@@ -457,6 +457,13 @@ impl Checker {
         if expected_repr == actual_repr || matches!(**actual_elem, PhpType::Never) {
             return Ok(());
         }
+        // A `null` element of a pointer array is the null pointer word, so `return [null]` from
+        // `: array<ptr<T>|null>` shares the declared pointer storage.
+        if matches!(expected_repr, PhpType::Pointer(_))
+            && crate::types::merge_pointer_elements(expected_elem, actual_elem).is_some()
+        {
+            return Ok(());
+        }
         Err(CompileError::new(
             span,
             &format!(

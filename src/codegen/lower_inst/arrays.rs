@@ -99,8 +99,10 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
         )));
     }
     let array = expect_operand(inst, 0)?;
-    indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
+    let elem_ty = indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
     require_array_to_mixed_result(&inst.result_php_type.codegen_repr(), inst)?;
+    // Pointer words carry header tag 0 like ints, so the element type selects the pointer mode.
+    let pointer_elements = matches!(elem_ty.codegen_repr(), PhpType::Pointer(_));
     let done = ctx.next_label("array_to_mixed_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -112,6 +114,13 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
             ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load the indexed-array packed header to recover the runtime slot tag
             ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type byte into the low bits
             ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the source element value_type for Mixed boxing
+            if pointer_elements {
+                abi::emit_load_int_immediate(
+                    ctx.emitter,
+                    "x1",
+                    crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE,
+                );
+            }
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
         }
         Arch::X86_64 => {
@@ -125,6 +134,13 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
             ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load the indexed-array packed header to recover the runtime slot tag
             ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type byte into the low bits
             ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the source element value_type for Mixed boxing
+            if pointer_elements {
+                abi::emit_load_int_immediate(
+                    ctx.emitter,
+                    "rsi",
+                    crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE,
+                );
+            }
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
         }
     }

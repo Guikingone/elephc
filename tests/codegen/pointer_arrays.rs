@@ -471,3 +471,57 @@ echo probe(...$bag), "|", tagged(...$bag, n: 7), "\n";
     );
     assert_eq!(out, "unset1|unset17\n");
 }
+
+/// Verifies a pointer array or hash built by a conditional keeps its null words: a ternary, a
+/// nested ternary, `?:`, `match` and `??` merging a record address with `[null]` hand the callee
+/// an unset null element, field reads through either arm and a `foreach` reach the right values.
+///
+/// Top level on purpose (`$argc` is 1), so no branch folds away.
+#[test]
+fn test_pointer_array_conditional_literals_keep_null_words() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function at(buffer<Vec2> $v, int $i): ptr<Vec2> { return $v[$i]; }
+function probe(array<ptr<Vec2>|null> $items): string { return isset($items[0]) ? "set" : "unset"; }
+function field(array<ptr<Vec2>|null> $items): string { $p = $items[0]; return $p === null ? "null" : (string) $p->x; }
+function hprobe(array<string, ptr<Vec2>|null> $items): string { return isset($items["a"]) ? "set" : "unset"; }
+$v = buffer_new<Vec2>(1);
+$v[0]->x = 9;
+$maybe = $argc > 100 ? [at($v, 0)] : null;
+echo probe($argc > 100 ? [at($v, 0)] : [null]),
+    probe($argc > 0 ? ($argc > 100 ? [null] : [null]) : [null]),
+    probe(($argc > 100 ? [at($v, 0)] : []) ?: [null]),
+    probe(match ($argc) { 0 => [at($v, 0)], default => [null] }),
+    probe($maybe ?? [null]),
+    hprobe($argc > 100 ? ["a" => at($v, 0)] : ["a" => null]), "|";
+echo field($argc > 0 ? [at($v, 0)] : [null]), field($argc > 100 ? [at($v, 0)] : [null]), "|";
+foreach (($argc > 0 ? [at($v, 0), null] : [null]) as $q) { echo $q === null ? "N" : $q->x; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "unsetunsetunsetunsetunsetunset|9null|9N\n");
+}
+
+/// Verifies `[null]` stays the null pointer word where it is returned, spread or assigned: a
+/// `return [null]` from `: array<ptr<T>|null>` compiles, a returned ternary and a call result
+/// read through `isset()` are unset, as are `[...[null]]` and a ternary assigned to a property.
+#[test]
+fn test_pointer_array_null_literals_through_returns_spreads_and_properties() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+class Bag { public array<ptr<Vec2>|null> $items = []; }
+function at(buffer<Vec2> $v, int $i): ptr<Vec2> { return $v[$i]; }
+function probe(array<ptr<Vec2>|null> $items): string { return isset($items[0]) ? "set" : "unset"; }
+function make(buffer<Vec2> $v, int $n): array<ptr<Vec2>|null> { return $n > 100 ? [at($v, 0)] : [null]; }
+function nul(): array<ptr<Vec2>|null> { return [null]; }
+$v = buffer_new<Vec2>(1);
+$b = new Bag();
+$b->items = $argc > 100 ? [at($v, 0)] : [null];
+echo probe([...[null]]), probe(make($v, $argc)), probe(nul()), "|";
+echo isset(make($v, $argc)[0]) ? "set" : "unset", isset(nul()[0]) ? "set" : "unset", isset($b->items[0]) ? "set" : "unset", "\n";
+"#,
+    );
+    assert_eq!(out, "unsetunsetunset|unsetunsetunset\n");
+}

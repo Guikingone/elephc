@@ -132,6 +132,25 @@ pub(super) fn null_coalesce_merge_type(
 ) -> PhpType {
     let raw_value_ty = value_ty;
     let value_ty = strip_void_from_union(raw_value_ty.clone()).codegen_repr();
+    // A pointer array beside a `[null]` (or another pointer array) default keeps pointer storage.
+    if super::indexed_array_literals::literal_pointer_element_type(&value_ty).is_some() {
+        if super::indexed_array_literals::is_null_only_literal(default) {
+            if matches!(default.kind, ExprKind::ArrayLiteralAssoc(_))
+                == matches!(value_ty, PhpType::AssocArray { .. })
+            {
+                return value_ty;
+            }
+        } else {
+            let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
+            if super::indexed_array_literals::literal_pointer_element_type(&default_ty).is_some() {
+                if let Some(merged) =
+                    super::merge_temps::merge_pointer_containers(value_ty.clone(), default_ty)
+                {
+                    return merged;
+                }
+            }
+        }
+    }
     let declared_default_ty = materialized_expr_type_for_merge(ctx, default);
     // A `?ptr<T>` on either side keeps the merge nullable when the other side may be null: the
     // codegen form of both (the bare pointer, or `Void` for a literal null) would drop that.

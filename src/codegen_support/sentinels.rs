@@ -83,6 +83,12 @@ pub(crate) const TAGGED_SCALAR_TAG_NULL: i64 = 8;
 /// This is an internal array-storage tag, not a boxed Mixed runtime value tag.
 pub(crate) const TAGGED_SCALAR_ARRAY_VALUE_TYPE: i64 = 11;
 
+/// Conversion mode passed to `__rt_array_to_mixed` for an indexed array of raw pointer words.
+///
+/// A 0 word boxes as PHP null and any other word as its integer address, matching a `?ptr<T>`
+/// element read. It is only ever a helper argument: a pointer array's header keeps tag 0.
+pub(crate) const POINTER_ARRAY_VALUE_TYPE: i64 = 13;
+
 /// Value tag a class property descriptor (`_class_vd_desc_*`, `_class_prop_desc_*`,
 /// `_class_json_desc_*`, `_class_serprop_*`) carries for an inline `{payload, tag}` slot.
 ///

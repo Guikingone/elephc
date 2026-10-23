@@ -700,7 +700,7 @@ fn retype_pointer_literal_value(
 }
 
 /// Returns true for an array literal whose every element (or value) is a literal `null`.
-fn is_null_only_literal(expr: &Expr) -> bool {
+pub(super) fn is_null_only_literal(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::ArrayLiteral(items) => {
             !items.is_empty() && items.iter().all(|item| matches!(item.kind, ExprKind::Null))
