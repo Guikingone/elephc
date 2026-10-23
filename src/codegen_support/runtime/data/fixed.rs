@@ -507,6 +507,13 @@ pub(crate) fn emit_runtime_data_fixed(
     // Heap headers and object-handle side-table indices use 16-byte granules.
     // Keep payload alignment stable when preceding runtime symbols change.
     out.push_str(&comm_directive_aligned("_heap_buf", heap_size, 16, target));
+    // One bit per 8-byte heap granule records live payload bases. String persistence uses this
+    // authoritative side table to reject forged headers in interior byte views in constant time.
+    out.push_str(&comm_directive(
+        "_heap_live_bases",
+        heap_size.div_ceil(64).max(1),
+        target,
+    ));
     out.push_str(&comm_directive("_heap_off", 8, target));
     out.push_str(&comm_directive("_heap_free_list", 8, target));
     out.push_str(&comm_directive("_heap_small_bins", 32, target));

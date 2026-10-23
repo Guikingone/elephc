@@ -376,13 +376,17 @@ fn test_error_negate_string() {
     );
 }
 
-/// Verifies that comparison operators on strings produce an error.
-/// Input: `$x = "a"; echo $x < 1;` — string vs int comparison is invalid.
+/// Verifies that a relational comparison MIXING a string and a number is still rejected.
+///
+/// Two strings order fine since issue #507 — PHP's own rule, through the runtime ordering
+/// helper. A string against a number is a different conversion (PHP casts the number to a
+/// string when the string is non-numeric) and stays unsupported, so the diagnostic now names
+/// both accepted shapes.
 #[test]
-fn test_error_comparison_on_string() {
+fn test_error_comparison_mixing_string_and_number() {
     expect_error(
         "<?php $x = \"a\"; echo $x < 1;",
-        "Comparison operators require numeric operands",
+        "Comparison operators require numeric or string operands",
     );
 }
 
@@ -3489,4 +3493,23 @@ fn test_declared_union_local_accepts_the_other_member_after_a_guard() {
          if ($x instanceof A) { $x = new B(); } \
          echo \"ok\";",
     );
+}
+
+
+/// Accepted placement still activates strict parameter checking, including an earlier body.
+#[test]
+fn test_error_strict_types_after_bare_declare_is_effective() {
+    for source in [
+        "<?php declare(ticks=1) echo 0; declare(strict_types=1); function number(int $v): int { return $v; } echo number(true);",
+        "<?php declare(ticks=1) echo number(true); declare(strict_types=1); function number(int $v): int { return $v; }",
+        "<?php declare(ticks=1) if (true) { echo number(true); } declare(strict_types=1); function number(int $v): int { return $v; }",
+        "<?php declare(ticks=1) { $a = [0]; echo ($a[number(true)] += 1); } declare(strict_types=1); function number(int $v): int { return $v; }",
+    ] { expect_error(source, "`declare(strict_types=1)` is active in this file"); }
+}
+
+/// Once a script declares strict typing, a later zero does not clear its op-array flag.
+#[test]
+fn test_error_strict_types_later_zero_does_not_disable_one() {
+    expect_error("<?php declare(strict_types=1); declare(strict_types=0); function number(int $v): int { return $v; } echo number(true);",
+        "`declare(strict_types=1)` is active in this file");
 }

@@ -109,7 +109,8 @@ pub(super) fn lower_builtin_call_args(
 ) -> Vec<crate::ir::ValueId> {
     let rewritten = builtin_string_callbacks_as_first_class(sig, args);
     let args = rewritten.as_deref().unwrap_or(args);
-    let operands = lower_planned_builtin_call_args(ctx, name, sig, args);
+    let operands = borrowed_string_args::try_lower(ctx, name, sig, args)
+        .unwrap_or_else(|| lower_planned_builtin_call_args(ctx, name, sig, args));
     let canonical = php_symbol_key(name.trim_start_matches('\\'));
     let lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering);

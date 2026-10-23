@@ -12,6 +12,8 @@
 
 #[path = "runtime_gc/borrowed_numeric.rs"]
 mod borrowed_numeric;
+#[path = "runtime_gc/borrowed_string_reads.rs"]
+mod borrowed_string_reads;
 #[path = "runtime_gc/json_decode_owners.rs"]
 mod json_decode_owners;
 #[path = "runtime_gc/string_append.rs"]

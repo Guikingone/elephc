@@ -16,6 +16,7 @@ use crate::ir::{print_module, Terminator};
 
 mod aggregate_operand_owners;
 mod argument_evaluation_owners;
+mod borrowed_string_reads;
 mod arrays;
 mod append_writes;
 mod nullable_array_merges;
@@ -52,6 +53,7 @@ mod weak_map_places;
 mod backtrace_labels;
 mod preg_match_all_review;
 mod object_mixed_return_owners;
+mod numeric_string_comparisons;
 mod packed_record_addresses;
 mod boxed_array_write_owners;
 mod boxed_array_reduce;

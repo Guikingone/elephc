@@ -195,6 +195,8 @@ pub(crate) struct LoweringSnapshot {
     reference_call_context: Option<ReferenceCallContext>,
     refusals: usize,
     call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
+    borrowed_string_call_operands: HashSet<ValueId>,
+    borrowed_string_calls_enabled: bool,
     append_update_cell_aliases: HashSet<String>,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
@@ -284,6 +286,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) reference_call_context: Option<ReferenceCallContext>,
     /// Nested owner ledgers for source-order call argument evaluation.
     pub(crate) call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
+    /// String subjects borrowed through read-only builtin calls whose result must be detached.
+    pub(crate) borrowed_string_call_operands: HashSet<ValueId>,
+    pub(crate) borrowed_string_calls_enabled: bool,
     pub(crate) append_update_cell_aliases: HashSet<String>,
     initialized_slots: HashSet<LocalSlotId>,
     pub functions: &'m HashMap<String, FunctionSig>,
@@ -589,6 +594,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             nested_append_read_suppressed: false,
             reference_call_context: None,
             call_argument_evaluation_scopes: Vec::new(),
+            borrowed_string_call_operands: HashSet::new(),
+            borrowed_string_calls_enabled: true,
             append_update_cell_aliases: HashSet::new(),
             argument_guards: HashMap::new(),
             argument_guard_scopes: Vec::new(),
@@ -646,6 +653,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             // always lowered again for real, and that pass records its refusals again.
             refusals: crate::ir_lower::diagnostics::mark(),
             call_argument_evaluation_scopes: self.call_argument_evaluation_scopes.clone(),
+            borrowed_string_call_operands: self.borrowed_string_call_operands.clone(),
+            borrowed_string_calls_enabled: self.borrowed_string_calls_enabled,
             append_update_cell_aliases: self.append_update_cell_aliases.clone(),
             argument_guards: self.argument_guards.clone(),
             argument_guard_scopes: self.argument_guard_scopes.clone(),
@@ -722,6 +731,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reference_call_context = snapshot.reference_call_context;
         crate::ir_lower::diagnostics::rollback_to(snapshot.refusals);
         self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
+        self.borrowed_string_call_operands = snapshot.borrowed_string_call_operands;
+        self.borrowed_string_calls_enabled = snapshot.borrowed_string_calls_enabled;
         self.append_update_cell_aliases = snapshot.append_update_cell_aliases;
         self.argument_guards = snapshot.argument_guards;
         self.argument_guard_scopes = snapshot.argument_guard_scopes;
