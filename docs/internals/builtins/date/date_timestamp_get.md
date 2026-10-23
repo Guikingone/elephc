@@ -2,7 +2,7 @@
 title: "date_timestamp_get() - internals"
 description: "Compiler internals for date_timestamp_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 213
+  order: 214
 ---
 
 ## `date_timestamp_get()` - internals

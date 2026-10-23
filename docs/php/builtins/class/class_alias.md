@@ -2,7 +2,7 @@
 title: "class_alias()"
 description: "Creates an alias for a class."
 sidebar:
-  order: 74
+  order: 75
 ---
 
 ## class_alias()
