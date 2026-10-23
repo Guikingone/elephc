@@ -870,3 +870,42 @@ echo $p === null ? "null" : $p->x, "\n";
     );
     assert_eq!(out, "true|true|true|integer|true|7\n");
 }
+
+/// Verifies a `mixed` call result written into a static `?ptr<T>` property through
+/// `ReflectionProperty::setValue()` or `ReflectionClass::setStaticPropertyValue()` releases its
+/// boxed cell once the address is copied out.
+///
+/// Creating the reflection objects leaves blocks live on its own, so the writes are measured
+/// against the same program without them: they must not add a single live block.
+#[test]
+fn test_nullable_pointer_static_reflection_writes_release_mixed_sources() {
+    let prelude = r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+class S { public static ?ptr $sp = null; }
+function first(buffer<Vec2> $v): ?ptr<Vec2> { return $v[0]; }
+function mixnull(): mixed { return null; }
+function mixlive(buffer<Vec2> $v): mixed { return first($v); }
+$v = buffer_new<Vec2>(1);
+$rs = new ReflectionProperty('S', 'sp');
+$c = new ReflectionClass('S');
+"#;
+    let writes = r#"$rs->setValue(null, mixlive($v));
+$c->setStaticPropertyValue('sp', mixnull());
+$c->setStaticPropertyValue('sp', mixlive($v));
+$rs->setValue(null, mixnull());
+$rs->setValue(null, mixlive($v));
+$c->setStaticPropertyValue('sp', mixnull());
+"#;
+    let tail = "echo json_encode(S::$sp === null), \"\\n\";\nunset($rs, $c);\n";
+    let baseline = compile_and_run_with_heap_debug(&format!("{prelude}{tail}"));
+    let written = compile_and_run_with_heap_debug(&format!("{prelude}{writes}{tail}"));
+    let summary = |stderr: &str| {
+        stderr
+            .lines()
+            .find(|line| line.contains("HEAP DEBUG: leak summary"))
+            .map(str::to_string)
+    };
+    assert_eq!(written.stdout, "true\n", "{}", written.stderr);
+    assert!(summary(&baseline.stderr).is_some(), "{}", baseline.stderr);
+    assert_eq!(summary(&written.stderr), summary(&baseline.stderr), "{}", written.stderr);
+}

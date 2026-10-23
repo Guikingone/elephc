@@ -923,8 +923,13 @@ fn load_static_property_store_value_to_result(
         }
         load_value_to_first_int_arg(ctx, value)?;
         match slot_ty.codegen_repr() {
+            PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
             // A `?ptr<T>` slot stores the address word, cast like an int: PHP null becomes 0.
-            PhpType::Int | PhpType::Pointer(_) => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
+            // The slot keeps no pointer to the box, so an adopted source is retired here.
+            PhpType::Pointer(_) => {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+                objects::release_adopted_mixed_source(ctx, value, &PhpType::Int)?;
+            }
             PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
             // An object slot stores the unboxed object POINTER, retained on its own, so the
