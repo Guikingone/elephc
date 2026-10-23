@@ -81,7 +81,7 @@ pub(super) fn parse_namespace_stmt(
     let mut body = Vec::new();
     let mut errors = Vec::new();
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
-        match parse_file_or_namespace_scope_item(tokens, pos, &mut body) {
+        match parse_file_or_namespace_scope_item(tokens, pos, &mut body, false) {
             Ok(()) => {}
             Err(error) => {
                 errors.extend(error.flatten());
