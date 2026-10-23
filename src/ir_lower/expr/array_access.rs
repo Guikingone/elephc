@@ -254,7 +254,9 @@ pub(crate) fn lower_array_access_from_values(
     // A statically scalar receiver has no offsets: PHP warns
     // ("Trying to access array offset on <type>") and answers null. Handing the scalar to the
     // container runtime dereferenced its payload as a pointer and crashed the program (#2025).
-    let receiver_php = ctx.builder.value_php_type(array_value.value).codegen_repr();
+    // Match the semantic PHP type, not its storage repr: `codegen_repr()` maps a resource to
+    // `Int` and `false` to `Bool`, and the warning must name the type PHP names.
+    let receiver_php = ctx.builder.value_php_type(array_value.value);
     if matches!(
         receiver_php,
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Resource(_)

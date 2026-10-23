@@ -72,3 +72,22 @@ echo f(), "\n";
         out.stderr
     );
 }
+
+/// A resource receiver names `resource`, not the integer storage its repr collapses to.
+/// `STDIN` is statically a resource; a `fopen()` result is boxed `mixed` and takes the runtime
+/// path instead.
+#[test]
+fn test_scalar_array_offset_read_names_a_resource() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function f(): string { $y = STDIN["a"]; return gettype($y); }
+echo f(), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "NULL\n");
+    assert!(
+        out.stderr.contains("Trying to access array offset on resource"),
+        "missing resource warning: {}",
+        out.stderr
+    );
+}
