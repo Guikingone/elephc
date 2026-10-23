@@ -2170,6 +2170,8 @@ fn audit_expr(expr: &Expr, out: &mut Vec<String>) {
             }
         }
         ExprKind::Spread(inner) => audit_expr(inner, out),
+        // `@expr` suppresses diagnostics; the wrapped call is still reachable.
+        ExprKind::ErrorSuppress(inner) => audit_expr(inner, out),
         // Leaves: nothing to descend into. A class-constant read names no function.
         ExprKind::ScopedConstantAccess { .. } | ExprKind::ClassConstant { .. } => {}
         ExprKind::Variable(_)
