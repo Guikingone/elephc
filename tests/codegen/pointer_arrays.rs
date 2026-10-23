@@ -447,3 +447,27 @@ echo counted(...$bag, items: [null]), keyed(...$bag, items: ["a" => null]), "\n"
     );
     assert_eq!(out, "unsetunsetunset|unsetunset\n");
 }
+
+/// Verifies a `[null]` default of an `array<ptr<T>|null>` parameter keeps pointer storage when an
+/// associative unpack leaves that parameter out: the call synthesizes a `key exists ? value :
+/// default` ternary for it, whose default branch must still be built against the parameter, so
+/// `isset()` of the null element is false with and without a trailing named argument.
+#[test]
+fn test_pointer_array_default_behind_an_associative_unpack() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function at(buffer<Vec2> $v, int $i): ptr<Vec2> { return $v[$i]; }
+function probe(array<ptr<Vec2>|null> $items = [null], array<ptr<Vec2>|null> $more = []): string {
+    return (isset($items[0]) ? "set" : "unset") . count($more);
+}
+function tagged(array<ptr<Vec2>|null> $items = [null], array<ptr<Vec2>|null> $more = [], int $n = 0): string {
+    return (isset($items[0]) ? "set" : "unset") . count($more) . $n;
+}
+$v = buffer_new<Vec2>(1);
+$bag = ["more" => [at($v, 0)]];
+echo probe(...$bag), "|", tagged(...$bag, n: 7), "\n";
+"#,
+    );
+    assert_eq!(out, "unset1|unset17\n");
+}

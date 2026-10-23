@@ -138,6 +138,19 @@ pub(crate) fn lower_expr_for_destination(
     if let ExprKind::NamedArg { value, .. } = &expr.kind {
         return lower_expr_for_destination(ctx, value, destination);
     }
+    // The branches of a ternary bound to a pointer array or hash share its destination.
+    if let ExprKind::Ternary { condition, then_expr, else_expr } = &expr.kind {
+        if literal_pointer_element_type(destination).is_some() {
+            return super::ternary_cast::lower_ternary_with_destination(
+                ctx,
+                condition,
+                then_expr,
+                else_expr,
+                expr,
+                Some(destination),
+            );
+        }
+    }
     match (destination.codegen_repr(), &expr.kind) {
         (PhpType::Array(elem), ExprKind::ArrayLiteral(_))
             if matches!(elem.codegen_repr(), PhpType::Pointer(_)) =>
@@ -661,11 +674,13 @@ pub(crate) fn array_literal_type_for_ir(
     PhpType::Array(Box::new(elem_ty))
 }
 
-/// Returns the pointer element type of an array or hash literal type, if its elements are pointers.
+/// Returns the pointer element type of an array or hash type, if its elements are pointers.
+///
+/// The element is erased too, so a declared `array<ptr<T>|null>` (a union element) counts.
 pub(super) fn literal_pointer_element_type(literal_ty: &PhpType) -> Option<PhpType> {
     let elem = match literal_ty.codegen_repr() {
-        PhpType::Array(elem) => *elem,
-        PhpType::AssocArray { value, .. } => *value,
+        PhpType::Array(elem) => elem.codegen_repr(),
+        PhpType::AssocArray { value, .. } => value.codegen_repr(),
         _ => return None,
     };
     matches!(elem, PhpType::Pointer(_)).then_some(elem)

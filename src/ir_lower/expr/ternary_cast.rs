@@ -17,6 +17,22 @@ pub(super) fn lower_ternary(
     else_expr: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
+    lower_ternary_with_destination(ctx, condition, then_expr, else_expr, expr, None)
+}
+
+/// Lowers a ternary whose result is bound to `destination`, when one is known.
+///
+/// An array-literal branch is built against the destination, so a `[null]` default bound to
+/// `array<ptr<T>|null>` (the fallback an associative unpack synthesizes for a missing key) holds
+/// the null pointer word even when the merge temporary boxes it.
+pub(super) fn lower_ternary_with_destination(
+    ctx: &mut LoweringContext<'_, '_>,
+    condition: &Expr,
+    then_expr: &Expr,
+    else_expr: &Expr,
+    expr: &Expr,
+    destination: Option<&PhpType>,
+) -> LoweredValue {
     let cond = lower_expr(ctx, condition);
     let cond = ctx.truthy_consuming(cond, Some(condition.span));
     let result_type = branch_merge_result_type(ctx, then_expr, else_expr, expr);
@@ -35,14 +51,14 @@ pub(super) fn lower_ternary(
 
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    store_expr_into_temp(ctx, &temp_name, result_type.clone(), then_expr, expr.span);
+    store_branch_into_temp(ctx, &temp_name, result_type.clone(), then_expr, expr.span, destination);
     let then_reachable = !ctx.builder.insertion_block_is_terminated();
     let then_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    store_expr_into_temp(ctx, &temp_name, result_type, else_expr, expr.span);
+    store_branch_into_temp(ctx, &temp_name, result_type, else_expr, expr.span, destination);
     let else_reachable = !ctx.builder.insertion_block_is_terminated();
     let else_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
@@ -56,6 +72,27 @@ pub(super) fn lower_ternary(
         else_reachable,
     ));
     take_owned_temp(ctx, &temp_name, expr.span)
+}
+
+/// Stores one ternary branch into the merge temporary, building an array literal against the
+/// destination type when there is one.
+fn store_branch_into_temp(
+    ctx: &mut LoweringContext<'_, '_>,
+    temp_name: &str,
+    temp_type: PhpType,
+    branch: &Expr,
+    span: crate::span::Span,
+    destination: Option<&PhpType>,
+) {
+    match destination {
+        Some(destination)
+            if matches!(branch.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) =>
+        {
+            let value = lower_expr_for_destination(ctx, branch, destination);
+            store_value_into_temp(ctx, temp_name, temp_type, value, span);
+        }
+        _ => store_expr_into_temp(ctx, temp_name, temp_type, branch, span),
+    }
 }
 
 /// Lowers a cast expression.
