@@ -185,13 +185,19 @@ pub(crate) fn lower_expr_for_destination(
     }
 }
 
-/// Copies an indexed array of boxed elements into pointer storage for a pointer-array destination.
+/// Converts an indexed array bound to a pointer-array destination into pointer storage.
 ///
-/// A literal of only `null`s held in a local (`$a = [null]`) is an array of boxed Mixed cells,
-/// which a pointer-array reader would take for addresses. Each element is cast like an int, so a
-/// boxed null becomes the null pointer word and a boxed integer its address. Arrays that already
-/// hold pointer words, or no elements at all, pass through, and hashes keep per-entry tags their
-/// readers already check.
+/// A literal of only `null`s held in a local (`$a = [null]`) or returned by a function without a
+/// return type (`function boxed() { return [null]; }`, typed `array<void>`) is an array of boxed
+/// Mixed cells, which a pointer-array reader would take for addresses. Whether the slots are boxed
+/// is a runtime property of the array's header, not of its static element type, so every source
+/// whose element is not already a pointer goes through `Op::ArrayToPointerWords`: it rewrites a
+/// boxed null as the null pointer word and a boxed integer as its address, and passes arrays that
+/// already hold pointer words (or no elements) through. Hashes keep per-entry tags their readers
+/// already check.
+///
+/// The op consumes one owned reference: an owning temporary (a call result) is handed over as it
+/// is, and anything else (a local load) is retained first, so the local keeps its own array.
 fn convert_array_to_pointer_storage(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
@@ -204,94 +210,25 @@ fn convert_array_to_pointer_storage(
     let Some(pointer_elem) = literal_pointer_element_type(destination) else {
         return source;
     };
-    let source_elem = match ctx.builder.value_php_type(source.value).codegen_repr() {
-        PhpType::Array(elem) => elem.codegen_repr(),
+    match ctx.builder.value_php_type(source.value).codegen_repr() {
+        PhpType::Array(elem) if !matches!(elem.codegen_repr(), PhpType::Pointer(_)) => {}
         _ => return source,
+    }
+    let owned = if ctx.value_is_owning_temporary(source)
+        && !ctx.value_is_owned_unboxed_local_load(source.value)
+    {
+        source
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span))
     };
-    if source_elem != PhpType::Mixed {
-        return source;
-    }
-    let array = ctx.emit_value(
-        Op::ArrayNew,
-        Vec::new(),
-        Some(Immediate::Capacity(4)),
-        PhpType::Array(Box::new(pointer_elem.clone())),
-        Op::ArrayNew.default_effects(),
-        Some(span),
-    );
-    let len = ctx.emit_value(
-        Op::ArrayLen,
-        vec![source.value],
+    ctx.emit_owned_value(
+        Op::ArrayToPointerWords,
+        vec![owned.value],
         None,
-        PhpType::Int,
-        Op::ArrayLen.default_effects(),
+        PhpType::Array(Box::new(pointer_elem)),
+        Op::ArrayToPointerWords.default_effects(),
         Some(span),
-    );
-    let zero = emit_i64_at_span(ctx, 0, span);
-    let header = ctx.builder.create_named_block("array.to_pointer.next", vec![(IrType::I64, PhpType::Int)]);
-    let body = ctx.builder.create_named_block("array.to_pointer.body", Vec::new());
-    let exit = ctx.builder.create_named_block("array.to_pointer.exit", Vec::new());
-    ctx.builder.terminate(Terminator::Br { target: header, args: vec![zero.value] });
-
-    ctx.builder.position_at_end(header);
-    let index = ctx.builder.block_param(header, 0);
-    let has_next = ctx.emit_value(
-        Op::ICmp,
-        vec![index, len.value],
-        Some(Immediate::CmpPredicate(CmpPredicate::Slt)),
-        PhpType::Bool,
-        Op::ICmp.default_effects(),
-        Some(span),
-    );
-    ctx.builder.terminate(Terminator::CondBr {
-        cond: has_next.value,
-        then_target: body,
-        then_args: Vec::new(),
-        else_target: exit,
-        else_args: Vec::new(),
-    });
-
-    ctx.builder.position_at_end(body);
-    let boxed = ctx.emit_value(
-        Op::ArrayGet,
-        vec![source.value, index],
-        None,
-        PhpType::Mixed,
-        Op::ArrayGet.default_effects(),
-        Some(span),
-    );
-    let word = crate::ir_lower::expr::instanceof_coercions::coerce_to_int_at_span(ctx, boxed, Some(span));
-    let pointer = ctx.emit_value(
-        Op::Move,
-        vec![word.value],
-        None,
-        pointer_elem,
-        Op::Move.default_effects(),
-        Some(span),
-    );
-    ctx.emit_void(
-        Op::ArrayPush,
-        vec![array.value, pointer.value],
-        None,
-        Op::ArrayPush.default_effects(),
-        Some(span),
-    );
-    let one = emit_i64_at_span(ctx, 1, span);
-    let next = ctx.emit_value(
-        Op::IAdd,
-        vec![index, one.value],
-        None,
-        PhpType::Int,
-        Op::IAdd.default_effects(),
-        Some(span),
-    );
-    ctx.builder.terminate(Terminator::Br { target: header, args: vec![next.value] });
-
-    ctx.builder.position_at_end(exit);
-    if ctx.value_is_owning_temporary(source) {
-        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
-    }
-    array
+    )
 }
 
 /// Returns an indexed-array type for contextual literal lowering.

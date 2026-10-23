@@ -880,3 +880,43 @@ echo $r;
     assert!(summary(&baseline.stderr).is_some(), "{}", baseline.stderr);
     assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
 }
+
+/// Verifies `[null]` returned by functions without a return type (typed `array<void>` but built
+/// with boxed cells) is converted when it reaches a pointer-array destination: both ternary
+/// orders, a `match`, a plain return and a call argument all read the element as null in
+/// `foreach` and `isset()`, and the conversion keeps the heap-debug leak summary unchanged.
+#[test]
+fn test_pointer_array_destinations_convert_untyped_null_array_results() {
+    let prelude = r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function boxed() { return [null]; }
+function boxedn(int $n) { return [null]; }
+function t1(bool $b): array<ptr<Vec2>|null> { return $b ? boxed() : [null]; }
+function t2(bool $b): array<ptr<Vec2>|null> { return $b ? [null] : boxedn(1); }
+function m(int $i): array<ptr<Vec2>|null> { return match ($i) { 0 => boxed(), default => [null] }; }
+function r(): array<ptr<Vec2>|null> { return boxedn(2); }
+function take(array<ptr<Vec2>|null> $items): string {
+    $s = "";
+    foreach ($items as $p) { $s .= $p === null ? "N" : "L"; }
+    return $s . (isset($items[0]) ? "s" : "u");
+}
+"#;
+    let calls = r#"$r = "";
+foreach ([true, false] as $b) {
+    $r .= take(t1($b)) . take(t2($b)) . take(m($b ? 0 : 1)) . take($b ? boxed() : [null]) . "|";
+}
+echo $r, take(r());
+"#;
+    let tail = "echo \"\\n\";\n";
+    let baseline = compile_and_run_with_heap_debug(&format!("{prelude}{tail}"));
+    let called = compile_and_run_with_heap_debug(&format!("{prelude}{calls}{tail}"));
+    let summary = |stderr: &str| {
+        stderr
+            .lines()
+            .find(|line| line.contains("HEAP DEBUG: leak summary"))
+            .map(str::to_string)
+    };
+    assert_eq!(called.stdout, "NuNuNuNu|NuNuNuNu|Nu\n", "{}", called.stderr);
+    assert!(summary(&baseline.stderr).is_some(), "{}", baseline.stderr);
+    assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
+}
