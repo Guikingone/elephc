@@ -756,12 +756,18 @@ pub(super) fn foreach_value_type(source_ty: &PhpType) -> PhpType {
             // A pointer element is its raw word and may be the null pointer, so the binding is
             // `?ptr<T>` like an indexed read of the same element.
             pointer @ PhpType::Pointer(_) => crate::types::pointer_element_read_type(pointer),
+            // A buffer handle is its raw word; a stored element is never null.
+            buffer @ PhpType::Buffer(_) => buffer,
             _ => PhpType::Mixed,
         },
         // A hash of pointers binds the pointer word too (see `lower_foreach_current_value`); a
         // stored `null` is the word 0, so the binding keeps PHP null.
         PhpType::AssocArray { value, .. } if matches!(value.codegen_repr(), PhpType::Pointer(_)) => {
             crate::types::pointer_element_read_type(value.codegen_repr())
+        }
+        // A hash of buffers binds the handle word the same way.
+        PhpType::AssocArray { value, .. } if matches!(value.codegen_repr(), PhpType::Buffer(_)) => {
+            value.codegen_repr()
         }
         PhpType::Object(class_name) if class_name == "Phar" || class_name == "PharData" => {
             PhpType::Object("PharFileInfo".to_string())
@@ -772,9 +778,10 @@ pub(super) fn foreach_value_type(source_ty: &PhpType) -> PhpType {
 
 /// Emits the current foreach value with the type the loop variable binds.
 ///
-/// Hash iteration hands every entry out boxed as `Mixed`, and a pointer entry is boxed as an
-/// integer-like payload. For a hash of pointers the box is cast back to that word and retyped,
-/// so `$p->x` and `$p === null` see the pointer instead of a boxed integer.
+/// Hash iteration hands every entry out boxed as `Mixed`, and a pointer or buffer entry is boxed
+/// as an integer-like payload. For a hash of pointers or buffers the box is cast back to that
+/// word and retyped, so `$p->x`, `$p === null` and `$buf[$i]` see the pointer or handle instead
+/// of a boxed integer.
 fn lower_foreach_current_value(
     ctx: &mut LoweringContext<'_, '_>,
     iterator: LoweredValue,
@@ -782,9 +789,9 @@ fn lower_foreach_current_value(
     value_ty: &PhpType,
     span: Span,
 ) -> LoweredValue {
-    let unbox_hash_pointer = matches!(source_ty, PhpType::AssocArray { .. })
-        && matches!(value_ty.codegen_repr(), PhpType::Pointer(_));
-    let current_ty = if unbox_hash_pointer { PhpType::Mixed } else { value_ty.clone() };
+    let unbox_hash_word = matches!(source_ty, PhpType::AssocArray { .. })
+        && matches!(value_ty.codegen_repr(), PhpType::Pointer(_) | PhpType::Buffer(_));
+    let current_ty = if unbox_hash_word { PhpType::Mixed } else { value_ty.clone() };
     let value = ctx.emit_value(
         Op::IterCurrentValue,
         vec![iterator.value],
@@ -793,7 +800,7 @@ fn lower_foreach_current_value(
         Op::IterCurrentValue.default_effects(),
         Some(span),
     );
-    if !unbox_hash_pointer {
+    if !unbox_hash_word {
         return value;
     }
     let word = crate::ir_lower::expr::coerce_to_int_at_span(ctx, value, Some(span));

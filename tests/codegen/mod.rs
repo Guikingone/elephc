@@ -11,6 +11,7 @@ mod exceptions;
 mod fibers;
 mod buffers;
 mod buffer_ptr;
+mod buffer_arrays;
 mod packed_nested_fields;
 mod data_widths;
 mod generics;

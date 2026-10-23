@@ -63,6 +63,7 @@ fn array_shift_element_type(ty: PhpType) -> Result<PhpType> {
                     | PhpType::Void
                     | PhpType::Never
                     | PhpType::Pointer(_)
+                    | PhpType::Buffer(_)
             ) || elem.is_refcounted()
             {
                 return Ok(elem);
@@ -159,7 +160,12 @@ fn emit_array_shift_save_first_aarch64(
     elem_ty: &PhpType,
 ) -> Result<()> {
     match elem_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction("add x10, x0, #24");                        // compute the first pointer-sized payload slot in the indexed array
             ctx.emitter.instruction("ldr x11, [x10]");                          // preserve the removed first pointer-sized payload across compaction
         }
@@ -196,7 +202,12 @@ fn emit_array_shift_save_first_x86_64(
     elem_ty: &PhpType,
 ) -> Result<()> {
     match elem_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first pointer-sized payload slot in the indexed array
             ctx.emitter.instruction("mov r8, QWORD PTR [r11]");                 // preserve the removed first pointer-sized payload across compaction
         }
@@ -291,7 +302,12 @@ fn emit_array_shift_restore_first_aarch64(
     elem_ty: &PhpType,
 ) -> Result<()> {
     match elem_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction("mov x0, x11");                             // restore the removed pointer-sized payload into the result register
         }
         PhpType::Float => {
@@ -323,7 +339,12 @@ fn emit_array_shift_restore_first_x86_64(
     elem_ty: &PhpType,
 ) -> Result<()> {
     match elem_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction("mov rax, r8");                             // restore the removed pointer-sized payload into the result register
         }
         PhpType::Float => {

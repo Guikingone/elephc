@@ -2589,7 +2589,12 @@ fn load_current_array_value_aarch64(
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction(                                            // skip the indexed-array header to reach element payloads
                 &format!("add {}, {}, #24", array_reg, array_reg)
             );
@@ -2652,7 +2657,12 @@ fn load_current_array_value_x86_64(
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction(                                            // skip the indexed-array header to reach element payloads
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
             );

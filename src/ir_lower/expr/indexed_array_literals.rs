@@ -1098,8 +1098,11 @@ pub(super) fn builtin_call_result_type_for_ir(
     }
     let checked = ctx.builtin_call_types.get(&span).cloned()?;
     // A pointer result (`ptr_null()`, or `array_pop` of pointers, unboxed to its word after the
-    // call) is stored as the pointer word, not boxed into a `mixed` slot.
-    if crate::types::is_nullable_pointer_type(&checked) || matches!(checked, PhpType::Pointer(_)) {
+    // call) is stored as the pointer word, not boxed into a `mixed` slot; a buffer handle from
+    // `array_pop` of buffers is stored as its word the same way.
+    if crate::types::is_nullable_pointer_type(&checked)
+        || matches!(checked, PhpType::Pointer(_) | PhpType::Buffer(_))
+    {
         return Some(checked.codegen_repr());
     }
     match materializable_array_element_type(checked)? {

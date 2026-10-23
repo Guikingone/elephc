@@ -1185,7 +1185,11 @@ fn materialize_hash_value_aarch64(
         return materialize_hash_mixed_value_for_concrete_storage_aarch64(ctx, value, storage_value_ty);
     }
     match value_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Float
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.load_value_to_reg(value, "x3")?;
             ctx.emitter.instruction("mov x4, xzr");                             // scalar associative-array payloads leave the high value word empty
         }
@@ -1231,7 +1235,11 @@ fn materialize_hash_value_x86_64(
         return materialize_hash_mixed_value_for_concrete_storage_x86_64(ctx, value, storage_value_ty);
     }
     match value_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Float
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.load_value_to_reg(value, "rcx")?;
             ctx.emitter.instruction("xor r8, r8");                              // scalar associative-array payloads leave the high value word empty
         }
@@ -1499,7 +1507,11 @@ fn materialize_hash_concrete_value_aarch64(
             ctx.emitter.instruction("mov x3, xzr");                             // null associative-array payloads use a zero low word
             ctx.emitter.instruction("mov x4, xzr");                             // null associative-array payloads use a zero high word
         }
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Float
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.load_value_to_reg(value, "x3")?;
             ctx.emitter.instruction("mov x4, xzr");                             // scalar associative-array payloads leave the high value word empty
         }
@@ -1542,7 +1554,11 @@ fn materialize_hash_concrete_value_x86_64(
             ctx.emitter.instruction("xor rcx, rcx");                            // null associative-array payloads use a zero low word
             ctx.emitter.instruction("xor r8, r8");                              // null associative-array payloads use a zero high word
         }
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Float
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.load_value_to_reg(value, "rcx")?;
             ctx.emitter.instruction("xor r8, r8");                              // scalar associative-array payloads leave the high value word empty
         }
@@ -1593,6 +1609,7 @@ pub(super) fn hash_get_supports_value_type(value_ty: &PhpType) -> bool {
             | PhpType::Str
             | PhpType::Mixed
             | PhpType::Pointer(_)
+            | PhpType::Buffer(_)
     ) || value_ty.is_refcounted()
 }
 
@@ -1607,7 +1624,11 @@ pub(super) fn emit_hash_get_success_aarch64(
         emit_hash_get_concrete_reference_payload_aarch64(ctx);
     }
     match value_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction("mov x0, x1");                              // move the borrowed hash scalar payload into the standard integer result
             if matches!(value_ty, PhpType::Callable) {
                 abi::emit_incref_if_refcounted(ctx.emitter, value_ty);
@@ -1648,7 +1669,11 @@ pub(super) fn emit_hash_get_success_x86_64(
         emit_hash_get_concrete_reference_payload_x86_64(ctx);
     }
     match value_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction("mov rax, rdi");                            // move the borrowed hash scalar payload into the standard integer result
             if matches!(value_ty, PhpType::Callable) {
                 abi::emit_incref_if_refcounted(ctx.emitter, value_ty);
@@ -1884,8 +1909,9 @@ fn emit_hash_get_miss(ctx: &mut FunctionContext<'_>, value_ty: &PhpType, miss_re
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             }
         },
-        // A missing pointer value reads as the null pointer word, which is PHP null there.
-        PhpType::Pointer(_) => {
+        // A missing pointer value reads as the null pointer word, which is PHP null there; a
+        // missing buffer value reads as handle 0, which every buffer operation rejects.
+        PhpType::Pointer(_) | PhpType::Buffer(_) => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         }
         _ => {
@@ -1953,6 +1979,12 @@ fn require_hash_get_result(value_ty: &PhpType, inst: &Instruction) -> Result<()>
     }
     // A pointer value is one raw word whatever its target tag.
     if matches!((value_ty, &result_ty), (PhpType::Pointer(_), PhpType::Pointer(_))) {
+        return Ok(());
+    }
+    // A buffer handle is one raw word too, boxed like an integer for a `mixed` result.
+    if matches!(value_ty, PhpType::Buffer(_))
+        && (result_ty == *value_ty || result_ty == PhpType::Mixed)
+    {
         return Ok(());
     }
     if value_ty.is_refcounted() && result_ty == *value_ty {
@@ -2048,6 +2080,7 @@ fn require_supported_hash_value(
                 | PhpType::Iterable
                 | PhpType::Object(_)
                 | PhpType::Pointer(_)
+                | PhpType::Buffer(_)
         ))
     {
         return Ok(value_ty);
@@ -2060,6 +2093,7 @@ fn require_supported_hash_value(
             | PhpType::Float
             | PhpType::Str
             | PhpType::Pointer(_)
+            | PhpType::Buffer(_)
     ) {
         return Ok(value_ty);
     }

@@ -814,7 +814,9 @@ fn append_array_literal_element(
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             append_refcounted_array_literal_element(ctx, value_type);
         }
-        PhpType::Int | PhpType::Bool | PhpType::Pointer(_) => append_scalar_array_literal_element(ctx),
+        PhpType::Int | PhpType::Bool | PhpType::Pointer(_) | PhpType::Buffer(_) => {
+            append_scalar_array_literal_element(ctx)
+        }
         PhpType::Float => append_float_array_literal_element(ctx),
         PhpType::Str => append_string_array_literal_element(ctx),
         other => {
@@ -1123,6 +1125,7 @@ fn array_element_size(elem_type: &PhpType) -> Result<i64> {
         | PhpType::Union(_)
         | PhpType::Iterable
         | PhpType::Pointer(_)
+        | PhpType::Buffer(_)
         | PhpType::Void => Ok(8),
         other => Err(CodegenIrError::unsupported(format!(
             "array default element PHP type {:?}",

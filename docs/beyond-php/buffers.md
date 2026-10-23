@@ -134,6 +134,47 @@ Packed element fields and whole scalar elements can be written through a
 buffer-typed property, as in `moveX()` and `setId()` above. A static property
 cannot hold a buffer yet.
 
+## Arrays of buffers
+
+Indexed arrays and hashes can hold buffer handles. Literals, appends, index and key writes,
+`array_push()`, `array_pop()`, `array_shift()`, `foreach` and variadic parameters keep each
+element as the opaque handle, so nothing is copied or boxed:
+
+```php
+<?php
+function total(buffer<i32> ...$streams): int {
+    $sum = 0;
+    foreach ($streams as $stream) {
+        for ($i = 0; $i < buffer_len($stream); $i++) {
+            $sum += $stream[$i];
+        }
+    }
+    return $sum;
+}
+
+buffer<i32> $a = buffer_new<i32>(4);
+buffer<i32> $b = buffer_new<i32>(2);
+$a[0] = 5;
+$b[1] = 7;
+$streams = [$a, $b];
+$streams[] = buffer_new<i32>(8);
+echo total(...$streams);            // 12
+$last = array_pop($streams);
+echo $streams[1][1];                // 7: an element read gives the buffer back
+$byName = ["a" => $a, "b" => $b];
+echo $byName["b"][1];               // 7
+```
+
+An element read gives the buffer back, so `$streams[1][1]` reads element 1 of the second
+buffer; a write through such a read (`$streams[1][1] = 3`) is rejected at compile time, so
+assign the element to a variable first. Every element must have the same buffer type: a
+`buffer<int>` beside a `buffer<i32>` widens the array to `mixed`, which cannot hold a buffer. A missing element or key, and `array_pop()` or
+`array_shift()` of an empty array, read as an invalid handle that the next buffer operation
+rejects with the use-after-free error below. Freeing a buffer does not touch the arrays that
+hold its handle; their elements become stale aliases. A `mixed` view of such an array
+(`print_r()`, `var_dump()`, `json_encode()`, an `array<mixed>` parameter) shows each handle as
+an integer.
+
 ## Buffer length
 
 ```php
