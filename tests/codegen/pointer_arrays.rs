@@ -790,3 +790,22 @@ $args = [[null, null]];
     assert!(summary(&baseline.stderr).is_some(), "{}", baseline.stderr);
     assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
 }
+
+/// Verifies a reference element of a bridged array (`[&$x]` built in eval) converts to the
+/// referenced value: the integer address survives the conversion, a plain element behaves the
+/// same, and the caller's array and variable keep their values.
+#[test]
+fn test_pointer_array_parameter_conversion_reads_reference_elements() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function take(array<ptr<Vec2>|null> $items): string {
+    $items[] = null;
+    return ($items[0] === null ? "null" : (string) (int) $items[0]) . "," . json_encode($items)
+        . (isset($items[1]) ? "set" : "unset");
+}
+eval('$x = 123; $items = [&$x]; echo take($items), "|", take([123]), "|", $x, json_encode($items), "\n";');
+"#,
+    );
+    assert_eq!(out, "123,[123,null]unset|123,[123,null]unset|123[123]\n");
+}

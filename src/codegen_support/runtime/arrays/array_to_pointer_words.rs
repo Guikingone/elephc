@@ -14,8 +14,9 @@
 //!   arrays and null containers return unchanged.
 //! - The helper consumes one owned reference and returns an owned array: a shared array is split
 //!   by `__rt_array_ensure_unique` first, so the caller's array keeps its boxed slots.
-//! - A null cell becomes the null pointer word 0 and an integer cell its address; each cell is
-//!   released once its word is stored. The header is then stamped `POINTER_ARRAY_VALUE_TYPE`.
+//! - Each cell is read through `__rt_mixed_unbox`, so a reference element (`[&$addr]`) yields
+//!   the referenced value: null becomes the null pointer word 0 and an integer its address. The
+//!   slot's own cell is released once its word is stored. The header is then stamped `POINTER_ARRAY_VALUE_TYPE`.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -47,10 +48,10 @@ pub fn emit_array_to_pointer_words(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #7");                                          // do the slots hold boxed Mixed cells?
     emitter.instruction("b.ne __rt_array_to_pointer_words_passthrough");        // pointer words and empty arrays are already in shape
 
-    // -- frame: [sp] array, [sp+8] length, [sp+16] index, [sp+24] pending word --
-    emitter.instruction("sub sp, sp, #48");                                     // reserve the conversion frame
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #32");                                    // establish the conversion frame
+    // -- frame: [sp] array, [sp+8] length, [sp+16] index, [sp+24] pending word, [sp+32] cell --
+    emitter.instruction("sub sp, sp, #64");                                     // reserve the conversion frame
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish the conversion frame
     emitter.instruction("bl __rt_array_ensure_unique");                         // split a shared array so the caller keeps its boxed slots
     emitter.instruction("str x0, [sp, #0]");                                    // save the unique array pointer
     emitter.instruction("ldr x9, [x0]");                                        // load the logical array length
@@ -67,12 +68,12 @@ pub fn emit_array_to_pointer_words(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x12, x9, lsl #3]");                           // load the boxed Mixed cell of this slot
     emitter.instruction("mov x13, #0");                                         // default word = the null pointer
     emitter.instruction("cbz x0, __rt_array_to_pointer_words_store");           // an empty slot stays the null pointer
-    emitter.instruction("ldr x14, [x0]");                                       // load the cell's runtime value tag
-    emitter.instruction("cmp x14, #0");                                         // is it an integer, the boxed form of a live address?
-    emitter.instruction("b.ne __rt_array_to_pointer_words_release");            // null and any other value become the null pointer
-    emitter.instruction("ldr x13, [x0, #8]");                                   // the integer payload is the pointer word
-    emitter.label("__rt_array_to_pointer_words_release");
+    emitter.instruction("str x0, [sp, #32]");                                   // keep the slot's own cell for the release
+    emitter.instruction("bl __rt_mixed_unbox");                                 // peel nested and reference wrappers: x0 = tag, x1 = payload
+    emitter.instruction("cmp x0, #0");                                          // is it an integer, the boxed form of a live address?
+    emitter.instruction("csel x13, x1, xzr, eq");                               // the integer payload is the word; null and anything else are 0
     emitter.instruction("str x13, [sp, #24]");                                  // keep the word across the cell release
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the slot's own cell
     emitter.instruction("bl __rt_decref_mixed");                                // release the cell the slot owned
     emitter.instruction("ldr x13, [sp, #24]");                                  // reload the converted word
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the element index
@@ -87,8 +88,8 @@ pub fn emit_array_to_pointer_words(emitter: &mut Emitter) {
     emitter.label("__rt_array_to_pointer_words_stamp");
     emitter.instruction("ldr x0, [sp, #0]");                                    // return the converted array
     crate::codegen_support::arrays::emit_array_value_type_stamp(emitter, "x0", &PhpType::Pointer(None));
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the conversion frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the conversion frame
     emitter.instruction("ret");                                                 // x0 = owned array of raw pointer words
 
     emitter.label("__rt_array_to_pointer_words_passthrough");
@@ -116,10 +117,10 @@ fn emit_array_to_pointer_words_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 7");                                          // do the slots hold boxed Mixed cells?
     emitter.instruction("jne __rt_array_to_pointer_words_passthrough");         // pointer words and empty arrays are already in shape
 
-    // -- frame: [rbp-8] array, [rbp-16] length, [rbp-24] index, [rbp-32] pending word --
+    // -- frame: [rbp-8] array, [rbp-16] length, [rbp-24] index, [rbp-32] pending word, [rbp-40] cell --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the conversion frame
-    emitter.instruction("sub rsp, 32");                                         // reserve the frame slots, keeping calls 16-byte aligned
+    emitter.instruction("sub rsp, 48");                                         // reserve the frame slots, keeping calls 16-byte aligned
     emitter.instruction("call __rt_array_ensure_unique");                       // split a shared array so the caller keeps its boxed slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the unique array pointer
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the logical array length
@@ -135,11 +136,13 @@ fn emit_array_to_pointer_words_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edx, edx");                                        // default word = the null pointer
     emitter.instruction("test rax, rax");                                       // is the slot empty?
     emitter.instruction("jz __rt_array_to_pointer_words_store");                // an empty slot stays the null pointer
-    emitter.instruction("cmp QWORD PTR [rax], 0");                              // is it an integer, the boxed form of a live address?
-    emitter.instruction("jne __rt_array_to_pointer_words_release");             // null and any other value become the null pointer
-    emitter.instruction("mov rdx, QWORD PTR [rax + 8]");                        // the integer payload is the pointer word
-    emitter.label("__rt_array_to_pointer_words_release");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // keep the slot's own cell for the release
+    emitter.instruction("call __rt_mixed_unbox");                               // peel nested and reference wrappers: rax = tag, rdi = payload
+    emitter.instruction("xor edx, edx");                                        // default word = the null pointer
+    emitter.instruction("test rax, rax");                                       // is it an integer, the boxed form of a live address?
+    emitter.instruction("cmovz rdx, rdi");                                      // the integer payload is the word; null and anything else are 0
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // keep the word across the cell release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the slot's own cell
     emitter.instruction("call __rt_decref_mixed");                              // release the cell the slot owned (cell in rax)
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // reload the converted word
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // reload the element index
