@@ -8,8 +8,9 @@
 //!
 //! Key details:
 //! - Buffer handles are not refcounted and are never null: a missing element or key and a pop of
-//!   an empty array read as handle 0, which every buffer operation rejects with the
-//!   use-after-free diagnostic.
+//!   an empty array read as handle 0, which `??` and `empty()` treat as null and which every
+//!   buffer access (element reads and writes, `buffer_len`, `buffer_ptr`) rejects with the
+//!   use-after-free diagnostic; `buffer_free` of it is the idempotent no-op of a freed local.
 //! - Scalar, width and packed-record buffers are covered, since the element access that follows
 //!   an array read must keep the buffer's own element type.
 
@@ -158,6 +159,38 @@ echo buffer_len($miss);
 "#
     ));
     assert!(err.contains("use of buffer after buffer_free()"), "{}", err);
+}
+
+/// Verifies the invalid handle 0 of a missed read reads as null for `??` and `empty()`: an
+/// indexed miss, a hash miss, and `array_pop()`/`array_shift()` of an emptied array take the
+/// coalesce default, while live handles are not empty and do not coalesce.
+#[test]
+fn test_buffer_array_misses_coalesce_and_are_empty() {
+    let out = compile_and_run(&format!(
+        "{PRELUDE}{}",
+        r#"$fallback = filled(1, 77);
+$list = [filled(1, 1)];
+$h = ["a" => filled(1, 2)];
+$hit = $list[0] ?? $fallback;
+$miss = $list[9] ?? $fallback;
+$key = $h["a"] ?? $fallback;
+$nokey = $h["zz"] ?? $fallback;
+echo $hit[0], "|", $miss[0], "|", $key[0], "|", $nokey[0], "
+";
+echo empty($list[0]) ? "empty" : "live", "|", empty($list[9]) ? "empty" : "live", "|";
+echo empty($h["a"]) ? "empty" : "live", "|", empty($h["zz"]) ? "empty" : "live", "
+";
+$only = array_pop($list);
+$popped = array_pop($list) ?? $fallback;
+$shifted = array_shift($list) ?? $only;
+echo $popped[0], "|", $shifted[0], "
+";
+"#
+    ));
+    assert_eq!(out, "1|77|2|77
+live|empty|live|empty
+77|1
+");
 }
 
 /// Verifies `array_pop()` of an emptied buffer array hands back handle 0, which the next buffer

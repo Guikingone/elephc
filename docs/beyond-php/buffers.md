@@ -168,12 +168,14 @@ echo $byName["b"][1];               // 7
 An element read gives the buffer back, so `$streams[1][1]` reads element 1 of the second
 buffer; a write through such a read (`$streams[1][1] = 3`) is rejected at compile time, so
 assign the element to a variable first. Every element must have the same buffer type: a
-`buffer<int>` beside a `buffer<i32>` widens the array to `mixed`, which cannot hold a buffer. A missing element or key, and `array_pop()` or
-`array_shift()` of an empty array, read as an invalid handle that the next buffer operation
-rejects with the use-after-free error below. Freeing a buffer does not touch the arrays that
-hold its handle; their elements become stale aliases. A `mixed` view of such an array
-(`print_r()`, `var_dump()`, `json_encode()`, an `array<mixed>` parameter) shows each handle as
-an integer.
+`buffer<int>` beside a `buffer<i32>` widens the array to `mixed`, which cannot hold a buffer.
+A missing element or key, and `array_pop()` or `array_shift()` of an empty array, read as the
+invalid handle 0: `??` takes its default and `empty()` answers true for it, like a missing
+element of any other array, while an element read or write, `buffer_len()` or `buffer_ptr()` on
+it aborts with the use-after-free error below (`buffer_free()` of it is the same no-op as
+freeing an already freed local). Freeing a buffer does not touch the arrays that hold its
+handle; their elements become stale aliases. A `mixed` view of such an array (`print_r()`,
+`var_dump()`, `json_encode()`, an `array<mixed>` parameter) shows each handle as an integer.
 
 ## Buffer length
 
