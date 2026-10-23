@@ -674,16 +674,19 @@ echo sum($b, 2), "\n";
 }
 
 /// The documented example prints the same result with the optimizer on and off and resolves
-/// its buffer handle once in front of the `step` loop.
+/// its buffer handle once in front of the `step` loop; its second half steps a list of
+/// particle buffers, so the per-layer sums come from buffers handed back by the array.
 #[test]
 fn test_buffer_loops_example_hoists_resolution() {
     let source = include_str!("../../../examples/buffer-loops/main.php");
     assert!(function_ir(source, true, "step").contains("= buffer_resolve "));
-    let expected = "particles=8; sum=380\n";
+    let expected =
+        "particles=8; sum=380\nlayer 0: sum=300\nlayer 1: sum=308\nlayer 2: sum=316\nlayers=3; total=924\n";
     if std::env::var_os("ELEPHC_PHP_CHECK").is_some() {
         let model = source.replace("packed class ", "class ").replace("buffer<Particle>", "array")
             .replace("buffer_new<Particle>($count)", "array_map(fn($unused) => new Particle(), range(1, $count))")
-            .replace("buffer_free($p);", "unset($p);");
+            .replace("buffer_free($p);", "unset($p);")
+            .replace("buffer_free($particles);", "unset($particles);");
         let dir = make_cli_test_dir("elephc_buffer_loops_php_model");
         let path = dir.join("model.php"); fs::write(&path, model).unwrap();
         let php = Command::new("php").arg("-n").arg(&path).output().unwrap();
