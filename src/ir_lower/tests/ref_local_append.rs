@@ -79,14 +79,6 @@ function earlyNativeForeach(int $flag): void {
     foreach ($items as &$v) { $v = "z"; }
     echo "each:", $items[0], "\n";
 }
-class DynamicForeachOwner {}
-function earlyDynamicForeach(int $flag): void {
-    $items = [new DynamicForeachOwner(), "a"];
-    if ($flag < 0) { touchUnknown($items); return; }
-    foreach ($items as &$v) { $v = 1; }
-    unset($v);
-    echo "dynamic-each:", $items[0], "\n";
-}
 function earlyNativeIndex(int $flag): void {
     $items = ["b", "a"];
     if ($flag < 0) { touchUnknown($items); return; }
@@ -123,7 +115,6 @@ class AppendTarget {
 buildUnknown($argc); buildArray($argc); buildAssoc($argc); (new AppendTarget())->build($argc);
 buildMaybe($argc, $argc < 0);
 buildClosure($argc);
-earlyDynamicForeach($argc);
 appendReplaced();
 $items = [];
 for ($i = 0; $i < $argc; $i++) { $items[] = $i; }
@@ -205,6 +196,97 @@ touchUnknown($items); echo count($items);
         assert!(boxed > 0 && native > 0 && boxed + native >= 6,
             "{target}: cover boxed and native views in methods, functions, closures and main: {boxed}/{native}");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// A reference-backed `iterable` source reaches dynamic indexed and hash conversion with a lease.
+#[test]
+fn ref_local_dynamic_iterable_foreach_owns_writeback_on_all_targets() {
+    use crate::ir::{Immediate, Op, ValueDef};
+    use crate::types::PhpType;
+
+    let source = r#"<?php
+function keepDynamicIterable(iterable $items): iterable { return $items; }
+function touchDynamicIterable(&$items): void { $items = 123; }
+function mutateDynamicIterable(iterable $input, int $flag): void {
+    $items = keepDynamicIterable($input);
+    if ($flag < 0) {
+        touchDynamicIterable($items);
+        return;
+    }
+    foreach ($items as &$value) { $value = 1; }
+    unset($value);
+}
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter()
+            .find(|function| function.name == "mutateDynamicIterable")
+            .expect("dynamic iterable fixture function");
+        let iter_start = function.instructions.iter()
+            .find(|instruction| instruction.op == Op::IterStart)
+            .expect("dynamic iterable fixture must reach IterStart");
+        let source_value = function.value(iter_start.operands[0]).expect("iterator source value");
+        assert_eq!(source_value.php_type.codegen_repr(), PhpType::Iterable, "{name}");
+        let ValueDef::Instruction { inst: source_load, .. } = source_value.def else {
+            panic!("{name}: iterator source must be loaded from the local");
+        };
+        let source_load = function.instruction(source_load).expect("iterator source load");
+        assert_eq!(source_load.op, Op::LoadRefCell, "{name}");
+        let Some(Immediate::LocalSlot(source_slot)) = source_load.immediate else {
+            panic!("{name}: reference load must identify its raw local slot");
+        };
+        assert_eq!(
+            function.locals[source_slot.as_raw() as usize].php_type.codegen_repr(),
+            PhpType::Mixed,
+            "{name}: the iterable view must come from final Mixed storage",
+        );
+        assert!(
+            !function.instructions.iter().any(|instruction| instruction.op == Op::ArrayToHash),
+            "{name}: iterable source must stay dynamic until backend dispatch",
+        );
+
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let body = assembly.split_once("@fn name=mutateDynamicIterable ").unwrap().1
+            .split_once("@endfn name=mutateDynamicIterable").unwrap().0;
+        let body = body.split_once("op=iter_start").expect("iterator assembly").1;
+        let indexed_label = body.lines()
+            .find(|line| line.contains("iter_start_dyn_indexed") && line.trim_end().ends_with(':'))
+            .expect("dynamic indexed label");
+        let hash_label = body.lines()
+            .find(|line| line.contains("iter_start_dyn_hash") && line.trim_end().ends_with(':'))
+            .expect("dynamic hash label");
+        let object_label = body.lines()
+            .find(|line| line.contains("iter_start_dyn_object") && line.trim_end().ends_with(':'))
+            .expect("dynamic object label");
+        let indexed_start = body.find(indexed_label).unwrap();
+        let hash_start = body.find(hash_label).unwrap();
+        let object_start = body.find(object_label).unwrap();
+        let indexed = &body[indexed_start..hash_start];
+        let hash = &body[hash_start..object_start];
+
+        for (branch, conversion) in [
+            (indexed, "__rt_array_to_hash"),
+            (hash, "__rt_hash_to_mixed"),
+        ] {
+            let retain = branch.find("__rt_incref")
+                .unwrap_or_else(|| panic!("{name}: missing borrowed-source retain in:\n{branch}"));
+            let cleanup = branch.find("__rt_decref_mixed")
+                .unwrap_or_else(|| panic!("{name}: missing old Mixed-box cleanup in:\n{branch}"));
+            let convert = branch.find(conversion)
+                .unwrap_or_else(|| panic!("{name}: missing {conversion} in:\n{branch}"));
+            assert!(retain < cleanup && cleanup < convert,
+                "{name}: retain and retire the raw Mixed owner before {conversion}:\n{branch}");
+            let writeback = &branch[convert..];
+            let boxed = writeback.find("__rt_mixed_from_value")
+                .unwrap_or_else(|| panic!("{name}: converted owner must be boxed for raw-local writeback:\n{branch}"));
+            let transferred = writeback.find("__rt_decref_any")
+                .unwrap_or_else(|| panic!("{name}: owned writeback must transfer its retained container lease:\n{branch}"));
+            assert!(boxed < transferred,
+                "{name}: box the converted owner before transferring its retained lease:\n{branch}");
+        }
     }
 }
 

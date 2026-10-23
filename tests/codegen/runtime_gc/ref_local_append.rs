@@ -417,7 +417,8 @@ joinNativeNested(1); joinNativeNested(-1);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Dynamic by-reference iteration retakes and republishes a borrowed Mixed-array payload.
+/// Dynamic by-reference iteration retakes and republishes indexed and hash payloads borrowed
+/// through an `iterable` view of a raw Mixed reference-local.
 #[test]
 fn test_ref_local_append_dynamic_foreach_heap_balance() {
     let out = compile_and_run_with_heap_debug(r#"<?php
@@ -425,21 +426,35 @@ class DynamicForeachOwner {
     public static int $destroyed = 0;
     public function __destruct() { self::$destroyed++; }
 }
-function touchDynamicForeachItems(&$items): void {}
-function runDynamicForeach(int $flag): void {
-    for ($round = 0; $round < 3; $round++) {
-        $items = [new DynamicForeachOwner(), "x"];
-        if ($flag < 0) { touchDynamicForeachItems($items); return; }
-        foreach ($items as &$value) { $value = $round; }
-        unset($value);
-        echo count($items), ":", $items[0], ":", $items[1], "|";
+function keepDynamicForeachIterable(iterable $items): iterable { return $items; }
+function touchDynamicForeachItems(&$items): void { $items = 123; }
+function runDynamicForeach(iterable $input, int $round, int $flag): void {
+    $items = keepDynamicForeachIterable($input);
+    if ($flag < 0) {
+        touchDynamicForeachItems($items);
+        return;
     }
-    echo DynamicForeachOwner::$destroyed, "\n";
+    foreach ($items as &$value) { $value = $round; }
+    unset($value);
+    foreach ($items as $key => $value) { echo $key, "=", $value, ","; }
+    echo "|";
 }
-runDynamicForeach($argc);
+function exerciseDynamicForeach(int $flag): void {
+    for ($round = 0; $round < 3; $round++) {
+        runDynamicForeach([new DynamicForeachOwner(), "x"], $round, $flag);
+        runDynamicForeach(["left" => new DynamicForeachOwner(), "right" => "x"], $round, $flag);
+        echo "d=", DynamicForeachOwner::$destroyed, "\n";
+    }
+}
+exerciseDynamicForeach($argc);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "2:0:0|2:1:1|2:2:2|3\n", "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "0=0,1=0,|left=0,right=0,|d=2\n0=1,1=1,|left=1,right=1,|d=4\n0=2,1=2,|left=2,right=2,|d=6\n",
+        "{}",
+        out.stderr,
+    );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
