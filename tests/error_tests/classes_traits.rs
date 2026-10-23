@@ -1035,3 +1035,13 @@ fn test_error_source_throw_in_class_constant_initializer() {
         expect_error(source, "Constant expression contains invalid operations");
     }
 }
+
+/// A typed class constant naming a declared top-level constant checks the declared type
+/// against that constant's value, including when the declaration is later in the file (#1827).
+#[test]
+fn test_error_typed_constant_rejects_mismatched_referenced_constant() {
+    expect_error(
+        "<?php class Probe { const int Z = LATER; } const LATER = \"hi\";",
+        "Cannot use string as value for class constant Probe::Z of type int",
+    );
+}

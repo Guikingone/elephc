@@ -30,17 +30,23 @@ pub(crate) fn validate_deferred_class_constants(
     program: &Program,
 ) -> Vec<CompileError> {
     let mut errors = Vec::new();
+    // A class-constant initializer is a constant expression PHP evaluates lazily, on its first
+    // READ, so it may name a top-level constant declared later in the file or imported with
+    // `use const`. The statement pass records those names only when it reaches their
+    // declaration, so seed the program's own declarations for the declared-type check (#1827
+    // review).
+    let declared = crate::codegen_support::collect_constants(program, checker.target);
 
     for class in flattened_classes {
         for constant in &class.constants {
-            validate_constant_declaration(checker, &class.name, constant, &mut errors);
+            validate_constant_declaration(checker, &class.name, constant, &declared, &mut errors);
             validate_class_constant_contract(checker, class, constant, &mut errors);
         }
     }
 
     for interface in interface_map.values() {
         for constant in &interface.constants {
-            validate_constant_declaration(checker, &interface.name, constant, &mut errors);
+            validate_constant_declaration(checker, &interface.name, constant, &declared, &mut errors);
             validate_interface_constant_contract(
                 checker,
                 &interface.name,
@@ -53,7 +59,7 @@ pub(crate) fn validate_deferred_class_constants(
 
     for enum_unit in flattened_enums.values() {
         for constant in &enum_unit.constants {
-            validate_constant_declaration(checker, &enum_unit.name, constant, &mut errors);
+            validate_constant_declaration(checker, &enum_unit.name, constant, &declared, &mut errors);
             validate_interface_contracts_for_constant(
                 checker,
                 &enum_unit.name,
@@ -64,7 +70,7 @@ pub(crate) fn validate_deferred_class_constants(
         }
     }
 
-    validate_trait_constants(checker, program, &mut errors);
+    validate_trait_constants(checker, program, &declared, &mut errors);
     errors
 }
 
@@ -73,6 +79,7 @@ fn validate_constant_declaration(
     checker: &mut Checker,
     owner: &str,
     constant: &ClassConst,
+    declared_constants: &HashMap<String, (ExprKind, PhpType)>,
     errors: &mut Vec<CompileError>,
 ) {
     // PHP forbids `throw` in a constant expression, typed or not. The checker's deferred
@@ -105,9 +112,22 @@ fn validate_constant_declaration(
     if matches!(value.kind, ExprKind::Throw(_)) {
         return;
     }
+    // Resolve a declared top-level constant the statement pass has not reached yet, so the
+    // declared type is checked against its real value type; a name that is declared nowhere
+    // still fails with the undefined-constant diagnostic.
+    let mut seeded = Vec::new();
+    for (name, (_, ty)) in declared_constants {
+        if !checker.constants.contains_key(name) {
+            checker.constants.insert(name.clone(), ty.clone());
+            seeded.push(name.clone());
+        }
+    }
     let previous_class = checker.current_class.replace(owner.to_string());
     let actual = checker.infer_type(&value, &TypeEnv::default());
     checker.current_class = previous_class;
+    for name in seeded {
+        checker.constants.remove(&name);
+    }
     match actual {
         Ok(actual) if strict_type_accepts(checker, &expected, &actual, true) => {}
         Ok(actual) => errors.push(CompileError::new(
@@ -387,6 +407,7 @@ pub(super) fn strict_type_accepts(
 fn validate_trait_constants(
     checker: &mut Checker,
     program: &Program,
+    declared_constants: &HashMap<String, (ExprKind, PhpType)>,
     errors: &mut Vec<CompileError>,
 ) {
     for statement in program {
@@ -402,11 +423,11 @@ fn validate_trait_constants(
                     {
                         continue;
                     }
-                    validate_constant_declaration(checker, name, constant, errors);
+                    validate_constant_declaration(checker, name, constant, declared_constants, errors);
                 }
             }
             StmtKind::NamespaceBlock { body, .. } => {
-                validate_trait_constants(checker, body, errors);
+                validate_trait_constants(checker, body, declared_constants, errors);
             }
             _ => {}
         }
