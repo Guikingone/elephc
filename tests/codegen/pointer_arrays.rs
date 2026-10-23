@@ -846,3 +846,37 @@ echo st(), "|", rp(), "\n";
     );
     assert_eq!(out, "nullunset[null,ADDR]|nullunset\n");
 }
+
+/// Verifies a ternary returned from a pointer-array function whose branches merge a pointer
+/// literal with a boxed local (`$b ? [null] : $a`, `$a = [null]`) is converted back to pointer
+/// words: `foreach` sees null in either branch order, and the conversion keeps the heap-debug
+/// leak summary equal to a run without the calls.
+#[test]
+fn test_pointer_array_ternary_returns_merging_boxed_locals_hold_pointer_words() {
+    let prelude = r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function nul(bool $b): array<ptr<Vec2>|null> { $a = [null]; return $b ? [null] : $a; }
+function nul2(bool $b): array<ptr<Vec2>|null> { $a = [null]; return $b ? $a : [null]; }
+"#;
+    let calls = r#"$r = "";
+foreach ([true, false] as $b) {
+    foreach (nul($b) as $p) { $r .= $p === null ? "N" : "L"; }
+    foreach (nul2($b) as $p) { $r .= $p === null ? "N" : "L"; }
+    $l = nul($b);
+    $r .= (isset($l[0]) ? "s" : "u") . json_encode($l) . "|";
+}
+echo $r;
+"#;
+    let tail = "echo \"\\n\";\n";
+    let baseline = compile_and_run_with_heap_debug(&format!("{prelude}{tail}"));
+    let called = compile_and_run_with_heap_debug(&format!("{prelude}{calls}{tail}"));
+    let summary = |stderr: &str| {
+        stderr
+            .lines()
+            .find(|line| line.contains("HEAP DEBUG: leak summary"))
+            .map(str::to_string)
+    };
+    assert_eq!(called.stdout, "NNu[null]|NNu[null]|\n", "{}", called.stderr);
+    assert!(summary(&baseline.stderr).is_some(), "{}", baseline.stderr);
+    assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
+}

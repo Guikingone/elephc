@@ -24,7 +24,10 @@ pub(super) fn lower_ternary(
 ///
 /// An array-literal branch is built against the destination, so a `[null]` default bound to
 /// `array<ptr<T>|null>` (the fallback an associative unpack synthesizes for a missing key) holds
-/// the null pointer word even when the merge temporary boxes it.
+/// the null pointer word even when the merge temporary boxes it. An indexed pointer-array
+/// destination also types the merge temporary itself and lowers every branch against it, so a
+/// boxed local in either branch (`$b ? $a : [null]`) is converted to pointer words instead of
+/// being merged through a `mixed` box.
 pub(super) fn lower_ternary_with_destination(
     ctx: &mut LoweringContext<'_, '_>,
     condition: &Expr,
@@ -35,7 +38,12 @@ pub(super) fn lower_ternary_with_destination(
 ) -> LoweredValue {
     let cond = lower_expr(ctx, condition);
     let cond = ctx.truthy_consuming(cond, Some(condition.span));
-    let result_type = branch_merge_result_type(ctx, then_expr, else_expr, expr);
+    let pointer_array_destination =
+        destination.filter(|ty| crate::types::is_pointer_element_indexed_array(ty));
+    let result_type = match pointer_array_destination.map(PhpType::codegen_repr) {
+        Some(PhpType::Array(elem)) => PhpType::Array(Box::new(elem.codegen_repr())),
+        _ => branch_merge_result_type(ctx, then_expr, else_expr, expr),
+    };
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();
     let then_block = ctx.builder.create_named_block("ternary.then", Vec::new());
@@ -75,7 +83,7 @@ pub(super) fn lower_ternary_with_destination(
 }
 
 /// Stores one ternary branch into the merge temporary, building an array literal against the
-/// destination type when there is one.
+/// destination type when there is one, and any branch when the destination is a pointer array.
 fn store_branch_into_temp(
     ctx: &mut LoweringContext<'_, '_>,
     temp_name: &str,
@@ -86,7 +94,8 @@ fn store_branch_into_temp(
 ) {
     match destination {
         Some(destination)
-            if matches!(branch.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) =>
+            if crate::types::is_pointer_element_indexed_array(destination)
+                || matches!(branch.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) =>
         {
             let value = lower_expr_for_destination(ctx, branch, destination);
             store_value_into_temp(ctx, temp_name, temp_type, value, span);
