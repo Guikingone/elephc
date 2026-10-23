@@ -165,8 +165,9 @@ $byName = ["a" => $a, "b" => $b];
 echo $byName["b"][1];               // 7
 ```
 
-An element read gives the buffer back, so `$streams[1][1]` reads element 1 of the second
-buffer; a write through such a read (`$streams[1][1] = 3`) is rejected at compile time, so
+A ternary, `?:`, `??` or `match` whose arms are arrays of the same buffer type keeps the
+handles as words, whether the arms are literals, locals or an empty literal. An element read
+gives the buffer back, so `$streams[1][1]` reads element 1 of the second buffer; a write through such a read (`$streams[1][1] = 3`) is rejected at compile time, so
 assign the element to a variable first. Every element must have the same buffer type: a
 `buffer<int>` beside a `buffer<i32>` widens the array to `mixed`, which cannot hold a buffer.
 A missing element or key, and `array_pop()` or `array_shift()` of an empty array, read as the

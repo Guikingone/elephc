@@ -223,3 +223,42 @@ echo buffer_len($none);
     ));
     assert!(err.contains("use of buffer after buffer_free()"), "{}", err);
 }
+
+/// Verifies a ternary, `?:`, `??` or `match` whose arms are arrays of the same buffer type keeps
+/// the handles as words: the merged array is read back through indexing, `foreach` and
+/// `array_pop` without boxing either arm into `array<mixed>`, including an empty literal arm, a
+/// local arm and a typed return (`return $a ?: [$b]` used to read Mixed cells as handles).
+#[test]
+fn test_buffer_array_branch_merges_keep_the_handles() {
+    let out = compile_and_run(&format!(
+        "{PRELUDE}{}",
+        r#"function pick(buffer<int> $b): array<buffer<int> > {
+    $a = [$b];
+    return $a ?: [$b];
+}
+function choose(bool $first, buffer<int> $x, buffer<int> $y): array<buffer<int> > {
+    return match (true) { $first => [$x], default => [$y] };
+}
+$x = filled(3, 10);
+$y = filled(5, 20);
+$list = $argc > 100 ? [$x] : [$y];
+echo buffer_len($list[0]), "|";
+$withEmpty = $argc > 100 ? [] : [$x, $y];
+echo count($withEmpty), ":", buffer_len($withEmpty[1]), ":", $withEmpty[0][2], "|";
+foreach (pick($x) as $p) { echo buffer_len($p), ":", $p[0]; }
+$popped = pick($y);
+echo "|", buffer_len(array_pop($popped)), ":", count($popped), "|";
+$chosen = choose(false, $x, $y);
+echo buffer_len($chosen[0]), "|", buffer_len(choose(true, $x, $y)[0]), "|";
+$maybe = $argc > 100 ? [$x] : null;
+$fallback = $maybe ?? [$y];
+echo buffer_len($fallback[0]), "|";
+$orEmpty = $maybe ?? [];
+$present = ($argc > 100 ? null : [$x]) ?? [];
+echo count($orEmpty), ":", buffer_len($present[0]), "|";
+$byName = $argc > 100 ? ["a" => $x] : ["a" => $y, "b" => $x];
+echo count($byName), ":", buffer_len($byName["b"]), "\n";
+"#
+    ));
+    assert_eq!(out, "5|2:5:12|3:10|5:0|5|3|5|0:3|2:3\n");
+}

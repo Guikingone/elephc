@@ -755,6 +755,21 @@ pub(super) fn literal_pointer_element_type(literal_ty: &PhpType) -> Option<PhpTy
     matches!(elem, PhpType::Pointer(_)).then_some(elem)
 }
 
+/// Returns the raw-word element type of an array or hash type: a pointer word, as
+/// `literal_pointer_element_type` answers, or a buffer handle.
+///
+/// Branch merges use it to keep an array of buffers as word storage across a ternary, `?:` or
+/// `match`; the pointer-word conversions keep asking `literal_pointer_element_type`, since a
+/// buffer handle never comes boxed from a null literal.
+pub(super) fn literal_raw_word_element_type(literal_ty: &PhpType) -> Option<PhpType> {
+    let elem = match literal_ty.codegen_repr() {
+        PhpType::Array(elem) => elem.codegen_repr(),
+        PhpType::AssocArray { value, .. } => value.codegen_repr(),
+        _ => return None,
+    };
+    matches!(elem, PhpType::Pointer(_) | PhpType::Buffer(_)).then_some(elem)
+}
+
 /// Rewrites a packed record address or `null` stored into a pointer-element literal into the word.
 fn retype_pointer_literal_value(
     ctx: &mut LoweringContext<'_, '_>,
@@ -765,6 +780,18 @@ fn retype_pointer_literal_value(
     match pointer_elem {
         Some(elem) => ctx.retype_packed_address_for_pointer_sink(value, elem, Some(span)),
         None => value,
+    }
+}
+
+/// Returns true for an array or hash literal with no items.
+///
+/// A branch merge treats `[]` as a shape-only branch of an array of buffers: it adds no element
+/// and is lowered against the merged buffer-array type.
+pub(super) fn is_empty_literal(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::ArrayLiteral(items) => items.is_empty(),
+        ExprKind::ArrayLiteralAssoc(pairs) => pairs.is_empty(),
+        _ => false,
     }
 }
 
