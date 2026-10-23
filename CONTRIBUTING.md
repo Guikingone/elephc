@@ -198,7 +198,9 @@ and the optional-driver live database suites run when you add the PR to the queu
    your PR, and runs every tier on it. That is exactly the commit `main` will point to.
 3. When the required checks pass, the queue fast-forwards `main` to that commit. The push
    run that follows on `main` sees the queue's successful run on the same commit and skips
-   the test jobs.
+   the test jobs. The queue can land several PRs at once when the last of them passes, while
+   the runs of the ones ahead are still going; `merge-queue-cleanup.yml` cancels those runs on
+   the same push, since `main` already contains their commits.
 4. If a check fails, the PR leaves the queue and stays open, and the PRs behind it are
    rebuilt without it. Fix the failure, wait for the PR tier, and add it to the queue again.
 
