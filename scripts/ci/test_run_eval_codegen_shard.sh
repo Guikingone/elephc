@@ -14,6 +14,8 @@ trap 'rm -rf "$fixture_dir"' EXIT HUP INT TERM
 #   crash_racing both pass, then the process lingers and answers the watchdog's TERM by exiting
 #                3: to the runner, the same as a crash landing between the watchdog's liveness
 #                check and its signal, which no sleep can time reliably
+#   oom_killed   both pass, then an outside SIGKILL ends the process while a child it started
+#                keeps stdout open past the budget
 #   slow_exit    both pass, then the process lingers holding stdout
 #   stall_before only the first passes, then the process lingers
 cat > "$fixture_dir/codegen_tests" <<'EOF'
@@ -50,6 +52,12 @@ case "$FAKE_MODE" in
         echo "test result: ok. 2 passed; 0 failed"
         trap 'exit 3' TERM
         while :; do sleep 1; done
+        ;;
+    oom_killed)
+        echo "test codegen::eval::second ... ok"
+        echo "test result: ok. 2 passed; 0 failed"
+        sleep 8 &
+        kill -KILL $$
         ;;
     stall_before)
         sleep 30
@@ -117,6 +125,21 @@ test ! -e "$fixture_dir/nextest-args"
 status=$(run_shard crash_racing)
 if [ "$status" -ne 3 ]; then
     echo "a crash racing the watchdog's stop exited $status, expected 3" >&2
+    cat "$fixture_dir/out" >&2
+    exit 1
+fi
+test ! -e "$fixture_dir/nextest-args"
+
+# A pass an outside SIGKILL ended keeps its 137 even when a leftover child holds the pipeline
+# open past the budget: the watchdog stopped nothing, so it is neither a 124 nor a warning.
+status=$(run_shard oom_killed)
+if [ "$status" -ne 137 ]; then
+    echo "a pass killed from outside exited $status, expected 137" >&2
+    cat "$fixture_dir/out" >&2
+    exit 1
+fi
+if grep -q '::warning::' "$fixture_dir/out"; then
+    echo "a pass killed from outside was reported as a watchdog stop" >&2
     cat "$fixture_dir/out" >&2
     exit 1
 fi

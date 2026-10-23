@@ -132,6 +132,10 @@ while kill -0 "$tee_pid" 2>/dev/null; do
     # a process that already finished and replace its real status with 124: macOS shards
     # reported "75 passed ... finished in 1797.91s" and failed with 124 exactly that way.
     kill -0 "$tee_pid" 2>/dev/null || break
+    # The subshell writes the status file as soon as it reaps libtest, so the file means libtest
+    # already ended even while a child it left behind still holds the pipe open. Its status is its
+    # own, whatever ended it (an outside SIGKILL included), and the watchdog has nothing to stop.
+    [[ -e $pass1_status_file ]] && break
     now=$(date +%s)
     completed=$(completed_count)
     if [[ $completed -ne $last_completed ]]; then
@@ -159,8 +163,8 @@ wait "$tee_pid" || true
 pass1_status=$(cat "$pass1_status_file" 2>/dev/null || echo 1)
 if [[ -n $watchdog_reason ]]; then
     # 143 and 137 are the watchdog's own TERM and KILL. Any other status is one the pass returned
-    # by itself after the liveness check above but before the signal landed, and it stands: a
-    # crash racing the budget must not become the all-passed warning below.
+    # by itself after the checks above but before the signal landed, and it stands: a crash
+    # racing the budget must not become the all-passed warning below.
     case $pass1_status in
         137 | 143) pass1_status=124 ;;
         *)
