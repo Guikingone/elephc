@@ -36,6 +36,13 @@ impl Checker {
             }
         }
         let obj_ty = self.infer_type(object, env)?;
+        // A `?ptr<T>` reaches its fields like `ptr<T>`: the value is the bare address, and a
+        // null one faults with the null-pointer dereference fatal a null `ptr<T>` raises.
+        let nullable_pointer = match &obj_ty {
+            PhpType::Union(members) => crate::types::nullable_pointer_union_member(members),
+            _ => None,
+        };
+        let obj_ty = nullable_pointer.unwrap_or(obj_ty);
         if let PhpType::Object(class_name) = &obj_ty {
             let inferred = self.infer_property_on_class_type(class_name, property, expr);
             if inferred.is_err()

@@ -1169,6 +1169,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 Op::MixedClone, vec![borrowed.value], None, PhpType::Mixed,
                 Op::MixedClone.default_effects(), span,
             )
+        } else if crate::types::is_pointer_element_indexed_array(php_type) {
+            // A runtime bridge (callable invoker, eval binding) can pass an array of boxed Mixed
+            // cells; the conversion consumes this owned reference and returns raw pointer words.
+            let owned = crate::ir_lower::ownership::acquire_if_refcounted(self, borrowed, span);
+            self.emit_owned_value(
+                Op::ArrayToPointerWords, vec![owned.value], None, php_type.clone(),
+                Op::ArrayToPointerWords.default_effects(), span,
+            )
         } else {
             borrowed
         };
@@ -3514,6 +3522,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::MixedBox
                     | Op::MixedClone
                     | Op::ArrayToMixed
+                    | Op::ArrayToPointerWords
                     | Op::HashToMixed
                     | Op::InvokerRefArg
                     | Op::MixedNumericBinop
@@ -4665,6 +4674,40 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         boxed
     }
 
+    /// Widens a pointer array or hash to boxed Mixed elements, leaving any other value as it is.
+    ///
+    /// Each null pointer word becomes PHP null and each live word its integer address, so a view
+    /// of the container through `mixed` agrees with its `?ptr<T>` element reads. A borrowed
+    /// source is copied first, so the pointer container itself keeps its storage.
+    pub(crate) fn widen_pointer_container_to_mixed(
+        &mut self,
+        value: LoweredValue,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let source_ty = self.builder.value_php_type(value.value).codegen_repr();
+        let target_ty = match &source_ty {
+            PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Pointer(_)) => {
+                PhpType::Array(Box::new(PhpType::Mixed))
+            }
+            PhpType::AssocArray { key, value: elem }
+                if matches!(elem.codegen_repr(), PhpType::Pointer(_)) =>
+            {
+                PhpType::AssocArray {
+                    key: key.clone(),
+                    value: Box::new(PhpType::Mixed),
+                }
+            }
+            _ => return value,
+        };
+        crate::ir_lower::expr::coerce_container_to_mixed_payload(
+            self,
+            value,
+            &source_ty,
+            &target_ty,
+            span.unwrap_or_else(Span::dummy),
+        )
+    }
+
     /// Emits a value-producing opcode with computed storage and ownership metadata.
     pub(crate) fn emit_value(
         &mut self,
@@ -4730,6 +4773,39 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::Move.default_effects(),
             span,
         )
+    }
+
+    /// Retypes a value written into an array or hash element for pointer storage.
+    ///
+    /// A packed record address is stored as the `ptr<T>` word the checker types it as, whatever
+    /// the container's current element type: an empty local array takes its element type from
+    /// the first write, and a `Packed` value there would widen it to boxed `mixed`. `null`
+    /// becomes the word 0 only when the container already stores pointers; anywhere else it
+    /// stays PHP null.
+    pub(crate) fn retype_value_for_container_element(
+        &mut self,
+        container_ty: &PhpType,
+        value: LoweredValue,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let element = match container_ty.codegen_repr() {
+            PhpType::Array(element) => Some(*element),
+            PhpType::AssocArray { value, .. } => Some(*value),
+            _ => None,
+        };
+        if let Some(element) =
+            element.filter(|element| matches!(element.codegen_repr(), PhpType::Pointer(_)))
+        {
+            return self.retype_packed_address_for_pointer_sink(value, &element, span);
+        }
+        match self.builder.value_php_type(value.value).codegen_repr() {
+            PhpType::Packed(class_name) => self.retype_packed_address_for_pointer_sink(
+                value,
+                &PhpType::Pointer(Some(class_name)),
+                span,
+            ),
+            _ => value,
+        }
     }
 
     /// Emits a value-producing opcode whose result is an unconditional owned reference.

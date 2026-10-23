@@ -11,6 +11,7 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
+use crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE;
 
 /// Emits `__rt_json_encode_array_dynamic`: encodes a PHP indexed array to a JSON array literal.
 ///
@@ -176,7 +177,18 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_json_arr_dyn_value_object");                 // objects encode through the object descriptor walker
     emitter.instruction("cmp x12, #7");                                         // does this array store boxed mixed payloads?
     emitter.instruction("b.eq __rt_json_arr_dyn_value_mixed");                  // boxed mixed payloads encode through the mixed helper
+    emitter.instruction(&format!("cmp x12, #{}", POINTER_ARRAY_VALUE_TYPE));    // does this array store raw ?ptr<T> words?
+    emitter.instruction("b.eq __rt_json_arr_dyn_value_pointer");                // pointer words encode as null or an integer address
     emitter.instruction("b __rt_json_arr_dyn_value_null");                      // null and unsupported payloads encode as JSON null
+
+    emitter.label("__rt_json_arr_dyn_value_pointer");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
+    emitter.instruction("ldr x4, [sp, #40]");                                   // reload the loop index
+    emitter.instruction("add x4, x4, #3");                                      // skip the 24-byte array header
+    emitter.instruction("ldr x0, [x0, x4, lsl #3]");                            // load the raw pointer word
+    emitter.instruction("cbz x0, __rt_json_arr_dyn_value_null");                // a null pointer word encodes as JSON null
+    emitter.instruction("bl __rt_itoa");                                        // encode a live address as decimal digits
+    emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded element into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_int");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
@@ -433,7 +445,19 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_arr_dyn_value_object");                   // encode objects through the object descriptor walker
     emitter.instruction("cmp r10, 7");                                          // does this indexed array store boxed mixed payloads?
     emitter.instruction("je __rt_json_arr_dyn_value_mixed");                    // encode boxed mixed payloads through the mixed JSON helper
+    emitter.instruction(&format!("cmp r10, {}", POINTER_ARRAY_VALUE_TYPE));     // does this indexed array store raw ?ptr<T> words?
+    emitter.instruction("je __rt_json_arr_dyn_value_pointer");                  // pointer words encode as null or an integer address
     emitter.instruction("jmp __rt_json_arr_dyn_value_null");                    // unsupported payloads currently degrade to JSON null
+
+    emitter.label("__rt_json_arr_dyn_value_pointer");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index
+    emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header
+    emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8]");                  // load the raw pointer word
+    emitter.instruction("test rax, rax");                                       // is this the null pointer word?
+    emitter.instruction("jz __rt_json_arr_dyn_value_null");                     // a null pointer word encodes as JSON null
+    emitter.instruction("call __rt_itoa");                                      // encode a live address as a decimal JSON slice
+    emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded JSON element into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_int");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before loading the integer element payload

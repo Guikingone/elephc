@@ -99,8 +99,11 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
         )));
     }
     let array = expect_operand(inst, 0)?;
-    indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
+    let elem_ty = indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
     require_array_to_mixed_result(&inst.result_php_type.codegen_repr(), inst)?;
+    // A pointer array stamped before its first pointer write can carry another header tag, so the
+    // element type selects the pointer mode.
+    let pointer_elements = matches!(elem_ty.codegen_repr(), PhpType::Pointer(_));
     let done = ctx.next_label("array_to_mixed_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -112,6 +115,13 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
             ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load the indexed-array packed header to recover the runtime slot tag
             ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type byte into the low bits
             ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the source element value_type for Mixed boxing
+            if pointer_elements {
+                abi::emit_load_int_immediate(
+                    ctx.emitter,
+                    "x1",
+                    crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE,
+                );
+            }
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
         }
         Arch::X86_64 => {
@@ -125,10 +135,39 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
             ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load the indexed-array packed header to recover the runtime slot tag
             ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type byte into the low bits
             ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the source element value_type for Mixed boxing
+            if pointer_elements {
+                abi::emit_load_int_immediate(
+                    ctx.emitter,
+                    "rsi",
+                    crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE,
+                );
+            }
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
         }
     }
     ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a pointer-array slot binding through `__rt_array_to_pointer_words`.
+///
+/// Runtime bridges (the callable descriptor invoker, eval argument binding) can hand a pointer-array
+/// parameter an array of boxed Mixed cells; the helper rewrites those into raw `?ptr<T>` words and
+/// passes pointer arrays through. It consumes the operand's owned reference and returns the owner.
+pub(super) fn lower_array_to_pointer_words(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expects exactly one operand",
+            inst.op.name()
+        )));
+    }
+    let array = expect_operand(inst, 0)?;
+    let arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(array, arg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_to_pointer_words");
     store_if_result(ctx, inst)
 }
 
@@ -1487,8 +1526,13 @@ fn lower_runtime_polymorphic_array_push(
 }
 
 /// Restores semantic tags after shared word-write helpers specialize an empty array's storage.
+/// A pointer write restamps `POINTER_ARRAY_VALUE_TYPE`, which `__rt_array_set_int` clears on the
+/// first write into an empty array.
 fn stamp_scalar_array_write_result(ctx: &mut FunctionContext<'_>, stored_type: &PhpType) {
-    if matches!(stored_type, PhpType::Float | PhpType::Bool | PhpType::Callable) {
+    if matches!(
+        stored_type,
+        PhpType::Float | PhpType::Bool | PhpType::Callable | PhpType::Pointer(_)
+    ) {
         // The helper has already performed COW and possible growth. Stamp its returned
         // owner, not the original pointer, so aliases retain their original metadata.
         let result = abi::int_result_reg(ctx.emitter);
@@ -1830,7 +1874,7 @@ fn lower_array_set_aarch64(
     ctx.load_value_to_reg(array, "x0")?;
     ctx.load_value_to_reg(index, "x1")?;
     match value_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Float => {
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Pointer(_) => {
             ctx.load_value_to_reg(value, "x2")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
         }
@@ -1977,7 +2021,7 @@ fn lower_array_set_x86_64(
     ctx.load_value_to_reg(array, "rdi")?;
     ctx.load_value_to_reg(index, "rsi")?;
     match value_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Float => {
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Pointer(_) => {
             ctx.load_value_to_reg(value, "rdx")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
         }
@@ -2047,7 +2091,7 @@ fn emit_array_get_in_bounds_aarch64(
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable => {
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Pointer(_) => {
             ctx.emitter
                 .instruction(
                 &format!("add {}, {}, #24", array_reg, array_reg)
@@ -2185,7 +2229,7 @@ fn emit_array_get_in_bounds_x86_64(
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable => {
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Pointer(_) => {
             ctx.emitter
                 .instruction(
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
@@ -2275,7 +2319,7 @@ fn materialize_widened_array_payload_aarch64(
     result_ty: &PhpType,
 ) {
     match elem_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable => {
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Pointer(_) => {
             ctx.emitter.instruction("mov x0, x1");                              // move the unboxed low word into the integer result register
             if matches!(elem_ty, PhpType::Callable) {
                 abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
@@ -2306,7 +2350,7 @@ fn materialize_widened_array_payload_x86_64(
     result_ty: &PhpType,
 ) {
     match elem_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable => {
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Pointer(_) => {
             ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed low word into the integer result register
             if matches!(elem_ty, PhpType::Callable) {
                 abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
@@ -2564,6 +2608,10 @@ pub(super) fn emit_array_get_null_fallback(
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             }
         },
+        // A missing pointer element reads as the null pointer word, which is PHP null there.
+        PhpType::Pointer(_) => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
         _ => {
             abi::emit_load_int_immediate(
                 ctx.emitter,
@@ -2593,7 +2641,7 @@ fn lower_array_push_aarch64(
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::TaggedScalar => {
             lower_array_push_tagged_scalar_aarch64(ctx, array, value)?;
         }
-        PhpType::Int | PhpType::Bool => {
+        PhpType::Int | PhpType::Bool | PhpType::Pointer(_) => {
             ctx.load_value_to_reg(value, "x1")?;
             ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
@@ -2676,14 +2724,14 @@ fn emit_scalar_slot_element_tag(ctx: &mut FunctionContext<'_>, tag: Option<PhpTy
 /// not reachable here -- a `mixed` element type boxes instead of taking this path.
 fn scalar_slot_element_tag(elem_ty: &PhpType, value_ty: &PhpType) -> Option<PhpType> {
     let from_array = elem_ty.codegen_repr();
-    if matches!(from_array, PhpType::Float | PhpType::Bool) {
+    if matches!(from_array, PhpType::Float | PhpType::Bool | PhpType::Pointer(_)) {
         return Some(from_array);
     }
     if !matches!(from_array, PhpType::Never | PhpType::Void) {
         return None;
     }
     let from_value = value_ty.codegen_repr();
-    matches!(from_value, PhpType::Float | PhpType::Bool).then_some(from_value)
+    matches!(from_value, PhpType::Float | PhpType::Bool | PhpType::Pointer(_)).then_some(from_value)
 }
 
 /// Lowers an indexed-array append for x86_64 targets.
@@ -2705,7 +2753,7 @@ fn lower_array_push_x86_64(
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::TaggedScalar => {
             lower_array_push_tagged_scalar_x86_64(ctx, array, value)?;
         }
-        PhpType::Int | PhpType::Bool => {
+        PhpType::Int | PhpType::Bool | PhpType::Pointer(_) => {
             ctx.load_value_to_reg(array, "r11")?;
             ctx.load_value_to_reg(value, "rsi")?;
             ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper
@@ -2874,7 +2922,7 @@ fn lower_array_push_unboxed_mixed_aarch64(
     ctx.load_value_to_reg(value, "x0")?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match elem_ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float | PhpType::Pointer(_) => {
             ctx.emitter.instruction("mov x11, x1");                             // keep the unboxed scalar payload while loading the array receiver
             ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x1, x11");                             // pass the unboxed scalar payload to the append helper
@@ -2917,7 +2965,7 @@ fn lower_array_push_unboxed_mixed_x86_64(
     ctx.load_value_to_reg(value, "rax")?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match elem_ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float | PhpType::Pointer(_) => {
             ctx.emitter.instruction("mov r10, rdi");                            // keep the unboxed scalar payload while loading the array receiver
             ctx.load_value_to_reg(array, "r11")?;
             ctx.emitter.instruction("mov rsi, r10");                            // pass the unboxed scalar payload to the append helper
@@ -3259,7 +3307,9 @@ fn effective_array_set_value_type(
     if matches!(elem_ty, PhpType::Never | PhpType::Void) {
         return require_supported_array_set_value(value_ty, inst);
     }
-    if elem_ty == value_ty {
+    if elem_ty == value_ty
+        || matches!((&elem_ty, &value_ty), (PhpType::Pointer(_), PhpType::Pointer(_)))
+    {
         return require_supported_array_set_value(value_ty, inst);
     }
     Err(CodegenIrError::unsupported(format!(
@@ -3278,6 +3328,7 @@ fn require_supported_array_set_value(value_ty: PhpType, inst: &Instruction) -> R
             | PhpType::Float
             | PhpType::Str
             | PhpType::TaggedScalar
+            | PhpType::Pointer(_)
     ) {
         return Ok(value_ty);
     }
@@ -3318,6 +3369,10 @@ fn require_array_get_result(elem_ty: &PhpType, inst: &Instruction) -> Result<()>
     if matches!(elem_ty, PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float | PhpType::Str)
         && (result_ty == *elem_ty || result_ty == PhpType::Mixed)
     {
+        return Ok(());
+    }
+    // A pointer element is one raw word whatever its target tag, as in pointer properties.
+    if matches!((elem_ty, &result_ty), (PhpType::Pointer(_), PhpType::Pointer(_))) {
         return Ok(());
     }
     if elem_ty.is_refcounted() && result_ty == *elem_ty {

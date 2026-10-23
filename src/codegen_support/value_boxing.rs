@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Tag values and payload register conventions must match `__rt_mixed_from_value`.
+//! - `container_value_tag()` is the tag stored for an array or hash element: pointer words use
+//!   `POINTER_ARRAY_VALUE_TYPE` (13) instead of the integer tag a boxed pointer takes.
 //! - `mixed_unbox_payload_reg()` is the matching contract for the OTHER direction: it names
 //!   the register `__rt_mixed_unbox` returns its payload low word in, which is not the first
 //!   argument register on AArch64.
@@ -53,6 +55,20 @@ pub(crate) fn runtime_value_tag(ty: &PhpType) -> u8 {
         PhpType::TaggedScalar => {
             unreachable!("TaggedScalar carries its runtime tag in the tag register, not a static tag")
         }
+    }
+}
+
+/// Returns the runtime value tag an indexed-array header or hash entry records for an element of
+/// type `ty`.
+///
+/// A pointer element (`ptr<T>` or `?ptr<T>`) is stored as its raw word under
+/// `POINTER_ARRAY_VALUE_TYPE`, so dynamic readers show the null pointer as PHP null rather than
+/// integer 0. Every other type uses `runtime_value_tag`.
+pub(crate) fn container_value_tag(ty: &PhpType) -> i64 {
+    if matches!(ty.codegen_repr(), PhpType::Pointer(_)) {
+        crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE
+    } else {
+        runtime_value_tag(ty) as i64
     }
 }
 

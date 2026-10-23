@@ -67,7 +67,10 @@ pub(super) fn lower_arg_with_signature(
     if let Some(lowered) = lower_tracked_callable_array_param(ctx, sig, index, arg) {
         return lowered.value;
     }
-    let lowered = lower_expr(ctx, arg);
+    let lowered = match sig.params.get(index) {
+        Some((_, param_ty)) => lower_expr_for_destination(ctx, arg, param_ty),
+        None => lower_expr(ctx, arg),
+    };
     record_pointer_reference_argument(ctx, sig, index, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
 }

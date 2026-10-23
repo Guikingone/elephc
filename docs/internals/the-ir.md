@@ -793,6 +793,7 @@ preserves PHP exponentiation result rules.
 | `MixedUnbox(expected)` | `Heap(Mixed)` | expected storage | `reads_heap`, `may_fatal` |
 | `MixedTagOf` | `Heap(Mixed)` | `I64` | `reads_heap` |
 | `ArrayToMixed`, `HashToMixed` | array/hash | `Heap(Mixed)` | `alloc_heap`, `refcount_op` |
+| `ArrayToPointerWords` | owned array bound to a pointer-array slot | `Heap(Array)` with raw `?ptr<T>` words | `reads_heap`, `writes_heap`, `alloc_heap`, `refcount_op` |
 | `MixedCastBool`, `MixedCastInt`, `MixedCastFloat`, `MixedCastString` | `Heap(Mixed)` | scalar/string | `reads_heap`, maybe `alloc_concat`, `may_warn` |
 
 ### Strings

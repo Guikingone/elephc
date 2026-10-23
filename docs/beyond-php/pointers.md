@@ -131,6 +131,42 @@ element. A `?ptr<T>` variable that a `=== null` guard narrowed can still be pass
 as `?ptr<T>` again after the call. A plain `ptr<T>` variable stays a plain pointer after the
 call: if the callee stored `null`, it is address 0, not PHP `null`.
 
+## Arrays of pointers
+
+Indexed arrays and hashes can hold pointers: `ptr`, `ptr<T>`, packed record addresses such
+as `$buffer[$i]`, and `null`. Each element is the raw pointer word, a `null` element is the
+null pointer, and the array keeps pointer storage instead of boxing its elements. That holds
+for literals (including spreads such as `[$p, ...$more]` and `["a" => $p, ...$rest]`),
+appends, index and key writes, and `array_push()`:
+
+```php
+<?php
+packed class Vec2 { public int $x; public int $y; }
+
+$points = buffer_new<Vec2>(3);
+$picked = [$points[0], $points[2]];   // record addresses
+$picked[] = null;                     // stays an array of pointers
+foreach ($picked as $p) {
+    if ($p !== null) {
+        $p->x += 1;                   // writes through to the buffer
+    }
+}
+$byName = ["origin" => $points[0]];
+echo $byName["origin"]->x;            // 1
+```
+
+Reading an element gives a `?ptr<T>`: a `null` element and a missing key both read as
+`null`, so check `!== null` before reaching a field. `array_pop()` and `array_shift()`
+return a `?ptr<T>` the same way. Introspection (`var_dump`, `print_r`, `var_export`,
+`json_encode`, `serialize`), a `mixed` or `array<mixed>` view of the array, and builtins
+that read its elements at run time (`in_array()`, `array_sum()`, `vsprintf()`) see a `null`
+element as PHP `null` and a live one as its integer address. An array that reaches a pointer-array
+parameter from `call_user_func_array()`, a callable or `eval` (where its elements are ordinary
+PHP values) is converted on entry: `null` becomes the null pointer and an integer its address.
+
+Some array builtins (`array_merge()`, `array_slice()`, `array_map()`, `sort()` and similar) do
+not accept arrays of pointers yet and report an unsupported-feature error at compile time.
+
 ## Raw string copies
 
 ```php

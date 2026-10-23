@@ -17,6 +17,15 @@ pub(super) fn store_expr_into_temp(
     expr: &Expr,
     span: crate::span::Span,
 ) {
+    // A pointer-array temporary builds a literal branch as pointer words, so `[null]` is the
+    // null pointer rather than a boxed null the merged array cannot hold.
+    if super::indexed_array_literals::literal_pointer_element_type(&temp_type).is_some()
+        && matches!(expr.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_))
+    {
+        let value = lower_expr_for_destination(ctx, expr, &temp_type);
+        store_value_into_temp(ctx, temp_name, temp_type, value, span);
+        return;
+    }
     if temp_type.codegen_repr() == PhpType::Mixed {
         if let Some(value) = lower_array_value_for_merge(ctx, expr) {
             store_value_into_temp(ctx, temp_name, temp_type, value, span);
@@ -62,6 +71,9 @@ pub(super) fn branch_merge_result_type(
     else_expr: &Expr,
     expr: &Expr,
 ) -> PhpType {
+    if let Some(pointer_array) = pointer_array_branch_merge_type(ctx, [then_expr, else_expr]) {
+        return pointer_array;
+    }
     let then_ty = materialized_expr_type_for_merge(ctx, then_expr);
     let else_ty = materialized_expr_type_for_merge(ctx, else_expr);
     let branch_ty = nullable_aware_branch_merge_type(&then_ty, &else_ty);
@@ -85,6 +97,11 @@ pub(super) fn match_merge_result_type(
     default: Option<&Expr>,
     expr: &Expr,
 ) -> PhpType {
+    if let Some(pointer_array) =
+        pointer_array_branch_merge_type(ctx, arms.iter().map(|(_, result)| result).chain(default))
+    {
+        return pointer_array;
+    }
     let mut merged: Option<PhpType> = None;
     for result in arms.iter().map(|(_, result)| result).chain(default) {
         let arm_ty = materialized_expr_type_for_merge(ctx, result);
@@ -113,6 +130,9 @@ pub(super) fn short_ternary_merge_result_type(
     value: &Expr,
     default: &Expr,
 ) -> PhpType {
+    if let Some(pointer_array) = pointer_array_branch_merge_type(ctx, [value, default]) {
+        return pointer_array;
+    }
     let value_ty = materialized_expr_type_for_merge(ctx, value);
     let default_ty = materialized_expr_type_for_merge(ctx, default);
     // A `?ptr<T>` side keeps the merge nullable: its codegen form is the bare pointer word, and
@@ -134,6 +154,65 @@ pub(super) fn nullable_aware_branch_merge_type(left: &PhpType, right: &PhpType) 
             .unwrap_or(PhpType::Void);
     }
     materialized_merge_type(left, right)
+}
+
+/// Returns the pointer array or hash storage that merged branches share, if any.
+///
+/// Every branch must be a pointer array (or hash) value or a literal of only `null`s, with at
+/// least one of them holding pointers and all of them the same shape. A `[null]` branch types
+/// as `array<mixed>` on its own, so the ordinary merge would box the pointer branches, while the
+/// checker joins `ptr<T>` and `null` into one pointer element.
+pub(super) fn pointer_array_branch_merge_type<'e>(
+    ctx: &LoweringContext<'_, '_>,
+    branches: impl IntoIterator<Item = &'e Expr>,
+) -> Option<PhpType> {
+    let mut merged: Option<PhpType> = None;
+    let mut null_literal_shapes = Vec::new();
+    for branch in branches {
+        if super::indexed_array_literals::is_null_only_literal(branch) {
+            null_literal_shapes.push(matches!(branch.kind, ExprKind::ArrayLiteralAssoc(_)));
+            continue;
+        }
+        // A literal branch is typed the way its own lowering stamps it.
+        let ty = match &branch.kind {
+            ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, branch),
+            ExprKind::ArrayLiteralAssoc(pairs) => {
+                super::assoc_array_literals::assoc_array_literal_type_for_ir(ctx, pairs, branch)
+            }
+            _ => materialized_expr_type_for_merge(ctx, branch),
+        }
+        .codegen_repr();
+        super::indexed_array_literals::literal_pointer_element_type(&ty)?;
+        merged = Some(match merged {
+            None => ty,
+            Some(acc) => merge_pointer_containers(acc, ty)?,
+        });
+    }
+    let merged = merged?;
+    let merged_is_hash = matches!(merged, PhpType::AssocArray { .. });
+    null_literal_shapes
+        .into_iter()
+        .all(|is_hash| is_hash == merged_is_hash)
+        .then_some(merged)
+}
+
+/// Joins two pointer arrays or two pointer hashes into the storage both fit.
+pub(super) fn merge_pointer_containers(left: PhpType, right: PhpType) -> Option<PhpType> {
+    match (left, right) {
+        (PhpType::Array(left), PhpType::Array(right)) => Some(PhpType::Array(Box::new(
+            PhpType::widen_array_branch_element(*left, *right).codegen_repr(),
+        ))),
+        (
+            PhpType::AssocArray { key: left_key, value: left_value },
+            PhpType::AssocArray { key: right_key, value: right_value },
+        ) => Some(PhpType::AssocArray {
+            key: Box::new(if left_key == right_key { *left_key } else { PhpType::Mixed }),
+            value: Box::new(
+                PhpType::widen_array_branch_element(*left_value, *right_value).codegen_repr(),
+            ),
+        }),
+        _ => None,
+    }
 }
 
 /// Returns true when a PHP type can materialize PHP null at runtime.
@@ -418,7 +497,8 @@ pub(super) fn coerce_value_for_temp(
 /// concrete container must box its slots via `ArrayToMixed` / `HashToMixed`: storing the raw
 /// pointer would let Mixed-element reads misinterpret typed slot bytes. Borrowed sources are
 /// retained first so the conversion's copy-on-write split rewrites a private copy; owning
-/// temporaries transfer their reference into the converted result.
+/// temporaries transfer their reference into the converted result. A pointer-array target
+/// converts boxed indexed sources to pointer words under the same ownership rule.
 pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -464,7 +544,12 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
             }
             return unboxed;
         }
-        return value;
+        // An indexed array of boxed cells (`function boxed() { $a = [null]; return $a; }` is
+        // `array<void>` at the call site) merged into a pointer-array temporary would hand those
+        // cells to pointer-word readers, whichever way the merging arm was lowered.
+        return super::indexed_array_literals::convert_array_to_pointer_storage(
+            ctx, value, target_ty, span,
+        );
     }
     let op = match (source_ty, target_ty) {
         (PhpType::Array(source_elem), PhpType::Array(_))

@@ -603,11 +603,14 @@ pub(super) fn array_access_result_type(
 }
 
 /// Returns the materialized result type for a PHP array read, including miss-capable int reads.
+///
+/// A pointer element reads as `?ptr<T>`: the slot holds the bare word, a stored `null` is 0,
+/// and a missing key reads as 0 too, so the read must keep PHP null in its type.
 pub(crate) fn array_access_element_result_type(element_ty: PhpType) -> PhpType {
     if crate::codegen::sentinels::null_repr_is_tagged() && matches!(element_ty, PhpType::Int) {
         PhpType::TaggedScalar
     } else {
-        element_ty
+        crate::types::pointer_element_read_type(element_ty)
     }
 }
 

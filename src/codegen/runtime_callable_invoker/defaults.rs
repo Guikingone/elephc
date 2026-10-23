@@ -14,6 +14,8 @@
 //!   the invoker keeps its existing fatal diagnostic; nothing is ever replaced by null.
 //! - Compiler-generated lazy default Errors bypass constant folding and remain catchable throws.
 //! - Nested lazy Errors use native EIR helpers to preserve prefix effects and unwind cleanup.
+//! - An indexed default for a pointer-element slot stores raw pointer words (null = 0) under
+//!   `POINTER_ARRAY_VALUE_TYPE`, never boxed Mixed cells the callee would read as addresses.
 //! - Every refcounted default is FRESHLY allocated per invocation and hands the caller exactly one
 //!   owner, which `InvokerArgumentOwners` adopts and releases on the normal and escape paths alike.
 //! - Object defaults are constructed through the same pair of runtime entry points eval already
@@ -390,9 +392,14 @@ pub(super) fn emit_const_default_to_result(
     }
 }
 
-/// Returns the element type of a strictly indexed target slot.
+/// Returns the element type of a strictly indexed target slot. A pointer element (`ptr<T>` or
+/// `?ptr<T>`) comes back as its pointer storage type, so the default holds raw pointer words
+/// under `POINTER_ARRAY_VALUE_TYPE` as the callee's typed reads and writes expect.
 fn target_indexed_elem_ty(target_ty: Option<&PhpType>) -> Option<PhpType> {
     match target_ty?.codegen_repr() {
+        PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Pointer(_)) => {
+            Some(elem.codegen_repr())
+        }
         PhpType::Array(elem) => Some(*elem),
         _ => None,
     }
@@ -492,7 +499,10 @@ fn append_indexed_array_element(
             !matches!(default, InvokerDefaultValue::String(_)),
         ),
         PhpType::Float => append_indexed_float_element(emitter),
-        PhpType::Int | PhpType::Bool => append_indexed_scalar_element(emitter),
+        // A null pointer default is already the 0 word in the result register.
+        PhpType::Int | PhpType::Bool | PhpType::Pointer(_) => {
+            append_indexed_scalar_element(emitter)
+        }
         _ => {
             box_const_default_for_container(emitter, default, value_ty);
             append_indexed_refcounted_element(emitter);

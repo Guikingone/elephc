@@ -42,7 +42,10 @@ pub(super) fn lower_static_property_assign(
     value: &Expr,
     span: Span,
 ) {
-    let source = lower_expr(ctx, value);
+    let source = match static_property_type(ctx, receiver, property) {
+        Some(slot_ty) => crate::ir_lower::expr::lower_expr_for_destination(ctx, value, &slot_ty),
+        None => lower_expr(ctx, value),
+    };
     if has_deferred_default_error(ctx, receiver) {
         raise_deferred_default_error(ctx, receiver, &[source], span);
         return;
@@ -193,6 +196,7 @@ pub(super) fn lower_static_property_array_push(
     if let Some(property_ty) =
         static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
     {
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
         ctx.emit_void(
             Op::ArrayPush,
@@ -386,6 +390,7 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
     if let Some(property_ty) =
         static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
     {
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         let array_ty = property_ty.clone();
         let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
         // PHP reads a plain-variable index at STORE time, after the right-hand side, so

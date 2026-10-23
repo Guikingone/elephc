@@ -106,6 +106,7 @@ mod misc;
 mod pointers;
 mod pointer_strings;
 mod nullable_pointers;
+mod pointer_arrays;
 mod ffi;
 mod oop;
 mod static_class_features;

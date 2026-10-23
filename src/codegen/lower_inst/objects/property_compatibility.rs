@@ -125,6 +125,9 @@ pub(super) fn ensure_property_value_supported(
     if can_store_pointer_in_pointer_property(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if can_store_pointer_array_in_pointer_array_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     Err(CodegenIrError::unsupported(format!(
         "{} assigning PHP type {:?} to {}::${} with PHP type {:?}",
         inst.op.name(),
@@ -133,6 +136,26 @@ pub(super) fn ensure_property_value_supported(
         slot.property,
         slot.php_type
     )))
+}
+
+/// Returns true when an array of pointer words fills an array property of pointer words.
+///
+/// `array<ptr<T>>` and `array<?ptr<T>>` share one storage: every element is a raw pointer word
+/// and null is the word 0, so the element types differ only in what a read may return.
+fn can_store_pointer_array_in_pointer_array_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    match (value_ty.codegen_repr(), slot_ty.codegen_repr()) {
+        (PhpType::Array(value_elem), PhpType::Array(slot_elem)) => matches!(
+            (value_elem.codegen_repr(), slot_elem.codegen_repr()),
+            (PhpType::Pointer(_), PhpType::Pointer(_))
+        ),
+        (PhpType::AssocArray { value: value_elem, .. }, PhpType::AssocArray { value: slot_elem, .. }) => {
+            matches!(
+                (value_elem.codegen_repr(), slot_elem.codegen_repr()),
+                (PhpType::Pointer(_), PhpType::Pointer(_))
+            )
+        }
+        _ => false,
+    }
 }
 
 /// Returns true when a pointer value fills a pointer-typed property.

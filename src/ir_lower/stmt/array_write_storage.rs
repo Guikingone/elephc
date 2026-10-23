@@ -49,6 +49,8 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
     } else {
         load_array_local_for_write(ctx, array, span)
     };
+    let array_ty = ctx.builder.value_php_type(array_value.value);
+    let value = ctx.retype_value_for_container_element(&array_ty, value, Some(span));
     let pins = crate::ir_lower::expr::pin_in_flight_owners(
         ctx,
         &[array_value.value, value.value],
@@ -239,6 +241,12 @@ pub(super) fn indexed_array_write_updated_type(current_ty: PhpType, value_ty: Ph
             let elem_ty = elem_ty.codegen_repr();
             if elem_ty == value_ty.codegen_repr() {
                 return None;
+            }
+            // Every pointer is one raw word: a pointer with another target keeps pointer
+            // storage, refined to an untyped `ptr` element instead of boxed `mixed` slots.
+            if let (PhpType::Pointer(_), PhpType::Pointer(_)) = (&elem_ty, &value_ty.codegen_repr()) {
+                return crate::types::merge_pointer_elements(&elem_ty, &value_ty.codegen_repr())
+                    .map(|merged| PhpType::Array(Box::new(merged.codegen_repr())));
             }
             let value_ty = normalize_array_write_element_type(value_ty.codegen_repr());
             if elem_ty == value_ty {

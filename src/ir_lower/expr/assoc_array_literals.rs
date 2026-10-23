@@ -20,6 +20,20 @@ pub(super) fn lower_assoc_array_literal_with_guard(
     ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, Expr)], expr: &Expr, guarded: bool,
 ) -> LoweredValue {
     let hash_ty = assoc_array_literal_type_for_ir(ctx, pairs, expr);
+    lower_assoc_array_literal_as(ctx, pairs, expr, guarded, hash_ty)
+}
+
+/// Lowers an associative literal into an explicitly chosen hash storage type.
+///
+/// The storage type drives the per-value pointer retype, so a destination of pointer values
+/// (`["k" => null]` bound to `array<string, ?ptr<T>>`) stores each `null` as the word 0.
+pub(super) fn lower_assoc_array_literal_as(
+    ctx: &mut LoweringContext<'_, '_>,
+    pairs: &[(Expr, Expr)],
+    expr: &Expr,
+    guarded: bool,
+    hash_ty: PhpType,
+) -> LoweredValue {
     let hash = ctx.emit_value(
         Op::HashNew,
         Vec::new(),
@@ -35,6 +49,13 @@ pub(super) fn lower_assoc_array_literal_with_guard(
         let key_value = lower_expr(ctx, key);
         let key = root_array_literal_item(ctx, key_value, key.span, &mut roots);
         let value_operand = lower_expr(ctx, value);
+        // A packed record address or `null` stored as a pointer value is the pointer word.
+        let value_operand = match &hash_ty {
+            PhpType::AssocArray { value: value_ty, .. } => {
+                ctx.retype_packed_address_for_pointer_sink(value_operand, value_ty, Some(value.span))
+            }
+            _ => value_operand,
+        };
         let value = root_array_literal_item(ctx, value_operand, value.span, &mut roots);
         let hash = load_published_container(ctx, owner, hash_ty.clone(), expr.span);
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
@@ -54,6 +75,13 @@ pub(super) fn assoc_array_literal_type_from_spreads(
     items: &[Expr],
     expr: &Expr,
 ) -> PhpType {
+    // Pointers and `null`s (direct, or a spread of a null-only literal) share pointer storage.
+    if let Some(pointer) = pointer_literal_element_type(ctx, items) {
+        return PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(pointer),
+        };
+    }
     let mut value_ty = PhpType::Never;
     for item in items {
         let next = match &item.kind {
@@ -104,6 +132,8 @@ pub(super) fn assoc_array_literal_type_for_ir(
     let (Some(key_ty), Some(value_ty)) = (key_ty, value_ty) else {
         return fallback_expr_type(expr);
     };
+    let value_ty = pointer_literal_element_type(ctx, pairs.iter().map(|(_, value)| value))
+        .unwrap_or(value_ty);
     PhpType::AssocArray {
         key: Box::new(key_ty),
         value: Box::new(value_ty),

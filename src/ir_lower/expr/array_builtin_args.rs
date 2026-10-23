@@ -49,6 +49,10 @@ pub(super) fn lower_static_array_push(
         // Re-read the local for every append: an earlier one may have replaced the slot's
         // pointer, and appending into the stale one would write to freed storage.
         let array_value = ctx.load_local(array_name, Some(args[0].span));
+        // A packed record address or `null` appended to pointers is the pointer word, as in
+        // the `$a[] = ...` statement.
+        let array_ty = ctx.builder.value_php_type(array_value.value);
+        let value = ctx.retype_value_for_container_element(&array_ty, value, Some(expr.span));
         let (array_value, updated_ty, needs_storeback) =
             if crate::ir_lower::stmt::ref_bound_mixed_indexed_array_write(ctx, array_name, value) {
                 (array_value, Some(ctx.local_type(array_name)), true)

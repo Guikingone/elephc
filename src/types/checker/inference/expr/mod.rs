@@ -128,7 +128,9 @@ impl Checker {
             if matches!(value_ty, PhpType::Never) {
                 value_ty = next;
             } else if value_ty != next {
-                value_ty = PhpType::Mixed;
+                // Pointers and `null` share one pointer-word element.
+                value_ty = crate::types::merge_pointer_elements(&value_ty, &next)
+                    .unwrap_or(PhpType::Mixed);
             }
         }
         if matches!(value_ty, PhpType::Never) {

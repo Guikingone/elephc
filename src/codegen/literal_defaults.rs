@@ -651,6 +651,11 @@ fn literal_array_element(
             ExprKind::StringLiteral(value) => Ok(LiteralArrayElement::Str(value.clone())),
             _ => Err(unsupported_literal_default(context, elem_type, op_name)),
         },
+        // A pointer element's only literal is `null`, the null pointer word 0.
+        PhpType::Pointer(_) => match expr {
+            ExprKind::Null => Ok(LiteralArrayElement::Int(0)),
+            _ => Err(unsupported_literal_default(context, elem_type, op_name)),
+        },
         _ => Err(unsupported_literal_default(context, elem_type, op_name)),
     }
 }
@@ -809,7 +814,7 @@ fn append_array_literal_element(
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             append_refcounted_array_literal_element(ctx, value_type);
         }
-        PhpType::Int | PhpType::Bool => append_scalar_array_literal_element(ctx),
+        PhpType::Int | PhpType::Bool | PhpType::Pointer(_) => append_scalar_array_literal_element(ctx),
         PhpType::Float => append_float_array_literal_element(ctx),
         PhpType::Str => append_string_array_literal_element(ctx),
         other => {
@@ -1094,12 +1099,13 @@ fn materialize_assoc_literal_concrete_value_x86_64(
     }
 }
 
-/// Returns the runtime value tag to pass for one literal hash insertion.
+/// Returns the runtime value tag to pass for one literal hash insertion. A pointer hash entry
+/// keeps its raw word under `POINTER_ARRAY_VALUE_TYPE`, as `hash_set` stores it.
 fn assoc_literal_value_tag(storage_value_type: &PhpType, actual_value_type: &PhpType) -> i64 {
     if matches!(storage_value_type.codegen_repr(), PhpType::Mixed | PhpType::Iterable) {
         runtime_value_tag(&actual_value_type.codegen_repr()) as i64
     } else {
-        runtime_value_tag(&storage_value_type.codegen_repr()) as i64
+        crate::codegen::container_value_tag(&storage_value_type.codegen_repr())
     }
 }
 
@@ -1116,6 +1122,7 @@ fn array_element_size(elem_type: &PhpType) -> Result<i64> {
         | PhpType::AssocArray { .. }
         | PhpType::Union(_)
         | PhpType::Iterable
+        | PhpType::Pointer(_)
         | PhpType::Void => Ok(8),
         other => Err(CodegenIrError::unsupported(format!(
             "array default element PHP type {:?}",

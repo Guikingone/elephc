@@ -431,14 +431,7 @@ pub(super) fn lower_foreach(
         ctx.mark_local_initialized(value_var);
     } else {
         let value_ty = foreach_value_type(&source_ty);
-        let value = ctx.emit_value(
-            Op::IterCurrentValue,
-            vec![iterator.value],
-            None,
-            value_ty.clone(),
-            Op::IterCurrentValue.default_effects(),
-            Some(array.span),
-        );
+        let value = lower_foreach_current_value(ctx, iterator, &source_ty, &value_ty, array.span);
         ctx.store_local(value_var, value, value_ty, Some(array.span));
     }
     lower_block(ctx, body);
@@ -760,13 +753,58 @@ pub(super) fn foreach_value_type(source_ty: &PhpType) -> PhpType {
             PhpType::Callable => PhpType::Callable,
             PhpType::Object(class_name) => PhpType::Object(class_name),
             elem @ (PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool) => elem,
+            // A pointer element is its raw word and may be the null pointer, so the binding is
+            // `?ptr<T>` like an indexed read of the same element.
+            pointer @ PhpType::Pointer(_) => crate::types::pointer_element_read_type(pointer),
             _ => PhpType::Mixed,
         },
+        // A hash of pointers binds the pointer word too (see `lower_foreach_current_value`); a
+        // stored `null` is the word 0, so the binding keeps PHP null.
+        PhpType::AssocArray { value, .. } if matches!(value.codegen_repr(), PhpType::Pointer(_)) => {
+            crate::types::pointer_element_read_type(value.codegen_repr())
+        }
         PhpType::Object(class_name) if class_name == "Phar" || class_name == "PharData" => {
             PhpType::Object("PharFileInfo".to_string())
         }
         _ => PhpType::Mixed,
     }
+}
+
+/// Emits the current foreach value with the type the loop variable binds.
+///
+/// Hash iteration hands every entry out boxed as `Mixed`, and a pointer entry is boxed as an
+/// integer-like payload. For a hash of pointers the box is cast back to that word and retyped,
+/// so `$p->x` and `$p === null` see the pointer instead of a boxed integer.
+fn lower_foreach_current_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    iterator: LoweredValue,
+    source_ty: &PhpType,
+    value_ty: &PhpType,
+    span: Span,
+) -> LoweredValue {
+    let unbox_hash_pointer = matches!(source_ty, PhpType::AssocArray { .. })
+        && matches!(value_ty.codegen_repr(), PhpType::Pointer(_));
+    let current_ty = if unbox_hash_pointer { PhpType::Mixed } else { value_ty.clone() };
+    let value = ctx.emit_value(
+        Op::IterCurrentValue,
+        vec![iterator.value],
+        None,
+        current_ty,
+        Op::IterCurrentValue.default_effects(),
+        Some(span),
+    );
+    if !unbox_hash_pointer {
+        return value;
+    }
+    let word = crate::ir_lower::expr::coerce_to_int_at_span(ctx, value, Some(span));
+    ctx.emit_value(
+        Op::Move,
+        vec![word.value],
+        None,
+        value_ty.clone(),
+        Op::Move.default_effects(),
+        Some(span),
+    )
 }
 
 /// Returns the local value type used when a foreach binds the value by reference.

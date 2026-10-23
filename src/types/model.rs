@@ -319,7 +319,8 @@ impl PhpType {
     ///
     /// `Never` is the placeholder element type of an empty array literal, so it
     /// contributes no runtime value and defers to the populated branch. The
-    /// `false` subtype and `bool` share the boolean contract; every other
+    /// `false` subtype and `bool` share the boolean contract, and pointers and
+    /// `null` share the pointer word (see `merge_pointer_elements`); every other
     /// disagreement requires boxed `Mixed` element storage.
     pub fn widen_array_branch_element(a: PhpType, b: PhpType) -> PhpType {
         if a == b {
@@ -337,6 +338,9 @@ impl PhpType {
         ) {
             return PhpType::Bool;
         }
+        if let Some(pointer) = merge_pointer_elements(&a, &b) {
+            return pointer;
+        }
         PhpType::Mixed
     }
 
@@ -349,6 +353,50 @@ impl PhpType {
             key: Box::new(PhpType::widen(t1.hash_key_type(), t2.hash_key_type())),
             value: Box::new(PhpType::widen(t1.hash_value_type(), t2.hash_value_type())),
         }
+    }
+}
+
+/// Merges two array element types that are pointers, `?ptr<T>` or `null` into one pointer element.
+///
+/// Every pointer is one raw word, so pointers with different target tags share an untyped `ptr`
+/// slot, and a `null` element is the null pointer word, which keeps the element `?ptr<T>`.
+/// Returns `None` when either side is something else (or both are `null`), leaving the caller's
+/// ordinary widening to `mixed`.
+pub(crate) fn merge_pointer_elements(a: &PhpType, b: &PhpType) -> Option<PhpType> {
+    /// Splits a pointer-like element into its pointer (none for `null`) and nullability.
+    fn split(ty: &PhpType) -> Option<(Option<PhpType>, bool)> {
+        match ty {
+            PhpType::Pointer(_) => Some((Some(ty.clone()), false)),
+            PhpType::Void => Some((None, true)),
+            PhpType::Union(members) => nullable_pointer_union_member(members).map(|p| (Some(p), true)),
+            _ => None,
+        }
+    }
+    let (left, left_null) = split(a)?;
+    let (right, right_null) = split(b)?;
+    let pointer = match (left, right) {
+        (Some(left), Some(right)) if left == right => left,
+        (Some(_), Some(_)) => PhpType::Pointer(None),
+        (Some(pointer), None) | (None, Some(pointer)) => pointer,
+        (None, None) => return None,
+    };
+    Some(if left_null || right_null {
+        PhpType::Union(vec![pointer, PhpType::Void])
+    } else {
+        pointer
+    })
+}
+
+/// Returns the type of an element read that can miss: a pointer element becomes `?ptr<T>`.
+///
+/// A missing pointer element is the null pointer word, which is PHP null, so the read keeps
+/// `null` in its type (a plain pointer would make `=== null` fold to false). Other element
+/// types are returned unchanged.
+pub(crate) fn pointer_element_read_type(element: PhpType) -> PhpType {
+    if matches!(element, PhpType::Pointer(_)) {
+        PhpType::Union(vec![element, PhpType::Void])
+    } else {
+        element
     }
 }
 
@@ -372,6 +420,15 @@ pub(crate) fn nullable_pointer_union_member(members: &[PhpType]) -> Option<PhpTy
 /// Returns whether a type is a `?ptr<T>` union, stored as a pointer word where 0 is null.
 pub(crate) fn is_nullable_pointer_type(php_type: &PhpType) -> bool {
     matches!(php_type, PhpType::Union(members) if nullable_pointer_union_member(members).is_some())
+}
+
+/// Returns whether `ty` is an indexed array whose elements are stored as raw pointer words
+/// (`array<ptr<T>>` or `array<ptr<T>|null>`), as opposed to boxed Mixed cells.
+pub(crate) fn is_pointer_element_indexed_array(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Pointer(_))
+    )
 }
 
 /// Returns the type a value of a declared type is boxed into `mixed` as: its codegen type, except
