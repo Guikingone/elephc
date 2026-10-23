@@ -9,6 +9,8 @@
 //! - Covers literals, appends, index and key writes, foreach over arrays and hashes, `null`
 //!   elements and missing keys (both read back as PHP null), untyped `ptr` elements, and
 //!   `array_push`/`array_pop` (task 6da89f60).
+//! - Hash literals that mix pointers with `null` or with other targets are tested at top level,
+//!   where `main` is lowered from the checker's finished environment.
 
 use crate::support::*;
 
@@ -307,4 +309,31 @@ echo $b->named["a"] === null ? "null" : "set", ":", $b->named["b"]->x, "\n";
 "#,
     );
     assert_eq!(out, "null:7|null:7|8|null:8|1|null:8\n");
+}
+
+/// Verifies a top-level associative literal that mixes a pointer with `null`, or two pointer
+/// targets, keeps pointer-word storage: the null element reads as PHP null, the live one reaches
+/// its record, and two targets keep their addresses (an untyped `ptr` element).
+///
+/// Top level on purpose: `main` is lowered from the checker's finished environment, so a literal
+/// the checker typed `array<string, mixed>` was converted element by element into mixed integers.
+#[test]
+fn test_pointer_hash_literals_mixing_null_and_targets_keep_pointer_words() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+packed class A { public int $x; }
+function at(buffer<Vec2> $v, int $i): ptr<Vec2> { return $v[$i]; }
+function id(?ptr $p): ?ptr { return $p; }
+$v = buffer_new<Vec2>(1);
+$v[0]->x = 10;
+$p = at($v, 0);
+$h = ["a" => $p, "b" => null];
+echo $h["b"] === null ? "null" : "wild", "|", $h["a"]->x, "|";
+$a = buffer_new<A>(1);
+$t = ["v" => $v[0], "a" => $a[0]];
+echo id($t["v"]) === $v[0] ? "same" : "diff", id($t["a"]) === $a[0] ? "same" : "diff", "\n";
+"#,
+    );
+    assert_eq!(out, "null|10|samesame\n");
 }

@@ -144,7 +144,10 @@ impl Checker {
                     });
                     val_ty = Some(match val_ty {
                         Some(current) if current == vt => current,
-                        Some(_) => PhpType::Mixed,
+                        // Pointers and `null` share one pointer-word element, as in an indexed
+                        // literal; anything else widens to `mixed`.
+                        Some(current) => crate::types::merge_pointer_elements(&current, &vt)
+                            .unwrap_or(PhpType::Mixed),
                         None => vt,
                     });
                 }
