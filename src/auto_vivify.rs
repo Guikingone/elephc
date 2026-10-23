@@ -524,19 +524,26 @@ fn collect_catch(clause: &CatchClause, refs: &HashMap<String, FnRefs>, scope: &m
 }
 
 /// Scans an expression for by-reference output arguments, recursing into children.
-/// Builtins whose by-reference OUTPUT parameter receives an ARRAY from the callee.
+/// Builtins whose by-reference OUTPUT parameters must stay UNDECLARED.
 ///
-/// These stay UNDECLARED. php leaves the local undefined before the call, and the checker's
-/// undefined-variable path gives it `Mixed`, which `count()` and element access already
-/// handle. A `null` declaration would instead bind `Void`, and `count($matches)` would reach
-/// the EIR backend as `count for PHP type Void`; declaring it as an empty array fixes the
-/// count but types the elements `never`, so the values the callee writes read back empty.
+/// php leaves the local undefined before the call, and the checker's undefined-variable path
+/// gives it `Mixed`, which `count()` and element access already handle. A `null` declaration
+/// would instead bind `Void`: `count($matches)` then reaches the EIR backend as `count for PHP
+/// type Void`, and declaring the output as an empty array fixes the count but types the
+/// elements `never`, so the values the callee writes read back empty.
+///
+/// `xml_parse_into_struct()` joins them for the same `Void` reason: its checker hook accepts
+/// `$values`/`$index` undefined, and its lowering reads the operand's type to tell an OMITTED
+/// `$index` from a supplied one. A pre-declared `$index = null` binds it `Void`, which is
+/// indistinguishable from the planned default, so the index array would never be built.
+///
 /// Every other output keeps the neutral `null` declaration, which is what closes the
 /// `Undefined variable` diagnostic for a later plain read.
 fn builtin_array_output(name: &str, index: usize) -> bool {
     matches!(
         (crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str(), index),
         ("preg_match", 2) | ("preg_match_all", 2)
+            | ("xml_parse_into_struct", 2) | ("xml_parse_into_struct", 3)
     )
 }
 
