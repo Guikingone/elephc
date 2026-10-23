@@ -473,11 +473,22 @@ pub(super) fn assoc_array_literal_type_from_entries(
     // An entry of only pointers, pointer spreads and `null`s is a pointer hash, with or without a
     // `null`: the merge below sees a spread entry's element type where it expects the source's
     // container, so it would widen every spread to `mixed`.
+    // A keyed or bare value is typed once for the pointer probe and the merge below, so a value
+    // holding a nested merge is scanned once per nesting level.
+    let value_types: Vec<Option<PhpType>> = entries
+        .iter()
+        .map(|entry| match entry {
+            ArrayEntry::Spread(_) => None,
+            ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => {
+                Some(array_literal_element_type_for_ir(ctx, value))
+            }
+        })
+        .collect();
     if let Some(pointer) = pointer_literal_entries_element_type(
         ctx,
-        entries.iter().map(|entry| match entry {
-            ArrayEntry::Spread(source) => (spread_entry_source(source), true),
-            ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => (value, false),
+        entries.iter().zip(&value_types).map(|(entry, value_ty)| match entry {
+            ArrayEntry::Spread(source) => (spread_entry_source(source), true, None),
+            ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => (value, false, value_ty.clone()),
         }),
         false,
     ) {
@@ -487,16 +498,17 @@ pub(super) fn assoc_array_literal_type_from_entries(
         };
     }
     let mut value_ty = PhpType::Never;
-    for entry in entries {
-        let next = match entry {
-            ArrayEntry::Spread(inner) => {
+    for (entry, entry_value_ty) in entries.iter().zip(value_types) {
+        let next = match (entry, entry_value_ty) {
+            (ArrayEntry::Spread(inner), _) => {
                 match spread_source_storage_type_for_ir(ctx, inner).codegen_repr() {
                     PhpType::Array(elem) => elem.codegen_repr(),
                     PhpType::AssocArray { value, .. } => value.codegen_repr(),
                     _ => PhpType::Mixed,
                 }
             }
-            ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => {
+            (_, Some(ty)) => ty.codegen_repr(),
+            (ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value), None) => {
                 array_literal_element_type_for_ir(ctx, value).codegen_repr()
             }
         };
@@ -725,15 +737,18 @@ pub(crate) fn array_literal_type_for_ir(
     }) {
         return assoc_array_literal_type_from_spreads(ctx, items, expr);
     }
-    if let Some(pointer) = pointer_literal_element_type(ctx, items) {
+    // Each item is typed once and read by both the pointer probe and the ordinary merge: an item
+    // holding a nested merge (`$m ?? [$inner, null]`) would otherwise be scanned twice per level.
+    let item_types: Vec<PhpType> =
+        items.iter().map(|item| array_literal_element_type_for_ir(ctx, item)).collect();
+    let probe_types: Vec<Option<PhpType>> = item_types.iter().cloned().map(Some).collect();
+    if let Some(pointer) = pointer_literal_element_type(ctx, items, &probe_types) {
         return PhpType::Array(Box::new(pointer));
     }
-    let mut elem_ty = array_literal_element_type_for_ir(ctx, &items[0]);
-    for item in items.iter().skip(1) {
-        elem_ty = merge_ir_indexed_element_type(
-            elem_ty,
-            array_literal_element_type_for_ir(ctx, item),
-        );
+    let mut item_types = item_types.into_iter();
+    let mut elem_ty = item_types.next().expect("a non-empty literal has a first item");
+    for item_ty in item_types {
+        elem_ty = merge_ir_indexed_element_type(elem_ty, item_ty);
     }
     PhpType::Array(Box::new(elem_ty))
 }
@@ -849,15 +864,20 @@ fn lower_spread_source(
 /// `?ptr<T>`, so `[$p, null]` keeps raw pointer storage instead of widening every element to a
 /// boxed `mixed` (where `$a[0]->x` could no longer reach the record). Literals without a `null`
 /// return `None` and keep the ordinary merge.
+///
+/// `value_types` holds, per value and in order, the type the caller already gave it with
+/// `array_literal_element_type_for_ir` (`Some`), so the value is not typed again here; a `None`
+/// (a spread, or a value the caller typed another way) is typed by the probe itself.
 pub(super) fn pointer_literal_element_type<'e>(
     ctx: &LoweringContext<'_, '_>,
     values: impl IntoIterator<Item = &'e Expr>,
+    value_types: &[Option<PhpType>],
 ) -> Option<PhpType> {
     pointer_literal_entries_element_type(
         ctx,
-        values.into_iter().map(|value| match &value.kind {
-            ExprKind::Spread(source) => (source.as_ref(), true),
-            _ => (value, false),
+        values.into_iter().zip(value_types).map(|(value, ty)| match &value.kind {
+            ExprKind::Spread(source) => (source.as_ref(), true, None),
+            _ => (value, false, ty.clone()),
         }),
         true,
     )
@@ -869,25 +889,26 @@ pub(super) fn pointer_literal_element_type<'e>(
 /// `null`s contributes a `null`, as the type checker's literal merge does. With `require_null`
 /// a literal without any `null` returns `None`, leaving it to the caller's ordinary merge.
 ///
-/// Callers type the same entries again when this returns `None`, so the scan must not type a
-/// nested literal itself: the `null` check and a nested literal value (a container, never a
-/// pointer) are decided syntactically, which keeps deeply nested literals linear per level.
+/// Callers merge the same entries again when this returns `None`, so an entry comes with the
+/// type they already gave it (`Some`) and is not typed twice; the `null` check and a nested
+/// literal value (a container, never a pointer) are decided syntactically. Both keep deeply
+/// nested literals and merges linear per level. An entry without a type (a spread) is typed here.
 pub(super) fn pointer_literal_entries_element_type<'e>(
     ctx: &LoweringContext<'_, '_>,
-    entries: impl IntoIterator<Item = (&'e Expr, bool)>,
+    entries: impl IntoIterator<Item = (&'e Expr, bool, Option<PhpType>)>,
     require_null: bool,
 ) -> Option<PhpType> {
-    let entries: Vec<(&'e Expr, bool)> = entries.into_iter().collect();
+    let entries: Vec<(&'e Expr, bool, Option<PhpType>)> = entries.into_iter().collect();
     let is_null_entry = |value: &Expr, is_spread: bool| {
         (!is_spread && matches!(value.kind, ExprKind::Null))
             || (is_spread && is_null_only_literal(value))
     };
-    if require_null && !entries.iter().any(|&(value, is_spread)| is_null_entry(value, is_spread)) {
+    if require_null && !entries.iter().any(|(value, is_spread, _)| is_null_entry(value, *is_spread)) {
         return None;
     }
     let mut has_null = false;
     let mut pointer: Option<PhpType> = None;
-    for (value, is_spread) in entries {
+    for (value, is_spread, value_ty) in entries {
         if is_null_entry(value, is_spread) {
             has_null = true;
             continue;
@@ -895,14 +916,14 @@ pub(super) fn pointer_literal_entries_element_type<'e>(
         if !is_spread && matches!(value.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) {
             return None;
         }
-        let elem_ty = if is_spread {
-            match spread_source_storage_type_for_ir(ctx, value).codegen_repr() {
+        let elem_ty = match value_ty {
+            Some(ty) => ty,
+            None if is_spread => match spread_source_storage_type_for_ir(ctx, value).codegen_repr() {
                 PhpType::Array(elem) => elem.codegen_repr(),
                 PhpType::AssocArray { value, .. } => value.codegen_repr(),
                 _ => PhpType::Mixed,
-            }
-        } else {
-            array_literal_element_type_for_ir(ctx, value)
+            },
+            None => array_literal_element_type_for_ir(ctx, value),
         };
         if !matches!(elem_ty, PhpType::Pointer(_)) {
             return None;

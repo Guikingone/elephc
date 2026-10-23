@@ -461,3 +461,28 @@ echo "\n";
     );
     assert_eq!(out, "1111111\n");
 }
+
+/// Verifies literal typing scans each item once when a literal holds a `null` beside a nested
+/// merge: the pointer probe (`[$p, null]` storage) and the ordinary element merge share the item
+/// types, so a 24-deep `$m ?? [E, null]` or `$flag ? [E, null] : []` nesting compiles well
+/// inside the bound instead of doubling the work per level.
+#[test]
+fn test_nested_null_sibling_literals_type_in_linear_time() {
+    let mut coalesce = String::from("$argc");
+    let mut ternary = String::from("$argc");
+    for _ in 0..24 {
+        coalesce = format!("($maybe ?? [{coalesce}, null])");
+        ternary = format!("($flag ? [{ternary}, null] : [])");
+    }
+    let source = format!(
+        "<?php\n$maybe = $argc > 100 ? null : [];\n$flag = $argc > 0;\n$a = {coalesce};\n$b = {ternary};\necho count($a), \"|\", count($b), \"\\n\";\n"
+    );
+    let started = std::time::Instant::now();
+    let out = compile_and_run(&source);
+    let elapsed = started.elapsed();
+    assert_eq!(out, "0|2\n");
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "null-sibling literal typing took {elapsed:?}"
+    );
+}

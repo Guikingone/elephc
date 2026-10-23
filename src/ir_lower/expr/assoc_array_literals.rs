@@ -75,22 +75,34 @@ pub(super) fn assoc_array_literal_type_from_spreads(
     items: &[Expr],
     expr: &Expr,
 ) -> PhpType {
+    // A plain item is typed once for the pointer probe and the merge below, so an item holding
+    // a nested merge is scanned once per nesting level; a spread is typed by each as before.
+    let item_types: Vec<Option<PhpType>> = items
+        .iter()
+        .map(|item| match &item.kind {
+            ExprKind::Spread(_) => None,
+            _ => Some(array_literal_element_type_for_ir(ctx, item)),
+        })
+        .collect();
     // Pointers and `null`s (direct, or a spread of a null-only literal) share pointer storage.
-    if let Some(pointer) = pointer_literal_element_type(ctx, items) {
+    if let Some(pointer) = pointer_literal_element_type(ctx, items, &item_types) {
         return PhpType::AssocArray {
             key: Box::new(PhpType::Mixed),
             value: Box::new(pointer),
         };
     }
     let mut value_ty = PhpType::Never;
-    for item in items {
-        let next = match &item.kind {
-            ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
-                PhpType::Array(elem) => elem.codegen_repr(),
-                PhpType::AssocArray { value, .. } => value.codegen_repr(),
-                _ => PhpType::Mixed,
-            },
-            _ => array_literal_element_type_for_ir(ctx, item).codegen_repr(),
+    for (item, item_ty) in items.iter().zip(item_types) {
+        let next = match (&item.kind, item_ty) {
+            (ExprKind::Spread(inner), _) => {
+                match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
+                    PhpType::Array(elem) => elem.codegen_repr(),
+                    PhpType::AssocArray { value, .. } => value.codegen_repr(),
+                    _ => PhpType::Mixed,
+                }
+            }
+            (_, Some(ty)) => ty.codegen_repr(),
+            (_, None) => array_literal_element_type_for_ir(ctx, item).codegen_repr(),
         };
         value_ty = merge_ir_assoc_value_type(value_ty, next);
     }
@@ -117,9 +129,26 @@ pub(super) fn assoc_array_literal_type_for_ir(
     // every literal's key type.
     let mut key_ty: Option<PhpType> = None;
     let mut value_ty: Option<PhpType> = None;
+    // The pointer probe below reuses a value's type where both typers agree (a lazy merge or a
+    // nested literal, the values that cost a scan per nesting level); other values keep the
+    // probe's own element typing, so its pointer verdict does not change.
+    let mut probe_types: Vec<Option<PhpType>> = Vec::with_capacity(pairs.len());
     for (key, value) in pairs {
         let next_key = normalized_array_key_type(key, infer_expr_type_syntactic(key));
         let next_value = assoc_array_literal_value_type_for_ir(ctx, value);
+        probe_types.push(
+            matches!(
+                value.kind,
+                ExprKind::Ternary { .. }
+                    | ExprKind::ShortTernary { .. }
+                    | ExprKind::Match { .. }
+                    | ExprKind::NullCoalesce { .. }
+                    | ExprKind::Assignment { .. }
+                    | ExprKind::ArrayLiteral(_)
+                    | ExprKind::ArrayLiteralAssoc(_)
+            )
+            .then(|| next_value.clone()),
+        );
         key_ty = Some(match key_ty {
             Some(current) => merge_array_key_types(current, next_key),
             None => next_key,
@@ -132,8 +161,9 @@ pub(super) fn assoc_array_literal_type_for_ir(
     let (Some(key_ty), Some(value_ty)) = (key_ty, value_ty) else {
         return fallback_expr_type(expr);
     };
-    let value_ty = pointer_literal_element_type(ctx, pairs.iter().map(|(_, value)| value))
-        .unwrap_or(value_ty);
+    let value_ty =
+        pointer_literal_element_type(ctx, pairs.iter().map(|(_, value)| value), &probe_types)
+            .unwrap_or(value_ty);
     PhpType::AssocArray {
         key: Box::new(key_ty),
         value: Box::new(value_ty),
