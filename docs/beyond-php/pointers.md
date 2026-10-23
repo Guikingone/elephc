@@ -160,7 +160,9 @@ Reading an element gives a `?ptr<T>`: a `null` element and a missing key both re
 return a `?ptr<T>` the same way. Introspection (`var_dump`, `print_r`, `var_export`,
 `json_encode`, `serialize`), a `mixed` or `array<mixed>` view of the array, and builtins
 that read its elements at run time (`in_array()`, `array_sum()`, `vsprintf()`) see a `null`
-element as PHP `null` and a live one as its integer address.
+element as PHP `null` and a live one as its integer address. An array that reaches a pointer-array
+parameter from `call_user_func_array()`, a callable or `eval` (where its elements are ordinary
+PHP values) is converted on entry: `null` becomes the null pointer and an integer its address.
 
 Some array builtins (`array_merge()`, `array_slice()`, `array_map()`, `sort()` and similar) do
 not accept arrays of pointers yet and report an unsupported-feature error at compile time.

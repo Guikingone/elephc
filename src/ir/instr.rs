@@ -913,6 +913,9 @@ pub enum Op {
     MixedUnbox,
     MixedTagOf,
     ArrayToMixed,
+    /// Consumes an owned indexed array bound to a pointer-array slot and returns it with raw
+    /// `?ptr<T>` words: boxed Mixed slots (from a runtime bridge) become null or address words.
+    ArrayToPointerWords,
     HashToMixed,
     MixedCastBool,
     MixedCastInt,
@@ -1344,6 +1347,10 @@ impl Op {
                 E::READS_HEAP | E::ALLOC_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL
             }
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
+            // Rewrites the (possibly split) array's slots and releases the boxed cells it replaces.
+            ArrayToPointerWords => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+            }
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
             | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
             | GeneratorNew => {
@@ -1726,6 +1733,7 @@ impl Op {
             MixedUnbox => "mixed_unbox",
             MixedTagOf => "mixed_tag_of",
             ArrayToMixed => "array_to_mixed",
+            ArrayToPointerWords => "array_to_pointer_words",
             HashToMixed => "hash_to_mixed",
             MixedCastBool => "mixed_cast_bool",
             MixedCastInt => "mixed_cast_int",

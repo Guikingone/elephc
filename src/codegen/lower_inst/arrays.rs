@@ -101,7 +101,8 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
     let array = expect_operand(inst, 0)?;
     let elem_ty = indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
     require_array_to_mixed_result(&inst.result_php_type.codegen_repr(), inst)?;
-    // Pointer words carry header tag 0 like ints, so the element type selects the pointer mode.
+    // A pointer array stamped before its first pointer write can carry another header tag, so the
+    // element type selects the pointer mode.
     let pointer_elements = matches!(elem_ty.codegen_repr(), PhpType::Pointer(_));
     let done = ctx.next_label("array_to_mixed_done");
     match ctx.emitter.target.arch {
@@ -145,6 +146,28 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
         }
     }
     ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a pointer-array slot binding through `__rt_array_to_pointer_words`.
+///
+/// Runtime bridges (the callable descriptor invoker, eval argument binding) can hand a pointer-array
+/// parameter an array of boxed Mixed cells; the helper rewrites those into raw `?ptr<T>` words and
+/// passes pointer arrays through. It consumes the operand's owned reference and returns the owner.
+pub(super) fn lower_array_to_pointer_words(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expects exactly one operand",
+            inst.op.name()
+        )));
+    }
+    let array = expect_operand(inst, 0)?;
+    let arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(array, arg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_to_pointer_words");
     store_if_result(ctx, inst)
 }
 

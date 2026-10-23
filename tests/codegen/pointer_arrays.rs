@@ -13,6 +13,8 @@
 //!   where `main` is lowered from the checker's finished environment.
 //! - Pointer containers stamp runtime value type 13, so introspection, `mixed` views and runtime
 //!   array readers show a null element as PHP null and a live one as an integer address.
+//! - Arrays reaching a pointer-array parameter through runtime bridges (callable invoker, eval)
+//!   are converted to pointer words on entry.
 
 use crate::support::*;
 
@@ -725,4 +727,66 @@ echo take(), "|", run("take"), "|", run(take(...)), "\n";
 "#,
     );
     assert_eq!(out, "[null,ADDR]unsetnull7|[null,ADDR]unsetnull7|[null,ADDR]unsetnull7\n");
+}
+
+/// Verifies a pointer-array parameter that receives an array of boxed Mixed cells from a runtime
+/// bridge holds raw pointer words in the callee: `call_user_func_array` with a `[null]` argument,
+/// and eval calling a function with an explicit argument or its default, a method and a
+/// constructor. After an append the null element still reads as unset null, while pointer
+/// hashes (whose entries carry their own tags) keep working.
+#[test]
+fn test_pointer_array_parameters_convert_arrays_from_runtime_bridges() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function take(array<ptr<Vec2>|null> $items = [null]): string {
+    $w = buffer_new<Vec2>(1);
+    $items[] = $w[0];
+    $a = (string) (int) $items[1];
+    return str_replace($a, "ADDR", (string) json_encode($items)) . (isset($items[0]) ? "set" : "unset")
+        . ($items[0] === null ? "null" : "live");
+}
+function takeh(array<string, ptr<Vec2>|null> $items = ["a" => null]): string {
+    return (isset($items["a"]) ? "set" : "unset") . ($items["a"] === null ? "null" : "live");
+}
+class C {
+    public string $out = "";
+    public function __construct(array<ptr<Vec2>|null> $items = [null]) { $this->out = take($items); }
+    public function m(array<ptr<Vec2>|null> $items = [null]): string { return take($items); }
+}
+$args = [[null]];
+echo call_user_func_array("take", $args), "|";
+eval('echo take([null]), "|", take(), "|", (new C())->m(), "|", (new C())->out, "|", takeh(), "\n";');
+"#,
+    );
+    assert_eq!(
+        out,
+        "[null,ADDR]unsetnull|[null,ADDR]unsetnull|[null,ADDR]unsetnull|[null,ADDR]unsetnull|[null,ADDR]unsetnull|unsetnull\n"
+    );
+}
+
+/// Verifies converting a bridged array of boxed cells into pointer words releases the cells and
+/// leaves the caller's array intact: repeated `call_user_func_array` calls keep the heap-debug
+/// leak summary equal to a run without them, and the caller still reads its boxed null.
+#[test]
+fn test_pointer_array_parameter_conversion_releases_boxed_cells() {
+    let prelude = r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function take(array<ptr<Vec2>|null> $items): int { return count($items) + ($items[0] === null ? 0 : 10); }
+$args = [[null, null]];
+"#;
+    let calls = r#"echo call_user_func_array("take", $args), call_user_func_array("take", $args), "|";
+"#;
+    let tail = "echo json_encode($args), \"\\n\";\n";
+    let baseline = compile_and_run_with_heap_debug(&format!("{prelude}{tail}"));
+    let called = compile_and_run_with_heap_debug(&format!("{prelude}{calls}{tail}"));
+    let summary = |stderr: &str| {
+        stderr
+            .lines()
+            .find(|line| line.contains("HEAP DEBUG: leak summary"))
+            .map(str::to_string)
+    };
+    assert_eq!(called.stdout, "22|[[null,null]]\n", "{}", called.stderr);
+    assert!(summary(&baseline.stderr).is_some(), "{}", baseline.stderr);
+    assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
 }
