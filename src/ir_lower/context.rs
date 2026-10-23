@@ -4682,12 +4682,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         LoweredValue { value, ir_type }
     }
 
-    /// Emits an `is_truthy` conversion when a value is not already I64.
+    /// Emits an `is_truthy` conversion unless the value is an integer that is already its own
+    /// truthiness.
+    ///
+    /// A raw PHP null is also an I64 (the null literal or an assignment expression whose
+    /// right-hand side is null), and its sentinel is nonzero, so a `Void`/`Never` value must
+    /// still go through `is_truthy`, whose null arm answers false (#1990).
     pub(crate) fn truthy(&mut self, input: LoweredValue, span: Option<Span>) -> LoweredValue {
         if let Some(value) = super::expr::object_operators::lower_object_truthy(self, input, span) {
             return value;
         }
-        if input.ir_type == IrType::I64 {
+        if input.ir_type == IrType::I64
+            && !matches!(
+                self.builder.value_php_type(input.value).codegen_repr(),
+                PhpType::Void | PhpType::Never
+            )
+        {
             return input;
         }
         self.emit_value(

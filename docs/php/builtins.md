@@ -56,8 +56,8 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`array_unique()`](./builtins/array/array_unique.md) | `(array $array): array` | `array` | ✓ | ✓ |
 | [`array_unshift()`](./builtins/array/array_unshift.md) | `(array $array, ...$values): int` | `int` | ✓ | ✓ |
 | [`array_values()`](./builtins/array/array_values.md) | `(array $array): array` | `array` | ✓ | ✓ |
-| [`array_walk()`](./builtins/array/array_walk.md) | `(array $array, callable $callback): void` | `void` | ✓ | ✓ |
-| [`array_walk_recursive()`](./builtins/array/array_walk_recursive.md) | `(array $array, callable $callback): void` | `void` | ✓ | - |
+| [`array_walk()`](./builtins/array/array_walk.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | ✓ |
+| [`array_walk_recursive()`](./builtins/array/array_walk_recursive.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | - |
 | [`arsort()`](./builtins/array/arsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`asort()`](./builtins/array/asort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`call_user_func()`](./builtins/array/call_user_func.md) | `(callable $callback, ...$args): mixed` | `mixed` | ✓ | ✓ |
