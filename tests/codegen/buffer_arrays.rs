@@ -175,22 +175,37 @@ $hit = $list[0] ?? $fallback;
 $miss = $list[9] ?? $fallback;
 $key = $h["a"] ?? $fallback;
 $nokey = $h["zz"] ?? $fallback;
-echo $hit[0], "|", $miss[0], "|", $key[0], "|", $nokey[0], "
-";
+echo $hit[0], "|", $miss[0], "|", $key[0], "|", $nokey[0], "\n";
 echo empty($list[0]) ? "empty" : "live", "|", empty($list[9]) ? "empty" : "live", "|";
-echo empty($h["a"]) ? "empty" : "live", "|", empty($h["zz"]) ? "empty" : "live", "
-";
+echo empty($h["a"]) ? "empty" : "live", "|", empty($h["zz"]) ? "empty" : "live", "\n";
 $only = array_pop($list);
 $popped = array_pop($list) ?? $fallback;
 $shifted = array_shift($list) ?? $only;
-echo $popped[0], "|", $shifted[0], "
-";
+echo $popped[0], "|", $shifted[0], "\n";
 "#
     ));
-    assert_eq!(out, "1|77|2|77
-live|empty|live|empty
-77|1
-");
+    assert_eq!(out, "1|77|2|77\nlive|empty|live|empty\n77|1\n");
+}
+
+/// Verifies `isset()` sees the invalid handle 0 as unset wherever it can sit: an indexed or hash
+/// miss, a local that copied one, and a 0 handle stored back into an element or a key, while
+/// live handles are set.
+#[test]
+fn test_buffer_array_isset_sees_the_missing_handle_as_unset() {
+    let out = compile_and_run(&format!(
+        "{PRELUDE}{}",
+        r#"$list = [filled(1, 1)];
+$h = ["a" => filled(1, 2)];
+$miss = @$list[9];
+$nokey = @$h["zz"];
+echo isset($list[0]) ? "set" : "unset", "|", isset($list[9]) ? "set" : "unset", "|", isset($miss) ? "set" : "unset", "|";
+echo isset($h["a"]) ? "set" : "unset", "|", isset($h["zz"]) ? "set" : "unset", "|", isset($nokey) ? "set" : "unset", "\n";
+$list[0] = $miss;
+$h["a"] = $nokey;
+echo isset($list[0]) ? "set" : "unset", "|", isset($h["a"]) ? "set" : "unset", "|", count($list), "|", count($h), "\n";
+"#
+    ));
+    assert_eq!(out, "set|unset|unset|set|unset|unset\nunset|unset|1|1\n");
 }
 
 /// Verifies `array_pop()` of an emptied buffer array hands back handle 0, which the next buffer
