@@ -525,3 +525,32 @@ echo isset(make($v, $argc)[0]) ? "set" : "unset", isset(nul()[0]) ? "set" : "uns
     );
     assert_eq!(out, "unsetunsetunset|unsetunsetunset\n");
 }
+
+/// Verifies a null-only literal held in a local reaches a pointer-array slot as pointer words:
+/// returned from `: array<ptr<T>|null>`, passed positionally or by name, or stored in a typed
+/// property, its element reads, `isset()` and `foreach` all see the null pointer, not the box.
+#[test]
+fn test_pointer_array_slots_convert_boxed_null_locals() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+class Bag { public array<ptr<Vec2>|null> $items = []; }
+function nul(): array<ptr<Vec2>|null> { $a = [null]; return $a; }
+function walk(array<ptr<Vec2>|null> $items): string {
+    $o = "";
+    foreach ($items as $p) { $o .= $p === null ? "N" : "L"; }
+    return $o;
+}
+function first(array<ptr<Vec2>|null> $items): string {
+    $p = $items[0];
+    return ($p === null ? "N" : "L") . (isset($items[0]) ? "s" : "u");
+}
+foreach (nul() as $p) { echo $p === null ? "N" : "L"; }
+$a = [null];
+$b = new Bag();
+$b->items = $a;
+echo "|", walk($a), walk(nul()), walk(items: $a), walk($b->items), "|", first($a), first(nul()), "\n";
+"#,
+    );
+    assert_eq!(out, "N|NNNN|NuNu\n");
+}
