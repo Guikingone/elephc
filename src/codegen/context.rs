@@ -383,6 +383,20 @@ impl<'a> FunctionContext<'a> {
             .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
     }
 
+    /// Returns the type a value is boxed into `mixed` as.
+    ///
+    /// That is its codegen type, except for a `?ptr<T>`: its codegen form is the bare pointer,
+    /// and only the declared union tells the boxer that address 0 is PHP null (a plain `ptr`
+    /// boxes 0 as the integer it is).
+    pub(super) fn mixed_box_type(&self, value: ValueId) -> Result<PhpType> {
+        let raw = self.raw_value_php_type(value)?;
+        if crate::types::is_nullable_pointer_type(&raw) {
+            Ok(raw)
+        } else {
+            self.value_php_type(value)
+        }
+    }
+
     /// Returns a function value's source PHP metadata before codegen representation erasure.
     pub(super) fn raw_value_php_type(&self, value: ValueId) -> Result<PhpType> {
         self.function
@@ -417,6 +431,18 @@ impl<'a> FunctionContext<'a> {
             .locals
             .get(slot.as_raw() as usize)
             .map(|metadata| metadata.php_type.codegen_repr())
+            .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))
+    }
+
+    /// Returns the type a local slot's value is boxed into `mixed` as.
+    ///
+    /// Like `mixed_box_type`, the slot's codegen type except for a `?ptr<T>` slot, which keeps
+    /// its declared union so address 0 boxes as PHP null.
+    pub(super) fn local_mixed_box_type(&self, slot: LocalSlotId) -> Result<PhpType> {
+        self.function
+            .locals
+            .get(slot.as_raw() as usize)
+            .map(|metadata| crate::types::mixed_box_php_type(&metadata.php_type))
             .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))
     }
 
@@ -932,6 +958,57 @@ impl<'a> FunctionContext<'a> {
         self.store_value_to_local_as(slot, value, RefCellStorePrevious::Keep)
     }
 
+    /// Identifies a borrowed concrete container read from an unpromoted boxed reference local.
+    pub(super) fn needs_borrowed_container_lease(
+        &self, slot: LocalSlotId, value: ValueId,
+    ) -> Result<bool> {
+        let ref_load = self.function.value(value).and_then(|value| match value.def {
+            ValueDef::Instruction { inst, .. } => self.function.instruction(inst),
+            _ => None,
+        }).is_some_and(|inst| inst.op == Op::LoadRefCell);
+        Ok(ref_load
+            && self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
+            && self.local_php_type(slot)?.codegen_repr() == PhpType::Mixed
+            && matches!(self.value_php_type(value)?.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable))
+    }
+
+    /// Gives a consuming mutation a lease before retiring its source local's previous box.
+    pub(super) fn prepare_mutated_source_local_owner(
+        &mut self, slot: LocalSlotId, value: ValueId,
+    ) -> Result<()> {
+        if self.needs_borrowed_container_lease(slot, value)? {
+            self.retake_mutated_source_local_owner(slot, value)
+        } else {
+            self.release_mutated_source_local_owner(slot, value)
+        }
+    }
+
+    /// Publishes a mutation's replacement, transferring its explicitly retaken borrowed lease.
+    pub(super) fn store_mutated_container_writeback_to_local(
+        &mut self, slot: LocalSlotId, value: ValueId,
+    ) -> Result<()> {
+        if self.needs_borrowed_container_lease(slot, value)? {
+            if self.value_is_released_later(value) {
+                return self.store_receiver_value_to_local(slot, value);
+            }
+            return self.store_owned_container_to_raw_local(slot, value);
+        }
+        self.store_container_writeback_to_local(slot, value)
+    }
+
+    /// Moves a consuming mutation's concrete container lease into its raw local's Mixed box.
+    fn store_owned_container_to_raw_local(
+        &mut self, slot: LocalSlotId, value: ValueId,
+    ) -> Result<()> {
+        let ty = self.load_value_to_result(value)?;
+        emit_box_current_owned_value_as_mixed(self.emitter, &ty);
+        let target_ty = self.local_php_type(slot)?;
+        let offset = self.local_offset(slot)?;
+        self.store_current_result_at_offset(&target_ty, offset);
+        Ok(())
+    }
+
     /// Shared body of the two local stores, parameterized by the previous-occupant rule.
     fn store_value_to_local_as(
         &mut self,
@@ -1009,10 +1086,12 @@ impl<'a> FunctionContext<'a> {
         if target_ty.codegen_repr() == PhpType::Mixed
             && source_ty.codegen_repr() != PhpType::Mixed
         {
+            // The declared type for a `?ptr<T>`, so address 0 boxes as PHP null.
+            let box_ty = self.mixed_box_type(value)?;
             if self.value_can_own_mixed_box_source(value)? {
-                emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
+                emit_box_current_owned_value_as_mixed(self.emitter, &box_ty);
             } else {
-                emit_box_current_value_as_mixed(self.emitter, &source_ty);
+                emit_box_current_value_as_mixed(self.emitter, &box_ty);
             }
         }
         // Narrow Mixed to Int when the local slot is typed Int but the value
@@ -1073,6 +1152,9 @@ impl<'a> FunctionContext<'a> {
         if self.local_slot_representation(slot) != LocalSlotRepresentation::Raw
             || !self.value_is_released_later(value)
         {
+            if self.needs_borrowed_container_lease(slot, value)? {
+                return self.store_owned_container_to_raw_local(slot, value);
+            }
             return self.store_value_to_local(slot, value);
         }
         let source_ty = self.load_value_to_result(value)?;
@@ -1080,7 +1162,8 @@ impl<'a> FunctionContext<'a> {
         if target_ty.codegen_repr() == PhpType::Mixed
             && source_ty.codegen_repr() != PhpType::Mixed
         {
-            emit_box_current_value_as_mixed(self.emitter, &source_ty);
+            // The declared type for a `?ptr<T>`, so address 0 boxes as PHP null.
+            emit_box_current_value_as_mixed(self.emitter, &self.mixed_box_type(value)?);
         }
         coerce_current_result_for_target_store(self.emitter, &source_ty, &target_ty)?;
         let offset = self.local_offset(slot)?;
@@ -1106,7 +1189,11 @@ impl<'a> FunctionContext<'a> {
             && self.value_is_released_later(value)
             && self.local_php_type(slot)?.codegen_repr() == PhpType::Mixed
             && self.value_php_type(value)?.codegen_repr() != PhpType::Mixed;
-        self.store_value_to_local(slot, value)?;
+        if self.needs_borrowed_container_lease(slot, value)? {
+            self.store_owned_container_to_raw_local(slot, value)?;
+        } else {
+            self.store_value_to_local(slot, value)?;
+        }
         Ok(owed)
     }
 
@@ -1476,6 +1563,11 @@ impl<'a> FunctionContext<'a> {
         }
         let value_ty = self.value_php_type(value)?.codegen_repr();
         if value_ty == PhpType::Str {
+            if self.function.instructions.iter().any(|inst| {
+                inst.op == Op::Release && inst.operands.first().copied() == Some(value)
+            }) {
+                return Ok(false);
+            }
             return self.value_is_heap_owned_string_for_mixed_box(value);
         }
         if self.value_can_transfer_ownership_to_consumer(value)? {

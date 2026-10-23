@@ -207,6 +207,24 @@ dynamic fragments enable the optional `elephc-magician` interpreter staticlib
 at final linking. This is a lowering/linking decision, not a separate timed
 compiler phase. See [Eval Runtime Architecture](eval-runtime.md).
 
+Before EIR validation, `src/ir_lower/boxed_array_appends.rs` reconciles single-use append
+receivers with their final local storage. A later reference call can widen a local from a
+native array to boxed `Mixed`; earlier appends then use `MixedArrayAppend` and a borrowed
+boxed read when no consumer observes a concrete native element layout. Typed consumers such as
+string-array sorting keep native append; codegen retires the old box before mutation so the
+unboxed lease becomes the mutator's owner without forcing a copy. A borrowed reference-cell
+read on an unpromoted raw path first retakes that lease before a consuming mutation, then
+transfers it through mutation writeback; a later explicit release makes writeback retain its
+own owner. Indexed writes, hash mutations, nested writes and reference iteration share this
+protocol. Iterator conversion reloads the SSA source after retiring its previous box because
+cleanup may clobber result registers. Append lowering evaluates the RHS before loading the current local, so a reference
+write on the RHS also selects the ordinary scalar/string parent guards. The final storage read
+stays after RHS evaluation, while the shared runtime keeps copy-on-write and reference aliases intact.
+Rejected append branches release an owned string RHS before raising the catchable parent error.
+Ordinary local loads unboxed from final `Mixed` storage own a lease that the consumer releases,
+including on paths that never promote. Reference-cell reads preserve their alias payload shape
+and remain borrowed. Indexed writes still detach a shared cell; only append bypasses that copy.
+
 ### Generated-artifact write policy
 
 **Source:** `src/pipeline/artifact_io.rs`

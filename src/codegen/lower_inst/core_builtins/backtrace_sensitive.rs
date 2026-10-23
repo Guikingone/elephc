@@ -41,7 +41,7 @@ pub(super) fn wrap(ctx: &mut FunctionContext<'_>) -> Result<()> {
 pub(super) fn wrap_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()> {
     let borrowed = matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
     if !borrowed {
-        emit_box_current_value_as_mixed(ctx.emitter, &ty.codegen_repr());
+        emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(ty));
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     }
     wrap(ctx)?;

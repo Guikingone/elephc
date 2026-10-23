@@ -201,7 +201,7 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
         // Mixed storage even though lowering emitted no ReleaseLocalSlot before the conversion.
         // Retire that outer box now, while the retained child keeps the source alive. Raw array
         // slots take the no-op branch, so ArrayToHash remains the sole consumer of their owner.
-        ctx.release_mutated_source_local_owner(slot, array)?;
+        ctx.prepare_mutated_source_local_owner(slot, array)?;
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -393,15 +393,14 @@ pub(super) fn separate_get_for_write_receiver(
     helper: &str,
 ) -> Result<()> {
     let receiver = ReceiverPlace::resolve(ctx, array)?;
-    let Some(slot) = receiver.slot() else {
-        return Ok(());
-    };
+    if receiver.slot().is_none() { return Ok(()); }
     receiver.reload_local_value(ctx, array)?;
+    receiver.prepare_consuming_storeback(ctx, array)?;
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(array, arg_reg)?;
     abi::emit_call_label(ctx.emitter, helper);
     ctx.store_result_value(array)?;
-    ctx.store_container_writeback_to_local(slot, array)?;
+    receiver.store_back_container_writeback(ctx, array)?;
     ctx.writeback_global_array_source(array)
 }
 
@@ -1080,13 +1079,16 @@ pub(super) fn lower_array_elem_addr(
     require_integer_like_index(ctx.value_php_type(index)?, inst)?;
     let elem_size = array_element_size(&array_ty)?;
     let source_local = source_load_local_slot(ctx, array)?;
+    if let Some(slot) = source_local {
+        ctx.prepare_mutated_source_local_owner(slot, array)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_array_elem_addr_prepare_aarch64(ctx, array, index, elem_size)?,
         Arch::X86_64 => lower_array_elem_addr_prepare_x86_64(ctx, array, index, elem_size)?,
     }
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
-        ctx.store_container_writeback_to_local(slot, array)?;
+        ctx.store_mutated_container_writeback_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
     match ctx.emitter.target.arch {
@@ -1106,6 +1108,9 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let value_ty = effective_array_set_value_type(&elem_ty, &raw_value_ty, inst)?;
     require_integer_like_index(ctx.value_php_type(index)?, inst)?;
     let source_local = source_load_local_slot(ctx, array)?;
+    if let Some(slot) = source_local {
+        ctx.prepare_mutated_source_local_owner(slot, array)?;
+    }
     if matches!(elem_ty.codegen_repr(), PhpType::Mixed) {
         lower_runtime_polymorphic_array_set(ctx, array, index, value, &raw_value_ty)?;
     } else {
@@ -1121,7 +1126,7 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     stamp_scalar_array_write_result(ctx, &value_ty);
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
-        ctx.store_container_writeback_to_local(slot, array)?;
+        ctx.store_mutated_container_writeback_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
     Ok(())
@@ -1395,10 +1400,13 @@ pub(super) fn lower_array_push_value(
     } else {
         elem_ty.codegen_repr()
     };
+    if let Some(slot) = source_local {
+        ctx.prepare_mutated_source_local_owner(slot, array)?;
+    }
     lower_runtime_polymorphic_array_push(ctx, array, value, &elem_ty, &stored_type)?;
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
-        ctx.store_container_writeback_to_local(slot, array)?;
+        ctx.store_mutated_container_writeback_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
     Ok(())
@@ -1839,7 +1847,9 @@ fn lower_array_set_aarch64(
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "x2", "x3")?;
+            let staged = super::ownership::stage_string_byte_view(ctx, value, "x2", "x3");
             abi::emit_call_label(ctx.emitter, "__rt_array_set_str");
+            super::ownership::release_string_byte_stage(ctx, staged);
         }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(value, "x2")?;
@@ -1987,7 +1997,9 @@ fn lower_array_set_x86_64(
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "rdx", "rcx")?;
+            let staged = super::ownership::stage_string_byte_view(ctx, value, "rdx", "rcx");
             abi::emit_call_label(ctx.emitter, "__rt_array_set_str");
+            super::ownership::release_string_byte_stage(ctx, staged);
         }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(value, "rdx")?;
@@ -2619,7 +2631,9 @@ fn lower_array_push_aarch64(
             ctx.load_string_value_to_regs(value, "x1", "x2")?;
             ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the string append helper
+            let staged = super::ownership::stage_string_byte_view(ctx, value, "x1", "x2");
             abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
+            super::ownership::release_string_byte_stage(ctx, staged);
         }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(value, "x1")?;
@@ -2729,7 +2743,9 @@ fn lower_array_push_x86_64(
             ctx.load_value_to_reg(array, "r11")?;
             ctx.load_string_value_to_regs(value, "rsi", "rdx")?;
             ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the string append helper
+            let staged = super::ownership::stage_string_byte_view(ctx, value, "rsi", "rdx");
             abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
+            super::ownership::release_string_byte_stage(ctx, staged);
         }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(array, "r11")?;
@@ -3201,11 +3217,25 @@ fn box_value_for_mixed_container(
     value_ty: &PhpType,
 ) -> Result<()> {
     ctx.load_value_to_result(value)?;
-    if ctx.value_can_own_mixed_box_source(value)? {
-        emit_box_current_owned_value_as_mixed(ctx.emitter, &value_ty.codegen_repr());
+    let staged = if matches!(value_ty.codegen_repr(), PhpType::Str) {
+        let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+        super::ownership::stage_string_byte_view(ctx, value, pointer_reg, length_reg)
     } else {
-        emit_box_current_value_as_mixed(ctx.emitter, &value_ty.codegen_repr());
+        false
+    };
+    // A `?ptr<T>` boxes by its declared type, so address 0 is stored as PHP null.
+    let raw_ty = ctx.raw_value_php_type(value)?;
+    let box_ty = if crate::types::is_nullable_pointer_type(&raw_ty) {
+        raw_ty
+    } else {
+        value_ty.codegen_repr()
+    };
+    if ctx.value_can_own_mixed_box_source(value)? {
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
+    } else {
+        emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
     }
+    super::ownership::release_string_byte_stage(ctx, staged);
     Ok(())
 }
 
@@ -3708,7 +3738,7 @@ pub(super) fn lower_slot_detach(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let container_ty = ctx.value_php_type(container)?.codegen_repr();
     let source_local = source_load_local_slot(ctx, container)?;
     if let Some(slot) = source_local {
-        ctx.release_mutated_source_local_owner(slot, container)?;
+        ctx.prepare_mutated_source_local_owner(slot, container)?;
     }
     match container_ty {
         PhpType::AssocArray { .. } => match ctx.emitter.target.arch {
@@ -3728,7 +3758,7 @@ pub(super) fn lower_slot_detach(ctx: &mut FunctionContext<'_>, inst: &Instructio
     }
     ctx.store_result_value(container)?;
     if let Some(slot) = source_local {
-        ctx.store_container_writeback_to_local(slot, container)?;
+        ctx.store_mutated_container_writeback_to_local(slot, container)?;
     }
     ctx.writeback_global_array_source(container)?;
     Ok(())

@@ -267,15 +267,41 @@ pub(super) fn lower_array_access_from_value_with_null_preservation(
     warn_on_missing: bool,
     preserve_null: bool,
 ) -> LoweredValue {
-    let index_value = lower_expr(ctx, index);
-    lower_array_access_from_values(ctx, array_value, index_value, index, expr, warn_on_missing, preserve_null)
+    let array_value = crate::ir_lower::ownership::persist_string_byte_view(
+        ctx,
+        array_value,
+        Some(expr.span),
+    );
+    let mut pending_receiver = [array_value];
+    let (index_value, receiver_pins) = super::lower_with_pending_owners(
+        ctx,
+        &mut pending_receiver,
+        expr.span,
+        |ctx| lower_expr(ctx, index),
+    );
+    let array_value = pending_receiver[0];
+    let receiver_pins = if receiver_pins.is_empty() {
+        super::pin_in_flight_owners(ctx, &[array_value.value], expr.span)
+    } else {
+        receiver_pins
+    };
+    lower_array_access_from_values_with_receiver_pins(
+        ctx,
+        array_value,
+        index_value,
+        index,
+        expr,
+        warn_on_missing,
+        preserve_null,
+        receiver_pins,
+    )
 }
 
 /// Reads an already evaluated receiver and key, preserving their normal read cleanup.
 pub(crate) fn lower_array_access_from_values(
     ctx: &mut LoweringContext<'_, '_>,
     array_value: LoweredValue,
-    mut index_value: LoweredValue,
+    index_value: LoweredValue,
     index: &Expr,
     expr: &Expr,
     warn_on_missing: bool,
@@ -285,6 +311,29 @@ pub(crate) fn lower_array_access_from_values(
     // owning intermediate receiver reachable until the read finishes; the normal release
     // below still retires it after the independent result has been stabilized.
     let receiver_pins = super::pin_in_flight_owners(ctx, &[array_value.value], expr.span);
+    lower_array_access_from_values_with_receiver_pins(
+        ctx,
+        array_value,
+        index_value,
+        index,
+        expr,
+        warn_on_missing,
+        preserve_null,
+        receiver_pins,
+    )
+}
+
+/// Reads an evaluated receiver and key while preserving an owner published before key evaluation.
+fn lower_array_access_from_values_with_receiver_pins(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    mut index_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+    preserve_null: bool,
+    receiver_pins: Vec<super::PinnedInFlightOwner>,
+) -> LoweredValue {
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             // Nullable scalar keys carry an inline tag. Preserve null as the empty-string
@@ -385,6 +434,11 @@ pub(crate) fn lower_array_access_from_values(
         op.default_effects(),
         Some(expr.span),
     );
+    if op == Op::StrCharAt {
+        // The backend returns a view into the receiver. The common stabilization below
+        // must copy that byte before an owning receiver can be retired (issue #1908).
+        ctx.builder.set_value_ownership(result.value, Ownership::Borrowed);
+    }
     super::unpin_in_flight_owners(ctx, receiver_pins, expr.span);
     // An owning boxed index temporary (e.g. `$B[$i + 1]` on the mixed-key read
     // path) is consumed by the read without any runtime refcount operation on

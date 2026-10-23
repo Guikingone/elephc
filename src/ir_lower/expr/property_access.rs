@@ -1167,7 +1167,7 @@ pub(crate) fn static_property_result_type(
     }) {
         property_ty.clone()
     } else {
-        property_ty.codegen_repr()
+        crate::types::eir_value_php_type(property_ty)
     };
     normalize_value_php_type(result_type)
 }

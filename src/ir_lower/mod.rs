@@ -11,6 +11,7 @@
 //! - EIR is the only production backend; unsupported lowering must fail explicitly.
 
 mod array_pointer_scan;
+mod boxed_array_appends;
 mod builtin_datetime;
 mod clone_overrides;
 mod context;

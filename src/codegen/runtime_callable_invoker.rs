@@ -345,7 +345,8 @@ fn emit_boxed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType) {
         | PhpType::Iterable
         | PhpType::Object(_)
         | PhpType::Callable => emit_box_current_owned_value_as_mixed(emitter, &repr),
-        _ => emit_box_current_value_as_mixed(emitter, &repr),
+        // The declared type, so a `?ptr<T>` result boxes address 0 as PHP null.
+        _ => emit_box_current_value_as_mixed(emitter, ret_ty),
     }
 }
 

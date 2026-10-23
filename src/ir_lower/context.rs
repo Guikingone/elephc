@@ -162,6 +162,14 @@ pub(crate) struct ReferenceCallContext {
     pub(crate) adopted: bool,
 }
 
+/// A local bound to a pointer by-reference parameter, with the parameter's declared type.
+struct PointerReferenceBinding {
+    slot: LocalSlotId,
+    name: String,
+    span: Span,
+    param_ty: PhpType,
+}
+
 /// Rollback point for a speculative statement lowering.
 #[derive(Clone)]
 pub(crate) struct LoweringSnapshot {
@@ -216,6 +224,7 @@ pub(crate) struct LoweringSnapshot {
     numeric_tracked_locals: std::collections::HashSet<String>,
     final_mixed_locals: std::collections::HashMap<String, std::collections::HashSet<usize>>,
     numeric_proof_sealed: bool,
+    pointer_reference_bindings: usize,
 }
 
 /// Lengths of append-only intern pools captured for speculative rollback.
@@ -454,6 +463,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// When set, loop facts reuse `numeric_closure_sites` instead of seeding
     /// another proof from the now-Mixed slots.
     pub(crate) numeric_proof_sealed: bool,
+    /// Locals bound to a pointer by-reference parameter, checked against their final frame
+    /// storage once the body is lowered (`refuse_pointer_reference_bindings`).
+    pointer_reference_bindings: Vec<PointerReferenceBinding>,
     source_path: Option<String>,
 }
 
@@ -611,6 +623,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             numeric_tracked_locals: HashSet::new(),
             final_mixed_locals: HashMap::new(),
             numeric_proof_sealed: false,
+            pointer_reference_bindings: Vec::new(),
             source_path,
         }
     }
@@ -669,6 +682,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             numeric_tracked_locals: self.numeric_tracked_locals.clone(),
             final_mixed_locals: self.final_mixed_locals.clone(),
             numeric_proof_sealed: self.numeric_proof_sealed,
+            pointer_reference_bindings: self.pointer_reference_bindings.len(),
         }
     }
 
@@ -730,6 +744,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.expression_depth = snapshot.expression_depth;
         self.reference_call_context = snapshot.reference_call_context;
         crate::ir_lower::diagnostics::rollback_to(snapshot.refusals);
+        self.pointer_reference_bindings.truncate(snapshot.pointer_reference_bindings);
         self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
         self.borrowed_string_call_operands = snapshot.borrowed_string_call_operands;
         self.borrowed_string_calls_enabled = snapshot.borrowed_string_calls_enabled;
@@ -995,6 +1010,50 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Updates only the flow-sensitive PHP type fact for a local.
     pub(crate) fn set_local_logical_type(&mut self, name: &str, ty: PhpType) {
         self.local_types.insert(name.to_string(), ty);
+    }
+
+    /// Records a local bound to a pointer by-reference parameter, for the final storage check.
+    pub(crate) fn record_pointer_reference_binding(
+        &mut self,
+        name: &str,
+        span: Span,
+        param_ty: &PhpType,
+    ) {
+        if let Some(slot) = self.local_slots.get(name).copied() {
+            self.pointer_reference_bindings.push(PointerReferenceBinding {
+                slot,
+                name: name.to_string(),
+                span,
+                param_ty: param_ty.clone(),
+            });
+        }
+    }
+
+    /// Refuses each pointer by-reference binding whose local did not end up a pointer word.
+    ///
+    /// The callee reads and writes a raw pointer word through the reference. A frame slot is a
+    /// pointer word only when every store into it was one: a slot that also holds `null` before
+    /// a pointer (in any order of branches) is boxed `mixed`, and a `null`-only slot holds the
+    /// null sentinel, so the caller would misread what the callee wrote. Final storage is known
+    /// only once the whole body is lowered.
+    pub(crate) fn refuse_pointer_reference_bindings(&self) {
+        for binding in &self.pointer_reference_bindings {
+            let storage = self.builder.local_php_type(binding.slot);
+            if matches!(storage.codegen_repr(), PhpType::Pointer(_)) {
+                continue;
+            }
+            let shown = crate::types::pointer_param_display(&binding.param_ty);
+            crate::ir_lower::diagnostics::refuse(
+                binding.span,
+                &format!(
+                    "${name} cannot bind to a `{shown}` by-reference parameter: the callee writes \
+                     a pointer word back, but ${name} is not stored as one (it holds only null, \
+                     or null and a pointer, or another type somewhere in this scope). Declare \
+                     it as `{shown} ${name} = null;`",
+                    name = binding.name,
+                ),
+            );
+        }
     }
 
     /// Returns `true` if a local slot has already been declared for `name`.
@@ -1870,9 +1929,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             (false, false, LocalKind::StaticLocal) => Op::LoadStaticLocal,
             _ => Op::LoadLocal,
         };
-        // A normal ref-cell read borrows a lifetime-tracked pointee. Scalar payloads remain
-        // `NonHeap`. Only `load_local_storage`, used when retiring the slot's stored owner, may
-        // claim ownership of the same refcounted payload.
+        // Reference-cell reads borrow their pointee. Append normalization chooses the
+        // final boxed representation without changing other reference payload contracts.
         let ownership = if op == Op::LoadRefCell
             && Ownership::php_type_needs_lifetime_tracking(&php_type)
         {
@@ -2564,9 +2622,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Shared body of the two consuming-mutation preludes above.
     ///
     /// Declares (or re-declares) the local at `replacement_type`, widens its frame storage so
-    /// the final Mixed representation is visible, and — only when `release_box` is set — drops
-    /// the previous Mixed box so the source load becomes the container's sole owner for the
-    /// mutation. Program-global names return early: their storage is the `_eir_global_*`
+    /// the final Mixed representation is visible, and, only when `release_box` is set, clears
+    /// and retires the previous Mixed box so the source load becomes the container's sole owner
+    /// for the mutation. Program-global names return early: their storage is the `_eir_global_*`
     /// symbol, not a frame slot. A ref-bound local never releases here either; its cell alias
     /// is retired by the `StoreRefCell` that publishes the replacement.
     fn prepare_mutated_local_owner_impl(
@@ -2597,7 +2655,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
             && !matches!(source_type, PhpType::Mixed | PhpType::Union(_))
         {
-            self.release_stored_local_value(name, slot, span);
+            self.emit_void(
+                Op::ReleaseLocalSlot,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                Op::ReleaseLocalSlot.default_effects(),
+                span,
+            );
         }
     }
 
@@ -3468,7 +3532,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::StrConcat
                     | Op::StrAppend
                     | Op::StrPersist
-                    | Op::StrCharAt
                     | Op::StrInterpolate
                     | Op::ArrayNew
                     | Op::HashNew
@@ -3543,7 +3606,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     return None;
                 }
                 let op = self.builder.value_defining_op(value);
-                if matches!(op, Some(Op::LoadLocal | Op::LoadStaticLocal))
+                if matches!(op, Some(Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell))
                     && !self.value_is_owned_temp_load(value)
                 {
                     return None;
@@ -3833,6 +3896,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let Some(inst) = self.builder.value_defining_instruction(value.value) else {
             return false;
         };
+        // A byte view owns no allocation, but a later argument can replace its source.
+        // Preserve source-evaluation pinning; backend release skips the borrowed view itself.
+        if inst.op == Op::StrCharAt { return true; }
         if !matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
             return false;
         }
@@ -4640,18 +4706,33 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// preserving the raw address payload. The sink's pointer type wins even when it names
     /// another class: the checker accepts any pointer for any pointer, and the payload is the
     /// same address either way.
+    ///
+    /// A PHP `null` reaching a pointer sink (including a `?ptr<T>` slot, stored as one pointer
+    /// word) becomes the word 0: null and a null pointer are the same value there, and the
+    /// ordinary null sentinel word would read as a live address.
     pub(crate) fn retype_packed_address_for_pointer_sink(
         &mut self,
         value: LoweredValue,
         expected: &PhpType,
         span: Option<Span>,
     ) -> LoweredValue {
-        if !matches!(self.builder.value_php_type(value.value).codegen_repr(), PhpType::Packed(_)) {
-            return value;
-        }
+        let source = self.builder.value_php_type(value.value).codegen_repr();
         let PhpType::Pointer(target) = expected.codegen_repr() else {
             return value;
         };
+        if matches!(source, PhpType::Void | PhpType::Never) {
+            return self.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(0)),
+                PhpType::Pointer(target),
+                Op::ConstI64.default_effects(),
+                span,
+            );
+        }
+        if !matches!(source, PhpType::Packed(_)) {
+            return value;
+        }
         self.emit_value(
             Op::Move,
             vec![value.value],
@@ -4693,12 +4774,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         LoweredValue { value, ir_type }
     }
 
-    /// Emits an `is_truthy` conversion when a value is not already I64.
+    /// Emits an `is_truthy` conversion unless the value is an integer that is already its own
+    /// truthiness.
+    ///
+    /// A raw PHP null is also an I64 (the null literal or an assignment expression whose
+    /// right-hand side is null), and its sentinel is nonzero, so a `Void`/`Never` value must
+    /// still go through `is_truthy`, whose null arm answers false (#1990).
     pub(crate) fn truthy(&mut self, input: LoweredValue, span: Option<Span>) -> LoweredValue {
         if let Some(value) = super::expr::object_operators::lower_object_truthy(self, input, span) {
             return value;
         }
-        if input.ir_type == IrType::I64 {
+        if input.ir_type == IrType::I64
+            && !matches!(
+                self.builder.value_php_type(input.value).codegen_repr(),
+                PhpType::Void | PhpType::Never
+            )
+        {
             return input;
         }
         self.emit_value(

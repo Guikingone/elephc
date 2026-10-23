@@ -6162,7 +6162,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Void,
+        returns: TypeSpec::Bool,
         by_ref_return: false,
         summary: "Applies a user function to every member of an array. AOT boxed arrays pass a writable value reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported.",
         examples: &[
@@ -6199,7 +6199,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Void,
+        returns: TypeSpec::Bool,
         by_ref_return: false,
         summary: "Applies a user function recursively to array leaf values. AOT boxed arrays pass a writable leaf reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported.",
         examples: &[
@@ -6230,7 +6230,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Void,
+        returns: TypeSpec::Bool,
         by_ref_return: false,
         summary: "Sorts an array in descending order and maintains index association.",
         examples: &[
@@ -6292,7 +6292,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Void,
+        returns: TypeSpec::Bool,
         by_ref_return: false,
         summary: "Sorts an array and maintains index association.",
         examples: &[
@@ -25862,7 +25862,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Void,
+        returns: TypeSpec::Bool,
         by_ref_return: false,
         summary: "Sorts an array using a case-insensitive natural order algorithm.",
         examples: &[
@@ -25893,7 +25893,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Void,
+        returns: TypeSpec::Bool,
         by_ref_return: false,
         summary: "Sorts an array using a natural order algorithm.",
         examples: &[
@@ -29091,7 +29091,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Void,
+        returns: TypeSpec::Bool,
         by_ref_return: false,
         summary: "Sorts an array in descending order. In compiled (AOT) code, arrays with runtime-typed (`mixed`) elements, including declared PHP array parameters, are accepted when every element is `null`, `bool`, `int`, `float`, or `string`. Keys are reindexed and value copies keep their original order. A non-scalar element (nested array, object, resource, or boxed callable) terminates execution before sorting with `Fatal error: sorting Mixed arrays containing non-scalar values is not supported`. This deliberate restriction does not implement full PHP container ordering.",
         examples: &[
@@ -30149,7 +30149,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Void,
+        returns: TypeSpec::Bool,
         by_ref_return: false,
         summary: "Shuffles an array into random order.",
         examples: &[
@@ -30310,7 +30310,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Void,
+        returns: TypeSpec::Bool,
         by_ref_return: false,
         summary: "Sorts an array in ascending order. In compiled (AOT) code, arrays with runtime-typed (`mixed`) elements, including declared PHP array parameters, are accepted when every element is `null`, `bool`, `int`, `float`, or `string`. Keys are reindexed and value copies keep their original order. A non-scalar element (nested array, object, resource, or boxed callable) terminates execution before sorting with `Fatal error: sorting Mixed arrays containing non-scalar values is not supported`. This deliberate restriction does not implement full PHP container ordering.",
         examples: &[
@@ -34384,7 +34384,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Void,
+        returns: TypeSpec::Bool,
         by_ref_return: false,
         summary: "Sorts an array with a user-defined comparison function and maintains index association.",
         examples: &[
@@ -34489,7 +34489,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Void,
+        returns: TypeSpec::Bool,
         by_ref_return: false,
         summary: "Sorts an array by keys using a user-defined comparison function.",
         examples: &[
@@ -34749,7 +34749,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Void,
+        returns: TypeSpec::Bool,
         by_ref_return: false,
         summary: "Sorts an array by values using a user-defined comparison function.",
         examples: &[

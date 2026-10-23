@@ -334,7 +334,7 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
 pub(super) fn lower_str_persist(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     require_string(ctx.load_value_to_result(value)?, inst)?;
-    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    super::ownership::persist_loaded_string(ctx, value)?;
     store_if_result(ctx, inst)
 }
 
@@ -368,6 +368,23 @@ pub(super) fn lower_resource_to_string(
     store_if_result(ctx, inst)
 }
 
+/// Converts the `?ptr<T>` word in the result register to a string: a null pointer (0) is PHP
+/// null and converts to `""` (the text `echo` prints for it), any other address to `0x...`.
+pub(in crate::codegen::lower_inst) fn emit_loaded_nullable_pointer_to_string(
+    ctx: &mut FunctionContext<'_>,
+) {
+    let null_case = ctx.next_label("nullable_pointer_to_string_null");
+    let done = ctx.next_label("nullable_pointer_to_string_done");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &null_case);
+    abi::emit_call_label(ctx.emitter, "__rt_ptoa");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&null_case);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+    ctx.emitter.label(&done);
+}
+
 /// Lowers an integer-like-to-string conversion, including PHP bool/null string rules.
 ///
 /// Raw pointers (`ptr` and `ptr<T>`) share the integer register shape and format as the same
@@ -377,7 +394,12 @@ pub(super) fn lower_int_like_to_string(
     inst: &Instruction,
 ) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    match ctx.load_value_to_result(value)?.codegen_repr() {
+    let loaded_ty = ctx.load_value_to_result(value)?;
+    if crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(value)?) {
+        emit_loaded_nullable_pointer_to_string(ctx);
+        return store_if_result(ctx, inst);
+    }
+    match loaded_ty.codegen_repr() {
         PhpType::Bool => {
             lower_loaded_bool_to_string(ctx)?;
             store_if_result(ctx, inst)

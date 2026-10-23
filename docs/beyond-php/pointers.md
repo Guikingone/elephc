@@ -85,6 +85,52 @@ pair keeps the value exactly. Both accept an `int` value and convert it.
 
 Pointer dereference helpers abort on null pointer dereference. Use `ptr_is_null($p)` to check.
 
+A nullable pointer type (`?ptr`, `?ptr<T>` or `ptr<T>|null`) is stored as the bare address,
+and PHP `null` is address 0. Returning `null`, assigning it, or a `= null` property default
+writes a null pointer, and `=== null`, `!== null`, `is_null()`, `isset()` and `??` test the
+address against 0:
+
+```php
+<?php
+packed class Vec2 { public int $x; public int $y; }
+
+function find(buffer<Vec2> $items, int $x): ?ptr<Vec2> {
+    for ($i = 0; $i < buffer_len($items); $i++) {
+        if ($items[$i]->x === $x) {
+            return $items[$i];
+        }
+    }
+    return null;
+}
+
+$items = buffer_new<Vec2>(4);
+$hit = find($items, 0);
+if ($hit !== null) {
+    echo $hit->y;             // field access through the found record
+}
+echo gettype(find($items, 9)); // "NULL"
+```
+
+Because the two are the same value, a `ptr_null()` stored in a `?ptr<T>` reads as `null`:
+`echo`, `(string)`, concatenation, interpolation and `sprintf("%s")` give the empty string,
+`gettype()` answers `NULL`, and boxing it into a `mixed` value stores PHP `null`. Builtins
+that take `mixed` (`gettype`, `is_int`, `json_encode`, `var_dump`, `serialize`) and the
+`(int)`/`(float)` casts see a live `?ptr<T>` as its integer address, so `gettype()` answers
+`integer` for it. A
+non-nullable `ptr` keeps printing `0x0`. Narrow a `?ptr<T>` with `!== null` before passing
+it to an `extern` function that takes `ptr<T>`. Object introspection (`var_dump`, `print_r`,
+`var_export`, `json_encode`, `serialize`) shows a pointer property as its integer address,
+so a null `?ptr<T>` property appears there as `0`.
+
+A `?ptr<T> &$p` (or `ptr<T> &$p`) by-reference parameter writes the pointer word back
+through the caller's variable, so that variable must hold a pointer word everywhere in its
+scope: a pointer value (`$p = $buffer[0];`), a declared `?ptr<T> $p = null;`, or a pointer
+parameter. A variable that holds only `null`, or `null` and a pointer at different points, is
+rejected at compile time (declare it `?ptr<T> $p = null;` instead), and so is an array
+element. A `?ptr<T>` variable that a `=== null` guard narrowed can still be passed, and reads
+as `?ptr<T>` again after the call. A plain `ptr<T>` variable stays a plain pointer after the
+call: if the callee stored `null`, it is address 0, not PHP `null`.
+
 ## Raw string copies
 
 ```php
@@ -128,13 +174,19 @@ hand the text to another string builtin, pass `(string)$p`.
 
 A pointer is not a string, so it is still rejected where a `string` is required
 by declaration: a `string` parameter or return type, `strlen()`, and loose
-comparison with `==` (use `===`). The conversion applies to values the compiler
+comparison with `==` (use `===`; a `?ptr<T>` compares with `==` like the PHP value it
+stands for, `null` or its integer address). The conversion applies to values the compiler
 knows to be pointers: a pointer stored in a `mixed` or union-typed value, for
 example `$v = $flag ? $p : "none"`, is held as its integer address there and
-prints in decimal. `settype($p, "string")` needs that same mixed storage, so it
+prints in decimal (a null `ptr` is the integer `0` there, not PHP `null`; a null
+`?ptr<T>` is PHP `null`). `settype($p, "string")` needs that same mixed storage, so it
 does not compile yet for a pointer variable; assign `(string)$p` to another
 variable instead. Code running inside `eval()` also sees pointers as plain
-integers, so `echo ptr_null()` there prints `0`.
+integers, so `echo ptr_null()` there prints `0`. A `?ptr<T>` that `eval()` reaches through
+a compiled class (a method result or parameter, an instance or static property, a
+constructor parameter) keeps its nullable meaning: address 0 is PHP `null` there, and a
+`null` passed from `eval()` becomes address 0. A method with a `?ptr<T> &$p` by-reference
+parameter cannot be called from `eval()` yet.
 
 ## Function reference
 

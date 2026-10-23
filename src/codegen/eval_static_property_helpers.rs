@@ -139,8 +139,10 @@ fn static_property_visibility_supported(visibility: &Visibility) -> bool {
 }
 
 /// Returns true for static-property storage shapes the bridge can box and update.
+///
+/// A `?ptr<T>` is one pointer word: PHP null reads and writes as address 0.
 fn static_property_type_supported(ty: &PhpType) -> bool {
-    matches!(
+    crate::types::is_nullable_pointer_type(ty) || matches!(
         ty.codegen_repr(),
         PhpType::Int
             | PhpType::Bool
@@ -753,7 +755,13 @@ fn emit_x86_64_uninitialized_guard(
 /// Boxes an ARM64 static property symbol payload into a Mixed cell.
 fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
     match slot.ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
+        // A `?ptr<T>` word boxes by the declared union in `slot.ty`, address 0 as PHP null.
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Pointer(_)
+        | PhpType::Object(_)
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. } => {
             abi::emit_load_symbol_to_reg(emitter, "x0", &slot.symbol, 0);
             emit_box_current_value_as_mixed(emitter, &slot.ty);
         }
@@ -803,7 +811,13 @@ fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStati
 /// Boxes an x86_64 static property symbol payload into a Mixed cell.
 fn emit_x86_64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
     match slot.ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
+        // A `?ptr<T>` word boxes by the declared union in `slot.ty`, address 0 as PHP null.
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Pointer(_)
+        | PhpType::Object(_)
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. } => {
             abi::emit_load_symbol_to_reg(emitter, "rax", &slot.symbol, 0);
             emit_box_current_value_as_mixed(emitter, &slot.ty);
         }
@@ -864,7 +878,9 @@ fn emit_aarch64_store_static_property_slot(
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
     }
     match slot.ty.codegen_repr() {
-        PhpType::Int => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "x0"),
+        PhpType::Int | PhpType::Pointer(_) => {
+            emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "x0")
+        }
         PhpType::Bool => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_bool", "x0"),
         PhpType::Float => {
             emitter.instruction("ldr x0, [sp, #32]");                           // reload the boxed eval value for float coercion
@@ -918,7 +934,9 @@ fn emit_x86_64_store_static_property_slot(
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
     }
     match slot.ty.codegen_repr() {
-        PhpType::Int => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "rax"),
+        PhpType::Int | PhpType::Pointer(_) => {
+            emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "rax")
+        }
         PhpType::Bool => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_bool", "rax"),
         PhpType::Float => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval value for float coercion

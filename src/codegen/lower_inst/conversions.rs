@@ -95,6 +95,12 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         emit_resource_display_id_to_int(ctx);
         return store_if_result(ctx, inst);
     }
+    // A `?ptr<T>` converts like the PHP value it stands for: null is 0, a live address is the
+    // integer it boxes to.
+    if crate::types::is_nullable_pointer_type(&raw_ty) {
+        ctx.load_value_to_result(value)?;
+        return store_if_result(ctx, inst);
+    }
     match raw_ty.codegen_repr() {
         PhpType::Int | PhpType::Bool => {
             ctx.load_value_to_result(value)?;
@@ -163,6 +169,13 @@ fn lower_cast_to_float(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
     if matches!(raw_ty, PhpType::Resource(_)) {
         ctx.load_value_to_result(value)?;
         emit_resource_display_id_to_int(ctx);
+        abi::emit_int_result_to_float_result(ctx.emitter);
+        return store_if_result(ctx, inst);
+    }
+    // A `?ptr<T>` converts like the PHP value it stands for: null is 0.0, a live address the
+    // integer it boxes to.
+    if crate::types::is_nullable_pointer_type(&raw_ty) {
+        ctx.load_value_to_result(value)?;
         abi::emit_int_result_to_float_result(ctx.emitter);
         return store_if_result(ctx, inst);
     }

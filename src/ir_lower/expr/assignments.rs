@@ -115,6 +115,10 @@ pub(super) fn lower_assignment_expr(
         } else {
             value_php_type
         };
+        // `($p = null)` into a pointer-word local stores address 0, as the statement form does.
+        let (lowered, php_type) =
+            crate::ir_lower::stmt::retype_value_for_pointer_local(ctx, name, lowered, expr.span)
+                .unwrap_or((lowered, php_type));
         ctx.store_local(name, lowered, php_type, Some(expr.span));
         result = ctx.load_local(name, Some(expr.span));
         let static_callable = callable_array
@@ -475,6 +479,7 @@ pub(super) fn lower_dynamic_property_assign(
     let (mut receiver, property, value) = if is_static_property_write_chain(object) {
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
+        let property = crate::ir_lower::ownership::persist_string_byte_view(ctx, property, Some(span));
         let property_pins = pin_in_flight_owners(ctx, &[property.value], span);
         // The traversal must not pin this same lease again at a nullable hop. Its
         // borrowed guard view remains protected by the earlier name record below it.
@@ -492,6 +497,7 @@ pub(super) fn lower_dynamic_property_assign(
         let receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
+        let property = crate::ir_lower::ownership::persist_string_byte_view(ctx, property, Some(span));
         let property_pins = pin_in_flight_owners(ctx, &[property.value], span);
         let value = lower_expr(ctx, value);
         unpin_in_flight_owners(ctx, property_pins, span);

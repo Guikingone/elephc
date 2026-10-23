@@ -2,7 +2,7 @@
 //! Provides the checked construction API for hand-built and lowered EIR.
 //!
 //! Called from:
-//! - Phase 02 tests and future Phase 03 AST-to-EIR lowering.
+//! - AST-to-EIR lowering and IR construction tests.
 //!
 //! Key details:
 //! - The builder assigns value/instruction IDs, prevents emission after a
@@ -145,6 +145,23 @@ impl<'f> Builder<'f> {
         self.current = Some(block);
     }
 
+    /// Moves new ownership preparation and records before an already lowered operand window.
+    /// Their operands precede the window or belong to the moved tail; refresh SSA positions.
+    pub fn move_trailing_instructions(
+        &mut self, source: BlockId, start: usize, target: BlockId, position: usize,
+    ) {
+        let moved = self.func.blocks[source.as_raw() as usize].instructions.split_off(start);
+        self.func.blocks[target.as_raw() as usize].instructions.splice(position..position, moved);
+        // Removing a tail leaves prior source positions intact; refresh the target suffix.
+        for (index, id) in self.func.blocks[target.as_raw() as usize].instructions.iter().copied().enumerate().skip(position) {
+            if let Some(value) = self.func.instructions[id.as_raw() as usize].result {
+                self.func.values[value.as_raw() as usize].def = ValueDef::Instruction {
+                    block: target, index: index as u32, inst: id,
+                };
+            }
+        }
+    }
+
     /// Returns one block parameter value by index.
     pub fn block_param(&self, block: BlockId, index: usize) -> ValueId {
         self.func.blocks[block.as_raw() as usize].params[index]
@@ -270,7 +287,7 @@ impl<'f> Builder<'f> {
             let Some(source_inst) = self.func.instructions.get(source_inst.as_raw() as usize) else {
                 continue;
             };
-            if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+            if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell) {
                 continue;
             }
             let Some(Immediate::LocalSlot(slot)) = source_inst.immediate else {
@@ -334,7 +351,7 @@ impl<'f> Builder<'f> {
             let Some(source_inst) = self.func.instructions.get(source_inst.as_raw() as usize) else {
                 continue;
             };
-            if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
+            if !matches!(source_inst.op, Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell) {
                 continue;
             }
             let Some(Immediate::LocalSlot(slot)) = source_inst.immediate else {

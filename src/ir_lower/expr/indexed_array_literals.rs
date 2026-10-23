@@ -311,6 +311,7 @@ pub(super) fn lower_mixed_array_literal(
             ArrayEntry::Keyed(key, value) => {
                 let span = key.span;
                 let key = lower_expr(ctx, key);
+                let (key, key_owner) = root_owned_call_operand(ctx, key, span);
                 let value = lower_expr(ctx, value);
                 ctx.emit_void(
                     Op::HashSet,
@@ -319,6 +320,9 @@ pub(super) fn lower_mixed_array_literal(
                     Op::HashSet.default_effects(),
                     Some(span),
                 );
+                if let Some(owner) = key_owner {
+                    retire_owned_call_operand(ctx, owner, span);
+                }
             }
             ArrayEntry::Value(value) => {
                 let span = value.span;

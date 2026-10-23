@@ -48,7 +48,10 @@ pub(super) fn lower_static_property_assign(
         return;
     }
     let source = static_property_type(ctx, receiver, property)
-        .map(|slot_ty| coerce_typed_assign_value(ctx, source, &slot_ty, span))
+        .map(|slot_ty| {
+            let source = ctx.retype_packed_address_for_pointer_sink(source, &slot_ty, Some(span));
+            coerce_typed_assign_value(ctx, source, &slot_ty, span)
+        })
         .unwrap_or(source);
     if static_property_store_retains_independent_value(ctx, receiver, property, source) {
         store_static_property(ctx, receiver, property, source.value, span);
@@ -147,6 +150,7 @@ pub(super) fn static_property_store_retains_independent_value(
             slot_ty,
             PhpType::Str
                 | PhpType::Int
+                | PhpType::Pointer(_)
                 | PhpType::Bool
                 | PhpType::Float
                 | PhpType::Object(_)
@@ -342,7 +346,8 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
     key_already_diagnosed: bool,
 ) {
     let key_marker = key_already_diagnosed.then_some(Immediate::Bool(true));
-    let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
+    let (index, value, mut index_pins) =
+        array_write_core::lower_write_key_and_value(ctx, index, value);
     if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
         ctx.emit_void(
             Op::RuntimeCall,
@@ -350,6 +355,11 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
             key_marker,
             effects_lookup::runtime_effects(),
             Some(span),
+        );
+        crate::ir_lower::expr::unpin_in_flight_owners(
+            ctx,
+            std::mem::take(&mut index_pins),
+            span,
         );
         release_persisted_string_operand(ctx, index, span);
         if ctx.value_is_owning_temporary(value) {
@@ -363,7 +373,13 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
     if let Some(name) = bind_mixed_static_array_write_root(ctx, &root) {
         let array = load_array_local_for_write(ctx, &name, span);
         array_write_core::lower_concrete_array_set_values(
-            ctx, array, index, value, span, key_already_diagnosed,
+            ctx,
+            array,
+            index,
+            value,
+            std::mem::take(&mut index_pins),
+            span,
+            key_already_diagnosed,
         );
         return;
     }
@@ -376,6 +392,11 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
         // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
         // rule; sharing the helper is what keeps the two from answering differently for
         // the same source line.
+        crate::ir_lower::expr::unpin_in_flight_owners(
+            ctx,
+            std::mem::take(&mut index_pins),
+            span,
+        );
         let index =
             coerce_array_key_to_int_at_span(ctx, index, Some(span), key_already_diagnosed);
         let value = coerce_indexed_array_set_value(ctx, &array_ty, value, Some(span));
@@ -411,6 +432,12 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
             effects_lookup::runtime_effects(),
             Some(span),
         );
+        crate::ir_lower::expr::unpin_in_flight_owners(
+            ctx,
+            std::mem::take(&mut index_pins),
+            span,
+        );
+        release_persisted_string_operand(ctx, index, span);
         store_static_property(ctx, receiver, property, property_value.value, span);
         return;
     }
@@ -421,6 +448,8 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
         effects_lookup::runtime_effects(),
         Some(span),
     );
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, index_pins, span);
+    release_persisted_string_operand(ctx, index, span);
 }
 
 /// Binds mixed-element static storage through a hash-aware relocating write alias.

@@ -35,8 +35,12 @@ pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
     op_name: &str,
 ) -> Result<()> {
     match ctx.raw_value_php_type(value)? {
-        // A packed record address (buffer element or nested record) is one pointer word.
-        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Pointer(_) | PhpType::Packed(_) => {
+        // A packed record address (buffer element or nested record) is one pointer word, and so
+        // is a `?ptr<T>` (null is 0); its union must not reach the Mixed cell arm below.
+        ty if matches!(
+            ty,
+            PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Pointer(_) | PhpType::Packed(_)
+        ) || crate::types::is_nullable_pointer_type(&ty) => {
             ctx.load_value_to_result(value)?;
             emit_int_result_nonzero_bool(ctx);
         }
@@ -141,6 +145,12 @@ pub(super) fn lower_is_null(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 
 /// Emits an `is_null` boolean result for static nulls and boxed Mixed payloads.
 pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    // A `?ptr<T>` is one pointer word where 0 is null.
+    if crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(value)?) {
+        ctx.load_value_to_result(value)?;
+        super::builtins::emit_int_result_zero_bool(ctx);
+        return Ok(());
+    }
     match ctx.value_php_type(value)? {
         PhpType::Mixed | PhpType::Union(_) => emit_mixed_tag_eq(ctx, value, 8),
         PhpType::Void | PhpType::Never => {

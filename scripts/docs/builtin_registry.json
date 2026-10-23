@@ -22620,7 +22620,7 @@
           "type": "callable"
         }
       ],
-      "return_type": "void",
+      "return_type": "bool",
       "variadic": null
     },
     "since": null,
@@ -22759,7 +22759,7 @@
           "type": "callable"
         }
       ],
-      "return_type": "void",
+      "return_type": "bool",
       "variadic": null
     },
     "since": null,
