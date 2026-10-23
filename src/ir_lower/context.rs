@@ -1864,9 +1864,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             (false, false, LocalKind::StaticLocal) => Op::LoadStaticLocal,
             _ => Op::LoadLocal,
         };
-        // A normal ref-cell read borrows a lifetime-tracked pointee. Scalar payloads remain
-        // `NonHeap`. Only `load_local_storage`, used when retiring the slot's stored owner, may
-        // claim ownership of the same refcounted payload.
+        // Reference-cell reads borrow their pointee. Append normalization chooses the
+        // final boxed representation without changing other reference payload contracts.
         let ownership = if op == Op::LoadRefCell
             && Ownership::php_type_needs_lifetime_tracking(&php_type)
         {
@@ -2558,9 +2557,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Shared body of the two consuming-mutation preludes above.
     ///
     /// Declares (or re-declares) the local at `replacement_type`, widens its frame storage so
-    /// the final Mixed representation is visible, and — only when `release_box` is set — drops
-    /// the previous Mixed box so the source load becomes the container's sole owner for the
-    /// mutation. Program-global names return early: their storage is the `_eir_global_*`
+    /// the final Mixed representation is visible, and, only when `release_box` is set, clears
+    /// and retires the previous Mixed box so the source load becomes the container's sole owner
+    /// for the mutation. Program-global names return early: their storage is the `_eir_global_*`
     /// symbol, not a frame slot. A ref-bound local never releases here either; its cell alias
     /// is retired by the `StoreRefCell` that publishes the replacement.
     fn prepare_mutated_local_owner_impl(
@@ -2591,7 +2590,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
             && !matches!(source_type, PhpType::Mixed | PhpType::Union(_))
         {
-            self.release_stored_local_value(name, slot, span);
+            self.emit_void(
+                Op::ReleaseLocalSlot,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                Op::ReleaseLocalSlot.default_effects(),
+                span,
+            );
         }
     }
 
@@ -3532,7 +3537,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     return None;
                 }
                 let op = self.builder.value_defining_op(value);
-                if matches!(op, Some(Op::LoadLocal | Op::LoadStaticLocal))
+                if matches!(op, Some(Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell))
                     && !self.value_is_owned_temp_load(value)
                 {
                     return None;

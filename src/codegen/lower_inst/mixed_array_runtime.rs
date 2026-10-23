@@ -114,6 +114,9 @@ pub(super) fn lower_array_fetch_for_write_runtime_call(
             store_if_result(ctx, inst)
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            if let Some(slot) = super::receiver_place::ReceiverPlace::resolve(ctx, receiver)?.slot() {
+                ctx.prepare_mutated_source_local_owner(slot, receiver)?;
+            }
             let indexed = matches!(receiver_ty, PhpType::Array(_));
             let tag: i64 = if indexed {
                 4

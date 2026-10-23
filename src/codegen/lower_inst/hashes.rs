@@ -387,9 +387,7 @@ pub(super) fn lower_descriptor_arg_set(
     let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
     let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
-    if let Some(slot) = receiver.slot() {
-        ctx.release_mutated_source_local_owner(slot, hash)?;
-    }
+    receiver.prepare_consuming_storeback(ctx, hash)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_hash_set_aarch64_with(
             ctx, hash, key, value, &value_ty, &storage_value_ty, HashKeyNormalization::RawString,
@@ -482,9 +480,7 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let hash_ty = ctx.value_php_type(hash)?;
     require_hash(hash_ty.clone(), inst)?;
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
-    if let Some(slot) = receiver.slot() {
-        ctx.release_mutated_source_local_owner(slot, hash)?;
-    }
+    receiver.prepare_consuming_storeback(ctx, hash)?;
     ctx.load_value_to_reg(hash, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_ensure_unique");
     ctx.store_result_value(hash)?;
@@ -518,9 +514,7 @@ pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
     let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
-    if let Some(slot) = receiver.slot() {
-        ctx.release_mutated_source_local_owner(slot, hash)?;
-    }
+    receiver.prepare_consuming_storeback(ctx, hash)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_hash_append_aarch64(ctx, hash, value, &value_ty, &storage_value_ty)?,
         Arch::X86_64 => lower_hash_append_x86_64(ctx, hash, value, &value_ty, &storage_value_ty)?,
@@ -613,9 +607,7 @@ pub(super) fn lower_hash_spread(ctx: &mut FunctionContext<'_>, inst: &Instructio
     require_hash(ctx.value_php_type(dest)?, inst)?;
     require_hash(ctx.value_php_type(source)?, inst)?;
     let receiver = ReceiverPlace::resolve(ctx, dest)?;
-    if let Some(slot) = receiver.slot() {
-        ctx.release_mutated_source_local_owner(slot, dest)?;
-    }
+    receiver.prepare_consuming_storeback(ctx, dest)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(dest, "x0")?;

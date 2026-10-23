@@ -201,7 +201,7 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
         // Mixed storage even though lowering emitted no ReleaseLocalSlot before the conversion.
         // Retire that outer box now, while the retained child keeps the source alive. Raw array
         // slots take the no-op branch, so ArrayToHash remains the sole consumer of their owner.
-        ctx.release_mutated_source_local_owner(slot, array)?;
+        ctx.prepare_mutated_source_local_owner(slot, array)?;
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -393,15 +393,14 @@ pub(super) fn separate_get_for_write_receiver(
     helper: &str,
 ) -> Result<()> {
     let receiver = ReceiverPlace::resolve(ctx, array)?;
-    let Some(slot) = receiver.slot() else {
-        return Ok(());
-    };
+    if receiver.slot().is_none() { return Ok(()); }
     receiver.reload_local_value(ctx, array)?;
+    receiver.prepare_consuming_storeback(ctx, array)?;
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(array, arg_reg)?;
     abi::emit_call_label(ctx.emitter, helper);
     ctx.store_result_value(array)?;
-    ctx.store_container_writeback_to_local(slot, array)?;
+    receiver.store_back_container_writeback(ctx, array)?;
     ctx.writeback_global_array_source(array)
 }
 
@@ -1080,13 +1079,16 @@ pub(super) fn lower_array_elem_addr(
     require_integer_like_index(ctx.value_php_type(index)?, inst)?;
     let elem_size = array_element_size(&array_ty)?;
     let source_local = source_load_local_slot(ctx, array)?;
+    if let Some(slot) = source_local {
+        ctx.prepare_mutated_source_local_owner(slot, array)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_array_elem_addr_prepare_aarch64(ctx, array, index, elem_size)?,
         Arch::X86_64 => lower_array_elem_addr_prepare_x86_64(ctx, array, index, elem_size)?,
     }
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
-        ctx.store_container_writeback_to_local(slot, array)?;
+        ctx.store_mutated_container_writeback_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
     match ctx.emitter.target.arch {
@@ -1106,6 +1108,9 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let value_ty = effective_array_set_value_type(&elem_ty, &raw_value_ty, inst)?;
     require_integer_like_index(ctx.value_php_type(index)?, inst)?;
     let source_local = source_load_local_slot(ctx, array)?;
+    if let Some(slot) = source_local {
+        ctx.prepare_mutated_source_local_owner(slot, array)?;
+    }
     if matches!(elem_ty.codegen_repr(), PhpType::Mixed) {
         lower_runtime_polymorphic_array_set(ctx, array, index, value, &raw_value_ty)?;
     } else {
@@ -1121,7 +1126,7 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     stamp_scalar_array_write_result(ctx, &value_ty);
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
-        ctx.store_container_writeback_to_local(slot, array)?;
+        ctx.store_mutated_container_writeback_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
     Ok(())
@@ -1395,10 +1400,13 @@ pub(super) fn lower_array_push_value(
     } else {
         elem_ty.codegen_repr()
     };
+    if let Some(slot) = source_local {
+        ctx.prepare_mutated_source_local_owner(slot, array)?;
+    }
     lower_runtime_polymorphic_array_push(ctx, array, value, &elem_ty, &stored_type)?;
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
-        ctx.store_container_writeback_to_local(slot, array)?;
+        ctx.store_mutated_container_writeback_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
     Ok(())
@@ -3702,7 +3710,7 @@ pub(super) fn lower_slot_detach(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let container_ty = ctx.value_php_type(container)?.codegen_repr();
     let source_local = source_load_local_slot(ctx, container)?;
     if let Some(slot) = source_local {
-        ctx.release_mutated_source_local_owner(slot, container)?;
+        ctx.prepare_mutated_source_local_owner(slot, container)?;
     }
     match container_ty {
         PhpType::AssocArray { .. } => match ctx.emitter.target.arch {
@@ -3722,7 +3730,7 @@ pub(super) fn lower_slot_detach(ctx: &mut FunctionContext<'_>, inst: &Instructio
     }
     ctx.store_result_value(container)?;
     if let Some(slot) = source_local {
-        ctx.store_container_writeback_to_local(slot, container)?;
+        ctx.store_mutated_container_writeback_to_local(slot, container)?;
     }
     ctx.writeback_global_array_source(container)?;
     Ok(())

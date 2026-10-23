@@ -932,6 +932,57 @@ impl<'a> FunctionContext<'a> {
         self.store_value_to_local_as(slot, value, RefCellStorePrevious::Keep)
     }
 
+    /// Identifies a borrowed concrete container read from an unpromoted boxed reference local.
+    pub(super) fn needs_borrowed_container_lease(
+        &self, slot: LocalSlotId, value: ValueId,
+    ) -> Result<bool> {
+        let ref_load = self.function.value(value).and_then(|value| match value.def {
+            ValueDef::Instruction { inst, .. } => self.function.instruction(inst),
+            _ => None,
+        }).is_some_and(|inst| inst.op == Op::LoadRefCell);
+        Ok(ref_load
+            && self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
+            && self.local_php_type(slot)?.codegen_repr() == PhpType::Mixed
+            && matches!(self.value_php_type(value)?.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable))
+    }
+
+    /// Gives a consuming mutation a lease before retiring its source local's previous box.
+    pub(super) fn prepare_mutated_source_local_owner(
+        &mut self, slot: LocalSlotId, value: ValueId,
+    ) -> Result<()> {
+        if self.needs_borrowed_container_lease(slot, value)? {
+            self.retake_mutated_source_local_owner(slot, value)
+        } else {
+            self.release_mutated_source_local_owner(slot, value)
+        }
+    }
+
+    /// Publishes a mutation's replacement, transferring its explicitly retaken borrowed lease.
+    pub(super) fn store_mutated_container_writeback_to_local(
+        &mut self, slot: LocalSlotId, value: ValueId,
+    ) -> Result<()> {
+        if self.needs_borrowed_container_lease(slot, value)? {
+            if self.value_is_released_later(value) {
+                return self.store_receiver_value_to_local(slot, value);
+            }
+            return self.store_owned_container_to_raw_local(slot, value);
+        }
+        self.store_container_writeback_to_local(slot, value)
+    }
+
+    /// Moves a consuming mutation's concrete container lease into its raw local's Mixed box.
+    fn store_owned_container_to_raw_local(
+        &mut self, slot: LocalSlotId, value: ValueId,
+    ) -> Result<()> {
+        let ty = self.load_value_to_result(value)?;
+        emit_box_current_owned_value_as_mixed(self.emitter, &ty);
+        let target_ty = self.local_php_type(slot)?;
+        let offset = self.local_offset(slot)?;
+        self.store_current_result_at_offset(&target_ty, offset);
+        Ok(())
+    }
+
     /// Shared body of the two local stores, parameterized by the previous-occupant rule.
     fn store_value_to_local_as(
         &mut self,
@@ -1073,6 +1124,9 @@ impl<'a> FunctionContext<'a> {
         if self.local_slot_representation(slot) != LocalSlotRepresentation::Raw
             || !self.value_is_released_later(value)
         {
+            if self.needs_borrowed_container_lease(slot, value)? {
+                return self.store_owned_container_to_raw_local(slot, value);
+            }
             return self.store_value_to_local(slot, value);
         }
         let source_ty = self.load_value_to_result(value)?;
@@ -1106,7 +1160,11 @@ impl<'a> FunctionContext<'a> {
             && self.value_is_released_later(value)
             && self.local_php_type(slot)?.codegen_repr() == PhpType::Mixed
             && self.value_php_type(value)?.codegen_repr() != PhpType::Mixed;
-        self.store_value_to_local(slot, value)?;
+        if self.needs_borrowed_container_lease(slot, value)? {
+            self.store_owned_container_to_raw_local(slot, value)?;
+        } else {
+            self.store_value_to_local(slot, value)?;
+        }
         Ok(owed)
     }
 
@@ -1476,6 +1534,11 @@ impl<'a> FunctionContext<'a> {
         }
         let value_ty = self.value_php_type(value)?.codegen_repr();
         if value_ty == PhpType::Str {
+            if self.function.instructions.iter().any(|inst| {
+                inst.op == Op::Release && inst.operands.first().copied() == Some(value)
+            }) {
+                return Ok(false);
+            }
             return self.value_is_heap_owned_string_for_mixed_box(value);
         }
         if self.value_can_transfer_ownership_to_consumer(value)? {

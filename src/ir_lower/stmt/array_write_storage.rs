@@ -18,7 +18,9 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
 ) -> LoweredValue {
     let ty = ctx.local_type(name);
     let value = ctx.load_local(name, Some(span));
-    if ty.codegen_repr() != PhpType::Mixed || ctx.append_update_cell_aliases.contains(name) {
+    if ty.codegen_repr() != PhpType::Mixed
+        || ctx.append_update_cell_aliases.contains(name)
+    {
         return value;
     }
     let detached = ctx.emit_owned_value(
@@ -37,10 +39,28 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
     let receiver = Expr::new(ExprKind::Variable(array.into()), span);
     if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &receiver, value, span) { return; }
-    let array_value = load_array_local_for_write(ctx, array, span);
     let value = lower_expr(ctx, value);
-    let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[array_value.value, value.value], span);
-    if !super::nested_write_guards::guard_nested_write_parent(ctx, array_value, None, span) {
+    // PHP selects the current append target after RHS effects, including reference writes.
+    // Loading here also gives the ordinary parent guards the RHS-updated storage type.
+    // Append's final-storage normalization mutates a bound box directly. Other indexed
+    // writers still require the detached cell published by load_array_local_for_write.
+    let array_value = if ctx.is_ref_bound_local(array) {
+        ctx.load_local(array, Some(span))
+    } else {
+        load_array_local_for_write(ctx, array, span)
+    };
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(
+        ctx,
+        &[array_value.value, value.value],
+        span,
+    );
+    if !super::nested_write_guards::guard_array_push_parent(
+        ctx,
+        array_value,
+        value,
+        &pins,
+        span,
+    ) {
         return;
     }
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
