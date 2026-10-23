@@ -702,3 +702,27 @@ echo in_array(null, $b->items, true) ? "strict" : "-", "\n";
     );
     assert_eq!(out, "[null,ADDR]|unset|strict\n");
 }
+
+/// Verifies a pointer-array parameter default materialized by the runtime callable invoker (a
+/// string callable and a first-class callable reached through a `callable` parameter) holds raw
+/// pointer words: after an append, the null default still reads as null through typed reads,
+/// `isset()` and `json_encode`, exactly as a direct call does.
+#[test]
+fn test_pointer_array_defaults_through_the_callable_invoker_hold_pointer_words() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function take(array<ptr<Vec2>|null> $items = [null]): string {
+    $w = buffer_new<Vec2>(1);
+    $w[0]->x = 7;
+    $items[] = $w[0];
+    $a = (string) (int) $items[1];
+    return str_replace($a, "ADDR", (string) json_encode($items)) . (isset($items[0]) ? "set" : "unset")
+        . ($items[0] === null ? "null" : "live") . $items[1]->x;
+}
+function run(callable $c): string { return $c(); }
+echo take(), "|", run("take"), "|", run(take(...)), "\n";
+"#,
+    );
+    assert_eq!(out, "[null,ADDR]unsetnull7|[null,ADDR]unsetnull7|[null,ADDR]unsetnull7\n");
+}
