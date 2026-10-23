@@ -183,6 +183,17 @@ impl CallArgPlan {
             .any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
     }
 
+    /// Returns how many leading `normalized_args()` entries are the regular parameters in order.
+    ///
+    /// Passthrough arguments keep their source order, so none of them is tied to a parameter.
+    pub(crate) fn normalized_regular_arg_count(&self) -> usize {
+        if self.passthrough_args.is_some() {
+            0
+        } else {
+            self.regular_args.len()
+        }
+    }
+
     /// Returns a flat list of expressions in parameter order suitable for codegen
     /// materialization. Preserves spread expressions for static-array spreads that
     /// were resolved in place; applies default guards for optional slots when the

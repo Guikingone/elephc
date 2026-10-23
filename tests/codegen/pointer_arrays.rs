@@ -427,7 +427,8 @@ echo $e["b"]->x, $e[0]->x, isset($e[1]) ? "set" : "unset", "\n";
 
 /// Verifies a null-only literal passed as a named argument to an `array<ptr<T>|null>` parameter
 /// keeps pointer storage like a positional one, so `isset()` of its null element is false for a
-/// function and a method call alike.
+/// function and a method call, and beside an associative unpack (`f(...$bag, items: [null])`,
+/// which lowers through the normalized-argument fallback) for an array and a hash parameter.
 #[test]
 fn test_pointer_array_named_argument_null_only_literal() {
     let out = compile_and_run(
@@ -437,8 +438,12 @@ function probe(array<ptr<Vec2>|null> $items): string { return isset($items[0]) ?
 class Box {
     public function probe(array<ptr<Vec2>|null> $items): string { return isset($items[0]) ? "set" : "unset"; }
 }
-echo probe([null]), probe(items: [null]), (new Box())->probe(items: [null]), "\n";
+function counted(int $n, array<ptr<Vec2>|null> $items): string { return isset($items[0]) ? "set" : "unset"; }
+function keyed(int $n, array<string, ptr<Vec2>|null> $items): string { return isset($items["a"]) ? "set" : "unset"; }
+echo probe([null]), probe(items: [null]), (new Box())->probe(items: [null]), "|";
+$bag = ["n" => 1];
+echo counted(...$bag, items: [null]), keyed(...$bag, items: ["a" => null]), "\n";
 "#,
     );
-    assert_eq!(out, "unsetunsetunset\n");
+    assert_eq!(out, "unsetunsetunset|unsetunset\n");
 }
