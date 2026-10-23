@@ -57,6 +57,22 @@ pub(super) fn lower_buffer_len(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_if_result(ctx, inst)
 }
 
+/// Lowers `buffer_ptr(buffer)` by resolving the handle and loading the descriptor's payload pointer.
+///
+/// `__rt_buffer_resolve` reports a null or stale handle through the use-after-free diagnostic,
+/// so the address answered belongs to a live payload; it stays valid until `buffer_free()`
+/// releases the buffer. A buffer of packed records answers the address of element 0, the
+/// `ptr<T>` that `$buf[0]` reads.
+pub(super) fn lower_buffer_ptr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "buffer_ptr", 1)?;
+    let buffer = expect_operand(inst, 0)?;
+    require_buffer(ctx.load_value_to_result(buffer)?, "buffer_ptr")?;
+    abi::emit_call_label(ctx.emitter, "__rt_buffer_resolve");
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, result, result, 0);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `buffer_free(buffer)` by releasing non-null local handles and nulling the owner slot.
 pub(super) fn lower_buffer_free(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "buffer_free", 1)?;

@@ -37,8 +37,8 @@ echo "sizeof(Vertex) = ", ptr_sizeof("Vertex"), "\n";     // 20, the C sizeof
 echo "sizeof(GridBox) = ", ptr_sizeof("GridBox"), "\n";   // 36
 
 // A textured quad: a vertex buffer in the SDL_Vertex shape and a 16-bit index list (the
-// size_indices = 2 form of SDL_RenderGeometryRaw). Record buffers reach C through an element
-// read as ptr<Vertex>; a scalar buffer has no payload pointer yet.
+// size_indices = 2 form of SDL_RenderGeometryRaw). Both reach C through buffer_ptr(): the
+// vertex payload as a ptr<Vertex> and the index payload as the const void* of uint16_t.
 $quad = buffer_new<Vertex>(4);
 $xs = [0.0, 1.0, 1.0, 0.0];
 $ys = [0.0, 0.0, 1.0, 1.0];
@@ -62,6 +62,13 @@ for ($i = 0; $i < 6; $i++) {
     echo "vertex ", $indices[$i], ": (", $v->x, ", ", $v->y, ") uv (", $v->u, ", ", $v->v, ") rgba ",
         $v->r, " ", $v->g, " ", $v->b, " ", $v->a, "\n";
 }
+
+// The payload pointers C would receive, read back here through the raw pointer builtins.
+$vertices = buffer_ptr($quad);                          // ptr<Vertex>: the address of $quad[0]
+$second = ptr_offset($vertices, ptr_sizeof("Vertex"));
+echo "second vertex through its pointer: (", $second->x, ", ", $second->y, ")\n";
+$indexData = buffer_ptr($indices);                      // ptr: six consecutive uint16_t
+echo "index 4 through its pointer: ", ptr_read16(ptr_offset($indexData, 2 * 4)), "\n";
 
 // Width rules: integers keep their low bits, f32 rounds to single precision.
 $quad[0]->g = 300;      // 44, like (uint8_t) 300 in C

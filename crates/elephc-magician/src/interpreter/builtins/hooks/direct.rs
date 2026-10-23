@@ -225,6 +225,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     BufferLen,
     /// Dispatches `buffer_new(...)`.
     BufferNew,
+    /// Dispatches `buffer_ptr(...)`.
+    BufferPtr,
     /// Dispatches `ptr(...)`.
     Ptr,
     /// Dispatches `ptr_get(...)`.
@@ -479,6 +481,7 @@ impl EvalDirectHook {
             Self::BufferFree => eval_builtin_buffer_free(args, context, scope, values),
             Self::BufferLen => eval_builtin_buffer_len(args, context, scope, values),
             Self::BufferNew => eval_builtin_buffer_new(args, context, scope, values),
+            Self::BufferPtr => eval_builtin_buffer_ptr(args, context, scope, values),
             Self::Ptr => eval_builtin_ptr(args, context, scope, values),
             Self::PtrGet => eval_builtin_ptr_get(args, context, scope, values),
             Self::PtrIsNull => eval_builtin_ptr_is_null(args, context, scope, values),

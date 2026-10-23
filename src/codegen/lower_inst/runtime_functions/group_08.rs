@@ -107,6 +107,9 @@ pub(super) fn lower(
         RuntimeFnId::BufferLen => Some({
             crate::codegen::lower_inst::builtins::buffers::lower_buffer_len(ctx, inst)
         }),
+        RuntimeFnId::BufferPtr => Some({
+            crate::codegen::lower_inst::builtins::buffers::lower_buffer_ptr(ctx, inst)
+        }),
         RuntimeFnId::Ptr => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr(ctx, inst)
         }),

@@ -228,6 +228,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     BufferLen,
     /// Dispatches `buffer_new(...)`.
     BufferNew,
+    /// Dispatches `buffer_ptr(...)`.
+    BufferPtr,
     /// Dispatches `ptr(...)`.
     Ptr,
     /// Dispatches `ptr_get(...)`.
@@ -584,6 +586,7 @@ impl EvalValuesHook {
             Self::BufferFree => eval_buffer_free_values_result(evaluated_args, values),
             Self::BufferLen => eval_buffer_len_values_result(evaluated_args, values),
             Self::BufferNew => eval_buffer_new_values_result(evaluated_args, values),
+            Self::BufferPtr => eval_buffer_ptr_values_result(evaluated_args, values),
             Self::Ptr => eval_ptr_values_result(evaluated_args),
             Self::PtrGet => eval_ptr_get_values_result(evaluated_args, values),
             Self::PtrIsNull => eval_ptr_is_null_values_result(evaluated_args, values),

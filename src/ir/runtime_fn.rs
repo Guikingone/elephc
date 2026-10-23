@@ -434,6 +434,7 @@ pub enum RuntimeFnId {
     ElephcPtrWriteString,
     BufferFree,
     BufferLen,
+    BufferPtr,
     Ptr,
     PtrGet,
     PtrIsNull,
@@ -1074,6 +1075,12 @@ impl RuntimeFnId {
                 }
                 sig.return_type = PhpType::Int;
             }
+            RuntimeFnId::BufferPtr => {
+                if let Some((_, buffer_ty)) = sig.params.get_mut(0) {
+                    *buffer_ty = PhpType::Buffer(Box::new(PhpType::Int));
+                }
+                sig.return_type = PhpType::Pointer(None);
+            }
             _ => {}
         }
     }
@@ -1489,7 +1496,8 @@ impl RuntimeFnId {
                 crate::ir::Effects::READS_HEAP.bits()
                     | crate::ir::Effects::ALLOC_CONCAT.bits(),
             ),
-            RuntimeFnId::BufferLen => crate::ir::Effects::from_bits_retain(
+            // Both resolve the handle (a stale one is fatal) and read the descriptor.
+            RuntimeFnId::BufferLen | RuntimeFnId::BufferPtr => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::MAY_FATAL.bits(),
             ),
             // `getmypid()` is not a constant: a `pcntl_fork()` child reads its own id.
@@ -2298,6 +2306,8 @@ impl RuntimeFnId {
                 | RuntimeFnId::BcScale
                 // `iconv_set_encoding()` answers with a bare boolean.
                 | RuntimeFnId::IconvSetEncoding
+                // `buffer_ptr()` answers the raw payload address of a scalar buffer handle.
+                | RuntimeFnId::BufferPtr
                 // The clone override reference guard answers nothing at all: it returns or
                 // throws, so a result temporary would only keep the override array alive.
                 | RuntimeFnId::ElephcCloneOverrideReferenceGuard
@@ -3026,6 +3036,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPtrWriteString => "__elephc_ptr_write_string",
             RuntimeFnId::BufferFree => "buffer_free",
             RuntimeFnId::BufferLen => "buffer_len",
+            RuntimeFnId::BufferPtr => "buffer_ptr",
             RuntimeFnId::Ptr => "ptr",
             RuntimeFnId::PtrGet => "ptr_get",
             RuntimeFnId::PtrIsNull => "ptr_is_null",

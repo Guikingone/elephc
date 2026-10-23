@@ -7,7 +7,7 @@ sidebar:
 
 `buffer<T>` is a fixed-size contiguous array of POD values or packed records. Designed for game loops, renderers, and performance-critical code where hash table overhead is unacceptable.
 
-> **Strict mode:** buffers are an elephc extension with no PHP equivalent. Compiling with [`--strict-php`](../compiling/cli-reference.md#strict-php-mode) rejects the `buffer<T>` type, `buffer_new<T>`, `buffer_len()`, and `buffer_free()`.
+> **Strict mode:** buffers are an elephc extension with no PHP equivalent. Compiling with [`--strict-php`](../compiling/cli-reference.md#strict-php-mode) rejects the `buffer<T>` type, `buffer_new<T>`, `buffer_len()`, `buffer_ptr()`, and `buffer_free()`.
 
 ## Why not PHP arrays?
 
@@ -64,10 +64,10 @@ written to `f32` rounds to single precision). `buffer<i32>` and `buffer<int>` ar
 types because their strides differ. Packed classes take the same width names for their fields;
 see [Field widths](packed-classes.md#field-widths).
 
-A scalar buffer has no payload pointer yet, so it cannot be passed to C: only a buffer of
-packed records reaches C, through an element (`$buf[0]`) read as a `ptr<T>`. A one-field
-packed class (`packed class Index { public u16 $v; }`) keeps the width in memory and gives C
-that pointer.
+`buffer_ptr($buf)` is the address of the payload, so a width buffer reaches C at its width:
+`buffer_ptr($indices)` of a `buffer<u16>` is the `const void*` index list that
+`SDL_RenderGeometryRaw` takes with `size_indices` 2, and `buffer_ptr($positions)` of a
+`buffer<f32>` is a `const float*`. See [Payload pointer](#payload-pointer).
 
 ## Buffer builtins
 
@@ -75,6 +75,7 @@ that pointer.
 |---|---|---|
 | `buffer_new<T>()` | `buffer_new<T>($length): buffer<T>` | Allocate a fixed-size buffer with `$length` elements of type `T` |
 | `buffer_len()` | `buffer_len($buffer): int` | Return the logical element count stored in the buffer descriptor |
+| `buffer_ptr()` | `buffer_ptr($buffer): ptr` | Return the address of the payload (`ptr<T>` for a buffer of packed records), valid until `buffer_free()` |
 | `buffer_free()` | `buffer_free($buffer): void` | Release a local buffer variable and nullify it |
 
 ## Reading and writing
@@ -139,6 +140,39 @@ cannot hold a buffer yet.
 <?php
 echo buffer_len($data);   // 512
 ```
+
+## Payload pointer
+
+`buffer_ptr($buf)` returns the address of the buffer's payload, the memory `$buf[0]` lives
+in, so a buffer can be handed to C or read with the [pointer builtins](pointers.md):
+
+```php
+<?php
+extern function memset(ptr $dest, i32 $byte, u64 $count): ptr;
+
+buffer<u8> $pixels = buffer_new<u8>(640 * 480);
+memset(buffer_ptr($pixels), 255, buffer_len($pixels));   // C fills the payload in place
+echo $pixels[1000];                                       // 255
+
+buffer<u16> $indices = buffer_new<u16>(6);
+$indices[4] = 2;
+echo ptr_read16(ptr_offset(buffer_ptr($indices), 2 * 4)); // 2, the element at its 2-byte stride
+
+packed class Vec2 { public f32 $x; public f32 $y; }
+buffer<Vec2> $quad = buffer_new<Vec2>(4);
+$first = buffer_ptr($quad);                               // ptr<Vec2>, the same address as $quad[0]
+$first->x = 1.5;
+echo $quad[0]->x;                                         // 1.5
+```
+
+The pointer is the payload itself, not a copy: writes made through it, by PHP or by C, are
+visible through `$buf[$i]`, and element `$i` sits at `buffer_ptr($buf) + $i * stride` with the
+strides of the [Element widths](#element-widths) table. For a buffer of packed records the
+result is a `ptr<T>`, as `$buf[0]` is; for every other element type it is the untyped `ptr`.
+The address stays valid until `buffer_free()`: `buffer_ptr()` of a freed buffer, or of an alias
+of one, aborts with the use-after-free error below, and a pointer taken earlier dangles once
+the payload is released. Unlike `buffer_free()`, `buffer_ptr()` accepts any buffer expression,
+including a property or a call result.
 
 ## Freeing buffers
 

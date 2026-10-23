@@ -56,18 +56,18 @@ pub(crate) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId
     for inst in &function.instructions {
         // A packed field store copies a scalar into the record; unlike an object property store
         // it can never bind a promoted by-reference parameter, so the operand stays a value.
-        // `buffer_len` likewise observes a buffer handle by value through its typed runtime target;
-        // keep every other runtime call on the default-deny path.
-        let is_buffer_len = inst.op == Op::RuntimeCall
+        // `buffer_len` and `buffer_ptr` likewise observe a buffer handle by value through their
+        // typed runtime targets; keep every other runtime call on the default-deny path.
+        let observes_buffer_handle = inst.op == Op::RuntimeCall
             && matches!(
                 inst.immediate,
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-                    RuntimeFnId::BufferLen
+                    RuntimeFnId::BufferLen | RuntimeFnId::BufferPtr
                 )))
             );
         if op_is_value_only_consumer(inst.op)
             || function.is_packed_field_access(inst)
-            || is_buffer_len
+            || observes_buffer_handle
         {
             continue;
         }
@@ -129,8 +129,8 @@ mod tests {
     use crate::ir::{Builder, IrHeapKind, IrType, LocalKind, Ownership, Terminator};
     use crate::types::PhpType;
 
-    /// Both buffer-length forms consume their loaded handles by value while an unclassified
-    /// runtime call remains conservatively address-escaping.
+    /// Both buffer-length forms and `buffer_ptr` consume their loaded handles by value while an
+    /// unclassified runtime call remains conservatively address-escaping.
     #[test]
     fn buffer_len_runtime_call_does_not_escape_its_slot() {
         let mut function = Function::new("runtime_calls".into(), IrType::Void, PhpType::Void);
@@ -149,6 +149,12 @@ mod tests {
         );
         let eir_len_slot = function.add_local(
             Some("eir_len_buffer".into()),
+            IrType::Heap(IrHeapKind::Buffer),
+            buffer_type.clone(),
+            LocalKind::PhpLocal,
+        );
+        let ptr_slot = function.add_local(
+            Some("ptr_buffer".into()),
             IrType::Heap(IrHeapKind::Buffer),
             buffer_type.clone(),
             LocalKind::PhpLocal,
@@ -186,6 +192,21 @@ mod tests {
                 PhpType::Int,
                 Ownership::NonHeap,
             );
+            let ptr_handle = builder.emit_load_local(
+                ptr_slot,
+                IrType::Heap(IrHeapKind::Buffer),
+                buffer_type.clone(),
+            );
+            builder.emit(
+                Op::RuntimeCall,
+                vec![ptr_handle],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::BufferPtr,
+                ))),
+                IrType::I64,
+                PhpType::Pointer(None),
+                Ownership::NonHeap,
+            );
             let other_handle = builder.emit_load_local(
                 other_slot,
                 IrType::Heap(IrHeapKind::Buffer),
@@ -207,6 +228,7 @@ mod tests {
         let escaping = address_escaping_slots(&function);
         assert!(!escaping.contains(&len_slot));
         assert!(!escaping.contains(&eir_len_slot));
+        assert!(!escaping.contains(&ptr_slot));
         assert!(escaping.contains(&other_slot));
     }
 }
