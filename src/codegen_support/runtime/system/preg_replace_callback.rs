@@ -94,11 +94,32 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_preg_replace_callback_malloc_fail");      // allocation failure frees the handle and returns the original subject
     emitter.instruction(&format!("str x0, [sp, #{}]", regmatches_ptr_off));     // save dynamic offset-pair buffer pointer
 
-    // -- materialize subject as a C string for repeated regexec calls --
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_ptr_off));        // reload subject pointer for C-string conversion
-    emitter.instruction(&format!("ldr x2, [sp, #{}]", subject_len_off));        // reload subject length for C-string conversion
-    emitter.instruction("bl __rt_cstr2");                                       // copy subject to the secondary null-terminated buffer
-    emitter.instruction(&format!("str x0, [sp, #{}]", subject_cstr_off));       // save null-terminated subject pointer
+    // -- materialize a private subject copy for repeated regexec calls --
+    // The callback may run another regex that grows the shared `__rt_cstr2`
+    // buffer. Keeping the subject in a private owned block means the outer
+    // cursor stays valid across any nested conversion.
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", subject_len_off));        // reload the subject length
+    emitter.instruction("adds x0, x2, #1");                                     // reserve room for the payload plus its NUL terminator
+    emitter.instruction("b.cc __rt_preg_replace_callback_subject_len_ok");      // a representable length continues to allocation
+    emitter.instruction("b __rt_alloc_overflow");                               // a wrapped length can never be terminated
+    emitter.label("__rt_preg_replace_callback_subject_len_ok");
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate a private subject copy callbacks cannot replace
+    emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned string payload
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the private copy so the epilogue can release it
+    emitter.instruction(&format!("str x0, [sp, #{}]", subject_cstr_off));       // save the private null-terminated subject pointer
+    emitter.instruction("mov x9, x0");                                          // destination cursor
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_ptr_off));       // source byte pointer
+    emitter.instruction(&format!("ldr x11, [sp, #{}]", subject_len_off));       // source byte count
+    emitter.instruction("mov x12, #0");                                         // copy index
+    emitter.label("__rt_preg_replace_callback_subject_copy");
+    emitter.instruction("cmp x12, x11");                                        // have all subject bytes been copied?
+    emitter.instruction("b.ge __rt_preg_replace_callback_subject_copy_done");   // terminate the private copy
+    emitter.instruction("ldrb w13, [x10, x12]");                                // load one subject byte
+    emitter.instruction("strb w13, [x9, x12]");                                 // store it into the private copy
+    emitter.instruction("add x12, x12, #1");                                    // advance the copy index
+    emitter.instruction("b __rt_preg_replace_callback_subject_copy");           // continue copying subject bytes
+    emitter.label("__rt_preg_replace_callback_subject_copy_done");
+    emitter.instruction("strb wzr, [x9, x11]");                                 // terminate the private subject copy
 
     // -- allocate a dedicated output buffer that callback scratch cannot clobber --
     emitter.instruction("mov x19, #4096");                                      // initial output capacity
@@ -289,6 +310,8 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x11, [sp, #{}]", output_write_off));      // load the initialized empty-subject output cursor
     emitter.label("__rt_preg_replace_callback_done");
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // save final output pointer
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", subject_cstr_off));       // reload the private subject copy for release
+    emitter.instruction("bl __rt_heap_free_safe");                              // release the subject copy now that no cursor points into it
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic capture buffer for cleanup
@@ -402,11 +425,33 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_preg_replace_callback_malloc_fail_linux_x86_64");// allocation failure frees the opaque handle and returns the subject
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off));// save dynamic offset-pair buffer pointer
 
-    // -- materialize subject as a C string for repeated regexec calls --
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off));// reload subject pointer for C-string conversion
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off));// reload subject length for C-string conversion
-    emitter.instruction("call __rt_cstr2");                                     // copy subject to a null-terminated buffer
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off));// save null-terminated subject pointer
+    // -- materialize a private subject copy for repeated regexec calls --
+    // The callback may run another regex that grows the shared `__rt_cstr2`
+    // buffer. Keeping the subject in a private owned block means the outer
+    // cursor stays valid across any nested conversion.
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off));// reload the subject length
+    emitter.instruction("mov rax, rdx");                                        // start the private subject size from the byte length
+    emitter.instruction("add rax, 1");                                          // reserve room for the payload plus its NUL terminator
+    emitter.instruction("jnc __rt_preg_replace_callback_subject_len_ok_linux_x86_64");// a representable length continues to allocation
+    emitter.instruction("jmp __rt_alloc_overflow");                             // a wrapped length can never be terminated
+    emitter.label("__rt_preg_replace_callback_subject_len_ok_linux_x86_64");
+    emitter.instruction("call __rt_heap_alloc");                                // allocate a private subject copy callbacks cannot replace
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1)));// materialize the owned-string kind word
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the private copy so the epilogue can release it
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off));// save the private null-terminated subject pointer
+    emitter.instruction("mov rdi, rax");                                        // destination cursor
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_ptr_off));// source byte pointer
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off));// source byte count
+    emitter.instruction("xor ecx, ecx");                                        // copy index
+    emitter.label("__rt_preg_replace_callback_subject_copy_linux_x86_64");
+    emitter.instruction("cmp rcx, rdx");                                        // have all subject bytes been copied?
+    emitter.instruction("jge __rt_preg_replace_callback_subject_copy_done_linux_x86_64");// terminate the private copy
+    emitter.instruction("mov r8b, BYTE PTR [rsi + rcx]");                       // load one subject byte
+    emitter.instruction("mov BYTE PTR [rdi + rcx], r8b");                       // store it into the private copy
+    emitter.instruction("add rcx, 1");                                          // advance the copy index
+    emitter.instruction("jmp __rt_preg_replace_callback_subject_copy_linux_x86_64");// continue copying subject bytes
+    emitter.label("__rt_preg_replace_callback_subject_copy_done_linux_x86_64");
+    emitter.instruction("mov BYTE PTR [rdi + rdx], 0");                         // terminate the private subject copy
 
     // -- allocate a dedicated output buffer that callback scratch cannot clobber --
     emitter.instruction("mov rax, 4096");                                       // initial output capacity
@@ -599,6 +644,8 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_write_off));// load the initialized empty-subject output cursor
     emitter.label("__rt_preg_replace_callback_done_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off));// save final output pointer
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_cstr_off));// reload the private subject copy into the runtime free ABI register
+    emitter.instruction("call __rt_heap_free_safe");                            // release the subject copy now that no cursor points into it
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off));// reload dynamic capture buffer for cleanup

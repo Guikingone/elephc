@@ -2286,6 +2286,31 @@ echo $result;
     assert_eq!(out, "price: [123] and [456]");
 }
 
+/// Verifies a nested regex in the callback cannot free the outer replacement subject.
+///
+/// Heap debugging poisons released blocks, so the output assertion also catches a
+/// cursor that resumes inside the shared `__rt_cstr2` storage after a nested grow.
+#[test]
+fn test_preg_replace_callback_nested_regex_keeps_outer_subject_alive() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$longer = str_repeat("c", 20000);
+$subject = str_repeat("a", 5000) . "X" . str_repeat("b", 5000);
+$result = preg_replace_callback(
+    "/X/",
+    function ($matches) use ($longer) {
+        preg_match("/c/", $longer);
+        return "Y";
+    },
+    $subject
+);
+echo strlen($result), "|", str_contains($result, "aYb") ? "match" : "bad", "|", str_ends_with($result, "bbb") ? "tail" : "bad";
+"#,
+    );
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "10001|match|tail", "{}", output.stderr);
+}
+
 /// Verifies `preg_replace_callback` returns a valid empty string for an empty subject, so the
 /// result survives being copied, compared and coalesced.
 #[test]

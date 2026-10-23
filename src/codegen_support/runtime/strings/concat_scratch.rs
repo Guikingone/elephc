@@ -487,6 +487,8 @@ fn emit_preg_cb_ensure_aarch64(emitter: &mut Emitter) {
     emitter.instruction("csel x2, x13, x2, lo");                                // otherwise grow straight to the required total
     emitter.instruction("str x2, [sp, #40]");                                   // save the new capacity across the grow call
     emitter.instruction("bl __rt_concat_grow");                                 // allocate, copy, and release the old block
+    emitter.instruction("mov x9, #1");                                          // callback output is an owned call result, not a concat operand
+    emitter.instruction("str x9, [x0, #-8]");                                   // retag the grown block so persistence copies instead of adopting it
     emitter.instruction("mov x9, x0");                                          // new base
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the base slot address
     emitter.instruction("str x9, [x10]");                                       // publish the new base
@@ -541,6 +543,8 @@ fn emit_preg_cb_ensure_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_cb_ensure_cap_ready_x86");
     emitter.instruction("mov QWORD PTR [rbp - 56], rsi");                       // save the new capacity across the grow call
     emitter.instruction("call __rt_concat_grow");                               // allocate, copy, and release the old block
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1)));// materialize the owned-string kind word
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // retag the grown block so persistence copies instead of adopting it
     emitter.instruction("mov r8, rax");                                         // new base
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the base slot address
     emitter.instruction("mov QWORD PTR [r9], r8");                              // publish the new base
