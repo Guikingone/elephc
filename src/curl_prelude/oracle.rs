@@ -2183,12 +2183,15 @@ function __elephc_curl_push_invoke(mixed $parent, mixed $pushed_id, mixed $heade
     if (isset($callbacks[1]) && $callbacks[1] !== null) {
         curl_setopt($pushed, CURLOPT_HEADERFUNCTION, $callbacks[1]);
     }
-    // php-src hands the SAME CurlHandle object back from curl_multi_info_read() when the
-    // pushed transfer completes. Park it here; info_read consumes it (see the static's
-    // comment for why this is not a back-pointer on the handle).
-    CurlHandle::$__elephc_pushed[(int) $pushed_id] = $pushed;
     $headers = $headers_json === "" ? [] : json_decode((string) $headers_json, true);
-    return (int) call_user_func($user, $parent, $pushed, $headers);
+    $answer = (int) call_user_func($user, $parent, $pushed, $headers);
+    // php-src hands the SAME CurlHandle object back from curl_multi_info_read() when the
+    // pushed transfer completes. Park it only when the push is ACCEPTED: a denied push has
+    // its native handle destroyed by libcurl, and the bridge drops the entry with it.
+    if ($answer === CURL_PUSH_OK) {
+        CurlHandle::$__elephc_pushed[(int) $pushed_id] = $pushed;
+    }
+    return $answer;
 }
 
 function curl_multi_setopt(CurlMultiHandle $multi_handle, int $option, mixed $value): bool {

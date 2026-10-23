@@ -271,11 +271,36 @@ pub(crate) fn handles() -> &'static Mutex<HashMap<i64, EasyEntry>> {
     HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Drops the bridge entry for a pushed handle libcurl DENIED, or that the push callback
+/// refused by throwing.
+///
+/// libcurl's `CURLMOPT_PUSHFUNCTION` contract destroys a denied pushed handle, so the entry
+/// must not survive: the prelude has already minted a `CurlHandle` for this id, and keeping
+/// the entry would let a later `curl_setopt()`/`curl_getinfo()` on that object reach freed
+/// memory.
+pub(crate) fn unregister_pushed(id: i64) {
+    lock_recover(handles()).remove(&id);
+}
+
+/// Transfers ownership of an ACCEPTED pushed handle to the application.
+///
+/// `CURL_PUSH_OK` hands the pushed handle to the application (libcurl only *adds it to the
+/// multi*, it does not keep owning it). Until this runs the entry is libcurl-owned, so a
+/// deny would destroy it; afterwards `elephc_curl_easy_free` must `curl_easy_cleanup` it
+/// exactly like any other handle a `CurlHandle` object owns.
+pub(crate) fn accept_pushed(id: i64) {
+    if let Some(entry) = lock_recover(handles()).get_mut(&id) {
+        entry.pushed = false;
+    }
+}
+
 /// Registers a libcurl-owned handle created by a server push under a fresh bridge id.
 ///
 /// The PHP side wraps the id into a `CurlHandle` so the push callback can address the
-/// pushed transfer (`curl_setopt`, `curl_multi_getcontent`). libcurl frees the handle
-/// itself; the entry is dropped when its multi is freed.
+/// pushed transfer (`curl_setopt`, `curl_multi_getcontent`). Ownership is libcurl's only
+/// until the push callback answers: [`accept_pushed`] hands it to the application (the
+/// entry then cleans the handle up on teardown) and [`unregister_pushed`] drops the entry
+/// for a denied push, whose handle libcurl destroys.
 pub(crate) fn register_pushed(curl: *mut crate::easy::CURL, inherit_return_transfer: bool) -> i64 {
     if curl.is_null() {
         return 0;

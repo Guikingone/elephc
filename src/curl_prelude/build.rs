@@ -2707,12 +2707,6 @@ fn decl_fn_elephc_curl_push_invoke() -> Stmt {
                 vec![],
                 None,
             ),
-            s_static_prop_array_assign(
-                "CurlHandle",
-                "__elephc_pushed",
-                e_cast(CastType::Int, e_var("pushed_id")),
-                e_var("pushed"),
-            ),
             s_assign(
                 "headers",
                 e_ternary(
@@ -2724,13 +2718,28 @@ fn decl_fn_elephc_curl_push_invoke() -> Stmt {
                     ),
                 ),
             ),
-            s_return(e_cast(
-                CastType::Int,
-                e_call(
-                    "call_user_func",
-                    vec![e_var("user"), e_var("parent"), e_var("pushed"), e_var("headers")],
+            s_assign(
+                "answer",
+                e_cast(
+                    CastType::Int,
+                    e_call(
+                        "call_user_func",
+                        vec![e_var("user"), e_var("parent"), e_var("pushed"), e_var("headers")],
+                    ),
                 ),
-            )),
+            ),
+            s_if(
+                e_binop(e_var("answer"), BinOp::StrictEq, e_const("CURL_PUSH_OK")),
+                vec![s_static_prop_array_assign(
+                    "CurlHandle",
+                    "__elephc_pushed",
+                    e_cast(CastType::Int, e_var("pushed_id")),
+                    e_var("pushed"),
+                )],
+                vec![],
+                None,
+            ),
+            s_return(e_var("answer")),
         ])
         .build()
 }

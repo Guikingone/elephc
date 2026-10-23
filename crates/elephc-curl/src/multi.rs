@@ -159,10 +159,6 @@ pub(crate) struct MultiEntry {
     last_errno: CURLMcode,
     /// The most recently popped completion message (see this module's header).
     last_message: InfoMessage,
-    /// Bridge ids handed to server-push callbacks. libcurl owns the pushed handles; these
-    /// entries exist so the PHP side can address them during and after the callback, and
-    /// they are dropped when the multi is freed.
-    pushed: Vec<i64>,
 }
 
 // SAFETY: identical reasoning to `crate::handles::EasyEntry`'s `Send` impl — the
@@ -230,13 +226,12 @@ pub(crate) fn multi_option_kind(opt: i64) -> i32 {
     match opt {
         3 | 6 | 7 | 8 | 13 | 16 => MULTI_OPTION_LONG,
         30_009 | 30_010 => MULTI_OPTION_OFF_T,
-        // A callback option php-src really does support, through machinery this
-        // build does not have: it is a CALLBACK on the MULTI handle, and the
-        // callback machinery is easy-handle-only. HTTP/2 itself has been built in
-        // since curl recipe revision 2, so the server-push hook is the only half
-        // that is missing. `false` plus a warning, matching every other
-        // unsupported option here
-        // — never an inert `true` and never a wild function pointer.
+        // 20014 CURLMOPT_PUSHFUNCTION is a CALLBACK, so it never reaches this table:
+        // the prelude handles the option itself (validating the callable, installing it on
+        // the attached handles) and the bridge installs one push trampoline per multi at
+        // `curl_multi_init`. The row stays UNSUPPORTED as the fail-closed answer for a
+        // caller that bypasses the prelude — never an inert `true`, never a wild function
+        // pointer.
         20_014 => MULTI_OPTION_UNSUPPORTED,
         _ => MULTI_OPTION_INVALID,
     }
@@ -294,7 +289,6 @@ pub extern "C" fn elephc_curl_multi_init() -> i64 {
                 monitored_easy: HashSet::new(),
                 last_errno: CURLM_OK,
                 last_message: InfoMessage::default(),
-                pushed: Vec::new(),
             },
         );
         // The push trampoline is installed on EVERY multi: whether a push is accepted is
@@ -680,14 +674,6 @@ pub extern "C" fn elephc_curl_multi_free(multi_id: i64) {
         for easy_id in &entry.attached {
             if let Some(easy) = easy_ptr(*easy_id) {
                 unsafe { curl_multi_remove_handle(entry.multi, easy) };
-            }
-        }
-        // Pushed handles are owned by libcurl and die with the multi; drop the bridge
-        // entries that addressed them.
-        if !entry.pushed.is_empty() {
-            let mut handles = handles::lock_recover(handles::handles());
-            for pushed_id in &entry.pushed {
-                handles.remove(pushed_id);
             }
         }
         unsafe { curl_multi_cleanup(entry.multi) };

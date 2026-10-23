@@ -515,8 +515,12 @@ add-then-set orders work, and `[$object, 'method']` callables resolve through
 `__call` exactly like `curl_setopt()`'s callbacks. The pushed `CurlHandle` is
 handed to the callback and returned by `curl_multi_info_read()` as the SAME
 object; it inherits the parent's write mode (a `CURLOPT_RETURNTRANSFER` parent
-captures the pushed body too) and its write/header callables. Pushed handles are
-owned by libcurl — they are never `curl_easy_cleanup()`ed by elephc. `curl_share_setopt()` implements `CURLSHOPT_SHARE` and
+captures the pushed body too) and its write/header callables. The callback's
+answer decides ownership, exactly as libcurl documents it: returning
+`CURL_PUSH_OK` transfers the pushed handle to the application, so its
+`CurlHandle` teardown runs `curl_easy_cleanup()`, while any other answer (or a
+thrown exception) denies the push and libcurl destroys the handle — the bridge
+then drops its entry so the handle cannot be addressed afterwards. `curl_share_setopt()` implements `CURLSHOPT_SHARE` and
 `CURLSHOPT_UNSHARE` over the five `CURL_LOCK_DATA_*` values PHP exposes.
 
 ### PHP-layer options

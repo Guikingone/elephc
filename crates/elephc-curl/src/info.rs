@@ -303,8 +303,9 @@ pub(crate) unsafe fn getinfo_all_json(curl: *mut CURL) -> Vec<u8> {
     off_t_key(&mut map, "conn_id", info::CONN_ID);
 
     // `request_header` is added by the prelude once CURLINFO_HEADER_OUT has captured the
-    // outgoing request, matching php-src's conditional `if (ch->header.str)`. The bridge
-    // never sees it: the capture runs through the PHP debug callback the prelude installs.
+    // outgoing request, matching php-src's conditional `if (ch->header.str)`. The capture
+    // itself runs in the bridge's debug trampoline (CURLOPT_VERBOSE delivers the outgoing
+    // header there), so this map only reports what the prelude stored.
 
     serde_json::Value::Object(map).to_string().into_bytes()
 }

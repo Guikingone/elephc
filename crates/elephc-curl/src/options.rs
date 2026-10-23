@@ -43,8 +43,10 @@
 //! - `CURLINFO_HEADER_OUT` (2) is in the table even though it is not a `CURLOPT_*`
 //!   constant: php-src's `curl_setopt()` switch accepts it (it turns on request-header
 //!   tracking through the debug callback), so answering `ValueError` for it would be
-//!   wrong. Capturing the request header still needs machinery this build does not have,
-//!   so it stays `KIND_UNSUPPORTED`.
+//!   wrong. Capturing the request header is implemented by the prelude (it enables
+//!   CURLOPT_VERBOSE and the bridge's debug trampoline stores the outgoing header), so the
+//!   prelude intercepts this option before consulting the table; the row stays
+//!   `KIND_UNSUPPORTED` as the fail-closed answer for any other route.
 //! - ANYTHING NOT IN THIS TABLE IS `KIND_INVALID`, which the prelude turns into php-src's
 //!   own `ValueError: curl_setopt(): Argument #2 ($option) is not a valid cURL option`.
 //!   That is the real php-src behaviour for an unrecognized option number, and it is a

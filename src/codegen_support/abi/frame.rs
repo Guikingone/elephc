@@ -113,8 +113,9 @@ pub fn emit_return(emitter: &mut Emitter) {
 }
 
 /// Emits code that computes the address of a local frame slot and stores it in `dest`.
-/// Uses the frame pointer (x29/rbp) as the base. Large offsets on AArch64 are walked down in
-/// 4095-byte chunks to stay within immediate-add instructions.
+/// Uses the frame pointer (x29/rbp) as the base. On AArch64 an offset below 16 MiB takes one
+/// page-granular `sub` with `lsl #12` plus its low twelve bits; only a larger frame falls
+/// back to walking the destination down in 4095-byte chunks.
 pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {

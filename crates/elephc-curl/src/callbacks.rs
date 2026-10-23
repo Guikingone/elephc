@@ -805,12 +805,21 @@ unsafe extern "C" fn push_callback(
         ];
         let (result, _, threw) = invoke(slot, &args, RESULT_INT, std::ptr::null_mut(), 0);
         if threw {
+            // A throwing callable denies the push; libcurl destroys the offered handle.
+            crate::handles::unregister_pushed(pushed_id);
             mark_threw(parent_id);
             return 1;
         }
         // php-src's CURL_PUSH_OK is 0 and CURL_PUSH_DENY is 1; the wrapper returns the
         // PHP callable's int, and any non-zero answer denies the push.
-        i32::from(result != 0)
+        if result != 0 {
+            crate::handles::unregister_pushed(pushed_id);
+            return 1;
+        }
+        // CURL_PUSH_OK: libcurl adds the handle to the multi and hands OWNERSHIP to us, so
+        // the entry (and the PHP object rooted for it) must clean it up on teardown.
+        crate::handles::accept_pushed(pushed_id);
+        0
     }));
     outcome.unwrap_or(1)
 }
