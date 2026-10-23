@@ -954,3 +954,47 @@ function walk(): string {
     assert!(summary(&baseline.stderr).is_some(), "{}", baseline.stderr);
     assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
 }
+
+/// Verifies an untyped `[null]` call result merged with a pointer-array arm is converted when it
+/// lands in the merge temporary: a `match`, a ternary assignment without a destination and a
+/// short ternary all read the boxed arm's element as null in `foreach` and `isset()`, the live
+/// arm keeps its pointer, and the conversion keeps the heap-debug leak summary unchanged.
+#[test]
+fn test_pointer_array_merges_convert_untyped_null_array_arms() {
+    let prelude = r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function boxed() { return [null]; }
+function m(int $i, array<ptr<Vec2>|null> $ps): array<ptr<Vec2>|null> {
+    return match ($i) { 0 => boxed(), default => $ps };
+}
+function walk(array<ptr<Vec2>|null> $ps): string {
+    $s = "";
+    foreach (m(0, $ps) as $p) { $s .= $p === null ? "N" : "L"; }
+    foreach (m(1, $ps) as $p) { $s .= $p === null ? "N" : "L"; }
+    foreach ([true, false] as $b) {
+        $x = $b ? boxed() : $ps;
+        foreach ($x as $p) { $s .= $p === null ? "N" : "L"; }
+        $s .= isset($x[0]) ? "s" : "u";
+    }
+    $y = boxed() ?: $ps;
+    foreach ($y as $p) { $s .= $p === null ? "N" : "L"; }
+    return $s;
+}
+$w = buffer_new<Vec2>(1);
+$w[0]->x = 7;
+$ps = [$w[0]];
+"#;
+    let calls = "echo walk($ps);\n";
+    let tail = "echo \"\\n\";\n";
+    let baseline = compile_and_run_with_heap_debug(&format!("{prelude}{tail}"));
+    let called = compile_and_run_with_heap_debug(&format!("{prelude}{calls}{tail}"));
+    let summary = |stderr: &str| {
+        stderr
+            .lines()
+            .find(|line| line.contains("HEAP DEBUG: leak summary"))
+            .map(str::to_string)
+    };
+    assert_eq!(called.stdout, "NLNuLsN\n", "{}", called.stderr);
+    assert!(summary(&baseline.stderr).is_some(), "{}", baseline.stderr);
+    assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
+}

@@ -497,7 +497,8 @@ pub(super) fn coerce_value_for_temp(
 /// concrete container must box its slots via `ArrayToMixed` / `HashToMixed`: storing the raw
 /// pointer would let Mixed-element reads misinterpret typed slot bytes. Borrowed sources are
 /// retained first so the conversion's copy-on-write split rewrites a private copy; owning
-/// temporaries transfer their reference into the converted result.
+/// temporaries transfer their reference into the converted result. A pointer-array target
+/// converts boxed indexed sources to pointer words under the same ownership rule.
 pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -543,7 +544,12 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
             }
             return unboxed;
         }
-        return value;
+        // An indexed array of boxed cells (`function boxed() { return [null]; }` is
+        // `array<void>`) merged into a pointer-array temporary would hand those cells to
+        // pointer-word readers, whichever way the merging arm was lowered.
+        return super::indexed_array_literals::convert_array_to_pointer_storage(
+            ctx, value, target_ty, span,
+        );
     }
     let op = match (source_ty, target_ty) {
         (PhpType::Array(source_elem), PhpType::Array(_))

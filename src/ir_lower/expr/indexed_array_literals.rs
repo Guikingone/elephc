@@ -201,7 +201,7 @@ pub(crate) fn lower_expr_for_destination(
 ///
 /// The op consumes one owned reference: an owning temporary (a call result) is handed over as it
 /// is, and anything else (a local load) is retained first, so the local keeps its own array.
-fn convert_array_to_pointer_storage(
+pub(super) fn convert_array_to_pointer_storage(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
     destination: &PhpType,
