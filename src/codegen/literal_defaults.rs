@@ -1099,12 +1099,13 @@ fn materialize_assoc_literal_concrete_value_x86_64(
     }
 }
 
-/// Returns the runtime value tag to pass for one literal hash insertion.
+/// Returns the runtime value tag to pass for one literal hash insertion. A pointer hash entry
+/// keeps its raw word under `POINTER_ARRAY_VALUE_TYPE`, as `hash_set` stores it.
 fn assoc_literal_value_tag(storage_value_type: &PhpType, actual_value_type: &PhpType) -> i64 {
     if matches!(storage_value_type.codegen_repr(), PhpType::Mixed | PhpType::Iterable) {
         runtime_value_tag(&actual_value_type.codegen_repr()) as i64
     } else {
-        runtime_value_tag(&storage_value_type.codegen_repr()) as i64
+        crate::codegen::container_value_tag(&storage_value_type.codegen_repr())
     }
 }
 

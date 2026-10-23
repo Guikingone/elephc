@@ -1503,8 +1503,13 @@ fn lower_runtime_polymorphic_array_push(
 }
 
 /// Restores semantic tags after shared word-write helpers specialize an empty array's storage.
+/// A pointer write restamps `POINTER_ARRAY_VALUE_TYPE`, which `__rt_array_set_int` clears on the
+/// first write into an empty array.
 fn stamp_scalar_array_write_result(ctx: &mut FunctionContext<'_>, stored_type: &PhpType) {
-    if matches!(stored_type, PhpType::Float | PhpType::Bool | PhpType::Callable) {
+    if matches!(
+        stored_type,
+        PhpType::Float | PhpType::Bool | PhpType::Callable | PhpType::Pointer(_)
+    ) {
         // The helper has already performed COW and possible growth. Stamp its returned
         // owner, not the original pointer, so aliases retain their original metadata.
         let result = abi::int_result_reg(ctx.emitter);

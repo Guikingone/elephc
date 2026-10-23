@@ -1482,11 +1482,9 @@ fn hash_set_value_tag(value_ty: &PhpType, storage_value_ty: &PhpType) -> i64 {
             return crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64;
         }
         crate::codegen::runtime_value_tag(&value_ty.codegen_repr()) as i64
-    } else if matches!(storage_value_ty.codegen_repr(), PhpType::Pointer(_)) {
-        // A pointer hash entry is a raw `?ptr<T>` word that dynamic readers show as null for 0.
-        crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE
     } else {
-        crate::codegen::runtime_value_tag(storage_value_ty) as i64
+        // A pointer hash entry is a raw `?ptr<T>` word that dynamic readers show as null for 0.
+        crate::codegen::container_value_tag(storage_value_ty)
     }
 }
 

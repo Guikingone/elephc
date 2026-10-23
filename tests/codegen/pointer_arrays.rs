@@ -654,3 +654,51 @@ echo str_replace($addr, "ADDR", vsprintf("[%s]|%d", $l)), "\n";
     );
     assert_eq!(out, "strictloose|sum|[]|ADDR\n");
 }
+
+/// Verifies pointer hashes built from instance and static property defaults keep a null entry
+/// as the null pointer word, and a pointer array stored into an `array<mixed>` property boxes
+/// its null element as PHP null: through `mixed` both read as unset `NULL`.
+#[test]
+fn test_pointer_container_defaults_and_mixed_properties_read_null_as_null() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function at(buffer<Vec2> $v, int $i): ptr<Vec2> { return $v[$i]; }
+class Bag {
+    public array<string, ptr<Vec2>|null> $items = ["a" => null];
+    public static array<string, ptr<Vec2>|null> $shared = ["a" => null];
+    public array<mixed> $list = [];
+}
+function hm(array<string, mixed> $a): string { return (isset($a["a"]) ? "set" : "unset") . gettype($a["a"]); }
+$v = buffer_new<Vec2>(1);
+$bag = new Bag();
+echo hm($bag->items), "|", hm(Bag::$shared), "|", $bag->items["a"] === null ? "null" : "live", "|";
+$l = [null, at($v, 0)];
+$bag->list = $l;
+echo isset($bag->list[0]) ? "set" : "unset", gettype($bag->list[0]), gettype($bag->list[1]), "\n";
+"#,
+    );
+    assert_eq!(out, "unsetNULL|unsetNULL|null|unsetNULLinteger\n");
+}
+
+/// Verifies the first index write into an empty pointer array keeps its pointer value type, so
+/// a null element written by index still reads as PHP null through `json_encode`, `mixed` and
+/// strict `in_array`.
+#[test]
+fn test_pointer_array_first_index_write_keeps_null_words_as_null() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+class Bag { public array<ptr<Vec2>|null> $items = []; }
+function mi(mixed $m): string { return isset($m[0]) ? "set" : "unset"; }
+$v = buffer_new<Vec2>(1);
+$b = new Bag();
+$b->items[0] = null;
+$b->items[1] = $v[0];
+$addr = (string) (int) $b->items[1];
+echo str_replace($addr, "ADDR", (string) json_encode($b->items)), "|", mi($b->items), "|";
+echo in_array(null, $b->items, true) ? "strict" : "-", "\n";
+"#,
+    );
+    assert_eq!(out, "[null,ADDR]|unset|strict\n");
+}
