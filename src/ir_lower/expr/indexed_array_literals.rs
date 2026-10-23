@@ -841,19 +841,32 @@ pub(super) fn pointer_literal_element_type<'e>(
 /// A spread contributes its source's element type, and a spread of a literal holding only
 /// `null`s contributes a `null`, as the type checker's literal merge does. With `require_null`
 /// a literal without any `null` returns `None`, leaving it to the caller's ordinary merge.
+///
+/// Callers type the same entries again when this returns `None`, so the scan must not type a
+/// nested literal itself: the `null` check and a nested literal value (a container, never a
+/// pointer) are decided syntactically, which keeps deeply nested literals linear per level.
 pub(super) fn pointer_literal_entries_element_type<'e>(
     ctx: &LoweringContext<'_, '_>,
     entries: impl IntoIterator<Item = (&'e Expr, bool)>,
     require_null: bool,
 ) -> Option<PhpType> {
+    let entries: Vec<(&'e Expr, bool)> = entries.into_iter().collect();
+    let is_null_entry = |value: &Expr, is_spread: bool| {
+        (!is_spread && matches!(value.kind, ExprKind::Null))
+            || (is_spread && is_null_only_literal(value))
+    };
+    if require_null && !entries.iter().any(|&(value, is_spread)| is_null_entry(value, is_spread)) {
+        return None;
+    }
     let mut has_null = false;
     let mut pointer: Option<PhpType> = None;
     for (value, is_spread) in entries {
-        if (!is_spread && matches!(value.kind, ExprKind::Null))
-            || (is_spread && is_null_only_literal(value))
-        {
+        if is_null_entry(value, is_spread) {
             has_null = true;
             continue;
+        }
+        if !is_spread && matches!(value.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) {
+            return None;
         }
         let elem_ty = if is_spread {
             match spread_source_storage_type_for_ir(ctx, value).codegen_repr() {
