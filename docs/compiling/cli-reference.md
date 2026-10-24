@@ -605,6 +605,13 @@ compile error:
   ```text
   $a changes type from int to string; the previous value is discarded (compile with --strict-locals to make this an error)
   ```
+  At the same eligibility, a COMPATIBLE reassignment between two different
+  numeric types (`int`, `float`, `int|float`, `mixed`) also starts a fresh
+  slot, with no warning, when the assigned value is a raw `int`/`float` or a
+  fresh arithmetic result: a counter name reused by a later loop
+  (`for ($i = $n - 1; …)` after `for ($i = 0; …)`) then keeps one slot per
+  loop. This is a storage decision with no typing effect, so `--strict-locals`
+  does not change it.
 - **Branch-divergent assignment.** `if (…) { $a = 0; } else { $a = "ciao"; }`
   — and the same shape for a single-branch retype of an outer binding, or a
   heterogeneous loop-carried local — compiles instead of failing, as

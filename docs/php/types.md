@@ -307,6 +307,15 @@ A local is monomorphic by default, but three shapes let it change type anyway. `
 
 A `for` initializer is straight-line code too: it runs exactly once whenever the loop statement does, so `for ($i = 0; …) { … } $i = "done";` re-binds `$i` with the same warning as `$i = 0; for (; …) { … } $i = "done";`.
 
+The same straight-line re-bind also happens silently, with no warning, when a numeric local is reassigned a different numeric type, so a counter name reused by a later loop gets a slot of its own in each loop:
+
+```php
+for ($i = 0; $i < $n; $i++) { … }       // $i stays a raw integer counter
+for ($i = $n - 1; $i >= 0; $i--) { … }  // $n - 1 may overflow to float: this $i is boxed
+```
+
+Nothing PHP can observe changes (the old value is dropped either way, and each loop still promotes to float exactly where PHP does); only the second loop pays for the boxed storage its own initializer needs.
+
 One behaviour differs from PHP: reading a variable after `unset()` is a compile error, where PHP warns and evaluates the read as `null`. Probe the name with `isset()` (or `empty()` / `??`), which stay legal on an unbound name:
 
 ```php
