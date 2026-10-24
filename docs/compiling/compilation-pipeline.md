@@ -93,7 +93,8 @@ Physical source (.php or .lfc)
   names. After autoload insertion, DOM usage is checked again so newly loaded
   classes receive the same declarations before type checking. Every included
   and autoloaded file is lexed with its own source identity, so statements at
-  the same line and column of two files never share a checker result.
+  the same line and column of two files never share a checker result, and a
+  diagnostic raised inside such a file names it.
 - **func-args** — rewrites `func_num_args()`, `func_get_args()`, and
   `func_get_arg()` into a hidden variadic parameter plus ordinary PHP operations.
   This happens after autoloading but before manifest baking, optimization, and

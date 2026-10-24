@@ -16,7 +16,7 @@
 //!   interned in a process-wide table instead, so no source is ever too wide to compile.
 //! - Every physical file a compile loads besides the entry (each include execution, each
 //!   autoloaded class file) gets its own identity from one counter that only the ROOT include
-//!   resolution rewinds.
+//!   resolution rewinds, and its path is registered for diagnostics (`Span::source_path`).
 
 /// The first line number handed out to synthetically built nodes.
 ///
@@ -101,6 +101,16 @@ std::thread_local! {
     /// file parses in one compile, which is pathological).
     static NEXT_SYNTHETIC_SOURCE_ID: std::cell::Cell<u32> =
         const { std::cell::Cell::new(SOURCE_ID_MASK + 1) };
+    /// The physical file each included or autoloaded source identity was lexed from.
+    ///
+    /// A checker or lowering diagnostic carries only a span, so without this an error inside an
+    /// autoloaded class file printed a bare `error[line:col]` that read as a position in the entry
+    /// file. Per thread like [`NEXT_SOURCE_ID`], whose identities it names: two compiles running
+    /// on two threads of one process each see their own files. An entry is overwritten when its
+    /// identity is handed out again after [`Span::reset_source_ids`], so a lookup names the latest
+    /// file lexed with that identity. The entry file (identity 0) is never registered.
+    static SOURCE_PATHS: std::cell::RefCell<std::collections::HashMap<u32, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -183,6 +193,23 @@ impl Span {
     /// write guard, a builtin call type, a binding decision) leaked between files (issue #1445).
     pub fn reset_source_ids() {
         NEXT_SOURCE_ID.with(|next| next.set(1));
+    }
+
+    /// Records the physical file an included or autoloaded source identity was lexed from.
+    pub fn register_source_path(source_id: u32, path: impl Into<String>) {
+        let path = path.into();
+        SOURCE_PATHS.with(|paths| {
+            paths.borrow_mut().insert(source_id, path);
+        });
+    }
+
+    /// Returns the included or autoloaded file this span was lexed from, when one was registered.
+    ///
+    /// `None` for the entry file (identity 0), a synthetic `eval` fragment, and any identity no
+    /// loader registered; callers then fall back to the bare `line:col` form.
+    pub fn source_path(self) -> Option<String> {
+        let source_id = self.source_id();
+        SOURCE_PATHS.with(|paths| paths.borrow().get(&source_id).cloned())
     }
 
     /// Returns a source identity for a synthetic parse that [`Span::reset_source_ids`] must not
@@ -369,6 +396,23 @@ mod tests {
         assert_ne!(first, second);
         assert!(first > SOURCE_ID_MASK, "synthetic ids stay clear of the include range");
         assert!(second > SOURCE_ID_MASK);
+    }
+
+    /// A registered identity names its file through every span lexed with it, an unregistered
+    /// one and the entry file's identity 0 name none, and a later registration of the same
+    /// identity (after a reset hands it out again) replaces the earlier file.
+    #[test]
+    fn registered_source_paths_name_the_file_of_their_spans() {
+        Span::register_source_path(9_101, "src/Counter.lfc");
+        let span = Span::with_end_from(
+            Span::new_in_source(9, 9, 9_101),
+            Span::new_in_source(9, 47, 9_101),
+        );
+        assert_eq!(span.source_path().as_deref(), Some("src/Counter.lfc"));
+        assert_eq!(Span::new_in_source(9, 9, 9_102).source_path(), None);
+        assert_eq!(Span::new(9, 9).source_path(), None, "the entry file is never registered");
+        Span::register_source_path(9_101, "src/Fixed.lfc");
+        assert_eq!(span.source_path().as_deref(), Some("src/Fixed.lfc"));
     }
 
     /// A column past the inline 16 bits keeps its value and its source identity (#1292), and

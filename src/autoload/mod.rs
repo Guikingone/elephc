@@ -220,6 +220,7 @@ fn load_autoloaded_file(
     // readonly write guard, a builtin call type, a binding decision) leaked between them: one
     // class got another class's readonly guard (issue #1445).
     let source_id = Span::fresh_source_id();
+    Span::register_source_path(source_id, file_label.clone());
     let tokens =
         crate::lexer::tokenize_with_mode_and_source_id(&content, source_mode, source_id)
             .map_err(|e| e.with_file(file_label.clone()))?;

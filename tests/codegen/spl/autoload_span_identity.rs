@@ -1,6 +1,7 @@
 //! Purpose:
 //! Regression tests for the source identity of autoloaded class files (issue #1445): statements
-//! at the same line and column of two autoloaded files must stay distinct checker map keys.
+//! at the same line and column of two autoloaded files must stay distinct checker map keys, and
+//! a diagnostic raised inside an autoloaded file must name that file.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests autoload_span_identity` through Rust's test harness.
@@ -9,8 +10,8 @@
 //! - Autoloaded files used to be lexed with the entry file's source identity, so span-keyed
 //!   checker results (the readonly write guard, binding decisions, builtin call types) leaked
 //!   from one class file to the statement at the same position in another.
-//! - The LFC repro goes through the real CLI pipeline; the other runtime fixtures use the
-//!   in-process multi-file harness, which runs the same autoload pass.
+//! - The LFC repro and the diagnostic tests go through the real CLI pipeline; the other runtime
+//!   fixtures use the in-process multi-file harness, which runs the same autoload pass.
 
 use crate::support::*;
 
@@ -53,6 +54,24 @@ fn compile_project_with_cli_and_run(
     let _ = fs::remove_dir_all(dir);
     assert!(output.status.success(), "program failed: {stderr}\nstdout: {stdout}");
     stdout
+}
+
+/// Runs `elephc --check` on `entry` of a written project and returns the stderr of the failure.
+fn check_project_with_cli_expect_failure(
+    prefix: &str,
+    files: &[(&str, &str)],
+    entry: &str,
+) -> String {
+    let dir = write_project(prefix, files);
+    let check = elephc_cli_command(&dir)
+        .arg("--check")
+        .arg(dir.join(entry))
+        .output()
+        .expect("elephc CLI should run");
+    let stderr = String::from_utf8_lossy(&check.stderr).into_owned();
+    let _ = fs::remove_dir_all(dir);
+    assert!(!check.status.success(), "the check should fail, got success: {stderr}");
+    stderr
 }
 
 /// The exact Ivory repro of #1445: a readonly initialization at `Fixed.lfc:9:9` must not guard
@@ -162,4 +181,26 @@ fn test_autoloaded_retypes_at_the_same_position_compile_and_run() {
         "main.php",
     );
     assert_eq!(out, "0s\n1t\n");
+}
+
+/// A checker error inside an autoloaded class file names that file. It used to print a bare
+/// `error[7:16]`, which read as a position in the entry file.
+#[test]
+fn test_checker_error_in_an_autoloaded_file_names_the_file() {
+    let stderr = check_project_with_cli_expect_failure(
+        "elephc_autoload_span_diagnostic",
+        &[
+            ("composer.json", COMPOSER_PSR4),
+            (
+                "src/Broken.lfc",
+                "namespace App;\n\nfinal class Broken\n{\n    public function run(): int\n    {\n        return new Missing();\n    }\n}\n",
+            ),
+            ("main.lfc", "use App\\Broken;\n\necho (new Broken())->run(), \"\\n\";\n"),
+        ],
+        "main.lfc",
+    );
+    assert!(
+        stderr.contains("src/Broken.lfc:7:16]: Undefined class: App\\Missing"),
+        "the diagnostic should name the autoloaded file: {stderr}"
+    );
 }
