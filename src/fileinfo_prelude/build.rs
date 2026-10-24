@@ -23,7 +23,7 @@ fn reject(condition: Expr, class: &str, message: &str) -> Stmt {
 }
 /// Emits a PHP warning and returns false for a recoverable native failure.
 fn failure() -> Vec<Stmt> {
-    vec![s_expr(e_call("__elephc_builtin_warning", vec![e_call("elephc_fileinfo_error", vec![])])), s_return(e_bool(false))]
+    vec![s_expr(e_call("__elephc_builtin_warning", vec![concat(concat(e_var("_function"), e_str("(): ")), e_call("elephc_fileinfo_error", vec![]))])), s_return(e_bool(false))]
 }
 /// Requires a valid object handle before each operation.
 fn require_handle() -> Vec<Stmt> {
@@ -36,7 +36,7 @@ fn context_check() -> Stmt {
 }
 
 /// Builds one query method, preserving bytes and PHP stream-context behavior.
-fn query_method(file: bool) -> crate::synthetic_class::MethodBuilder {
+fn query_engine(file: bool) -> crate::synthetic_class::MethodBuilder {
     let (name, parameter) = if file { ("file", "filename") } else { ("buffer", "string") };
     let mut body = require_handle();
     body.push(context_check());
@@ -50,7 +50,7 @@ fn query_method(file: bool) -> crate::synthetic_class::MethodBuilder {
             s_if(e_binop(e_call("strpos", vec![e_var(parameter), e_str("://")]), BinOp::StrictNotEq, e_bool(false)), vec![
                 s_assign("_data", e_call("file_get_contents", vec![e_var(parameter), e_bool(false), e_var("context"), e_int(0), e_int(7340032)])),
                 s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
-                s_return(e_method_call(e_this(), "buffer", vec![e_var("_data"), e_var("flags")])),
+                s_return(e_method_call(e_this(), "__elephc_buffer", vec![e_var("_function"), e_var("_data"), e_var("flags")])),
             ], vec![], None),
             s_assign("_result", e_call("elephc_fileinfo_file", vec![e_var("_raw"), e_var(parameter), e_var("flags")])),
         ]);
@@ -59,9 +59,20 @@ fn query_method(file: bool) -> crate::synthetic_class::MethodBuilder {
     }
     body.push(s_if(eq(e_call("elephc_fileinfo_ok", vec![]), e_int(0)), failure(), vec![], None));
     body.push(s_return(e_var("_result")));
-    method(name).param(parameter, TypeExpr::Str)
+    method(&format!("__elephc_{name}")).final_().param("_function", TypeExpr::Str).param(parameter, TypeExpr::Str)
         .param_default("flags", TypeExpr::Int, e_int(0))
         .param_default("context", t_mixed(), e_null()).returns(result_type()).body(body)
+}
+
+/// Public method dispatch remains overridable; procedural calls use the final engine helper.
+fn query_method(file: bool) -> crate::synthetic_class::MethodBuilder {
+    let (name, parameter) = if file { ("file", "filename") } else { ("buffer", "string") };
+    method(name).param(parameter, TypeExpr::Str)
+        .param_default("flags", TypeExpr::Int, e_int(0))
+        .param_default("context", t_mixed(), e_null()).returns(result_type())
+        .returning(e_method_call(e_this(), &format!("__elephc_{name}"), vec![
+            e_str(&format!("finfo::{name}")), e_var(parameter), e_var("flags"), e_var("context"),
+        ]))
 }
 
 /// Builds the owning class, including PHP's clone and serialization restrictions.
@@ -84,7 +95,10 @@ fn finfo_class() -> Stmt {
         .method(method("__construct").param_default("flags", TypeExpr::Int, e_int(0))
             .param_default("magic_database", t_nullable(TypeExpr::Str), e_null()).body(constructor))
         .method(query_method(false)).method(query_method(true))
-        .method(method("set_flags").param("flags", TypeExpr::Int).returns(TypeExpr::Bool).body(set_flags))
+        .method(query_engine(false)).method(query_engine(true))
+        .method(method("set_flags").param("flags", TypeExpr::Int).returns(TypeExpr::Bool)
+            .returning(e_method_call(e_this(), "__elephc_set_flags", vec![e_var("flags")])))
+        .method(method("__elephc_set_flags").final_().param("flags", TypeExpr::Int).returns(TypeExpr::Bool).body(set_flags))
         .method(method("__debugInfo").returns(t_array()).returning(e_array(vec![])))
         .method(method("__clone").returns(TypeExpr::Void).body(vec![
             s_prop_assign(e_this(), "__elephc_handle", e_int(0)),
@@ -121,14 +135,14 @@ fn functions() -> Program {
                 ])], None)]).build(),
         function("finfo_close").param("finfo", t_class("finfo")).returns(TypeExpr::Bool).returning(e_bool(true)).build(),
         function("finfo_set_flags").param("finfo", t_class("finfo")).param("flags", TypeExpr::Int)
-            .returns(TypeExpr::Bool).returning(e_method_call(e_var("finfo"), "set_flags", vec![e_var("flags")])).build(),
+            .returns(TypeExpr::Bool).returning(e_method_call(e_var("finfo"), "__elephc_set_flags", vec![e_var("flags")])).build(),
     ];
     out.push(function("finfo_buffer").param("finfo", t_class("finfo")).param("string", TypeExpr::Str)
         .param_default("flags", TypeExpr::Int, e_int(0)).param_default("context", t_mixed(), e_null())
-        .returns(result_type()).returning(e_method_call(e_var("finfo"), "buffer", vec![e_var("string"), e_var("flags"), e_var("context")])).build());
+        .returns(result_type()).returning(e_method_call(e_var("finfo"), "__elephc_buffer", vec![e_str("finfo_buffer"), e_var("string"), e_var("flags"), e_var("context")])).build());
     out.push(function("finfo_file").param("finfo", t_class("finfo")).param("filename", TypeExpr::Str)
         .param_default("flags", TypeExpr::Int, e_int(0)).param_default("context", t_mixed(), e_null())
-        .returns(result_type()).returning(e_method_call(e_var("finfo"), "file", vec![e_var("filename"), e_var("flags"), e_var("context")])).build());
+        .returns(result_type()).returning(e_method_call(e_var("finfo"), "__elephc_file", vec![e_str("finfo_file"), e_var("filename"), e_var("flags"), e_var("context")])).build());
     out.push(function("mime_content_type").param("filename", t_mixed()).returns(result_type()).body(vec![
         s_assign("_finfo", e_new_fq("finfo", vec![e_const("FILEINFO_MIME_TYPE")])),
         s_if(e_call("is_resource", vec![e_var("filename")]), vec![

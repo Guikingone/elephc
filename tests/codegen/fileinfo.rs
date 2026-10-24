@@ -206,3 +206,23 @@ echo $f->buffer("hello"), "\n";
     assert_eq!(out.stdout, "2\nfile\n2\ndatabase\nwarning\ntext/plain\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Procedural functions invoke the native implementation even if a subclass overrides methods.
+#[test]
+fn test_fileinfo_procedural_calls_bypass_overrides() {
+    if fileinfo_native::skip("test_fileinfo_procedural_calls_bypass_overrides") { return; }
+    let out = compile_and_run(r#"<?php
+class OverriddenFinfo extends finfo {
+    public function buffer(string $string, int $flags = 0, mixed $context = null): string|false { return "override"; }
+    public function file(string $filename, int $flags = 0, mixed $context = null): string|false { return "override"; }
+    public function set_flags(int $flags): bool { echo "bad flag override\n"; return true; }
+}
+$f = new OverriddenFinfo(FILEINFO_MIME_TYPE);
+echo $f->buffer("hello"), "\n";
+echo finfo_buffer($f, "hello"), "\n";
+finfo_set_flags($f, FILEINFO_MIME_ENCODING);
+echo finfo_buffer($f, "hello"), "\n";
+echo finfo_file($f, "data://text/plain,hello"), "\n";
+"#);
+    assert_eq!(out, "override\ntext/plain\nus-ascii\nus-ascii\n");
+}
