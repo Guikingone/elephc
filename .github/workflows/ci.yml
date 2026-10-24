@@ -248,6 +248,14 @@ jobs:
           ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh macos-aarch64)" \
             cargo test -p elephc-fileinfo
 
+      - name: Test the PHP fileinfo surface
+        env:
+          ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+        run: |
+          cargo test -p elephc --test codegen_tests 'codegen::fileinfo::' -- --list
+          cargo test -p elephc --test codegen_tests 'codegen::fileinfo::' -- --test-threads=2
+
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
         # lib/, holding libelephc_libxml2_shim.a + libxml2.a), links both statically
@@ -426,6 +434,14 @@ jobs:
           ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh linux-x86_64)" \
             cargo test -p elephc-fileinfo
 
+      - name: Test the PHP fileinfo surface
+        env:
+          ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+        run: |
+          cargo test -p elephc --test codegen_tests 'codegen::fileinfo::' -- --list
+          cargo test -p elephc --test codegen_tests 'codegen::fileinfo::' -- --test-threads=2
+
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
         # lib/, holding libelephc_libxml2_shim.a + libxml2.a), links both statically
@@ -595,6 +611,14 @@ jobs:
         run: |
           ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh linux-aarch64)" \
             cargo test -p elephc-fileinfo
+
+      - name: Test the PHP fileinfo surface
+        env:
+          ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+        run: |
+          cargo test -p elephc --test codegen_tests 'codegen::fileinfo::' -- --list
+          cargo test -p elephc --test codegen_tests 'codegen::fileinfo::' -- --test-threads=2
 
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's

@@ -15,7 +15,7 @@ fn test_fileinfo_buffer_flags_and_aliases() {
     if fileinfo_native::skip("test_fileinfo_buffer_flags_and_aliases") { return; }
     let out = compile_and_run(r#"<?php
 $f = new \FiNfO(FILEINFO_MIME_TYPE);
-echo finfo_buffer(finfo: $f, string: "hello"), "\n";
+echo \FiNfO_BuFfEr(finfo: $f, string: "hello"), "\n";
 echo $f->buffer("hello", FILEINFO_MIME_ENCODING), "\n";
 echo $f->buffer("hello"), "\n";
 echo finfo_buffer($f, "hello", FILEINFO_MIME), "\n";
