@@ -165,7 +165,7 @@ echo 'done';
 /// Predicates reject invalid dynamic kinds without validating entries after a successful match.
 #[test]
 fn test_tokenizer_is_checks_dynamic_types_in_source_order() {
-    let out = compile_and_run(r#"<?php
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(r#"<?php
 $t = new PhpToken(T_STRING, 'name');
 $values = [true, 1.5, null, new stdClass()];
 foreach ($values as $value) {
@@ -176,7 +176,8 @@ echo ':', $t->is(['name', []]) ? 'match' : 'wrong';
 try { $t->is([[], 'name']); echo 'wrong'; }
 catch (TypeError $error) { echo ':TypeError'; }
 "#);
-    assert_eq!(out, "TTTT:match:TypeError");
+    assert!(out.success, "{}\n{}\n{}", out.stdout, out.stderr, asm);
+    assert_eq!(out.stdout, "TTTT:match:TypeError");
 }
 
 /// Empty token streams still reject abstract subclasses, and partial binary strings retain quote IDs.
