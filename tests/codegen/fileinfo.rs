@@ -182,3 +182,27 @@ echo $f->buffer("hello"), "\n";
 "#);
     assert_eq!(out, "uncloneable\nTrying to clone an uncloneable object of class DescribedFinfo\nSerialization of 'DescribedFinfo' is not allowed\nUnserialization of 'DescribedFinfo' is not allowed\ntext/plain\n");
 }
+
+/// Fileinfo failures use E_WARNING and allow PHP handlers to suppress or throw.
+#[test]
+fn test_fileinfo_warning_handlers() {
+    if fileinfo_native::skip("test_fileinfo_warning_handlers") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$f = new finfo(FILEINFO_MIME_TYPE);
+set_error_handler(function(int $errno, string $_message, string $_file, int $_line): bool {
+    echo $errno, "\n";
+    return true;
+});
+echo $f->file("/elephc-fileinfo-missing/file") === false ? "file\n" : "bad\n";
+echo finfo_open(0, "/elephc-fileinfo-missing/database") === false ? "database\n" : "bad\n";
+restore_error_handler();
+set_error_handler(function(int $_errno, string $_message, string $_file, int $_line): bool {
+    throw new RuntimeException("warning");
+});
+try { $f->file("/elephc-fileinfo-missing/file"); } catch (RuntimeException $e) { echo $e->getMessage(), "\n"; }
+restore_error_handler();
+echo $f->buffer("hello"), "\n";
+"#);
+    assert_eq!(out.stdout, "2\nfile\n2\ndatabase\nwarning\ntext/plain\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

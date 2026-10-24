@@ -23,7 +23,7 @@ fn reject(condition: Expr, class: &str, message: &str) -> Stmt {
 }
 /// Emits a PHP warning and returns false for a recoverable native failure.
 fn failure() -> Vec<Stmt> {
-    vec![s_expr(e_call("trigger_error", vec![e_call("elephc_fileinfo_error", vec![]), e_const("E_USER_WARNING")])), s_return(e_bool(false))]
+    vec![s_expr(e_call("__elephc_builtin_warning", vec![e_call("elephc_fileinfo_error", vec![])])), s_return(e_bool(false))]
 }
 /// Requires a valid object handle before each operation.
 fn require_handle() -> Vec<Stmt> {
@@ -116,7 +116,7 @@ fn functions() -> Program {
             .returns(t_union(vec![t_class("finfo"), TypeExpr::False]))
             .body(vec![s_try(vec![s_return(e_new_fq("finfo", vec![e_var("flags"), e_var("magic_database")]))],
                 vec![(vec!["Exception"], Some("_error"), vec![
-                    s_expr(e_call("trigger_error", vec![e_method_call(e_var("_error"), "getMessage", vec![]), e_const("E_USER_WARNING")])),
+                    s_expr(e_call("__elephc_builtin_warning", vec![e_method_call(e_var("_error"), "getMessage", vec![])])),
                     s_return(e_bool(false)),
                 ])], None)]).build(),
         function("finfo_close").param("finfo", t_class("finfo")).returns(TypeExpr::Bool).returning(e_bool(true)).build(),

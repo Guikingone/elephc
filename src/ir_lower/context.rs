@@ -5206,8 +5206,8 @@ pub(super) fn opcode_has_opaque_user_code_target(op: Op, immediate: Option<&Imme
             ))),
         ) => true,
         (Op::CoreBuiltin, Some(Immediate::I64(selector))) => {
-            crate::ir::CoreBuiltinOp::from_i64(*selector)
-                == Some(crate::ir::CoreBuiltinOp::TriggerError)
+            matches!(crate::ir::CoreBuiltinOp::from_i64(*selector),
+                Some(crate::ir::CoreBuiltinOp::TriggerError | crate::ir::CoreBuiltinOp::BuiltinWarning))
         }
         _ => false,
     }

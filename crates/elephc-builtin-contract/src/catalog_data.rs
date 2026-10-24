@@ -16,6 +16,17 @@ use crate::{
 
 pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     BuiltinContract {
+        id: BuiltinId::from_canonical_name("__elephc_builtin_warning"),
+        name: "__elephc_builtin_warning", area: Area::System, module: PhpModule::Elephc,
+        since: None, kind: BuiltinKind::Function,
+        params: &[ParamSpec { name: "message", ty: TypeSpec::Str, default: None, by_ref: false }],
+        variadic: None, variadic_by_ref: false, min_args: None, max_args: None,
+        arity_error: None, returns: TypeSpec::Bool, by_ref_return: false,
+        summary: "Raises an engine warning through the active PHP error handler.",
+        examples: &[], php_manual: None, deprecation: None,
+        extension: false, internal: true, requirements: &[],
+    },
+    BuiltinContract {
         id: BuiltinId::from_canonical_name("__elephc_bcnumber_add"),
         name: "__elephc_bcnumber_add",
         area: Area::Math,

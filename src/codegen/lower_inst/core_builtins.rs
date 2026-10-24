@@ -51,7 +51,8 @@ pub(super) fn lower_core_builtin(
         CoreBuiltinOp::SetExceptionHandler => handlers::lower_set_exception_handler(ctx, inst)?,
         CoreBuiltinOp::GetErrorHandler => handlers::lower_get_error_handler(ctx),
         CoreBuiltinOp::GetExceptionHandler => handlers::lower_get_exception_handler(ctx),
-        CoreBuiltinOp::TriggerError => handlers::lower_trigger_error(ctx, inst)?,
+        CoreBuiltinOp::TriggerError => handlers::lower_trigger_error(ctx, inst, false)?,
+        CoreBuiltinOp::BuiltinWarning => handlers::lower_trigger_error(ctx, inst, true)?,
         CoreBuiltinOp::GetDefinedConstants => constants::lower_get_defined_constants(ctx, inst)?,
         CoreBuiltinOp::GetDefinedVars => {
             return Err(CodegenIrError::invalid_module(

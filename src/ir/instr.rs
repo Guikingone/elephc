@@ -668,6 +668,8 @@ pub enum CoreBuiltinOp {
     GetResources = 14,
     GetErrorHandler = 15,
     GetExceptionHandler = 16,
+    /// An internal prelude warning at PHP E_WARNING severity.
+    BuiltinWarning = 17,
 }
 
 impl CoreBuiltinOp {
@@ -691,7 +693,7 @@ impl CoreBuiltinOp {
             | Self::ErrorReporting
             | Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
-            | Self::TriggerError => BuiltinResultOwnership::NonHeap,
+            | Self::TriggerError | Self::BuiltinWarning => BuiltinResultOwnership::NonHeap,
         }
     }
 
@@ -720,6 +722,7 @@ impl CoreBuiltinOp {
             14 => Some(Self::GetResources),
             15 => Some(Self::GetErrorHandler),
             16 => Some(Self::GetExceptionHandler),
+            17 => Some(Self::BuiltinWarning),
             _ => None,
         }
     }
@@ -735,7 +738,7 @@ impl CoreBuiltinOp {
             | Self::GetResources => 1,
             Self::SetErrorHandler => 3,
             Self::SetExceptionHandler => 2,
-            Self::TriggerError => 4,
+            Self::TriggerError | Self::BuiltinWarning => 4,
             Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
             | Self::GetDefinedVars
@@ -766,7 +769,7 @@ impl CoreBuiltinOp {
                     | E::REFCOUNT_OP.bits()
                     | E::MAY_THROW.bits(),
             ),
-            Self::DebugPrintBacktrace | Self::TriggerError => E::all(),
+            Self::DebugPrintBacktrace | Self::TriggerError | Self::BuiltinWarning => E::all(),
             Self::ErrorReporting => {
                 Effects::from_bits_retain(E::READS_GLOBAL.bits() | E::WRITES_GLOBAL.bits())
             }

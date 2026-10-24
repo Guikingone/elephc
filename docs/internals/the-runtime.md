@@ -1832,3 +1832,9 @@ when a subclass overrides its destructor. The shared builtin class contract mark
 `finfo` uncloneable: the typed clone operation and reflection apply that policy
 through the internal class's ancestry, including in eval. Serialization uses the
 existing internal-class refusal table before any user subclass hook runs.
+
+Compiler preludes raise engine warnings through the internal
+`__elephc_builtin_warning` alias and the typed `CoreBuiltinOp::BuiltinWarning`
+operation. It carries source metadata and `E_WARNING` through the ordinary handler
+and reporting machinery, while PHP's public `trigger_error()` retains its restricted
+user-level error categories.

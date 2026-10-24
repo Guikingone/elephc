@@ -34,7 +34,8 @@ echo $info->file(__FILE__), "\n";
 ```
 
 `finfo_buffer()` and `finfo_file()` are the procedural equivalents. Both return a
-string on success or `false` on a recoverable identification/read failure. Buffer
+string on success or `false` on a recoverable identification/read failure.
+Failures raise `E_WARNING` through the active PHP error handler and reporting mask. Buffer
 contents are binary-safe. `finfo_file()` accepts stream-wrapper URLs and a nullable
 stream context. The context argument of `finfo_buffer()` has no effect, as in PHP.
 Directories return `directory`.
