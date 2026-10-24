@@ -1130,7 +1130,7 @@ eval-scope helpers, or retain interpreter fallback. See
 | `PtrReadString`, `PtrWriteString` | pointer and string/len | string or int | native memory effects, maybe `alloc_heap`, `may_fatal` |
 | `PtrOffset` | pointer, byte offset | `I64` pointer | pure arithmetic, but php_type tag preserved |
 | `PtrCheckNonnull` | pointer | `Void` | `may_fatal` |
-| `BufferNew(element_type, len)` | length | `Heap(Buffer)` | allocates a separate payload and publishes a generation-safe handle; `alloc_heap`, `may_fatal` |
+| `BufferNew(element_type, len)` | `I64` length | `Heap(Buffer)` | allocates a separate payload and publishes a generation-safe handle; `alloc_heap`, `may_fatal`. Lowering converts a non-`int` length (checked int arithmetic, `mixed`, `int\|float`) to float, truncates it with `FToI`, and selects `-1` when `IToF` does not give the same float back, so a fraction, NaN, infinity or an out-of-range value fails the runtime length validation |
 | `BufferLen` | buffer handle | `I64` | resolves generation/activity, then `reads_heap`; `may_fatal` on stale or invalid handles |
 | `BufferGet`, `BufferSet` | buffer handle, index, value | typed value or `Void` | resolve generation/activity before payload access; `reads_heap`/`writes_heap`, bounds `may_fatal` |
 | `BufferResolve` | buffer handle | `I64` descriptor | optimizer-only; resolves generation/activity WITHOUT faulting and answers 0 for a stale or invalid handle; `reads_heap` |
