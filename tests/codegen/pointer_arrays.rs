@@ -1004,7 +1004,8 @@ $ps = [$w[0]];
 /// Verifies `?:` and `??` keep pointer storage when the other side is an untyped call returning
 /// only `null`s: the call result is an `array<mixed>` of boxed cells, but the merge types it the
 /// way it types a `[null]` local, so the live arm still reaches its record through `$p->x` and the
-/// boxed null is converted into a null pointer word.
+/// boxed null is converted into a null pointer word. Also covers an `@` call arm and the
+/// `(array)` literal element predictor of the same `??`.
 #[test]
 fn test_pointer_array_short_ternary_and_coalesce_with_null_only_calls_keep_records() {
     let out = compile_and_run(
@@ -1015,15 +1016,19 @@ function nulls() { return [null]; }
 function short(array<ptr<Vec2>|null> $ps): string {
     $r = $ps ?: boxed();
     $t = $ps ?: nulls();
+    $u = $ps ?: @nulls();
     $s = "";
     foreach ($r as $p) { $s .= $p === null ? "N" : (string) $p->x; }
     foreach ($t as $p) { $s .= $p === null ? "N" : (string) $p->x; }
+    foreach ($u as $p) { $s .= $p === null ? "N" : (string) $p->x; }
     return $s;
 }
 function coalesce(?array<ptr<Vec2>|null> $m): string {
     $r = $m ?? boxed();
+    $c = [(array) ($m ?? boxed())];
     $s = "";
     foreach ($r as $p) { $s .= $p === null ? "N" : (string) $p->x; }
+    foreach ($c[0] as $p) { $s .= $p === null ? "N" : (string) $p->x; }
     return $s;
 }
 $w = buffer_new<Vec2>(1);
@@ -1031,5 +1036,5 @@ $w[0]->x = 7;
 echo short([$w[0]]), "|", short([]), "|", coalesce([$w[0]]), "|", coalesce(null), "\n";
 "#,
     );
-    assert_eq!(out, "77|NN|7|N\n");
+    assert_eq!(out, "777|NNN|77|NN\n");
 }

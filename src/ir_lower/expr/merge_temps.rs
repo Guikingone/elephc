@@ -88,7 +88,12 @@ fn merge_arm_type(ctx: &LoweringContext<'_, '_>, arm: &Expr) -> PhpType {
 /// converted into it. A merge that stays all-null is stored with `mixed` slots
 /// (`null_only_merge_storage`).
 pub(super) fn null_only_call_merge_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpType> {
-    let ExprKind::FunctionCall { name, .. } = &expr.kind else {
+    // `@f()` is the call itself, as `materialized_expr_type_for_merge` reads it.
+    let mut call = expr;
+    while let ExprKind::ErrorSuppress(inner) = &call.kind {
+        call = inner;
+    }
+    let ExprKind::FunctionCall { name, .. } = &call.kind else {
         return None;
     };
     let canonical = name.as_str();

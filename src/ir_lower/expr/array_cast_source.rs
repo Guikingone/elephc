@@ -281,9 +281,12 @@ fn null_coalesce_source_type(
     default: &Expr,
 ) -> PhpType {
     let value_ty = strip_void_from_union(array_cast_source_type_for_ir(ctx, value)).codegen_repr();
-    let default_ty = array_cast_source_type_for_ir(ctx, default).codegen_repr();
+    // An all-null user call default is typed as the merge types it (`null_only_call_merge_type`).
+    let default_ty = super::merge_temps::null_only_call_merge_type(ctx, default)
+        .unwrap_or_else(|| array_cast_source_type_for_ir(ctx, default))
+        .codegen_repr();
     // Must agree with `null_coalesce_result_type`, which boxes an int/bool pair.
-    materialized_merge_type(&value_ty, &default_ty)
+    super::merge_temps::null_only_merge_storage(materialized_merge_type(&value_ty, &default_ty))
 }
 
 /// Returns the type of a direct, extern, or builtin call.
