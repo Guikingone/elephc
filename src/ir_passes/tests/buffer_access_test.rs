@@ -3,7 +3,7 @@
 //! the preheader descriptor for an SSA or local-slot handle, loops with several back edges,
 //! handles that change between iterations, address sharing across a join, and the loops and
 //! modules the pass must leave alone. Same-buffer induction proofs cover accepted and refused
-//! bounds-check elimination shapes.
+//! bounds-check elimination shapes, and preheader placement tests pin where the resolver goes.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -365,6 +365,147 @@ fn hoists_an_invariant_handle_into_the_preheader() {
     assert_eq!(count_ops(function, Op::BufferGet) + count_ops(function, Op::BufferSet), 0);
     assert!(validate_function(function).is_ok(), "the rewritten loop is valid");
     assert!(!hoist_buffer_resolution(&mut module), "a second run finds nothing to rewrite");
+}
+
+/// Builds `entry -> header(i) -> body -> header` whose preheader `entry` is filled by
+/// `fill_entry` before it branches to the header.
+///
+/// `fill_entry` receives the builder positioned in `entry` and the `$b` buffer slot, and returns
+/// the SSA handle the body should read through (or `None` to reload `$b` inside the body) and a
+/// float the body uses on every iteration, in the role of a `float $dt` load LICM hoisted into the
+/// preheader. Returns the function, the preheader, and that float value.
+fn preheader_loop(
+    fill_entry: impl FnOnce(&mut Builder<'_>, LocalSlotId) -> (Option<ValueId>, ValueId),
+) -> (Function, BlockId, ValueId) {
+    let mut function = Function::new("preheader".to_string(), IrType::Void, PhpType::Void);
+    let (entry, invariant);
+    {
+        let mut b = Builder::new(&mut function);
+        entry = b.create_named_block("entry", vec![]);
+        let header = b.create_named_block("header", vec![(IrType::I64, PhpType::Int)]);
+        let body = b.create_named_block("body", vec![]);
+        let exit = b.create_named_block("exit", vec![]);
+        b.set_entry(entry);
+        let slot = add_buffer_local(&mut b, int_buffer_type());
+
+        b.position_at_end(entry);
+        let (ssa_handle, float) = fill_entry(&mut b, slot);
+        invariant = float;
+        let zero = b.emit_const_i64(0);
+        b.terminate(Terminator::Br { target: header, args: vec![zero] });
+
+        b.position_at_end(header);
+        let index = b.block_param(header, 0);
+        branch(&mut b, body, vec![], exit, vec![]);
+
+        b.position_at_end(body);
+        let handle = ssa_handle.unwrap_or_else(|| load_buffer(&mut b, slot, int_buffer_type()));
+        emit_int_get(&mut b, handle, index);
+        b.emit(Op::FAdd, vec![float, float], None, IrType::F64, PhpType::Float, Ownership::NonHeap);
+        back_edge(&mut b, header, index);
+
+        b.position_at_end(exit);
+        b.terminate(Terminator::Return { value: None });
+    }
+    (function, entry, invariant)
+}
+
+/// Emits `load_local $dt` for a fresh float local, in the role of a hoisted float parameter.
+fn load_float_local(builder: &mut Builder<'_>) -> ValueId {
+    let slot = builder.add_local(Some("dt".to_string()), IrType::F64, PhpType::Float, LocalKind::PhpLocal);
+    builder.emit_load_local(slot, IrType::F64, PhpType::Float)
+}
+
+/// Returns the position of `value`'s defining instruction inside `block`.
+fn position_in_block(function: &Function, block: BlockId, value: ValueId) -> usize {
+    let ValueDef::Instruction { inst, .. } = function.value(value).expect("value exists").def else {
+        panic!("value is a block parameter");
+    };
+    block_instructions(function, block)
+        .iter()
+        .position(|id| *id == inst)
+        .expect("value is defined in the block")
+}
+
+/// Returns the position of the first instruction of `op` inside `block`.
+fn op_position(function: &Function, block: BlockId, op: Op) -> usize {
+    block_instructions(function, block)
+        .iter()
+        .position(|id| function.instructions[id.as_raw() as usize].op == op)
+        .unwrap_or_else(|| panic!("block has no {op:?}"))
+}
+
+/// With nothing in the preheader able to free or rebind a buffer, the slot load and the resolver
+/// call go in front of it, ahead of the loop-invariant float load, so that float does not live
+/// across the call. Every shifted instruction keeps a definition index that validates.
+#[test]
+fn resolves_ahead_of_invariant_preheader_loads() {
+    let (function, entry, dt) = preheader_loop(|b, _| {
+        let dt = load_float_local(b);
+        b.emit_const_f64(0.5);
+        (None, dt)
+    });
+    assert!(validate_function(&function).is_ok(), "the input loop is valid");
+    let mut module = module_with(function);
+
+    assert!(hoist_buffer_resolution(&mut module));
+    let function = &module.functions[0];
+    let resolve = op_position(function, entry, Op::BufferResolve);
+    assert_eq!(resolve, 1, "the slot load and the resolver open the preheader");
+    assert_eq!(op_position(function, entry, Op::LoadLocal), 0, "the handle load comes first");
+    assert!(resolve < position_in_block(function, entry, dt), "the float is loaded after the call");
+    assert_eq!(count_ops(function, Op::BufferGetResolved), 1);
+    assert!(validate_function(function).is_ok(), "shifted definitions keep their indices");
+}
+
+/// A preheader store to the handle slot rebinds the buffer, so the resolver follows it and still
+/// precedes the float load placed after it.
+#[test]
+fn resolves_after_a_preheader_write_of_the_handle_slot() {
+    let (function, entry, dt) = preheader_loop(|b, slot| {
+        let other = b.add_local(
+            Some("c".to_string()),
+            IrType::Heap(IrHeapKind::Buffer),
+            int_buffer_type(),
+            LocalKind::PhpLocal,
+        );
+        let replacement = load_buffer(b, other, int_buffer_type());
+        b.emit_store_local(slot, replacement);
+        (None, load_float_local(b))
+    });
+    assert!(validate_function(&function).is_ok(), "the input loop is valid");
+    let mut module = module_with(function);
+
+    assert!(hoist_buffer_resolution(&mut module));
+    let function = &module.functions[0];
+    let store = op_position(function, entry, Op::StoreLocal);
+    let resolve = op_position(function, entry, Op::BufferResolve);
+    assert_eq!(resolve, store + 2, "the slot is reloaded and resolved right after the store");
+    assert!(resolve < position_in_block(function, entry, dt), "the float is loaded after the call");
+    assert!(validate_function(function).is_ok());
+}
+
+/// An SSA handle defined in the preheader is resolved right after its definition: earlier would
+/// read an undefined value, later would keep the following float live across the call.
+#[test]
+fn resolves_an_ssa_handle_right_after_its_definition() {
+    let mut handle = None;
+    let (function, entry, dt) = preheader_loop(|b, slot| {
+        b.emit_const_i64(7);
+        let loaded = load_buffer(b, slot, int_buffer_type());
+        handle = Some(loaded);
+        (Some(loaded), load_float_local(b))
+    });
+    let handle = handle.expect("the preheader defined the handle");
+    assert!(validate_function(&function).is_ok(), "the input loop is valid");
+    let mut module = module_with(function);
+
+    assert!(hoist_buffer_resolution(&mut module));
+    let function = &module.functions[0];
+    let resolve = op_position(function, entry, Op::BufferResolve);
+    assert_eq!(resolve, position_in_block(function, entry, handle) + 1);
+    assert!(resolve < position_in_block(function, entry, dt), "the float is loaded after the call");
+    assert!(validate_function(function).is_ok());
 }
 
 /// Zero-based unit-step loops bounded by the same buffer length mark reads and writes in range,
