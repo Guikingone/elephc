@@ -315,8 +315,8 @@ fn test_property_buffer_accesses_of_two_indexes_share_one_descriptor() {
     assert!(!ir.contains("= buffer_get "), "{ir}");
 }
 
-/// Inside a loop body, the two reads of one iteration share the property read and the record
-/// address, which is the shape a caller's loop gets once such a method is inlined into it.
+/// Inside a method's own loop body, the two reads of one iteration share the property read
+/// and the record address.
 #[test]
 fn test_property_buffer_reads_in_one_loop_iteration_share_one_record() {
     let ir = function_ir(TABLE_SOURCE, true, "Table::countMatching");
