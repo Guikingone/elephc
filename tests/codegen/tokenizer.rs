@@ -133,3 +133,33 @@ echo 'done';
     assert_eq!(out.stdout, "done");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Predicates reject invalid dynamic kinds without validating entries after a successful match.
+#[test]
+fn test_tokenizer_is_checks_dynamic_types_in_source_order() {
+    let out = compile_and_run(r#"<?php
+$t = new PhpToken(T_STRING, 'name');
+$values = [true, 1.5, null, new stdClass()];
+foreach ($values as $value) {
+    try { $t->is($value); echo 'wrong'; }
+    catch (TypeError $error) { echo 'T'; }
+}
+echo ':', $t->is(['name', []]) ? 'match' : 'wrong';
+try { $t->is([[], 'name']); echo 'wrong'; }
+catch (TypeError $error) { echo ':TypeError'; }
+"#);
+    assert_eq!(out, "TTTT:match:TypeError");
+}
+
+/// Empty token streams still reject abstract subclasses, and partial binary strings retain quote IDs.
+#[test]
+fn test_tokenizer_abstract_subclass_and_binary_quote() {
+    let out = compile_and_run(r#"<?php
+abstract class AbstractSourceToken extends PhpToken {}
+try { AbstractSourceToken::tokenize(''); echo 'wrong'; }
+catch (Error $error) { echo 'abstract'; }
+$tokens = PhpToken::tokenize('<?php b"unfinished');
+echo ':', $tokens[1]->id, ':', $tokens[1]->text;
+"#);
+    assert_eq!(out, "abstract:34:b\"");
+}

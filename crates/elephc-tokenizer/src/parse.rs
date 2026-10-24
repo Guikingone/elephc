@@ -31,7 +31,7 @@ pub(super) fn validate(source: &[u8], tokens: &mut [Token]) -> Result<(), ParseE
         }
     }
     for (index, token) in tokens.iter().enumerate() {
-        if token.id == id("T_ECHO") {
+        if token.id == id("T_ECHO") || token.id == id("T_OPEN_TAG_WITH_ECHO") {
             let next = tokens[index + 1..].iter().find(|t| ![id("T_WHITESPACE"), id("T_COMMENT"), id("T_DOC_COMMENT")].contains(&t.id));
             if next.is_none_or(|t| t.id == i64::from(b';') || t.id == id("T_CLOSE_TAG")) {
                 return Err(ParseError { message: "syntax error, unexpected token, expecting an expression".into(), line: token.line });

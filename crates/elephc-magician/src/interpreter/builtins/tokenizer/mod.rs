@@ -35,11 +35,20 @@ pub(in crate::interpreter) fn eval_tokenizer_values(
         return values.string(elephc_tokenizer::token_name(id).unwrap_or("UNKNOWN"));
     }
     let Some(code) = args.first().copied() else { return Err(EvalStatus::RuntimeFatal); };
-    if matches!(values.type_tag(code)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_RESOURCE) {
+    let tag = values.type_tag(code)?;
+    if matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_RESOURCE | EVAL_TAG_CALLABLE)
+        || tag == EVAL_TAG_OBJECT && !eval_object_has_to_string(code, context, values)? {
         let given = eval_given_type_name(code, context, values)?;
         return eval_throw_type_error(&format!("token_get_all(): Argument #1 ($code) must be of type string, {given} given"), context, values);
     }
-    let code = values.string_bytes(code)?;
+    let code = if tag == EVAL_TAG_OBJECT {
+        let text = eval_string_context_value(code, context, values)?;
+        let result = values.string_bytes(text);
+        let released = values.release(text);
+        let bytes = result?;
+        released?;
+        bytes
+    } else { values.string_bytes(code)? };
     let flags = match args.get(1) {
         Some(value) => tokenizer_int(*value, name, 2, "flags", context, values)?, None => 0,
     };
@@ -68,7 +77,7 @@ fn tokenizer_int(
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
     let tag = values.type_tag(value)?;
-    let invalid = matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_RESOURCE)
+    let invalid = matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_RESOURCE | EVAL_TAG_CALLABLE)
         || tag == EVAL_TAG_STRING && {
             let bytes = values.string_bytes(value)?;
             std::str::from_utf8(&bytes).ok().and_then(|s| s.trim().parse::<f64>().ok()).is_none_or(|n| !n.is_finite())

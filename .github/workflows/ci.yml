@@ -2580,6 +2580,17 @@ jobs:
           ELEPHC_TOKENIZER_REQUIRE_PHP85: '1'
         run: cargo test --locked -p elephc-tokenizer --lib
 
+      - name: Build the compiler and tokenizer bridge
+        run: |
+          cargo build --locked -p elephc-tokenizer
+          cargo build --locked --bin elephc
+      - name: Run the native tokenizer example
+        run: |
+          target/debug/elephc examples/tokenizer/main.php
+          examples/tokenizer/main > "$RUNNER_TEMP/tokenizer-example.out"
+          grep -F 'Function declaration at line 1, byte ' "$RUNNER_TEMP/tokenizer-example.out"
+          grep -F 'First token: T_OPEN_TAG' "$RUNNER_TEMP/tokenizer-example.out"
+
   differential-tests:
     name: Differential test run (PHPUnit vs elephc test)
     runs-on: ubuntu-latest

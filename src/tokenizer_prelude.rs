@@ -123,6 +123,9 @@ class PhpToken implements \Stringable {
     public function __toString(): string { return $this->text; }
 
     public static function tokenize(string $code, int $flags = 0): array {
+        $called = static::class;
+        $reflection = new \ReflectionClass($called);
+        if ($reflection->isAbstract()) { throw new \Error("Cannot instantiate abstract class " . $called); }
         $tokens = token_get_all($code, $flags);
         $result = [];
         $line = 1;
@@ -133,7 +136,7 @@ class PhpToken implements \Stringable {
                 $text = $token[1];
                 $line = $token[2];
             } else {
-                $id = ord($token);
+                $id = ord($token[strlen($token) - 1]);
                 $text = $token;
             }
             $result[] = new static($id, $text, $line, $pos);
