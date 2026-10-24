@@ -150,6 +150,11 @@ pub(super) fn reuse_property_buffers(function: &mut Function) -> bool {
     changed
 }
 
+/// Merges only redundant property reads, leaving descriptor placement to loop hoisting.
+pub(super) fn reuse_property_reads(function: &mut Function) -> bool {
+    merge_property_reads(function, &Facts::of(function))
+}
+
 /// Replaces each buffer-typed property read that a dominating read of the same property on the
 /// same receiver already made, across a clean region.
 fn merge_property_reads(function: &mut Function, facts: &Facts) -> bool {
@@ -597,7 +602,7 @@ fn blocks_reached_avoiding(
 /// print or run user code. A user call is rejected even with a read-only effect summary:
 /// summaries drop the callee's local effects, and matched slots are not proven free of address
 /// escapes, so the region never relies on how a callee could reach the caller's frame.
-fn keeps_reads_stable(function: &Function, inst: &Instruction) -> bool {
+pub(super) fn keeps_reads_stable(function: &Function, inst: &Instruction) -> bool {
     match inst.op {
         Op::Acquire | Op::Release => is_buffer_refcount_no_op(function, inst),
         Op::PropGet if !function.is_packed_field_access(inst) => {
@@ -671,7 +676,7 @@ fn reads_the_method_receiver(function: &Function, inst: &Instruction) -> bool {
 }
 
 /// Returns whether an instruction is a plain read of a buffer-typed property of `$this`.
-fn is_buffer_property_read(function: &Function, inst: &Instruction) -> bool {
+pub(super) fn is_buffer_property_read(function: &Function, inst: &Instruction) -> bool {
     inst.op == Op::PropGet
         && inst.operands.len() == 1
         && !function.is_packed_field_access(inst)
