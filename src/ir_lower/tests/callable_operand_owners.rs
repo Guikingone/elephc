@@ -227,7 +227,7 @@ fn slot_instruction(function: &Function, op: Op, slot: crate::ir::LocalSlotId) -
 fn acquired_alias_capable_string_arguments_are_pinned_on_every_target() {
     let source = r#"<?php
 function aliasString(string $value): string { return $value; }
-function relayString(string $value): string { return aliasString($value); }
+function relayString(mixed $value): string { return aliasString((string)$value); }
 echo relayString('value');
 "#;
     for target in TARGETS {
@@ -247,7 +247,7 @@ echo relayString('value');
         assert!(active.iter().any(|slot| function.instructions.iter().any(|instruction|
             instruction.op == Op::StoreLocal
                 && instruction.immediate == Some(Immediate::LocalSlot(*slot))
-                && instruction.operands == [operand])), "{target}: the string lease is reachable during the call");
+                && instruction.operands == [operand])), "{target}: the string lease is reachable during the call: {function:#?}");
         assert_owner_records_are_lifo(&function, target);
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
