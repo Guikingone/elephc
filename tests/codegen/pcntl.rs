@@ -1693,6 +1693,34 @@ fn test_pcntl_dispatch_cleanup_catch_preserves_masked_snapshot() {
     assert_eq!(out, "first|first:second");
 }
 
+/// Eval-side dispatch cannot make an escaping AOT handler skip its saved signal-mask restoration.
+#[test]
+fn test_pcntl_eval_dispatch_inside_aot_handler_keeps_unwind_mask() {
+    let out = compile_and_run(r#"<?php
+        extern "System" {
+            function getpid(): int;
+            function kill(int $pid, int $signal): int;
+        }
+        $code = $argc > 0 ? 'pcntl_signal_dispatch();' : '';
+        pcntl_signal(SIGUSR1, function() use ($code): void {
+            eval($code);
+            throw new RuntimeException('caught');
+        });
+        $original = [];
+        pcntl_sigprocmask(SIG_UNBLOCK, [SIGUSR1], $original);
+        kill(getpid(), SIGUSR1);
+        try { pcntl_signal_dispatch(); }
+        catch (RuntimeException $error) {
+            $current = [];
+            pcntl_sigprocmask(SIG_BLOCK, [SIGUSR2], $current);
+            echo $error->getMessage(), ':', in_array(SIGUSR1, $current) ? 'blocked' : 'clear';
+        }
+        pcntl_sigprocmask(SIG_SETMASK, $original);
+        pcntl_signal(SIGUSR1, SIG_DFL);
+    "#);
+    assert_eq!(out, "caught:clear");
+}
+
 /// Reaps a real child through `pcntl_waitid()` and exposes target-aware siginfo fields.
 #[test]
 fn test_pcntl_waitid_populates_signal_info() {

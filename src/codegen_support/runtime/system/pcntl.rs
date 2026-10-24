@@ -509,9 +509,7 @@ fn emit_pcntl_abort_dispatch_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #112");                                    // reserve one siginfo record and saved frame state
     emitter.instruction("stp x29, x30, [sp, #96]");                             // preserve frame pointer and return address
     emitter.instruction("add x29, sp, #96");                                    // establish the cleanup frame
-    abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_dispatching");
-    emitter.instruction("ldr x10, [x9]");                                       // test whether an exception escaped a signal handler
-    emitter.instruction("cbz x10, __rt_pcntl_abort_dispatch_done");             // ordinary throws require no PCNTL cleanup
+    // -- only the AOT marker can identify an unwind outside this dispatch --
     abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
     abi::emit_load_symbol_to_reg(emitter, "x11", "__rt_pcntl_dispatch_handler", 0);
     emitter.instruction("cmp x10, x11");                                        // distinguish an escaping throw from a handler's inner catch
@@ -550,9 +548,7 @@ fn emit_pcntl_abort_dispatch_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish stable cleanup offsets
     emitter.instruction("sub rsp, 96");                                         // reserve one stable siginfo discard record
-    abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_dispatching");
-    emitter.instruction("cmp QWORD PTR [r9], 0");                               // test whether an exception escaped a signal handler
-    emitter.instruction("je __rt_pcntl_abort_dispatch_done_x86");               // ordinary throws require no PCNTL cleanup
+    // -- eval can change the shared guard, so the saved AOT handler owns restoration --
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
     abi::emit_load_symbol_to_reg(emitter, "r11", "__rt_pcntl_dispatch_handler", 0);
     emitter.instruction("cmp r10, r11");                                        // distinguish an escaping throw from a handler's inner catch
