@@ -12,7 +12,8 @@
 //! - Arguments cover a literal string, a literal `null`, and boxed `string|null` values decided
 //!   only at runtime (`$argc`), because each takes a different lowering path. A `mixed` scalar
 //!   passes its string form; a `mixed` array or object is a fatal error.
-//! - `getenv()` checks a real libc NULL return on every target without a fixture.
+//! - `getenv()` checks a real libc NULL return on every target without a fixture, reading a
+//!   variable the runner sets instead of one the CI environment may lack.
 //! - The fixture is assembled into the test program itself, so no shared library is needed.
 
 use super::*;
@@ -313,16 +314,17 @@ run_calls($argc);
 }
 
 /// Verifies libc `getenv()` declared with a `?string` return reads an unset variable's NULL as
-/// PHP null and a set variable as its value, on every target without a fixture.
+/// PHP null and a set variable as its value, on every target without a fixture. The set
+/// variable is provided by the runner, so the test does not depend on the CI environment.
 #[test]
 fn test_ffi_extern_getenv_nullable_return_reads_unset_as_null() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_env(
         r#"<?php
 extern function getenv(string $name): ?string;
 var_dump(getenv("ELEPHC_TEST_SURELY_UNSET_VARIABLE_7F3A"));
-$home = getenv("HOME");
-echo $home === null ? "unset" : "set";
+var_dump(getenv("ELEPHC_TEST_NULLABLE_GETENV"));
 "#,
+        &[("ELEPHC_TEST_NULLABLE_GETENV", std::ffi::OsStr::new("set-value"))],
     );
-    assert_eq!(out, "NULL\nset");
+    assert_eq!(out, "NULL\nstring(9) \"set-value\"\n");
 }
