@@ -295,7 +295,7 @@ echo use_probe(new Probe()), "\n";
     }
 }
 
-/// Buffer reuse must retain the separate private slots after a parent accessor is spliced.
+/// Actual inlining keeps both parent reads and the shadowing child read in their original scopes.
 #[test]
 fn shadowed_private_buffers_keep_their_original_scopes_on_every_target() {
     let source = r#"<?php
@@ -330,9 +330,9 @@ echo (new ChildBuffers())->combined($argc - 1, $argc), "\n";
             }))
             .map(|id| combined.inlined_scopes.get(&id).map(String::as_str))
             .collect();
-        assert_eq!(scopes.len(), 2, "{target}: separate private properties: {scopes:?}");
-        assert!(scopes.contains(&Some("ParentBuffers")), "{target}: parent scope: {scopes:?}");
-        assert!(scopes.contains(&None), "{target}: original child scope: {scopes:?}");
+        assert_eq!(scopes.len(), 3, "{target}: original receiver temps keep all reads: {scopes:?}");
+        assert_eq!(scopes.iter().filter(|scope| **scope == Some("ParentBuffers")).count(), 2);
+        assert_eq!(scopes.iter().filter(|scope| scope.is_none()).count(), 1);
     }
 }
 

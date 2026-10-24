@@ -299,6 +299,14 @@ fn shares_property_reads_from_the_same_inlined_scope() {
         assert_eq!(function.instruction(first).expect("original read").op, Op::PropGet);
         assert_eq!(function.inlined_scopes.get(&first).map(String::as_str), Some("Parent"));
         assert_eq!(function.instruction(later).expect("redundant read").op, Op::Nop);
+        if second == Second::SameRecord {
+            assert_eq!(count_ops(&function, Op::BufferGet), 1);
+            assert_eq!(count_ops(&function, Op::BufferResolve), 0);
+            assert_eq!(defining_op(&function, built.second_record), Op::Nop);
+        } else {
+            assert_eq!(count_ops(&function, Op::BufferResolve), 1);
+            assert_eq!(count_ops(&function, Op::BufferGetResolved), 2);
+        }
     }
 }
 
