@@ -127,3 +127,27 @@ initialize(new Setter(), $argc);
             "{target}: a setter must not inherit initializer-only store compatibility");
     }
 }
+
+/// Variance keeps ordinary and final methods virtual across instantiated final-class receivers.
+#[test]
+fn method_effects_keep_instantiated_final_class_calls_virtual() {
+    let source = r#"<?php
+class InlineAnimal {}
+class InlineDog extends InlineAnimal {}
+final class VarianceBox<+T> {
+    public function __construct(private T $value) {}
+    public function kind(): string { return 'kind'; }
+    final public function finalKind(): string { return 'final'; }
+}
+function inspect(VarianceBox<InlineAnimal> $box): string { return $box->kind() . $box->finalKind(); }
+echo inspect(new VarianceBox<InlineDog>(new InlineDog())), "\n";
+"#;
+    for target in TARGETS {
+        let module = optimized(source, target);
+        let calls = called_methods(&module, function(&module, "inspect"));
+        for name in ["kind", "finalKind"] {
+            assert!(calls.iter().any(|call| call == name),
+                "{target}: {name} must retain its specialization dispatch: {calls:?}");
+        }
+    }
+}

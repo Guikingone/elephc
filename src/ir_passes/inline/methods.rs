@@ -10,6 +10,8 @@
 //!   the vtable to a different body: the receiver's static class is final, the method is final,
 //!   or the class has no vtable slot for it. The selected body is the one
 //!   `method_resolution::resolve_method_call_target` would call directly.
+//! - Instantiated generic receivers keep vtable dispatch: variance permits a different
+//!   specialization even when the template class or method is final.
 //! - A spliced body loses its own frame, so only bodies whose lowering cannot observe that are
 //!   admitted: every instruction is in `op_is_frame_independent`, whose codegen never reads the
 //!   enclosing function's name, flags or signature. Scope-sensitive property and call operations
@@ -85,9 +87,10 @@ impl MethodTargets {
                 if !signature_is_candidate(method_key, signature) {
                     continue;
                 }
+                // Variance can widen an instantiated receiver without an inheritance edge.
                 let dispatches_dynamically = class_info.vtable_slots.contains_key(method_key)
-                    && !class_info.final_methods.contains(method_key)
-                    && !class_info.is_final;
+                    && (class_name.contains('<')
+                        || (!class_info.final_methods.contains(method_key) && !class_info.is_final));
                 if dispatches_dynamically {
                     continue;
                 }
@@ -286,7 +289,9 @@ pub(super) fn bound_method_name(module: &Module, function: &Function, inst: &Ins
     let info = module.class_infos.get(class)?;
     if info.is_internal || module.interface_infos.contains_key(class) { return None; }
     let key = php_symbol_key(method);
-    if info.vtable_slots.contains_key(&key) && !info.is_final && !info.final_methods.contains(&key) {
+    if info.vtable_slots.contains_key(&key)
+        && (class.contains('<') || (!info.is_final && !info.final_methods.contains(&key)))
+    {
         return None;
     }
     info.methods.get(&key)?;
@@ -372,6 +377,8 @@ fn op_is_frame_independent(op: Op) -> bool {
             | Op::StrConcat
             | Op::StrAppend
             | Op::StrLen
+            | Op::StrPersist
+            | Op::ReturnBoundaryMixedToInt
             // A message fixed at lowering, such as a receiver null check an earlier round
             // spliced into this body: `emit_error` reads nothing from the frame.
             | Op::ThrowError

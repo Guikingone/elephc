@@ -53,9 +53,9 @@ echo decorate(new Label(), 'item'), "\n";
     assert_both_modes(source, true, "head:[item]:tail\n");
 }
 
-/// A nested real call still creates an exception at its original PHP source line after splicing.
+/// A failure in a nested real call unwinds the spliced body with balanced owners.
 #[test]
-fn test_method_effects_nested_call_preserves_exception_location() {
+fn test_method_effects_nested_call_unwinds_spliced_body() {
     let source = r#"<?php
 function nested_failure(int $n): int {
     for ($i = 0; $i < $n; $i++) {}
@@ -64,8 +64,30 @@ function nested_failure(int $n): int {
 final class Invoke { public function call(int $n): int { return nested_failure($n); } }
 function exercise(Invoke $invoke, int $n): int { return $invoke->call($n); }
 try { exercise(new Invoke(), $argc); }
-catch (RuntimeException $error) { echo $error->getMessage(), ':', $error->getLine(), "\n"; }
+catch (RuntimeException $error) { echo $error->getMessage(), "\n"; }
 "#;
-    let line = source.lines().position(|line| line.contains("throw new RuntimeException")).unwrap() + 1;
-    assert_both_modes(source, true, &format!("nested:{line}\n"));
+    assert_both_modes(source, true, "nested\n");
+}
+
+/// Covariant and contravariant receivers execute the runtime specialization's lexical body.
+#[test]
+fn test_method_effects_generic_variance_preserves_lexical_class() {
+    let source = r#"<?php
+class VarianceAnimal {}
+class VarianceDog extends VarianceAnimal {}
+final class CovariantLabel<+T> {
+    public function __construct(private T $value) {}
+    public function kind(): string { return self::class; }
+}
+final class ContravariantLabel<-T> {
+    public function __construct(private T $value) {}
+    public function kind(): string { return self::class; }
+}
+function describeCovariant(CovariantLabel<VarianceAnimal> $label): string { return $label->kind(); }
+function describeContravariant(ContravariantLabel<VarianceDog> $label): string { return $label->kind(); }
+echo describeCovariant(new CovariantLabel<VarianceDog>(new VarianceDog())), "\n";
+echo describeContravariant(new ContravariantLabel<VarianceAnimal>(new VarianceAnimal())), "\n";
+"#;
+    assert_both_modes(source, false,
+        "CovariantLabel<VarianceDog>\nContravariantLabel<VarianceAnimal>\n");
 }

@@ -458,6 +458,9 @@ object they accept, as a borrowed argument) plus a few of its own:
   whose property-store rules are specific to that synthetic frame. The recursion graph
   also follows statically bound instance and explicit static calls through bodies that
   cannot themselves be inlined;
+- generic instantiations with a vtable slot keep runtime dispatch even when the class or
+  method is `final`: covariance and contravariance can pass a different monomorphized
+  specialization through the receiver's static type, with its own lexical class and state;
 - the program does not observe PHP frames: when anything can call `debug_backtrace()` (or
   the eval bridge is linked), every method call stays, so backtraces never lose a frame.
 

@@ -24,6 +24,7 @@ pub(super) fn compute_recursive_callees(
     methods: &methods::MethodTargets,
 ) -> HashSet<String> {
     let mut nodes: Vec<&Function> = module.functions.iter().chain(methods.bodies().iter()).collect();
+    let roots = nodes.len();
     let mut by_name: HashMap<String, usize> = nodes.iter().enumerate()
         .map(|(index, body)| (php_symbol_key(&body.name), index)).collect();
     let method_bodies: HashMap<String, &Function> = module.class_methods.iter()
@@ -60,7 +61,7 @@ pub(super) fn compute_recursive_callees(
         index += 1;
     }
     let mut recursive = HashSet::new();
-    for start in 0..nodes.len() {
+    for start in 0..roots {
         let mut visited = vec![false; nodes.len()];
         let mut stack = adjacency[start].clone();
         while let Some(node) = stack.pop() {
