@@ -10,6 +10,10 @@
 //!   module only materializes precomputed SSA values into C ABI locations.
 //! - String parameters are converted to call-scoped C strings and released
 //!   immediately after the foreign call returns.
+//! - A `?string` parameter (`ExternAbiType::NullableCStr`) passes PHP null as a NULL `char*` and
+//!   any other value as the same call-scoped copy; its cleanup slot then holds NULL, which the
+//!   heap free ignores. A `?string` return reads NULL as a boxed PHP null and any other pointer
+//!   as a boxed owned copy of its bytes.
 //! - Callable extern parameters lower to C function pointers. Descriptor-backed
 //!   callables use generated trampolines when the callable signature is known.
 //! - Extern returns are normalized before the EIR store from the declared C width: 64-bit
@@ -22,6 +26,8 @@
 
 use crate::codegen::abi;
 use crate::codegen::callable_descriptor;
+use crate::codegen::platform::Arch;
+use crate::codegen::{emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
 use crate::codegen_support::DeferredExternCallbackTrampoline;
 use crate::ir::{
     ExternDecl, ExternParamDecl, Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId,
@@ -53,7 +59,7 @@ pub(super) fn lower_extern_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let string_arg_count = decl
         .params
         .iter()
-        .filter(|param| param.php_type.codegen_repr() == PhpType::Str)
+        .filter(|param| param_takes_cstr_copy(param))
         .count();
     let cleanup_bytes = string_arg_count * 16;
     if cleanup_bytes > 0 {
@@ -65,7 +71,7 @@ pub(super) fn lower_extern_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     for (idx, param) in decl.params.iter().enumerate() {
         let value = expect_operand(inst, idx)?;
         let pushed_ty = materialize_extern_arg(ctx, value, param)?;
-        if param.php_type.codegen_repr() == PhpType::Str {
+        if param_takes_cstr_copy(param) {
             abi::emit_temporary_stack_address(ctx.emitter, cleanup_base_reg, pushed_arg_bytes);
             abi::emit_store_to_address(
                 ctx.emitter,
@@ -121,13 +127,24 @@ fn extern_decl<'a>(ctx: &'a FunctionContext<'_>, inst: &Instruction) -> Result<&
 /// Rejects extern features whose ABI cleanup or trampoline lowering is not implemented yet.
 fn validate_extern_shape(decl: &ExternDecl) -> Result<()> {
     for param in &decl.params {
-        validate_supported_extern_type(&decl.name, &param.php_type, "parameter")?;
+        validate_supported_extern_type(&decl.name, &param.php_type, param.abi, "parameter")?;
     }
-    validate_supported_extern_type(&decl.name, &decl.return_php_type, "return")
+    validate_supported_extern_type(&decl.name, &decl.return_php_type, decl.return_abi, "return")
 }
 
 /// Validates one extern-facing PHP type against the scalar subset this module supports.
-fn validate_supported_extern_type(name: &str, ty: &PhpType, position: &str) -> Result<()> {
+///
+/// A `?string` slot is the boxed `string|null` union on the PHP side, which no other extern
+/// shape accepts, so its declared ABI shape admits it.
+fn validate_supported_extern_type(
+    name: &str,
+    ty: &PhpType,
+    abi_ty: ExternAbiType,
+    position: &str,
+) -> Result<()> {
+    if abi_ty == ExternAbiType::NullableCStr {
+        return Ok(());
+    }
     match (position, ty.codegen_repr()) {
         ("parameter", PhpType::Callable) => Ok(()),
         (
@@ -146,8 +163,18 @@ fn validate_supported_extern_type(name: &str, ty: &PhpType, position: &str) -> R
     }
 }
 
+/// Returns whether an extern parameter receives a call-scoped C string copy that is freed after
+/// the call: every `string` parameter, and every `?string` parameter (whose slot is NULL when
+/// PHP null was passed).
+fn param_takes_cstr_copy(param: &ExternParamDecl) -> bool {
+    matches!(param.abi, ExternAbiType::CStr | ExternAbiType::NullableCStr)
+}
+
 /// Returns the C ABI type for an extern parameter after PHP-specific conversion.
 fn c_abi_param_type(param: &ExternParamDecl) -> PhpType {
+    if param.abi == ExternAbiType::NullableCStr {
+        return PhpType::Pointer(None);
+    }
     match param.php_type.codegen_repr() {
         PhpType::Callable => PhpType::Pointer(None),
         PhpType::Str => PhpType::Pointer(None),
@@ -170,6 +197,10 @@ fn materialize_extern_arg(
     value: ValueId,
     param: &ExternParamDecl,
 ) -> Result<PhpType> {
+    if param.abi == ExternAbiType::NullableCStr {
+        materialize_nullable_cstr_arg(ctx, value, param)?;
+        return Ok(PhpType::Pointer(None));
+    }
     let target_ty = param.php_type.codegen_repr();
     let actual_ty = ctx.value_php_type(value)?;
     match (&target_ty, actual_ty.codegen_repr()) {
@@ -264,6 +295,64 @@ fn materialize_mixed_extern_arg(
             )))
         }
     }
+    Ok(())
+}
+
+/// Converts a `?string` argument into the `char*` the C callee receives.
+///
+/// A string becomes a call-scoped null-terminated copy and PHP null becomes NULL. A boxed
+/// `string|null` value is decided from its runtime tag: null passes NULL, and anything else is
+/// cast to a string and copied exactly like a `string` argument.
+fn materialize_nullable_cstr_arg(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    param: &ExternParamDecl,
+) -> Result<()> {
+    match ctx.value_php_type(value)? {
+        PhpType::Str => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_str_to_cstr");
+        }
+        PhpType::Void => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
+        PhpType::Mixed => materialize_boxed_nullable_cstr_arg(ctx, value)?,
+        actual => {
+            return Err(CodegenIrError::unsupported(format!(
+                "extern parameter ${} expects ?string, got {}",
+                param.name, actual
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// Converts a boxed `string|null` argument into NULL for PHP null, or into a call-scoped C
+/// string copy of its string cast for any other payload.
+fn materialize_boxed_nullable_cstr_arg(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let null_label = ctx.next_label("extern_nullable_cstr_arg_null");
+    let done_label = ctx.next_label("extern_nullable_cstr_arg_done");
+    // -- a boxed PHP null passes a NULL char* --
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #8");                              // does the boxed ?string argument carry the PHP null tag?
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 8");                              // does the boxed ?string argument carry the PHP null tag?
+        }
+    }
+    abi::emit_branch_if_equal_wide(ctx.emitter, &null_label);
+    // -- any other payload is cast to a string and copied like a string argument --
+    materialize_mixed_extern_arg(ctx, value, &PhpType::Str)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&done_label);
     Ok(())
 }
 
@@ -563,12 +652,17 @@ fn extern_codegen_types_match(expected: &PhpType, actual: &PhpType) -> bool {
 /// Normalizes extern return registers before storing the EIR result.
 ///
 /// Integer returns widen from the declared C width, a C `float` widens to the PHP double, and a
-/// C `bool` keeps only its low byte, since both ABIs define nothing above it.
+/// C `bool` keeps only its low byte, since both ABIs define nothing above it. A `?string`
+/// return becomes the boxed `string|null` value the call is typed as.
 fn normalize_extern_return(
     ctx: &mut FunctionContext<'_>,
     return_ty: &PhpType,
     return_abi: ExternAbiType,
 ) -> Result<()> {
+    if return_abi == ExternAbiType::NullableCStr {
+        emit_nullable_cstr_return(ctx);
+        return Ok(());
+    }
     match return_ty.codegen_repr() {
         PhpType::Void => Ok(()),
         PhpType::Int => {
@@ -601,6 +695,25 @@ fn normalize_extern_return(
             other
         ))),
     }
+}
+
+/// Converts a returned `char*` that may be NULL into the boxed `?string` the call produces.
+///
+/// NULL boxes PHP null. Any other pointer is copied up to its terminator into an owned string,
+/// exactly as a `string` return is, and the box takes that string over without a second copy.
+fn emit_nullable_cstr_return(ctx: &mut FunctionContext<'_>) {
+    let null_label = ctx.next_label("extern_nullable_cstr_return_null");
+    let done_label = ctx.next_label("extern_nullable_cstr_return_done");
+    // -- a NULL char* return reads as PHP null --
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &null_label);
+    // -- any other pointer becomes an owned string moved into a Mixed box --
+    abi::emit_call_label(ctx.emitter, "__rt_cstr_to_str");
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    // The integer result register still holds the NULL word, which a boxed null ignores.
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
+    ctx.emitter.label(&done_label);
 }
 
 /// Releases call-scoped C-string argument copies after preserving the extern return value.
