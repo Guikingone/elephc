@@ -67,35 +67,3 @@ while (count($layers) > 0) {
     $particles = array_pop($layers);
     buffer_free($particles);
 }
-
-// A counting sort over grid cells. `$counts[$cell]++` and `--$ends[...]` update a scalar buffer
-// element in place: one typed read, add and store per update, with no allocation in the loop.
-$cellCount = 4;
-$cellOf = [2, 0, 3, 2, 1, 0, 2, 3];
-$items = count($cellOf);
-$counts = buffer_new<int>($cellCount);
-foreach ($cellOf as $cell) {
-    $counts[$cell]++;
-}
-$ends = buffer_new<int>($cellCount);
-$end = 0;
-for ($cell = 0; $cell < $cellCount; $cell++) {
-    $end += $counts[$cell];
-    $ends[$cell] = $end;
-}
-$order = buffer_new<int>($items);
-for ($item = $items - 1; $item >= 0; $item--) {
-    $order[--$ends[$cellOf[$item]]] = $item;
-}
-echo "cell counts:";
-for ($cell = 0; $cell < $cellCount; $cell++) {
-    echo " ", $counts[$cell];
-}
-echo "; sorted items:";
-for ($i = 0; $i < $items; $i++) {
-    echo " ", $order[$i];
-}
-echo "\n";
-buffer_free($counts);
-buffer_free($ends);
-buffer_free($order);
