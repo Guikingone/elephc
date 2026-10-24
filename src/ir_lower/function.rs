@@ -2078,7 +2078,8 @@ fn function_params(signature: &FunctionSig) -> Vec<FunctionParam> {
         .collect()
 }
 
-/// Returns an EIR ABI signature with boxed dynamic and object-reference parameters.
+/// Returns an EIR ABI signature with boxed dynamic and object-reference parameters, and with the
+/// boxed storage of an inferred all-null container return.
 pub(crate) fn eir_signature_with_php_param_contracts(
     owner_name: &str,
     signature: &FunctionSig,
@@ -2117,6 +2118,9 @@ pub(crate) fn eir_signature_with_php_param_contracts(
             &eir_signature.return_type,
         );
     }
+    // The body builds a `[null]` it returns with boxed slots, as every caller reads it.
+    eir_signature.return_type =
+        crate::types::dynamic_params::null_only_container_return_storage(&eir_signature.return_type);
     eir_signature
 }
 

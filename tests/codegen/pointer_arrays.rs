@@ -881,8 +881,8 @@ echo $r;
     assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
 }
 
-/// Verifies a `[null]` local returned by functions without a return type (typed `array<void>` at
-/// the call site but built with boxed cells) is converted when it reaches a pointer-array destination: both ternary
+/// Verifies a `[null]` local returned by functions without a return type (an `array<mixed>` of
+/// boxed cells at the call site) is converted when it reaches a pointer-array destination: both ternary
 /// orders, a `match`, a plain return and a call argument all read the element as null in
 /// `foreach` and `isset()`, and the conversion keeps the heap-debug leak summary unchanged.
 #[test]
@@ -955,10 +955,10 @@ function walk(): string {
     assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
 }
 
-/// Verifies an untyped `[null]` local returned from a call and merged with a pointer-array arm is converted when it
-/// lands in the merge temporary: a `match`, a ternary assignment without a destination and a
-/// short ternary all read the boxed arm's element as null in `foreach` and `isset()`, the live
-/// arm keeps its pointer, and the conversion keeps the heap-debug leak summary unchanged. The
+/// Verifies an untyped `[null]` local returned from a call and merged with a pointer-array arm
+/// still reads as null: a `match`, a ternary assignment without a destination and a short
+/// ternary all read the boxed arm's element as null in `foreach` and `isset()`, the live arm keeps
+/// its pointer, and the heap-debug leak summary is unchanged. The
 /// `match` arm is a literal: a parameter arm beside a call arm leaks on `main` as well.
 #[test]
 fn test_pointer_array_merges_convert_untyped_null_array_arms() {
