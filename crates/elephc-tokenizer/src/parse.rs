@@ -57,7 +57,14 @@ pub(super) fn validate(source: &[u8], tokens: &mut [Token]) -> Result<(), ParseE
         return Err(ParseError { message, line: 1 + newline_count(&source[..at]) });
     }
     let mut names = HashSet::new();
-    collect_names(Node::Program(program), &mut names);
+    let mut invalid_echo = None;
+    collect_names(Node::Program(program), &mut names, &mut invalid_echo);
+    if let Some(at) = invalid_echo {
+        let at = at.min(source.len());
+        let message = if at == source.len() { "syntax error, unexpected end of file".into() }
+            else { format!("syntax error, unexpected token \"{}\"", String::from_utf8_lossy(&source[at..at + 1])) };
+        return Err(ParseError { message, line: 1 + newline_count(&source[..at]) });
+    }
     for token in tokens {
         if token.id >= 256 && token.id != id("T_STRING_VARNAME") && names.contains(&token.pos) { token.id = id("T_STRING"); }
     }
@@ -65,13 +72,19 @@ pub(super) fn validate(source: &[u8], tokens: &mut [Token]) -> Result<(), ParseE
 }
 
 /// Collects local identifier positions, skipping AST nodes with dedicated PHP token kinds.
-fn collect_names(node: Node<'_, '_>, names: &mut HashSet<usize>) {
+fn collect_names(node: Node<'_, '_>, names: &mut HashSet<usize>, invalid_echo: &mut Option<usize>) {
+    let empty_or_trailing_echo = match node {
+        Node::Echo(echo) if echo.values.nodes.is_empty() || echo.values.tokens.len() >= echo.values.nodes.len() => Some(echo.terminator.span()),
+        Node::EchoTag(echo) if echo.values.nodes.is_empty() || echo.values.tokens.len() >= echo.values.nodes.len() => Some(echo.terminator.span()),
+        _ => None,
+    };
+    if let Some(span) = empty_or_trailing_echo { invalid_echo.get_or_insert(span.start.offset as usize); }
     if matches!(node, Node::MagicConstant(_)) { return; }
     if let Node::LocalIdentifier(identifier) = node {
         names.insert(identifier.span.start.offset as usize);
         return;
     }
-    node.visit_children(|child| collect_names(child, names));
+    node.visit_children(|child| collect_names(child, names, invalid_echo));
     if let Node::FunctionCall(call) = node {
         if let mago_syntax::cst::Expression::Identifier(mago_syntax::cst::Identifier::Local(identifier)) = call.function {
             if identifier.value.eq_ignore_ascii_case(b"clone") { names.remove(&(identifier.span.start.offset as usize)); }

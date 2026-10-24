@@ -2580,13 +2580,23 @@ jobs:
           ELEPHC_TOKENIZER_REQUIRE_PHP85: '1'
         run: cargo test --locked -p elephc-tokenizer --lib
 
+  tokenizer-native-smoke:
+    name: Tokenizer native smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: Build the compiler and tokenizer bridge
         run: |
           cargo build --locked -p elephc-tokenizer
           cargo build --locked --bin elephc
       - name: Run the native tokenizer example
         run: |
-          target/debug/elephc examples/tokenizer/main.php
+          target/debug/elephc --with-tokenizer examples/tokenizer/main.php
+          trap 'rm -f "$RUNNER_TEMP/tokenizer-example.out"' EXIT
           examples/tokenizer/main > "$RUNNER_TEMP/tokenizer-example.out"
           grep -F 'Function declaration at line 1, byte ' "$RUNNER_TEMP/tokenizer-example.out"
           grep -F 'First token: T_OPEN_TAG' "$RUNNER_TEMP/tokenizer-example.out"
@@ -2996,6 +3006,7 @@ jobs:
       - image-api-sync
       - builtins-docs-sync
       - tokenizer-tests
+      - tokenizer-native-smoke
       - differential-tests
       - managed-native-smoke
       - curl-feature-contract
@@ -3027,7 +3038,7 @@ jobs:
           EXTENDED_TIER: ${{ needs.plan.outputs.extended }}
         run: |
           always="plan build-archive-macos-aarch64 build-archive-linux-x86_64
-            build-archive-linux-aarch64 image-api-sync builtins-docs-sync tokenizer-tests differential-tests
+            build-archive-linux-aarch64 image-api-sync builtins-docs-sync tokenizer-tests tokenizer-native-smoke differential-tests
             curl-feature-contract security-audit action-pins frame-assertions-release
             benchmark-tooling"
           run_tier="non-codegen-tests-linux-x86_64 non-codegen-tests-linux-aarch64
