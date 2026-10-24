@@ -180,7 +180,7 @@ Type error: cannot reassign $a from int to string
 
 Shape 1 (`unset()` kill) is unaffected in either mode.
 
-Because a `Span` carries no file identity, elephc cannot always tell apart two DIFFERENT statements that happen to sit at the same line and column — the same position in two different included files, or the same file `require`d twice. When such a collision lands on a retype/kill/mixed-storage decision, `binding_decision_ambiguity.rs` rejects it with `Cannot re-bind $a here: …` instead of silently mis-lowering one of the two sites. It also checks the mixed-storage keys a later scan REMOVED (`retired_mixed_storage_store_sites`): a re-decision drops the decisions filed against the sites it is about to re-decide, matching by `(span, name)`, so one body's scan can strip another body's decision and leave nothing behind to reject. The kill and retype maps are deliberately not given the same treatment — a stripped decision there falls back to the pre-feature lowering path, which is correct, whereas a stripped mixed-storage decision removes the name from `CheckResult::mixed_storage_local_names()` while the checker still types the local `Mixed`.
+Every parsed file instance (each include execution and each autoloaded class file) lexes with its own source identity packed into its spans (see [the lexer](the-lexer.md)), so two statements at the same line and column of DIFFERENT files are distinct decision keys. A key can still name more than one node of one parsed source, and when such a collision lands on a retype/kill/mixed-storage decision, `binding_decision_ambiguity.rs` rejects it with `Cannot re-bind $a here: …` instead of silently mis-lowering one of the two sites. It also checks the mixed-storage keys a later scan REMOVED (`retired_mixed_storage_store_sites`): a re-decision drops the decisions filed against the sites it is about to re-decide, matching by `(span, name)`, so one body's scan can strip another body's decision and leave nothing behind to reject. The kill and retype maps are deliberately not given the same treatment: a stripped decision there falls back to the pre-feature lowering path, which is correct, whereas a stripped mixed-storage decision removes the name from `CheckResult::mixed_storage_local_names()` while the checker still types the local `Mixed`.
 
 `eval()`'d code — whether interpreted by the optional Magician bridge or AOT-lowered from a literal fragment into an EIR scope function — reads and writes its locals through a boxed `Mixed` scope cell rather than a compiled, typed frame slot (see [eval() scope behavior](../php/eval.md#scope-behavior)), so it was never subject to this rule to begin with: `--strict-locals` has no effect inside `eval()` fragments. The body that CALLS `eval()` is the reverse case: because the scope cell is addressed by NAME, shapes 1 and 2 would hand the fragment a slot the rest of the body no longer uses, so `mixed_storage_scan` records a per-body "contains eval" flag (`Checker::body_contains_eval`) and `local_binding_is_killable` refuses both there — body-scoped rather than point-in-time, since `eval_barrier_active` only rises once the walk has PASSED an `eval` and the hazard includes an `eval` below the site. See [`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode) for the CLI flag.
 
@@ -437,6 +437,19 @@ is therefore still `Implementation|false`. Storage operands never qualify, whate
 as null, and the checker has no definite-assignment analysis to rule those out. Inferred returns do
 not qualify either, since a body that falls off its end returns an implicit `null` its inferred
 type omits, and neither do builtin and extern results.
+
+### Buffer merges
+
+**Files:** `src/types/checker/inference/expr/buffer_merges.rs`
+
+A ternary, `?:`, `match` or `??` with an arm that holds a `buffer<T>` is typed by its own rule
+before the joins above: every arm that completes must have that same buffer type, and the merge
+is then that buffer. A `throw` arm is skipped by its shape (it is typed `never` by `infer_type`
+and `null` by the assignment-effects walk), and so are a dead or `null` default of `??` and a
+`null` left operand. Any other arm (another buffer type, `null`, `mixed`, a scalar) is a compile
+error: a buffer has no null and no `mixed` form, and the boxed handle a `mixed` merge would hold
+reads its elements back as null. The EIR merge typing in `src/ir_lower/expr/merge_temps.rs`
+(`shared_buffer_merge_type`) keeps the same handle word for the same arms.
 
 ## User-defined function checking
 
