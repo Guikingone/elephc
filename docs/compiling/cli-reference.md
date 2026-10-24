@@ -589,7 +589,9 @@ compile error:
 - **`unset()` kill.** `unset($a)` KILLS the binding when BOTH the binding's
   creating assignment and the `unset($a)` call itself sit at conditional depth
   0 — each a straight-line statement, not nested inside any
-  `if`/loop/`try`/`switch`/…. The creating assignment can occur anywhere in
+  `if`/loop/`try`/`switch`/…. A `for` loop's initializer counts as a
+  statement at the depth of the `for` itself, since it runs exactly once
+  whenever the loop does. The creating assignment can occur anywhere in
   the body, not only as its first statement; a CONDITIONAL `unset($a)` (one
   itself nested inside a branch or loop) does not kill, since the branch may
   never run. The name must also be never reference-aliased. A later read of a

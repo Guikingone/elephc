@@ -305,6 +305,8 @@ $f(5);         // int(5)
 
 A local is monomorphic by default, but three shapes let it change type anyway. `unset($a)` ends the binding, and the next assignment re-binds `$a` at any type with no diagnostic. A plain straight-line reassignment (`$a = 0; $a = "ciao";`) re-binds `$a` to a fresh slot of the new type and warns. A branch-divergent assignment (`if (…) { $a = 0; } else { $a = "ciao"; }`) compiles the local as boxed `mixed` storage for the whole body and warns — a performance signal as much as a correctness one, since every read of it then goes through the box.
 
+A `for` initializer is straight-line code too: it runs exactly once whenever the loop statement does, so `for ($i = 0; …) { … } $i = "done";` re-binds `$i` with the same warning as `$i = 0; for (; …) { … } $i = "done";`.
+
 One behaviour differs from PHP: reading a variable after `unset()` is a compile error, where PHP warns and evaluates the read as `null`. Probe the name with `isset()` (or `empty()` / `??`), which stay legal on an unbound name:
 
 ```php
