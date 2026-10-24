@@ -301,8 +301,8 @@ fn materialize_mixed_extern_arg(
 /// Converts a `?string` argument into the `char*` the C callee receives.
 ///
 /// A string becomes a call-scoped null-terminated copy and PHP null becomes NULL. A boxed
-/// `string|null` value is decided from its runtime tag: null passes NULL, and anything else is
-/// cast to a string and copied exactly like a `string` argument.
+/// `string|null` value is decided from its runtime tag: null passes NULL, and any other payload
+/// becomes the same call-scoped copy of its string form.
 fn materialize_nullable_cstr_arg(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
@@ -328,14 +328,21 @@ fn materialize_nullable_cstr_arg(
 }
 
 /// Converts a boxed `string|null` argument into NULL for PHP null, or into a call-scoped C
-/// string copy of its string cast for any other payload.
+/// string copy for any other payload.
+///
+/// A boxed string is copied straight from its borrowed payload. `__rt_mixed_cast_string` is
+/// only used for the other payloads a `mixed` value can hold (an int reads as its digits, an
+/// object through `__toString`), and the string it returns is released once copied: the object
+/// arm hands back an owned block the call-scoped cleanup would never see, while the scratch
+/// and static results of the other arms are ignored by `__rt_heap_free_safe`.
 fn materialize_boxed_nullable_cstr_arg(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
 ) -> Result<()> {
     let null_label = ctx.next_label("extern_nullable_cstr_arg_null");
+    let string_label = ctx.next_label("extern_nullable_cstr_arg_string");
     let done_label = ctx.next_label("extern_nullable_cstr_arg_done");
-    // -- a boxed PHP null passes a NULL char* --
+    // -- dispatch on the boxed runtime tag: PHP null passes NULL, a string copies its bytes --
     ctx.load_value_to_result(value)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
@@ -347,11 +354,37 @@ fn materialize_boxed_nullable_cstr_arg(
         }
     }
     abi::emit_branch_if_equal_wide(ctx.emitter, &null_label);
-    // -- any other payload is cast to a string and copied like a string argument --
-    materialize_mixed_extern_arg(ctx, value, &PhpType::Str)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #1");                              // does the boxed ?string argument hold a string payload?
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 1");                              // does the boxed ?string argument hold a string payload?
+        }
+    }
+    abi::emit_branch_if_equal_wide(ctx.emitter, &string_label);
+    // -- any other payload is cast to a string, copied, and the cast result released --
+    load_value_to_first_int_arg(ctx, value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+    let (cast_ptr_reg, _) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, cast_ptr_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_str_to_cstr");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_jump(ctx.emitter, &done_label);
+    // -- a boxed string is copied from its borrowed payload (pointer, length) --
+    ctx.emitter.label(&string_label);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rax, rdi");                                // move the unboxed string pointer into str_to_cstr's input register
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_to_cstr");
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&null_label);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
     ctx.emitter.label(&done_label);
     Ok(())
 }

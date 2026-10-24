@@ -114,6 +114,28 @@ echo elephc_test_nullable_len($missing) . ";" . elephc_test_nullable_len($presen
     assert_eq!(out, "-1;2;2;-1;4");
 }
 
+/// Verifies a `mixed` argument reaches a `?string` parameter as its PHP string form: an int as
+/// its digits, `true` as "1", `false` as "", a string as itself, an object through
+/// `__toString()`, and null as NULL.
+#[test]
+fn test_ffi_extern_nullable_string_param_casts_mixed_payloads() {
+    let out = run_nullable_string_program(
+        r#"
+class Label {
+    public function __toString(): string {
+        return "label";
+    }
+}
+function len_of(mixed $value): int {
+    return elephc_test_nullable_len($value);
+}
+echo len_of(42) . ";" . len_of(true) . ";" . len_of(false) . ";" . len_of("abc") . ";"
+    . len_of(new Label()) . ";" . len_of(null);
+"#,
+    );
+    assert_eq!(out, "2;1;0;3;5;-1");
+}
+
 /// Verifies NULL and non-NULL `?string` arguments mix with a plain `string` parameter in one
 /// call, each landing in its own C argument register.
 #[test]
@@ -192,13 +214,21 @@ var_dump(call_user_func($callback, "dynamic"));
 }
 
 /// Verifies `?string` calls leak nothing: every argument copy is freed after the call, a NULL
-/// argument frees nothing, and every boxed return (string or null) is released with its owner.
-/// The baseline only declares the externs; the variant makes every kind of call inside a
-/// function so its locals are released before the counts are printed.
+/// argument frees nothing, a boxed string or int argument leaves no intermediate string cast
+/// behind (the regression: forwarding a PHP `?string` parameter leaked one string per call),
+/// and every boxed return (string or null) is released with its owner. The baseline only
+/// declares the externs; the variant makes every kind of call inside functions so their locals
+/// are released before the counts are printed.
 #[test]
 fn test_ffi_extern_nullable_string_calls_free_every_copy_and_box() {
     let baseline = run_nullable_string_program_with_gc_stats(
         r#"
+function forward(?string $s): int {
+    return 0;
+}
+function forward_mixed(mixed $value): int {
+    return 0;
+}
 function run_calls(int $n): void {
 }
 run_calls($argc);
@@ -207,7 +237,18 @@ run_calls($argc);
     assert!(baseline.success, "baseline program failed: {}", baseline.stderr);
     let out = run_nullable_string_program_with_gc_stats(
         r#"
+function forward(?string $s): int {
+    return elephc_test_nullable_len($s);
+}
+function forward_mixed(mixed $value): int {
+    return elephc_test_nullable_len($value);
+}
 function run_calls(int $n): void {
+    for ($i = 0; $i < 8; $i++) {
+        forward($n > 0 ? "repeated" : null);
+        forward($n > 5 ? "never" : null);
+        forward_mixed($n);
+    }
     elephc_test_nullable_len(null);
     elephc_test_nullable_len("abc");
     $missing = $n > 5 ? "never" : null;
