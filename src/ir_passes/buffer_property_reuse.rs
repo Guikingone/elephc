@@ -190,7 +190,10 @@ fn same_property_value(function: &Function, facts: &Facts, earlier: InstId, late
     else {
         return false;
     };
-    if first.immediate != second.immediate || !facts.dominates(first_point, second_point) {
+    if first.immediate != second.immediate
+        || first.result_php_type != second.result_php_type
+        || !facts.dominates(first_point, second_point)
+    {
         return false;
     }
     let Some(receivers) = match_operands(function, facts, first.operands[0], second.operands[0])
