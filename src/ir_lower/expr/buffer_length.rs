@@ -6,23 +6,26 @@
 //!
 //! Key details:
 //! - An `int` length passes through unchanged. A boxed `mixed` / `int|float` length (checked int
-//!   arithmetic such as `$n + 1` produces one) that holds an int is unboxed exactly.
-//! - Any other length converts both to int and to float with PHP's conversions, and the int count
-//!   is used only when it converts back to the same float and is not `PHP_INT_MAX`, where PHP's
-//!   numeric-string conversion saturates. A fraction, NaN, infinity, or a value outside the int
-//!   range becomes `-1`, which `__rt_buffer_new` rejects with its length diagnostic on every
-//!   target.
+//!   arithmetic such as `$n + 1` produces one) dispatches on its runtime tag: an int payload is
+//!   unboxed exactly, a float payload is truncated with the silent `FToI`, and any other payload
+//!   converts both to int and to float with PHP's conversions.
+//! - A count is used only when it converts back to the same float and is not `PHP_INT_MAX`,
+//!   where PHP's numeric-string conversion saturates. A fraction, NaN, infinity, or a value
+//!   outside the int range becomes `-1`, which `__rt_buffer_new` rejects with its length
+//!   diagnostic on every target.
+//! - Each path converts only the representation it runs with, so no conversion raises a PHP cast
+//!   warning even after EIR passes narrow the boxed producer to a raw `int` or `float` (checked
+//!   arithmetic over constants folds to a raw float constant, for which a `Cast` to int warns).
 //! - Counts stay exact at every magnitude: a zero-size packed element has stride 0, so any
 //!   non-negative count allocates and `buffer_len()` would show a rounded one.
 
 use super::*;
+use crate::ir::PhpTypePredicate;
 
 /// Lowers a `buffer_new<T>()` length to an `I64` element count.
 ///
-/// A boxed length dispatches on its runtime tag: an int payload is converted directly, anything
-/// else goes through the whole-number check of `select_checked_count`. A raw float uses `FToI`,
-/// which raises no cast warning. The owning boxed temporary, if any, is released once every
-/// conversion has read it.
+/// The owning boxed temporary, if any, is released once at the join, after every conversion on
+/// the taken path has read it.
 pub(super) fn lower_buffer_length(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -36,50 +39,60 @@ pub(super) fn lower_buffer_length(
     let selected = ctx
         .builder
         .create_named_block("buffer.length", vec![(IrType::I64, PhpType::Int)]);
-    if matches!(value.ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)) {
-        let is_int = ctx.emit_value(
-            Op::TypePredicate,
-            vec![value.value],
-            Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Int)),
-            PhpType::Bool,
-            Op::TypePredicate.default_effects(),
-            Some(span),
-        );
-        let int_payload = ctx.builder.create_named_block("buffer.length.int", Vec::new());
-        let other_payload = ctx.builder.create_named_block("buffer.length.convert", Vec::new());
-        ctx.builder.terminate(Terminator::CondBr {
-            cond: is_int.value,
-            then_target: int_payload,
-            then_args: Vec::new(),
-            else_target: other_payload,
-            else_args: Vec::new(),
-        });
-        ctx.builder.position_at_end(int_payload);
-        let count = emit_cast(ctx, value, IrType::I64, PhpType::Int, span);
-        ctx.builder.terminate(Terminator::Br { target: selected, args: vec![count.value] });
-        ctx.builder.position_at_end(other_payload);
-    }
-    let (truncated, float) = if value.ir_type == IrType::F64 {
-        let truncated = ctx.emit_value(
-            Op::FToI,
-            vec![value.value],
-            None,
-            PhpType::Int,
-            Op::FToI.default_effects(),
-            Some(span),
-        );
-        (truncated, value)
+    if value.ir_type == IrType::F64 {
+        select_float_count(ctx, value, selected, span);
     } else {
+        if matches!(value.ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)) {
+            let not_int = branch_on_payload(ctx, value, PhpTypePredicate::Int, "int", span);
+            let count = emit_cast(ctx, value, IrType::I64, PhpType::Int, span);
+            ctx.builder.terminate(Terminator::Br { target: selected, args: vec![count.value] });
+            ctx.builder.position_at_end(not_int);
+            let other = branch_on_payload(ctx, value, PhpTypePredicate::Float, "float", span);
+            let float = emit_cast(ctx, value, IrType::F64, PhpType::Float, span);
+            select_float_count(ctx, float, selected, span);
+            ctx.builder.position_at_end(other);
+        }
         let truncated = emit_cast(ctx, value, IrType::I64, PhpType::Int, span);
-        (truncated, emit_cast(ctx, value, IrType::F64, PhpType::Float, span))
-    };
-    select_checked_count(ctx, truncated, float, selected, span);
+        let float = emit_cast(ctx, value, IrType::F64, PhpType::Float, span);
+        select_checked_count(ctx, truncated, float, selected, span);
+    }
     ctx.builder.position_at_end(selected);
     release_coerced_source_if_owned(ctx, value, Some(span));
     LoweredValue { value: ctx.builder.block_param(selected, 0), ir_type: IrType::I64 }
 }
 
-/// Emits a PHP scalar `Cast` of `value` without releasing it, so both conversions can read it.
+/// Branches on a runtime type test of `value` and positions the builder in the matching block.
+///
+/// Returns the block for every other payload, which the caller positions at when it is done.
+fn branch_on_payload(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    predicate: PhpTypePredicate,
+    name: &str,
+    span: Span,
+) -> BlockId {
+    let is_payload = ctx.emit_value(
+        Op::TypePredicate,
+        vec![value.value],
+        Some(Immediate::TypePredicate(predicate)),
+        PhpType::Bool,
+        Op::TypePredicate.default_effects(),
+        Some(span),
+    );
+    let payload = ctx.builder.create_named_block(format!("buffer.length.{name}"), Vec::new());
+    let other = ctx.builder.create_named_block(format!("buffer.length.not_{name}"), Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_payload.value,
+        then_target: payload,
+        then_args: Vec::new(),
+        else_target: other,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(payload);
+    other
+}
+
+/// Emits a PHP scalar `Cast` of `value` without releasing it, so several conversions can read it.
 fn emit_cast(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -95,6 +108,24 @@ fn emit_cast(
         Op::Cast.default_effects(),
         Some(span),
     )
+}
+
+/// Truncates a raw float with the silent `FToI` and selects it when it is the float's whole count.
+fn select_float_count(
+    ctx: &mut LoweringContext<'_, '_>,
+    float: LoweredValue,
+    selected: BlockId,
+    span: Span,
+) {
+    let truncated = ctx.emit_value(
+        Op::FToI,
+        vec![float.value],
+        None,
+        PhpType::Int,
+        Op::FToI.default_effects(),
+        Some(span),
+    );
+    select_checked_count(ctx, truncated, float, selected, span);
 }
 
 /// Branches to `selected` with `truncated` when it is the whole count `float` names, else with -1.

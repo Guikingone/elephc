@@ -997,6 +997,37 @@ echo "allocated ", buffer_len($b);
     );
 }
 
+/// Regression for task f9ea1d1e: with `--ir-opt`, checked arithmetic over operands the EIR passes
+/// fold to constants becomes a raw float constant, and an int `Cast` of a raw float raises PHP's
+/// "not representable" warning. The length conversion must stay silent on that path too, so the
+/// overflowed `2^62 * 4` reaches the length fatal instead of a throwing error handler, with and
+/// without the optimizer.
+#[test]
+fn test_buffer_new_folded_overflow_length_is_fatal_without_cast_warning() {
+    let source = r#"<?php
+set_error_handler(function ($level, $message) {
+    throw new Exception("warning: " . $message);
+});
+try {
+    $b = buffer_new<int>((($argc & 0) | (1 << 62)) * 4);
+    echo "allocated ", buffer_len($b);
+} catch (Exception $e) {
+    echo $e->getMessage();
+}
+"#;
+    for err in [
+        compile_and_run_expect_failure(source),
+        without_ir_opt(|| compile_and_run_expect_failure(source)),
+    ] {
+        assert!(
+            err.contains("buffer_new() length is negative or exceeds the maximum buffer size"),
+            "{}",
+            err
+        );
+        assert!(!err.contains("not representable"), "{}", err);
+    }
+}
+
 /// Regression for task f9ea1d1e: converting a boxed arithmetic length releases the box, so sizing
 /// a buffer with `$n * 2 + 1` on every iteration leaves a clean heap once each buffer is freed.
 #[test]

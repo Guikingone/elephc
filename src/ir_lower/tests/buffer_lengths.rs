@@ -6,8 +6,8 @@
 //!
 //! Key details:
 //! - An `int` length reaches `buffer_new` directly, with no conversion.
-//! - A `mixed` length from checked int arithmetic dispatches on its runtime int tag, converts a
-//!   non-int payload to int and to float for the whole-number check, and reaches `buffer_new` as
+//! - A `mixed` length from checked int arithmetic dispatches on its runtime tag (int, float,
+//!   other), checks a non-int payload for a whole-number round trip, and reaches `buffer_new` as
 //!   the parameter of the block that selects the count.
 
 use crate::ir::{Function, Module, Op, ValueDef};
@@ -64,7 +64,7 @@ echo direct(2), computed(2);
         matches!(length_definition(computed), ValueDef::BlockParam { .. }),
         "a mixed length must reach buffer_new through the whole-number selection"
     );
-    for op in [Op::TypePredicate, Op::Cast, Op::IToF, Op::FCmp, Op::ICmp] {
+    for op in [Op::TypePredicate, Op::Cast, Op::FToI, Op::IToF, Op::FCmp, Op::ICmp] {
         assert!(has_op(computed, op), "the mixed length conversion is missing {op:?}");
     }
 }
