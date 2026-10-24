@@ -449,6 +449,49 @@ fn test_pcntl_signal_mask_round_trip() {
     assert_eq!(out, "blocked|array|restored");
 }
 
+/// Catching a PHP exception preserves signal-mask changes made inside the protected body.
+#[test]
+fn test_pcntl_exception_boundary_preserves_signal_mask_changes() {
+    let out = compile_and_run(r#"<?php
+        $original = [];
+        pcntl_sigprocmask(SIG_BLOCK, [SIGUSR1], $original);
+        try {
+            pcntl_sigprocmask(SIG_UNBLOCK, [SIGUSR1]);
+            throw new RuntimeException('body');
+        } catch (RuntimeException $error) {
+            $current = [];
+            pcntl_sigprocmask(SIG_BLOCK, [], $current);
+            echo $error->getMessage(), ':', in_array(SIGUSR1, $current) ? 'blocked' : 'clear';
+        }
+        pcntl_sigprocmask(SIG_SETMASK, $original);
+    "#);
+    assert_eq!(out, "body:clear");
+}
+
+/// Protected object cleanup preserves deliberate mask changes while propagating a destructor throw.
+#[test]
+fn test_pcntl_cleanup_boundary_preserves_signal_mask_changes() {
+    let out = compile_and_run(r#"<?php
+        class MaskChangingCleanup {
+            public function __destruct() {
+                pcntl_sigprocmask(SIG_UNBLOCK, [SIGUSR1]);
+                throw new RuntimeException('cleanup');
+            }
+        }
+        $original = [];
+        pcntl_sigprocmask(SIG_BLOCK, [SIGUSR1], $original);
+        $values = [new MaskChangingCleanup()];
+        try { unset($values); }
+        catch (RuntimeException $error) {
+            $current = [];
+            pcntl_sigprocmask(SIG_BLOCK, [], $current);
+            echo $error->getMessage(), ':', in_array(SIGUSR1, $current) ? 'blocked' : 'clear';
+        }
+        pcntl_sigprocmask(SIG_SETMASK, $original);
+    "#);
+    assert_eq!(out, "cleanup:clear");
+}
+
 /// Coerces numeric strings and ignores associative keys in literal PCNTL signal sets.
 #[test]
 fn test_pcntl_signal_masks_accept_php_coercible_literal_arrays() {
