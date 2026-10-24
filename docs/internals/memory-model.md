@@ -49,6 +49,8 @@ This page explains where every value lives in memory at runtime.
 │                              │  _rt_diag_suppression, _rt_diag_pending_*,
 │                              │  _php_diagnostic_*,
 │                              │  _rt_unmanaged_ref_borrow_top,
+│                              │  _obj_handle_index, _obj_handle_free/_top,
+│                              │  _obj_weak_reference_index,
 │                              │  _resource_inventory_head/_tail,
 │                              │  _json_last_error, _json_active_*,
 │                              │  _json_indent_depth, _json_validate_*,
@@ -96,9 +98,24 @@ Each function has a stack frame. The [code generator](the-codegen.md) calculates
 
 On the EIR backend the frame also reserves one save slot per callee-saved register that the linear-scan register allocator uses. Eligible scalar PHP locals are promoted to SSA values, so their repeated loads and stores can disappear and loop-carried values can live in registers. The frame still reserves local slots, and address-taken, by-reference, global/static, refcounted, and volatile locals continue to use them. See [The IR](the-ir.md) for scalar promotion and register allocation.
 
+### Frame-local numeric cells
+
+Checked integer add/subtract/multiply results may use a 24-byte `mixed` cell in
+the current stack frame when codegen proves the entire lifetime cannot escape.
+The cell has the ordinary runtime tag and payload but no heap header, and it
+must never reach a heap release or outlive its producing activation. Its
+overflow branch computes the operation's float result from the original
+operands. References, `eval`, suspension, delayed reads and unknown consumers
+retain ordinary heap storage. See
+[Frame-local checked numeric cells](the-codegen.md#frame-local-checked-numeric-cells).
+
 ### Variable allocation
 
-Variables are allocated stack slots when the [code generator](the-codegen.md) scans the function body (`collect_local_vars`). The allocation is determined at compile time — there's no dynamic stack growth.
+EIR lowering declares PHP locals and hidden temporary slots before codegen.
+`src/codegen/frame.rs::layout_for_function()` then assigns their fixed offsets
+from the EIR metadata, alongside SSA backing slots, frame-local numeric cells
+and saved registers. The allocation is determined at compile time; there is no
+dynamic stack growth for these slots.
 
 For heap-backed values, stack slots also carry compile-time ownership metadata in codegen: `Owned`, `Borrowed`, `MaybeOwned`, or `NonHeap`. This metadata is not stored in the generated binary; it only guides when codegen must retain a borrowed heap value before storing it into a new owner, and which local aliases must not be blindly decreffed yet.
 
@@ -111,7 +128,7 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 | `Array` | 8 bytes | Pointer to heap-allocated header |
 | `AssocArray` | 8 bytes | Pointer to heap-allocated hash table |
 | `Iterable` | 8 bytes | Type-erased heap pointer for arrays or Traversable objects |
-| `Mixed` | 8 bytes | Pointer to heap-allocated boxed mixed cell |
+| `Mixed` | 8 bytes | Pointer to a boxed Mixed cell, normally heap-allocated |
 | `Void` (null) | 8 bytes | Sentinel value `0x7FFFFFFFFFFFFFFE` |
 | `Object` | 8 bytes | Pointer to heap-allocated object |
 | `Callable` | 8 bytes | Function pointer |
@@ -121,6 +138,51 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 | `Packed` | 8 bytes | Metadata-only nominal type, accessed via pointer |
 | `Union` | 8 bytes | Boxed runtime-tagged payload (same storage as Mixed) |
 | `TaggedScalar` | 16 bytes | 8-byte payload + 8-byte runtime tag (tagged null representation) |
+
+### Nonescaping checked numeric results
+
+Checked integer add, subtract and multiply can use a 24-byte cell reserved in the
+current function's frame. The cell retains the ordinary Mixed tag and two payload
+words. Overflow converts both original integers to double and writes a float tag;
+the optimization does not narrow the arithmetic domain or replace promotion with
+a fatal error. Frame sizing and instruction emission support all five targets.
+
+Transient producers in one block may reuse a cell after its last payload read,
+including reads through transparent ownership copies. A numeric emitter reads
+both inputs before writing its result, allowing reuse at that boundary. Values
+stored in any local retain dedicated cells, and different blocks do not share.
+This limits additional stack use to simultaneously live transient values instead
+of the total number of operations in a long expression.
+
+`src/codegen/stack_numeric.rs` proves the complete use graph before frame layout.
+Only same-block scalar observations, closed numeric producers, ownership
+scaffolding and one ordinary local or owned operand slot may consume a selected
+pointer. Declared integer returns copy the payload and retain their type check.
+Every access to the owning slot must preserve the numeric storage contract. A
+borrowed pointer must be converted before that slot is stored or released, or any
+producer that can back it executes again. Independent cells may intervene.
+Published operand slots require one same-block store, balanced owner records and
+final retirement. Their cleanup records remain intact when a property read can
+throw, and the dispatcher rejects frame addresses. Returns of the cell,
+pointer-valued block arguments, a second
+local, container stores and unknown consumers retain heap storage. Parameters,
+globals, statics, references, eval storage and suspended activations do not receive
+this local storage optimization. Private slots in the executable main frame use
+the same complete lifetime proof; global-visible values still retain heap storage.
+
+Loop-carried numeric slots are lowered with their final Mixed representation from
+entry, including arithmetic results copied through another local. Closed numeric
+add/subtract/multiply and increment inputs preserve an existing float tag on later
+iterations. Counters retain scalar lowering only after a discarded SSA/range trial
+proves every update safe; mutually observed counters are proved together, and nested
+loop invariants are simplified before the range check. Unknown aliases and dynamic
+scope access reject the proof.
+
+These frame cells have no heap header and cannot own children. Proven retains and
+releases of their SSA pointers emit no refcount calls. A selected local may still
+hold a numeric heap seed; its direct Mixed cleanup releases that seed and ignores
+frame addresses through the runtime's existing heap-range check. This avoids a
+protected destructor callback for values that cannot execute PHP cleanup code.
 
 ### Eval subclass property storage
 
@@ -255,6 +317,29 @@ Generator switches replace the active value with their guarded-stack floor and
 restore the main value on return. Reaching the floor raises the compiler's
 maximum-call-stack fatal instead of falling through to a raw guard-page fault.
 
+String offset reads return a borrowed one-byte view into their receiver. If the receiver is an
+owned temporary, EIR lowering acquires the selected byte before releasing the receiver, so a
+property, array element, or call result can be indexed without leaving a dangling view.
+A byte needed after another expression is materialized before that expression runs, so
+replacing the source cannot invalidate a pending key, comparison, dispatch, or call operand.
+When acquiring or persisting a present byte view, the backend stages that byte on the stack
+before calling the string helper. This prevents preceding payload bytes from masquerading as
+a transferable concat allocation header. Empty and missing views bypass byte staging so the
+string helper preserves its sentinel behavior.
+For a byte selected from a heap-backed concat temporary, acquisition copies that byte
+independently and the receiver release frees the concat block only while it still carries
+`CONCAT_TEMP_HEAP_KIND`. A full-string store that already adopted and retagged the block
+keeps its owner. Explicit yielded keys are boxed before their temporary byte owner retires;
+the resulting single-use Mixed box transfers into the generator before suspension.
+Silent `empty()` string probes use PHP string truthiness, including the one-byte string `"0"`.
+
+Pending concat operands and computed array keys are published across an operand window when
+its EIR effects include a catchable throw or a warning that can call a throwing user error
+handler, or the window contains a direct throw terminator. Lowering
+first discovers those effects, then persists fresh transient strings and places the owner
+records before the window, retiring them after the consumer. This covers whole strings as well as persisted byte views;
+non-throwing scalar windows introduce no owner slots that could inhibit integer sinking or CSE.
+
 ## The string buffer (scratch pad)
 
 ```asm
@@ -296,9 +381,19 @@ When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the code
 - **The buffer can safely reset** without invalidating stored values
 - **Hash table keys** are also persisted to heap (via `str_persist`)
 
+Transient adoption accepts only an exact live allocation base. The allocator records each
+8-byte payload granule in `_heap_live_bases`, a bitmap using one byte per 64 heap bytes.
+Allocation sets the base bit, free clears it before reuse or coalescing, and web arena reset
+clears the used bitmap range before resetting `_heap_off`. The probe checks alignment, range,
+the complete transient kind and the live-base bit in constant time. User-controlled bytes
+before an interior substring cannot impersonate a heap header, and unrelated heap blocks
+never need to be scanned.
+
 ### Outgrowing the buffer
 
 64KB is where results *prefer* to live, not a ceiling on how large one can be. Every runtime producer reserves its destination through `__rt_concat_reserve`, which hands back scratch while the result still fits and an owned heap block when it does not; `__rt_concat_publish` then advances `_concat_off` only for the scratch case, deciding which it was from the pointer's own address rather than a flag. A producer whose size is not known until it has run — `implode()`, `stream_get_contents()` — starts in scratch and moves the bytes it has already written into a larger owned block with `__rt_concat_grow` when the next piece no longer fits.
+
+A `.` result (and the `__rt_concat_grow` producers) that outgrows the buffer is stamped `CONCAT_TEMP_HEAP_KIND` instead of heap kind 1: like a scratch slice it has no owner that frees it, and the first consumer that persists it, a store or an `Acquire`, adopts the block in place by retagging it as an owned string rather than copying it, which is what keeps `$s .= ...` from duplicating a large accumulator on every append. That takeover is only safe while nothing else will release the same block. A user function that may return its argument hands the block back as its call result, an owning temporary the caller releases, so before such a call the caller claims a fresh transient argument (a `.`, interpolation or scalar-to-string result, never a builtin view such as `substr($s, 0)` or `$s[0]`, which points into a live string) with `EnsureOwned` (`__rt_str_claim`): the block is retagged as owned without a copy, every later persist duplicates it, and the argument is released after the call unless the callee returned it (`ReleaseUnlessAliases`). Without the claim, `$x = id($big . "b")` stored a block that the release of the call result then freed.
 
 This is a bounds check, not an optimization. A producer that skips it writes straight past `_concat_buf` into the adjacent BSS globals, which corrupts data silently in a CLI program and faults in a `--web` worker, at a size no `--heap-size` can change — `_concat_buf` is a fixed array. `implode()` was the last one still doing that (issue #515).
 
@@ -1013,6 +1108,7 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_rt_diag_suppression`, `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — runtime warning suppression depth and warning strings used by `@`
 - `_resource_id_prefix` — prefix used by resource display helpers
 - `_obj_handle_index`, `_obj_handle_free`, `_obj_handle_free_top` — direct heap-granule-to-object-handle index plus the LIFO pool of reusable PHP object handles
+- `_obj_weak_reference_index` - one non-owning wrapper pointer per 16-byte heap granule, cleared before referent or wrapper reuse; `_weak_map_key_retire_fn` selects the live WeakMap retirement callback, and `_weak_reference_class_id` / `_weak_map_class_id` identify the emitted classes
 - `_web_heap_guard_enabled` — enables per-request live-block accounting for persistent `--web` workers
 - `_resource_id_keys`, `_resource_id_vals` — open-addressed native-resource-to-PHP-id map; resource ids and object handles deliberately use separate numbering spaces
 - `_vd_indent`, `_vd_seen`, `_vd_seen_n` — current `var_dump()` indentation and its bounded recursion-detection stack
@@ -1188,6 +1284,7 @@ read the same uniform heap header, including on the iOS targets.
 | Eval bridge hook slots | `_elephc_eval_ob_handler_fn`, `_elephc_eval_dynamic_object_destruct_fn`, `_elephc_eval_closure_bind_fn`, `_elephc_eval_wrap_callback_fn`, `_elephc_eval_object_gc_child_fn`, `_elephc_eval_object_release_fn`, `_elephc_eval_array_reference_retire_fn`, `_elephc_eval_object_clone_fn` = 8 bytes each | Late-bound Magician callbacks for eval-managed handlers, closures, callbacks, objects, references, and cloning |
 | Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
 | Heap and GC metadata | `_heap_off`, `_heap_free_list`, `_heap_debug_enabled`, `_heap_max`, and each `_gc_*` flag, counter, pointer, or timer = 8 bytes each; `_heap_small_bins` = 32 bytes | Fixed-size allocator, cycle-collector, destructor, pin, and timing bookkeeping |
+| Weak-reference identity index | `_obj_weak_reference_index` = `(heap_size / 16 + 2) * 8` bytes, or 4 MiB plus 16 bytes for the default 8 MiB heap | One non-owning wrapper pointer per heap granule; it neither keeps keys alive nor acts as a collector root |
 | Buffer descriptors | `_buffer_registry` = 196656 bytes (4097 descriptors × 48 bytes), `_buffer_registry_free` = 8 bytes, `_buffer_registry_next` = 8 bytes | Up to 4096 live buffers; freed descriptors are recycled with a new generation, while exhaustion aborts with `Fatal error: buffer registry exhausted` (an invalid requested size aborts earlier with `Fatal error: buffer_new() length is negative or exceeds the maximum buffer size`) |
 | Exception and user-handler state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_magic_set_guard_head`, and every `_php_error_handler_*` / `_php_exception_handler_*` slot = 8 bytes each | Active exception state and current user handlers; nested handler registrations use heap-backed linked stacks |
 | Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame`, `_fiber_main_saved_magic_set_guard` = 40 bytes total | Current-fiber and main-frame resume bookkeeping, including the magic-set recursion guard |

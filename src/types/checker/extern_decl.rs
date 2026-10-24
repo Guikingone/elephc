@@ -80,7 +80,8 @@ impl Checker {
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)
-                | PhpType::Packed(_) => {
+                | PhpType::Packed(_)
+                | PhpType::Narrow(_) => {
                     return Err(CompileError::new(
                         span,
                         &format!("Unsupported extern parameter type in {}()", name),
@@ -116,8 +117,8 @@ impl Checker {
 
     /// Validates an extern class field declaration's C type.
     ///
-    /// Rejects `void`, `callable`, and explicit C widths (`i8`..`u64`, `f32`) on extern fields
-    /// (fields are still laid out as 8-byte slots); all other C types are permitted.
+    /// Rejects `void` and `callable`, which have no struct layout; every other extern type,
+    /// including the explicit C widths (`i8` to `u64`, `f32`), is laid out naturally.
     ///
     /// Inputs:
     /// - `class_name`: class name for error messages.
@@ -129,15 +130,6 @@ impl Checker {
         field: &crate::parser::ast::ExternField,
         span: crate::span::Span,
     ) -> Result<(), CompileError> {
-        if matches!(field.c_type, CType::IntWidth(_) | CType::F32) {
-            return Err(CompileError::new(
-                span,
-                &format!(
-                    "Extern class '{}' field ${} uses an explicit C width; extern class fields support int, float, bool, string, ptr, and ptr<T> only",
-                    class_name, field.name
-                ),
-            ));
-        }
         if matches!(field.c_type, CType::Void | CType::Callable) {
             return Err(CompileError::new(
                 span,

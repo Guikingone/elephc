@@ -50,6 +50,7 @@ fn lower_property_array_push_value(
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         let data = ctx.intern_string(property);
         let property_value = ctx.emit_value(
             Op::PropGet,
@@ -245,9 +246,36 @@ fn lower_property_array_assign_value(
         );
         return;
     }
+    if let Some(property_ty) = object_property_type(ctx, object.value, property)
+        .filter(|ty| matches!(ty.codegen_repr(), PhpType::Buffer(_)))
+    {
+        let data = ctx.intern_string(property);
+        let property_value = ctx.emit_value(
+            Op::PropGet,
+            vec![object.value],
+            Some(Immediate::Data(data)),
+            property_ty.clone(),
+            Op::PropGet.default_effects(),
+            Some(span),
+        );
+        let property_value =
+            crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
+        let index = coerce_to_int_at_span(ctx, index, Some(span));
+        let value = coerce_buffer_set_value(ctx, &property_ty, value, Some(span));
+        ctx.emit_void(
+            Op::BufferSet,
+            vec![property_value.value, index.value, value.value],
+            None,
+            Op::BufferSet.default_effects(),
+            Some(span),
+        );
+        crate::ir_lower::ownership::release_if_owned(ctx, property_value, Some(span));
+        return;
+    }
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         let data = ctx.intern_string(property);
         let property_value = ctx.emit_value(
             Op::PropGet,
@@ -292,6 +320,7 @@ fn lower_property_array_assign_value(
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_assoc_array_type)
     {
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         let data = ctx.intern_string(property);
         let property_value = ctx.emit_value(
             Op::PropGet,

@@ -67,8 +67,38 @@ pub(super) fn lower_arg_with_signature(
     if let Some(lowered) = lower_tracked_callable_array_param(ctx, sig, index, arg) {
         return lowered.value;
     }
-    let lowered = lower_expr(ctx, arg);
+    let lowered = match sig.params.get(index) {
+        Some((_, param_ty)) => lower_expr_for_destination(ctx, arg, param_ty),
+        None => lower_expr(ctx, arg),
+    };
+    record_pointer_reference_argument(ctx, sig, index, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+}
+
+/// Records a local passed to a pointer by-reference parameter for the final storage check.
+fn record_pointer_reference_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) {
+    if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return;
+    }
+    let Some((_, param_ty)) = sig.params.get(index) else {
+        return;
+    };
+    if !matches!(param_ty.codegen_repr(), PhpType::Pointer(_)) {
+        return;
+    }
+    // `@$x` and `p: $x` still bind `$x`'s own storage.
+    let mut place = arg;
+    while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &place.kind {
+        place = value;
+    }
+    if let ExprKind::Variable(name) = &place.kind {
+        ctx.record_pointer_reference_binding(name, place.span, param_ty);
+    }
 }
 
 /// Captures a by-value runtime-parser argument while preserving by-reference places.

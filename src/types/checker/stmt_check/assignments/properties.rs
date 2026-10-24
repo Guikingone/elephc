@@ -53,7 +53,7 @@ pub(super) fn check_property_assign(
     if matches!(obj_ty.codegen_repr(), PhpType::Mixed) {
         scope_dynamic_storage::record_scope_dynamic_mixed_receiver_mutation(checker, property);
     }
-    if let PhpType::Pointer(Some(class_name)) = &obj_ty {
+    if let PhpType::Pointer(Some(class_name)) | PhpType::Packed(class_name) = &obj_ty {
         check_pointer_property_write(checker, class_name, property, &val_ty, span)?;
     }
     Ok(())
@@ -195,9 +195,9 @@ fn refuse_scope_dynamic_element_write(
 /// Type-checks an indexed property array assignment (`$obj->prop[$index] = value`).
 ///
 /// Infers object, index, and value types. Validates array key types and property mutability.
-/// For `PhpType::Object`, handles both `Array` and `AssocArray` storage, merging element types
-/// when the property lacks a declared type. For `PhpType::Pointer`, requires integer indexing
-/// and that the field is an array type.
+/// For `PhpType::Object`, handles array storage and buffer element validation, merging array
+/// element types when the property lacks a declared type. For `PhpType::Pointer`, requires
+/// integer indexing and that the field is an array type.
 pub(super) fn check_property_array_assign(
     checker: &mut Checker,
     object: &Expr,
@@ -230,6 +230,10 @@ pub(super) fn check_property_array_assign(
                 if checker.object_type_implements_interface(prop_class_name, "ArrayAccess") {
                     return Ok(());
                 }
+            }
+            if let PhpType::Buffer(elem_ty) = &prop_ty {
+                super::arrays::validate_buffer_element_write(elem_ty, &idx_ty, &val_ty, span)?;
+                return Ok(());
             }
             if !is_php_array_key_type(&normalized_idx_ty) {
                 return Err(CompileError::new(span, "Array index must be integer"));
@@ -732,6 +736,27 @@ fn merge_associative_property_slot_type(
     }
 }
 
+/// Returns whether a value of `val_ty` can be stored into an extern class field of `field_ty`.
+///
+/// Integer fields of every width take an `int` (narrow widths keep its low bits, as C would),
+/// and also the `mixed` or `int|float` result of integer arithmetic, which lowering narrows with
+/// a strict runtime check exactly like a packed `int` field;
+/// float fields of either width also take an `int`, converted like PHP's int-to-float coercion;
+/// `bool` fields take a bool; pointer fields take any pointer or `null`; `string` fields take a
+/// string, copied into a fresh null-terminated buffer the struct then owns.
+fn extern_field_accepts(field_ty: &PhpType, val_ty: &PhpType) -> bool {
+    match field_ty {
+        PhpType::Int => {
+            matches!(val_ty, PhpType::Int | PhpType::Mixed) || val_ty.is_int_float_union()
+        }
+        PhpType::Float => matches!(val_ty, PhpType::Float | PhpType::Int),
+        PhpType::Bool => matches!(val_ty, PhpType::Bool | PhpType::False),
+        PhpType::Pointer(_) => matches!(val_ty, PhpType::Pointer(_) | PhpType::Void),
+        PhpType::Str => matches!(val_ty, PhpType::Str),
+        _ => false,
+    }
+}
+
 /// Validates a write to a property of a typed pointer (extern or packed class).
 ///
 /// Checks that the field exists in `extern_field_type` or `packed_field_type` and that the
@@ -744,12 +769,30 @@ fn check_pointer_property_write(
     span: Span,
 ) -> Result<(), CompileError> {
     if let Some(field_ty) = checker.extern_field_type(class_name, property) {
-        if field_ty == PhpType::Int && val_ty != &PhpType::Int {
+        if !extern_field_accepts(&field_ty, val_ty) {
             return Err(CompileError::new(
                 span,
                 &format!(
                     "Type error: cannot assign {:?} to extern field {}::{} of type {:?}",
                     val_ty, class_name, property, field_ty
+                ),
+            ));
+        }
+    } else if let Some(PhpType::Packed(inner)) = checker.packed_field_type(class_name, property) {
+        // A nested record field is assigned as a whole by copying the source record's bytes,
+        // so the value must be the address of a record of the SAME packed class: a buffer
+        // element, another nested field, or a `ptr<Inner>`.
+        let same_record = matches!(
+            val_ty,
+            PhpType::Pointer(Some(source)) | PhpType::Packed(source)
+                if source.trim_start_matches('\\').eq_ignore_ascii_case(inner.trim_start_matches('\\'))
+        );
+        if !same_record {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Type error: cannot assign {} to packed field {}::{} of type {}; a nested packed field takes a {} record",
+                    val_ty, class_name, property, inner, inner
                 ),
             ));
         }

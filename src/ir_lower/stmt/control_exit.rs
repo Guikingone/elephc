@@ -395,6 +395,13 @@ fn acquire_and_return_reference_cell(
 
 /// Lowers a return expression with contextual array-literal element storage when available.
 pub(super) fn lower_return_expr(ctx: &mut LoweringContext<'_, '_>, value_expr: &Expr) -> LoweredValue {
+    // A pointer-array return keeps pointer words whatever the returned expression builds.
+    if !ctx.by_ref_return
+        && crate::ir_lower::expr::is_pointer_array_destination(&ctx.return_php_type)
+    {
+        let return_ty = ctx.return_php_type.clone();
+        return crate::ir_lower::expr::lower_expr_for_destination(ctx, value_expr, &return_ty);
+    }
     if matches!(value_expr.kind, ExprKind::ArrayLiteral(_)) {
         if let PhpType::Array(elem_ty) = ctx.return_php_type.codegen_repr() {
             return lower_array_literal_with_expected_type(ctx, value_expr, *elem_ty);

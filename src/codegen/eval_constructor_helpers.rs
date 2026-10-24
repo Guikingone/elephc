@@ -292,8 +292,10 @@ fn constructor_signature_supported(sig: &FunctionSig) -> bool {
 }
 
 /// Returns true for one constructor argument type supported by the bridge.
+///
+/// A `?ptr<T>` argument is cast like an int: PHP null becomes address 0.
 fn constructor_param_supported(ty: &PhpType) -> bool {
-    matches!(
+    crate::types::is_nullable_pointer_type(ty) || matches!(
         ty.codegen_repr(),
         PhpType::Int
             | PhpType::Bool
@@ -1425,7 +1427,7 @@ fn emit_aarch64_cast_eval_arg(
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
     }
     match param_ty.codegen_repr() {
-        PhpType::Int => {
+        PhpType::Int | PhpType::Pointer(_) => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for integer coercion
             emitter.instruction("bl __rt_mixed_cast_int");                      // coerce the eval argument to a PHP int
         }
@@ -1590,7 +1592,7 @@ fn emit_x86_64_cast_eval_arg(
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
     }
     match param_ty.codegen_repr() {
-        PhpType::Int => {
+        PhpType::Int | PhpType::Pointer(_) => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for integer coercion
             emitter.instruction("call __rt_mixed_cast_int");                    // coerce the eval argument to a PHP int
         }

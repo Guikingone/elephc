@@ -159,7 +159,7 @@ pub(super) fn lower_static_method_call(
     // be declared with the exact type the call is emitted with.
     let result_type = sig
         .as_ref()
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
         .unwrap_or_else(|| {
             if ctx.has_eval_barrier() && matches!(receiver, StaticReceiver::Named(_)) {
                 PhpType::Mixed
@@ -370,7 +370,7 @@ pub(super) fn lower_static_method_descriptor_call(
         .map(crate::codegen::callable_dispatch::static_method_runtime_wrapper_sig);
     let result_type = sig
         .as_ref()
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
         .unwrap_or_else(|| fallback_expr_type(expr));
     let target = CallableTarget::StaticMethod {
         receiver: receiver.clone(),
@@ -407,7 +407,7 @@ pub(super) fn lower_static_method_descriptor_value_call(
     let sig = static_method_implementation_signature(ctx, receiver, method).cloned();
     let result_type = sig
         .as_ref()
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
         .unwrap_or_else(|| fallback_expr_type(expr));
     let target = CallableTarget::StaticMethod {
         receiver: receiver.clone(),
@@ -524,7 +524,7 @@ pub(in crate::ir_lower) fn static_method_call_expr_type_for_ir(
 ) -> Option<PhpType> {
     let nominal = static_method_implementation_signature(ctx, receiver, method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, method))
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))?;
+        .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))?;
     match (
         static_method_late_static_return_for_ir(ctx, receiver, method),
         static_late_binding_receiver_type_for_ir(ctx, receiver),

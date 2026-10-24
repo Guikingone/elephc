@@ -5,6 +5,8 @@
 //! Called from:
 //! - `crate::codegen::shared_mixed_string` for the `__toString` dispatch ladder.
 //! - `crate::codegen::shared_count_guard` for `count()`'s countable check.
+//! - `crate::codegen::eval_inventory_helper` and `crate::codegen::eval_status_helper`
+//!   for the eval catalog and status helpers.
 //!
 //! Key details:
 //! - The helper takes its boxed `Mixed` in the INT RESULT register, not an argument register,
@@ -73,6 +75,50 @@ pub(super) fn emit_shared_helper(
     ctx.emitter.blank();
     ctx.emitter.comment(comment);
     ctx.emitter.label(label);
+    emit_helper_entry(&mut ctx);
+    body(&mut ctx)?;
+    emit_helper_exit(&mut ctx);
+    Ok(())
+}
+
+/// Emits one shared helper that owns its own section and atom.
+///
+/// A forward `bl` to a `label()`-defined helper resolves inside one object file,
+/// so reachability is not what this buys. It buys section and atom OWNERSHIP:
+/// `label_global` opens a per-symbol `.text.<name>` section on Linux, so
+/// `--gc-sections` can drop the helper independently and cannot attribute it to
+/// whatever function happened to be open, and it marks the helper `.globl` on
+/// macOS so `-dead_strip` treats it as its own atom instead of folding it into
+/// its neighbour. Use it for any helper that stands alone rather than sitting
+/// inside a caller's body.
+pub(super) fn emit_global_shared_helper(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    shared: &mut SharedCodegenState,
+    regalloc_linear: bool,
+    label: &str,
+    return_php_type: PhpType,
+    comment: &str,
+    body: impl FnOnce(&mut FunctionContext<'_>) -> Result<()>,
+) -> Result<()> {
+    let function = helper_function(label, return_php_type);
+    // Shared helpers own no cleanup-tracked locals, so an exception can skip
+    // their synthetic frame and unwind through the caller's activation record.
+    let layout = frame::layout_for_function(
+        &function,
+        emitter.target,
+        regalloc_linear,
+        false,
+        false,
+    );
+    let mut ctx = FunctionContext::new(
+        module, &function, emitter, data, shared, layout, false, false, false, None,
+    );
+
+    ctx.emitter.blank();
+    ctx.emitter.comment(comment);
+    ctx.emitter.label_global(label);
     emit_helper_entry(&mut ctx);
     body(&mut ctx)?;
     emit_helper_exit(&mut ctx);

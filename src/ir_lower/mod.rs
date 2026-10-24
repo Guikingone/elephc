@@ -11,6 +11,7 @@
 //! - EIR is the only production backend; unsupported lowering must fail explicitly.
 
 mod array_pointer_scan;
+mod boxed_array_appends;
 mod builtin_datetime;
 mod clone_overrides;
 mod context;
@@ -22,6 +23,7 @@ mod expr;
 mod fibers;
 mod function;
 mod loop_closures;
+mod numeric_storage;
 /// The padding-thunk symbol codegen calls for a dynamic `new` that omits defaulted arguments.
 pub(crate) use function::dynamic_constructor_thunk_name;
 pub(crate) use function::eval_native_default_helper_name;

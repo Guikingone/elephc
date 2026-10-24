@@ -14,7 +14,8 @@
 //!   freshly allocated string/array children.
 //! - elephc indexed-array layout: `length@0`, `capacity@8`, `elem_size@16`,
 //!   elements at `+24`; the element `value_type` is byte 1 of the kind word at
-//!   `arr - 8` (0=int, 1=string, 2=float, 3=bool, 7=mixed cell ptr, 11=tagged).
+//!   `arr - 8` (0=int, 1=string, 2=float, 3=bool, 7=mixed cell ptr, 11=tagged,
+//!   13=raw `?ptr<T>` word, packed as null for 0 and as an integer otherwise).
 //! - Emits both ARM64 and x86_64 variants gated on `emitter.target.arch`.
 
 use crate::codegen_support::emit::Emitter;
@@ -104,7 +105,16 @@ pub fn emit_zval_pack_array_packed(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_zval_pack_array_packed_vt_hasharr");         // stage the nested associative array for pack_element
     emitter.instruction("cmp x15, #11");                                        // value_type 11 = tagged scalar
     emitter.instruction("b.eq __rt_zval_pack_array_packed_vt_tagged");          // stage the tagged scalar for pack_element
+    emitter.instruction(&format!("cmp x15, #{}", crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE)); // value_type 13 = raw ?ptr<T> word
+    emitter.instruction("b.eq __rt_zval_pack_array_packed_vt_pointer");         // stage the pointer word as null or an integer
     emitter.instruction("b __rt_zval_pack_array_packed_vt_null");               // unknown kinds pack as null
+
+    emitter.label("__rt_zval_pack_array_packed_vt_pointer");
+    emitter.instruction("ldr x1, [x14]");                                       // lo = the raw pointer word
+    emitter.instruction("cbz x1, __rt_zval_pack_array_packed_vt_null");         // the null pointer word packs as PHP null
+    emitter.instruction("mov x2, xzr");                                         // hi = 0
+    emitter.instruction("mov x0, #0");                                          // tag = 0 (a live address is an integer)
+    emitter.instruction("b __rt_zval_pack_array_packed_call_elem");             // pack the staged element
 
     emitter.label("__rt_zval_pack_array_packed_vt_int");
     emitter.instruction("ldr x1, [x14]");                                       // lo = integer value
@@ -284,7 +294,17 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_zval_pack_array_packed_vt_hasharr");           // stage the nested associative array for pack_element
     emitter.instruction("cmp r15, 11");                                         // value_type 11 = tagged scalar
     emitter.instruction("je __rt_zval_pack_array_packed_vt_tagged");            // stage the tagged scalar for pack_element
+    emitter.instruction(&format!("cmp r15, {}", crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE)); // value_type 13 = raw ?ptr<T> word
+    emitter.instruction("je __rt_zval_pack_array_packed_vt_pointer");           // stage the pointer word as null or an integer
     emitter.instruction("jmp __rt_zval_pack_array_packed_vt_null");             // unknown kinds pack as null
+
+    emitter.label("__rt_zval_pack_array_packed_vt_pointer");
+    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = the raw pointer word
+    emitter.instruction("test rdi, rdi");                                       // is this the null pointer word?
+    emitter.instruction("jz __rt_zval_pack_array_packed_vt_null");              // the null pointer word packs as PHP null
+    emitter.instruction("xor rsi, rsi");                                        // hi = 0
+    emitter.instruction("xor eax, eax");                                        // tag = 0 (a live address is an integer)
+    emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
 
     emitter.label("__rt_zval_pack_array_packed_vt_int");
     emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = integer value

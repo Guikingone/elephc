@@ -20,6 +20,20 @@ pub(super) fn lower_assoc_array_literal_with_guard(
     ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, Expr)], expr: &Expr, guarded: bool,
 ) -> LoweredValue {
     let hash_ty = assoc_array_literal_type_for_ir(ctx, pairs, expr);
+    lower_assoc_array_literal_as(ctx, pairs, expr, guarded, hash_ty)
+}
+
+/// Lowers an associative literal into an explicitly chosen hash storage type.
+///
+/// The storage type drives the per-value pointer retype, so a destination of pointer values
+/// (`["k" => null]` bound to `array<string, ?ptr<T>>`) stores each `null` as the word 0.
+pub(super) fn lower_assoc_array_literal_as(
+    ctx: &mut LoweringContext<'_, '_>,
+    pairs: &[(Expr, Expr)],
+    expr: &Expr,
+    guarded: bool,
+    hash_ty: PhpType,
+) -> LoweredValue {
     let hash = ctx.emit_value(
         Op::HashNew,
         Vec::new(),
@@ -35,6 +49,13 @@ pub(super) fn lower_assoc_array_literal_with_guard(
         let key_value = lower_expr(ctx, key);
         let key = root_array_literal_item(ctx, key_value, key.span, &mut roots);
         let value_operand = lower_expr(ctx, value);
+        // A packed record address or `null` stored as a pointer value is the pointer word.
+        let value_operand = match &hash_ty {
+            PhpType::AssocArray { value: value_ty, .. } => {
+                ctx.retype_packed_address_for_pointer_sink(value_operand, value_ty, Some(value.span))
+            }
+            _ => value_operand,
+        };
         let value = root_array_literal_item(ctx, value_operand, value.span, &mut roots);
         let hash = load_published_container(ctx, owner, hash_ty.clone(), expr.span);
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
@@ -49,20 +70,52 @@ pub(super) fn lower_assoc_array_literal_with_guard(
 /// Returns the associative-array type for a literal that contains at least one associative
 /// spread. Mirrors the type checker's `assoc_spread_literal_value_type` so EIR storage matches
 /// the value types actually lowered into the hash.
+///
+/// `spread_storage` holds, per item, the codegen storage `spread_source_storage_type_for_ir`
+/// gave a spread's source (`None` for a plain item), typed once by the caller.
 pub(super) fn assoc_array_literal_type_from_spreads(
     ctx: &LoweringContext<'_, '_>,
     items: &[Expr],
     expr: &Expr,
+    spread_storage: &[Option<PhpType>],
 ) -> PhpType {
+    // Every item is typed once for the pointer probe and the merge below, so an item or spread
+    // source holding a nested merge is scanned once per nesting level. The merge types a spread
+    // source as an element; that is what the source's storage already is for a merge or a
+    // literal source, the sources that cost a scan per level, so those reuse the storage.
+    let item_types: Vec<Option<PhpType>> = items
+        .iter()
+        .zip(spread_storage)
+        .map(|(item, storage)| match (&item.kind, storage) {
+            (ExprKind::Spread(_), Some(storage)) => Some(spread_storage_probe_element_type(storage)),
+            (ExprKind::Spread(_), None) => None,
+            _ => Some(array_literal_element_type_for_ir(ctx, item)),
+        })
+        .collect();
+    // Pointers and `null`s (direct, or a spread of a null-only literal) share pointer storage.
+    if let Some(pointer) = pointer_literal_element_type(ctx, items, &item_types) {
+        return PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(pointer),
+        };
+    }
     let mut value_ty = PhpType::Never;
-    for item in items {
-        let next = match &item.kind {
-            ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
-                PhpType::Array(elem) => elem.codegen_repr(),
-                PhpType::AssocArray { value, .. } => value.codegen_repr(),
-                _ => PhpType::Mixed,
+    for ((item, storage), item_ty) in items.iter().zip(spread_storage).zip(item_types) {
+        let next = match (&item.kind, storage) {
+            (ExprKind::Spread(inner), Some(storage)) if spread_source_is_typed_as_element(inner) => {
+                spread_storage_probe_element_type(storage)
+            }
+            (ExprKind::Spread(inner), _) => {
+                match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
+                    PhpType::Array(elem) => elem.codegen_repr(),
+                    PhpType::AssocArray { value, .. } => value.codegen_repr(),
+                    _ => PhpType::Mixed,
+                }
+            }
+            (_, _) => match item_ty {
+                Some(ty) => ty.codegen_repr(),
+                None => array_literal_element_type_for_ir(ctx, item).codegen_repr(),
             },
-            _ => array_literal_element_type_for_ir(ctx, item).codegen_repr(),
         };
         value_ty = merge_ir_assoc_value_type(value_ty, next);
     }
@@ -73,6 +126,20 @@ pub(super) fn assoc_array_literal_type_from_spreads(
         key: Box::new(PhpType::Mixed),
         value: Box::new(value_ty),
     }
+}
+
+/// Returns true when `spread_source_storage_type_for_ir` types `source` exactly as
+/// `array_literal_element_type_for_ir` does, so a merge may reuse the storage it already has.
+///
+/// The storage typer special-cases three kinds only: `@expr` (typed through its operand), a
+/// function call (typed from its signature when one is known) and an array read (whose logical
+/// null is stripped); every other source, a lazy merge, a nested literal, an `(array)` cast, a
+/// variable or a property read, goes straight to the element typer.
+fn spread_source_is_typed_as_element(source: &Expr) -> bool {
+    !matches!(
+        source.kind,
+        ExprKind::ErrorSuppress(_) | ExprKind::FunctionCall { .. } | ExprKind::ArrayAccess { .. }
+    )
 }
 
 /// Returns the associative-array type that the EIR backend can faithfully materialize.
@@ -89,9 +156,26 @@ pub(super) fn assoc_array_literal_type_for_ir(
     // every literal's key type.
     let mut key_ty: Option<PhpType> = None;
     let mut value_ty: Option<PhpType> = None;
+    // The pointer probe below reuses a value's type where both typers agree (a lazy merge or a
+    // nested literal, the values that cost a scan per nesting level); other values keep the
+    // probe's own element typing, so its pointer verdict does not change.
+    let mut probe_types: Vec<Option<PhpType>> = Vec::with_capacity(pairs.len());
     for (key, value) in pairs {
         let next_key = normalized_array_key_type(key, infer_expr_type_syntactic(key));
         let next_value = assoc_array_literal_value_type_for_ir(ctx, value);
+        probe_types.push(
+            matches!(
+                value.kind,
+                ExprKind::Ternary { .. }
+                    | ExprKind::ShortTernary { .. }
+                    | ExprKind::Match { .. }
+                    | ExprKind::NullCoalesce { .. }
+                    | ExprKind::Assignment { .. }
+                    | ExprKind::ArrayLiteral(_)
+                    | ExprKind::ArrayLiteralAssoc(_)
+            )
+            .then(|| next_value.clone()),
+        );
         key_ty = Some(match key_ty {
             Some(current) => merge_array_key_types(current, next_key),
             None => next_key,
@@ -104,6 +188,9 @@ pub(super) fn assoc_array_literal_type_for_ir(
     let (Some(key_ty), Some(value_ty)) = (key_ty, value_ty) else {
         return fallback_expr_type(expr);
     };
+    let value_ty =
+        pointer_literal_element_type(ctx, pairs.iter().map(|(_, value)| value), &probe_types)
+            .unwrap_or(value_ty);
     PhpType::AssocArray {
         key: Box::new(key_ty),
         value: Box::new(value_ty),
@@ -124,7 +211,11 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
             target: CastType::Array,
             expr: inner,
         } => array_cast_literal_element_type(ctx, inner),
-        ExprKind::Ternary { .. } => {
+        ExprKind::Ternary { .. }
+        | ExprKind::ShortTernary { .. }
+        | ExprKind::Match { .. }
+        | ExprKind::NullCoalesce { .. }
+        | ExprKind::Assignment { .. } => {
             // Use the actual branch-merge representation before choosing hash storage.
             ir_array_storage_type(materialized_expr_type_for_merge(ctx, value))
         }
@@ -238,7 +329,10 @@ pub(super) fn scoped_constant_value_type_for_ir(
     ir_array_storage_type(infer_expr_type_syntactic(value))
 }
 
-/// Returns the element/value type for an array-access expression used inside a literal.
+/// Returns the PHP value shape of an array access before merge or literal storage is selected.
+///
+/// A PHP array read can yield null on a missing key even when its elements are non-nullable.
+/// Keep that logical null here; the read itself retains its existing typed fast path.
 pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
@@ -250,20 +344,67 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
         }
         ExprKind::ArrayLiteral(items) => Some(array_literal_type_for_ir(ctx, items, array)),
         ExprKind::ArrayLiteralAssoc(pairs) => Some(assoc_array_literal_type_for_ir(ctx, pairs, array)),
-        _ => None,
+        // Any other receiver that loads a buffer (`make()[0]`, `($b ?? $c)[0]`) is typed from
+        // what its own lowering loads; other receivers keep the previous syntactic answer.
+        _ => buffer_receiver_type_for_ir(ctx, array),
     }?
     .codegen_repr();
     match array_ty {
-        PhpType::Array(elem_ty) => {
-            Some(array_access_element_result_type(normalize_value_php_type(*elem_ty).codegen_repr()))
-        }
-        PhpType::AssocArray { value, .. } => {
-            Some(array_access_element_result_type(normalize_value_php_type(*value).codegen_repr()))
-        }
+        PhpType::Array(element) | PhpType::AssocArray { value: element, .. } => Some(
+            nullable_aware_branch_merge_type(&normalize_value_php_type(*element), &PhpType::Void),
+        ),
         PhpType::Str => Some(PhpType::Str),
         PhpType::Mixed | PhpType::Union(_) => Some(PhpType::Mixed),
+        // A packed buffer element reads as its record address, which the checker types `ptr<T>`.
+        // A scalar element keeps its own type: the syntactic fallback answers `int`, which
+        // truncated a `buffer<float>` element in merges and literals.
+        PhpType::Buffer(elem_ty) => match normalize_value_php_type(*elem_ty).codegen_repr() {
+            PhpType::Packed(class_name) => Some(PhpType::Pointer(Some(class_name))),
+            scalar @ (PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Pointer(_)) => {
+                Some(scalar)
+            }
+            _ => None,
+        },
         _ => None,
     }
+}
+
+/// Returns the buffer type a receiver expression loads, or `None` when it is not a buffer.
+///
+/// A call, `??`, ternary, match or assignment answers through the merge predictor, which agrees
+/// with the type their lowering materializes. Only a buffer answer is returned: the syntactic
+/// fallback the caller keeps for everything else types an element read `int`, which truncated
+/// `buffer<float>` elements read through these receivers.
+fn buffer_receiver_type_for_ir(ctx: &LoweringContext<'_, '_>, receiver: &Expr) -> Option<PhpType> {
+    let loaded = super::merge_temps::materialized_expr_type_for_merge(ctx, receiver);
+    matches!(loaded.codegen_repr(), PhpType::Buffer(_)).then_some(loaded)
+}
+
+/// Returns the packed class whose record an expression addresses, if the lowering knows it.
+///
+/// Covers a packed buffer element, a nested packed field read, a call returning a `ptr<T>` to
+/// a packed record, and a local holding any of them.
+fn packed_record_class_of_expr(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<String> {
+    let ty = match &expr.kind {
+        ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+        }
+        ExprKind::Variable(name) => ctx.local_types.get(name).cloned(),
+        // A call returning `ptr<T>` to a packed record (`first($b)->pos`).
+        ExprKind::FunctionCall { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. } => {
+            Some(super::merge_temps::materialized_expr_type_for_merge(ctx, expr))
+        }
+        _ => None,
+    }?;
+    let class_name = match ty.codegen_repr() {
+        PhpType::Pointer(Some(class_name)) | PhpType::Packed(class_name) => class_name,
+        _ => return None,
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    ctx.packed_classes.contains_key(normalized).then(|| normalized.to_string())
 }
 
 /// Returns the declared type for an object property expression used inside a literal.
@@ -272,6 +413,17 @@ pub(in crate::ir_lower) fn property_access_expr_type_for_ir(
     object: &Expr,
     property: &str,
 ) -> Option<PhpType> {
+    // A nested packed field reads as the address of the embedded record (`ptr<T>` to the
+    // checker) and a `ptr<T>` field as its pointer; scalar packed fields keep the previous
+    // syntactic answer.
+    if let Some(record) = packed_record_class_of_expr(ctx, object) {
+        let field = ctx.packed_classes.get(&record)?.fields.iter().find(|field| field.name == property)?;
+        return match field.php_type.codegen_repr() {
+            PhpType::Packed(inner) => Some(PhpType::Pointer(Some(inner))),
+            pointer @ PhpType::Pointer(_) => Some(pointer),
+            _ => None,
+        };
+    }
     let class_name = instance_callable_object_class(ctx, object)?;
     let normalized = class_name.trim_start_matches('\\');
     if is_builtin_stdclass_name(normalized) {
@@ -312,7 +464,7 @@ pub(in crate::ir_lower) fn method_call_expr_type_for_ir(
     let class_name = instance_callable_object_class(ctx, object)?;
     let method_key = php_symbol_key(method);
     class_method_signature(ctx, &class_name, &method_key)
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
 }
 
 /// Returns the declared method result type plus `null` when a nullsafe receiver may be null.

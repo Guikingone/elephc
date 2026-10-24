@@ -105,6 +105,12 @@ You can write PHP using the constructs documented in the [docs](docs/). Classes 
 
 Experimental [`eval()` support](docs/php/eval.md) AOT-lowers eligible literal fragments and falls back to the optional, statically linked Magician interpreter for dynamic fragments. Runnable examples live in [`examples/eval/`](examples/eval/), [`examples/eval-globals/`](examples/eval-globals/), [`examples/eval-throw/`](examples/eval-throw/) for throwing a class declared by `eval()`, and the opt-in regex example [`examples/eval_regex/`](examples/eval_regex/).
 
+The standard-library surface also includes immutable [`BcMath\Number`](docs/php/bcmath.md)
+decimal arithmetic and operators, [`WeakReference` and `WeakMap`](docs/php/core-symbols.md)
+for caches that do not retain their keys, and a small
+[DOM HTML fragment walker](docs/php/dom-html.md) for Termwind-style rendering.
+The DOM surface is an HTML-only subset with explicit limits.
+
 For performance-oriented code, elephc exposes compiler extensions beyond standard PHP — see the Why section above.
 
 Then compile and run:
@@ -563,13 +569,13 @@ The full list of supported constructs, operators, and control structures is in t
 - **Web server (`--web`)**: standalone prefork HTTP server binaries with compile-time `worker` (default), persistent `pool`, or fork-per-`request` isolation; request superglobals and `php://input`; `header()`/`http_response_code()` response control; and PHP-compatible sessions — `$_SESSION`, the complete `session_*()` API, file persistence, custom save handlers, strict mode, cookies and cache limiters, and trans-SID rewriting
 - **Generics**: compile-time specialization of functions, classes, interfaces, methods, and traits, with inference, bounds, defaults, variance, typed arrays and callables; native syntax is rejected by `--strict-php`, while supported PHPDoc templates affect compilation in both modes. See [Generics](docs/beyond-php/generics.md).
 - **Testing**: a native test runtime inside the compiler (`Elephc\Testing\TestCase` with a PHPUnit-compatible assertion subset, `Runner`, and a `PHPUnit\Framework\TestCase` alias so plain-PHP suites compile unchanged) and `elephc test`, which discovers the test classes under a path at compile time, builds the suite into a native binary, and runs it. See [Testing](docs/beyond-php/testing.md).
-- **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`
+- **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_ptr()`, `buffer_free()`
 
 </details>
 
-### Built-in functions (1069)
+### Built-in functions (1074)
 
-The generated builtin documentation currently exposes 1069 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
+The generated builtin documentation currently exposes 1074 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
 
 ### Constants
 

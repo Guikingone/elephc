@@ -2,7 +2,7 @@
 title: "mysqli_stmt_param_count()"
 description: "Returns how many placeholders a prepared statement has."
 sidebar:
-  order: 173
+  order: 174
 ---
 
 ## mysqli_stmt_param_count()

@@ -84,6 +84,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: serialize_value (tag/lo/hi -> serialize() wire bytes) ---");
     emitter.label_global("__rt_serialize_value");
+    crate::codegen_support::sentinels::emit_normalize_pointer_word_tag(emitter, "x0", "x1", "x9", "__rt_serialize_value_tag_ready");
 
     emitter.instruction("cmp x0, #4");                                          // only container-shaped tags can carry the null sentinel
     emitter.instruction("b.lt __rt_serialize_value_input_ready");               // scalar payloads preserve their original bits
@@ -1053,6 +1054,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: serialize_value (tag/lo/hi -> serialize() wire bytes) ---");
     emitter.label_global("__rt_serialize_value");
+    crate::codegen_support::sentinels::emit_normalize_pointer_word_tag(emitter, "rdi", "rsi", "r11", "__rt_serialize_value_tag_ready");
 
     emitter.instruction("cmp rdi, 4");                                          // only container-shaped tags can carry the null sentinel
     emitter.instruction("jl __rt_serialize_value_input_ready");                 // scalar payloads preserve their original bits

@@ -33,6 +33,8 @@ use crate::types::{
 use std::collections::HashSet;
 
 mod constants;
+mod array_merge_values;
+use array_merge_values::lower_array_value_for_merge;
 mod nullsafe_chain;
 mod ref_place_args;
 mod boxed_user_sort;
@@ -56,6 +58,7 @@ mod native_isset;
 mod callable_probes;
 mod descriptor_invoke;
 mod call_operand_owners;
+mod pending_owners;
 mod descriptor_args;
 mod descriptor_unpack;
 mod static_array_callbacks;
@@ -63,6 +66,7 @@ mod callable_tracking;
 mod callable_resolution;
 mod unset;
 mod array_builtin_args;
+mod borrowed_string_args;
 mod weak_string_unions;
 mod builtin_special_args;
 mod call_arg_coercion;
@@ -185,6 +189,7 @@ use core_introspection::*;
 use reflection_new_instance::*;
 use nullable_method_calls::*;
 use method_metadata::*;
+pub(in crate::ir_lower) use method_metadata::method_signature;
 use static_method_calls::*;
 use scoped_values::*;
 use generators::*;
@@ -194,12 +199,15 @@ use merge_temps::*;
 pub(crate) use callable_resolution::{
     is_bound_closure_assignment_shape, lower_bound_closure_for_assignment,
 };
+pub(crate) use pending_owners::lower_with_pending_owners;
 pub(crate) use call_operand_owners::{
     pin_in_flight_owners, register_owned_call_operand, retire_owned_call_operand,
     root_owned_call_operand, unpin_in_flight_owners, unregister_owned_call_operand,
     PinnedInFlightOwner,
 };
 pub(crate) use property_access::singular_object_class;
+pub(crate) use property_access::packed_receiver_class;
+pub(crate) use property_access::extern_receiver_class;
 pub(crate) use callable_tracking::{
     lower_callable_array_for_assignment, reflection_arg_array_binding_for_expr,
     reflection_class_binding_for_expr, reflection_function_binding_for_expr,
@@ -210,7 +218,8 @@ pub(crate) use callable_tracking::{
 pub(crate) use callable_tracking::LoweredCallableArrayAssignment;
 pub(crate) use closures::{body_contains_eval_call, lower_closure_for_assignment};
 pub(crate) use indexed_array_literals::{
-    array_literal_type_for_ir, lower_array_literal_with_expected_type,
+    array_literal_type_for_ir, is_pointer_array_destination, lower_array_literal_with_expected_type,
+    lower_expr_for_destination,
 };
 pub(crate) use array_access::{
     array_access_element_result_type, index_expr_key_type,

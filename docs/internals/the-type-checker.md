@@ -42,6 +42,7 @@ pub enum PhpType {
         value: Box<PhpType>,
     },
     Buffer(Box<PhpType>),
+    Narrow(ScalarWidth),           // storage width of a buffer<T> element only (buffer<i32>, buffer<f32>)
     Callable,                      // closures and function references
     Object(String),                // class instance, e.g., Object("Point") or Object("App\\Point")
     Packed(String),
@@ -53,6 +54,13 @@ pub enum PhpType {
 ```
 
 This is still much smaller than full PHP's runtime type system, but it now includes user-written union and nullable annotations where the language subset supports them. `Union(...)` values are lowered to the same boxed runtime representation used by `Mixed`. `TaggedScalar` is never produced by the checker itself: codegen funnels construct it from `int|null` unions under the tagged null representation (the default; see `--null-repr`), storing the value as an inline two-word `{payload, tag}` pair instead of a heap-boxed cell. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`), and heterogeneous payloads in either representation widen to boxed `Mixed` elements.
+
+`Narrow(width)` is the storage width of a `buffer<T>` element declared with a C width name
+(`buffer<u8>`, `buffer<i32>`, `buffer<f32>`). It only ever appears inside `Buffer`: every
+element read and write uses `storage_value_type()`, the `Int` or `Float` the width reads as, so
+no value is typed `Narrow` (the EIR validator rejects one). Packed class fields keep the same
+widths in their metadata instead, as `PackedFieldInfo::width` beside the field's `int` or
+`float` type, and `PackedClassInfo::align` records the natural C alignment the layout pads to.
 
 `False` is the PHP literal `false` subtype used by false-sentinel declarations such as `int|false` (the shape many builtins like `strpos` return). Its runtime representation is identical to `Bool`, and `bool` accepts a `False` value. Union normalization keeps a distinct `False` member only when the declaration is false-only: a full `bool` member in the same union absorbs it.
 

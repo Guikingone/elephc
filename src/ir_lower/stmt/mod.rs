@@ -73,6 +73,7 @@ mod static_property_helpers;
 use statement_basics::*;
 use local_assignments::*;
 pub(super) use local_assignments::lower_ref_assign;
+pub(super) use local_assignments::retype_value_for_pointer_local;
 use conditionals::*;
 use loops::*;
 use array_write_core::*;

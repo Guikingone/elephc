@@ -13,6 +13,7 @@
 mod buffer_free;
 mod buffer_len;
 mod buffer_new;
+mod buffer_ptr;
 mod ptr;
 mod ptr_get;
 mod ptr_is_null;
@@ -36,6 +37,7 @@ mod ptr_write_string;
 pub(in crate::interpreter) use buffer_free::*;
 pub(in crate::interpreter) use buffer_len::*;
 pub(in crate::interpreter) use buffer_new::*;
+pub(in crate::interpreter) use buffer_ptr::*;
 pub(in crate::interpreter) use ptr::*;
 pub(in crate::interpreter) use ptr_get::*;
 pub(in crate::interpreter) use ptr_is_null::*;

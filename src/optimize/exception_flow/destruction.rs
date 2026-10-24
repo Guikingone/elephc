@@ -175,6 +175,7 @@ impl ExceptionFlowAnalysis {
             | PhpType::Buffer(_)
             | PhpType::Packed(_)
             | PhpType::Pointer(_)
+            | PhpType::Narrow(_)
             | PhpType::TaggedScalar => ThrownTypes::default(),
         }
     }

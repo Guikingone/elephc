@@ -49,6 +49,10 @@ pub(super) fn lower_static_array_push(
         // Re-read the local for every append: an earlier one may have replaced the slot's
         // pointer, and appending into the stale one would write to freed storage.
         let array_value = ctx.load_local(array_name, Some(args[0].span));
+        // A packed record address or `null` appended to pointers is the pointer word, as in
+        // the `$a[] = ...` statement.
+        let array_ty = ctx.builder.value_php_type(array_value.value);
+        let value = ctx.retype_value_for_container_element(&array_ty, value, Some(expr.span));
         let (array_value, updated_ty, needs_storeback) =
             if crate::ir_lower::stmt::ref_bound_mixed_indexed_array_write(ctx, array_name, value) {
                 (array_value, Some(ctx.local_type(array_name)), true)
@@ -109,7 +113,8 @@ pub(super) fn lower_builtin_call_args(
 ) -> Vec<crate::ir::ValueId> {
     let rewritten = builtin_string_callbacks_as_first_class(sig, args);
     let args = rewritten.as_deref().unwrap_or(args);
-    let operands = lower_planned_builtin_call_args(ctx, name, sig, args);
+    let operands = borrowed_string_args::try_lower(ctx, name, sig, args)
+        .unwrap_or_else(|| lower_planned_builtin_call_args(ctx, name, sig, args));
     let canonical = php_symbol_key(name.trim_start_matches('\\'));
     let lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering);

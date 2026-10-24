@@ -10,13 +10,13 @@
 use super::*;
 
 /// Publishes class-initialization failures independently of per-property Reflection metadata.
-pub(super) fn register_eval_native_class_default_errors(ctx: &mut FunctionContext<'_>, context_offset: usize) {
+pub(super) fn register_eval_native_class_default_errors(ctx: &mut FunctionContext<'_>, context_source: EvalContextSource) {
     let mut errors: Vec<_> = ctx.module.class_infos.iter().filter_map(|(name, class)|
         class.deferred_property_default_error.as_ref().map(|error| (name.clone(), error.clone())))
         .collect();
     errors.sort();
     for (name, message) in errors {
-        load_eval_context_local_to_arg(ctx, context_offset, 0);
+        load_eval_context_source_to_arg(ctx, context_source, 0);
         for (argument, value) in [(1, name), (3, message)] {
             let (label, len) = ctx.data.add_string(value.as_bytes());
             abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, argument), &label);
@@ -34,10 +34,10 @@ pub(super) fn register_eval_native_class_default_errors(ctx: &mut FunctionContex
 /// Emits one native property-default metadata registration call into the eval context.
 pub(super) fn register_eval_native_property_default(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     registration: &EvalNativePropertyDefaultRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     let property_key = format!(
         "{}::{}",
         registration.class_name, registration.property_name
@@ -121,10 +121,10 @@ pub(super) fn register_eval_native_property_default(
 /// Emits one native member-attribute metadata registration call into the eval context.
 pub(super) fn register_eval_native_member_attribute(
     ctx: &mut FunctionContext<'_>,
-    context_offset: usize,
+    context_source: EvalContextSource,
     registration: &EvalNativeMemberAttributeRegistration,
 ) {
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     let record = eval_native_member_attribute_record(registration);
     let (record_label, record_len) = ctx.data.add_string(&record);
     abi::emit_symbol_address(

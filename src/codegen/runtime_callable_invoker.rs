@@ -345,7 +345,8 @@ fn emit_boxed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType) {
         | PhpType::Iterable
         | PhpType::Object(_)
         | PhpType::Callable => emit_box_current_owned_value_as_mixed(emitter, &repr),
-        _ => emit_box_current_value_as_mixed(emitter, &repr),
+        // The declared type, so a `?ptr<T>` result boxes address 0 as PHP null.
+        _ => emit_box_current_value_as_mixed(emitter, ret_ty),
     }
 }
 
@@ -1674,7 +1675,8 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
         | PhpType::Callable
         | PhpType::Pointer(_)
         | PhpType::Buffer(_)
-        | PhpType::Packed(_) => {
+        | PhpType::Packed(_)
+        | PhpType::Narrow(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
             abi::emit_store_zero_to_address(emitter, cell_reg, 8);
@@ -2680,7 +2682,10 @@ fn coerce_result_to_type(
     }
     if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         match target_ty.codegen_repr() {
-            PhpType::Int | PhpType::Resource(_) | PhpType::Pointer(_) => {
+            // A buffer handle is boxed as an integer like a pointer word, so the integer cast
+            // recovers it for a `buffer<T>` parameter (the `buffer_len(...)` and
+            // `buffer_ptr(...)` wrappers forwarded through a `callable`).
+            PhpType::Int | PhpType::Resource(_) | PhpType::Pointer(_) | PhpType::Buffer(_) => {
                 abi::emit_call_label(emitter, "__rt_mixed_cast_int");
             }
             PhpType::Bool => {
@@ -2735,6 +2740,7 @@ fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
             PhpType::Int
                 | PhpType::Resource(_)
                 | PhpType::Pointer(_)
+                | PhpType::Buffer(_)
                 | PhpType::Bool
                 | PhpType::Float
                 | PhpType::Str

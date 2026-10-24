@@ -2,7 +2,7 @@
 title: "date_timezone_get()"
 description: "Returns a date's timezone."
 sidebar:
-  order: 215
+  order: 216
 ---
 
 ## date_timezone_get()

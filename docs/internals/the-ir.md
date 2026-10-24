@@ -162,6 +162,7 @@ pub struct Value {
 | `Array(inner)` | `Heap(Array)` | Indexed array heap object; element type stays in `php_type`. |
 | `AssocArray { key, value }` | `Heap(Hash)` | Hash table heap object; key/value types stay in `php_type`. |
 | `Buffer(inner)` | `Heap(Buffer(inner))` | Opaque generation/index handle resolved through the static buffer descriptor registry; not PHP array COW storage. |
+| `Narrow(width)` | never a value | Storage width of a `buffer<T>` element (`buffer<i32>`, `buffer<u8>`, `buffer<f32>`); only appears inside `Buffer(inner)`. Element reads and writes carry its value type (`Int` or `Float`); packed fields keep their width in `PackedFieldInfo::width` instead. |
 | `Callable` | `I64` | Callable descriptor address; ownership is tracked separately and released via callable descriptor runtime. |
 | `Object(name)` | `Heap(Object(name))` | Runtime object pointer and class metadata. |
 | `Packed(name)` | `Heap(Packed(name))` | Pointer/layout handle for packed POD data. |
@@ -233,6 +234,40 @@ cell, so taking the checked type verbatim read that box's header as an array.
 answers — a concrete value is boxed into it on the way in, a `Mixed` value is stored
 as-is — and it is what a literal mixing a builtin call with a plain element already
 merged to.
+
+### Missing array elements at lazy merges
+
+A typed array describes its populated elements; a read can still produce `null`.
+AST pruning retains a merge whose selected arm/default is an array read until EIR,
+rather than replacing the entire merge with its raw read. Materialized branch types therefore
+include the missing-value alternative before choosing storage for `match`, ternary, short-ternary and coalescing results. Object/container
+reads keep their concrete getter and nullable merge storage preserves their null
+payload. A merge-bound raw scalar or callable read uses the boxed getter so absence
+is distinguished before conversion, including a float miss that an ordinary
+warned typed read represents as zero. Already-tagged integer getters keep their
+existing null-aware path. Receiver/key evaluation and warnings still
+occur once. Explicit casts and string offsets keep their usual lowering.
+
+When a nullable object/callable merge returns through a concrete payload ABI,
+`MixedUnbox` takes an independent payload reference before the owning merge cell
+is released. This prevents a clean-looking return value from leaking its box.
+
+Unpacking uses a separate storage projection for a direct container read. Its
+implicit null alternative does not turn native indexed storage into a hash;
+the unpack operation still rejects an actual null value at runtime. Literal,
+positional-call and boxed-binder classification share that projection, including
+error-suppressed reads, so argument binding cannot replace the unpack diagnostic
+with an arity error. Ordinary
+literal elements retain the nullable logical type because inserting a missed
+read is valid and must store PHP null.
+
+A nullable receiver's null path still evaluates the offset once and honors the
+normal/silent warning flag. Undefined roots and native nullable containers can
+carry a raw null word, so the null arm retires the original owning source and
+creates a canonical boxed-null receiver for the dynamic getter ABI. That receiver
+is parked in the in-flight cleanup chain while offset evaluation or warning
+delivery can throw. The getter retires it normally; its proven-null payload has
+no user destructor, so detaching that non-owning cleanup record afterwards is safe.
 
 ### Parsed Type Expressions
 
@@ -399,7 +434,8 @@ Ownership operations:
 | `Release` | owned value | `Void` | `REFCOUNT_OP`, maybe `WRITES_HEAP`, destruction may throw and debug may fatal | `__rt_decref_any`, `__rt_heap_free_safe`, callable descriptor release |
 | `Move` | any value | same type | pure validator operation | no machine instruction |
 | `Borrow` | value with live owner | same type | pure validator operation | no machine instruction |
-| `EnsureOwned` | maybe-owned value | same type | may branch, refcount effect | emits conditional retain/ownership normalization |
+| `EnsureOwned` | fresh transient `Str` argument (`.`, interpolation, scalar-to-string; never a builtin view) | `Str`, same payload, owned | `REFCOUNT_OP`, `WRITES_HEAP` | `__rt_str_claim`: retags a `CONCAT_TEMP_HEAP_KIND` block as an owned string in place, leaves scratch and literals untouched; emitted before a user call that may return the argument |
+| `ReleaseUnlessAliases` | owned argument, call result | `Void` | `REFCOUNT_OP`, `WRITES_HEAP`, `READS_HEAP` | releases the argument unless its payload pointer equals the result's: boxed `Mixed` pairs, and owned `Str` arguments (claimed or acquired) of a user call |
 
 Strings are not modeled as generic heap pointers because their ABI is `(ptr,
 len)`, but string ownership still participates in validator checks.
@@ -757,6 +793,7 @@ preserves PHP exponentiation result rules.
 | `MixedUnbox(expected)` | `Heap(Mixed)` | expected storage | `reads_heap`, `may_fatal` |
 | `MixedTagOf` | `Heap(Mixed)` | `I64` | `reads_heap` |
 | `ArrayToMixed`, `HashToMixed` | array/hash | `Heap(Mixed)` | `alloc_heap`, `refcount_op` |
+| `ArrayToPointerWords` | owned array bound to a pointer-array slot | `Heap(Array)` with raw `?ptr<T>` words | `reads_heap`, `writes_heap`, `alloc_heap`, `refcount_op` |
 | `MixedCastBool`, `MixedCastInt`, `MixedCastFloat`, `MixedCastString` | `Heap(Mixed)` | scalar/string | `reads_heap`, maybe `alloc_concat`, `may_warn` |
 
 ### Strings
@@ -1096,6 +1133,8 @@ eval-scope helpers, or retain interpreter fallback. See
 | `BufferNew(element_type, len)` | length | `Heap(Buffer)` | allocates a separate payload and publishes a generation-safe handle; `alloc_heap`, `may_fatal` |
 | `BufferLen` | buffer handle | `I64` | resolves generation/activity, then `reads_heap`; `may_fatal` on stale or invalid handles |
 | `BufferGet`, `BufferSet` | buffer handle, index, value | typed value or `Void` | resolve generation/activity before payload access; `reads_heap`/`writes_heap`, bounds `may_fatal` |
+| `BufferResolve` | buffer handle | `I64` descriptor | optimizer-only; resolves generation/activity WITHOUT faulting and answers 0 for a stale or invalid handle; `reads_heap` |
+| `BufferGetResolved`, `BufferSetResolved` | descriptor, index, value; optional `true` immediate | typed value or `Void` | optimizer-only forms of `BufferGet`/`BufferSet` behind a hoisted `BufferResolve`; a zero descriptor always raises the use-after-free fatal at the access; absent immediate performs the usual unsigned bounds check, while `true` records a same-buffer loop proof and omits that check; `reads_heap` or `writes_heap`, `may_fatal` |
 | `BufferFree` | local buffer handle | `Void` | invalidates the descriptor before releasing the payload and clears the local; `writes_heap`, `may_fatal` on stale aliases |
 | `PackedFieldGet`, `PackedFieldSet` | packed pointer, field metadata | typed value or `Void` | raw memory effects |
 | `ExternGlobalLoad`, `ExternGlobalStore` | global metadata | typed value or `Void` | external state effects |
@@ -1314,7 +1353,11 @@ Validation has two modes:
 8. Callable descriptor ops require `PhpType::Callable` metadata even when the
    storage type is `I64`.
 9. Pointer ops require `PhpType::Pointer(_)` metadata.
-10. Buffer ops require `Heap(Buffer(_))`.
+10. Buffer ops require `Heap(Buffer(_))`, except `BufferGetResolved` and
+    `BufferSetResolved`, whose first operand is the `I64` descriptor of a
+    `BufferResolve`. Their optional immediate may only be `true`, meaning the
+    optimizer proved the exact index nonnegative and below that descriptor's
+    logical length.
 
 ### Ownership Rules
 
@@ -1507,6 +1550,30 @@ typed opcode is implemented for macOS AArch64, Linux AArch64, and Linux x86_64.
 `FreshMixedTransfer` runs only after this specialization has finished, so a later
 ownership rewrite cannot hand the sink a new integer-only use graph. See
 [Fresh Mixed Assignment Transfer](#fresh-mixed-assignment-transfer).
+
+### Bounded Mixed Counters
+
+`src/ir_passes/bounded_mixed_counter.rs` considers ordinary Mixed locals updated
+only by increment/decrement and seeded with concrete PHP integers. A complete
+storage/use scan excludes aliases, other types, pointer escapes, parameters,
+static/global storage, eval, suspension and exceptional CFGs. Direct-call
+consumers are accepted only at physical, by-value `mixed` parameter positions
+recorded from the module before function optimization. The snapshot uses the
+backend's PHP canonical name keys and first-match priority (free functions before
+closures), retaining an ineligible first target instead of selecting a later one.
+Call targets, signatures,
+closure eligibility and return representations remain unchanged.
+
+The pass scalarizes a private trial function, removes transparent numeric owner
+copies with the shared rewrite helpers, and requires successful SSA promotion.
+The existing integer-range analysis must rewrite every new checked update to an
+unchecked integer operation before the trial can replace the original function.
+Strict integer bounds can establish that the update fits even at a runtime limit
+of PHP_INT_MAX or PHP_INT_MIN. An inclusive bound, an unrelated loop condition,
+a late type change or a missing proof keeps the boxed path and PHP float promotion.
+The analysis is capped at 16 candidate locals in functions of at most 4096
+instructions. It runs only with IR optimization enabled and uses the existing
+scalar and call-argument backends for every supported target.
 
 ### Boxed Numeric Chain Fusion
 

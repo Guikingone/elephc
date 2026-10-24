@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The merge queue's temporary `gh-readonly-queue/main/...` commits. They run every tier, and
+  # the queue fast-forwards main to the commit it tested; see the `plan` job.
+  merge_group:
+    types: [checks_requested]
 
 # Least privilege for every job: the repository default token is read-write,
 # and no job here writes anything through it. `packages: read` lets the Linux
@@ -47,11 +51,49 @@ env:
     -p elephc-curl
 
 jobs:
+  # Chooses the tiers this run executes (scripts/ci/plan_tiers.sh, CONTRIBUTING.md § "CI
+  # tiers and the merge queue"). Pull requests run every Linux job plus the macOS compile,
+  # doctests and managed-native smoke; the macOS test matrix and the iOS links run in the
+  # merge queue, which tests the exact commit main is fast-forwarded to. A pull request gets
+  # the macOS tier too with the `ci:macos` label (then re-run) or when it changes CI
+  # scheduling (this file, nextest.toml, scripts/ci/, .github/actions/). The push to main
+  # that the queue produces skips the test jobs, because the queue already ran them on the
+  # same commit; any other push runs everything.
+  plan:
+    name: Plan CI tiers
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      extended: ${{ steps.plan.outputs.extended }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+          sparse-checkout-cone-mode: true
+
+      - name: Choose the tiers
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          WORKFLOW_FILE: ci.yml
+          EXTENDED_LABEL: ci:macos
+          EXTENDED_PATHS: ^(\.github/workflows/ci\.yml|\.config/nextest\.toml|scripts/ci/|\.github/actions/)
+        run: bash scripts/ci/plan_tiers.sh
+
   # Compile each platform once, then let that platform's tests start as soon as
   # its archive is uploaded. This avoids a matrix-wide barrier where Linux tests
   # wait for a queued or slower macOS archive job.
   build-archive-macos-aarch64:
     name: Build & Archive Tests (macos-aarch64)
+    needs: plan
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -59,6 +101,12 @@ jobs:
 
       - name: Test nextest artifact validation
         run: sh scripts/ci/test_validate_archived_nextest.sh
+
+      - name: Test the CI tier planner, the eval shard runner and the merge queue cleanup
+        run: |
+          bash scripts/ci/test_plan_tiers.sh
+          bash scripts/ci/test_run_eval_codegen_shard.sh
+          bash scripts/ci/test_cancel_superseded_queue_runs.sh
 
       - name: Test macOS notarization gate
         run: python3 -B -m unittest discover -s .github/scripts -p 'test_notarize_macos.py' -v
@@ -78,6 +126,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-macos-aarch64
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
 
@@ -200,6 +249,8 @@ jobs:
             cargo test -p elephc-xml
 
       - name: Upload test archive
+        # Only when this run's test jobs for the platform consume it (see `plan`).
+        if: needs.plan.outputs.extended == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-macos-aarch64
@@ -211,6 +262,8 @@ jobs:
           if-no-files-found: error
 
       - name: Upload codegen test archive
+        # Only when this run's test jobs for the platform consume it (see `plan`).
+        if: needs.plan.outputs.extended == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-codegen-macos-aarch64
@@ -220,6 +273,7 @@ jobs:
 
   build-archive-linux-x86_64:
     name: Build & Archive Tests (linux-x86_64)
+    needs: plan
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     # Every Linux job runs inside the prebuilt CI image (multi-arch, built by
@@ -245,6 +299,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-container-linux-x86_64
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
 
@@ -361,6 +416,8 @@ jobs:
             cargo test -p elephc-xml
 
       - name: Upload test archive
+        # Only when this run's test jobs for the platform consume it (see `plan`).
+        if: needs.plan.outputs.run == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-linux-x86_64
@@ -369,6 +426,8 @@ jobs:
           if-no-files-found: error
 
       - name: Upload codegen test archive
+        # Only when this run's test jobs for the platform consume it (see `plan`).
+        if: needs.plan.outputs.run == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-codegen-linux-x86_64
@@ -378,6 +437,7 @@ jobs:
 
   build-archive-linux-aarch64:
     name: Build & Archive Tests (linux-aarch64)
+    needs: plan
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     container:
@@ -398,6 +458,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-container-linux-aarch64
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
 
@@ -514,6 +575,8 @@ jobs:
             cargo test -p elephc-xml
 
       - name: Upload test archive
+        # Only when this run's test jobs for the platform consume it (see `plan`).
+        if: needs.plan.outputs.run == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-linux-aarch64
@@ -522,6 +585,8 @@ jobs:
           if-no-files-found: error
 
       - name: Upload codegen test archive
+        # Only when this run's test jobs for the platform consume it (see `plan`).
+        if: needs.plan.outputs.run == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nextest-archive-codegen-linux-aarch64
@@ -540,7 +605,8 @@ jobs:
   # at one test per core.
   non-codegen-tests-macos-aarch64:
     name: Non-Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
-    needs: build-archive-macos-aarch64
+    needs: [plan, build-archive-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 30
     strategy:
@@ -609,7 +675,8 @@ jobs:
 
   non-codegen-tests-linux-x86_64:
     name: Non-Codegen Tests (linux-x86_64 ${{ matrix.shard }}/4)
-    needs: build-archive-linux-x86_64
+    needs: [plan, build-archive-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -658,7 +725,8 @@ jobs:
 
   non-codegen-tests-linux-aarch64:
     name: Non-Codegen Tests (linux-aarch64 ${{ matrix.shard }}/4)
-    needs: build-archive-linux-aarch64
+    needs: [plan, build-archive-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     strategy:
@@ -707,7 +775,8 @@ jobs:
 
   cli-tests-macos-aarch64:
     name: CLI Eval Tests (macos-aarch64 ${{ matrix.shard }}/6)
-    needs: build-archive-macos-aarch64
+    needs: [plan, build-archive-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 30
     strategy:
@@ -780,7 +849,8 @@ jobs:
 
   cli-tests-linux-x86_64:
     name: CLI Eval Tests (linux-x86_64 ${{ matrix.shard }}/6)
-    needs: build-archive-linux-x86_64
+    needs: [plan, build-archive-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -833,7 +903,8 @@ jobs:
 
   cli-tests-linux-aarch64:
     name: CLI Eval Tests (linux-aarch64 ${{ matrix.shard }}/6)
-    needs: build-archive-linux-aarch64
+    needs: [plan, build-archive-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     strategy:
@@ -886,7 +957,8 @@ jobs:
 
   web-tests-macos-aarch64:
     name: Web Tests (macos-aarch64 ${{ matrix.shard }}/2)
-    needs: build-archive-macos-aarch64
+    needs: [plan, build-archive-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 20
     strategy:
@@ -954,7 +1026,8 @@ jobs:
 
   web-tests-linux-x86_64:
     name: Web Tests (linux-x86_64 ${{ matrix.shard }}/2)
-    needs: build-archive-linux-x86_64
+    needs: [plan, build-archive-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -1002,7 +1075,8 @@ jobs:
 
   web-tests-linux-aarch64:
     name: Web Tests (linux-aarch64 ${{ matrix.shard }}/2)
-    needs: build-archive-linux-aarch64
+    needs: [plan, build-archive-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     strategy:
@@ -1050,7 +1124,8 @@ jobs:
 
   codegen-tests-macos-aarch64:
     name: Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
-    needs: build-archive-macos-aarch64
+    needs: [plan, build-archive-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 40
     strategy:
@@ -1155,7 +1230,8 @@ jobs:
 
   codegen-tests-linux-x86_64:
     name: Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
-    needs: build-archive-linux-x86_64
+    needs: [plan, build-archive-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     container:
@@ -1240,7 +1316,8 @@ jobs:
 
   codegen-tests-linux-aarch64:
     name: Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
-    needs: build-archive-linux-aarch64
+    needs: [plan, build-archive-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
     container:
@@ -1328,7 +1405,8 @@ jobs:
   # survive between cases while preserving the full three-target test surface.
   pdo-codegen-tests-macos-aarch64:
     name: PDO Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
-    needs: build-archive-macos-aarch64
+    needs: [plan, build-archive-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 40
     strategy:
@@ -1389,7 +1467,8 @@ jobs:
 
   pdo-codegen-tests-linux-x86_64:
     name: PDO Codegen Tests (linux-x86_64 ${{ matrix.shard }}/4)
-    needs: build-archive-linux-x86_64
+    needs: [plan, build-archive-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     container:
@@ -1430,7 +1509,8 @@ jobs:
 
   pdo-codegen-tests-linux-aarch64:
     name: PDO Codegen Tests (linux-aarch64 ${{ matrix.shard }}/4)
-    needs: build-archive-linux-aarch64
+    needs: [plan, build-archive-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
     container:
@@ -1476,7 +1556,8 @@ jobs:
   # ordinary shards, from the elephc binary the archive already carries.
   curl-native-macos-aarch64:
     name: Managed Native curl (macos-aarch64)
-    needs: build-archive-macos-aarch64
+    needs: [plan, build-archive-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -1555,7 +1636,8 @@ jobs:
 
   curl-native-linux-x86_64:
     name: Managed Native curl (linux-x86_64)
-    needs: build-archive-linux-x86_64
+    needs: [plan, build-archive-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     container:
@@ -1617,7 +1699,8 @@ jobs:
 
   curl-native-linux-aarch64:
     name: Managed Native curl (linux-aarch64)
-    needs: build-archive-linux-aarch64
+    needs: [plan, build-archive-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     container:
@@ -1688,7 +1771,8 @@ jobs:
   # the Linux CI container.
   curl-codegen-tests-macos-aarch64:
     name: Curl Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
-    needs: [build-archive-macos-aarch64, curl-native-macos-aarch64]
+    needs: [plan, build-archive-macos-aarch64, curl-native-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 45
     strategy:
@@ -1786,7 +1870,8 @@ jobs:
 
   curl-codegen-tests-linux-x86_64:
     name: Curl Codegen Tests (linux-x86_64 ${{ matrix.shard }}/4)
-    needs: [build-archive-linux-x86_64, curl-native-linux-x86_64]
+    needs: [plan, build-archive-linux-x86_64, curl-native-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     container:
@@ -1864,7 +1949,8 @@ jobs:
 
   curl-codegen-tests-linux-aarch64:
     name: Curl Codegen Tests (linux-aarch64 ${{ matrix.shard }}/4)
-    needs: [build-archive-linux-aarch64, curl-native-linux-aarch64]
+    needs: [plan, build-archive-linux-aarch64, curl-native-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     container:
@@ -1948,6 +2034,8 @@ jobs:
   # or misses a framework/archive on either platform, fails here.
   curl-ios-compile-link:
     name: Curl iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: plan
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 60
     strategy:
@@ -1981,6 +2069,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-curl-${{ matrix.elephc_target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
 
@@ -2011,6 +2100,8 @@ jobs:
   # libxml2, `-liconv`, or the SDK's zlib/bzip2 on either platform, fails here.
   xml-ios-compile-link:
     name: XML iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: plan
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 60
     strategy:
@@ -2044,6 +2135,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-xml-${{ matrix.elephc_target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
 
@@ -2071,7 +2163,8 @@ jobs:
   # survive between cases, with two workers preserving bounded parallelism.
   eval-codegen-tests-macos-aarch64:
     name: Eval Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
-    needs: build-archive-macos-aarch64
+    needs: [plan, build-archive-macos-aarch64]
+    if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
     timeout-minutes: 40
     strategy:
@@ -2154,7 +2247,8 @@ jobs:
 
   eval-codegen-tests-linux-x86_64:
     name: Eval Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
-    needs: build-archive-linux-x86_64
+    needs: [plan, build-archive-linux-x86_64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     container:
@@ -2214,7 +2308,8 @@ jobs:
 
   eval-codegen-tests-linux-aarch64:
     name: Eval Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
-    needs: build-archive-linux-aarch64
+    needs: [plan, build-archive-linux-aarch64]
+    if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
     container:
@@ -2358,6 +2453,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-builtins-docs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
 
@@ -2485,6 +2581,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-curl-feature
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
 
@@ -2524,6 +2621,8 @@ jobs:
 
   managed-native-smoke:
     name: Managed Native Packages (${{ matrix.target }})
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -2560,6 +2659,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-managed-native-${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
 
@@ -2787,6 +2887,7 @@ jobs:
     name: Build & Test
     runs-on: ubuntu-latest
     needs:
+      - plan
       - build-archive-macos-aarch64
       - build-archive-linux-x86_64
       - build-archive-linux-aarch64
@@ -2840,45 +2941,51 @@ jobs:
           retention-days: 7
 
       - name: Verify test jobs
+        # The plan job decides which tiers ran; a skipped tier must be skipped, never a quiet
+        # failure, and a job in `needs` that none of the lists below classifies fails the gate,
+        # so a new job cannot slip past it.
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          RUN_TIER: ${{ needs.plan.outputs.run }}
+          EXTENDED_TIER: ${{ needs.plan.outputs.extended }}
         run: |
-          test "${{ needs.build-archive-macos-aarch64.result }}" = "success"
-          test "${{ needs.build-archive-linux-x86_64.result }}" = "success"
-          test "${{ needs.build-archive-linux-aarch64.result }}" = "success"
-          test "${{ needs.non-codegen-tests-macos-aarch64.result }}" = "success"
-          test "${{ needs.non-codegen-tests-linux-x86_64.result }}" = "success"
-          test "${{ needs.non-codegen-tests-linux-aarch64.result }}" = "success"
-          test "${{ needs.cli-tests-macos-aarch64.result }}" = "success"
-          test "${{ needs.cli-tests-linux-x86_64.result }}" = "success"
-          test "${{ needs.cli-tests-linux-aarch64.result }}" = "success"
-          test "${{ needs.web-tests-macos-aarch64.result }}" = "success"
-          test "${{ needs.web-tests-linux-x86_64.result }}" = "success"
-          test "${{ needs.web-tests-linux-aarch64.result }}" = "success"
-          test "${{ needs.codegen-tests-macos-aarch64.result }}" = "success"
-          test "${{ needs.codegen-tests-linux-x86_64.result }}" = "success"
-          test "${{ needs.codegen-tests-linux-aarch64.result }}" = "success"
-          test "${{ needs.pdo-codegen-tests-macos-aarch64.result }}" = "success"
-          test "${{ needs.pdo-codegen-tests-linux-x86_64.result }}" = "success"
-          test "${{ needs.pdo-codegen-tests-linux-aarch64.result }}" = "success"
-          test "${{ needs.curl-codegen-tests-macos-aarch64.result }}" = "success"
-          test "${{ needs.curl-codegen-tests-linux-x86_64.result }}" = "success"
-          test "${{ needs.curl-codegen-tests-linux-aarch64.result }}" = "success"
-          test "${{ needs.curl-native-macos-aarch64.result }}" = "success"
-          test "${{ needs.curl-native-linux-x86_64.result }}" = "success"
-          test "${{ needs.curl-native-linux-aarch64.result }}" = "success"
-          test "${{ needs.curl-ios-compile-link.result }}" = "success"
-          test "${{ needs.xml-ios-compile-link.result }}" = "success"
-          test "${{ needs.eval-codegen-tests-macos-aarch64.result }}" = "success"
-          test "${{ needs.eval-codegen-tests-linux-x86_64.result }}" = "success"
-          test "${{ needs.eval-codegen-tests-linux-aarch64.result }}" = "success"
-          test "${{ needs.image-api-sync.result }}" = "success"
-          test "${{ needs.builtins-docs-sync.result }}" = "success"
-          test "${{ needs.differential-tests.result }}" = "success"
-          test "${{ needs.managed-native-smoke.result }}" = "success"
-          test "${{ needs.curl-feature-contract.result }}" = "success"
-          test "${{ needs.security-audit.result }}" = "success"
-          test "${{ needs.action-pins.result }}" = "success"
-          test "${{ needs.frame-assertions-release.result }}" = "success"
-          test "${{ needs.benchmark-tooling.result }}" = "success"
+          always="plan build-archive-macos-aarch64 build-archive-linux-x86_64
+            build-archive-linux-aarch64 image-api-sync builtins-docs-sync differential-tests
+            curl-feature-contract security-audit action-pins frame-assertions-release
+            benchmark-tooling"
+          run_tier="non-codegen-tests-linux-x86_64 non-codegen-tests-linux-aarch64
+            cli-tests-linux-x86_64 cli-tests-linux-aarch64 web-tests-linux-x86_64
+            web-tests-linux-aarch64 codegen-tests-linux-x86_64 codegen-tests-linux-aarch64
+            pdo-codegen-tests-linux-x86_64 pdo-codegen-tests-linux-aarch64
+            curl-native-linux-x86_64 curl-native-linux-aarch64 curl-codegen-tests-linux-x86_64
+            curl-codegen-tests-linux-aarch64 eval-codegen-tests-linux-x86_64
+            eval-codegen-tests-linux-aarch64 managed-native-smoke"
+          extended_tier="non-codegen-tests-macos-aarch64 cli-tests-macos-aarch64
+            web-tests-macos-aarch64 codegen-tests-macos-aarch64 pdo-codegen-tests-macos-aarch64
+            curl-native-macos-aarch64 curl-codegen-tests-macos-aarch64
+            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link"
+          in_list() { case " $(echo $2) " in *" $1 "*) return 0 ;; esac; return 1; }
+          echo "tiers: run=$RUN_TIER extended=$EXTENDED_TIER"
+          status=0
+          for job in $(jq -r 'keys[]' <<< "$NEEDS"); do
+            result=$(jq -r --arg job "$job" '.[$job].result' <<< "$NEEDS")
+            if in_list "$job" "$always"; then
+              want=success
+            elif in_list "$job" "$run_tier"; then
+              if [ "$RUN_TIER" = true ]; then want=success; else want=skipped; fi
+            elif in_list "$job" "$extended_tier"; then
+              if [ "$EXTENDED_TIER" = true ]; then want=success; else want=skipped; fi
+            else
+              echo "::error::$job is in needs but in none of this gate's tier lists"
+              status=1
+              continue
+            fi
+            if [ "$result" != "$want" ]; then
+              echo "::error::$job finished $result, expected $want"
+              status=1
+            fi
+          done
+          exit "$status"
 
   benchmark:
     name: Benchmark Suite

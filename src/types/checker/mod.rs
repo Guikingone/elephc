@@ -299,6 +299,12 @@ pub(crate) struct Checker {
     pub extern_classes: HashMap<String, ExternClassInfo>,
     /// Packed layout-only records (`packed class`), keyed by canonical name.
     pub packed_classes: HashMap<String, PackedClassInfo>,
+    /// Canonical names of every packed or extern record declared in the program.
+    ///
+    /// This predeclaration set lets `ptr<T>` fields name their own record or a record whose
+    /// layout has not been built yet, without making duplicate detection treat each record as
+    /// colliding with itself.
+    pub declared_native_records: HashSet<String>,
     /// Extern global variable declarations, keyed by variable name.
     pub extern_globals: HashMap<String, PhpType>,
     /// Libraries required by `#[link]` attributes on extern blocks, in link order.
@@ -708,7 +714,7 @@ pub(crate) struct SavedNarrowingOrigin {
 impl Checker {
     /// True when `name`'s current binding may be killed (by `unset`) or re-bound to an
     /// incompatible type (by assignment) at the current program point. See
-    /// `.plans/local-retype-and-strict-locals.md` — depth-0 + non-aliased rule.
+    /// `docs/php/types.md`, Local retyping: the depth-0 and non-aliased rule.
     ///
     /// A body that calls `eval()` anywhere answers `false` for EVERY name, so both the kill and
     /// the straight-line retype step aside there and the body keeps its pre-feature behaviour

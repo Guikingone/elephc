@@ -12,6 +12,12 @@
 
 #[path = "runtime_gc/borrowed_numeric.rs"]
 mod borrowed_numeric;
+#[path = "runtime_gc/borrowed_string_reads.rs"]
+mod borrowed_string_reads;
+#[path = "runtime_gc/ref_local_append.rs"]
+mod ref_local_append;
+#[path = "runtime_gc/string_offset_lifetime.rs"]
+mod string_offset_lifetime;
 #[path = "runtime_gc/json_decode_owners.rs"]
 mod json_decode_owners;
 #[path = "runtime_gc/string_append.rs"]
@@ -34,6 +40,8 @@ mod object_cast;
 mod array_cast;
 #[path = "runtime_gc/nullable_string_return.rs"]
 mod nullable_string_return;
+#[path = "runtime_gc/nullable_array_read_owners.rs"]
+mod nullable_array_read_owners;
 #[path = "runtime_gc/iconv.rs"]
 mod iconv;
 #[path = "runtime_gc/mbstring.rs"]
@@ -144,6 +152,7 @@ mod boxed_array_column;
 mod boxed_array_take;
 mod boxed_array_unshift;
 mod boxed_array_sort;
+mod boxed_array_reverse;
 mod boxed_array_splice;
 mod boxed_array_slice;
 mod boxed_array_key_sort;

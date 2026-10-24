@@ -23146,7 +23146,7 @@ echo $untyped->getType() === null ? "N" : "n";
     );
     assert_eq!(
         out.stdout,
-        "H:intB,stringB:n:D?EvalAotReflectPropertyTypeDepC:S?intB:B?stringB:uN"
+        "H:stringB,intB:n:D?EvalAotReflectPropertyTypeDepC:S?intB:B?stringB:uN"
     );
 }
 
@@ -24148,7 +24148,7 @@ foreach ($intersection->getTypes() as $type) {
     );
     assert_eq!(
         out.stdout,
-        "U2:intB:stringB:D?:EvalAotReflectTypeDepC:R?:stringB:S!:EvalAotReflectTypeDepC:I2:EvalAotReflectTypeLeftC:EvalAotReflectTypeRightC"
+        "U2:stringB:intB:D?:EvalAotReflectTypeDepC:R?:stringB:S!:EvalAotReflectTypeDepC:I2:EvalAotReflectTypeLeftC:EvalAotReflectTypeRightC"
     );
 }
 
@@ -24863,7 +24863,7 @@ foreach ($params as $param) {
     );
     assert_eq!(
         out.stdout,
-        "7/3:first@0rvRNTnac:int!B:A1:EvalParamTag:first:d|union@1rvbYTnac:union!:intB:stringB:A0:d|both@2rvbYTnac:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|items@3OvbYTNAc:array?B:A0:D=null|callback@4OvbYTNaC:callable?B:A0:D=null|second@5OvbYTNac:App\\Name?C:A0:D=null|rest@6OVRNtNac:null:A0:d|"
+        "7/3:first@0rvRNTnac:int!B:A1:EvalParamTag:first:d|union@1rvbYTnac:union!:stringB:intB:A0:d|both@2rvbYTnac:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|items@3OvbYTNAc:array?B:A0:D=null|callback@4OvbYTNaC:callable?B:A0:D=null|second@5OvbYTNac:App\\Name?C:A0:D=null|rest@6OVRNtNac:null:A0:d|"
     );
 }
 
@@ -24899,7 +24899,7 @@ echo $unionType;
     );
     assert_eq!(
         out.stdout,
-        "dep:?EvalReflectTypeStringDep|union:int|string|null|both:EvalReflectTypeStringLeft&EvalReflectTypeStringRight|mixed:mixed|items:?array|cast:int|string|null|concat:int|string|null|echo:int|string|null"
+        "dep:?EvalReflectTypeStringDep|union:string|int|null|both:EvalReflectTypeStringLeft&EvalReflectTypeStringRight|mixed:mixed|items:?array|cast:string|int|null|concat:string|int|null|echo:string|int|null"
     );
 }
 
@@ -25244,7 +25244,7 @@ echo ":unionSet:" . count($directUnion->getSettableType()->getTypes());');
     );
     assert_eq!(
         out.stdout,
-        "id:T:int!B|name:T:string?B|dep:T:EvalReflectPropertyTypeDep!C|plain:t:null|union:T:union!:intB:stringB|direct:T:EvalReflectPropertyTypeDep:set:EvalReflectPropertyTypeDep:plainSet:N:unionSet:2"
+        "id:T:int!B|name:T:string?B|dep:T:EvalReflectPropertyTypeDep!C|plain:t:null|union:T:union!:stringB:intB|direct:T:EvalReflectPropertyTypeDep:set:EvalReflectPropertyTypeDep:plainSet:N:unionSet:2"
     );
 }
 
@@ -25281,7 +25281,7 @@ echo ":" . $box->value;');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "string:2:intB:stringB:2:7");
+    assert_eq!(out.stdout, "string:2:stringB:intB:2:7");
 }
 
 /// Verifies eval ReflectionProperty materializes property default metadata through the bridge.
@@ -26119,7 +26119,7 @@ echo $plain->getReturnType() === null ? "Q" : "q";');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "T:int:N:B:2:intBstringB:never:n:B:p:Q");
+    assert_eq!(out.stdout, "T:int:N:B:2:stringBintB:never:n:B:p:Q");
 }
 
 /// Verifies eval ReflectionFunction and ReflectionMethod stringify retained signatures.
@@ -26149,7 +26149,7 @@ echo str_replace("\n", "|", $method->__toString());');
     );
     assert_eq!(
         out.stdout,
-        "Function [ <user> function eval_reflect_string_text ] {|  - Parameters [3] {|    Parameter #0 [ <required> string $name ]|    Parameter #1 [ <optional> int $count = 3 ]|    Parameter #2 [ <optional> &...$items ]|  }|  - Return [ ?string ]|}|::Method [ <user> final static public method run ] {|  - Parameters [2] {|    Parameter #0 [ <required> ?int $id ]|    Parameter #1 [ <optional> string $label = 'ok' ]|  }|  - Return [ ?string ]|}|"
+        "Function [ <user> function eval_reflect_string_text ] {||  - Parameters [3] {|    Parameter #0 [ <required> string $name ]|    Parameter #1 [ <optional> int $count = 3 ]|    Parameter #2 [ <optional> &...$items ]|  }|  - Return [ ?string ]|}|::Method [ <user> final static public method run ] {||  - Parameters [2] {|    Parameter #0 [ <required> ?int $id ]|    Parameter #1 [ <optional> string $label = 'ok' ]|  }|  - Return [ ?string ]|}|"
     );
 }
 
@@ -30567,4 +30567,164 @@ if ($w instanceof Wide) { echo readwide($w); }
 "#,
     );
     assert_eq!(out, "2|7s");
+}
+
+/// Counts how many times a symbol is DEFINED as a label in the user assembly.
+fn count_symbol_definitions(user_asm: &str, symbol: &str) -> usize {
+    let definition = format!("{symbol}:");
+    user_asm
+        .lines()
+        .filter(|line| line.trim() == definition)
+        .count()
+}
+
+/// Counts the direct calls to a symbol, on any supported call encoding.
+///
+/// AArch64 emits `bl`; x86_64 emits `call`. Mach-O prefixes an external name
+/// with `_` and the other targets do not, so the callee is compared with that
+/// one prefix optional. Comparing EXACTLY rather than by suffix keeps a future
+/// `..._native_method_extra` from inflating the count of
+/// `..._native_method`.
+fn count_direct_calls(user_asm: &str, symbol: &str) -> usize {
+    let prefixed = format!("_{symbol}");
+    user_asm
+        .lines()
+        .filter(|line| {
+            let line = line.trim();
+            ["bl ", "call "].iter().any(|opcode| {
+                line.strip_prefix(opcode).is_some_and(|callee| {
+                    let callee = callee.trim_end();
+                    callee == symbol || callee == prefixed
+                })
+            })
+        })
+        .count()
+}
+
+/// Asserts a helper label is emitted as a GLOBAL symbol, not an assembler-local one.
+///
+/// `count_symbol_definitions` cannot tell the two apart: both produce the same
+/// `name:` line. `label_global` additionally emits `.globl <name>` (and, on ELF,
+/// its own `.text.<name>` section), which is what keeps the helper out of a
+/// neighbouring function's section under `--gc-sections`/`-dead_strip`.
+fn assert_global_label(user_asm: &str, symbol: &str, context: &str) {
+    let globl = format!(".globl {symbol}");
+    assert!(
+        user_asm.lines().any(|line| line.trim() == globl),
+        "{context}: {symbol} must be emitted with a global label"
+    );
+}
+
+/// Builds a program whose method performs an eval that needs the BRIDGE, repeated `sites` times.
+///
+/// `$GLOBALS` inside the fragment is what forces the bridge path: a plain literal
+/// fragment compiles to an internal EIR function and never registers an inventory.
+fn eval_bridge_source(sites: usize) -> String {
+    let mut source = String::from("<?php\nclass Demo {\n    public int $n = 0;\n    public function run(): void {\n");
+    for index in 0..sites {
+        source.push_str(&format!(
+            "        eval('$GLOBALS[\"slot{index}\"] = {index};');\n"
+        ));
+    }
+    source.push_str("    }\n}\n$d = new Demo();\n$d->run();\necho $d->n, \"\\n\";\n");
+    source
+}
+
+/// Verifies the eval inventory is registered by ONE module-level helper, not once per eval site.
+///
+/// This is the regression guard for the quadratic blowup that made
+/// `examples/eval/main.php` emit 747 MB of assembly: every eval call site
+/// re-emitted the whole native inventory, so the registration count scaled with
+/// the number of SITES. With one helper it is a function of the INVENTORY alone,
+/// which is the same for both programs here, so the counts must be EQUAL.
+#[test]
+fn test_eval_inventory_is_registered_once_not_once_per_call_site() {
+    let single_dir = make_cli_test_dir("elephc_eval_inventory_single_site");
+    let (single_asm, _, _) =
+        compile_source_to_asm_with_options(&eval_bridge_source(1), &single_dir, 8_388_608, false, false);
+
+    let many_dir = make_cli_test_dir("elephc_eval_inventory_many_sites");
+    let (many_asm, _, _) =
+        compile_source_to_asm_with_options(&eval_bridge_source(8), &many_dir, 8_388_608, false, false);
+
+    assert_eq!(
+        count_symbol_definitions(&single_asm, "__elephc_eval_register_inventory"),
+        1,
+        "the native inventory helper must be emitted exactly once"
+    );
+    assert_global_label(&single_asm, "__elephc_eval_register_inventory", "one eval site");
+    assert_eq!(
+        count_symbol_definitions(&many_asm, "__elephc_eval_register_inventory"),
+        1,
+        "the native inventory helper must be emitted exactly once"
+    );
+    assert_global_label(&many_asm, "__elephc_eval_register_inventory", "eight eval sites");
+
+    let single_registrations = count_direct_calls(&single_asm, "__elephc_eval_register_native_method");
+    let many_registrations = count_direct_calls(&many_asm, "__elephc_eval_register_native_method");
+    assert!(
+        single_registrations > 0,
+        "an eval that takes the bridge path must register native methods"
+    );
+    assert_eq!(
+        single_registrations, many_registrations,
+        "the inventory is per PROGRAM, not per eval call site: 8 sites must not register \
+         8x the methods (single={single_registrations}, many={many_registrations})"
+    );
+}
+
+/// Verifies the eval status dispatch is one module-level helper shared by every call site.
+///
+/// Every bridge call reports a status, and the dispatch that turns one into a
+/// fatal diagnostic is identical at each of them. Inlining it gave a program
+/// thousands of copies of the same six-label block.
+#[test]
+fn test_eval_status_dispatch_is_a_single_shared_helper() {
+    let dir = make_cli_test_dir("elephc_eval_status_helper");
+    let (user_asm, _, _) =
+        compile_source_to_asm_with_options(&eval_bridge_source(4), &dir, 8_388_608, false, false);
+
+    assert_eq!(
+        count_symbol_definitions(&user_asm, "__elephc_eval_check_status"),
+        1,
+        "the eval status dispatch must be emitted exactly once"
+    );
+    assert_global_label(&user_asm, "__elephc_eval_check_status", "status dispatch");
+    assert!(
+        count_direct_calls(&user_asm, "__elephc_eval_check_status") > 0,
+        "eval call sites must reach the shared status dispatch"
+    );
+}
+
+/// Verifies a scope-aware literal eval still emits the status dispatch it needs.
+///
+/// A literal fragment compiles to an internal EIR function and does NOT link the
+/// bridge, but its scope accessors still report statuses through the shared
+/// helper. Gating that helper on the bridge alone left the program with an
+/// undefined `__elephc_eval_check_status` at link time.
+#[test]
+fn test_literal_eval_scope_program_defines_the_status_dispatch() {
+    let dir = make_cli_test_dir("elephc_eval_status_helper_literal");
+    let (user_asm, _, _) =
+        compile_source_to_asm_with_options(
+            r#"<?php
+eval('$created = "yes";');
+echo $created;
+"#,
+            &dir,
+            8_388_608,
+            false,
+            false,
+        );
+
+    assert!(
+        user_asm.contains("__elephc_eval_scope_set"),
+        "the literal eval must still lower through the eval scope accessor"
+    );
+    assert_eq!(
+        count_symbol_definitions(&user_asm, "__elephc_eval_check_status"),
+        1,
+        "a bridge-free literal eval still needs the shared status dispatch defined"
+    );
+    assert_global_label(&user_asm, "__elephc_eval_check_status", "literal eval");
 }

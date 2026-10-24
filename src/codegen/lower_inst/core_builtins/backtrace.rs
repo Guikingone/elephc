@@ -520,11 +520,13 @@ fn emit_argument_array_from_live_locals(ctx: &mut FunctionContext<'_>) -> Result
         };
         let ty = ctx.load_local_to_result(slot)?;
         let borrowed_box = matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
+        // A `?ptr<T>` parameter keeps its union, so address 0 is PHP null.
+        let box_ty = ctx.local_mixed_box_type(slot)?;
         let sensitive = super::backtrace_sensitive::is_sensitive(ctx, &name);
         if sensitive {
-            super::backtrace_sensitive::wrap_value(ctx, &ty)?;
+            super::backtrace_sensitive::wrap_value(ctx, &box_ty)?;
         } else if !borrowed_box {
-            emit_box_current_value_as_mixed(ctx.emitter, &ty.codegen_repr());
+            emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
         }
         append_box_to_saved_array(ctx, sensitive || !borrowed_box);
     }
@@ -927,7 +929,9 @@ fn emit_printed_live_arguments(ctx: &mut FunctionContext<'_>) -> Result<()> {
         let Some(slot) = ctx.local_slot_by_name(&name) else {
             continue;
         };
-        let ty = ctx.load_local_to_result(slot)?;
+        ctx.load_local_to_result(slot)?;
+        // A `?ptr<T>` parameter keeps its union, so address 0 prints as PHP null.
+        let ty = ctx.local_mixed_box_type(slot)?;
         if super::backtrace_sensitive::is_sensitive(ctx, &name) {
             super::backtrace_sensitive::wrap_value(ctx, &ty)?;
             abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
@@ -1028,7 +1032,7 @@ fn print_current_argument_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
     let repr = ty.codegen_repr();
     let borrowed_box = matches!(repr, PhpType::Mixed | PhpType::Union(_));
     if !borrowed_box {
-        emit_box_current_value_as_mixed(ctx.emitter, &repr);
+        emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(ty));
     }
     let box_reg = abi::int_result_reg(ctx.emitter).to_string();
     if !borrowed_box {
@@ -1130,7 +1134,7 @@ fn load_borrowed_argument_tail_box(ctx: &mut FunctionContext<'_>) {
 
 /// Returns class, function, and call-type strings for the current frame.
 fn frame_function_parts(ctx: &FunctionContext<'_>) -> (Option<String>, String, &'static str) {
-    match ctx.function.name.rsplit_once("::") {
+    match ctx.function.display_name().rsplit_once("::") {
         Some((class, function)) => (
             Some(class.trim_start_matches('\\').to_string()),
             function.to_string(),
@@ -1138,7 +1142,7 @@ fn frame_function_parts(ctx: &FunctionContext<'_>) -> (Option<String>, String, &
         ),
         None => (
             None,
-            ctx.function.name.trim_start_matches('\\').to_string(),
+            ctx.function.display_name().trim_start_matches('\\').to_string(),
             "",
         ),
     }

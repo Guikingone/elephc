@@ -21,7 +21,8 @@ eval_builtin! {
     values: BufferNew,
 }
 
-const BUFFER_HEADER_WORDS: usize = 2;
+/// Header words (length, stride) that precede an eval buffer's payload; `buffer_ptr` skips them.
+pub(super) const BUFFER_HEADER_WORDS: usize = 2;
 const BUFFER_DEFAULT_STRIDE: usize = 8;
 
 /// Evaluates PHP `buffer_new()` over one eval expression.

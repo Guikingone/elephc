@@ -113,6 +113,8 @@ pub struct Module {
     pub declared_trait_source_lines: HashMap<String, u32>,
     pub declared_trait_uses: HashMap<String, Vec<String>>,
     pub declared_trait_method_names: HashMap<String, Vec<String>>,
+    /// Class methods imported from traits, including aliases, before lexical provenance is lost.
+    pub imported_trait_method_names: HashMap<String, HashSet<String>>,
     pub declared_trait_methods: HashMap<String, HashMap<String, TraitMethodInfo>>,
     pub declared_trait_property_names: HashMap<String, Vec<String>>,
     pub declared_trait_properties: HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
@@ -175,6 +177,7 @@ impl Module {
             declared_trait_source_lines: HashMap::new(),
             declared_trait_uses: HashMap::new(),
             declared_trait_method_names: HashMap::new(),
+            imported_trait_method_names: HashMap::new(),
             declared_trait_methods: HashMap::new(),
             declared_trait_property_names: HashMap::new(),
             declared_trait_properties: HashMap::new(),
@@ -212,6 +215,32 @@ impl Module {
         function.set_id(id);
         self.closures.push(function);
         id
+    }
+
+    /// Returns whether any function-like body calls one typed PCNTL runtime operation.
+    ///
+    /// `pcntl_async_signals()` makes the backend dispatch pending signal handlers after every
+    /// instruction, so optimizations that assume no user code runs between two instructions
+    /// must check it module-wide.
+    pub(crate) fn uses_pcntl_runtime(&self, target: crate::ir::PcntlRuntime) -> bool {
+        self.functions
+            .iter()
+            .chain(self.class_methods.iter())
+            .chain(self.closures.iter())
+            .chain(self.fiber_wrappers.iter())
+            .chain(self.callback_wrappers.iter())
+            .chain(self.extern_callback_trampolines.iter())
+            .chain(self.runtime_callable_invokers.iter())
+            .any(|function| {
+                function.instructions.iter().any(|inst| {
+                    matches!(
+                        inst.immediate,
+                        Some(crate::ir::Immediate::RuntimeCall(
+                            crate::ir::RuntimeCallTarget::Pcntl(found)
+                        )) if found == target
+                    )
+                })
+            })
     }
 }
 

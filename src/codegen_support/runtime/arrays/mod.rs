@@ -109,6 +109,7 @@ mod array_to_hash_reverse;
 mod array_to_hash_unique;
 mod hash_to_hash_unique;
 mod array_to_mixed;
+mod array_to_pointer_words;
 mod array_udiff_uintersect;
 mod array_union;
 mod array_unshift;
@@ -168,6 +169,7 @@ mod hash_to_mixed;
 mod hash_union;
 mod hash_unset;
 mod heap_alloc;
+pub(crate) mod heap_live_bases;
 mod heap_grow_tail;
 mod heap_debug_check_live;
 mod heap_debug_fail;
@@ -406,6 +408,7 @@ pub use array_to_hash_unique::emit_array_to_hash_unique;
 pub use hash_to_hash_unique::emit_hash_to_hash_unique;
 /// Emit key-preserving deduplicating indexed-array-to-hash converter helper (array_unique).
 pub use array_to_mixed::emit_array_to_mixed;
+pub use array_to_pointer_words::emit_array_to_pointer_words;
 /// Emit array-to-Mixed conversion helper.
 pub use array_udiff_uintersect::emit_array_udiff_uintersect;
 /// Emit array udiff/uintersect comparator helper.

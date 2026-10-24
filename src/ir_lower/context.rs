@@ -24,7 +24,7 @@ use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
 use crate::span::Span;
 use crate::types::{
     array_storage_conversion, join_array_storage_conversion, ClassInfo, EnumInfo,
-    ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
+    ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
     ReturnAliasSummaries, ReturnArgAlias, ThrowAccessInfo, TypeEnv,
 };
 
@@ -162,7 +162,16 @@ pub(crate) struct ReferenceCallContext {
     pub(crate) adopted: bool,
 }
 
+/// A local bound to a pointer by-reference parameter, with the parameter's declared type.
+struct PointerReferenceBinding {
+    slot: LocalSlotId,
+    name: String,
+    span: Span,
+    param_ty: PhpType,
+}
+
 /// Rollback point for a speculative statement lowering.
+#[derive(Clone)]
 pub(crate) struct LoweringSnapshot {
     function: Function,
     insertion_block: Option<BlockId>,
@@ -194,6 +203,8 @@ pub(crate) struct LoweringSnapshot {
     reference_call_context: Option<ReferenceCallContext>,
     refusals: usize,
     call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
+    borrowed_string_call_operands: HashSet<ValueId>,
+    borrowed_string_calls_enabled: bool,
     append_update_cell_aliases: HashSet<String>,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
@@ -211,11 +222,13 @@ pub(crate) struct LoweringSnapshot {
     eval_scope_flush_names: BTreeSet<String>,
     numeric_closure_sites: std::collections::HashSet<Span>,
     numeric_tracked_locals: std::collections::HashSet<String>,
-    final_mixed_locals: std::collections::HashSet<String>,
+    final_mixed_locals: std::collections::HashMap<String, std::collections::HashSet<usize>>,
     numeric_proof_sealed: bool,
+    pointer_reference_bindings: usize,
 }
 
 /// Lengths of append-only intern pools captured for speculative rollback.
+#[derive(Clone)]
 struct DataPoolLengths {
     strings: usize,
     float_literals: usize,
@@ -277,6 +290,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) reference_call_context: Option<ReferenceCallContext>,
     /// Nested owner ledgers for source-order call argument evaluation.
     pub(crate) call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
+    /// String subjects borrowed through read-only builtin calls whose result must be detached.
+    pub(crate) borrowed_string_call_operands: HashSet<ValueId>,
+    pub(crate) borrowed_string_calls_enabled: bool,
     pub(crate) append_update_cell_aliases: HashSet<String>,
     initialized_slots: HashSet<LocalSlotId>,
     pub functions: &'m HashMap<String, FunctionSig>,
@@ -293,6 +309,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
         &'m HashMap<String, HashMap<String, crate::ir::TraitMethodInfo>>,
     pub declared_trait_properties: &'m HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
     pub packed_classes: &'m HashMap<String, PackedClassInfo>,
+    /// C struct layouts of the declared extern classes, read by `ptr<Class>` field accesses.
+    pub extern_classes: &'m HashMap<String, ExternClassInfo>,
     /// Statically-decided access violations lowered to runtime `Error` throws,
     /// keyed by the source span of the offending call/assignment.
     pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
@@ -431,14 +449,18 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) numeric_closure_sites: HashSet<Span>,
     /// Locals read or written by an admitted numeric proof.
     pub(crate) numeric_tracked_locals: HashSet<String>,
-    /// Locals whose frame slot must be Mixed from the first store.
+    /// Named storage epochs whose frame slot must be Mixed from the first store.
     ///
-    /// Set only on the replay that follows a discovery pass. The sealed proof
-    /// still describes the `int|float` value; this set is only the storage.
-    pub(crate) final_mixed_locals: HashSet<String>,
+    /// Set on replay when a closure proof or numeric backedge requires stable runtime tags.
+    /// Ordinals keep an unset/rebound variable independent from its old storage.
+    /// This map fixes storage only; fast arithmetic needs its own numeric-domain proof.
+    pub(crate) final_mixed_locals: HashMap<String, HashSet<usize>>,
     /// When set, loop facts reuse `numeric_closure_sites` instead of seeding
     /// another proof from the now-Mixed slots.
     pub(crate) numeric_proof_sealed: bool,
+    /// Locals bound to a pointer by-reference parameter, checked against their final frame
+    /// storage once the body is lowered (`refuse_pointer_reference_bindings`).
+    pointer_reference_bindings: Vec<PointerReferenceBinding>,
     source_path: Option<String>,
 }
 
@@ -461,6 +483,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         declared_trait_methods: &'m HashMap<String, HashMap<String, crate::ir::TraitMethodInfo>>,
         declared_trait_properties: &'m HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
         packed_classes: &'m HashMap<String, PackedClassInfo>,
+        extern_classes: &'m HashMap<String, ExternClassInfo>,
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
@@ -526,6 +549,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             declared_trait_methods,
             declared_trait_properties,
             packed_classes,
+            extern_classes,
             throw_access_sites,
             builtin_call_types,
             boxed_reference_promotion_sites,
@@ -576,6 +600,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             expression_depth: 0,
             reference_call_context: None,
             call_argument_evaluation_scopes: Vec::new(),
+            borrowed_string_call_operands: HashSet::new(),
+            borrowed_string_calls_enabled: true,
             append_update_cell_aliases: HashSet::new(),
             argument_guards: HashMap::new(),
             argument_guard_scopes: Vec::new(),
@@ -589,8 +615,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             eval_scope_flush_names: BTreeSet::new(),
             numeric_closure_sites: HashSet::new(),
             numeric_tracked_locals: HashSet::new(),
-            final_mixed_locals: HashSet::new(),
+            final_mixed_locals: HashMap::new(),
             numeric_proof_sealed: false,
+            pointer_reference_bindings: Vec::new(),
             source_path,
         }
     }
@@ -633,6 +660,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             // always lowered again for real, and that pass records its refusals again.
             refusals: crate::ir_lower::diagnostics::mark(),
             call_argument_evaluation_scopes: self.call_argument_evaluation_scopes.clone(),
+            borrowed_string_call_operands: self.borrowed_string_call_operands.clone(),
+            borrowed_string_calls_enabled: self.borrowed_string_calls_enabled,
             append_update_cell_aliases: self.append_update_cell_aliases.clone(),
             argument_guards: self.argument_guards.clone(),
             argument_guard_scopes: self.argument_guard_scopes.clone(),
@@ -647,6 +676,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             numeric_tracked_locals: self.numeric_tracked_locals.clone(),
             final_mixed_locals: self.final_mixed_locals.clone(),
             numeric_proof_sealed: self.numeric_proof_sealed,
+            pointer_reference_bindings: self.pointer_reference_bindings.len(),
         }
     }
 
@@ -708,7 +738,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.expression_depth = snapshot.expression_depth;
         self.reference_call_context = snapshot.reference_call_context;
         crate::ir_lower::diagnostics::rollback_to(snapshot.refusals);
+        self.pointer_reference_bindings.truncate(snapshot.pointer_reference_bindings);
         self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
+        self.borrowed_string_call_operands = snapshot.borrowed_string_call_operands;
+        self.borrowed_string_calls_enabled = snapshot.borrowed_string_calls_enabled;
         self.append_update_cell_aliases = snapshot.append_update_cell_aliases;
         self.argument_guards = snapshot.argument_guards;
         self.argument_guard_scopes = snapshot.argument_guard_scopes;
@@ -748,9 +781,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     php_type
                 }
             }
-            TypeExpr::Buffer(inner) => {
-                PhpType::Buffer(Box::new(self.type_expr_to_php_type_for_value(inner)))
-            }
+            TypeExpr::Buffer(inner) => PhpType::Buffer(Box::new(
+                crate::types::width_type_from_type_expr(inner)
+                    .unwrap_or_else(|| self.type_expr_to_php_type_for_value(inner)),
+            )),
             TypeExpr::Array(inner) => {
                 PhpType::Array(Box::new(self.type_expr_to_php_type_for_value(inner)))
             }
@@ -972,6 +1006,50 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.local_types.insert(name.to_string(), ty);
     }
 
+    /// Records a local bound to a pointer by-reference parameter, for the final storage check.
+    pub(crate) fn record_pointer_reference_binding(
+        &mut self,
+        name: &str,
+        span: Span,
+        param_ty: &PhpType,
+    ) {
+        if let Some(slot) = self.local_slots.get(name).copied() {
+            self.pointer_reference_bindings.push(PointerReferenceBinding {
+                slot,
+                name: name.to_string(),
+                span,
+                param_ty: param_ty.clone(),
+            });
+        }
+    }
+
+    /// Refuses each pointer by-reference binding whose local did not end up a pointer word.
+    ///
+    /// The callee reads and writes a raw pointer word through the reference. A frame slot is a
+    /// pointer word only when every store into it was one: a slot that also holds `null` before
+    /// a pointer (in any order of branches) is boxed `mixed`, and a `null`-only slot holds the
+    /// null sentinel, so the caller would misread what the callee wrote. Final storage is known
+    /// only once the whole body is lowered.
+    pub(crate) fn refuse_pointer_reference_bindings(&self) {
+        for binding in &self.pointer_reference_bindings {
+            let storage = self.builder.local_php_type(binding.slot);
+            if matches!(storage.codegen_repr(), PhpType::Pointer(_)) {
+                continue;
+            }
+            let shown = crate::types::pointer_param_display(&binding.param_ty);
+            crate::ir_lower::diagnostics::refuse(
+                binding.span,
+                &format!(
+                    "${name} cannot bind to a `{shown}` by-reference parameter: the callee writes \
+                     a pointer word back, but ${name} is not stored as one (it holds only null, \
+                     or null and a pointer, or another type somewhere in this scope). Declare \
+                     it as `{shown} ${name} = null;`",
+                    name = binding.name,
+                ),
+            );
+        }
+    }
+
     /// Returns `true` if a local slot has already been declared for `name`.
     pub(crate) fn has_local_slot(&self, name: &str) -> bool {
         self.local_slots.contains_key(name)
@@ -980,6 +1058,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Declares a local slot if it does not already exist.
     pub(crate) fn declare_local(&mut self, name: &str, php_type: PhpType) -> LocalSlotId {
         self.declare_local_with_kind(name, php_type, LocalKind::PhpLocal)
+    }
+
+    /// Counts earlier storage bindings of one PHP name, independently of unrelated hidden slots.
+    /// Parameter COW shadows are separate storage epochs and retain their generated suffix.
+    pub(crate) fn local_binding_ordinal(&self, name: &str, slot: Option<LocalSlotId>) -> usize {
+        let locals = &self.builder.function().locals;
+        let limit = slot.map_or(locals.len(), |slot| slot.as_raw() as usize);
+        locals.iter().take(limit).filter(|local| local.name.as_deref().is_some_and(|stored| {
+            stored == name || stored.strip_suffix("#cow") == Some(name)
+        })).count()
+    }
+
+    /// Applies a replay constraint only to its original binding, including before the first store.
+    pub(crate) fn is_final_mixed_local(&self, name: &str) -> bool {
+        self.final_mixed_locals.get(name).is_some_and(|bindings| {
+            bindings.contains(&self.local_binding_ordinal(name, self.local_slots.get(name).copied()))
+        })
     }
 
     /// Returns the frame storage type a local must use, boxing the locals PHP's `++`/`--`
@@ -1000,7 +1095,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// slot back to `I64` wherever no access can observe the float, which is what keeps an
     /// ordinary counter loop as fast as it was.
     fn boxed_incdec_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
-        if self.final_mixed_locals.contains(name) {
+        if self.is_final_mixed_local(name) {
             return PhpType::Mixed;
         }
         if !matches!(php_type.codegen_repr(), PhpType::Str) {
@@ -1073,6 +1168,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.emit_owned_value(
                 Op::MixedClone, vec![borrowed.value], None, PhpType::Mixed,
                 Op::MixedClone.default_effects(), span,
+            )
+        } else if crate::types::is_pointer_element_indexed_array(php_type) {
+            // A runtime bridge (callable invoker, eval binding) can pass an array of boxed Mixed
+            // cells; the conversion consumes this owned reference and returns raw pointer words.
+            let owned = crate::ir_lower::ownership::acquire_if_refcounted(self, borrowed, span);
+            self.emit_owned_value(
+                Op::ArrayToPointerWords, vec![owned.value], None, php_type.clone(),
+                Op::ArrayToPointerWords.default_effects(), span,
             )
         } else {
             borrowed
@@ -1804,9 +1907,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // in every scope. Ordinary globals remain boxed Mixed cells.
         let php_type = if uses_global {
             self.global_alias_type(name)
-        } else if self.final_mixed_locals.contains(name) && !self.is_ref_bound_local(name) {
-            // The sealed proof already established int|float. Read the boxed slot
-            // as Mixed so codegen does not insert a truncating mixed-to-int cast.
+        } else if self.is_final_mixed_local(name) && !self.is_ref_bound_local(name) {
+            // Replay fixed the final representation. Preserve its actual runtime tag
+            // instead of truncating a promoted float to the entry integer type.
             PhpType::Mixed
         } else {
             self.local_type(name)
@@ -1828,9 +1931,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             (false, false, LocalKind::StaticLocal) => Op::LoadStaticLocal,
             _ => Op::LoadLocal,
         };
-        // A normal ref-cell read borrows a lifetime-tracked pointee. Scalar payloads remain
-        // `NonHeap`. Only `load_local_storage`, used when retiring the slot's stored owner, may
-        // claim ownership of the same refcounted payload.
+        // Reference-cell reads borrow their pointee. Append normalization chooses the
+        // final boxed representation without changing other reference payload contracts.
         let ownership = if op == Op::LoadRefCell
             && Ownership::php_type_needs_lifetime_tracking(&php_type)
         {
@@ -2522,9 +2624,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Shared body of the two consuming-mutation preludes above.
     ///
     /// Declares (or re-declares) the local at `replacement_type`, widens its frame storage so
-    /// the final Mixed representation is visible, and — only when `release_box` is set — drops
-    /// the previous Mixed box so the source load becomes the container's sole owner for the
-    /// mutation. Program-global names return early: their storage is the `_eir_global_*`
+    /// the final Mixed representation is visible, and, only when `release_box` is set, clears
+    /// and retires the previous Mixed box so the source load becomes the container's sole owner
+    /// for the mutation. Program-global names return early: their storage is the `_eir_global_*`
     /// symbol, not a frame slot. A ref-bound local never releases here either; its cell alias
     /// is retired by the `StoreRefCell` that publishes the replacement.
     fn prepare_mutated_local_owner_impl(
@@ -2555,7 +2657,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && matches!(storage_type, PhpType::Mixed | PhpType::Union(_))
             && !matches!(source_type, PhpType::Mixed | PhpType::Union(_))
         {
-            self.release_stored_local_value(name, slot, span);
+            self.emit_void(
+                Op::ReleaseLocalSlot,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                Op::ReleaseLocalSlot.default_effects(),
+                span,
+            );
         }
     }
 
@@ -3406,6 +3514,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.builder.value_defining_op(value.value),
                 Some(
                     Op::Acquire
+                    | Op::EnsureOwned
                     | Op::IToStr
                     | Op::FToStr
                     | Op::BoolToStr
@@ -3413,6 +3522,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::MixedBox
                     | Op::MixedClone
                     | Op::ArrayToMixed
+                    | Op::ArrayToPointerWords
                     | Op::HashToMixed
                     | Op::InvokerRefArg
                     | Op::MixedNumericBinop
@@ -3425,7 +3535,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::StrConcat
                     | Op::StrAppend
                     | Op::StrPersist
-                    | Op::StrCharAt
                     | Op::StrInterpolate
                     | Op::ArrayNew
                     | Op::HashNew
@@ -3495,7 +3604,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     return None;
                 }
                 let op = self.builder.value_defining_op(value);
-                if matches!(op, Some(Op::LoadLocal | Op::LoadStaticLocal))
+                if matches!(op, Some(Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell))
                     && !self.value_is_owned_temp_load(value)
                 {
                     return None;
@@ -3785,6 +3894,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let Some(inst) = self.builder.value_defining_instruction(value.value) else {
             return false;
         };
+        // A byte view owns no allocation, but a later argument can replace its source.
+        // Preserve source-evaluation pinning; backend release skips the borrowed view itself.
+        if inst.op == Op::StrCharAt { return true; }
         if !matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
             return false;
         }
@@ -4562,6 +4674,40 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         boxed
     }
 
+    /// Widens a pointer array or hash to boxed Mixed elements, leaving any other value as it is.
+    ///
+    /// Each null pointer word becomes PHP null and each live word its integer address, so a view
+    /// of the container through `mixed` agrees with its `?ptr<T>` element reads. A borrowed
+    /// source is copied first, so the pointer container itself keeps its storage.
+    pub(crate) fn widen_pointer_container_to_mixed(
+        &mut self,
+        value: LoweredValue,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let source_ty = self.builder.value_php_type(value.value).codegen_repr();
+        let target_ty = match &source_ty {
+            PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Pointer(_)) => {
+                PhpType::Array(Box::new(PhpType::Mixed))
+            }
+            PhpType::AssocArray { key, value: elem }
+                if matches!(elem.codegen_repr(), PhpType::Pointer(_)) =>
+            {
+                PhpType::AssocArray {
+                    key: key.clone(),
+                    value: Box::new(PhpType::Mixed),
+                }
+            }
+            _ => return value,
+        };
+        crate::ir_lower::expr::coerce_container_to_mixed_payload(
+            self,
+            value,
+            &source_ty,
+            &target_ty,
+            span.unwrap_or_else(Span::dummy),
+        )
+    }
+
     /// Emits a value-producing opcode with computed storage and ownership metadata.
     pub(crate) fn emit_value(
         &mut self,
@@ -4582,6 +4728,84 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             )
             .expect("value opcode produces a value");
         LoweredValue { value, ir_type }
+    }
+
+    /// Retypes a packed record address only when a pointer sink consumes it.
+    ///
+    /// Packed producers keep their record-shaped metadata so field-access optimization still
+    /// recognizes them and does not insert pointer null checks. `Move` is the existing pure
+    /// forwarding operation, so this changes only the sink-facing PHP and EIR types while
+    /// preserving the raw address payload. The sink's pointer type wins even when it names
+    /// another class: the checker accepts any pointer for any pointer, and the payload is the
+    /// same address either way.
+    ///
+    /// A PHP `null` reaching a pointer sink (including a `?ptr<T>` slot, stored as one pointer
+    /// word) becomes the word 0: null and a null pointer are the same value there, and the
+    /// ordinary null sentinel word would read as a live address.
+    pub(crate) fn retype_packed_address_for_pointer_sink(
+        &mut self,
+        value: LoweredValue,
+        expected: &PhpType,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let source = self.builder.value_php_type(value.value).codegen_repr();
+        let PhpType::Pointer(target) = expected.codegen_repr() else {
+            return value;
+        };
+        if matches!(source, PhpType::Void | PhpType::Never) {
+            return self.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(0)),
+                PhpType::Pointer(target),
+                Op::ConstI64.default_effects(),
+                span,
+            );
+        }
+        if !matches!(source, PhpType::Packed(_)) {
+            return value;
+        }
+        self.emit_value(
+            Op::Move,
+            vec![value.value],
+            None,
+            PhpType::Pointer(target),
+            Op::Move.default_effects(),
+            span,
+        )
+    }
+
+    /// Retypes a value written into an array or hash element for pointer storage.
+    ///
+    /// A packed record address is stored as the `ptr<T>` word the checker types it as, whatever
+    /// the container's current element type: an empty local array takes its element type from
+    /// the first write, and a `Packed` value there would widen it to boxed `mixed`. `null`
+    /// becomes the word 0 only when the container already stores pointers; anywhere else it
+    /// stays PHP null.
+    pub(crate) fn retype_value_for_container_element(
+        &mut self,
+        container_ty: &PhpType,
+        value: LoweredValue,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let element = match container_ty.codegen_repr() {
+            PhpType::Array(element) => Some(*element),
+            PhpType::AssocArray { value, .. } => Some(*value),
+            _ => None,
+        };
+        if let Some(element) =
+            element.filter(|element| matches!(element.codegen_repr(), PhpType::Pointer(_)))
+        {
+            return self.retype_packed_address_for_pointer_sink(value, &element, span);
+        }
+        match self.builder.value_php_type(value.value).codegen_repr() {
+            PhpType::Packed(class_name) => self.retype_packed_address_for_pointer_sink(
+                value,
+                &PhpType::Pointer(Some(class_name)),
+                span,
+            ),
+            _ => value,
+        }
     }
 
     /// Emits a value-producing opcode whose result is an unconditional owned reference.
@@ -4615,12 +4839,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         LoweredValue { value, ir_type }
     }
 
-    /// Emits an `is_truthy` conversion when a value is not already I64.
+    /// Emits an `is_truthy` conversion unless the value is an integer that is already its own
+    /// truthiness.
+    ///
+    /// A raw PHP null is also an I64 (the null literal or an assignment expression whose
+    /// right-hand side is null), and its sentinel is nonzero, so a `Void`/`Never` value must
+    /// still go through `is_truthy`, whose null arm answers false (#1990).
     pub(crate) fn truthy(&mut self, input: LoweredValue, span: Option<Span>) -> LoweredValue {
         if let Some(value) = super::expr::object_operators::lower_object_truthy(self, input, span) {
             return value;
         }
-        if input.ir_type == IrType::I64 {
+        if input.ir_type == IrType::I64
+            && !matches!(
+                self.builder.value_php_type(input.value).codegen_repr(),
+                PhpType::Void | PhpType::Never
+            )
+        {
             return input;
         }
         self.emit_value(
@@ -5206,7 +5440,10 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
         TypeExpr::Ptr(name) => {
             PhpType::Pointer(name.as_ref().map(|name| name.as_str().to_string()))
         }
-        TypeExpr::Buffer(inner) => PhpType::Buffer(Box::new(type_expr_to_php_type(inner))),
+        TypeExpr::Buffer(inner) => PhpType::Buffer(Box::new(
+            crate::types::width_type_from_type_expr(inner)
+                .unwrap_or_else(|| type_expr_to_php_type(inner)),
+        )),
         TypeExpr::Named(name) => named_type_expr_to_php_type(name.as_str()),
         // Lowering only ever sees instantiated classes, which are `Named`. Should one
         // arrive uninstantiated, its head is the class it denotes — conservative metadata,

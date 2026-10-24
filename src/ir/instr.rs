@@ -15,6 +15,7 @@ use crate::ir::effects::Effects;
 use crate::ir::function::{FunctionId, LocalSlotId};
 use crate::ir::module::DataId;
 use crate::ir::runtime_call::RuntimeCallTarget;
+use crate::ir::runtime_fn::RuntimeFnId;
 use crate::ir::types::{IrHeapKind, IrType};
 use crate::ir::value::{Ownership, ValueId};
 use crate::span::Span;
@@ -65,6 +66,7 @@ const _: () = assert!(std::mem::size_of::<Instruction>() <= 112);
 /// Optimization pass recorded as an instruction's provenance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PassOrigin {
+    BufferAccess,
     ConstFold,
     IntegerRange,
     Licm,
@@ -75,6 +77,7 @@ impl PassOrigin {
     /// Returns the lower-case spelling used by source maps and the EIR printer.
     pub fn name(self) -> &'static str {
         match self {
+            PassOrigin::BufferAccess => "buffer_access",
             PassOrigin::ConstFold => "const_fold",
             PassOrigin::IntegerRange => "integer_range",
             PassOrigin::Licm => "licm",
@@ -113,6 +116,83 @@ impl Instruction {
     /// Returns true when this instruction has no SSA result value.
     pub fn is_void(&self) -> bool {
         self.result.is_none() || self.result_type.is_void()
+    }
+
+    /// Returns whether this instruction writes a FRESH transient string: new bytes in concat
+    /// scratch or, once the scratch is full, a new heap block stamped `CONCAT_TEMP_HEAP_KIND`.
+    ///
+    /// Only these results can be claimed with `EnsureOwned`. The other values whose release is a
+    /// no-op ([`Self::string_release_is_noop`]) include borrowed views: `substr($s, 0)`,
+    /// `ltrim($s)` with nothing to trim and `$s[0]` answer with a pointer into a live string, and
+    /// claiming one would hand the caller a release of storage another owner still holds.
+    pub fn creates_transient_string(&self) -> bool {
+        matches!(
+            self.op,
+            Op::StrConcat
+                | Op::StrInterpolate
+                | Op::IToStr
+                | Op::FToStr
+                | Op::BoolToStr
+                | Op::ResourceToStr
+        )
+    }
+
+    /// Returns whether ordinary string cleanup must skip this producer.
+    ///
+    /// Scratch values and borrowed views do not carry an owned string reference here. Producers
+    /// recognized by [`Self::creates_transient_string`] need a separate conditional release:
+    /// the backend frees their heap block only while its kind is still `CONCAT_TEMP_HEAP_KIND`.
+    /// If persistence has adopted the block, its owned-string reference belongs to the consumer;
+    /// scratch storage and these already adopted results stay untouched by producer cleanup.
+    /// Runtime calls skip ordinary release unless their result is fresh or independently owned.
+    pub fn string_release_is_noop(&self) -> bool {
+        if self.op == Op::RuntimeCall {
+            let result_is_releasable = match self.immediate {
+                Some(Immediate::RuntimeCall(
+                    RuntimeCallTarget::ArrayFetchForWrite
+                    | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+                    | RuntimeCallTarget::PendingAppendFetchForWrite
+                    | RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed,
+                )) => false,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target)))
+                | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                    target,
+                    ..
+                })) => {
+                    matches!(
+                        target.result_ownership(),
+                        crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                            | crate::builtins::semantics::BuiltinResultOwnership::Independent
+                    ) || matches!(target, RuntimeFnId::GetClass | RuntimeFnId::GetParentClass)
+                }
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::UnaryString(_))) => true,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ExecutablePath)) => true,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(target))) => matches!(
+                    target.result_ownership(),
+                    crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                ),
+                _ => false,
+            };
+            // Class-name lookups return static metadata or an owned eval string, never
+            // concat scratch. Validated release ignores metadata and retires detached copies.
+            // An Independent string lives in concat scratch while it fits and in an owned
+            // heap block past 64 KiB (`__rt_concat_reserve`); `acquire` duplicates both, so
+            // the original must still be released or every large result leaks. The heap
+            // block is never the `.` operator's takeover kind, and scratch is skipped.
+            return !result_is_releasable;
+        }
+        // MixedCastString detaches an owned buffer for string-tagged inputs. Its
+        // other tags return scratch or literals, both ignored by validated release.
+        matches!(
+            self.op,
+            Op::IToStr
+                | Op::FToStr
+                | Op::BoolToStr
+                | Op::ResourceToStr
+                | Op::StrConcat
+                | Op::StrCharAt
+                | Op::StrInterpolate
+        )
     }
 }
 
@@ -833,6 +913,9 @@ pub enum Op {
     MixedUnbox,
     MixedTagOf,
     ArrayToMixed,
+    /// Consumes an owned indexed array bound to a pointer-array slot and returns it with raw
+    /// `?ptr<T>` words: boxed Mixed slots (from a runtime bridge) become null or address words.
+    ArrayToPointerWords,
     HashToMixed,
     MixedCastBool,
     MixedCastInt,
@@ -843,7 +926,7 @@ pub enum Op {
     StrAppend,
     StrLen,
     StrPersist,
-    /// Reads a string offset; an optional Bool immediate controls missing-offset warnings.
+    /// Borrows a string offset view; an optional Bool immediate controls missing-offset warnings.
     StrCharAt,
     StrInterpolate,
     ConcatReset,
@@ -1094,6 +1177,16 @@ pub enum Op {
     BufferLen,
     BufferGet,
     BufferSet,
+    /// Speculatively resolves a buffer handle to its static descriptor address, or 0 for an
+    /// invalid, freed, or stale handle. Never faults: the access that consumes the descriptor
+    /// reports the use-after-free, so the resolution can run ahead of it in a loop preheader.
+    BufferResolve,
+    /// `buffer_get` through a descriptor from `BufferResolve`: `[descriptor, index]`. Faults
+    /// on a zero descriptor; a true immediate records a same-buffer proof that omits bounds.
+    BufferGetResolved,
+    /// `buffer_set` through a descriptor from `BufferResolve`: `[descriptor, index, value]`.
+    /// A true immediate has the same proven-in-range meaning as `BufferGetResolved`.
+    BufferSetResolved,
     BufferFree,
     PackedFieldGet,
     PackedFieldSet,
@@ -1254,6 +1347,10 @@ impl Op {
                 E::READS_HEAP | E::ALLOC_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL
             }
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
+            // Rewrites the (possibly split) array's slots and releases the boxed cells it replaces.
+            ArrayToPointerWords => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+            }
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
             | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
             | GeneratorNew => {
@@ -1264,9 +1361,13 @@ impl Op {
                 | E::WRITES_GLOBAL | E::ALLOC_HEAP | E::MAY_THROW | E::REFCOUNT_OP,
             IsNull | IsTruthy | TypePredicate | MixedUnbox | MixedCastBool | MixedCastInt
             | MixedCastFloat | BufferGet | BufferLen | PackedFieldGet | PtrRead
-            | PtrReadString => {
+            | PtrReadString | BufferGetResolved => {
                 E::READS_HEAP | E::MAY_FATAL
             }
+            // Reads the static descriptor registry and never faults.
+            BufferResolve => E::READS_HEAP,
+            // One scalar store into the validated payload: no refcounted element is replaced.
+            BufferSetResolved => E::WRITES_HEAP | E::MAY_FATAL,
             ArrayGetSilent | HashGetSilent | ArrayIsset | HashIsset | DescriptorArgKeyExists => {
                 E::READS_HEAP
             }
@@ -1469,6 +1570,24 @@ impl Op {
         }
     }
 
+    /// Returns the exact effects of a `prop_get` or `prop_set` on a `packed class` record.
+    ///
+    /// The read is a single load from the record. The write is a single store of a scalar the
+    /// lowering already narrowed or, for a nested packed record field, a copy of the source
+    /// record, so it reads the heap as well; `MAY_FATAL` stays for the payload guard a
+    /// `false`-typed field keeps and the null check of a `ptr<T>` copy source. Neither can warn,
+    /// throw, run user code, or touch the concat scratch. Effect refinement attaches these to
+    /// packed receivers with already materialized values; boxed sources keep default effects.
+    /// The validator accepts exactly this value as the one refinement of an
+    /// otherwise default-only `prop_set`.
+    pub fn packed_field_access_effects(self) -> Effects {
+        if self == Op::PropSet {
+            Effects::READS_HEAP | Effects::WRITES_HEAP | Effects::MAY_FATAL
+        } else {
+            Effects::READS_HEAP
+        }
+    }
+
     /// Returns true when the builder may replace the conservative default effects.
     ///
     /// The arithmetic opcodes below default to `MAY_THROW` because PHP raises a catchable
@@ -1614,6 +1733,7 @@ impl Op {
             MixedUnbox => "mixed_unbox",
             MixedTagOf => "mixed_tag_of",
             ArrayToMixed => "array_to_mixed",
+            ArrayToPointerWords => "array_to_pointer_words",
             HashToMixed => "hash_to_mixed",
             MixedCastBool => "mixed_cast_bool",
             MixedCastInt => "mixed_cast_int",
@@ -1757,6 +1877,9 @@ impl Op {
             BufferLen => "buffer_len",
             BufferGet => "buffer_get",
             BufferSet => "buffer_set",
+            BufferResolve => "buffer_resolve",
+            BufferGetResolved => "buffer_get_resolved",
+            BufferSetResolved => "buffer_set_resolved",
             BufferFree => "buffer_free",
             PackedFieldGet => "packed_field_get",
             PackedFieldSet => "packed_field_set",

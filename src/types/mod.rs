@@ -71,9 +71,16 @@ pub(crate) use array_keys::{
 pub(crate) use array_cast::{array_cast_result_type, php_cast_result_type, ArrayCast};
 pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
 pub use ffi::{
-    ctype_stack_size, ctype_to_abi_type, ctype_to_php_type, packed_type_size, ExternAbiType,
+    align_up, ctype_field_layout, ctype_to_abi_type, ctype_to_php_type, packed_type_layout,
+    packed_type_size, width_spelling_hint, width_type_from_type_expr,
+    ExternAbiType, ScalarWidth,
 };
 pub use model::{PhpType, TypeEnv};
+pub(crate) use model::{
+    eir_value_php_type, is_nullable_pointer_type, is_pointer_element_indexed_array,
+    merge_pointer_elements, mixed_box_php_type,
+    nullable_pointer_union_member, pointer_element_read_type, pointer_param_display,
+};
 pub(crate) use return_alias::{
     collect_return_alias_summaries, summarize_callable_return_alias, ReturnAliasSummaries,
     ReturnArgAlias,

@@ -798,6 +798,130 @@ fn web_reset_clears_static_property() {
     assert!(r2.ends_with("1"), "second response body: {:?}", r2);
 }
 
+/// Verifies an output buffer left open by one request is discarded before the next
+/// request runs. `_ob_level` gates every `ob_*` operation and every terminal write's
+/// capture branch, so a stale level would route the next request's output into heap
+/// storage that `__rt_web_reset` already reclaimed.
+#[test]
+fn web_reset_discards_output_buffers_between_requests() {
+    let dir = make_test_dir("web_reset_output_buffer");
+    let src = r#"<?php
+if (($_SERVER["REQUEST_URI"] ?? "") === "/leave") {
+    ob_start();
+    echo "LEFTOVER";
+} else {
+    $level = ob_get_level();
+    $stale = $level > 0 ? ob_get_clean() : "";
+    echo "level=", $level, ";stale=", $stale;
+}
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let _ = http_get(&addr, "/leave");
+    let r2 = http_get(&addr, "/check");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        r2.ends_with("level=0;stale="),
+        "second request inherited the previous output buffer: {:?}",
+        r2
+    );
+    assert!(
+        !r2.contains("LEFTOVER"),
+        "second request read stale buffered bytes: {:?}",
+        r2
+    );
+}
+
+/// Verifies the request-scoped stream context options are cleared between requests.
+/// `stream_context_create()` stores its options hash in a process-global slot; the
+/// hash is request memory, so leaving it published would let a later request read or
+/// free a reclaimed pointer. The pre-fix sequence crashed the worker with SIGSEGV.
+#[test]
+fn web_reset_clears_stream_context_between_requests() {
+    let dir = make_test_dir("web_reset_stream_context");
+    let src = r#"<?php
+if (($_SERVER["REQUEST_URI"] ?? "") === "/set") {
+    stream_context_create(["http" => ["header" => "X-Leak: req1"]]);
+    echo "set";
+} else {
+    $opts = stream_context_get_options(stream_context_get_default());
+    echo "opts=", json_encode($opts);
+}
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/set");
+    let r2 = http_get(&addr, "/get");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("set"), "first response body: {:?}", r1);
+    assert!(
+        r2.ends_with("opts=[]") || r2.ends_with("opts={}"),
+        "second request inherited stream context options: {:?}",
+        r2
+    );
+    assert!(
+        !r2.contains("X-Leak"),
+        "second request leaked the previous stream context: {:?}",
+        r2
+    );
+}
+
+/// Verifies state created by a destructor during the request reset cannot survive into
+/// the next handler. Static-property release runs PHP destructors inside `__rt_web_reset`;
+/// this destructor re-opens an output buffer and publishes a fresh stream context after
+/// the early clears, so only the final clear before `emit_heap_arena_reset` prevents the
+/// next request from observing pointers into the arena it is about to reclaim.
+#[test]
+fn web_reset_clears_state_created_by_destructors_during_reset() {
+    let dir = make_test_dir("web_reset_destructor_residue");
+    let src = r#"<?php
+class ResetResidue {
+    public function __destruct() {
+        stream_context_create(["http" => ["header" => "X-Residue: 1"]]);
+        ob_start();
+        echo "RESIDUE";
+    }
+}
+class ResetResidueHolder {
+    public static $value = null;
+}
+ResetResidueHolder::$value = new ResetResidue();
+if (($_SERVER["REQUEST_URI"] ?? "") === "/first") {
+    echo "first";
+} else {
+    $level = ob_get_level();
+    $stale = $level > 0 ? ob_get_clean() : "";
+    $opts = stream_context_get_options(stream_context_get_default());
+    echo "level=", $level, ";stale=", $stale, ";opts=", json_encode($opts);
+}
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/first");
+    let r2 = http_get(&addr, "/check");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("first"), "first response body: {:?}", r1);
+    assert!(
+        r2.ends_with("level=0;stale=;opts=[]") || r2.ends_with("level=0;stale=;opts={}"),
+        "second request inherited state created by the reset destructor: {:?}",
+        r2
+    );
+    assert!(
+        !r2.contains("RESIDUE") && !r2.contains("X-Residue"),
+        "second request leaked reset-destructor state: {:?}",
+        r2
+    );
+}
+
 /// Verifies that "Hello World" is served as the response body.
 #[test]
 fn web_server_serves_echo_body() {
@@ -2845,6 +2969,33 @@ echo count($c6), "|", implode(",", array_keys($_GET)), "\n";
     let _ = child.kill();
     let _ = child.wait();
     let expected = "3|3|a,b,c\n3|2|3\n2|2\n2|b,a\n";
+    assert!(r1.ends_with(expected), "first response body: {:?}", r1);
+    assert!(r2.ends_with(expected), "second response body: {:?}", r2);
+}
+
+/// The Mixed-valued hash builtins must keep an aliased superglobal alive.
+#[test]
+fn aliased_superglobal_survives_new_mixed_hash_builtins() {
+    let dir = make_test_dir("web_aliased_superglobal_mixed");
+    let src = r#"<?php
+$c1 = $_GET; array_shift($_GET);
+echo count($c1), "|", count($_GET), "|", implode(",", array_keys($_GET)), "\n";
+$c2 = $_GET; array_unshift($_GET, "n0");
+echo count($c2), "|", count($_GET), "|", implode(",", array_keys($_GET)), "\n";
+$c3 = $_GET; rsort($_GET);
+echo count($c3), "|", count($_GET), "|", implode(",", array_keys($_GET)), "\n";
+$c4 = $_GET; array_reverse($_GET);
+echo count($c4), "|", count($_GET), "\n";
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/?a=1&b=2&c=3");
+    let r2 = http_get(&addr, "/?a=1&b=2&c=3");
+    let _ = child.kill();
+    let _ = child.wait();
+    let expected = "3|2|b,c\n2|3|0,b,c\n3|3|0,1,2\n3|3\n";
     assert!(r1.ends_with(expected), "first response body: {:?}", r1);
     assert!(r2.ends_with(expected), "second response body: {:?}", r2);
 }

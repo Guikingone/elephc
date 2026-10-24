@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
+//! - Numeric operators delegate to the shared PHP-equivalent arithmetic folder.
 
 use super::*;
 
@@ -74,6 +75,7 @@ pub(super) fn reflection_member_flags(
         is_readonly,
         is_promoted,
         is_virtual: false,
+        is_inherited: false,
     }
 }
 
@@ -257,7 +259,9 @@ pub(super) fn reflection_constant_value(
         ExprKind::Null => Ok(ReflectionConstantValue::Null),
         ExprKind::Negate(inner) => {
             match reflection_constant_value(ctx, current_class, current_info, inner, depth + 1)? {
-                ReflectionConstantValue::Int(value) => Ok(ReflectionConstantValue::Int(-value)),
+                ReflectionConstantValue::Int(value) => Ok(value.checked_neg()
+                    .map(ReflectionConstantValue::Int)
+                    .unwrap_or_else(|| ReflectionConstantValue::Float(-(value as f64)))),
                 ReflectionConstantValue::Float(value) => Ok(ReflectionConstantValue::Float(-value)),
                 other => Err(unsupported_reflection_constant_value(other)),
             }
@@ -284,6 +288,22 @@ pub(super) fn reflection_constant_value(
             name,
             depth + 1,
         ),
+        // A GLOBAL constant. Only the scoped form was folded, so a parameter declared
+        // `int $n = LIMIT` reached the reflector with no value: `isDefaultValueAvailable()`
+        // answered false and `getDefaultValue()` threw, where PHP answers `true` and `7`
+        // (#1080). The module carries the declared value, so this resolves the same way the
+        // class form does.
+        ExprKind::ConstRef(name) => {
+            let key = name.as_str().trim_start_matches('\\');
+            let Some((value, _)) = ctx.module.global_constants.get(key) else {
+                return Err(CodegenIrError::unsupported(format!(
+                    "ReflectionClass constant metadata for undeclared constant {}",
+                    key
+                )));
+            };
+            let value = Expr::new(value.clone(), expr.span);
+            reflection_constant_value(ctx, current_class, current_info, &value, depth + 1)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "ReflectionClass constant metadata expression {:?}",
             other
@@ -301,45 +321,10 @@ pub(super) fn reflection_binary_constant_value(
     right: &Expr,
     depth: usize,
 ) -> Result<ReflectionConstantValue> {
+    let span = left.span;
     let left = reflection_constant_value(ctx, current_class, current_info, left, depth)?;
     let right = reflection_constant_value(ctx, current_class, current_info, right, depth)?;
     match (&left, op, &right) {
-        (
-            ReflectionConstantValue::Int(left),
-            BinOp::Add,
-            ReflectionConstantValue::Int(right),
-        ) => {
-            Ok(ReflectionConstantValue::Int(*left + *right))
-        }
-        (
-            ReflectionConstantValue::Int(left),
-            BinOp::Sub,
-            ReflectionConstantValue::Int(right),
-        ) => {
-            Ok(ReflectionConstantValue::Int(*left - *right))
-        }
-        (
-            ReflectionConstantValue::Int(left),
-            BinOp::Mul,
-            ReflectionConstantValue::Int(right),
-        ) => {
-            Ok(ReflectionConstantValue::Int(*left * *right))
-        }
-        (
-            ReflectionConstantValue::Int(left),
-            BinOp::Mod,
-            ReflectionConstantValue::Int(right),
-        ) if *right != 0 => {
-            Ok(ReflectionConstantValue::Int(*left % *right))
-        }
-        (
-            ReflectionConstantValue::Int(left),
-            BinOp::Pow,
-            ReflectionConstantValue::Int(right),
-        ) if *right >= 0 =>
-        {
-            Ok(ReflectionConstantValue::Int((*left).pow(*right as u32)))
-        }
         (
             ReflectionConstantValue::Str(left),
             BinOp::Concat,
@@ -347,9 +332,11 @@ pub(super) fn reflection_binary_constant_value(
         ) => Ok(ReflectionConstantValue::Str(format!("{}{}", left, right))),
         (
             left,
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow,
             right,
-        ) => reflection_float_binary_constant_value(left, op, right).ok_or_else(|| {
+        ) => super::constant_arithmetic::reflection_numeric_binary_constant_value(
+            left, op, right, span,
+        ).ok_or_else(|| {
             CodegenIrError::unsupported(format!(
                 "ReflectionClass constant metadata binary value {:?} {:?}",
                 reflection_constant_value_kind(left),
@@ -361,34 +348,6 @@ pub(super) fn reflection_binary_constant_value(
             reflection_constant_value_kind(left),
             reflection_constant_value_kind(right)
         ))),
-    }
-}
-
-/// Evaluates a numeric binary operator that must produce a float Reflection value.
-pub(super) fn reflection_float_binary_constant_value(
-    left: &ReflectionConstantValue,
-    op: &BinOp,
-    right: &ReflectionConstantValue,
-) -> Option<ReflectionConstantValue> {
-    let left = reflection_constant_value_as_float(left)?;
-    let right = reflection_constant_value_as_float(right)?;
-    let value = match op {
-        BinOp::Add => left + right,
-        BinOp::Sub => left - right,
-        BinOp::Mul => left * right,
-        BinOp::Div if right != 0.0 => left / right,
-        BinOp::Pow => left.powf(right),
-        _ => return None,
-    };
-    Some(ReflectionConstantValue::Float(value))
-}
-
-/// Returns the float representation of numeric Reflection constant metadata.
-pub(super) fn reflection_constant_value_as_float(value: &ReflectionConstantValue) -> Option<f64> {
-    match value {
-        ReflectionConstantValue::Int(value) => Some(*value as f64),
-        ReflectionConstantValue::Float(value) => Some(*value),
-        _ => None,
     }
 }
 
