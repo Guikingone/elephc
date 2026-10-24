@@ -7,14 +7,17 @@
 //! Key details:
 //! - Hand-built methods retain throwing property reads and raw buffer acquire/release pairs.
 
+use std::collections::HashMap;
+
 use crate::codegen::platform::{Arch, Platform, Target};
 use crate::ir::{
     validate_function, BlockId, Builder, CmpPredicate, DataId, Effects, Function, FunctionParam,
     Immediate, InstId, IrHeapKind, IrType, LocalKind, Module, Op, Ownership, RuntimeCallTarget,
-    RuntimeFnId, Terminator, ValueDef, ValueId,
+    RuntimeFnId, Terminator, Value, ValueDef, ValueId,
 };
 use crate::ir_passes::buffer_access::hoist_buffer_resolution;
 use crate::ir_passes::{compute_dominance, compute_loops};
+use crate::ir_passes::rewrite::replace_all_uses;
 use crate::types::PhpType;
 
 /// An independently varied reason to retain the original property read.
@@ -68,7 +71,7 @@ fn fixture(shape: Shape) -> (Function, BlockId, BlockId, InstId) {
             let receiver = b.emit_load_local(receiver_slot, IrType::Heap(IrHeapKind::Object), PhpType::Object("Slots".into()));
             Some(property(&mut b, receiver))
         } else { None };
-        let condition = b.emit(Op::ICmp, vec![index, limit], Some(Immediate::Cmp(CmpPredicate::Slt)),
+        let condition = b.emit(Op::ICmp, vec![index, limit], Some(Immediate::CmpPredicate(CmpPredicate::Slt)),
             IrType::I64, PhpType::Bool, Ownership::NonHeap).unwrap();
         b.terminate(Terminator::CondBr {
             cond: condition, then_target: body, then_args: vec![], else_target: exit, else_args: vec![],
@@ -175,5 +178,65 @@ fn buffer_property_loop_unsafe_shapes_remain_in_place() {
         let dominance = compute_dominance(&function);
         let loops = compute_loops(&function, &dominance);
         assert!(loops.loops().iter().find(|loop_ref| loop_ref.header == header).unwrap().contains(block));
+    }
+}
+
+/// Entry and zero-trip exit arguments substitute the initial value for the header parameter.
+#[test]
+fn buffer_property_loop_guard_remaps_nonempty_edge_arguments() {
+    for reversed in [false, true] {
+        let (mut function, entry, header, _) = fixture(Shape::Body);
+        let exit = function.blocks[5].id;
+        let old_index = function.instructions[function.blocks[header.as_raw() as usize].instructions[0].as_raw() as usize].result.unwrap();
+        let initial = function.instructions[function.blocks[entry.as_raw() as usize].instructions[0].as_raw() as usize].result.unwrap();
+        let index = ValueId::from_raw(function.values.len() as u32);
+        function.values.push(Value {
+            ir_type: IrType::I64, php_type: PhpType::Int, ownership: Ownership::NonHeap,
+            def: ValueDef::BlockParam { block: header, index: 0 },
+        });
+        function.blocks[header.as_raw() as usize].params.push(index);
+        replace_all_uses(&mut function, &HashMap::from([(old_index, index)]));
+        let result = ValueId::from_raw(function.values.len() as u32);
+        function.values.push(Value {
+            ir_type: IrType::I64, php_type: PhpType::Int, ownership: Ownership::NonHeap,
+            def: ValueDef::BlockParam { block: exit, index: 0 },
+        });
+        function.blocks[exit.as_raw() as usize].params.push(result);
+        function.return_type = IrType::I64;
+        function.return_php_type = PhpType::Int;
+        function.blocks[exit.as_raw() as usize].terminator = Some(Terminator::Return { value: Some(result) });
+        if let Some(Terminator::Br { args, .. }) = &mut function.blocks[entry.as_raw() as usize].terminator {
+            *args = vec![initial];
+        }
+        let next = function.blocks[4].instructions.iter().find_map(|id| {
+            let inst = &function.instructions[id.as_raw() as usize];
+            (inst.op == Op::IAdd).then_some(inst.result).flatten()
+        }).unwrap();
+        if let Some(Terminator::Br { args, .. }) = &mut function.blocks[4].terminator {
+            *args = vec![next];
+        }
+        if let Some(Terminator::CondBr { then_target, then_args, else_target, else_args, .. }) =
+            &mut function.blocks[header.as_raw() as usize].terminator
+        {
+            *else_args = vec![index];
+            if reversed {
+                std::mem::swap(then_target, else_target);
+                std::mem::swap(then_args, else_args);
+            }
+        }
+        if reversed {
+            let compare = function.blocks[header.as_raw() as usize].instructions.iter().copied()
+                .find(|id| function.instructions[id.as_raw() as usize].op == Op::ICmp).unwrap();
+            function.instructions[compare.as_raw() as usize].immediate = Some(Immediate::CmpPredicate(CmpPredicate::Sge));
+        }
+        let (changed, function) = optimize(function);
+        assert!(changed);
+        let Some(Terminator::CondBr { then_target, then_args, else_target, else_args, .. }) =
+            &function.blocks[entry.as_raw() as usize].terminator else { panic!("entry guard"); };
+        let exit_args = if *then_target == exit { then_args } else {
+            assert_eq!(*else_target, exit);
+            else_args
+        };
+        assert_eq!(exit_args, &vec![initial]);
     }
 }

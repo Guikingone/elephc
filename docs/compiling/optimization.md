@@ -487,12 +487,21 @@ or non-unit steps, and adjusted indexes such as `$b[$i + 1]` keep the check.
 
 The loop must not be able to free, allocate or rebind a buffer: a
 `buffer_free()`, an assignment to the buffer variable, output, a warning, a
-throw, or a call to anything that may do one of those inside it keeps the
+user-code throw, or a call to anything that may do one of those inside it keeps the
 ordinary per-access resolution, because user code could free the buffer through
 another handle. A call to a user function or method whose whole effect summary
 only reads state (or ends in a fatal error) does not block the rewrite.
 Generators, functions with `try`, dynamic `eval`, and programs that call
 `pcntl_async_signals()` are left alone.
+
+Loops over a buffer property of `$this` can also share one preheader read and
+resolution when no call, property write, free or other invalidating operation
+can change that property. Buffer acquire/release are word operations, and plain
+`$this` reads that may throw without running PHP do not invalidate descriptors.
+A body-only read moves behind a duplicate of the scalar entry condition, so a
+zero-trip loop never reads an uninitialized property. Conditional reads,
+faulting prefixes and header values used after the loop keep their original
+form. See the [buffer property loop example](../../examples/buffer-property-loop/main.php).
 
 A method that reads the same buffer property of `$this` several times shares
 that work too, inside or outside a loop:

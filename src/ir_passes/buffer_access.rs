@@ -20,9 +20,10 @@
 //!   allowlist: buffer element and packed field accesses, local loads, stores of scalar
 //!   locals, concat resets, and instructions whose effects only read state or fatal. That
 //!   includes a user function or method call whose refined effect summary is read-only. Any
-//!   other call, and releases, allocations, warnings (user error handlers), output
-//!   (output-buffer callbacks) and throws disqualify it, because each can run user code that
-//!   frees a buffer through an alias. Blocks that leave the loop for good are outside the natural body, and coming
+//!   other call, allocations, warnings, output and user-code releases or throws disqualify it.
+//!   In property-reuse modules, no-op buffer acquire/release and plain `$this` property reads
+//!   that may throw without running PHP are also buffer-preserving. Blocks that leave the
+//!   loop for good are outside the natural body, and coming
 //!   back always passes the preheader, which resolves again.
 //! - The buffer operand must be loop-invariant: an SSA value defined outside the loop, or a
 //!   `load_local` of a slot nothing in the loop writes and no by-reference alias can reach.

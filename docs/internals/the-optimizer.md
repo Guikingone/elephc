@@ -647,14 +647,25 @@ instruction in its body is on a default-deny allowlist: buffer element accesses,
 packed field reads and writes, local loads, stores to scalar locals, concat
 resets, and instructions whose effects only read state or fatal. That last group
 includes direct user function and method calls once effect refinement has proven
-the callee's whole summary read-only; every other call, and releases, allocations,
-warnings, output and throws, disqualify the loop, because each can run user code
+the callee's whole summary read-only; every other call, and user-code releases,
+allocations, warnings, output and throws, disqualify the loop, because each can run user code
 (a callee, a destructor, an error handler, an output callback) that frees a buffer
 through an alias. The handle must be an SSA value defined outside the loop
 or a `load_local` of a slot that nothing in the loop writes and no by-reference
 alias reaches. Generators, functions with exception handlers or dynamic `eval`,
 and modules that call `pcntl_async_signals()` (whose backend dispatches signal
 handlers after every instruction) are skipped.
+
+In modules that allow property reuse, buffer acquire/release are no-op word
+operations, and plain named reads on `$this` can throw without changing buffers
+or running PHP. These operations also preserve descriptor validity. Before
+descriptor hoisting, `buffer_property_loops` relocates a stable buffer-property
+read from the header or its unconditional body entry into a preheader. A
+body-only read gets a taken-only entry behind a duplicate of the scalar loop
+condition, preserving zero-trip uninitialized-property behavior. The read keeps
+its original instruction id and lexical scope. Calls, property writes, frees,
+conditional reads, faulting prefixes and live-out header SSA values prevent
+property motion. See `examples/buffer-property-loop/main.php`.
 
 Inside a rewritten loop, packed `buffer_get_resolved` instructions with the same
 descriptor and index compute the same record address, so a dominated access
@@ -672,8 +683,8 @@ therefore reaches the same bounds fatal without a separate signed test.
 ### Straight-line reuse of buffer property reads
 
 After the loops, `src/ir_passes/buffer_property_reuse.rs` handles the repeated
-`$this->slots[$i]` accesses of straight-line code, which the loop rewrite never
-sees because their handle is a property read inside the body. Each such access
+`$this->slots[$i]` accesses of straight-line code and reads left inside loops
+whose property handle could not be hoisted. Each such access
 reads the property, calls `__rt_buffer_resolve` and recomputes the record
 address. Three rewrites share that work, each only across a clean region: every
 instruction on any path from the earliest instruction either access depends on
