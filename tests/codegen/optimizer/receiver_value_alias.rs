@@ -33,7 +33,7 @@ fn test_receiver_value_alias_preserves_method_argument_updates() {
     }
 }
 
-/// Magic getters still run for every read, including through nullable and boxed receivers.
+/// Direct reads invoke magic getters; nullable and boxed receivers read a declared property.
 #[test]
 fn test_receiver_value_alias_preserves_magic_and_nullable_reads() {
     let source = r#"<?php
