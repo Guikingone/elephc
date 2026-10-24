@@ -58,7 +58,11 @@ pub(super) fn validate(source: &[u8], tokens: &mut [Token]) -> Result<(), ParseE
     }
     let mut names = HashSet::new();
     let mut invalid_echo = None;
-    collect_names(Node::Program(program), &mut names, &mut invalid_echo);
+    let mut invalid_escape = None;
+    collect_names(Node::Program(program), &mut names, &mut invalid_echo, &mut invalid_escape);
+    if let Some((at, message)) = invalid_escape {
+        return Err(ParseError { message: message.into(), line: 1 + newline_count(&source[..at.min(source.len())]) });
+    }
     if let Some(at) = invalid_echo {
         let at = at.min(source.len());
         let message = if at == source.len() { "syntax error, unexpected end of file".into() }
@@ -72,7 +76,22 @@ pub(super) fn validate(source: &[u8], tokens: &mut [Token]) -> Result<(), ParseE
 }
 
 /// Collects local identifier positions, skipping AST nodes with dedicated PHP token kinds.
-fn collect_names(node: Node<'_, '_>, names: &mut HashSet<usize>, invalid_echo: &mut Option<usize>) {
+fn collect_names(
+    node: Node<'_, '_>, names: &mut HashSet<usize>, invalid_echo: &mut Option<usize>,
+    invalid_escape: &mut Option<(usize, &'static str)>,
+) {
+    use mago_syntax::cst::{DocumentKind, LiteralStringKind};
+    if matches!(node, Node::DocumentString(document) if document.kind == DocumentKind::Nowdoc) { return; }
+    let literal = match node {
+        Node::LiteralString(literal) if literal.kind == LiteralStringKind::DoubleQuoted => Some((literal.raw, literal.span.start.offset)),
+        Node::LiteralStringPart(part) => Some((part.raw, part.span.start.offset)),
+        _ => None,
+    };
+    if let Some((raw, at)) = literal {
+        if let Some(message) = invalid_unicode_escape(raw) {
+            invalid_escape.get_or_insert((at as usize, message));
+        }
+    }
     let empty_or_trailing_echo = match node {
         Node::Echo(echo) if echo.values.nodes.is_empty() || echo.values.tokens.len() >= echo.values.nodes.len() => Some(echo.terminator.span()),
         Node::EchoTag(echo) if echo.values.nodes.is_empty() || echo.values.tokens.len() >= echo.values.nodes.len() => Some(echo.terminator.span()),
@@ -84,10 +103,30 @@ fn collect_names(node: Node<'_, '_>, names: &mut HashSet<usize>, invalid_echo: &
         names.insert(identifier.span.start.offset as usize);
         return;
     }
-    node.visit_children(|child| collect_names(child, names, invalid_echo));
+    node.visit_children(|child| collect_names(child, names, invalid_echo, invalid_escape));
     if let Node::FunctionCall(call) = node {
         if let mago_syntax::cst::Expression::Identifier(mago_syntax::cst::Identifier::Local(identifier)) = call.function {
             if identifier.value.eq_ignore_ascii_case(b"clone") { names.remove(&(identifier.span.start.offset as usize)); }
         }
     }
+}
+
+/// Validates PHP's active Unicode escapes without decoding or changing the original bytes.
+fn invalid_unicode_escape(raw: &[u8]) -> Option<&'static str> {
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] != b'\\' { i += 1; continue; }
+        if raw.get(i + 1..i + 3) != Some(b"u{") { i += 2; continue; }
+        let start = i + 3;
+        let mut end = start;
+        let mut codepoint = Some(0u64);
+        while let Some(digit) = raw.get(end).and_then(|b| (*b as char).to_digit(16)) {
+            codepoint = codepoint.and_then(|n| n.checked_mul(16)).and_then(|n| n.checked_add(u64::from(digit)));
+            end += 1;
+        }
+        if start == end || raw.get(end) != Some(&b'}') { return Some("Invalid UTF-8 codepoint escape sequence"); }
+        if codepoint.is_none_or(|n| n > 0x10ffff) { return Some("Invalid UTF-8 codepoint escape sequence: Codepoint too large"); }
+        i = end + 1;
+    }
+    None
 }
