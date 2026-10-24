@@ -508,6 +508,84 @@ fn resolves_an_ssa_handle_right_after_its_definition() {
     assert!(validate_function(function).is_ok());
 }
 
+/// Returns the instruction defining the descriptor operand of one resolved access result.
+fn descriptor_definition(function: &Function, access: ValueId) -> &crate::ir::Instruction {
+    let ValueDef::Instruction { inst, .. } = function.value(access).expect("access").def else {
+        panic!("access is an instruction result");
+    };
+    let descriptor = function.instructions[inst.as_raw() as usize].operands[0];
+    let ValueDef::Instruction { inst, .. } = function.value(descriptor).expect("descriptor").def
+    else {
+        panic!("descriptor is an instruction result");
+    };
+    &function.instructions[inst.as_raw() as usize]
+}
+
+/// Two handles resolve in loop-access order: a slot handle reloaded in the body resolves at the
+/// start of the preheader, and an SSA handle defined later resolves right after its own
+/// definition, after the first resolver. Each access reads its own handle's descriptor and every
+/// definition shifted by both insertions still validates.
+#[test]
+fn orders_the_resolvers_of_several_handles() {
+    let mut function = Function::new("two_buffers".to_string(), IrType::Void, PhpType::Void);
+    let (entry, ssa_handle, slot_access, ssa_access);
+    {
+        let mut b = Builder::new(&mut function);
+        entry = b.create_named_block("entry", vec![]);
+        let header = b.create_named_block("header", vec![(IrType::I64, PhpType::Int)]);
+        let body = b.create_named_block("body", vec![]);
+        let exit = b.create_named_block("exit", vec![]);
+        b.set_entry(entry);
+        let reloaded_slot = add_buffer_local(&mut b, int_buffer_type());
+        let ssa_slot = b.add_local(
+            Some("c".to_string()),
+            IrType::Heap(IrHeapKind::Buffer),
+            int_buffer_type(),
+            LocalKind::PhpLocal,
+        );
+
+        b.position_at_end(entry);
+        let dt = load_float_local(&mut b);
+        ssa_handle = load_buffer(&mut b, ssa_slot, int_buffer_type());
+        let zero = b.emit_const_i64(0);
+        b.terminate(Terminator::Br { target: header, args: vec![zero] });
+
+        b.position_at_end(header);
+        let index = b.block_param(header, 0);
+        branch(&mut b, body, vec![], exit, vec![]);
+
+        b.position_at_end(body);
+        let reloaded = load_buffer(&mut b, reloaded_slot, int_buffer_type());
+        slot_access = emit_int_get(&mut b, reloaded, index);
+        ssa_access = emit_int_get(&mut b, ssa_handle, index);
+        b.emit(Op::FAdd, vec![dt, dt], None, IrType::F64, PhpType::Float, Ownership::NonHeap);
+        back_edge(&mut b, header, index);
+
+        b.position_at_end(exit);
+        b.terminate(Terminator::Return { value: None });
+    }
+    assert!(validate_function(&function).is_ok(), "the input loop is valid");
+    let mut module = module_with(function);
+
+    assert!(hoist_buffer_resolution(&mut module));
+    let function = &module.functions[0];
+    let resolves: Vec<usize> = block_instructions(function, entry)
+        .iter()
+        .enumerate()
+        .filter(|(_, id)| function.instructions[id.as_raw() as usize].op == Op::BufferResolve)
+        .map(|(position, _)| position)
+        .collect();
+    assert_eq!(resolves, vec![1, 4], "slot load and resolver first, then after the SSA handle");
+    assert_eq!(position_in_block(function, entry, ssa_handle), 3);
+    let slot_resolve = descriptor_definition(function, slot_access);
+    let ssa_resolve = descriptor_definition(function, ssa_access);
+    assert_eq!(slot_resolve.op, Op::BufferResolve);
+    assert_eq!(defining_op(function, slot_resolve.operands[0]), Op::LoadLocal);
+    assert_eq!(ssa_resolve.op, Op::BufferResolve);
+    assert_eq!(ssa_resolve.operands, vec![ssa_handle], "the SSA handle resolves itself");
+    assert!(validate_function(function).is_ok(), "shifted definitions keep their indices");
+}
+
 /// Zero-based unit-step loops bounded by the same buffer length mark reads and writes in range,
 /// including when the length is computed once before the loop.
 #[test]
