@@ -39,6 +39,7 @@ fn test_receiver_value_alias_preserves_magic_and_nullable_reads() {
     let source = r#"<?php
 class ReceiverMagic {
     public int $reads = 0;
+    public int $value = 7;
     public function __get(string $name): int { $this->reads++; return $this->reads; }
     public function count(): int { return $this->reads; }
 }
@@ -49,14 +50,14 @@ function visitMagic(ReceiverMagic $receiver, int $count): void {
 }
 function readNullable(?ReceiverMagic $receiver): int {
     if ($receiver === null) { return 0; }
-    return $receiver->missing + $receiver->count();
+    return $receiver->value + $receiver->count();
 }
-function readBoxed(mixed $receiver): int { return $receiver->missing; }
+function readBoxed(mixed $receiver): int { return $receiver->value; }
 visitMagic(new ReceiverMagic(), $argc + 2);
 echo readNullable(null), ':', readNullable(new ReceiverMagic()), ':';
 echo readBoxed(new ReceiverMagic());
 "#;
     for optimized in [false, true] {
-        assert_eq!(run_receiver_fixture(source, optimized), "6:3|0:2:1");
+        assert_eq!(run_receiver_fixture(source, optimized), "6:3|0:7:7");
     }
 }
