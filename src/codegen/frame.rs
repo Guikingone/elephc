@@ -12,6 +12,9 @@
 //!   `_concat_buf` slices that were passed in by the caller.
 //! - Executable and library PHP frames publish cleanup activations so escaping exceptions
 //!   release owned locals before control reaches the surviving catch or native host.
+//! - Every frame saves the reserved nested-call register (x19/r12) unless all of its
+//!   instructions are register-neutral, so the unwinder, frame cleanup callbacks, generator
+//!   wrappers and native hosts that keep state in it across PHP calls get it back intact.
 
 use std::collections::{HashMap, HashSet};
 
@@ -163,8 +166,8 @@ pub(super) fn layout_for_function(
     // Method/callable dispatch hand-uses the reserved nested-call register
     // (x19/r12) to hold a receiver across argument-lowering calls; it is
     // callee-saved but outside the allocator's tracking, so reserve a save slot
-    // when the function needs it (issue #511).
-    if function_uses_nested_call_reg(function) {
+    // unless the function provably never touches it (issue #511).
+    if function_may_use_nested_call_reg(function) {
         let reg = nested_call_reg_name(target.arch);
         if !callee_saved_offsets.iter().any(|(saved, _)| *saved == reg) {
             offset += 8;
@@ -378,44 +381,54 @@ fn nested_call_reg_name(arch: Arch) -> &'static str {
     }
 }
 
-/// Detects dispatch paths that preserve a receiver in the reserved nested-call register.
-/// Mixed/union method calls, dynamic construction and Mixed string coercion use this
-/// callee-saved register outside the allocator's tracking. Each function must therefore
-/// save and restore it explicitly, including when all SSA values are stack allocated.
-fn function_uses_nested_call_reg(function: &Function) -> bool {
-    function.instructions.iter().any(|inst| {
-        // Dynamic constructors preserve their receiver across managed reference-cell staging.
-        if matches!(inst.op, Op::DynamicObjectNew | Op::DynamicObjectNewMixed) {
-            return true;
-        }
-        // A runtime-name property write can dispatch a missing name to `__set`, preserving the
-        // selected receiver in the same callee-saved register while its arguments are staged.
-        if inst.op == Op::DynamicPropSet {
-            return true;
-        }
-        // A boxed-Mixed STRING context holds its `__toString` receiver in the same register
-        // and is neither of the method-call opcodes below, so it used to slip through: a
-        // function whose only use was `echo $mixed` wrote `mov x19, x1` under a prologue that
-        // saved nothing. No caller shape was found that turns that into a wrong answer — the
-        // receiver is established AFTER argument lowering, which closes the obvious window —
-        // so this restores the callee-saved discipline rather than fixing a reproduced
-        // failure; per the note above, over-detection costs one store and one load.
-        if crate::codegen::shared_mixed_string::instruction_uses_mixed_string_ladder(function, inst)
-        {
-            return true;
-        }
-        if !matches!(inst.op, Op::MethodCall | Op::NullsafeMethodCall) {
-            return false;
-        }
-        let Some(receiver) = inst.operands.first() else {
-            return false;
-        };
-        let Some(value) = function.value(*receiver) else {
-            return false;
-        };
-        matches!(value.php_type, PhpType::Union(_))
-            || matches!(value.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-    })
+/// Decides whether a frame must save the reserved nested-call register.
+///
+/// The register is callee-saved but hand-used outside the allocator's tracking by many
+/// lowerings: direct, virtual, interface and nullsafe method dispatch, closure and callable
+/// descriptor invocation, dynamic construction, `__set` dispatch, the `__toString` ladder,
+/// builtin callback dispatch, and x86_64 scratch sequences. A predicate that listed those users
+/// missed a concrete-receiver method call, so a destructor calling `$this->close()` overwrote
+/// the register the exception unwinder and its frame cleanup callbacks keep their state in,
+/// and a generator body returned through a wrapper that had lost its Generator pointer.
+///
+/// The rule is therefore inverted: every frame saves the register unless all of its
+/// instructions are register-neutral (see `op_is_nested_call_reg_neutral`). Leaving an opcode
+/// out of that set costs one store and one load per activation; only adding one wrongly can
+/// lose the caller's register, which is why the set stays small and audited.
+fn function_may_use_nested_call_reg(function: &Function) -> bool {
+    !function
+        .instructions
+        .iter()
+        .all(|inst| op_is_nested_call_reg_neutral(inst.op))
+}
+
+/// Returns true for opcodes whose lowering never writes the reserved nested-call register.
+///
+/// Each member lowers to frame loads and stores, fixed scratch registers, or calls into
+/// runtime helpers, which already have to preserve the register because every dispatch path
+/// keeps its receiver there across them; none of them dispatches into PHP code through a
+/// receiver or descriptor held in the nested-call register. Error paths
+/// (division by zero, negative shifts) throw through the unwinder and never return here. The
+/// default is `false`, so a new opcode saves the register until its lowering is audited.
+fn op_is_nested_call_reg_neutral(op: Op) -> bool {
+    matches!(
+        op,
+        // Constants materialized into the result registers.
+        Op::ConstI64 | Op::ConstBool | Op::ConstNull | Op::ConstF64 | Op::ConstStr
+        // Frame-local slots (`lower_inst::local_loads` / `local_stores`); releases go through
+        // the runtime ownership helpers.
+        | Op::LoadLocal | Op::StoreLocal | Op::UnsetLocal | Op::ZeroLocalSlot
+        // Integer arithmetic, bitwise and shifts (`lower_inst::arithmetic`).
+        | Op::IAdd | Op::ISub | Op::IMul | Op::INeg | Op::IDiv | Op::ISMod
+        | Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedPow
+        | Op::IBitAnd | Op::IBitOr | Op::IBitXor | Op::IBitNot | Op::IShl | Op::IShrA
+        // Floating-point arithmetic (`lower_inst::floats` and `arithmetic::lower_float_div`).
+        | Op::FAdd | Op::FSub | Op::FMul | Op::FDiv | Op::FPow | Op::FNeg
+        // Scalar comparisons and numeric conversions.
+        | Op::ICmp | Op::FCmp | Op::IToF | Op::FToI
+        // Value forwarding and statement markers.
+        | Op::Move | Op::Borrow | Op::Nop | Op::ConcatReset
+    )
 }
 
 /// Emits the process-entry prologue for the EIR main function.
