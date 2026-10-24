@@ -44,6 +44,7 @@ env:
     -p elephc-image
     -p elephc-pcntl
     -p elephc-xml
+    -p elephc-tokenizer
     -p elephc-magician
     -p elephc-web
     -p elephc-instr
@@ -2516,6 +2517,38 @@ jobs:
             exit 1
           fi
 
+      - name: Upload generated builtin documentation
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: generated-builtin-docs
+          retention-days: 7
+          path: |
+            docs/php
+            docs/internals/builtins
+            scripts/docs/builtin_registry.json
+            scripts/docs/symbol_registry.json
+
+  tokenizer-tests:
+    name: Tokenizer PHP 8.5 parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Install PHP reference tokenizer
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.5'
+          extensions: tokenizer
+          coverage: none
+      - name: Check the shared tokenizer against PHP
+        env:
+          ELEPHC_TOKENIZER_REQUIRE_PHP85: '1'
+        run: cargo test --locked -p elephc-tokenizer --lib
+
   differential-tests:
     name: Differential test run (PHPUnit vs elephc test)
     runs-on: ubuntu-latest
@@ -2919,6 +2952,7 @@ jobs:
       - eval-codegen-tests-linux-aarch64
       - image-api-sync
       - builtins-docs-sync
+      - tokenizer-tests
       - differential-tests
       - managed-native-smoke
       - curl-feature-contract
@@ -2950,7 +2984,7 @@ jobs:
           EXTENDED_TIER: ${{ needs.plan.outputs.extended }}
         run: |
           always="plan build-archive-macos-aarch64 build-archive-linux-x86_64
-            build-archive-linux-aarch64 image-api-sync builtins-docs-sync differential-tests
+            build-archive-linux-aarch64 image-api-sync builtins-docs-sync tokenizer-tests differential-tests
             curl-feature-contract security-audit action-pins frame-assertions-release
             benchmark-tooling"
           run_tier="non-codegen-tests-linux-x86_64 non-codegen-tests-linux-aarch64

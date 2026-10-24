@@ -34094,6 +34094,33 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         requirements: &[],
     },
     BuiltinContract {
+        id: BuiltinId::from_canonical_name("token_get_all"),
+        name: "token_get_all", area: Area::String, module: PhpModule::Tokenizer,
+        since: None, kind: BuiltinKind::PreludeProvided,
+        params: &[
+            ParamSpec { name: "code", ty: TypeSpec::Str, default: None, by_ref: false },
+            ParamSpec { name: "flags", ty: TypeSpec::Int, default: Some(DefaultSpec::Int(0)), by_ref: false },
+        ],
+        variadic: None, variadic_by_ref: false, min_args: None, max_args: None,
+        arity_error: None, returns: TypeSpec::Array, by_ref_return: false,
+        summary: "Split PHP source into tokens while preserving its original bytes.", examples: &[],
+        php_manual: Some("https://www.php.net/manual/en/function.token-get-all.php"),
+        deprecation: None, extension: false, internal: false, requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("token_name"),
+        name: "token_name", area: Area::String, module: PhpModule::Tokenizer,
+        since: None, kind: BuiltinKind::PreludeProvided,
+        params: &[
+            ParamSpec { name: "id", ty: TypeSpec::Int, default: None, by_ref: false },
+        ],
+        variadic: None, variadic_by_ref: false, min_args: None, max_args: None,
+        arity_error: None, returns: TypeSpec::Str, by_ref_return: false,
+        summary: "Get the symbolic name of a PHP token identifier.", examples: &[],
+        php_manual: Some("https://www.php.net/manual/en/function.token-name.php"),
+        deprecation: None, extension: false, internal: false, requirements: &[],
+    },
+    BuiltinContract {
         id: BuiltinId::from_canonical_name("touch"),
         name: "touch",
         area: Area::Io,
