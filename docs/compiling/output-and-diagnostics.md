@@ -112,7 +112,7 @@ the phase finishes, elephc keeps its action-oriented label with a checkmark and
 elapsed time, then starts the next phase on a new line. Non-interactive output
 and `--quiet` keep the compact plain output without progress lines.
 
-### Diagnostic format
+### Diagnostic locations
 
 Errors and warnings name the physical file, line and column they come from:
 

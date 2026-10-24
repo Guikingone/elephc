@@ -668,7 +668,7 @@ warning[main.php:9:5]: Unused variable: $tmp
 warning[src/Helpers.php:14:9]: Unreachable code
 ```
 
-A diagnostic with no source position (some whole-program checks) prints `error: message`.
+A diagnostic with no source position (some whole-program checks) prints `error: message`. See [diagnostic locations](docs/compiling/output-and-diagnostics.md#diagnostic-locations).
 
 ## Project structure
 

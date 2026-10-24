@@ -90,15 +90,17 @@ std::thread_local! {
     static NEXT_SOURCE_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
     /// Source identities for synthetic parses (literal `eval` fragments).
     ///
-    /// A SEPARATE counter from [`NEXT_SOURCE_ID`], which [`Span::reset_source_ids`] rewinds per
-    /// include-resolution unit: sharing it let a fragment parsed after a reset alias an included
-    /// file's identity in span-keyed maps such as `builtin_call_types` (issue #1291). Starting
-    /// above [`SOURCE_ID_MASK`] keeps every synthetic id clear of the include range for any
-    /// realistic include count (an include id only reaches that range after 16_383 includes in
-    /// one resolution unit, which is pathological).
+    /// A SEPARATE counter from [`NEXT_SOURCE_ID`], which [`Span::reset_source_ids`] rewinds at
+    /// the start of every compile: sharing it let a fragment parsed after a reset alias an
+    /// included file's identity in span-keyed maps such as `builtin_call_types` (issue #1291).
+    /// Starting above [`SOURCE_ID_MASK`] keeps every synthetic id clear of the include range for
+    /// any realistic file count (an include or autoload id only reaches that range after 16_383
+    /// file parses in one compile, which is pathological).
     static NEXT_SYNTHETIC_SOURCE_ID: std::cell::Cell<u32> =
         const { std::cell::Cell::new(SOURCE_ID_MASK + 1) };
     /// The physical file each source identity was lexed from, for diagnostics.
+    /// Per thread like `NEXT_SOURCE_ID`, so parallel compilations name their own files.
+    /// The pipeline registers the entry file under identity 0 before frontend processing.
     ///
     /// A checker error carries only a span; without this a diagnostic from an included or
     /// autoloaded file printed `error[line:col]` with no way to tell which of thousands of files
@@ -197,7 +199,10 @@ impl Span {
         SOURCE_PATHS.with(|paths| paths.borrow().get(&source_id).cloned())
     }
 
-    /// Resets source identities at the beginning of a new include-resolution unit.
+    /// Resets source identities at the beginning of a compile's root include resolution.
+    ///
+    /// Only the root resolver resets the counter. Autoloaded files and their includes continue
+    /// allocating fresh identities, so span-keyed checker results cannot leak between files.
     pub fn reset_source_ids() {
         NEXT_SOURCE_ID.with(|next| next.set(1));
     }
@@ -421,6 +426,23 @@ mod tests {
         assert_ne!(first, second);
         assert!(first > SOURCE_ID_MASK, "synthetic ids stay clear of the include range");
         assert!(second > SOURCE_ID_MASK);
+    }
+
+    /// A registered identity names its file through every span lexed with it, an unregistered
+    /// one and an entry identity not yet registered by the pipeline name none. Registering the
+    /// same identity after a reset replaces the earlier file.
+    #[test]
+    fn registered_source_paths_name_the_file_of_their_spans() {
+        Span::register_source_path(9_101, "src/Counter.lfc");
+        let span = Span::with_end_from(
+            Span::new_in_source(9, 9, 9_101),
+            Span::new_in_source(9, 47, 9_101),
+        );
+        assert_eq!(span.source_path().as_deref(), Some("src/Counter.lfc"));
+        assert_eq!(Span::new_in_source(9, 9, 9_102).source_path(), None);
+        assert_eq!(Span::new(9, 9).source_path(), None, "source 0 is unregistered outside the pipeline");
+        Span::register_source_path(9_101, "src/Fixed.lfc");
+        assert_eq!(span.source_path().as_deref(), Some("src/Fixed.lfc"));
     }
 
     /// A column past the inline 16 bits keeps its value and its source identity (#1292), and
