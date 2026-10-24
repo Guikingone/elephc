@@ -521,12 +521,21 @@ fn descriptor_definition(function: &Function, access: ValueId) -> &crate::ir::In
     &function.instructions[inst.as_raw() as usize]
 }
 
-/// Two handles resolve in loop-access order: a slot handle reloaded in the body resolves at the
-/// start of the preheader, and an SSA handle defined later resolves right after its own
-/// definition, after the first resolver. Each access reads its own handle's descriptor and every
-/// definition shifted by both insertions still validates.
-#[test]
-fn orders_the_resolvers_of_several_handles() {
+/// A loop over two buffers and the values its tests inspect.
+struct TwoHandleLoop {
+    function: Function,
+    entry: BlockId,
+    /// Handle of the second buffer, loaded in the preheader after a float.
+    ssa_handle: ValueId,
+    /// Read through the first buffer, whose slot the body reloads.
+    slot_access: ValueId,
+    /// Read through the preheader SSA handle.
+    ssa_access: ValueId,
+}
+
+/// Builds `entry: $dt; $c; -> header(i) -> body -> header` whose body reads a reloaded `$b` slot
+/// handle and the preheader `$c` handle, in the order `ssa_first` selects.
+fn two_handle_loop(ssa_first: bool) -> TwoHandleLoop {
     let mut function = Function::new("two_buffers".to_string(), IrType::Void, PhpType::Void);
     let (entry, ssa_handle, slot_access, ssa_access);
     {
@@ -555,35 +564,74 @@ fn orders_the_resolvers_of_several_handles() {
         branch(&mut b, body, vec![], exit, vec![]);
 
         b.position_at_end(body);
-        let reloaded = load_buffer(&mut b, reloaded_slot, int_buffer_type());
-        slot_access = emit_int_get(&mut b, reloaded, index);
-        ssa_access = emit_int_get(&mut b, ssa_handle, index);
+        if ssa_first {
+            ssa_access = emit_int_get(&mut b, ssa_handle, index);
+            let reloaded = load_buffer(&mut b, reloaded_slot, int_buffer_type());
+            slot_access = emit_int_get(&mut b, reloaded, index);
+        } else {
+            let reloaded = load_buffer(&mut b, reloaded_slot, int_buffer_type());
+            slot_access = emit_int_get(&mut b, reloaded, index);
+            ssa_access = emit_int_get(&mut b, ssa_handle, index);
+        }
         b.emit(Op::FAdd, vec![dt, dt], None, IrType::F64, PhpType::Float, Ownership::NonHeap);
         back_edge(&mut b, header, index);
 
         b.position_at_end(exit);
         b.terminate(Terminator::Return { value: None });
     }
-    assert!(validate_function(&function).is_ok(), "the input loop is valid");
-    let mut module = module_with(function);
+    TwoHandleLoop { function, entry, ssa_handle, slot_access, ssa_access }
+}
+
+/// Hoists a two-handle loop and checks what both access orders share: each access reads its own
+/// handle's descriptor, and every definition shifted by both insertions still validates. Returns
+/// the rewritten function with the preheader positions of its resolvers.
+fn hoist_two_handle_loop(ssa_first: bool) -> (Function, TwoHandleLoop, Vec<usize>) {
+    let built = two_handle_loop(ssa_first);
+    assert!(validate_function(&built.function).is_ok(), "the input loop is valid");
+    let mut module = module_with(built.function.clone());
 
     assert!(hoist_buffer_resolution(&mut module));
-    let function = &module.functions[0];
-    let resolves: Vec<usize> = block_instructions(function, entry)
+    let function = module.functions.remove(0);
+    let resolves: Vec<usize> = block_instructions(&function, built.entry)
         .iter()
         .enumerate()
         .filter(|(_, id)| function.instructions[id.as_raw() as usize].op == Op::BufferResolve)
         .map(|(position, _)| position)
         .collect();
-    assert_eq!(resolves, vec![1, 4], "slot load and resolver first, then after the SSA handle");
-    assert_eq!(position_in_block(function, entry, ssa_handle), 3);
-    let slot_resolve = descriptor_definition(function, slot_access);
-    let ssa_resolve = descriptor_definition(function, ssa_access);
+    let slot_resolve = descriptor_definition(&function, built.slot_access);
+    let ssa_resolve = descriptor_definition(&function, built.ssa_access);
     assert_eq!(slot_resolve.op, Op::BufferResolve);
-    assert_eq!(defining_op(function, slot_resolve.operands[0]), Op::LoadLocal);
+    assert_eq!(defining_op(&function, slot_resolve.operands[0]), Op::LoadLocal);
     assert_eq!(ssa_resolve.op, Op::BufferResolve);
-    assert_eq!(ssa_resolve.operands, vec![ssa_handle], "the SSA handle resolves itself");
-    assert!(validate_function(function).is_ok(), "shifted definitions keep their indices");
+    assert_eq!(ssa_resolve.operands, vec![built.ssa_handle], "the SSA handle resolves itself");
+    assert!(validate_function(&function).is_ok(), "shifted definitions keep their indices");
+    (function, built, resolves)
+}
+
+/// When the slot handle is read first, its reload and resolver open the preheader, and the SSA
+/// handle defined later resolves right after its own definition.
+#[test]
+fn resolves_a_slot_handle_first_when_the_loop_reads_it_first() {
+    let (function, built, resolves) = hoist_two_handle_loop(false);
+    assert_eq!(resolves, vec![1, 4], "slot load and resolver first, then after the SSA handle");
+    assert_eq!(position_in_block(&function, built.entry, built.ssa_handle), 3);
+}
+
+/// When the SSA handle is read first, its resolver follows its definition and the floor keeps the
+/// later slot reload and resolver after it, instead of at the preheader start where nothing else
+/// would stop them.
+#[test]
+fn keeps_a_later_slot_resolver_after_an_earlier_group() {
+    let (function, built, resolves) = hoist_two_handle_loop(true);
+    assert_eq!(position_in_block(&function, built.entry, built.ssa_handle), 1);
+    assert_eq!(resolves, vec![2, 4], "the SSA resolver first, then the slot reload and resolver");
+    let entry = block_instructions(&function, built.entry);
+    let reload = &function.instructions[entry[3].as_raw() as usize];
+    assert_eq!(reload.op, Op::LoadLocal, "the slot reload sits right before its resolver");
+    assert_eq!(
+        descriptor_definition(&function, built.slot_access).operands,
+        vec![reload.result.expect("the reload defines the handle")],
+    );
 }
 
 /// Zero-based unit-step loops bounded by the same buffer length mark reads and writes in range,
