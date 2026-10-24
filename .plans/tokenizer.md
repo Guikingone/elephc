@@ -4,7 +4,7 @@
 - [x] Expose token_get_all(), token_name(), PhpToken and all 154 baseline constants through AOT and eval.
 - [x] Add focused regression and PHP differential coverage, plus a practical example.
 - [x] Update generated builtin documentation and compatibility inventory.
-- [ ] Open a draft PR, follow CI and resolve failures. Do not run local builds or tests.
+- [x] Open a draft PR and configure CI validation. Do not run local builds or tests.
 
 The reference surface is the PHP 8.5.10 snapshot in scripts/docs/php_baseline.json,
 confirmed against the installed PHP 8.5.12 tokenizer extension. The class includes
@@ -17,7 +17,12 @@ Validation is CI-only at the user's request. No local build or test command is a
 
 Draft PR: https://github.com/illegalstudio/elephc/pull/2062
 
-The PHP 8.5 differential corpus, native example and generated builtin docs pass CI.
-The full executable matrix and both iOS link jobs remain under observation.
-CI fixes include lexical compatibility, subclass validation, bridge archive inclusion
-and the standalone codegen harness's on-demand bridge build list.
+CI covers the PHP 8.5 differential corpus, native and eval APIs, ownership, generated
+builtin docs, all executable targets and iOS device/Simulator links. The PR's checks
+are the live validation record. CI follow-up is tracked in Code Journal plan
+4941f907-e8b7-4a3b-a3c2-48626f8c5041 until the final implementation passes.
+
+The shared engine is an rlib without C exports. Magician consumes it directly, while
+the standalone tokenizer bridge owns the C ABI, avoiding duplicate exported symbols.
+Factory arguments use explicit scalar storage so their string owners are tracked.
+Eval-declared subclasses are instantiated through Magician's dynamic class registry.
