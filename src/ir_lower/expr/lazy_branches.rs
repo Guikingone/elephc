@@ -27,10 +27,17 @@ pub(super) fn lower_null_coalesce(
         Some(expr.span),
     );
     // An all-null user call on the value side merges as the checker types it, as `?:` does
-    // (`null_only_call_merge_type`); its `array<mixed>` value is converted into the temp.
+    // (`null_only_call_merge_type`), when the lowered value is that call's `array<mixed>` storage;
+    // it is converted into the temp. A value loaded back through a `mixed` slot (`$g = f()` into
+    // a global alias) keeps its own type, as on main.
     let result_type = match super::merge_temps::null_only_call_merge_type(ctx, value_expr) {
-        Some(checker) => null_coalesce_merge_type(ctx, checker, default),
-        None => null_coalesce_result_type(ctx, value.value, default),
+        Some(checker)
+            if ctx.builder.value_php_type(value.value).codegen_repr()
+                == crate::types::dynamic_params::null_only_container_return_storage(&checker) =>
+        {
+            null_coalesce_merge_type(ctx, checker, default)
+        }
+        _ => null_coalesce_result_type(ctx, value.value, default),
     };
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();
