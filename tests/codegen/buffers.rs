@@ -786,6 +786,199 @@ echo buffer_len($b), ":", $b[0], ":", $b[2];
     assert_eq!(out, "4:0:42");
 }
 
+/// Regression for task f9ea1d1e: `buffer_new<T>()` accepts lengths computed with int arithmetic,
+/// which the checker types as `mixed` because PHP promotes an overflowing result to float. Covers
+/// a sum, a product and a difference of a parameter, and the shapes of Ivory's collision grid:
+/// a property product plus one, `max()` with a multiple of `buffer_len()`, and a multiple of
+/// `buffer_len()` alone.
+#[test]
+fn test_buffer_new_accepts_int_arithmetic_lengths() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Pair { public int $first; public int $second; }
+
+final class Grid
+{
+    private int $columns;
+    private int $rows;
+    private buffer<int> $cellStart;
+    private buffer<int> $entries;
+    private buffer<Pair> $pairs;
+
+    public function __construct(int $columns, int $rows, int $capacity)
+    {
+        $this->columns = $columns;
+        $this->rows = $rows;
+        $this->cellStart = buffer_new<int>($this->columns * $this->rows + 1);
+        $this->entries = buffer_new<int>($capacity);
+        $this->pairs = buffer_new<Pair>($capacity);
+    }
+
+    public function grow(int $total): void
+    {
+        $entries = $this->entries;
+        $this->entries = buffer_new<int>(max($total, 2 * buffer_len($entries)));
+        buffer_free($entries);
+        $pairs = $this->pairs;
+        $this->pairs = buffer_new<Pair>(2 * buffer_len($pairs));
+        buffer_free($pairs);
+    }
+
+    public function sizes(): string
+    {
+        return buffer_len($this->cellStart) . "," . buffer_len($this->entries) . "," . buffer_len($this->pairs);
+    }
+}
+
+function sized(int $n): string
+{
+    $sum = buffer_new<int>($n + 1);
+    $product = buffer_new<int>($n * 2);
+    $difference = buffer_new<float>($n - 1);
+    $sum[$n] = 7;
+    return buffer_len($sum) . "," . buffer_len($product) . "," . buffer_len($difference) . "," . $sum[$n];
+}
+
+echo sized(5), "|";
+$grid = new Grid(4, 3, 2);
+echo $grid->sizes(), "|";
+$grid->grow(3);
+echo $grid->sizes(), "|";
+$grid->grow(20);
+echo $grid->sizes();
+"#,
+    );
+    assert_eq!(out, "6,10,4,7|13,2,2|13,4,4|13,20,8");
+}
+
+/// Runs `examples/buffer-grid`, whose cell table and growing point list are sized with int
+/// arithmetic, so the example stays compilable and its printed counts stay correct.
+#[test]
+fn test_buffer_grid_example_sizes_buffers_with_int_arithmetic() {
+    let out = compile_and_run(include_str!("../../examples/buffer-grid/main.php"));
+    assert_eq!(out, "cells=12 capacity=16\nused cells=6\ncell (0,0)=3 cell (1,1)=2\n");
+}
+
+/// Regression for task f9ea1d1e: a `mixed` or `int|float` length is converted to int at runtime,
+/// like a buffer index, so an int, a whole float and a numeric string all size the buffer.
+#[test]
+fn test_buffer_new_converts_mixed_lengths_at_runtime() {
+    let out = compile_and_run(
+        r#"<?php
+function mixed_len(mixed $value): mixed
+{
+    return $value;
+}
+
+function int_or_float(bool $whole): int|float
+{
+    return $whole ? 6.0 : 2;
+}
+
+$a = buffer_new<int>(mixed_len(3));
+$b = buffer_new<int>(mixed_len(4.0));
+$c = buffer_new<int>(mixed_len("5"));
+$d = buffer_new<int>(int_or_float($argc > 0));
+$e = buffer_new<int>(int_or_float($argc < 0));
+echo buffer_len($a), ",", buffer_len($b), ",", buffer_len($c), ",", buffer_len($d), ",", buffer_len($e);
+"#,
+    );
+    assert_eq!(out, "3,4,5,6,2");
+}
+
+/// Regression for task f9ea1d1e: a converted length must be a whole number, so a fractional
+/// `mixed` length aborts through the length validation instead of truncating to 2 elements.
+#[test]
+fn test_buffer_new_fractional_mixed_length_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+function mixed_len(mixed $value): mixed
+{
+    return $value;
+}
+
+$b = buffer_new<int>(mixed_len(2.5));
+echo "allocated ", buffer_len($b);
+"#,
+    );
+    assert!(
+        err.contains("buffer_new() length is negative or exceeds the maximum buffer size"),
+        "{}",
+        err
+    );
+}
+
+/// Regression for task f9ea1d1e: a NaN length aborts. PHP converts NaN to int 0, so the
+/// whole-number check must treat the unordered comparison as a mismatch on every target.
+#[test]
+fn test_buffer_new_nan_mixed_length_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+function mixed_len(mixed $value): mixed
+{
+    return $value;
+}
+
+$b = buffer_new<int>(mixed_len(NAN));
+echo "allocated ", buffer_len($b);
+"#,
+    );
+    assert!(
+        err.contains("buffer_new() length is negative or exceeds the maximum buffer size"),
+        "{}",
+        err
+    );
+}
+
+/// Regression for task f9ea1d1e: `2^62 * 4` overflows to the float 2^64, which PHP's int cast
+/// reduces modulo 2^64 to 0. The length conversion must reject it as out of range rather than
+/// allocate an empty buffer.
+#[test]
+fn test_buffer_new_overflowing_arithmetic_length_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+$n = $argc << 62;
+$b = buffer_new<int>($n * 4);
+echo "allocated ", buffer_len($b);
+"#,
+    );
+    assert!(
+        err.contains("buffer_new() length is negative or exceeds the maximum buffer size"),
+        "{}",
+        err
+    );
+}
+
+/// Regression for task f9ea1d1e: converting a boxed arithmetic length releases the box, so sizing
+/// a buffer with `$n * 2 + 1` on every iteration leaves a clean heap once each buffer is freed.
+#[test]
+fn test_buffer_new_arithmetic_length_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function sized(int $n): int
+{
+    $b = buffer_new<int>($n * 2 + 1);
+    $len = buffer_len($b);
+    buffer_free($b);
+    return $len;
+}
+
+$total = 0;
+for ($i = 0; $i < 100; $i++) {
+    $total += sized($i);
+}
+echo $total;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "10000");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected arithmetic buffer lengths to leave a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies the linux-x86_64 runtime rejects invalid payload sizes before publishing a generation
 /// handle. The x86_64 code cannot be executed from an aarch64 host, so this asserts on the emitted
 /// assembly text and the absence of the legacy in-band buffer header.
