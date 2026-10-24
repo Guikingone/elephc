@@ -202,8 +202,8 @@ pub(super) fn layout_for_function(
 
 /// Returns whether any emitted EIR body can request a PHP Core backtrace.
 ///
-/// The predicate lives on `Module` so the inliner, which must keep method frames visible under
-/// the same condition, reads the exact answer codegen uses for activation emission.
+/// The predicate lives on `Module` beside `Module::calls_php_backtrace`, the narrower question
+/// the inliner asks before splicing a method frame away.
 pub(super) fn module_uses_backtrace(module: &Module) -> bool {
     module.uses_php_backtrace()
 }

@@ -235,7 +235,7 @@ echo use_probe(new Probe()), "\n";
 "#;
     for target in TARGETS {
         let module = optimized(source, target);
-        assert!(module.uses_php_backtrace(), "{target}: the fixture must observe backtraces");
+        assert!(module.calls_php_backtrace(), "{target}: the fixture must request a backtrace");
         let calls = called_methods(&module, function(&module, "use_probe"));
         assert!(
             calls.iter().any(|call| call == "value"),

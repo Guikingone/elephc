@@ -17,7 +17,10 @@
 //! - Property reads are limited to `$this` and packed records: neither receiver can be null, so
 //!   the read can never reach the null-receiver warning, which would otherwise report the line
 //!   of whatever call the host published last instead of the method call's.
-//! - Modules that can observe PHP frames (`Module::uses_php_backtrace`) keep every method call.
+//! - Modules that can request a backtrace directly or through the eval bridge
+//!   (`Module::calls_php_backtrace`) keep every method call, and a body that keeps a backtrace
+//!   argument snapshot (every frame does when a backtrace is reachable dynamically) is never a
+//!   candidate, so a method frame a backtrace could list always stays a real frame.
 //! - The receiver null check the real call performs is reproduced at the splice by the caller
 //!   (`super::apply_inline_at_site`); this module only reports when it can be skipped.
 
@@ -47,13 +50,13 @@ pub(super) struct MethodTargets {
 }
 
 impl MethodTargets {
-    /// Builds the target table, empty when the module can observe PHP frames.
+    /// Builds the target table, empty when the module can request a backtrace.
     pub(super) fn new(module: &Module) -> Self {
         let mut table = MethodTargets {
             bodies: Vec::new(),
             targets: HashMap::new(),
         };
-        if module.uses_php_backtrace() {
+        if module.calls_php_backtrace() {
             return table;
         }
         let mut body_by_implementation: HashMap<(String, String), usize> = HashMap::new();
