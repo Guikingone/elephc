@@ -302,6 +302,7 @@ pub(super) fn bound_method_name(module: &Module, function: &Function, inst: &Ins
 /// Returns whether a method-body instruction lowers the same in any enclosing function.
 fn instruction_is_frame_independent(module: &Module, function: &Function, inst: &Instruction) -> bool {
     if !op_is_frame_independent(inst.op) { return false; }
+    if store_resets_concat_scratch(function, inst) { return false; }
     if inst.op == Op::StaticMethodCall {
         return explicit_static_method_name(module, inst).is_some();
     }
@@ -313,6 +314,25 @@ fn instruction_is_frame_independent(module: &Module, function: &Function, inst: 
         || inst.operands.first().is_some_and(|&receiver| {
             value_loads_slot(function, receiver, receiver_slot())
         })
+}
+
+/// Recognizes the source store for which codegen implicitly rewinds its own frame's string scratch.
+///
+/// `local_stores::lower_store_local` resets only positive-span `StoreLocal(Acquire(StrConcat))`.
+/// The normal splice neutralizes explicit `ConcatReset` but cannot let this store rewind the host.
+fn store_resets_concat_scratch(function: &Function, inst: &Instruction) -> bool {
+    if inst.op != Op::StoreLocal || !inst.span.is_some_and(|span| span.line > 0) { return false; }
+    let Some(acquire) = inst.operands.first().and_then(|&value| defining_instruction(function, value))
+    else { return false; };
+    acquire.op == Op::Acquire && acquire.operands.first()
+        .and_then(|&value| defining_instruction(function, value))
+        .is_some_and(|source| source.op == Op::StrConcat)
+}
+
+/// Returns an SSA value's instruction without treating block parameters as instruction results.
+fn defining_instruction(function: &Function, value: ValueId) -> Option<&Instruction> {
+    let ValueDef::Instruction { inst, .. } = function.value(value)?.def else { return None; };
+    function.instruction(inst)
 }
 
 /// Returns whether an opcode's codegen never consults the enclosing function's identity.

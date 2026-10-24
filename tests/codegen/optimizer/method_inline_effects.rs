@@ -69,9 +69,11 @@ catch (RuntimeException $error) { echo $error->getMessage(), "\n"; }
     assert_both_modes(source, true, "nested\n");
 }
 
-/// Covariant and contravariant receivers execute the runtime specialization's lexical body.
+/// Variance preserves runtime lexical-class semantics while the IR test checks the new guard.
+///
+/// `self::class` is itself frame-dependent and remains excluded independently of the variance guard.
 #[test]
-fn test_method_effects_generic_variance_preserves_lexical_class() {
+fn test_method_effects_generic_variance_keeps_runtime_semantics() {
     let source = r#"<?php
 class VarianceAnimal {}
 class VarianceDog extends VarianceAnimal {}
@@ -90,4 +92,28 @@ echo describeContravariant(new ContravariantLabel<VarianceAnimal>(new VarianceAn
 "#;
     assert_both_modes(source, false,
         "CovariantLabel<VarianceDog>\nContravariantLabel<VarianceAnimal>\n");
+}
+
+/// Retained local-concat calls preserve scratch bytes used by both builtin and user-call siblings.
+#[test]
+fn test_method_effects_local_concat_keeps_host_sibling_arguments() {
+    let source = r#"<?php
+final class LocalLabel {
+    public function wrap(string $name): string { $local = '[' . $name; return $local . ']'; }
+    public function measure(string $a, string $b): int { $local = $a . $b; return strlen($local); }
+}
+function show(LocalLabel $label, string $prefix, string $name): void {
+    printf("%s|%s\n", $prefix . '!', $label->wrap($name));
+}
+function combine(string $prefix, int $length, string $suffix): string {
+    return $prefix . ':' . $length . ':' . $suffix;
+}
+$label = new LocalLabel();
+$prefix = str_repeat('A', $argc + 4);
+$x = str_repeat('x', $argc + 1);
+$y = str_repeat('y', $argc + 1);
+show($label, 'head', 'item');
+echo combine($prefix . 'B', $label->measure($x, $y), $prefix . 'C'), "\n";
+"#;
+    assert_both_modes(source, true, "head!|[item]\nAAAAAB:4:AAAAAC\n");
 }

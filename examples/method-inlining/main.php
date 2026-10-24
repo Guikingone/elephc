@@ -17,9 +17,9 @@ packed class Slot
 
 final class Component
 {
-    public static function contains(int $mask, int $required): bool
+    public static function normalize(int $mask): int
     {
-        return ($mask & $required) === $required;
+        return $mask & 3;
     }
 }
 
@@ -35,10 +35,17 @@ final class Table
 
     public function add(int $mask): void
     {
+        $mask = $this->normalizeMask($mask);
         $index = $this->highWater;
         $this->slots[$index]->alive = true;
         $this->slots[$index]->mask = $mask;
         $this->highWater = $index + 1;
+    }
+
+    // A small wrapper around a nested static call splices during insertion, off the hot scan.
+    private function normalizeMask(int $mask): int
+    {
+        return Component::normalize($mask);
     }
 
     // Buffers have no automatic cleanup: the table releases its storage explicitly.
@@ -61,7 +68,7 @@ final class Table
     public function matches(int $index, int $components): bool
     {
         return $this->slots[$index]->alive
-            && Component::contains($this->slots[$index]->mask, $components);
+            && ($this->slots[$index]->mask & $components) === $components;
     }
 }
 

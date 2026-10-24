@@ -151,3 +151,21 @@ echo inspect(new VarianceBox<InlineDog>(new InlineDog())), "\n";
         }
     }
 }
+
+/// A source concat assignment keeps its frame because its store also resets that frame's scratch.
+#[test]
+fn method_effects_keep_implicit_concat_store_resets_in_the_callee() {
+    let source = r#"<?php
+final class LocalLabel {
+    public function wrap(string $name): string { $local = '[' . $name; return $local . ']'; }
+}
+function decorate(LocalLabel $label, string $name): string { return $label->wrap($name); }
+echo decorate(new LocalLabel(), 'item'), "\n";
+"#;
+    for target in TARGETS {
+        let module = optimized(source, target);
+        let calls = called_methods(&module, function(&module, "decorate"));
+        assert!(calls.iter().any(|call| call == "wrap"),
+            "{target}: the implicit local-store reset must stay in a real frame");
+    }
+}
