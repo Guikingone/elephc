@@ -16,13 +16,13 @@ fn test_tokenizer_mixed_stream_and_roundtrip() {
     let out = compile_and_run(r#"<?php
 $code = '<?php echo 1;';
 $tokens = token_get_all($code);
-echo count($tokens), ':', token_name($tokens[1][0]), ':', $tokens[5], "\n";
+echo count($tokens), ':', token_name($tokens[1][0]), ':', $tokens[4], "\n";
 $restored = '';
 foreach ($tokens as $token) { $restored .= is_array($token) ? $token[1] : $token; }
 echo $restored === $code ? 'same' : 'different';
 echo ':', token_name(59), ':', token_name(-1), ':', token_name(T_PAAMAYIM_NEKUDOTAYIM);
 "#);
-    assert_eq!(out, "6:T_ECHO:;\nsame:UNKNOWN:UNKNOWN:T_DOUBLE_COLON");
+    assert_eq!(out, "5:T_ECHO:;\nsame:UNKNOWN:UNKNOWN:T_DOUBLE_COLON");
 }
 
 /// PhpToken retains its public fields, default constructor coordinates and strict predicates.
@@ -125,18 +125,34 @@ foreach (["token_get_all", "token_name"] as $function) {
 ' : '';
 eval($code);
 "#);
-    assert_eq!(out, "T_ECHO:6\nT_FUNCTION\nPhpToken:echo:6\nParseError:abstract:EvalSourceToken:html:1:TypeError:TypeError");
+    assert_eq!(out, "T_ECHO:5\nT_FUNCTION\nPhpToken:echo:6\nParseError:abstract:EvalSourceToken:html:1:TypeError:TypeError");
 }
 
 /// Repeated token arrays and object graphs leave no live PHP allocations after scope cleanup.
 #[test]
-fn test_tokenizer_repeated_results_are_released() {
+fn test_tokenizer_repeated_arrays_are_released() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 function inspect_source(): void {
     for ($i = 0; $i < 20; $i++) {
         $tokens = token_get_all('<?php echo "hello";');
+    }
+}
+
+/// Repeated object factories release their intermediate token arrays and boxed property values.
+#[test]
+fn test_tokenizer_repeated_objects_are_released() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function inspect_tokens(): void {
+    for ($i = 0; $i < 20; $i++) {
         $objects = PhpToken::tokenize('<?php echo "hello";');
     }
+}
+inspect_tokens();
+echo 'done';
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 inspect_source();
 echo 'done';

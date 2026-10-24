@@ -800,7 +800,6 @@ dependencies = [
  "elephc-phar",
  "elephc-probe",
  "elephc-tls",
- "elephc-tokenizer",
  "elephc-tz",
  "elephc-web",
  "flate2",
@@ -906,7 +905,7 @@ dependencies = [
  "elephc-mbstring",
  "elephc-pcntl",
  "elephc-phar",
- "elephc-tokenizer",
+ "elephc-tokenizer-engine",
  "flate2",
  "inventory",
  "libc",
@@ -996,6 +995,14 @@ dependencies = [
 
 [[package]]
 name = "elephc-tokenizer"
+version = "0.1.0"
+dependencies = [
+ "elephc-builtin-contract",
+ "elephc-tokenizer-engine",
+]
+
+[[package]]
+name = "elephc-tokenizer-engine"
 version = "0.1.0"
 dependencies = [
  "elephc-builtin-contract",

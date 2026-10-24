@@ -2578,7 +2578,7 @@ jobs:
       - name: Check the shared tokenizer against PHP
         env:
           ELEPHC_TOKENIZER_REQUIRE_PHP85: '1'
-        run: cargo test --locked -p elephc-tokenizer --lib
+        run: cargo test --locked -p elephc-tokenizer-engine --lib
 
   tokenizer-native-smoke:
     name: Tokenizer native smoke

@@ -32,7 +32,7 @@ pub(in crate::interpreter) fn eval_tokenizer_values(
     if name == "token_name" {
         let [value] = args else { return Err(EvalStatus::RuntimeFatal); };
         let id = tokenizer_int(*value, name, 1, "id", context, values)?;
-        return values.string(elephc_tokenizer::token_name(id).unwrap_or("UNKNOWN"));
+        return values.string(elephc_tokenizer_engine::token_name(id).unwrap_or("UNKNOWN"));
     }
     let Some(code) = args.first().copied() else { return Err(EvalStatus::RuntimeFatal); };
     let tag = values.type_tag(code)?;
@@ -52,7 +52,7 @@ pub(in crate::interpreter) fn eval_tokenizer_values(
     let flags = match args.get(1) {
         Some(value) => tokenizer_int(*value, name, 2, "flags", context, values)?, None => 0,
     };
-    let tokens = match elephc_tokenizer::tokenize(&code, flags) {
+    let tokens = match elephc_tokenizer_engine::tokenize(&code, flags) {
         Ok(tokens) => tokens,
         Err(error) => return eval_throw_builtin_exception("ParseError", &error.message, context, values),
     };
