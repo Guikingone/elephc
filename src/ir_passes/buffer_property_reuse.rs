@@ -4,8 +4,8 @@
 //! would otherwise reload the property, call `__rt_buffer_resolve` and recompute the address.
 //!
 //! Called from:
-//! - `crate::ir_passes::buffer_access::optimize_function`, after loop hoisting, for functions that
-//!   pass its generator, exception-handler and `eval` guards in modules without
+//! - `crate::ir_passes::buffer_access::optimize_function`, before and after loop descriptor
+//!   hoisting, for functions that pass its generator, exception-handler and `eval` guards without
 //!   `pcntl_async_signals()`.
 //! - `crate::ir_passes::buffer_property_loops`, for the shared clean-loop classifier and
 //!   property-read merging before descriptor hoisting.
