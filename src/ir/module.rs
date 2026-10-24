@@ -242,6 +242,46 @@ impl Module {
                 })
             })
     }
+
+    /// Returns whether any emitted EIR body can request a PHP Core backtrace.
+    ///
+    /// Codegen publishes per-frame backtrace activations only when this holds, and the inliner
+    /// keeps every method call boundary under the same condition: a spliced method would
+    /// otherwise disappear from `debug_backtrace()` frames.
+    pub(crate) fn uses_php_backtrace(&self) -> bool {
+        if self.required_runtime_features.eval_bridge {
+            return true;
+        }
+        let functions = || {
+            self.functions
+                .iter()
+                .chain(self.class_methods.iter())
+                .chain(self.closures.iter())
+                .chain(self.fiber_wrappers.iter())
+                .chain(self.callback_wrappers.iter())
+                .chain(self.extern_callback_trampolines.iter())
+                .chain(self.runtime_callable_invokers.iter())
+        };
+        if functions().any(Function::keeps_backtrace_argument_snapshot) {
+            return true;
+        }
+        functions()
+            .flat_map(|function| function.instructions.iter())
+            .any(|inst| {
+                inst.op == crate::ir::Op::CoreBuiltin
+                    && matches!(
+                        inst.immediate,
+                        Some(crate::ir::Immediate::I64(selector))
+                            if matches!(
+                                crate::ir::CoreBuiltinOp::from_i64(selector),
+                                Some(
+                                    crate::ir::CoreBuiltinOp::DebugBacktrace
+                                        | crate::ir::CoreBuiltinOp::DebugPrintBacktrace
+                                )
+                            )
+                    )
+            })
+    }
 }
 
 /// Deterministic literal/name pool used by IR immediates and printer output.
