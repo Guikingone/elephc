@@ -15,8 +15,8 @@ use std::collections::HashSet;
 
 use crate::ir::{
     validate_function, Builder, CmpPredicate, DataPool, Function, FunctionParam, Immediate,
-    IrHeapKind, IrType, LocalKind, LocalSlotId, MixedNumericOp, Op, Ownership, Terminator,
-    ValueId,
+    InstId, IrHeapKind, IrType, LocalKind, LocalSlotId, MixedNumericOp, Op, Ownership,
+    Terminator, ValueDef, ValueId,
 };
 use crate::ir_passes::bounded_mixed_counter::BoundedMixedCounter;
 use crate::ir_passes::driver::IrPass;
@@ -327,17 +327,77 @@ fn storage_proof_rejects_a_seed_that_can_overflow() {
     }
 }
 
-/// The optimizer pass proves the outer counter, then the seeded inner one on the result.
+/// Builds `$k = $n & 255; for ($j = $k + 1; $j < $n; $j++) {}`, or with `$k = $n` when
+/// `masked` is false, and returns the checked seed producer.
+fn seeded_loop(masked: bool) -> (Function, LocalSlotId, InstId) {
+    let (mut function, limit) = function_with_limit("seeded");
+    let counter = counter_slot(&mut function, "j");
+    let seed;
+    {
+        let mut b = Builder::new(&mut function);
+        let entry = b.create_named_block("entry", vec![]);
+        let cond = b.create_named_block("cond", vec![]);
+        let body = b.create_named_block("body", vec![]);
+        let exit = b.create_named_block("exit", vec![]);
+        b.set_entry(entry);
+        b.position_at_end(entry);
+        let input = b.emit_load_local(limit, IrType::I64, PhpType::Int);
+        let base = if masked {
+            let mask = b.emit_const_i64(255);
+            b.emit(Op::IBitAnd, vec![input, mask], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .expect("masked base")
+        } else {
+            input
+        };
+        let one = b.emit_const_i64(1);
+        seed = b
+            .emit(Op::ICheckedAdd, vec![base, one], None, MIXED, PhpType::Mixed, Ownership::Owned)
+            .expect("checked seed");
+        let copy = b
+            .emit(Op::MixedClone, vec![seed], None, MIXED, PhpType::Mixed, Ownership::Owned)
+            .expect("assignment copy");
+        emit_void(&mut b, Op::Release, vec![seed], None);
+        emit_owned_store(&mut b, counter, copy);
+        b.terminate(Terminator::Br { target: cond, args: vec![] });
+        b.position_at_end(cond);
+        let test = emit_limit_compare(&mut b, counter, limit, CmpPredicate::Slt);
+        b.terminate(Terminator::CondBr {
+            cond: test,
+            then_target: body,
+            then_args: vec![],
+            else_target: exit,
+            else_args: vec![],
+        });
+        b.position_at_end(body);
+        emit_increment(&mut b, counter);
+        b.terminate(Terminator::Br { target: cond, args: vec![] });
+        b.position_at_end(exit);
+        let zero = b.emit_const_i64(0);
+        b.terminate(Terminator::Return { value: Some(zero) });
+    }
+    validate_function(&function).expect("fixture is valid EIR");
+    let ValueDef::Instruction { inst, .. } = function.value(seed).expect("seed value").def else {
+        unreachable!("the seed is an instruction result");
+    };
+    (function, counter, inst)
+}
+
+/// The optimizer pass promotes a counter whose checked seed range analysis bounds, turning the
+/// seed into unchecked arithmetic, and leaves an unbounded `$n + 1` seed and its boxed counter.
 #[test]
-fn bounded_mixed_counter_promotes_a_counter_seeded_by_a_promoted_counter() {
-    let mut nested = nested_loops(MixedNumericOp::Add, 1, false);
-    assert!(BoundedMixedCounter::default().run(&mut nested.function, &mut DataPool::default()));
-    validate_function(&nested.function).expect("promoted function is valid EIR");
-    let function = &nested.function;
-    assert_eq!(function.locals[nested.outer.as_raw() as usize].ir_type, IrType::I64);
-    assert_eq!(function.locals[nested.inner.as_raw() as usize].ir_type, IrType::I64);
+fn bounded_mixed_counter_promotes_a_counter_with_a_bounded_checked_seed() {
+    let (mut function, counter, seed) = seeded_loop(true);
+    assert!(BoundedMixedCounter::default().run(&mut function, &mut DataPool::default()));
+    validate_function(&function).expect("promoted function is valid EIR");
+    assert_eq!(function.locals[counter.as_raw() as usize].ir_type, IrType::I64);
+    assert_eq!(function.instruction(seed).expect("seed").op, Op::IAdd);
     assert!(!function.instructions.iter().any(|inst| matches!(
         inst.op,
-        Op::StrIncDec | Op::MixedNumericBinop | Op::ICheckedAddToInt
+        Op::StrIncDec | Op::ICheckedAddToInt | Op::MixedClone
     )));
+
+    let (mut function, _, _) = seeded_loop(false);
+    let before = crate::ir::print_function(&function);
+    assert!(!BoundedMixedCounter::default().run(&mut function, &mut DataPool::default()));
+    assert_eq!(crate::ir::print_function(&function), before);
 }

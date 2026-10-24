@@ -53,6 +53,7 @@ echo pairCount($argc + 9), '|', inclusivePairs($argc + 4), '|', runs([3, 3, 6]),
 "#;
 
 /// The buffer-backed run scan of Ivory's grid broadphase: entries `starts[c]..starts[c + 1]`.
+/// Buffers are manually managed, so the program frees both before the heap check runs.
 const CELL_PAIRS: &str = r#"<?php
 final class Cells {
     private buffer<int> $starts;
@@ -80,12 +81,19 @@ final class Cells {
         }
         return $count;
     }
+    public function free(): void {
+        $starts = $this->starts;
+        $entries = $this->entries;
+        buffer_free($starts);
+        buffer_free($entries);
+    }
 }
 $cells = new Cells(6);
 foreach ([[0, 5], [3, 1], [5, 7], [0, 2], [0, 9]] as $index => [$start, $entry]) {
     $cells->set($start, $entry, $index);
 }
 echo $cells->pairs($argc + 1), "\n";
+$cells->free();
 "#;
 
 /// Runs one IR mode with strict heap validation, and the PHP oracle when asked and requested.
