@@ -349,8 +349,8 @@ fn keeps_reads_apart_across_buffer_free() {
     });
 }
 
-/// Even a user call whose effect summary is read-only keeps the reads apart: summaries leave out
-/// writes through by-reference parameters.
+/// Even a user call whose effect summary is read-only keeps the reads apart: the region never
+/// trusts a callee with the caller's frame.
 #[test]
 fn keeps_reads_apart_across_a_read_only_call() {
     assert_reads_stay_apart("call", |b, _, _| {

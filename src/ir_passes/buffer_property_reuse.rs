@@ -577,8 +577,9 @@ fn blocks_reached_avoiding(
 /// Default-deny classification of an instruction between two matched reads.
 ///
 /// It must not free, allocate or rebind a buffer, write a property or a non-scalar local, warn,
-/// print or run user code: a user call's effect summary leaves out what it writes through its
-/// by-reference parameters, so even a read-only call could change a matched slot.
+/// print or run user code. A user call is rejected even with a read-only effect summary:
+/// summaries drop the callee's local effects, and matched slots are not proven free of address
+/// escapes, so the region never relies on how a callee could reach the caller's frame.
 fn keeps_reads_stable(function: &Function, inst: &Instruction) -> bool {
     match inst.op {
         Op::Acquire | Op::Release => is_buffer_refcount_no_op(function, inst),

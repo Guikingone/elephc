@@ -680,7 +680,8 @@ instruction on any path from the earliest instruction either access depends on
 to the later one must keep buffers, buffer-typed properties and the matched
 local slots unchanged. The classifier is default-deny: the loop allowlist minus
 every opcode that can run user code (even a call whose effect summary is
-read-only, because summaries omit writes through by-reference parameters), plus
+read-only, since summaries drop the callee's local effects and matched slots are
+not proven free of address escapes), plus
 the no-op `acquire` and `release` of a buffer handle and named property reads
 refined to `reads_heap, may_throw`. A property store or `unset` on any object
 (another reference may alias the receiver), `buffer_free()`, a call, a release,
