@@ -20,8 +20,8 @@ impl Drop for DispatchDirectory {
 
 /// Selects a function's main body without including adjacent functions or runtime data.
 fn function_body<'a>(assembly: &'a str, name: &str) -> &'a str {
-    let start = format!("_fn_{name}:\n");
-    let end = format!("_fn_{name}_epilogue:");
+    let start = format!("{}:\n", elephc::names::function_symbol(name));
+    let end = format!("{}:", elephc::names::function_epilogue_symbol(name));
     assembly.split_once(&start).unwrap_or_else(|| panic!("missing {start}"))
         .1.split_once(&end).unwrap_or_else(|| panic!("missing {end}")).0
 }
