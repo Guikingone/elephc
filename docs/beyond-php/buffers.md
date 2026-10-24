@@ -96,7 +96,9 @@ Buffer indices may be statically typed as `int` or `mixed`. A `mixed` index is c
 
 `++` and `--` on an element of a scalar buffer (any integer or float width) read the element
 once, step it by one and write it back, with the same bounds and freed-buffer checks as any
-access and no heap allocation, so they suit counting and histogram loops. An integer element
+access. The update itself allocates nothing, so it suits counting and histogram loops; only the
+value of a prefix expression on an integer element (`$x = ++$counts[$i]`) is a boxed `mixed`,
+because it can be the promoted `float` described below. An integer element
 steps as a PHP `int`: an increment past `PHP_INT_MAX` (or a decrement past `PHP_INT_MIN`)
 promotes to `float` as in PHP, and the element then stores that float the way any float written
 to the buffer is stored, by PHP's float-to-int conversion (`PHP_INT_MAX` plus one stores

@@ -21,11 +21,14 @@
 //!   (`f64` or `f32`) adds or subtracts `1.0`, and the store rounds an `f32` as any write does.
 //! - Only the arithmetic staging changes. The element read, the key, the receiver and the
 //!   `BufferSet` keep the ordinary write paths, so evaluation order, bounds and stale-handle
-//!   fatals and the width conversion of the store are unchanged. The generated locals are not
-//!   written: a statement never reads them, and an expression returns the typed values.
+//!   fatals and the width conversion of the store are unchanged. A statement reads the element
+//!   where its value would be lowered, after the write's receiver; an expression reads and steps
+//!   it where its prelude did, before the write loads its handle or receiver. The generated
+//!   locals are not written: a statement never reads them, and an expression returns the typed
+//!   values.
 //! - A prefix expression on an int element still yields a `mixed`, because its value is PHP's
-//!   sum, which is a float past `PHP_INT_MAX`. Only that expression value is boxed; the store
-//!   does not read it.
+//!   sum, which is a float past `PHP_INT_MAX`. Only that expression value is boxed, after the
+//!   store, which does not read it.
 
 use super::*;
 
@@ -130,25 +133,49 @@ fn statement_read(value: &Expr) -> Option<&Expr> {
     Some(read)
 }
 
-/// Stores a typed `++`/`--` into a loaded local buffer, as `lower_array_assign` stores a value.
+/// Stores a statement `++`/`--` into a loaded local buffer, as `lower_array_assign` stores a value.
 ///
-/// The key and the update run in `lower_write_key_and_value`'s order, the key is converted as
-/// for any buffer write, and the stepped value goes through the ordinary `BufferSet`.
+/// The update's element read runs where the written value would, in `lower_write_key_and_value`'s
+/// order with the key, and the stepped value goes through the ordinary `BufferSet`.
 pub(super) fn lower_local_update(
     ctx: &mut LoweringContext<'_, '_>,
     buffer: LoweredValue,
     index: &Expr,
     update: &BufferIncDec<'_>,
     span: Span,
-) -> BufferIncDecValues {
-    let (index_value, values, index_pins) =
-        lower_write_key_then(ctx, index, |ctx| update.lower_values(ctx, span));
+) {
+    let (index_value, stored, index_pins) =
+        lower_write_key_then(ctx, index, |ctx| update.lower_values(ctx, span).stored);
+    store_local_element(ctx, buffer, index, index_value, stored, index_pins, span);
+}
+
+/// Stores an already stepped value into a loaded local buffer, keying it as any buffer write.
+fn lower_local_store(
+    ctx: &mut LoweringContext<'_, '_>,
+    buffer: LoweredValue,
+    index: &Expr,
+    stored: LoweredValue,
+    span: Span,
+) {
+    let (index_value, stored, index_pins) = lower_write_key_then(ctx, index, |_| stored);
+    store_local_element(ctx, buffer, index, index_value, stored, index_pins, span);
+}
+
+/// Converts the key and the stepped value as the `BufferSet` path of an array write does.
+fn store_local_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    buffer: LoweredValue,
+    index: &Expr,
+    index_value: LoweredValue,
+    stored: LoweredValue,
+    index_pins: Vec<crate::ir_lower::expr::PinnedInFlightOwner>,
+    span: Span,
+) {
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, index_pins, index.span);
     let index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
     let buffer_ty = ctx.builder.value_php_type(buffer.value);
-    let stored = coerce_buffer_set_value(ctx, &buffer_ty, values.stored, Some(span));
+    let stored = coerce_buffer_set_value(ctx, &buffer_ty, stored, Some(span));
     lower_concrete_array_set_values(ctx, buffer, index_value, stored, Vec::new(), span, true);
-    values
 }
 
 /// Converts an element read to its scalar class; a typed `BufferGet` result passes unchanged.
@@ -339,19 +366,17 @@ impl<'a> BufferExpressionUpdate<'a> {
 /// Returns `None`, having emitted nothing, when the receiver is not a scalar buffer; the caller
 /// then lowers the element read, the step, the write and the result as written. The decision
 /// reads the type `load_local` gives the receiver, which is what the write lowering sees.
+///
+/// The element read and the step run first, where the prelude ran them, and only then does the
+/// ordinary write load its handle or receiver. A get hook or warning handler that runs during the
+/// read and rebinds the receiver is therefore seen by the write exactly as before.
 pub(crate) fn lower_buffer_expression_update(
     ctx: &mut LoweringContext<'_, '_>,
     update: &BufferExpressionUpdate<'_>,
     span: Span,
 ) -> Option<LoweredValue> {
-    let (element, values) = match update.root {
-        ExpressionRoot::Local(name) => {
-            let element = scalar_buffer_element(&ctx.local_load_php_type(name)?)?;
-            let buffer_update =
-                BufferIncDec { read: update.read, element, increment: update.increment };
-            let buffer = load_array_local_for_write(ctx, name, span);
-            (element, lower_local_update(ctx, buffer, update.index, &buffer_update, span))
-        }
+    let element = match update.root {
+        ExpressionRoot::Local(name) => scalar_buffer_element(&ctx.local_load_php_type(name)?)?,
         ExpressionRoot::Property { object, property } => {
             let receiver = match &object.kind {
                 ExprKind::This => "this",
@@ -359,25 +384,35 @@ pub(crate) fn lower_buffer_expression_update(
                 _ => return None,
             };
             let receiver_ty = ctx.local_load_php_type(receiver)?;
-            let element = object_type_property_type(ctx, &receiver_ty, property)
+            // A null receiver reads null with a warning whose handler may bind the object the
+            // write then uses, and the expression yields that null; only a definite object reads
+            // the typed element, so a nullable receiver keeps the generic update.
+            if !matches!(receiver_ty.codegen_repr(), PhpType::Object(_)) {
+                return None;
+            }
+            object_type_property_type(ctx, &receiver_ty, property)
                 .as_ref()
-                .and_then(scalar_buffer_element)?;
-            let buffer_update =
-                BufferIncDec { read: update.read, element, increment: update.increment };
-            let values = lower_property_array_assign_with_update(
-                ctx,
-                object,
-                property,
-                update.index,
-                update.value,
-                span,
-                true,
-                PropertyElementUpdate::Buffer(buffer_update),
-            )
-            .expect("a resolved buffer property update yields its typed values");
-            (element, values)
+                .and_then(scalar_buffer_element)?
         }
     };
+    let values = BufferIncDec { read: update.read, element, increment: update.increment }
+        .lower_values(ctx, span);
+    match update.root {
+        ExpressionRoot::Local(name) => {
+            let buffer = load_array_local_for_write(ctx, name, span);
+            lower_local_store(ctx, buffer, update.index, values.stored, span);
+        }
+        ExpressionRoot::Property { object, property } => lower_property_array_assign_with_update(
+            ctx,
+            object,
+            property,
+            update.index,
+            update.value,
+            span,
+            true,
+            PropertyElementUpdate::Stored(values.stored),
+        ),
+    }
     Some(match (update.postfix, element) {
         (true, _) => values.old,
         (false, ScalarBufferElement::Float) => values.stored,

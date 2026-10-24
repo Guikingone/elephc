@@ -136,15 +136,16 @@ pub(super) fn lower_property_array_assign(
     );
 }
 
-/// How a property-array element write may update a scalar buffer property in registers.
+/// How a property-array element write may store a typed scalar buffer update.
 #[derive(Clone, Copy)]
-pub(super) enum PropertyElementUpdate<'a> {
+pub(super) enum PropertyElementUpdate {
     /// The value is lowered as written.
     Written,
     /// A statement `++`/`--` (`true` for `++`), typed once the receiver shows a scalar buffer.
     IncDec(bool),
-    /// An expression `++`/`--` whose scalar buffer property the caller already resolved.
-    Buffer(super::buffer_element_updates::BufferIncDec<'a>),
+    /// An expression `++`/`--` whose element read and step already ran, as the parser's prelude
+    /// runs them before the write: the write stores this value instead of lowering `value`.
+    Stored(LoweredValue),
 }
 
 /// Returns whether `read` is the element `$object->property[index]` a statement writes.
@@ -188,11 +189,11 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
     );
 }
 
-/// Lowers `$object->prop[index] = value` and returns the values of a typed buffer update.
+/// Lowers `$object->prop[index] = value`, storing a typed buffer update when `update` names one.
 ///
 /// A statement `++`/`--` is decided after the receiver is lowered, from the same property type
-/// that selects the `BufferSet` write below. The returned old and stored values exist only when
-/// the update took the typed buffer path; `value` is not lowered then.
+/// that selects the `BufferSet` write below, and its element read then runs where `value` would.
+/// `value` is not lowered when the write stores a typed update.
 pub(super) fn lower_property_array_assign_with_update(
     ctx: &mut LoweringContext<'_, '_>,
     object: &Expr,
@@ -201,32 +202,34 @@ pub(super) fn lower_property_array_assign_with_update(
     value: &Expr,
     span: Span,
     key_already_diagnosed: bool,
-    update: PropertyElementUpdate<'_>,
-) -> Option<super::buffer_element_updates::BufferIncDecValues> {
+    update: PropertyElementUpdate,
+) {
     let mut roots = Vec::new();
-    let mut updated = None;
     let (mut receiver, index, value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
-        let buffer = match update {
-            PropertyElementUpdate::Buffer(buffer) => Some(buffer),
-            PropertyElementUpdate::Written | PropertyElementUpdate::IncDec(_) => None,
+        let source = match update {
+            PropertyElementUpdate::Stored(stored) => PropertyWriteValue::Stored(stored),
+            PropertyElementUpdate::Written | PropertyElementUpdate::IncDec(_) => {
+                PropertyWriteValue::Expr(value)
+            }
         };
-        let (index, value) =
-            lower_property_write_operands(ctx, index, value, buffer, &mut roots, &mut updated, span);
+        let (index, value) = lower_property_write_operands(ctx, index, source, &mut roots, span);
         let receiver = crate::ir_lower::expr::lower_static_property_write_chain_with_operands(
             ctx, object, &[index.value, value.value], span);
         (receiver, index, value)
     } else {
         let object = lower_expr(ctx, object);
         let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
-        let buffer = match update {
-            PropertyElementUpdate::Written => None,
-            PropertyElementUpdate::IncDec(increment) => super::buffer_element_updates::property_statement_update(
-                ctx, receiver.value, property, value, increment,
-            ),
-            PropertyElementUpdate::Buffer(buffer) => Some(buffer),
+        let source = match update {
+            PropertyElementUpdate::Written => PropertyWriteValue::Expr(value),
+            PropertyElementUpdate::IncDec(increment) => {
+                super::buffer_element_updates::property_statement_update(
+                    ctx, receiver.value, property, value, increment,
+                )
+                .map_or(PropertyWriteValue::Expr(value), PropertyWriteValue::Buffer)
+            }
+            PropertyElementUpdate::Stored(stored) => PropertyWriteValue::Stored(stored),
         };
-        let (index, value) =
-            lower_property_write_operands(ctx, index, value, buffer, &mut roots, &mut updated, span);
+        let (index, value) = lower_property_write_operands(ctx, index, source, &mut roots, span);
         receiver.place_above_operand_roots(ctx, &roots, span);
         (receiver, index, value)
     };
@@ -234,27 +237,38 @@ pub(super) fn lower_property_array_assign_with_update(
     lower_property_array_assign_value(ctx, receiver.value, property, index, value, span, key_already_diagnosed);
     receiver.finish(ctx, span);
     retire_property_write_roots(ctx, roots, span);
-    updated
 }
 
-/// Lowers a property-array write's key and stored value, as a typed buffer update or as written.
+/// The value a property-array write stores, resolved once the receiver is known.
+enum PropertyWriteValue<'a> {
+    /// The written expression, lowered and rooted as an ordinary operand.
+    Expr(&'a Expr),
+    /// A statement `++`/`--` of a scalar buffer element, read and stepped where `Expr` would run.
+    Buffer(super::buffer_element_updates::BufferIncDec<'a>),
+    /// A typed update the caller already read and stepped.
+    Stored(LoweredValue),
+}
+
+/// Lowers a property-array write's key and stored value in PHP's variable-key order.
 fn lower_property_write_operands(
     ctx: &mut LoweringContext<'_, '_>,
     index: &Expr,
-    value: &Expr,
-    buffer: Option<super::buffer_element_updates::BufferIncDec<'_>>,
+    source: PropertyWriteValue<'_>,
     roots: &mut Vec<LocalSlotId>,
-    updated: &mut Option<super::buffer_element_updates::BufferIncDecValues>,
     span: Span,
 ) -> (LoweredValue, LoweredValue) {
-    let Some(buffer) = buffer else {
-        return lower_rooted_property_write_key_and_value(ctx, index, value, roots);
-    };
-    // The typed old and new element values are scalars, so they need no unwind root.
-    let (index, values) =
-        lower_rooted_property_write_key_then(ctx, index, roots, |ctx, _| buffer.lower_values(ctx, span));
-    *updated = Some(values);
-    (index, values.stored)
+    match source {
+        PropertyWriteValue::Expr(value) => {
+            lower_rooted_property_write_key_and_value(ctx, index, value, roots)
+        }
+        // The typed element values are scalars, so they need no unwind root.
+        PropertyWriteValue::Buffer(buffer) => lower_rooted_property_write_key_then(
+            ctx, index, roots, |ctx, _| buffer.lower_values(ctx, span).stored,
+        ),
+        PropertyWriteValue::Stored(stored) => {
+            lower_rooted_property_write_key_then(ctx, index, roots, |_, _| stored)
+        }
+    }
 }
 
 /// Lowers one operand into an unwind-visible owner and lends a borrowed view to the writer.

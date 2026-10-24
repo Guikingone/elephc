@@ -13,7 +13,7 @@
 //! - A PHP array element keeps the generic path, which promotes an overflow to float.
 
 use crate::codegen::platform::Target;
-use crate::ir::{Function, Immediate, Module, Op};
+use crate::ir::{Function, Immediate, Module, Op, ValueDef};
 use std::path::Path;
 
 /// Local, property, width and expression forms of buffer element `++`/`--`.
@@ -88,6 +88,27 @@ fn assert_unstaged(function: &Function, context: &str) {
     }), "{context} {}: typed element store", function.name);
 }
 
+/// Returns the arena position of the local load the function's typed store derives its handle from.
+///
+/// The handle of a local store is that load; a property store's handle is the property read of
+/// the write receiver, whose own receiver is the load.
+fn store_receiver_load(function: &Function) -> usize {
+    let store = function.instructions.iter().find(|inst| inst.op == Op::BufferSet)
+        .unwrap_or_else(|| panic!("{} has no buffer_set", function.name));
+    let mut value = store.operands[0];
+    loop {
+        let ValueDef::Instruction { inst, .. } = function.value(value).expect("store operand").def
+        else {
+            panic!("{}: the store handle is not an instruction result", function.name);
+        };
+        let definition = &function.instructions[inst.as_raw() as usize];
+        if definition.op == Op::LoadLocal {
+            return inst.as_raw() as usize;
+        }
+        value = definition.operands[0];
+    }
+}
+
 /// Lowered updates use one typed step per update and box only a prefix int expression's value.
 #[test]
 fn buffer_element_incdec_lowers_typed_steps_on_every_target() {
@@ -123,6 +144,16 @@ fn buffer_element_incdec_lowers_typed_steps_on_every_target() {
         assert_eq!(count(postfix, Op::ICheckedAddToInt, cast.clone()), 1, "{target}");
         assert_eq!(count(postfix, Op::FSub, None), 1, "{target}");
         assert_eq!(count(postfix, Op::ICheckedAdd, None), 0, "{target}");
+        // An expression reads the element where its prelude did, before the write loads its
+        // handle or receiver, so user code the read runs is seen by the write as before.
+        for name in ["CellGrid::claim", "prefixFloat", "prefixInt"] {
+            let function = named(&module, name);
+            let read = function.instructions.iter().position(|inst| inst.op == Op::BufferGet)
+                .unwrap_or_else(|| panic!("{target} {name}: element read"));
+            assert!(store_receiver_load(function) > read,
+                "{target} {name}: the write's receiver is loaded after the read\n{}",
+                crate::ir::print_function(function));
+        }
 
         crate::ir_passes::optimize_module(&mut module);
         crate::ir::validate_module(&module).unwrap();
