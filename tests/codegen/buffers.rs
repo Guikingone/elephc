@@ -886,21 +886,52 @@ echo buffer_len($a), ",", buffer_len($b), ",", buffer_len($c), ",", buffer_len($
     assert_eq!(out, "3,4,5,6,2");
 }
 
-/// Regression for task f9ea1d1e: a boxed int length keeps its exact value above 2^53, where a
-/// float conversion would round it. A zero-size packed element has stride 0, so such a count
-/// allocates and `buffer_len()` shows any rounding.
+/// Regression for task f9ea1d1e: a boxed int length and a numeric-string length keep their exact
+/// value above 2^53, where a float conversion would round them. A zero-size packed element has
+/// stride 0, so such a count allocates and `buffer_len()` shows any rounding.
 #[test]
 fn test_buffer_new_mixed_length_stays_exact_above_float_precision() {
     let out = compile_and_run(
         r#"<?php
 packed class Marker {}
 
+function mixed_len(mixed $value): mixed
+{
+    return $value;
+}
+
 $n = $argc << 53;
 $b = buffer_new<Marker>($n + 1);
-echo buffer_len($b);
+$s = buffer_new<Marker>(mixed_len("9007199254740995"));
+echo buffer_len($b), ",", buffer_len($s);
 "#,
     );
-    assert_eq!(out, "9007199254740993");
+    assert_eq!(out, "9007199254740993,9007199254740995");
+}
+
+/// Regression for task f9ea1d1e: PHP's int conversion saturates an out-of-range numeric string at
+/// `PHP_INT_MAX`, whose float equals the string's float 2^63. The length check must still reject
+/// it, even for a zero-size packed element whose stride 0 would let the saturated count allocate.
+#[test]
+fn test_buffer_new_out_of_range_numeric_string_length_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+packed class Marker {}
+
+function mixed_len(mixed $value): mixed
+{
+    return $value;
+}
+
+$b = buffer_new<Marker>(mixed_len("9223372036854775808"));
+echo "allocated ", buffer_len($b);
+"#,
+    );
+    assert!(
+        err.contains("buffer_new() length is negative or exceeds the maximum buffer size"),
+        "{}",
+        err
+    );
 }
 
 /// Regression for task f9ea1d1e: a converted length must be a whole number, so a fractional
