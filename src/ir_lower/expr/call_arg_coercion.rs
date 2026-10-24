@@ -116,11 +116,7 @@ fn retype_local_for_pointer_reference(
     name: &str,
     param_ty: &PhpType,
 ) {
-    if ctx.local_kinds.get(name).copied() != Some(LocalKind::PhpLocal)
-        || !ctx.has_local_slot(name)
-        || ctx.local_uses_global_storage(name)
-        || ctx.is_ref_bound_local(name)
-    {
+    if !ctx.local_is_plain_frame_slot(name) {
         return;
     }
     let retyped = match ctx.local_type(name) {

@@ -1278,6 +1278,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.uses_global_storage(name, kind)
     }
 
+    /// Returns whether a local is an ordinary frame slot of its own: a PHP local with a slot that
+    /// is neither program-global storage nor bound to a reference cell.
+    ///
+    /// Only such a slot can take the pointer-word storage of a local that holds `null` and
+    /// pointers (`pointer_word_storage` in `crate::ir::builder`) by a retype alone: a reference
+    /// cell, a global or a static keeps the `null` it already holds in its own representation.
+    pub(crate) fn local_is_plain_frame_slot(&self, name: &str) -> bool {
+        self.local_kinds.get(name).copied() == Some(LocalKind::PhpLocal)
+            && self.local_slots.contains_key(name)
+            && !self.local_uses_global_storage(name)
+            && !self.is_ref_bound_local(name)
+    }
+
     /// Records that a local currently aliases by-reference storage.
     pub(crate) fn mark_ref_bound_local(&mut self, name: &str) {
         self.ref_bound_locals.insert(name.to_string());

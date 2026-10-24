@@ -256,9 +256,13 @@ fn join_arm_types(ctx: &LoweringContext<'_, '_>, arms: &[IfArmExit]) -> TypeEnv 
             arm_types.push(arm_type.codegen_repr());
             raw_arm_types.push(arm_type.clone());
         }
-        if let Some(pointer) = join_pointer_arm_types(&raw_arm_types) {
-            joined.insert(name, pointer);
-            continue;
+        // A reference cell or a global keeps the `null` an arm stored in its own representation,
+        // so only an ordinary frame slot joins to the pointer word.
+        if ctx.local_is_plain_frame_slot(&name) {
+            if let Some(pointer) = join_pointer_arm_types(&raw_arm_types) {
+                joined.insert(name, pointer);
+                continue;
+            }
         }
         if arm_types.windows(2).all(|pair| pair[0] == pair[1]) {
             continue;
@@ -487,7 +491,8 @@ pub(super) fn lower_ifdef(
 /// Indexed and associative arrays are promoted in place so existing elements use boxed payload
 /// cells. A whole-value `Mixed` contract uses the ordinary retaining store, allowing loop-carried
 /// container-kind changes to share the same fixed frame representation. A `?ptr<T>` contract for
-/// a local that enters holding `null` only retypes it, since its slot is a pointer word.
+/// a local that enters holding `null` only retypes an ordinary frame slot, which becomes a
+/// pointer word; a reference cell, a global or a static is boxed as before.
 pub(super) fn apply_loop_storage_contracts(
     ctx: &mut LoweringContext<'_, '_>,
     loop_span: Span,
@@ -562,8 +567,18 @@ pub(super) fn apply_loop_storage_contracts(
             // pointers in the loop is one pointer word (`pointer_word_storage` in
             // `crate::ir::builder`): the retype widens its slot to that word, where the `null`
             // already stored is address 0, so the value needs no conversion.
-            (PhpType::Void | PhpType::Packed(_), PhpType::Pointer(_)) => {
+            (PhpType::Void | PhpType::Packed(_), PhpType::Pointer(_))
+                if ctx.local_is_plain_frame_slot(&name) =>
+            {
                 ctx.set_local_type(&name, target_ty);
+            }
+            // A reference cell, a global or a static keeps the `null` it holds in its own
+            // representation, which a retype cannot turn into address 0: such a local keeps the
+            // boxed whole-value contract a null-entry loop local had before pointer contracts.
+            (PhpType::Void, PhpType::Pointer(_)) => {
+                let source = ctx.load_local(&name, span);
+                let converted = ctx.box_value_as_mixed(source, PhpType::Mixed, span);
+                ctx.store_local(&name, converted, PhpType::Mixed, span);
             }
             // The contract cannot be materialized for the representation this local actually
             // holds — the only remaining shapes disagree on container kind (an `AssocArray`

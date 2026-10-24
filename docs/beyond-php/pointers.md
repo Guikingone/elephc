@@ -125,7 +125,8 @@ so a null `?ptr<T>` property appears there as `0`.
 A local that holds `null` at one point and a pointer or a packed record address at another
 is stored the same way, without a declaration: one pointer word where `null` is address 0.
 That covers assignments in sequence, the two arms of an `if`, and a loop that starts from
-`null`, such as a search over a buffer of records:
+`null`, such as a search over a buffer of records (a local that a reference or a `global`
+statement aliases keeps its boxed storage):
 
 ```php
 <?php

@@ -1189,3 +1189,34 @@ echo $f($v, 1), "|", $f($v, 0), "|", $f($v, 2), "|", $f($v, 0), "\n";
     );
     assert_eq!(out, "x7|null|x7|null\n");
 }
+
+/// Verifies a local that a reference aliases keeps reading PHP null when it is also assigned
+/// pointers: after a zero-trip loop that starts from `null`, and after an `if` whose taken arm
+/// stores `null`, through the local and through the alias. The pointer-word retype applies only
+/// to ordinary frame slots, because the reference cell keeps the `null` it was given.
+#[test]
+fn test_reference_aliased_null_locals_keep_reading_null() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function first(buffer<Vec2> $v): ptr<Vec2> { return $v[0]; }
+function probe(buffer<Vec2> $v, int $n): string {
+    $p = null;
+    $alias = &$p;
+    $p = null;
+    for ($i = 0; $i < $n; $i++) { $p = first($v); }
+    return (is_null($p) ? "null" : "set") . (is_null($alias) ? ":null" : ":set");
+}
+function branch(buffer<Vec2> $v, bool $ok): string {
+    $p = null;
+    $alias = &$p;
+    if ($ok) { $p = first($v); } else { $p = null; }
+    if ($p === null) { return "null"; }
+    return "set";
+}
+$v = buffer_new<Vec2>(1);
+echo probe($v, 0), "|", branch($v, false), "\n";
+"#,
+    );
+    assert_eq!(out, "null:null|null\n");
+}
