@@ -215,6 +215,7 @@ pub(crate) const NOT_SERIALIZABLE_BUILTIN_CLASSES: &[&str] = &[
     "Fiber",
     "FilesystemIterator",
     "GdImage",
+    "finfo",
     "Generator",
     "GlobIterator",
     "InternalIterator",

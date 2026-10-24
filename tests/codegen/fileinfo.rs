@@ -161,3 +161,24 @@ echo elephc_fileinfo_live_handles() === $before ? "clean\n" : "leak\n";
 "#);
     assert_eq!(out, "text/plain\ndestroyed\nclean\n");
 }
+
+/// Internal restrictions survive subclass hooks and agree with reflection.
+#[test]
+fn test_fileinfo_subclass_clone_and_wire_restrictions() {
+    if fileinfo_native::skip("test_fileinfo_subclass_clone_and_wire_restrictions") { return; }
+    let out = compile_and_run(r#"<?php
+class DescribedFinfo extends finfo {
+    public function __clone(): void { echo "bad clone hook\n"; }
+    public function __serialize(): array { echo "bad serialize hook\n"; return []; }
+    public function __unserialize(array $data): void { echo "bad unserialize hook\n"; }
+}
+$f = new DescribedFinfo(FILEINFO_MIME_TYPE);
+$r = new ReflectionClass($f);
+echo $r->isCloneable() ? "bad\n" : "uncloneable\n";
+try { $copy = clone $f; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { serialize($f); } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+try { unserialize('O:14:"DescribedFinfo":0:{}'); } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+echo $f->buffer("hello"), "\n";
+"#);
+    assert_eq!(out, "uncloneable\nTrying to clone an uncloneable object of class DescribedFinfo\nSerialization of 'DescribedFinfo' is not allowed\nUnserialization of 'DescribedFinfo' is not allowed\ntext/plain\n");
+}

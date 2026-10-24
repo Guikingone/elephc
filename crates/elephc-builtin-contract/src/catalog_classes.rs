@@ -17,9 +17,10 @@ macro_rules! class {
     (
         $name:literal, $canonical:literal, $kind:ident, $module:ident, $route:ident
         $(, since: $since:ident)? $(, extension: $extension:literal)? $(, internal: $internal:literal)?
-        $(, targets: $targets:expr)? $(, operators: $operators:expr)? $(,)?
+        $(, targets: $targets:expr)? $(, operators: $operators:expr)? $(, cloneable: $cloneable:literal)? $(,)?
     ) => {
         ClassContract {
+            cloneable: class!(@cloneable $($cloneable)?),
             operators: class!(@operators $($operators)?),
             id: BuiltinId::from_canonical_name($canonical),
             name: $name,
@@ -39,6 +40,8 @@ macro_rules! class {
     (@flag) => { false };
     (@targets $targets:expr) => { Some($targets) };
     (@targets) => { None };
+    (@cloneable $cloneable:literal) => { $cloneable };
+    (@cloneable) => { true };
     (@operators $operators:expr) => { Some($operators) };
     (@operators) => { None };
 }
@@ -206,7 +209,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("PDOStatement", "pdostatement", Class, Pdo, Prelude),
     class!("Phar", "phar", Class, Phar, CheckerInjected),
     class!("PharData", "phardata", Class, Phar, CheckerInjected),
-    class!("finfo", "finfo", Class, Fileinfo, Prelude),
+    class!("finfo", "finfo", Class, Fileinfo, Prelude, cloneable: false),
     class!("PharFileInfo", "pharfileinfo", Class, Phar, CheckerInjected),
     class!("php_user_filter", "php_user_filter", Class, Standard, CheckerInjected),
     class!("PHPUnit\\Framework\\TestCase", "phpunit\\framework\\testcase", Class, Elephc, Prelude),

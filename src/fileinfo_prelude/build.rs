@@ -86,7 +86,7 @@ fn finfo_class() -> Stmt {
         .method(query_method(false)).method(query_method(true))
         .method(method("set_flags").param("flags", TypeExpr::Int).returns(TypeExpr::Bool).body(set_flags))
         .method(method("__debugInfo").returns(t_array()).returning(e_array(vec![])))
-        .method(method("__clone").final_().returns(TypeExpr::Void).body(vec![
+        .method(method("__clone").returns(TypeExpr::Void).body(vec![
             s_prop_assign(e_this(), "__elephc_handle", e_int(0)),
             s_prop_assign(e_this(), "__elephc_owner", e_null()),
             s_throw(e_new_fq("Error", vec![concat(e_str("Trying to clone an uncloneable object of class "), e_call("get_class", vec![e_this()]))])),

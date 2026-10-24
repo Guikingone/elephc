@@ -18,7 +18,7 @@ use super::super::{error::NativeError, recipe::RecipeRequest, toolchain::run_che
 use super::util::copy_regular;
 
 const FLAGS: &[&str] = &[
-    "--disable-shared", "--enable-static", "--disable-zlib", "--disable-bzlib",
+    "--disable-shared", "--enable-static", "--disable-elf", "--disable-elf-core", "--disable-zlib", "--disable-bzlib",
     "--disable-xzlib", "--disable-zstdlib", "--disable-lzlib", "--disable-lrziplib",
     "--disable-libseccomp", "CFLAGS=-O2 -fPIC",
     // Fileinfo does not launch external decompressors, including on iOS.
