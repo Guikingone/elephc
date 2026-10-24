@@ -17,6 +17,16 @@ pub(super) fn store_expr_into_temp(
     expr: &Expr,
     span: crate::span::Span,
 ) {
+    // A `throw` arm of a buffer merge leaves through its exception and stores nothing: the boxed
+    // null its lowering answers is not a buffer handle, so the branch ends where the throw does
+    // and the merge block only joins the arms that store a buffer.
+    if matches!(expr.kind, ExprKind::Throw(_))
+        && matches!(temp_type.codegen_repr(), PhpType::Buffer(_))
+    {
+        lower_expr(ctx, expr);
+        ctx.builder.terminate(Terminator::Unreachable);
+        return;
+    }
     // A pointer-array temporary builds a literal branch as pointer words, so `[null]` is the
     // null pointer rather than a boxed null the merged array cannot hold.
     if super::indexed_array_literals::literal_pointer_element_type(&temp_type).is_some()
@@ -78,6 +88,33 @@ fn merge_arm_type(ctx: &LoweringContext<'_, '_>, arm: &Expr) -> PhpType {
     }
 }
 
+/// Returns the `buffer<T>` type every arm that completes shares, if they all hold the same one.
+///
+/// A buffer is an opaque handle word that has no `mixed` form: the ordinary merge widened two
+/// `buffer<T>` arms of a ternary or `match` against the syntactic fallback (`int`) into `mixed`,
+/// boxing the handle as an integer that an element read then answered with null. A `throw` arm
+/// stores nothing (`store_expr_into_temp` ends its branch), so it does not widen the merge. Any
+/// other mix keeps the ordinary merge; the checker rejects a buffer arm beside another type.
+/// The arms come typed, so nothing is typed again here.
+fn shared_buffer_merge_type(arms: &[(&Expr, PhpType)]) -> Option<PhpType> {
+    let mut shared: Option<PhpType> = None;
+    for (arm, ty) in arms {
+        if matches!(arm.kind, ExprKind::Throw(_)) {
+            continue;
+        }
+        let ty = ty.codegen_repr();
+        if !matches!(ty, PhpType::Buffer(_)) {
+            return None;
+        }
+        match &shared {
+            Some(existing) if *existing != ty => return None,
+            Some(_) => {}
+            None => shared = Some(ty),
+        }
+    }
+    shared
+}
+
 /// Chooses a merge temp type from contextual branch materialization and fallback metadata.
 pub(super) fn branch_merge_result_type(
     ctx: &LoweringContext<'_, '_>,
@@ -88,6 +125,9 @@ pub(super) fn branch_merge_result_type(
     let arms = [(then_expr, merge_arm_type(ctx, then_expr)), (else_expr, merge_arm_type(ctx, else_expr))];
     if let Some(raw_words) = pointer_array_branch_merge_type(&arms) {
         return raw_words;
+    }
+    if let Some(buffer) = shared_buffer_merge_type(&arms) {
+        return buffer;
     }
     let [(_, then_ty), (_, else_ty)] = &arms;
     let branch_ty = nullable_aware_branch_merge_type(then_ty, else_ty);
@@ -120,6 +160,9 @@ pub(super) fn match_merge_result_type(
     if let Some(raw_words) = pointer_array_branch_merge_type(&typed_arms) {
         return raw_words;
     }
+    if let Some(buffer) = shared_buffer_merge_type(&typed_arms) {
+        return buffer;
+    }
     let mut merged: Option<PhpType> = None;
     for (_, arm_ty) in &typed_arms {
         let arm_ty = arm_ty.clone();
@@ -151,6 +194,12 @@ pub(super) fn short_ternary_merge_result_type(
     let arms = [(value, merge_arm_type(ctx, value)), (default, merge_arm_type(ctx, default))];
     if let Some(raw_words) = pointer_array_branch_merge_type(&arms) {
         return raw_words;
+    }
+    // The tested value is stored as it was lowered, so only the default may be a `throw` arm.
+    if !matches!(value.kind, ExprKind::Throw(_)) {
+        if let Some(buffer) = shared_buffer_merge_type(&arms) {
+            return buffer;
+        }
     }
     let [(_, value_ty), (_, default_ty)] = &arms;
     // A `?ptr<T>` side keeps the merge nullable: its codegen form is the bare pointer word, and

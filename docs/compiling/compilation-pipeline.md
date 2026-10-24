@@ -91,11 +91,25 @@ Physical source (.php or .lfc)
   prelude is injected
   with `--web`, and namespace/`use` rules rewrite references to fully-qualified
   names. After autoload insertion, DOM usage is checked again so newly loaded
-  classes receive the same declarations before type checking.
+  classes receive the same declarations before type checking. Every included
+  and autoloaded file is lexed with its own source identity, so statements at
+  the same line and column of two files never share a checker result, and a
+  diagnostic raised inside such a file names it.
 - **func-args** — rewrites `func_num_args()`, `func_get_args()`, and
   `func_get_arg()` into a hidden variadic parameter plus ordinary PHP operations.
   This happens after autoloading but before manifest baking, optimization, and
   checking, so those later passes see the desugared callable shape.
+- **autoload prelude probe** — the autoload pass runs after name resolution, so
+  a prelude needed only by an autoloaded file would be missed. When autoload
+  rules exist, a probe (`src/autoload/prelude_probe.rs`) first runs name
+  resolution and the autoload pass on a copy of the program, asks each
+  prelude's detector about the result, and restores the thread-local source IDs
+  and anonymous-class counter. Process-global synthetic spans and include
+  temporaries stay monotonic, so discarding a probe cannot recycle identities
+  allocated by another compilation thread. The real pass injects the detected
+  preludes with fresh global identities. Every included and
+  autoloaded file gets its own source identity, which is how diagnostics name
+  the file they come from.
 - **opcache-manifest-bake** — after autoload insertion and argument-introspection
   desugaring, replaces the placeholder OPcache manifest with the complete
   entry/include/autoload file set before constant folding and emits any preload

@@ -1131,7 +1131,7 @@ eval-scope helpers, or retain interpreter fallback. See
 | `PtrReadString`, `PtrWriteString` | pointer and string/len | string or int | native memory effects, maybe `alloc_heap`, `may_fatal` |
 | `PtrOffset` | pointer, byte offset | `I64` pointer | pure arithmetic, but php_type tag preserved |
 | `PtrCheckNonnull` | pointer | `Void` | `may_fatal` |
-| `BufferNew(element_type, len)` | length | `Heap(Buffer)` | allocates a separate payload and publishes a generation-safe handle; `alloc_heap`, `may_fatal` |
+| `BufferNew(element_type, len)` | `I64` length | `Heap(Buffer)` | allocates a separate payload and publishes a generation-safe handle; `alloc_heap`, `may_fatal`. Lowering converts a non-`int` length (checked int arithmetic, `mixed`, `int\|float`) first, dispatching a boxed value on its runtime tag (`TypePredicate`): an int payload is cast exactly, a float payload is truncated with the silent `FToI`, and any other value is cast both to int and to float. The count becomes `-1` unless `IToF` of it gives the same float back and it is not `PHP_INT_MAX` (where numeric strings saturate), so a fraction, NaN, infinity or an out-of-range value fails the runtime length validation; each path converts only the representation it runs with, so none raises a cast warning after EIR passes narrow the box to a raw scalar |
 | `BufferLen` | buffer handle | `I64` | resolves generation/activity, then `reads_heap`; `may_fatal` on stale or invalid handles |
 | `BufferGet`, `BufferSet` | buffer handle, index, value | typed value or `Void` | resolve generation/activity before payload access; `reads_heap`/`writes_heap`, bounds `may_fatal` |
 | `BufferResolve` | buffer handle | `I64` descriptor | optimizer-only; resolves generation/activity WITHOUT faulting and answers 0 for a stale or invalid handle; `reads_heap` |
@@ -2140,7 +2140,7 @@ instructions, but they must be represented in metadata or consumed by lowering.
 | `ArrayLiteralAssoc` | Allocate hash table and insert key/value pairs in source order; empty hash keeps mixed key/value metadata. |
 | `Match` | Lower subject once; build strict-comparison arm CFG; default absence may `Fatal` via match-unhandled runtime. |
 | `ArrayAccess` | Lower base/index; dispatch to array/hash/mixed/object ArrayAccess/buffer access as type requires. |
-| `Ternary` | Lower condition, then branch CFG; result block joins branch values. |
+| `Ternary` | Lower condition, then branch CFG; result block joins branch values through a hidden merge temp typed from the arms. Arms of one `buffer<T>` type keep the handle word instead of a boxed `mixed` temp, and a `throw` arm of such a merge ends its branch with `Unreachable` (`ShortTernary`, `Match` and `NullCoalesce` merge the same way). |
 | `ShortTernary` | Lower value once; truthy path reuses value; false path lowers default. |
 | `Cast` | Lower expression then emit `Cast`/specific conversion op. |
 | `Closure` | Emit callable descriptor, capture metadata, and deferred closure function body. |

@@ -7,7 +7,9 @@
 //! Key details:
 //! - Retains constructor, visibility, eval-barrier, callable, and late-static-binding checks.
 
-use super::null_coalesce::{null_coalesce_result_type, operand_is_never_null};
+use super::null_coalesce::{
+    null_coalesce_buffer_merge_type, null_coalesce_result_type, operand_is_never_null,
+};
 use super::{body_must_not_use_this, Checker};
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
@@ -57,7 +59,13 @@ impl Checker {
             }
             ExprKind::BufferNew { element_type, len } => {
                 let len_ty = self.infer_type(len, env)?;
-                if len_ty != PhpType::Int {
+                // A length takes what a buffer index takes. Checked int arithmetic such as
+                // `$n + 1` infers `mixed` (PHP promotes an overflowing result to float), so a
+                // `mixed` or `int|float` length is converted at runtime, where a value that is
+                // not a whole number in range fails the allocation's length validation.
+                if !matches!(len_ty, PhpType::Int | PhpType::Mixed)
+                    && !len_ty.is_int_float_union()
+                {
                     return Err(CompileError::new(
                         expr.span,
                         "buffer_new<T>() length must be integer",
@@ -91,6 +99,17 @@ impl Checker {
                 let vt = self.infer_null_probe_operand(value, operand_env)?;
                 let value_is_never_null = operand_is_never_null(self, value, &vt, operand_env);
                 let dt = self.infer_type(default, env)?;
+                if let Some(buffer) = null_coalesce_buffer_merge_type(
+                    self,
+                    value,
+                    &vt,
+                    value_is_never_null,
+                    default,
+                    &dt,
+                    expr.span,
+                )? {
+                    return Ok(buffer);
+                }
                 Ok(null_coalesce_result_type(self, value_is_never_null, vt, dt))
             }
             ExprKind::Pipe { value, callable } => {
