@@ -12,7 +12,9 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, c_void, CStr, CString, OsStr};
+use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Mutex, OnceLock};
 
@@ -24,7 +26,7 @@ extern "C" {
     fn magic_setflags(cookie: *mut c_void, flags: c_int) -> c_int;
     fn magic_getflags(cookie: *mut c_void) -> c_int;
     fn magic_buffer(cookie: *mut c_void, data: *const c_void, length: usize) -> *const c_char;
-    fn magic_file(cookie: *mut c_void, path: *const c_char) -> *const c_char;
+    fn magic_descriptor(cookie: *mut c_void, fd: c_int) -> *const c_char;
     fn magic_error(cookie: *mut c_void) -> *const c_char;
 }
 
@@ -124,8 +126,18 @@ unsafe fn query(handle: i64, data: *const c_char, length: i64, flags: i64, file:
     let old = magic_getflags(cookie);
     let selected = if flags == 0 { old } else { flags as c_int };
     // PHP opens the stream first: paths follow symlinks and an unreadable file fails.
-    magic_setflags(cookie, if file { selected | 0x200 | 0x2 } else { selected });
-    let result = if file { magic_file(cookie, data) } else {
+    magic_setflags(cookie, selected);
+    let input = if file {
+        match std::fs::File::open(std::path::Path::new(OsStr::from_bytes(CStr::from_ptr(data).to_bytes()))) {
+            Ok(input) => Some(input),
+            Err(error) => {
+                magic_setflags(cookie, old);
+                outcome(None, CString::new(error.to_string()).unwrap_or_default());
+                return;
+            }
+        }
+    } else { None };
+    let result = if let Some(input) = &input { magic_descriptor(cookie, input.as_raw_fd()) } else {
         magic_buffer(cookie, data.cast(), length.max(0) as usize)
     };
     let copied = (!result.is_null()).then(|| copy_string(result));

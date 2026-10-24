@@ -42,11 +42,13 @@ fn query_method(file: bool) -> crate::synthetic_class::MethodBuilder {
     body.push(context_check());
     if file {
         body.extend([
+            reject(e_binop(e_binop(e_var("context"), BinOp::StrictNotEq, e_null()), BinOp::And,
+                e_binop(e_call("get_resource_type", vec![e_var("context")]), BinOp::StrictNotEq, e_str("stream-context"))), "TypeError", "finfo::file(): context must be a stream context resource"),
             reject(eq(e_var(parameter), e_str("")), "ValueError", "finfo::file(): Argument #1 ($filename) must not be empty"),
             reject(e_binop(e_call("strpos", vec![e_var(parameter), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)), "ValueError", "finfo::file(): Argument #1 ($filename) must not contain any null bytes"),
             s_if(e_call("is_dir", vec![e_var(parameter)]), vec![s_return(e_str("directory"))], vec![], None),
             s_if(e_binop(e_call("strpos", vec![e_var(parameter), e_str("://")]), BinOp::StrictNotEq, e_bool(false)), vec![
-                s_assign("_data", e_call("file_get_contents", vec![e_var(parameter), e_bool(false), e_var("context")])),
+                s_assign("_data", e_call("file_get_contents", vec![e_var(parameter), e_bool(false), e_var("context"), e_int(0), e_int(7340032)])),
                 s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
                 s_return(e_method_call(e_this(), "buffer", vec![e_var("_data"), e_var("flags")])),
             ], vec![], None),
@@ -112,17 +114,19 @@ fn functions() -> Program {
         function("finfo_set_flags").param("finfo", t_class("finfo")).param("flags", TypeExpr::Int)
             .returns(TypeExpr::Bool).returning(e_method_call(e_var("finfo"), "set_flags", vec![e_var("flags")])).build(),
     ];
-    for (name, method_name, param) in [("finfo_buffer", "buffer", "string"), ("finfo_file", "file", "filename")] {
-        out.push(function(name).param("finfo", t_class("finfo")).param(param, TypeExpr::Str)
-            .param_default("flags", TypeExpr::Int, e_int(0)).param_default("context", t_mixed(), e_null())
-            .returns(result_type()).returning(e_method_call(e_var("finfo"), method_name, vec![e_var(param), e_var("flags"), e_var("context")])).build());
-    }
+    out.push(function("finfo_buffer").param("finfo", t_class("finfo")).param("string", TypeExpr::Str)
+        .param_default("flags", TypeExpr::Int, e_int(0)).param_default("context", t_mixed(), e_null())
+        .returns(result_type()).returning(e_method_call(e_var("finfo"), "buffer", vec![e_var("string"), e_var("flags"), e_var("context")])).build());
+    out.push(function("finfo_file").param("finfo", t_class("finfo")).param("filename", TypeExpr::Str)
+        .param_default("flags", TypeExpr::Int, e_int(0)).param_default("context", t_mixed(), e_null())
+        .returns(result_type()).returning(e_method_call(e_var("finfo"), "file", vec![e_var("filename"), e_var("flags"), e_var("context")])).build());
     out.push(function("mime_content_type").param("filename", t_mixed()).returns(result_type()).body(vec![
         s_assign("_finfo", e_new_fq("finfo", vec![e_const("FILEINFO_MIME_TYPE")])),
         s_if(e_call("is_resource", vec![e_var("filename")]), vec![
+            reject(e_binop(e_call("get_resource_type", vec![e_var("filename")]), BinOp::StrictNotEq, e_str("stream")), "TypeError", "mime_content_type(): supplied resource is not a valid stream resource"),
             s_assign("_position", e_call("ftell", vec![e_var("filename")])),
             s_expr(e_call("fseek", vec![e_var("filename"), e_int(0)])),
-            s_assign("_data", e_call("stream_get_contents", vec![e_var("filename")])),
+            s_assign("_data", e_call("stream_get_contents", vec![e_var("filename"), e_int(7340032)])),
             s_expr(e_call("fseek", vec![e_var("filename"), e_var("_position")])),
             s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
             s_return(e_method_call(e_var("_finfo"), "buffer", vec![e_var("_data")])),

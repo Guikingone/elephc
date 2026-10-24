@@ -45,9 +45,10 @@ echo mime_content_type($s), ":", ftell($s), "\n";
 fclose($s);
 echo $f->file("data://text/plain;base64,aGVsbG8="), "\n";
 echo $f->file(sys_get_temp_dir()), "\n";
+echo $f->file("/dev/null"), "\n";
 unlink($p);
 "#);
-    assert_eq!(out, "text/plain\ntext/plain\ntext/plain:3\ntext/plain\ndirectory\n");
+    assert_eq!(out, "text/plain\ntext/plain\ntext/plain:3\ntext/plain\ndirectory\napplication/x-empty\n");
 }
 
 /// User databases support descriptions, MIME annotations, extensions and persistent options.

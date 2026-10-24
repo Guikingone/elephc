@@ -548,3 +548,39 @@ fn stmt_refs_fileinfo(stmt: &Stmt) -> bool {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Global functions, imports, callable references and nested declarations enable injection.
+    #[test]
+    fn fileinfo_detection_covers_php_name_positions() {
+        for source in [
+            "<?php finfo_buffer($f, 'x');",
+            "<?php namespace App; finfo_open();",
+            "<?php use finfo as Info; new Info();",
+            "<?php use function finfo_open as open; open();",
+            "<?php $f = \\FINFO_OPEN(...);",
+            "<?php function f(finfo ...$infos): void {}",
+            "<?php enum E { case A; public function inspect() { return new \\finfo(); } }",
+        ] {
+            let tokens = crate::lexer::tokenize(source).unwrap();
+            let ast = crate::parser::parse(&tokens).unwrap();
+            assert!(program_uses_fileinfo(&ast), "{source}");
+        }
+    }
+
+    /// User namespace declarations and constant-only programs never opt into the bridge.
+    #[test]
+    fn fileinfo_detection_respects_local_symbols() {
+        for source in [
+            "<?php namespace App; function finfo_open() { return 1; } finfo_open();",
+            "<?php \\App\\finfo_open();",
+            "<?php echo FILEINFO_MIME_TYPE;",
+        ] {
+            let tokens = crate::lexer::tokenize(source).unwrap();
+            let ast = crate::parser::parse(&tokens).unwrap();
+            assert!(!program_uses_fileinfo(&ast), "{source}");
+        }
+    }
+}
