@@ -3862,8 +3862,8 @@ var_dump($arr);
 /// literal against that `Void` element, and a caller typed `array<void>` took the boxed result
 /// for the empty-array placeholder, so `$a[] = 1` stored a raw integer beside the boxed null.
 /// Covers a returned literal, a returned local, a bare `array` return type and a hash, and a `??`
-/// over the call assigned to a global alias, a reference-bound local and a static local, whose
-/// slots keep their own merge type.
+/// over the call assigned to a global alias, a reference-bound local and a static local (also
+/// behind an element assignment), whose slots keep their own merge type.
 #[test]
 fn test_untyped_all_null_array_returns_keep_their_null_and_widen_on_append() {
     let out = compile_and_run(
@@ -3875,6 +3875,7 @@ function hash_nulls() { return ["k" => null]; }
 function globaled() { global $q; $x = ($q = local_nulls()) ?? []; $x[] = 6; return json_encode($x); }
 function aliased() { $a = [1, "a"]; $r = &$a; $x = ($a = local_nulls()) ?? []; $x[] = 7; return json_encode($x); }
 function statics() { static $s = [1, "a"]; $x = ($s = local_nulls()) ?? []; $x[] = 8; return json_encode($x); }
+function dimmed() { static $s = [1, "a"]; $d = []; $x = ($d[0] = ($s = local_nulls())) ?? []; $x[] = 9; return json_encode($x); }
 
 $a = nulls();
 echo count($a), json_encode($a), "|";
@@ -3890,11 +3891,11 @@ $d[] = 4;
 echo "|", json_encode($d);
 $h = hash_nulls();
 $h["x"] = 5;
-echo "|", json_encode($h), "|", globaled(), "|", aliased(), "|", statics(), "\n";
+echo "|", json_encode($h), "|", globaled(), "|", aliased(), "|", statics(), "|", dimmed(), "\n";
 "#,
     );
     assert_eq!(
         out,
-        "1[null]|N|[null,1]N1|[null,2]|[null,4]|{\"k\":null,\"x\":5}|[null,6]|[null,7]|[null,8]\n"
+        "1[null]|N|[null,1]N1|[null,2]|[null,4]|{\"k\":null,\"x\":5}|[null,6]|[null,7]|[null,8]|[null,9]\n"
     );
 }

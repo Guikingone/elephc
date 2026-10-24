@@ -83,11 +83,14 @@ pub(super) fn lower_null_coalesce(
 
 /// Returns true when the value side of `??` assigns through a local that keeps its own slot type
 /// (static or reference-bound), so the reloaded value carries that type rather than the call's.
+///
+/// Walks the chain the way `null_only_call_merge_type` does, so a non-local target whose value is
+/// bound to a prelude temp (`$d[0] = ($s = f())`) still reaches the inner slot.
 fn assigns_through_kept_type_slot(ctx: &LoweringContext<'_, '_>, mut expr: &Expr) -> bool {
     loop {
         match &expr.kind {
             ExprKind::ErrorSuppress(inner) => expr = inner,
-            ExprKind::Assignment { target, value, .. } => {
+            ExprKind::Assignment { target, value, result_target, prelude, .. } => {
                 if let ExprKind::Variable(name) = &target.kind {
                     if ctx.is_ref_bound_local(name)
                         || matches!(
@@ -98,7 +101,11 @@ fn assigns_through_kept_type_slot(ctx: &LoweringContext<'_, '_>, mut expr: &Expr
                         return true;
                     }
                 }
-                expr = value;
+                expr = super::merge_temps::assignment_result_expr(
+                    value,
+                    result_target.as_deref(),
+                    prelude,
+                );
             }
             _ => return false,
         }
