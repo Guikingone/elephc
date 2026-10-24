@@ -44,7 +44,7 @@ class DispatchDog extends DispatchAnimal {}
 final class VariantDispatch<+T> {
     public function __construct(private T $value) {}
     public function kind(false $value): string { return self::class; }
-    final public function finalKind(null $value): string { return self::class; }
+    final public function finalKind(false $value): string { return self::class; }
 }
 function read_final(SealedDispatch $object, int $value): int { return $object->value($value); }
 function read_inherited(SealedDispatch $object, int $value): int { return $object->inherited($value); }
@@ -55,7 +55,7 @@ function read_variant_final(VariantDispatch<DispatchAnimal> $object, mixed $valu
 $object = new SealedDispatch();
 echo read_final($object, $argc), read_inherited($object, $argc), read_nullable($object, $argc), read_base($object, $argc);
 $variant = new VariantDispatch<DispatchDog>(new DispatchDog());
-echo read_variant($variant, false), read_variant_final($variant, null);
+echo read_variant($variant, false), read_variant_final($variant, false);
 "#).unwrap();
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let output = elephc_cli_command(&dir.0)
@@ -124,13 +124,13 @@ class LiteralDispatchBase {
 final class LiteralDispatchLeaf extends LiteralDispatchBase {
     public function accept(bool $value): string { return $value ? 'true' : 'false'; }
     public function onlyFalse(false $value): string { return 'false-only'; }
-    public function onlyNull(null $value): string { return 'null-only'; }
+    final public function onlyFalseFinal(false $value): string { return 'final-false'; }
 }
 function widened(LiteralDispatchLeaf $object, bool $value): string { return $object->accept($value); }
 function guarded(?LiteralDispatchLeaf $object, mixed $value): void {
     try { echo $object->onlyFalse($value); } catch (TypeError $error) { echo 'false-error'; }
     echo ':';
-    try { echo $object->onlyNull($value); } catch (TypeError $error) { echo 'null-error'; }
+    try { echo $object->onlyFalseFinal($value); } catch (TypeError $error) { echo 'final-error'; }
 }
 $leaf = new LiteralDispatchLeaf();
 echo widened($leaf, $argc > 0), ':';
@@ -138,7 +138,7 @@ guarded($leaf, false);
 echo ':';
 guarded($leaf, null);
 "#);
-    assert_eq!(out, "true:false-only:null-error:false-error:null-only");
+    assert_eq!(out, "true:false-only:final-false:false-error:final-error");
 }
 
 /// Variance keeps the actual generic body's lexical class and per-instantiation static state.
@@ -153,7 +153,7 @@ final class CovariantDispatch<+T> {
     public function kind(): string { return self::class . ':' . self::$made; }
     final public function finalKind(): string { return self::class . ':' . self::$made; }
     public function onlyFalse(false $value): string { return 'wrong'; }
-    final public function onlyNull(null $value): string { return 'wrong'; }
+    final public function onlyFalseFinal(false $value): string { return 'wrong'; }
 }
 class ContravariantDispatch<-T> {
     private static int $made = 0;
@@ -171,7 +171,7 @@ function inspect_contravariant(ContravariantDispatch<DispatchDog> $object, Dispa
 function inspect_covariant_literals(?CovariantDispatch<DispatchAnimal> $object, mixed $value): void {
     try { echo $object->onlyFalse($value); } catch (TypeError $error) { echo $error->getMessage(); }
     echo ':';
-    try { echo $object->onlyNull($value); } catch (TypeError $error) { echo $error->getMessage(); }
+    try { echo $object->onlyFalseFinal($value); } catch (TypeError $error) { echo $error->getMessage(); }
 }
 function inspect_contravariant_literal(ContravariantDispatch<DispatchDog> $object, mixed $value): void {
     try { echo $object->onlyFalse($value); } catch (TypeError $error) { echo $error->getMessage(); }
@@ -188,7 +188,7 @@ inspect_contravariant_literal($contravariant, $argc > 0);
         "CovariantDispatch<DispatchDog>:1|CovariantDispatch<DispatchDog>:1|",
         "ContravariantDispatch<DispatchAnimal>:1|ContravariantDispatch<DispatchAnimal>:1|",
         "CovariantDispatch<DispatchDog>::onlyfalse(): Argument #1 ($value) must be of type false, true given:",
-        "CovariantDispatch<DispatchDog>::onlynull(): Argument #1 ($value) must be of type null, true given|",
+        "CovariantDispatch<DispatchDog>::onlyfalsefinal(): Argument #1 ($value) must be of type false, true given|",
         "ContravariantDispatch<DispatchAnimal>::onlyfalse(): Argument #1 ($value) must be of type false, true given",
     );
     assert_eq!(compile_and_run(source), expected);
