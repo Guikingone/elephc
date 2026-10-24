@@ -32,7 +32,8 @@
 //! - `null_only_container_return_storage` is shared the same way by a user function's EIR
 //!   signature and the caller's view: an `array<void>` the checker inferred for `[null]` is
 //!   stored as `array<mixed>` on both sides, while the checker keeps `array<void>` for its own
-//!   typing and merge typing reads that view (`caller_visible_checker_return_type`).
+//!   typing, and merge typing and the closure stamp read that view
+//!   (`caller_visible_checker_return_type`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -215,7 +216,10 @@ pub fn caller_visible_return_type(signature: &FunctionSig) -> PhpType {
 /// storage rule: the checker's `array<void>` stays `array<void>`.
 ///
 /// Merge typing reads this for a call arm (`crate::ir_lower::expr::merge_temps`), because beside
-/// a pointer array an all-null arm joins into a `?ptr<T>` element, as a `[null]` local does.
+/// a pointer array an all-null arm joins into a `?ptr<T>` element, as a `[null]` local does. A
+/// closure whose body is `return <user call>;` is typed from it too
+/// (`crate::ir_lower::function::direct_closure_return_expr_type`), because a merge of that
+/// closure's call reads only the closure's signature.
 pub fn caller_visible_checker_return_type(signature: &FunctionSig) -> PhpType {
     if signature.declared_return || !signature_has_dynamic_untyped_param(signature) {
         return signature.return_type.clone();
