@@ -227,12 +227,9 @@ pub(super) fn lower_trigger_error(
     abi::emit_load_symbol_to_reg(ctx.emitter, arg0, "_php_error_handler_callable", 0);
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg1, 0);
     abi::emit_call_label(ctx.emitter, "__rt_error_handler_invoke");
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, 32);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    abi::emit_release_temporary_stack(ctx.emitter, 64);
+    abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, 16);
+    super::super::callables::release_invoker_arg_preserving_result(ctx);
+    abi::emit_release_temporary_stack(ctx.emitter, 48);
     emit_release_handler_result_and_branch_on_false(ctx, &default_label);
     emit_bool_result(ctx, true);
     ctx.emitter.instruction(&branch_instruction(ctx, &done_label));             // skip PHP's default diagnostic after handler suppression
