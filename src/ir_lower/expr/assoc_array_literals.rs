@@ -70,17 +70,25 @@ pub(super) fn lower_assoc_array_literal_as(
 /// Returns the associative-array type for a literal that contains at least one associative
 /// spread. Mirrors the type checker's `assoc_spread_literal_value_type` so EIR storage matches
 /// the value types actually lowered into the hash.
+///
+/// `spread_storage` holds, per item, the codegen storage `spread_source_storage_type_for_ir`
+/// gave a spread's source (`None` for a plain item), typed once by the caller.
 pub(super) fn assoc_array_literal_type_from_spreads(
     ctx: &LoweringContext<'_, '_>,
     items: &[Expr],
     expr: &Expr,
+    spread_storage: &[Option<PhpType>],
 ) -> PhpType {
-    // A plain item is typed once for the pointer probe and the merge below, so an item holding
-    // a nested merge is scanned once per nesting level; a spread is typed by each as before.
+    // Every item is typed once for the pointer probe and the merge below, so an item or spread
+    // source holding a nested merge is scanned once per nesting level. The merge types a spread
+    // source as an element; that is what the source's storage already is for a merge or a
+    // literal source, the sources that cost a scan per level, so those reuse the storage.
     let item_types: Vec<Option<PhpType>> = items
         .iter()
-        .map(|item| match &item.kind {
-            ExprKind::Spread(_) => None,
+        .zip(spread_storage)
+        .map(|(item, storage)| match (&item.kind, storage) {
+            (ExprKind::Spread(_), Some(storage)) => Some(spread_storage_probe_element_type(storage)),
+            (ExprKind::Spread(_), None) => None,
             _ => Some(array_literal_element_type_for_ir(ctx, item)),
         })
         .collect();
@@ -92,8 +100,11 @@ pub(super) fn assoc_array_literal_type_from_spreads(
         };
     }
     let mut value_ty = PhpType::Never;
-    for (item, item_ty) in items.iter().zip(item_types) {
-        let next = match (&item.kind, item_ty) {
+    for ((item, storage), item_ty) in items.iter().zip(spread_storage).zip(item_types) {
+        let next = match (&item.kind, storage) {
+            (ExprKind::Spread(inner), Some(storage)) if spread_source_is_typed_as_element(inner) => {
+                spread_storage_probe_element_type(storage)
+            }
             (ExprKind::Spread(inner), _) => {
                 match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
                     PhpType::Array(elem) => elem.codegen_repr(),
@@ -101,8 +112,10 @@ pub(super) fn assoc_array_literal_type_from_spreads(
                     _ => PhpType::Mixed,
                 }
             }
-            (_, Some(ty)) => ty.codegen_repr(),
-            (_, None) => array_literal_element_type_for_ir(ctx, item).codegen_repr(),
+            (_, _) => match item_ty {
+                Some(ty) => ty.codegen_repr(),
+                None => array_literal_element_type_for_ir(ctx, item).codegen_repr(),
+            },
         };
         value_ty = merge_ir_assoc_value_type(value_ty, next);
     }
@@ -113,6 +126,23 @@ pub(super) fn assoc_array_literal_type_from_spreads(
         key: Box::new(PhpType::Mixed),
         value: Box::new(value_ty),
     }
+}
+
+/// Returns true when `spread_source_storage_type_for_ir` types `source` exactly as
+/// `array_literal_element_type_for_ir` does: a lazy merge or a nested literal, the sources that
+/// hold the nesting a literal merge pays for per level. Calls, reads and other sources keep
+/// their own spread typing.
+fn spread_source_is_typed_as_element(source: &Expr) -> bool {
+    matches!(
+        source.kind,
+        ExprKind::Ternary { .. }
+            | ExprKind::ShortTernary { .. }
+            | ExprKind::Match { .. }
+            | ExprKind::NullCoalesce { .. }
+            | ExprKind::Assignment { .. }
+            | ExprKind::ArrayLiteral(_)
+            | ExprKind::ArrayLiteralAssoc(_)
+    )
 }
 
 /// Returns the associative-array type that the EIR backend can faithfully materialize.
