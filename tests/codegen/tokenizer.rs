@@ -170,7 +170,7 @@ $t = new PhpToken(T_STRING, 'name');
 $values = [true, 1.5, null, new stdClass()];
 foreach ($values as $value) {
     try { $t->is($value); echo 'wrong'; }
-    catch (TypeError $error) { echo 'T'; }
+    catch (TypeError $error) { echo str_contains($error->getMessage(), '($kind)') ? 'T' : 'wrong'; }
 }
 echo ':', $t->is(['name', []]) ? 'match' : 'wrong';
 try { $t->is([[], 'name']); echo 'wrong'; }
