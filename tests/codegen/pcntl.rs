@@ -460,7 +460,7 @@ fn test_pcntl_exception_boundary_preserves_signal_mask_changes() {
             throw new RuntimeException('body');
         } catch (RuntimeException $error) {
             $current = [];
-            pcntl_sigprocmask(SIG_BLOCK, [], $current);
+            pcntl_sigprocmask(SIG_BLOCK, [SIGUSR2], $current);
             echo $error->getMessage(), ':', in_array(SIGUSR1, $current) ? 'blocked' : 'clear';
         }
         pcntl_sigprocmask(SIG_SETMASK, $original);
@@ -484,7 +484,7 @@ fn test_pcntl_cleanup_boundary_preserves_signal_mask_changes() {
         try { unset($values); }
         catch (RuntimeException $error) {
             $current = [];
-            pcntl_sigprocmask(SIG_BLOCK, [], $current);
+            pcntl_sigprocmask(SIG_BLOCK, [SIGUSR2], $current);
             echo $error->getMessage(), ':', in_array(SIGUSR1, $current) ? 'blocked' : 'clear';
         }
         pcntl_sigprocmask(SIG_SETMASK, $original);
@@ -1630,6 +1630,66 @@ fn test_pcntl_dispatch_defers_nested_signal_arrivals() {
         pcntl_signal(SIGUSR1, SIG_DFL);
         pcntl_signal(SIGUSR2, SIG_DFL);",
     );
+    assert_eq!(out, "first|first:second");
+}
+
+/// A catch inside a signal handler preserves the mask and guard for the current dispatch snapshot.
+#[test]
+fn test_pcntl_dispatch_inner_catch_preserves_masked_snapshot() {
+    let out = compile_and_run(r#"<?php
+        extern "System" {
+            function getpid(): int;
+            function kill(int $pid, int $signal): int;
+        }
+        $seen = '';
+        pcntl_signal(SIGUSR1, function() use (&$seen): void {
+            try { throw new RuntimeException('inner'); }
+            catch (RuntimeException $error) {}
+            $seen .= 'first';
+            kill(getpid(), SIGUSR2);
+            pcntl_signal_dispatch();
+        });
+        pcntl_signal(SIGUSR2, function() use (&$seen): void { $seen .= ':second'; });
+        kill(getpid(), SIGUSR1);
+        pcntl_signal_dispatch();
+        echo $seen . '|';
+        pcntl_signal_dispatch();
+        echo $seen;
+        pcntl_signal(SIGUSR1, SIG_DFL);
+        pcntl_signal(SIGUSR2, SIG_DFL);
+    "#);
+    assert_eq!(out, "first|first:second");
+}
+
+/// A protected cleanup throw caught inside a signal handler also leaves its dispatch active.
+#[test]
+fn test_pcntl_dispatch_cleanup_catch_preserves_masked_snapshot() {
+    let out = compile_and_run(r#"<?php
+        extern "System" {
+            function getpid(): int;
+            function kill(int $pid, int $signal): int;
+        }
+        class SignalCleanupFailure {
+            public function __destruct() { throw new RuntimeException('cleanup'); }
+        }
+        $seen = '';
+        pcntl_signal(SIGUSR1, function() use (&$seen): void {
+            $values = [new SignalCleanupFailure()];
+            try { unset($values); }
+            catch (RuntimeException $error) {}
+            $seen .= 'first';
+            kill(getpid(), SIGUSR2);
+            pcntl_signal_dispatch();
+        });
+        pcntl_signal(SIGUSR2, function() use (&$seen): void { $seen .= ':second'; });
+        kill(getpid(), SIGUSR1);
+        pcntl_signal_dispatch();
+        echo $seen . '|';
+        pcntl_signal_dispatch();
+        echo $seen;
+        pcntl_signal(SIGUSR1, SIG_DFL);
+        pcntl_signal(SIGUSR2, SIG_DFL);
+    "#);
     assert_eq!(out, "first|first:second");
 }
 

@@ -28,7 +28,7 @@ pub(crate) const EXCEPTION_GUARD_SLOT_SIZE: usize = 32;
 pub(crate) const EXCEPTION_GUARD_OWNER_OFFSET: usize = 24;
 
 impl Emitter {
-    /// Saves an internal exception boundary without reading the process signal mask.
+    /// Saves an internal exception boundary without reading the signal mask.
     ///
     /// The caller supplies the jump-buffer pointer in C argument zero. All supported
     /// libcs expose `_setjmp` and its matching `_longjmp`; `bl_c` handles symbol spelling.
