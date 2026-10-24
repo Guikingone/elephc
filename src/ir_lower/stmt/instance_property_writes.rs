@@ -465,6 +465,10 @@ fn narrow_mixed_value_for_fixed_layout_field(
         field_kind, class_name, property, narrowed_ty
     );
     let data = ctx.intern_string(&message);
+    // The narrowing throws for a value the field cannot hold. An owning source exists only as
+    // SSA at that point, so park it in the unwind chain for the narrowing: a caught TypeError
+    // then still releases the box and its payload, and runs a destructor it owes.
+    let source_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
     let narrowed = ctx.emit_value(
         op,
         vec![value.value],
@@ -473,6 +477,8 @@ fn narrow_mixed_value_for_fixed_layout_field(
         op.default_effects(),
         Some(span),
     );
+    // The source is released right below, so its unwind record must no longer own it.
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, source_pins, span);
     if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }

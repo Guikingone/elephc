@@ -11,8 +11,8 @@
 //!   but stays a boxed `Mixed` in EIR; the store used to write the box ADDRESS into the field.
 //! - Each scalar field narrows a boxed value strictly: its own type passes, an int widens into a
 //!   float field, and anything else throws a catchable `TypeError` before the field changes.
-//! - The loop fixtures run with the EIR optimizer on and off, and one runs under heap debug to
-//!   prove the narrowing releases every box it consumes.
+//! - The loop fixtures run with the EIR optimizer on and off, and the heap-debug fixtures prove
+//!   the narrowing releases every box it consumes, on the throwing path as well.
 
 use crate::support::*;
 
@@ -211,6 +211,38 @@ buffer_free($pts);
             out.stderr
         );
     }
+}
+
+/// Verifies a refused temporary is still released when the narrowing throws: the unwind retires
+/// the box before the catch body, so an object it carries is destroyed there, as PHP frees a
+/// live temporary while unwinding, and repeated refusals leave a clean heap.
+#[test]
+fn test_packed_field_narrowing_releases_refused_temporaries() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+packed class Cell { public int $id; public float $x; public bool $live; }
+class Noisy { public function __destruct() { echo "freed\n"; } }
+function load(mixed $v) { return $v; }
+$cells = buffer_new<Cell>(1);
+for ($i = 0; $i < 3; $i++) {
+    try { $cells[0]->x = json_decode("\"x\""); } catch (TypeError $e) { echo "float refused\n"; }
+}
+try { $cells[0]->id = load(new Noisy()); } catch (TypeError $e) { echo "int refused\n"; }
+try { $cells[0]->live = load([1, 2]); } catch (TypeError $e) { echo "bool refused\n"; }
+echo "done\n";
+buffer_free($cells);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "float refused\nfloat refused\nfloat refused\nfreed\nint refused\nbool refused\ndone\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected refused temporaries to be released, got: {}",
+        out.stderr
+    );
 }
 
 /// Verifies scalar packed field reads keep their type in array literals and branch merges:
