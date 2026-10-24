@@ -51,8 +51,8 @@ final class World
 
 $world = new World(3);
 for ($i = 0; $i < 3; $i++) {
-    $world->front[$i]->x = $i * 10.0;
-    $world->front[$i]->vx = 1.0 + $i;
+    $world->front[$i]->x = (float) $i * 10.0;
+    $world->front[$i]->vx = (float) $i + 1.0;
 }
 for ($frame = 0; $frame < 5; $frame++) {
     $world->step(0.5);
