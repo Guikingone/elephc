@@ -76,7 +76,11 @@ pub(super) fn resolve_method_call_target(
             impl_class, method_name
         )));
     }
-    let dynamic_slot = if class_info.final_methods.contains(&method_key) {
+    // A final receiver class cannot select an override, including for inherited methods.
+    // Keep the vtable fallback when this module has no directly callable EIR body.
+    let dynamic_slot = if has_direct_body
+        && (class_info.is_final || class_info.final_methods.contains(&method_key))
+    {
         None
     } else {
         dynamic_slot
