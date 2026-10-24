@@ -11,6 +11,7 @@
 //! - C fills fields that PHP reads by name and checks fields PHP wrote, which pins both the
 //!   offsets and the per-width extension, truncation, `f32` rounding and one-byte `bool`.
 //! - The fixture is assembled into the test program itself, so no shared library is needed.
+//! - Values whose type is only known at run time are narrowed strictly into scalar fields.
 
 use super::*;
 
@@ -336,6 +337,47 @@ echo $r->x, "\n";
 "#,
     );
     assert_eq!(out, "Extern field Rect::$x must be of type int, float given\n1\n");
+}
+
+/// Verifies float and `bool` fields narrow a value whose type is only known at run time, like a
+/// packed field: float arithmetic over a loop counter (boxed in EIR although the checker types it
+/// `float`) reaches C memory as a float instead of failing to compile, a runtime int converts
+/// into a float field, and any other runtime value raises a `TypeError` before the field changes.
+#[test]
+fn test_ffi_extern_class_float_and_bool_fields_narrow_runtime_values() {
+    let out = run_struct_program(
+        r#"
+$f = elephc_test_frect_blank();
+for ($i = 0; $i < 3; $i++) {
+    $f->w = 1.5 * ($i + 1);
+    $f->h = 0.25 * ($i + 1);
+}
+echo $f->w, " ", $f->h, " ", elephc_test_describe_frect(), "\n";
+$a = elephc_test_all_blank();
+$a->f64 = json_decode("3");
+$a->f32 = json_decode("0.5");
+$a->flag = json_decode("true");
+var_dump($a->f64, $a->f32, $a->flag);
+try {
+    $a->f64 = json_decode("\"x\"");
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+try {
+    $a->flag = json_decode("1");
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+var_dump($a->f64, $a->flag);
+"#,
+    );
+    assert_eq!(
+        out,
+        "4.5 0.75 not-single other 4.50 0.75\nfloat(3)\nfloat(0.5)\nbool(true)\n\
+         Extern field All::$f64 must be of type float, string given\n\
+         Extern field All::$flag must be of type bool, int given\n\
+         float(3)\nbool(true)\n"
+    );
 }
 
 /// Verifies a field read through a null `ptr<ExternClass>` aborts with the pointer extension's
