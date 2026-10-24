@@ -128,7 +128,7 @@ eval($code);
     assert_eq!(out, "T_ECHO:5\nT_FUNCTION\nPhpToken:echo:6\nParseError:abstract:EvalSourceToken:html:1:TypeError:TypeError");
 }
 
-/// Repeated token arrays and object graphs leave no live PHP allocations after scope cleanup.
+/// Repeated token arrays leave no live PHP allocations after scope cleanup.
 #[test]
 fn test_tokenizer_repeated_arrays_are_released() {
     let out = compile_and_run_with_heap_debug(r#"<?php
@@ -136,6 +136,15 @@ function inspect_source(): void {
     for ($i = 0; $i < 20; $i++) {
         $tokens = token_get_all('<?php echo "hello";');
     }
+}
+
+
+inspect_source();
+echo 'done';
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Repeated object factories release their intermediate token arrays and boxed property values.
@@ -148,13 +157,6 @@ function inspect_tokens(): void {
     }
 }
 inspect_tokens();
-echo 'done';
-"#);
-    assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "done");
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
-}
-inspect_source();
 echo 'done';
 "#);
     assert!(out.success, "{}", out.stderr);
