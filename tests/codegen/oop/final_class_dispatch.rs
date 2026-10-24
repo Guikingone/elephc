@@ -41,9 +41,10 @@ final class SealedDispatch extends ParentDispatch {
 }
 function read_final(SealedDispatch $object, int $value): int { return $object->value($value); }
 function read_inherited(SealedDispatch $object, int $value): int { return $object->inherited($value); }
+function read_nullable(?SealedDispatch $object, int $value): int { return $object->value($value); }
 function read_base(ParentDispatch $object, int $value): int { return $object->value($value); }
 $object = new SealedDispatch();
-echo read_final($object, $argc), read_inherited($object, $argc), read_base($object, $argc);
+echo read_final($object, $argc), read_inherited($object, $argc), read_nullable($object, $argc), read_base($object, $argc);
 "#).unwrap();
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let output = elephc_cli_command(&dir.0)
@@ -55,6 +56,7 @@ echo read_final($object, $argc), read_inherited($object, $argc), read_base($obje
         for (function, implementation) in [
             ("read_final", "_method_SealedDispatch_value"),
             ("read_inherited", "_method_ParentDispatch_inherited"),
+            ("read_nullable", "_method_SealedDispatch_value"),
         ] {
             let body = function_body(&assembly, function);
             assert!(body.contains(&format!("{call} {implementation}")), "{target}: {body}");
@@ -84,13 +86,15 @@ final class DispatchLeaf extends DispatchBase {
 }
 function from_base(DispatchBase $object): string { return $object->value(); }
 function from_nullable(?DispatchLeaf $object): string { return $object?->value() ?? 'null'; }
+function from_nullable_arrow(?DispatchLeaf $object): string { return $object->value(); }
 $leaf = new DispatchLeaf();
 $value = $argc;
 echo $leaf->inherited($value), ':', from_base($leaf), ':', from_nullable($leaf), ':', from_nullable(null), ':';
 echo $leaf->update(value: $value), ':', $value;
+echo ':', from_nullable_arrow($leaf);
 "#;
-    assert_eq!(compile_and_run(source), "2:leaf:leaf:null:leaf!:2");
-    without_ir_opt(|| assert_eq!(compile_and_run(source), "2:leaf:leaf:null:leaf!:2"));
+    assert_eq!(compile_and_run(source), "2:leaf:leaf:null:leaf!:2:leaf");
+    without_ir_opt(|| assert_eq!(compile_and_run(source), "2:leaf:leaf:null:leaf!:2:leaf"));
 }
 
 /// A final override may widen a parent's false-only parameter without losing its own guard.
@@ -106,7 +110,7 @@ final class LiteralDispatchLeaf extends LiteralDispatchBase {
     public function onlyNull(null $value): string { return 'null-only'; }
 }
 function widened(LiteralDispatchLeaf $object, bool $value): string { return $object->accept($value); }
-function guarded(LiteralDispatchLeaf $object, mixed $value): void {
+function guarded(?LiteralDispatchLeaf $object, mixed $value): void {
     try { echo $object->onlyFalse($value); } catch (TypeError $error) { echo 'false-error'; }
     echo ':';
     try { echo $object->onlyNull($value); } catch (TypeError $error) { echo 'null-error'; }

@@ -732,7 +732,7 @@ Total size: `8 + (num_properties × 16)`. Properties are stored at fixed offsets
 
 - Instance methods: codegen resolves a stable slot number from the static class metadata, then uses the object's `class_id` to load the concrete class vtable entry and `blr` to the implementation. The object pointer is still passed as the first argument in `x0` (as `$this`).
 - Private instance methods are excluded from the vtable and emitted as direct calls within the declaring class, preserving PHP's lexical binding for parent-private helpers.
-- Final methods and methods on a statically known final class call the emitted implementation directly, including inherited implementations. Overridable base-class receivers retain vtable dispatch. The same rule applies to nullable receivers after their null guard and uses the target's ordinary physical or source ABI entry.
+- Final methods and methods on a statically known final class call the emitted implementation directly, including inherited implementations. Ordinary `->` calls on overridable base-class receivers retain vtable dispatch. The same rule applies to nullable receivers after their null guard and uses the target's ordinary physical or source ABI entry.
 - Interfaces and abstract classes are enforced at compile time. Runtime method calls still use the existing class vtables, while dedicated interface metadata tables are emitted alongside the class metadata for roadmap-aligned interface bookkeeping and future dispatch work.
 - Static methods: `bl _static_ClassName_methodName`. No object pointer is passed.
 - `self::method()` / `parent::method()`: emitted as direct lexical calls, but static targets still forward the current "called class" id for later `static::` lookups.
