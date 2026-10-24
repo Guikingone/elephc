@@ -35,6 +35,7 @@ fn test_fileinfo_files_and_streams() {
     if fileinfo_native::skip("test_fileinfo_files_and_streams") { return; }
     let out = compile_and_run(r#"<?php
 $f = finfo_open(FILEINFO_MIME_TYPE);
+if ($f === false) { throw new RuntimeException("Could not open fileinfo"); }
 $p = tempnam(sys_get_temp_dir(), "finfo");
 file_put_contents($p, "hello\n");
 echo finfo_file($f, $p), "\n";
@@ -104,19 +105,29 @@ eval($code);
 #[test]
 fn test_fileinfo_heap_ownership() {
     if fileinfo_native::skip("test_fileinfo_heap_ownership") { return; }
-    let out = compile_and_run_with_heap_debug(r#"<?php
-for ($i = 0; $i < 10; $i++) {
+    let mut failures = Vec::new();
+    for (label, operation) in [
+        ("construct", ""),
+        ("query", "$s = $f->buffer(\"hello\");"),
+        ("close", "finfo_close($f);"),
+        ("query and alias", "$s = $f->buffer(\"hello\"); $g = $f; finfo_close($g); unset($g);"),
+    ] {
+        let source = format!(r#"<?php
+for ($i = 0; $i < 10; $i++) {{
     $f = new finfo(FILEINFO_MIME_TYPE);
-    $s = $f->buffer("hello");
-    $g = $f;
-    finfo_close($g);
-    unset($g);
+    {operation}
     unset($f);
-}
+}}
 echo "ok\n";
 "#);
-    assert_eq!(out.stdout, "ok\n");
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        let (out, asm) = compile_and_run_with_heap_debug_and_asm(&source);
+        assert_eq!(out.stdout, "ok\n", "{label}");
+        if !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            eprintln!("Fileinfo {label} assembly:\n{asm}");
+            failures.push(format!("{label}: {}", out.stderr));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// All eleven fileinfo constants resolve identically without enabling the native bridge.
@@ -134,7 +145,7 @@ fn test_fileinfo_extended_options() {
     if fileinfo_native::skip("test_fileinfo_extended_options") { return; }
     let out = compile_and_run(r#"<?php
 $p = tempnam(sys_get_temp_dir(), "magic");
-file_put_contents($p, "0 string ELEPHC First document\n!:apple ELPHDocu\n!:ext elph\n0 string ELEPHC Second document\n");
+file_put_contents($p, "0 string ELEPHC First document\n!:apple ELPHDocu\n!:ext elph\n0 string ELEPHC Second document\n!:apple ELPHDocu\n!:ext elph\n");
 $f = new finfo(FILEINFO_NONE, $p);
 echo $f->buffer("ELEPHC\0data", FILEINFO_APPLE), "\n";
 echo $f->buffer("ELEPHC\0data", FILEINFO_EXTENSION), "\n";
@@ -151,7 +162,7 @@ unlink($p);
 fn test_fileinfo_subclass_native_ownership() {
     if fileinfo_native::skip("test_fileinfo_subclass_native_ownership") { return; }
     let out = compile_and_run(r#"<?php
-extern "elephc_fileinfo" { fn elephc_fileinfo_live_handles(): int; }
+extern "elephc_fileinfo" { function elephc_fileinfo_live_handles(): int; }
 class DocumentInfo extends finfo {
     public function __destruct() { echo "destroyed\n"; }
 }
@@ -206,7 +217,21 @@ restore_error_handler();
 echo $f->buffer("hello"), "\n";
 "#);
     assert_eq!(out.stdout, "2\nfile\n2\ndatabase\nwarning\ntext/plain\n", "{}", out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    let mut failures = Vec::new();
+    if !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+        failures.push(format!("fileinfo warnings: {}", out.stderr));
+    }
+    for (label, source) in [
+        ("engine warning", "<?php __elephc_builtin_warning('control');"),
+        ("user warning handler", "<?php set_error_handler(function(int $n, string $m, string $f, int $l): bool { return true; }); trigger_error('control', E_USER_WARNING); restore_error_handler();"),
+        ("throwing user warning handler", "<?php set_error_handler(function(int $n, string $m, string $f, int $l): bool { throw new RuntimeException('control'); }); try { trigger_error('control', E_USER_WARNING); } catch (RuntimeException $e) {} restore_error_handler();"),
+    ] {
+        let control = compile_and_run_with_heap_debug(source);
+        if !control.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("{label}: {}", control.stderr));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// Procedural functions invoke the native implementation even if a subclass overrides methods.

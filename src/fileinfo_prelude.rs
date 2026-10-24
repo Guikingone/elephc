@@ -10,6 +10,7 @@
 
 mod build;
 mod detect;
+mod streams;
 use crate::parser::ast::Program;
 
 /// Builds the class, PHP functions and bridge extern declarations.
