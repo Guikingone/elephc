@@ -288,10 +288,8 @@ result is a `ptr<T>`, as `$buf[0]` is; for every other element type it is the un
 The address stays valid until `buffer_free()`: `buffer_ptr()` of a freed buffer, or of an alias
 of one, aborts with the use-after-free error below, and a pointer taken earlier dangles once
 the payload is released. Unlike `buffer_free()`, `buffer_ptr()` accepts any buffer expression,
-including a property or a call result. Inside `eval()`, where a buffer is a raw allocation
-rather than a registry handle, no buffer operation has that diagnostic: `buffer_free()` releases
-the memory and nulls its own variable, and another copy of the handle dangles for
-`buffer_ptr()` exactly as it does for `buffer_len()` and the element reads.
+including a property or a call result. Code inside `eval()` follows the same liveness rules; see
+[Buffers inside eval()](#buffers-inside-eval).
 
 ## Freeing buffers
 
@@ -307,6 +305,40 @@ Restrictions:
 - Only accepts plain local variables
 - Freeing a local nullifies that local; freeing the same local again is a no-op
 - Existing aliases become stale and fail with the use-after-free fatal error, even if the descriptor slot and heap payload are later reused
+
+## Buffers inside eval()
+
+Code running inside `eval()` creates a buffer with the untyped `buffer_new($length)`, whose
+elements are 8-byte words. Its value is an opaque integer handle from a registry with
+generations, the same liveness model compiled buffers use, so `buffer_len()`, `buffer_ptr()` and
+`buffer_free()` check that the buffer is still alive:
+
+```php
+<?php
+eval('
+$buf = buffer_new(4);
+$alias = $buf;
+ptr_set(buffer_ptr($buf), 7);       // element 0 is the first word of the payload
+echo ptr_get(buffer_ptr($alias));   // 7
+buffer_free($buf);                  // releases the payload and nulls $buf
+buffer_free($buf);                  // no-op: $buf is null now
+echo buffer_len($alias);            // Fatal error: use of buffer after buffer_free()
+');
+```
+
+- `buffer_len()`, `buffer_ptr()` or `buffer_free()` of an alias of a freed buffer aborts with
+  `Fatal error: use of buffer after buffer_free()`, even after a later `buffer_new()` reuses the
+  released memory, because each reuse of a registry slot gets a new generation.
+- `buffer_free()` of a variable nulls that variable, and freeing the null again is a no-op, as in
+  compiled code. `buffer_len()` and `buffer_ptr()` of the null, or of any other value that is not
+  a live eval buffer, abort with the same fatal error.
+- The handle is not an address: the payload is reachable only through `buffer_ptr()`, and
+  element `$i` sits at `ptr_offset(buffer_ptr($buf), $i * 8)`. Element syntax (`$buf[0]`) does
+  not reach the payload inside `eval()`, where the handle is a plain integer.
+- Eval buffers and compiled buffers live in separate registries. A compiled buffer handle that
+  reaches `eval()` as an integer, for example through a `mixed` view of an array of buffers, is
+  not an eval buffer there, so the buffer builtins abort on it with the same fatal error. Eval
+  buffers do not count against the 4096 live compiled buffers.
 
 ## Bounds checking
 
