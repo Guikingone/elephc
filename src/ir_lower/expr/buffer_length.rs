@@ -7,20 +7,21 @@
 //! Key details:
 //! - An `int` length passes through unchanged. Any other length the checker admits (the boxed
 //!   `mixed` of checked int arithmetic such as `$n + 1`, or a `mixed` / `int|float` value)
-//!   converts through PHP's float conversion and must then be a whole number.
-//! - A length that does not survive the float -> int -> float round trip (a fraction, NaN,
-//!   infinity, or a magnitude outside the int range) becomes `-1`, so `__rt_buffer_new`
-//!   rejects it with its existing length diagnostic on every target.
+//!   converts both to int and to float with PHP's conversions.
+//! - The int count is used only when it converts back to the same float, so an int payload of
+//!   any magnitude stays exact, while a fraction, NaN, infinity, or a float outside the int range
+//!   becomes `-1`, which `__rt_buffer_new` rejects with its existing length diagnostic on every
+//!   target. Exactness matters even above the payload limit: a zero-size packed element has
+//!   stride 0, so any non-negative count allocates.
 
 use super::*;
 
 /// Lowers a `buffer_new<T>()` length to an `I64` element count.
 ///
-/// A non-`int` length is converted to float, which releases an owning boxed temporary, then
-/// truncated with PHP's float-to-int conversion. The truncated count is used only when it
-/// converts back to the same float; otherwise the count is `-1`, which the allocation rejects.
-/// A whole number above 2^53 may round on the float conversion, but every such length is
-/// already beyond the allocator's 32-bit payload limit, so the diagnostic does not change.
+/// A non-`int` length is converted to int first (PHP's conversion, `FToI` for a raw float so no
+/// cast warning is raised) and then to float, which releases an owning boxed temporary once both
+/// conversions have read it. The int count is selected when `IToF` gives the float back;
+/// otherwise the count is `-1`, which the allocation rejects.
 pub(super) fn lower_buffer_length(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -31,15 +32,26 @@ pub(super) fn lower_buffer_length(
     {
         return value;
     }
+    let truncated = if value.ir_type == IrType::F64 {
+        ctx.emit_value(
+            Op::FToI,
+            vec![value.value],
+            None,
+            PhpType::Int,
+            Op::FToI.default_effects(),
+            Some(span),
+        )
+    } else {
+        ctx.emit_value(
+            Op::Cast,
+            vec![value.value],
+            Some(Immediate::CastTarget(IrType::I64)),
+            PhpType::Int,
+            Op::Cast.default_effects(),
+            Some(span),
+        )
+    };
     let float = coerce_to_float_at_span(ctx, value, Some(span));
-    let truncated = ctx.emit_value(
-        Op::FToI,
-        vec![float.value],
-        None,
-        PhpType::Int,
-        Op::FToI.default_effects(),
-        Some(span),
-    );
     let restored = ctx.emit_value(
         Op::IToF,
         vec![truncated.value],

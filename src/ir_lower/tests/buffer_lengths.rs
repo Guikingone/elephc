@@ -6,8 +6,9 @@
 //!
 //! Key details:
 //! - An `int` length reaches `buffer_new` directly, with no conversion.
-//! - A `mixed` length from checked int arithmetic is truncated, checked for a whole-number
-//!   round trip, and reaches `buffer_new` as the parameter of the block that selects it.
+//! - A `mixed` length from checked int arithmetic is converted to int and to float, checked for
+//!   a whole-number round trip, and reaches `buffer_new` as the parameter of the block that
+//!   selects it.
 
 use crate::ir::{Function, Module, Op, ValueDef};
 
@@ -54,14 +55,16 @@ echo direct(2), computed(2);
         matches!(length_definition(direct), ValueDef::Instruction { .. }),
         "an int length must reach buffer_new directly"
     );
-    assert!(!has_op(direct, Op::FToI), "an int length must not be converted");
+    for op in [Op::Cast, Op::IToF, Op::FCmp] {
+        assert!(!has_op(direct, op), "an int length must not be converted, found {op:?}");
+    }
 
     let computed = function(&module, "computed");
     assert!(
         matches!(length_definition(computed), ValueDef::BlockParam { .. }),
         "a mixed length must reach buffer_new through the whole-number selection"
     );
-    for op in [Op::FToI, Op::IToF, Op::FCmp] {
+    for op in [Op::Cast, Op::IToF, Op::FCmp] {
         assert!(has_op(computed, op), "the mixed length conversion is missing {op:?}");
     }
 }

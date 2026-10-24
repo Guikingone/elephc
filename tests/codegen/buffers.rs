@@ -886,6 +886,23 @@ echo buffer_len($a), ",", buffer_len($b), ",", buffer_len($c), ",", buffer_len($
     assert_eq!(out, "3,4,5,6,2");
 }
 
+/// Regression for task f9ea1d1e: a boxed int length keeps its exact value above 2^53, where a
+/// float conversion would round it. A zero-size packed element has stride 0, so such a count
+/// allocates and `buffer_len()` shows any rounding.
+#[test]
+fn test_buffer_new_mixed_length_stays_exact_above_float_precision() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Marker {}
+
+$n = $argc << 53;
+$b = buffer_new<Marker>($n + 1);
+echo buffer_len($b);
+"#,
+    );
+    assert_eq!(out, "9007199254740993");
+}
+
 /// Regression for task f9ea1d1e: a converted length must be a whole number, so a fractional
 /// `mixed` length aborts through the length validation instead of truncating to 2 elements.
 #[test]
