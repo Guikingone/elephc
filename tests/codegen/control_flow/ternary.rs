@@ -448,3 +448,26 @@ fn test_nested_array_literal_ternaries_compile_in_linear_time() {
         "nested ternary merge typing took {elapsed:?}"
     );
 }
+
+/// Verifies the typing of nested ternaries whose arm spreads the level below stays linear: the
+/// checker typed each spread source in its hash-spread scan and again in the element merge, so
+/// every level doubled the work. A 24-deep nesting must compile well inside the bound. Each level
+/// keeps the spread level's elements and appends `$n`, so the outermost array holds 25.
+#[test]
+fn test_nested_spread_literal_ternaries_compile_in_linear_time() {
+    let mut nested = String::from("[$n]");
+    for _ in 0..24 {
+        nested = format!("($flag ? [...{nested}, $n] : [])");
+    }
+    let source = format!(
+        "<?php\n$flag = $argc > 0;\n$n = $argc;\n$a = {nested};\necho count($a), \"\\n\";\n"
+    );
+    let started = std::time::Instant::now();
+    let out = compile_and_run(&source);
+    let elapsed = started.elapsed();
+    assert_eq!(out, "25\n");
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "nested spread ternary typing took {elapsed:?}"
+    );
+}
