@@ -10,8 +10,8 @@
 //! - Decoration (color, symbol prefix) is gated behind `crate::progress::is_decorated()`,
 //!   the same switch the live spinner and `--timings` report use, so plain/piped/`--quiet`
 //!   runs keep byte-identical text to before.
-//! - A diagnostic with no file of its own names the included or autoloaded file its span was
-//!   lexed from (`Span::source_path`); entry-file positions keep the bare `line:col` form.
+//! - A diagnostic whose span was lexed from an included or autoloaded file names that file
+//!   (`Span::source_path`), ahead of any entry-filename tag; entry-file positions keep their form.
 
 use super::{CompileError, CompileWarning};
 
@@ -24,8 +24,9 @@ use super::{CompileError, CompileWarning};
 ///   node with no registered source)
 /// - With no location metadata: `error: message`
 ///
-/// An error with no file of its own names the included or autoloaded file its span was lexed
-/// from (`Span::source_path`), so a checker error inside a class file says which file it is in.
+/// An error whose span was lexed from an included or autoloaded file names that file
+/// (`Span::source_path`), so a checker or lowering error inside a class file says which file it
+/// is in, even when the pipeline tagged it with the entry filename.
 ///
 /// Recursively prints any related errors attached to the main error.
 pub fn print_error(error: &CompileError) {
@@ -65,20 +66,22 @@ pub fn print_warning(warning: &CompileWarning) {
     }
 }
 
-/// Returns the file a diagnostic names: the one it was tagged with, else the included or
-/// autoloaded file its span was lexed from.
+/// Returns the file a diagnostic names: the included or autoloaded file its span was lexed
+/// from, else the file it was tagged with.
 ///
-/// Checker and lowering diagnostics carry only a span, so this is what puts `file:line:col` on
-/// an error inside an included or autoloaded file. A span with no position names no file, and
-/// the entry file's identity is never registered, so its diagnostics keep the `line:col` form.
+/// Checker diagnostics carry only a span, so this is what puts `file:line:col` on an error
+/// inside an included or autoloaded file. The span wins over the tag because the pipeline tags
+/// every lowering, export and `--emit-ir` refusal with the ENTRY filename: preferring that tag
+/// printed an included file's line and column under the entry file's name. A tag still names
+/// the file when the span has no position or no registered source, which covers every
+/// entry-file span (identity 0 is never registered) and keeps those diagnostics as they were.
 fn diagnostic_file(file: &Option<String>, span: crate::span::Span) -> Option<String> {
-    if file.is_some() {
-        return file.clone();
+    if span.line != 0 {
+        if let Some(path) = span.source_path() {
+            return Some(path);
+        }
     }
-    if span.line == 0 {
-        return None;
-    }
-    span.source_path()
+    file.clone()
 }
 
 /// Builds the plain `kind[location]: message` diagnostic text shared by both
@@ -123,19 +126,29 @@ mod tests {
         assert_eq!(msg, "warning[3:5]: bad");
     }
 
-    /// An untagged diagnostic names the registered file its span was lexed from, a tagged one
-    /// keeps its own file, and an unregistered or entry-file span names none.
+    /// A diagnostic names the registered file its span was lexed from, even when it was tagged
+    /// with the entry filename; an unregistered or entry-file span keeps its tag, or names none.
     #[test]
     fn diagnostic_file_falls_back_to_the_span_source() {
         let span = Span::new_in_source(4, 2, 9_201);
         Span::register_source_path(9_201, "vendor/a/B.php");
         assert_eq!(diagnostic_file(&None, span).as_deref(), Some("vendor/a/B.php"));
         assert_eq!(
-            diagnostic_file(&Some("x.php".to_string()), span).as_deref(),
-            Some("x.php")
+            diagnostic_file(&Some("main.php".to_string()), span).as_deref(),
+            Some("vendor/a/B.php"),
+            "an entry-file tag must not rename an included file's position"
+        );
+        let entry = Span::new(4, 2);
+        assert_eq!(
+            diagnostic_file(&Some("main.php".to_string()), entry).as_deref(),
+            Some("main.php")
+        );
+        assert_eq!(
+            diagnostic_file(&Some("main.php".to_string()), Span::dummy()).as_deref(),
+            Some("main.php")
         );
         assert_eq!(diagnostic_file(&None, Span::new_in_source(4, 2, 9_202)), None);
-        assert_eq!(diagnostic_file(&None, Span::new(4, 2)), None);
+        assert_eq!(diagnostic_file(&None, entry), None);
         assert_eq!(
             format_diagnostic("warning", &diagnostic_file(&None, span), span, "bad"),
             "warning[vendor/a/B.php:4:2]: bad"

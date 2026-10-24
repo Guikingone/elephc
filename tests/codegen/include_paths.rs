@@ -504,6 +504,37 @@ fn test_checker_error_in_an_included_file_names_the_file() {
     );
 }
 
+/// A lowering refusal inside an included file names that file, not the entry file (#1445).
+///
+/// The pipeline tags every lowering refusal with the entry filename, which printed the included
+/// file's line and column as `error[main.php:6:5]`. `--emit-ir` lowers the program without
+/// assembling it, which is enough to reach the refusal.
+#[test]
+fn test_lowering_error_in_an_included_file_names_the_file() {
+    let dir = make_cli_test_dir("elephc_included_file_lowering_diagnostic");
+    fs::write(
+        dir.join("lib.php"),
+        "<?php\nclass ValueOnlyHolder { public array $items = [1]; }\nfunction valueOnlySource(ValueOnlyHolder $holder): array { return $holder->items; }\nfunction bindValueOnly(): void {\n    $holder = new ValueOnlyHolder();\n    $alias = &valueOnlySource($holder);\n    echo count($alias);\n}\n",
+    )
+    .expect("failed to write the included file");
+    fs::write(dir.join("main.php"), "<?php\nrequire __DIR__ . '/lib.php';\nbindValueOnly();\n")
+        .expect("failed to write the including file");
+
+    let output = elephc_cli_command(&dir)
+        .arg("--emit-ir")
+        .arg("main.php")
+        .output()
+        .expect("failed to run elephc");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let _ = fs::remove_dir_all(&dir);
+    assert!(!output.status.success(), "the reference assignment must be refused: {stderr}");
+    assert!(
+        stderr.contains("lib.php:6:5]: Unsupported reference assignment"),
+        "the refusal must name the included file: {stderr}"
+    );
+    assert!(!stderr.contains("main.php:6:5]"), "the refusal must not name the entry file: {stderr}");
+}
+
 /// Verifies an anonymous class declared in an included file. The resolver parses the file once to
 /// discover its declarations and again to inline its body; both parses must give the class one
 /// name, or the `new` in the inlined body refers to a class discovery never declared.
