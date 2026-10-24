@@ -1026,10 +1026,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Refuses each pointer by-reference binding whose local did not end up a pointer word.
     ///
     /// The callee reads and writes a raw pointer word through the reference. A frame slot is a
-    /// pointer word only when every store into it was one: a slot that also holds `null` before
-    /// a pointer (in any order of branches) is boxed `mixed`, and a `null`-only slot holds the
-    /// null sentinel, so the caller would misread what the callee wrote. Final storage is known
-    /// only once the whole body is lowered.
+    /// pointer word when every store into it was `null`, a packed record address or a pointer
+    /// (`pointer_word_storage` in `crate::ir::builder`; a `null`-only local bound here is retyped
+    /// to the parameter's `?ptr<T>` first). A slot that a reference or `global` aliases, or that
+    /// also holds another type, is boxed, so the caller would misread what the callee wrote.
+    /// Final storage is known only once the whole body is lowered.
     pub(crate) fn refuse_pointer_reference_bindings(&self) {
         for binding in &self.pointer_reference_bindings {
             let storage = self.builder.local_php_type(binding.slot);
@@ -1041,9 +1042,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 binding.span,
                 &format!(
                     "${name} cannot bind to a `{shown}` by-reference parameter: the callee writes \
-                     a pointer word back, but ${name} is not stored as one (it holds only null, \
-                     or null and a pointer, or another type somewhere in this scope). Declare \
-                     it as `{shown} ${name} = null;`",
+                     a pointer word back, but ${name} is not stored as one (a reference or a \
+                     `global` statement aliases it, or it holds another type somewhere in this \
+                     scope). Declare it as `{shown} ${name} = null;`",
                     name = binding.name,
                 ),
             );
