@@ -49,14 +49,16 @@ multiple bytes.
 - `__toString(): string` returns the current text. The class implements `Stringable`.
 
 The class may be extended. Its constructor is final, and inherited `tokenize()`
-constructs instances of the called subclass.
+constructs instances of the called subclass. Abstract subclasses are rejected even
+when the source is empty.
 
 ## Parser validation
 
 Passing `TOKEN_PARSE` validates the source with a PHP parser and reclassifies
 reserved words used as identifiers in contexts where PHP permits them, such as
 class constant names. Syntax errors throw a catchable `ParseError`. Without the
-flag, incomplete and malformed PHP remains tokenizable. Other flag bits are
+flag, incomplete and malformed PHP remains tokenizable. Parser error wording may
+differ from Zend while retaining the catchable `ParseError` class. Other flag bits are
 ignored, matching PHP.
 
 The optional bridge embeds the Mago PHP lexer and parser. It does not execute PHP

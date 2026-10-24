@@ -113,10 +113,19 @@ catch (ParseError $e) { echo "ParseError"; }
 abstract class EvalAbstractSourceToken extends PhpToken {}
 try { EvalAbstractSourceToken::tokenize(""); echo "wrong"; }
 catch (Error $e) { echo ":abstract"; }
+class EvalSourceToken extends PhpToken {}
+$children = EvalSourceToken::tokenize("html");
+echo ":", get_class($children[0]), ":", $children[0]->text;
+class EvalTokenSource { public function __toString(): string { return "html"; } }
+echo ":", count(token_get_all(new EvalTokenSource()));
+foreach (["token_get_all", "token_name"] as $function) {
+    try { $function([]); echo "wrong"; }
+    catch (TypeError $e) { echo ":TypeError"; }
+}
 ' : '';
 eval($code);
 "#);
-    assert_eq!(out, "T_ECHO:6\nT_FUNCTION\nPhpToken:echo:6\nParseError:abstract");
+    assert_eq!(out, "T_ECHO:6\nT_FUNCTION\nPhpToken:echo:6\nParseError:abstract:EvalSourceToken:html:1:TypeError:TypeError");
 }
 
 /// Repeated token arrays and object graphs leave no live PHP allocations after scope cleanup.

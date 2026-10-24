@@ -455,17 +455,17 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
         eval_tokenizer_static_class_precondition(signature_owner, method_name,
             called_class_scope.unwrap_or(class_name), context, values)?;
         if let Some(scope) = bridge_scope {
-        eval_native_static_method_call_with_scope(
-            scope,
-            called_class_scope,
-            class_name,
-            method_name,
-            native_bound_arg_values(&bound_args),
-            context,
-            values,
-        )
-    } else {
-        values.static_method_call(class_name, method_name, native_bound_arg_values(&bound_args))
+            eval_native_static_method_call_with_scope(
+                scope,
+                called_class_scope,
+                class_name,
+                method_name,
+                native_bound_arg_values(&bound_args),
+                context,
+                values,
+            )
+        } else {
+            values.static_method_call(class_name, method_name, native_bound_arg_values(&bound_args))
         }
     })();
     let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
