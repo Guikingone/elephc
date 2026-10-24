@@ -74,8 +74,37 @@ fn merge_arm_type(ctx: &LoweringContext<'_, '_>, arm: &Expr) -> PhpType {
         ExprKind::ArrayLiteralAssoc(pairs) => {
             super::assoc_array_literals::assoc_array_literal_type_for_ir(ctx, pairs, arm)
         }
-        _ => materialized_expr_type_for_merge(ctx, arm),
+        _ => null_only_call_merge_type(ctx, arm)
+            .unwrap_or_else(|| materialized_expr_type_for_merge(ctx, arm)),
     }
+}
+
+/// Returns the checker's `array<void>` (or `array<K, void>`) for a call to a user function whose
+/// inferred return holds only `null`s, and `None` for any other expression.
+///
+/// The call hands back boxed `mixed` slots (`caller_visible_return_type`), but a merge types it
+/// the way it types a `[null]` local: beside a pointer array the `null` element joins into
+/// `?ptr<T>`, so `$ps ?: f()` and `$m ?? f()` keep pointer storage and the call result is
+/// converted into it. A merge that stays all-null is stored with `mixed` slots
+/// (`null_only_merge_storage`).
+pub(super) fn null_only_call_merge_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpType> {
+    let ExprKind::FunctionCall { name, .. } = &expr.kind else {
+        return None;
+    };
+    let canonical = name.as_str();
+    if source_prefers_extension_builtin(canonical) {
+        return None;
+    }
+    let signature = ctx.functions.get(canonical)?;
+    let checker = crate::types::dynamic_params::caller_visible_checker_return_type(signature);
+    (crate::types::dynamic_params::null_only_container_return_storage(&checker) != checker)
+        .then_some(checker)
+}
+
+/// Stores a merge whose element is still exactly `null` with `mixed` slots, the way `[null]` is
+/// built, so a temp is never typed with the empty-array element over boxed cells.
+pub(super) fn null_only_merge_storage(ty: PhpType) -> PhpType {
+    crate::types::dynamic_params::null_only_container_return_storage(&ty)
 }
 
 /// The type an arm contributes to the ordinary merge: a literal of buffers keeps its contextual
@@ -123,7 +152,7 @@ pub(super) fn branch_merge_result_type(
         return branch_ty;
     }
     let fallback_ty = fallback_expr_type(expr).codegen_repr();
-    wider_type_for_merge(&fallback_ty, &branch_ty.codegen_repr())
+    null_only_merge_storage(wider_type_for_merge(&fallback_ty, &branch_ty.codegen_repr()))
 }
 
 /// Chooses a match hidden-temp type by merging every arm result type, so
@@ -162,7 +191,7 @@ pub(super) fn match_merge_result_type(
         return merged;
     }
     let fallback_ty = fallback_expr_type(expr).codegen_repr();
-    wider_type_for_merge(&fallback_ty, &merged.codegen_repr())
+    null_only_merge_storage(wider_type_for_merge(&fallback_ty, &merged.codegen_repr()))
 }
 
 /// Chooses a short-ternary hidden-temp type without reintroducing the
@@ -185,7 +214,7 @@ pub(super) fn short_ternary_merge_result_type(
     {
         return nullable_aware_branch_merge_type(&value_ty, &default_ty);
     }
-    materialized_merge_type(&value_ty.codegen_repr(), &default_ty.codegen_repr())
+    null_only_merge_storage(materialized_merge_type(&value_ty.codegen_repr(), &default_ty.codegen_repr()))
 }
 
 /// Chooses a ternary branch merge type without erasing PHP null branches.
@@ -619,9 +648,11 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
             }
             return unboxed;
         }
-        // An indexed array whose static element is not a pointer can still hold boxed cells (a
-        // `[null]` is built with them), and merged into a pointer-array temporary it would hand
-        // those cells to pointer-word readers, whichever way the merging arm was lowered.
+        // An indexed array whose static element is not a pointer can still hold boxed cells: a
+        // `[null]` local, or the `array<mixed>` result of `function boxed() { return [null]; }`,
+        // which `null_only_call_merge_type` lets `?:` and `??` merge as a null-only arm. Stored
+        // in a pointer-array temporary unconverted, those cells would reach pointer-word readers,
+        // whichever way the merging arm was lowered.
         return super::indexed_array_literals::convert_array_to_pointer_storage(
             ctx, value, target_ty, span,
         );

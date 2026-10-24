@@ -134,7 +134,8 @@ pub(super) fn null_coalesce_merge_type(
     let value_ty = strip_void_from_union(raw_value_ty.clone()).codegen_repr();
     // Typed once: the pointer and buffer checks below and the ordinary merge all read it, and a
     // nested merge inside the default must not be scanned per check.
-    let declared_default_ty = materialized_expr_type_for_merge(ctx, default);
+    let declared_default_ty = super::merge_temps::null_only_call_merge_type(ctx, default)
+        .unwrap_or_else(|| materialized_expr_type_for_merge(ctx, default));
     // A pointer array beside a `[null]` (or another pointer array) default keeps pointer storage.
     if super::indexed_array_literals::literal_pointer_element_type(&value_ty).is_some() {
         if super::indexed_array_literals::is_null_only_literal(default) {
@@ -183,7 +184,7 @@ pub(super) fn null_coalesce_merge_type(
     if matches!(value_ty, PhpType::Object(_) | PhpType::Callable) && php_type_allows_null(&default_ty) {
         return nullable_aware_branch_merge_type(&value_ty, &default_ty);
     }
-    materialized_merge_type(&value_ty, &default_ty)
+    super::merge_temps::null_only_merge_storage(materialized_merge_type(&value_ty, &default_ty))
 }
 
 /// Merges the materialized types of two branches whose values are both known.

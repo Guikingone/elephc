@@ -29,9 +29,10 @@
 //!   parameter holds Mixed elements whatever element type the placeholder inferred. EIR call
 //!   lowering and the checker's typing of a closure that returns such a call both read that rule
 //!   here.
-//! - `null_only_container_return_storage` is shared the same way by the callee's EIR signature
-//!   and the caller's view: an `array<void>` the checker inferred for `[null]` is stored as
-//!   `array<mixed>` on both sides, while the checker keeps `array<void>` for its own typing.
+//! - `null_only_container_return_storage` is shared the same way by a user function's EIR
+//!   signature and the caller's view: an `array<void>` the checker inferred for `[null]` is
+//!   stored as `array<mixed>` on both sides, while the checker keeps `array<void>` for its own
+//!   typing and merge typing reads that view (`caller_visible_checker_return_type`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -207,11 +208,19 @@ pub fn expr_exposes_dynamic_param(expr: &Expr, dynamic_params: &HashSet<String>)
 /// An inferred all-null container is seen with the boxed storage the callee builds it with
 /// (`null_only_container_return_storage`), declared return or not.
 pub fn caller_visible_return_type(signature: &FunctionSig) -> PhpType {
-    let return_type = null_only_container_return_storage(&signature.return_type);
+    null_only_container_return_storage(&caller_visible_checker_return_type(signature))
+}
+
+/// Returns the caller's view of a user function's return type before the all-null container
+/// storage rule: the checker's `array<void>` stays `array<void>`.
+///
+/// Merge typing reads this for a call arm (`crate::ir_lower::expr::merge_temps`), because beside
+/// a pointer array an all-null arm joins into a `?ptr<T>` element, as a `[null]` local does.
+pub fn caller_visible_checker_return_type(signature: &FunctionSig) -> PhpType {
     if signature.declared_return || !signature_has_dynamic_untyped_param(signature) {
-        return return_type;
+        return signature.return_type.clone();
     }
-    dynamic_param_container_return_type(&return_type)
+    dynamic_param_container_return_type(&signature.return_type)
 }
 
 /// Returns the EIR storage of a return type whose container element is exactly `Void`.
@@ -222,8 +231,8 @@ pub fn caller_visible_return_type(signature: &FunctionSig) -> PhpType {
 /// empty-array element its writers specialize on the first write. A call result typed
 /// `array<void>` therefore made `$a = f(); $a[] = 1;` append a raw integer beside a boxed null,
 /// and the callee built a returned `[null]` against a `Void` element it cannot push. Both EIR
-/// sides use `mixed` slots instead: the callee's signature
-/// (`crate::ir_lower::function::eir_signature_with_php_param_contracts`) and the caller's view
+/// sides of a user function use `mixed` slots instead: the callee's signature
+/// (`crate::ir_lower::function::lower_user_function`) and the caller's view
 /// (`caller_visible_return_type`). `array<never>`, the empty `[]` contract callers specialize on,
 /// is left alone, and so is every other type.
 pub fn null_only_container_return_storage(return_type: &PhpType) -> PhpType {
