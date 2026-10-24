@@ -122,6 +122,10 @@ pub(super) fn null_only_call_merge_type(ctx: &LoweringContext<'_, '_>, expr: &Ex
 
 /// Stores a merge whose element is still exactly `null` with `mixed` slots, the way `[null]` is
 /// built, so a temp is never typed with the empty-array element over boxed cells.
+///
+/// Applied where a merge declares its temp (and by the `(array)` predictors of that temp), never
+/// inside the `*_merge_result_type` predictions: an enclosing merge must still see the inner
+/// all-null merge as `array<void>`, so `$ps ?: (f() ?: f())` keeps pointer storage as on main.
 pub(super) fn null_only_merge_storage(ty: PhpType) -> PhpType {
     crate::types::dynamic_params::null_only_container_return_storage(&ty)
 }
@@ -171,7 +175,7 @@ pub(super) fn branch_merge_result_type(
         return branch_ty;
     }
     let fallback_ty = fallback_expr_type(expr).codegen_repr();
-    null_only_merge_storage(wider_type_for_merge(&fallback_ty, &branch_ty.codegen_repr()))
+    wider_type_for_merge(&fallback_ty, &branch_ty.codegen_repr())
 }
 
 /// Chooses a match hidden-temp type by merging every arm result type, so
@@ -210,7 +214,7 @@ pub(super) fn match_merge_result_type(
         return merged;
     }
     let fallback_ty = fallback_expr_type(expr).codegen_repr();
-    null_only_merge_storage(wider_type_for_merge(&fallback_ty, &merged.codegen_repr()))
+    wider_type_for_merge(&fallback_ty, &merged.codegen_repr())
 }
 
 /// Chooses a short-ternary hidden-temp type without reintroducing the
@@ -233,7 +237,7 @@ pub(super) fn short_ternary_merge_result_type(
     {
         return nullable_aware_branch_merge_type(&value_ty, &default_ty);
     }
-    null_only_merge_storage(materialized_merge_type(&value_ty.codegen_repr(), &default_ty.codegen_repr()))
+    materialized_merge_type(&value_ty.codegen_repr(), &default_ty.codegen_repr())
 }
 
 /// Chooses a ternary branch merge type without erasing PHP null branches.

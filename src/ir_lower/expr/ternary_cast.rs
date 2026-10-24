@@ -42,7 +42,9 @@ pub(super) fn lower_ternary_with_destination(
         destination.filter(|ty| crate::types::is_pointer_element_indexed_array(ty));
     let result_type = match pointer_array_destination.map(PhpType::codegen_repr) {
         Some(PhpType::Array(elem)) => PhpType::Array(Box::new(elem.codegen_repr())),
-        _ => branch_merge_result_type(ctx, then_expr, else_expr, expr),
+        _ => super::merge_temps::null_only_merge_storage(branch_merge_result_type(
+            ctx, then_expr, else_expr, expr,
+        )),
     };
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();

@@ -116,7 +116,11 @@ pub(super) fn null_coalesce_result_type(
     value: ValueId,
     default: &Expr,
 ) -> PhpType {
-    null_coalesce_merge_type(ctx, ctx.builder.value_php_type(value), default)
+    super::merge_temps::null_only_merge_storage(null_coalesce_merge_type(
+        ctx,
+        ctx.builder.value_php_type(value),
+        default,
+    ))
 }
 
 /// Merges the type of the value side of `??` with the materialized type of its default.
@@ -184,7 +188,7 @@ pub(super) fn null_coalesce_merge_type(
     if matches!(value_ty, PhpType::Object(_) | PhpType::Callable) && php_type_allows_null(&default_ty) {
         return nullable_aware_branch_merge_type(&value_ty, &default_ty);
     }
-    super::merge_temps::null_only_merge_storage(materialized_merge_type(&value_ty, &default_ty))
+    materialized_merge_type(&value_ty, &default_ty)
 }
 
 /// Merges the materialized types of two branches whose values are both known.
@@ -297,7 +301,9 @@ pub(super) fn lower_short_ternary(
     expr: &Expr,
 ) -> LoweredValue {
     let condition_span = value.span;
-    let result_type = short_ternary_merge_result_type(ctx, value, default);
+    let result_type = super::merge_temps::null_only_merge_storage(short_ternary_merge_result_type(
+        ctx, value, default,
+    ));
     let value = lower_array_value_for_merge(ctx, value).unwrap_or_else(|| lower_expr(ctx, value));
     // A retained constant-null branch uses the raw I64 null sentinel. It is PHP-falsy,
     // while `truthy` deliberately forwards ordinary I64 conditions without converting them.

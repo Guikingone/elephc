@@ -20,7 +20,8 @@ pub(super) fn lower_match(
     let subject_span = subject.span;
     let subject = lower_expr(ctx, subject);
     let (subject, subject_owner) = root_owned_call_operand(ctx, subject, subject_span);
-    let result_type = match_merge_result_type(ctx, arms, default, expr);
+    let result_type =
+        super::merge_temps::null_only_merge_storage(match_merge_result_type(ctx, arms, default, expr));
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let merge = ctx.builder.create_named_block("match.merge", Vec::new());
 

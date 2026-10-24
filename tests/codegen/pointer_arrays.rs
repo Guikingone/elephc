@@ -1005,8 +1005,8 @@ $ps = [$w[0]];
 /// only `null`s: the call result is an `array<mixed>` of boxed cells, but the merge types it the
 /// way it types a `[null]` local, so the live arm still reaches its record through `$p->x` and the
 /// boxed null is converted into a null pointer word. Also covers an `@` call arm, a call through
-/// a first-class callable local and through a closure returning the call, an assignment arm, and
-/// the `(array)` literal element predictor of the same `??`.
+/// a first-class callable local and through a closure returning the call, an assignment arm, a
+/// nested all-null merge arm, and the `(array)` literal element predictor of the same `??`.
 #[test]
 fn test_pointer_array_short_ternary_and_coalesce_with_null_only_calls_keep_records() {
     let out = compile_and_run(
@@ -1023,6 +1023,7 @@ function short(array<ptr<Vec2>|null> $ps): string {
     $g = fn() => boxed();
     $k = $ps ?: $g();
     $z = $ps ?: ($q = boxed());
+    $n = $ps ?: (boxed() ?: boxed());
     $s = "";
     foreach ($r as $p) { $s .= $p === null ? "N" : (string) $p->x; }
     foreach ($t as $p) { $s .= $p === null ? "N" : (string) $p->x; }
@@ -1030,6 +1031,7 @@ function short(array<ptr<Vec2>|null> $ps): string {
     foreach ($v as $p) { $s .= $p === null ? "N" : (string) $p->x; }
     foreach ($k as $p) { $s .= $p === null ? "N" : (string) $p->x; }
     foreach ($z as $p) { $s .= $p === null ? "N" : (string) $p->x; }
+    foreach ($n as $p) { $s .= $p === null ? "N" : (string) $p->x; }
     return $s;
 }
 function coalesce(?array<ptr<Vec2>|null> $m): string {
@@ -1045,5 +1047,5 @@ $w[0]->x = 7;
 echo short([$w[0]]), "|", short([]), "|", coalesce([$w[0]]), "|", coalesce(null), "\n";
 "#,
     );
-    assert_eq!(out, "777777|NNNNNN|77|NN\n");
+    assert_eq!(out, "7777777|NNNNNNN|77|NN\n");
 }
