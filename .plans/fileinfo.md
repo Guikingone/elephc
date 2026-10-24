@@ -28,6 +28,12 @@ docs audit and site validation passed. Generated artifacts were downloaded witho
 local compilation. The comparison reports fileinfo as 6/6 functions, 1/1 classes
 and 11/11 constants. PHP 8.5 deprecations follow the selected PHP version profile.
 
-The CI archive jobs now execute all thirteen focused PHP fileinfo tests before
-publishing test archives. PHP execution, the broader regression matrix and Apple
-target validation are still pending. No local heavy builds or tests are authorized.
+The CI archive jobs now execute all fourteen focused PHP fileinfo tests before
+publishing test archives. Thirteen of the fourteen PHP tests passed in CI run 40121874821.
+CI isolated copied-FFI-input cleanup, non-null database string ownership and the
+reserved stream-context payload. Focused FFI and handler-unwind regressions run
+alongside fileinfo. Both iOS native packages and PHP static libraries compiled;
+the final-link fixture retains file queries and both iOS device/Simulator final links
+passed in run 40121874821. Only the throwing fileinfo warning handler retained one
+string; the latest correction pins its acquired input across the alias-capable call.
+The complete regression matrix and exact-head validation remain pending. No local heavy builds or tests are authorized.

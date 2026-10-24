@@ -48834,7 +48834,7 @@
       "checker_line": null,
       "codegen_file": "src/fileinfo_prelude/build.rs",
       "codegen_function": "finfo_buffer",
-      "codegen_line": 162,
+      "codegen_line": 163,
       "notes": [
         "Implemented by the compiler-injected fileinfo prelude."
       ],
@@ -48939,7 +48939,7 @@
       "checker_line": null,
       "codegen_file": "src/fileinfo_prelude/build.rs",
       "codegen_function": "finfo_close",
-      "codegen_line": 155,
+      "codegen_line": 156,
       "notes": [
         "Implemented by the compiler-injected fileinfo prelude."
       ],
@@ -49065,7 +49065,7 @@
       "checker_line": null,
       "codegen_file": "src/fileinfo_prelude/build.rs",
       "codegen_function": "finfo_file",
-      "codegen_line": 168,
+      "codegen_line": 169,
       "notes": [
         "Implemented by the compiler-injected fileinfo prelude."
       ],
@@ -49184,7 +49184,7 @@
       "checker_line": null,
       "codegen_file": "src/fileinfo_prelude/build.rs",
       "codegen_function": "finfo_open",
-      "codegen_line": 147,
+      "codegen_line": 148,
       "notes": [
         "Implemented by the compiler-injected fileinfo prelude."
       ],
@@ -49289,7 +49289,7 @@
       "checker_line": null,
       "codegen_file": "src/fileinfo_prelude/build.rs",
       "codegen_function": "finfo_set_flags",
-      "codegen_line": 159,
+      "codegen_line": 160,
       "notes": [
         "Implemented by the compiler-injected fileinfo prelude."
       ],
@@ -93984,7 +93984,7 @@
       "checker_line": null,
       "codegen_file": "src/fileinfo_prelude/build.rs",
       "codegen_function": "mime_content_type",
-      "codegen_line": 171,
+      "codegen_line": 172,
       "notes": [
         "Implemented by the compiler-injected fileinfo prelude."
       ],

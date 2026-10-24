@@ -222,6 +222,38 @@ fn slot_instruction(function: &Function, op: Op, slot: crate::ir::LocalSlotId) -
     })
 }
 
+/// Acquired string arguments keep an unwind owner even when their callee may return an alias.
+#[test]
+fn acquired_alias_capable_string_arguments_are_pinned_on_every_target() {
+    let source = r#"<?php
+function aliasString(string $value): string { return $value; }
+function relayString(string $value): string { return aliasString($value); }
+echo relayString('value');
+"#;
+    for target in TARGETS {
+        let (module, function) = lower_function(source, target, "relayString");
+        let call = first(&function, Op::Call).expect("relay calls the alias-capable function");
+        let operand = function.instructions[call].operands[0];
+        let mut active = Vec::new();
+        for instruction in &function.instructions[..call] {
+            if let Some(Immediate::LocalSlot(slot)) = instruction.immediate {
+                match instruction.op {
+                    Op::PushCallOperandOwner => active.push(slot),
+                    Op::PopCallOperandOwner => { assert_eq!(active.pop(), Some(slot), "{target}"); }
+                    _ => {}
+                }
+            }
+        }
+        assert!(active.iter().any(|slot| function.instructions.iter().any(|instruction|
+            instruction.op == Op::StoreLocal
+                && instruction.immediate == Some(Immediate::LocalSlot(*slot))
+                && instruction.operands == [operand])), "{target}: the string lease is reachable during the call");
+        assert_owner_records_are_lifo(&function, target);
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// A statically resolved extern callable releases its argument temporaries like the direct call.
 ///
 /// `ExternCall` consumes its operands; an owned string built for the call is not handed back by

@@ -127,10 +127,10 @@ fn test_fileinfo_eval_bundle() {
     if fileinfo_native::skip("test_fileinfo_eval_bundle") { return; }
     let out = compile_and_run(r#"<?php
 $f = new finfo(FILEINFO_MIME_TYPE);
-$code = $argc > 0 ? '$x = finfo_open(flags: FILEINFO_MIME_TYPE); echo get_class($x), ":", finfo_buffer(string: "hello", finfo: $x), "\n"; $fn = "finfo_buffer"; echo $fn($x, "hello"), "\n"; echo $x->buffer("hello", FILEINFO_MIME_ENCODING), "\n"; finfo_close($x); echo $x->buffer("hello"), "\n";' : '';
+$code = $argc > 0 ? '$x = finfo_open(flags: FILEINFO_MIME_TYPE); echo get_class($x), ":", finfo_buffer(string: "hello", finfo: $x), "\n"; $fn = "finfo_buffer"; echo $fn($x, "hello"), "\n"; echo $x->buffer("hello", FILEINFO_MIME_ENCODING), "\n"; finfo_close($x); echo $x->buffer("hello"), "\n"; finfo_set_flags($x, FILEINFO_MIME_TYPE); echo finfo_file($x, "data://text/plain,hello"), ":", mime_content_type(filename: "data://text/plain,hello"), "\n";' : '';
 eval($code);
 "#);
-    assert_eq!(out, "finfo:text/plain\ntext/plain\nus-ascii\ntext/plain\n");
+    assert_eq!(out, "finfo:text/plain\ntext/plain\nus-ascii\ntext/plain\ntext/plain:text/plain\n");
 }
 
 /// Repeated object construction and destruction balance compiler heap ownership.
@@ -232,7 +232,7 @@ echo $f->buffer("hello"), "\n";
 #[test]
 fn test_fileinfo_warning_handlers() {
     if fileinfo_native::skip("test_fileinfo_warning_handlers") { return; }
-    let out = compile_and_run_with_heap_debug(r#"<?php
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(r#"<?php
 $f = new finfo(FILEINFO_MIME_TYPE);
 set_error_handler(function(int $errno, string $_message, string $_file, int $_line): bool {
     echo $errno, "\n";
@@ -251,6 +251,7 @@ echo $f->buffer("hello"), "\n";
     assert_eq!(out.stdout, "2\nfile\n2\ndatabase\nwarning\ntext/plain\n", "{}", out.stderr);
     let mut failures = Vec::new();
     if !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+        eprintln!("Fileinfo warning assembly:\n{asm}");
         failures.push(format!("fileinfo warnings: {}", out.stderr));
     }
     for (label, source) in [

@@ -498,6 +498,18 @@ pub(super) fn root_user_call_operands(
                     roots.push((index, pin.slot));
                 }
             }
+            // Source-order evaluation can already have acquired a borrowed string. Its
+            // evaluation slot was handed to this call, so keep that lease visible when
+            // an alias-capable callee throws before the ordinary post-call release.
+            if !repeated
+                && !roots.iter().any(|(owner_index, _)| *owner_index == index)
+                && ctx.builder.value_php_type(*operand).codegen_repr() == PhpType::Str
+                && matches!(ctx.builder.value_defining_op(*operand), Some(Op::Acquire | Op::EnsureOwned))
+            {
+                for pin in pin_in_flight_owners(ctx, &[*operand], span) {
+                    roots.push((index, pin.slot));
+                }
+            }
             continue;
         }
         let value = LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
