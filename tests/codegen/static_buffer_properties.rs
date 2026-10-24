@@ -408,6 +408,87 @@ try {
     );
 }
 
+/// Verifies ternary, `match` and `?:` merges whose arms read static buffer properties keep the
+/// chosen buffer's handle (the merge rule of PR #2042), so writes through the result reach that
+/// buffer, a static buffer read in a condition tests its handle, and indexed and keyed literals
+/// of static buffers hold the handles.
+#[test]
+fn test_static_buffer_property_merges_choose_the_buffer() {
+    let out = compile_and_run(
+        r#"<?php
+final class Frames {
+    public static buffer<float> $front;
+    public static buffer<float> $back;
+    public static int $frame = 0;
+
+    public static function current(): buffer<float> {
+        return self::$frame % 2 === 0 ? self::$front : self::$back;
+    }
+
+    public static function next(): buffer<float> {
+        return match (self::$frame % 2) {
+            0 => self::$back,
+            default => self::$front,
+        };
+    }
+}
+
+Frames::$front = buffer_new<float>(2);
+Frames::$back = buffer_new<float>(2);
+Frames::$front[0] = 1.5;
+$next = Frames::next();
+$next[0] = Frames::current()[0] + 1.0;
+$pick = $argc > 1 ? Frames::$front : Frames::$back;
+$pick[1] = 7.5;
+$either = Frames::$front ?: Frames::$back;
+echo Frames::$back[0], "|", Frames::$back[1], "|", $either[0], "|", Frames::$front ? "set" : "unset";
+$list = [Frames::$front, Frames::$back];
+$named = ["front" => Frames::$front];
+echo "|", $list[1][0], "|", $named["front"][0];
+"#,
+    );
+    assert_eq!(out, "2.5|7.5|1.5|set|2.5|1.5");
+}
+
+/// Verifies static `ptr<T>` and `?ptr<T>` properties exchange values with locals that hold
+/// `null` and record addresses as one pointer word (PR #2046): a loop result stored into a
+/// `?ptr<T>` static, a static read into a local that starts as `null`, and a ternary of a record
+/// address and a `ptr<T>` static that stays a pointer.
+#[test]
+fn test_static_pointer_properties_with_null_or_pointer_locals() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+
+final class Cursor {
+    public static ptr<Vec2> $at;
+    public static ?ptr<Vec2> $best = null;
+}
+
+$items = buffer_new<Vec2>(3);
+$items[0]->x = 4;
+$items[1]->x = 9;
+$items[2]->x = 6;
+$best = null;
+for ($i = 0; $i < buffer_len($items); $i++) {
+    if ($best === null || $items[$i]->x > $best->x) {
+        $best = $items[$i];
+    }
+}
+Cursor::$best = $best;
+Cursor::$at = $items[2];
+$cur = null;
+if ($argc > 0) {
+    $cur = Cursor::$at;
+}
+echo Cursor::$best === null ? "none" : Cursor::$best->x, "|", $cur === null ? "none" : $cur->x;
+$pick = $argc > 1 ? $items[0] : Cursor::$at;
+echo "|", $pick->x;
+"#,
+    );
+    assert_eq!(out, "9|6|6");
+}
+
 /// Verifies the static-buffer-tables example compiles and prints its documented output.
 #[test]
 fn test_static_buffer_tables_example() {
