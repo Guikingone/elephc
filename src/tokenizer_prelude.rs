@@ -9,7 +9,7 @@
 //! - This prelude owns PHP arrays, objects, exceptions and snapshot lifetime on all targets.
 //! - The shared usage scan covers names, imports, dynamic callables and opaque eval.
 
-use crate::parser::ast::Program;
+use crate::parser::ast::{Program, Stmt};
 
 /// Parses the small declaration-only tokenizer surface in internal source mode.
 pub(crate) fn tokenizer_declarations() -> Program {
@@ -24,10 +24,7 @@ pub fn inject_if_used(
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
-        let usage = crate::prelude_prune::usage::collect(&program);
-        let used = force || usage.introspects || usage.dynamic_function_call || usage.constructs_dynamic_class
-            || ["token_get_all", "token_name"].iter().any(|name| usage.references(name) || usage.literals.contains(*name))
-            || usage.classes.contains("phptoken") || usage.literals.contains("phptoken");
+        let used = force || program_uses_surface(&program);
         if !used { return program; }
         let mut declarations = tokenizer_declarations();
         inventory.record_program("tokenizer", &declarations);
@@ -148,3 +145,11 @@ class PhpToken implements \Stringable {
     }
 }
 "#;
+
+/// Detects tokenizer references in entry files and the probed autoload closure.
+pub(crate) fn program_uses_surface(program: &[Stmt]) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    usage.introspects || usage.dynamic_function_call || usage.constructs_dynamic_class
+        || ["token_get_all", "token_name"].iter().any(|name| usage.references(name) || usage.literals.contains(*name))
+        || usage.classes.contains("phptoken") || usage.literals.contains("phptoken")
+}
