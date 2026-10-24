@@ -276,3 +276,23 @@ var_dump([$q->x]);
          array(1) {\n  [0]=>\n  float(-1.5)\n}\n"
     );
 }
+
+/// Verifies a ternary or `match` whose arms are literals of packed field reads keeps the reads'
+/// types: each arm now builds its literal with float and bool elements, and the merge must type
+/// the arm the same way instead of the syntactic `int` it read the float's bits back with.
+#[test]
+fn test_packed_field_reads_keep_their_type_in_literal_merge_arms() {
+    let out = compile_and_run(
+        r#"<?php
+packed class P { public float $x; public bool $live; }
+$b = buffer_new<P>(1);
+$b[0]->x = 2.5;
+$b[0]->live = true;
+$r = $argc > 0 ? [$b[0]->x] : [0];
+var_dump($r[0]);
+$m = match ($argc) { 1 => [$b[0]->x, $b[0]->live], default => [] };
+var_dump($m[1]);
+"#,
+    );
+    assert_eq!(out, "float(2.5)\nbool(true)\n");
+}
