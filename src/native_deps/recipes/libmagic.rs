@@ -44,6 +44,10 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
             configure.env_remove(variable);
         }
         run_checked(&mut configure, "configure libmagic host database compiler")?;
+        // Named automake targets skip BUILT_SOURCES, so generate the public header first.
+        let mut header = Command::new("make");
+        header.current_dir(&host).args(["-C", "src", "magic.h"]);
+        run_checked(&mut header, "generate libmagic host header")?;
         let mut make = Command::new("make");
         make.current_dir(&host).args(["-C", "src", "file"]);
         run_checked(&mut make, "build libmagic host database compiler")?;
@@ -52,6 +56,9 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
     configure.current_dir(&build).arg(request.source.join("configure")).args(FLAGS);
     if cross { configure.arg(format!("--host={}", request.toolchain.autoconf_host())); }
     run_checked(&mut configure, "configure static libmagic")?;
+    let mut header = request.toolchain.command(Path::new("make"));
+    header.current_dir(&build).args(["-C", "src", "magic.h"]);
+    run_checked(&mut header, "generate libmagic target header")?;
     let mut make = request.toolchain.command(Path::new("make"));
     make.current_dir(&build).args(["-C", "src", if cross { "libmagic.la" } else { "file" }]);
     run_checked(&mut make, "build static libmagic")?;

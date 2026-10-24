@@ -81,10 +81,10 @@ fn query_method(file: bool) -> crate::synthetic_class::MethodBuilder {
 /// Builds the owning class, including PHP's clone and serialization restrictions.
 fn finfo_class() -> Stmt {
     let mut constructor = vec![
-        s_prop_assign(e_this(), "__elephc_handle", e_int(0)),
-        s_prop_assign(e_this(), "__elephc_owner", e_null()),
         s_assign("_database", e_null_coalesce(e_var("magic_database"), e_str(""))),
         reject(e_binop(e_call("strpos", vec![e_var("_database"), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)), "ValueError", "finfo::__construct(): Argument #2 ($magic_database) must not contain any null bytes"),
+        s_prop_assign(e_this(), "__elephc_handle", e_int(0)),
+        s_prop_assign(e_this(), "__elephc_owner", e_null()),
         s_assign("_raw", e_call("elephc_fileinfo_open", vec![e_var("flags"), e_var("_database")])),
     ];
     constructor.push(s_if(eq(e_var("_raw"), e_int(0)), vec![s_throw(e_new_fq("Exception", vec![e_call("elephc_fileinfo_error", vec![])]))], vec![], None));

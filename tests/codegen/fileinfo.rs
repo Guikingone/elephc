@@ -80,11 +80,12 @@ echo @finfo_open(0, "/elephc-fileinfo-missing/magic") === false ? "database\n" :
 try { new finfo(0, "/elephc-fileinfo-missing/magic"); } catch (Exception $e) { echo "constructor\n"; }
 try { $f->file(""); } catch (ValueError $e) { echo "empty\n"; }
 try { $f->file("a\0b"); } catch (ValueError $e) { echo "nul\n"; }
+try { $f->__construct(0, "a\0b"); } catch (ValueError $e) { echo "database-nul\n"; }
 try { $g = clone $f; } catch (Error $e) { echo "clone\n"; }
 try { serialize($f); } catch (Exception $e) { echo "serialize\n"; }
 echo $f->buffer("hello"), "\n";
 "#);
-    assert_eq!(out, "missing\ndatabase\nconstructor\nempty\nnul\nclone\nserialize\ntext/plain\n");
+    assert_eq!(out, "missing\ndatabase\nconstructor\nempty\nnul\ndatabase-nul\nclone\nserialize\ntext/plain\n");
 }
 
 /// Runtime-unknown eval, named arguments and callable aliases use the host implementation.
