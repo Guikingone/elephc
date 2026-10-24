@@ -34,6 +34,10 @@
 
 ---
 
+PHP file information is available through `finfo`, the six fileinfo functions and
+all eleven `FILEINFO_*` constants. Run `elephc native add libmagic` in the project;
+use `--with-fileinfo` for opaque dynamic eval. See [fileinfo](docs/php/fileinfo.md).
+
 ## Support the project
 
 elephc is built and maintained independently. You can support the project by either:

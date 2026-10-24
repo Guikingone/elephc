@@ -55,6 +55,18 @@ pub(super) struct BridgeStaticlib {
 /// Every Elephc bridge known to discovery and CLI flag validation.
 pub(super) const BRIDGES: &[BridgeStaticlib] = &[
     BridgeStaticlib {
+        lib_name: "elephc_fileinfo",
+        env_var: "ELEPHC_FILEINFO_LIB_DIR",
+        crate_name: "elephc-fileinfo",
+        flag_name: "fileinfo",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        php_extensions: &["fileinfo"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_tls",
         env_var: "ELEPHC_TLS_LIB_DIR",
         crate_name: "elephc-tls",

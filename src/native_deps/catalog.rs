@@ -342,7 +342,24 @@ const LIBXML2_VERSIONS: &[PackageVersion] = &[PackageVersion {
     retained_headers: LIBXML2_HEADERS,
     provides: &["libxml2"],
 }];
+/// Pinned file/libmagic with a database embedded by the reviewed recipe.
+const LIBMAGIC_VERSIONS: &[PackageVersion] = &[PackageVersion {
+    version: "5.46",
+    source: SourceArchive {
+        https_url: "https://astron.com/pub/file/file-5.46.tar.gz",
+        sha256: "c9cc77c7c560c543135edc555af609d5619dbef011997e988ce40a3d75d86088",
+        exact_size: 1_312_892,
+        body_limit: 8 * 1024 * 1024,
+    },
+    recipe_revision: 1,
+    dependencies: &[],
+    supported_targets: TARGETS,
+    ordered_link_outputs: &["lib/libelephc_magic_database.a", "lib/libmagic.a"],
+    retained_headers: &["include/magic.h"],
+    provides: &["libmagic"],
+}];
 const PACKAGES: &[PackageSpec] = &[
+    PackageSpec { name: "libmagic", default_version: "5.46", versions: LIBMAGIC_VERSIONS },
     PackageSpec {
         name: "pcre2",
         default_version: "10.47",
@@ -505,7 +522,7 @@ mod tests {
     fn catalog_rejects_unknown_selection() {
         assert_eq!(
             package("libfoo").unwrap_err().to_string(),
-            "native catalog error: unknown native package 'libfoo'; known packages: pcre2, zlib, openssl, nghttp2, libssh2, curl, oniguruma, libxml2"
+            "native catalog error: unknown native package 'libfoo'; known packages: libmagic, pcre2, zlib, openssl, nghttp2, libssh2, curl, oniguruma, libxml2"
         );
         assert!(version("pcre2", Some("10.46")).is_err());
     }

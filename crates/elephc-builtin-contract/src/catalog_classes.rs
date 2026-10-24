@@ -205,6 +205,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("PDOStatement", "pdostatement", Class, Pdo, Prelude),
     class!("Phar", "phar", Class, Phar, CheckerInjected),
     class!("PharData", "phardata", Class, Phar, CheckerInjected),
+    class!("finfo", "finfo", Class, Fileinfo, Prelude),
     class!("PharFileInfo", "pharfileinfo", Class, Phar, CheckerInjected),
     class!("php_user_filter", "php_user_filter", Class, Standard, CheckerInjected),
     class!("PHPUnit\\Framework\\TestCase", "phpunit\\framework\\testcase", Class, Elephc, Prelude),

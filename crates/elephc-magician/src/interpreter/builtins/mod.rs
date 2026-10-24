@@ -39,6 +39,7 @@ mod symbols;
 mod time;
 mod types;
 mod xml;
+mod fileinfo;
 
 pub(super) use array::*;
 pub(super) use class_metadata::*;
@@ -61,4 +62,5 @@ pub(super) use string::*;
 pub(super) use symbols::*;
 pub(super) use time::*;
 pub(super) use xml::*;
+pub(super) use fileinfo::*;
 pub(super) use types::*;
