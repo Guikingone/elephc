@@ -474,20 +474,22 @@ fn test_buffer_counting_sort_example_runs_in_both_ir_modes() {
 ///
 /// The receiver is a reference to a typed holder property, so it stays a `HookedCells` (a closure
 /// assigning a by-reference capture would widen it to `mixed` and take the generic path), and the
-/// hook replaces the holder's property. An expression reads the element where the parser's
-/// prelude reads it, before the write loads its receiver, so the write lands on the receiver the
-/// hook bound; a statement loads its write receiver before the value, so it keeps the original.
-/// Both orders are the generic paths'. The EIR check keeps the fixture on the typed path.
+/// hook, armed once by a flag, replaces the holder's property (the static callback is never reset
+/// to null, which a `callable` static cannot store). An expression reads the element where the
+/// parser's prelude reads it, before the write loads its receiver, so the write lands on the
+/// receiver the hook bound; a statement loads its write receiver before the value, so it keeps
+/// the original. Both orders are the generic paths'. The EIR check keeps the fixture typed.
 #[test]
 fn test_buffer_element_incdec_receiver_rebound_by_a_get_hook() {
     let source = r#"<?php
 class HookedCells {
+    public static bool $armed = false;
     public static $onRead = null;
     public buffer<int> $cells {
         get {
-            $swap = self::$onRead;
-            self::$onRead = null;
-            if ($swap !== null) {
+            if (self::$armed) {
+                self::$armed = false;
+                $swap = self::$onRead;
                 $swap();
             }
             return $this->cells;
@@ -513,6 +515,7 @@ function expressionAfterRebind(HookedCells $first, HookedCells $spare): string {
     $holder = new Holder($first);
     $owner = &$holder->current;
     HookedCells::$onRead = function () use ($holder, $spare) { $holder->current = $spare; };
+    HookedCells::$armed = true;
     $old = $owner->cells[0]++;
     return $old . ' ' . $first->cells[0] . ' ' . $spare->cells[0];
 }
@@ -520,6 +523,7 @@ function statementAfterRebind(HookedCells $first, HookedCells $spare): string {
     $holder = new Holder($first);
     $owner = &$holder->current;
     HookedCells::$onRead = function () use ($holder, $spare) { $holder->current = $spare; };
+    HookedCells::$armed = true;
     $owner->cells[0]++;
     return $first->cells[0] . ' ' . $spare->cells[0];
 }
