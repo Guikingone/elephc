@@ -573,7 +573,8 @@ echo $c === null ? "null" : "x" . $c->x, "\n";
 /// Verifies a local whose frame slot is still not a pointer word is refused for a `?ptr<T>`
 /// by-reference parameter: one that a reference aliases (at top level and in a function) and
 /// one that a `global` statement makes program-global. Both keep boxed storage, which would
-/// misread the raw pointer word the callee writes back.
+/// misread the raw pointer word the callee writes back. The function with the `global`
+/// statement is called and has an observable body, so reachability pruning keeps it.
 #[test]
 fn test_nullable_pointer_by_ref_parameters_reject_non_pointer_storage() {
     let prelude = r#"<?php
@@ -584,7 +585,7 @@ $v = buffer_new<Vec2>(1);
     for body in [
         "$x = null; $r = &$x; fill($x, $v);",
         "function k(buffer<Vec2> $v): void { $x = null; $r = &$x; fill($x, $v); } k($v);",
-        "function g(): void { global $x; } $x = null; fill($x, $v);",
+        "function g(): void { global $x; echo $x; } $x = null; g(); fill($x, $v);",
     ] {
         let error = compile_cli_file_with_flags_expect_failure(&format!("{prelude}{body}"), &[]);
         assert!(
