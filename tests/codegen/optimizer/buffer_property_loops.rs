@@ -48,7 +48,7 @@ fn test_buffer_property_loop_guarded_resolution_matches_both_modes() {
     fs::remove_dir_all(dir).unwrap();
 }
 
-/// An uninitialized body-only buffer property stays unread when the loop does not enter.
+/// An uninitialized property stays unread on zero-trip and fails on the first entered read.
 #[test]
 fn test_buffer_property_loop_zero_trip_preserves_uninitialized_property() {
     let source = r#"<?php
@@ -60,12 +60,15 @@ final class MissingLoopSlots {
 }
 $slots = new MissingLoopSlots();
 $slots->fill($argc - 1);
-echo 'zero';
+echo 'zero|';
+$slots->fill($argc);
 "#;
     for optimized in [false, true] {
         let output = run_property_loop(source, optimized);
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-        assert_eq!(String::from_utf8_lossy(&output.stdout), "zero");
+        assert!(!output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "zero|");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("must not be accessed before initialization"), "{stderr}");
     }
 }
 
