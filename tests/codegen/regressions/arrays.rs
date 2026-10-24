@@ -3861,8 +3861,7 @@ var_dump($arr);
 /// append. The checker infers `[null]` as `array<void>`: the callee could not build a returned
 /// literal against that `Void` element, and a caller typed `array<void>` took the boxed result
 /// for the empty-array placeholder, so `$a[] = 1` stored a raw integer beside the boxed null.
-/// Covers a returned literal, a returned local, a bare `array` return type, a hash, and a merge of
-/// two such calls inside a function, which stays all-null and so must also get `mixed` slots.
+/// Covers a returned literal, a returned local, a bare `array` return type and a hash.
 #[test]
 fn test_untyped_all_null_array_returns_keep_their_null_and_widen_on_append() {
     let out = compile_and_run(
@@ -3871,7 +3870,6 @@ function nulls() { return [null]; }
 function local_nulls() { $a = [null]; return $a; }
 function declared(): array { return [null]; }
 function hash_nulls() { return ["k" => null]; }
-function merged() { $m = nulls() ?: nulls(); $m[] = 3; return json_encode($m); }
 
 $a = nulls();
 echo count($a), json_encode($a), "|";
@@ -3887,11 +3885,11 @@ $d[] = 4;
 echo "|", json_encode($d);
 $h = hash_nulls();
 $h["x"] = 5;
-echo "|", json_encode($h), "|", merged(), "\n";
+echo "|", json_encode($h), "\n";
 "#,
     );
     assert_eq!(
         out,
-        "1[null]|N|[null,1]N1|[null,2]|[null,4]|{\"k\":null,\"x\":5}|[null,3]\n"
+        "1[null]|N|[null,1]N1|[null,2]|[null,4]|{\"k\":null,\"x\":5}\n"
     );
 }

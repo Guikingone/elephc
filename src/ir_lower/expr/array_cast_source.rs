@@ -25,7 +25,7 @@ use super::indexed_array_literals::{
 };
 use super::lazy_branches::{materialized_merge_type, strip_void_from_union};
 use super::merge_temps::{
-    branch_merge_result_type, fallback_expr_type, match_merge_result_type, null_only_merge_storage,
+    branch_merge_result_type, fallback_expr_type, match_merge_result_type,
     short_ternary_merge_result_type,
 };
 use super::numeric_binary::{
@@ -73,17 +73,16 @@ pub(super) fn array_cast_source_type_for_ir(
         ExprKind::BoolLiteral(_) => PhpType::Bool,
         ExprKind::BinaryOp { left, op, right } => binary_source_type(ctx, left, op, right, expr),
         ExprKind::NullCoalesce { value, default } => null_coalesce_source_type(ctx, value, default),
-        // A merge hands back its temp, whose all-null storage is `mixed` (`null_only_merge_storage`).
         ExprKind::ShortTernary { value, default } => {
-            null_only_merge_storage(short_ternary_merge_result_type(ctx, value, default))
+            short_ternary_merge_result_type(ctx, value, default)
         }
         ExprKind::Ternary {
             then_expr,
             else_expr,
             ..
-        } => null_only_merge_storage(branch_merge_result_type(ctx, then_expr, else_expr, expr)),
+        } => branch_merge_result_type(ctx, then_expr, else_expr, expr),
         ExprKind::Match { arms, default, .. } => {
-            null_only_merge_storage(match_merge_result_type(ctx, arms, default.as_deref(), expr))
+            match_merge_result_type(ctx, arms, default.as_deref(), expr)
         }
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, expr),
         ExprKind::ArrayLiteralAssoc(pairs) => assoc_array_literal_type_for_ir(ctx, pairs, expr),
@@ -287,7 +286,7 @@ fn null_coalesce_source_type(
         .unwrap_or_else(|| array_cast_source_type_for_ir(ctx, default))
         .codegen_repr();
     // Must agree with `null_coalesce_result_type`, which boxes an int/bool pair.
-    null_only_merge_storage(materialized_merge_type(&value_ty, &default_ty))
+    materialized_merge_type(&value_ty, &default_ty)
 }
 
 /// Returns the type of a direct, extern, or builtin call.

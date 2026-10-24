@@ -85,10 +85,9 @@ fn merge_arm_type(ctx: &LoweringContext<'_, '_>, arm: &Expr) -> PhpType {
 /// The call hands back boxed `mixed` slots (`caller_visible_return_type`), but a merge types it
 /// the way it types a `[null]` local: beside a pointer array the `null` element joins into
 /// `?ptr<T>`, so `$ps ?: f()` and `$m ?? f()` keep pointer storage and the call result is
-/// converted into it. A merge that stays all-null is stored with `mixed` slots
-/// (`null_only_merge_storage`). The call may be suppressed, assigned, or made through a local
-/// statically bound to the function (`$f = f(...); $f()`), as `materialized_expr_type_for_merge`
-/// reads those shapes.
+/// converted into it. A merge whose arms are all such calls keeps `array<void>`, as on main. The
+/// call may be suppressed, assigned, or made through a local statically bound to the function
+/// (`$f = f(...); $f()`), as `materialized_expr_type_for_merge` reads those shapes.
 pub(super) fn null_only_call_merge_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpType> {
     let mut call = expr;
     loop {
@@ -118,16 +117,6 @@ pub(super) fn null_only_call_merge_type(ctx: &LoweringContext<'_, '_>, expr: &Ex
     let checker = crate::types::dynamic_params::caller_visible_checker_return_type(signature);
     (crate::types::dynamic_params::null_only_container_return_storage(&checker) != checker)
         .then_some(checker)
-}
-
-/// Stores a merge whose element is still exactly `null` with `mixed` slots, the way `[null]` is
-/// built, so a temp is never typed with the empty-array element over boxed cells.
-///
-/// Applied where a merge declares its temp (and by the `(array)` predictors of that temp), never
-/// inside the `*_merge_result_type` predictions: an enclosing merge must still see the inner
-/// all-null merge as `array<void>`, so `$ps ?: (f() ?: f())` keeps pointer storage as on main.
-pub(super) fn null_only_merge_storage(ty: PhpType) -> PhpType {
-    crate::types::dynamic_params::null_only_container_return_storage(&ty)
 }
 
 /// The type an arm contributes to the ordinary merge: a literal of buffers keeps its contextual
