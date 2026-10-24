@@ -2600,6 +2600,10 @@ jobs:
           examples/tokenizer/main > "$RUNNER_TEMP/tokenizer-example.out"
           grep -F 'Function declaration at line 1, byte ' "$RUNNER_TEMP/tokenizer-example.out"
           grep -F 'First token: T_OPEN_TAG' "$RUNNER_TEMP/tokenizer-example.out"
+      - name: Run focused native, eval and argument regressions
+        run: |
+          cargo test --locked --test codegen_tests test_tokenizer_
+          cargo test --locked --test error_tests tokenizer_
 
   differential-tests:
     name: Differential test run (PHPUnit vs elephc test)
