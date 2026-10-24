@@ -222,10 +222,11 @@ A `throw` arm can sit beside the buffer arms. Every other arm must have the same
 `mixed` form that could still be indexed. As in PHP, an element of the merge itself cannot be
 assigned (`($a ? $b : $c)[0] = 1.0` is rejected): assign the merge to a local and write through
 the local, or write a packed field (`(...)[0]->x = 1.0`) as above. `examples/buffer-double-buffering`
-runs this pattern. One gap remains: a `??` whose left side is a `buffer<T>` property reads that
-property through the probe that keeps an uninitialized property from raising, and the probe still
-boxes the handle, so an element read through `$o->a ?? $o->b` answers null. Pick between buffer
-properties with a ternary or `match`, or copy the property into a local first.
+runs this pattern. One gap remains: a `??` whose left side is a `buffer<T>` property, instance or
+static, reads that property through the probe that keeps an uninitialized property from raising,
+and the probe still boxes the handle, so an element read through `$o->a ?? $o->b` or
+`P::$a ?? P::$b` answers null. Pick between buffer properties with a ternary or `match`, or copy
+the property into a local first.
 
 A buffer in a condition (`if ($buf)`, `$buf ?: $other`, `!$buf`, `(bool) $buf`) tests its handle,
 not its length or its contents: every buffer `buffer_new<T>()` returns is true, while the invalid
