@@ -76,6 +76,15 @@ function token_name(int $id): string {
     return elephc_tokenizer_name($id);
 }
 
+function __elephc_tokenizer_type(mixed $value): string {
+    if (is_object($value)) { return get_class($value); }
+    if (is_bool($value)) {
+        if ($value) { return "true"; }
+        return "false";
+    }
+    return str_replace("double", "float", strtolower(gettype($value)));
+}
+
 function __elephc_tokenizer_matches(PhpToken $token, mixed $kind): bool {
     if (is_int($kind)) { return $token->id === $kind; }
     if (is_string($kind)) { return $token->text === $kind; }
@@ -86,12 +95,12 @@ function __elephc_tokenizer_matches(PhpToken $token, mixed $kind): bool {
             } elseif (is_string($entry)) {
                 if ($token->text === $entry) { return true; }
             } else {
-                throw new \TypeError("PhpToken::is(): Argument #1 ($kind) must only have elements of type string|int, " . (is_object($entry) ? get_class($entry) : (is_bool($entry) ? ($entry ? "true" : "false") : str_replace("double", "float", strtolower(gettype($entry))))) . " given");
+                throw new \TypeError("PhpToken::is(): Argument #1 ($kind) must only have elements of type string|int, " . __elephc_tokenizer_type($entry) . " given");
             }
         }
         return false;
     }
-    throw new \TypeError("PhpToken::is(): Argument #1 ($kind) must be of type string|int|array, " . (is_object($kind) ? get_class($kind) : (is_bool($kind) ? ($kind ? "true" : "false") : str_replace("double", "float", strtolower(gettype($kind))))) . " given");
+    throw new \TypeError("PhpToken::is(): Argument #1 ($kind) must be of type string|int|array, " . __elephc_tokenizer_type($kind) . " given");
 }
 
 class PhpToken implements \Stringable {
@@ -139,8 +148,8 @@ class PhpToken implements \Stringable {
                 $text = (string)$token[1];
                 $line = (int)$token[2];
             } else {
-                $id = ord($token[strlen($token) - 1]);
                 $text = (string)$token;
+                $id = ord($text[strlen($text) - 1]);
             }
             $result[] = new static($id, $text, $line, $pos);
             $pos += strlen($text);

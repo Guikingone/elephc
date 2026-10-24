@@ -137,8 +137,6 @@ function inspect_source(): void {
         $tokens = token_get_all('<?php echo "hello";');
     }
 }
-
-
 inspect_source();
 echo 'done';
 "#);

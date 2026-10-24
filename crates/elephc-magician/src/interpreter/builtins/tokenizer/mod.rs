@@ -89,15 +89,56 @@ fn tokenizer_int(
     eval_int_value(value, values)
 }
 
-/// Enforces PhpToken::tokenize's construction precondition for eval-declared subclasses.
-pub(in crate::interpreter) fn eval_tokenizer_static_class_precondition(
-    owner: &str, method: &str, called_class: &str,
+/// Materializes eval-declared PhpToken subclasses through the dynamic object registry.
+pub(in crate::interpreter) fn eval_tokenizer_static_method(
+    owner: &str, method: &str, called_class: &str, args: &[RuntimeCellHandle],
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    if owner.trim_start_matches('\\').eq_ignore_ascii_case("PhpToken")
-        && method.eq_ignore_ascii_case("tokenize")
-        && context.class(called_class).is_some_and(|class| class.is_abstract()) {
-        return eval_throw_error(&format!("Cannot instantiate abstract class {called_class}"), context, values);
-    }
-    Ok(())
+) -> Option<Result<RuntimeCellHandle, EvalStatus>> {
+    if !owner.trim_start_matches('\\').eq_ignore_ascii_case("PhpToken")
+        || !method.eq_ignore_ascii_case("tokenize") { return None; }
+    let class = context.class(called_class)?.clone();
+    Some((|| {
+        if class.is_abstract() {
+            return eval_throw_error(&format!("Cannot instantiate abstract class {called_class}"), context, values);
+        }
+        let code = values.string_bytes(*args.first().ok_or(EvalStatus::RuntimeFatal)?)?;
+        let flags = match args.get(1) {
+            Some(value) => tokenizer_int(*value, "PhpToken::tokenize", 2, "flags", context, values)?,
+            None => 0,
+        };
+        let tokens = match elephc_tokenizer_engine::tokenize(&code, flags) {
+            Ok(tokens) => tokens,
+            Err(error) => return eval_throw_builtin_exception("ParseError", &error.message, context, values),
+        };
+        let mut out = EvalArrayBuilder::indexed(values, tokens.len())?;
+        for (index, token) in tokens.iter().enumerate() {
+            out.index(index, |values| {
+                let mut arguments = Vec::with_capacity(4);
+                let mut scope = ElephcEvalScope::new();
+                let result = (|| {
+                    arguments.push(values.int(token.id)?);
+                    arguments.push(values.string_bytes_value(&code[token.pos..token.pos + token.len])?);
+                    arguments.push(values.int(token.line as i64)?);
+                    arguments.push(values.int(token.pos as i64)?);
+                    eval_dynamic_class_new_object(&class,
+                        positional_args(arguments.iter().map(|value| value.borrowed()).collect()),
+                        context, &mut scope, values)
+                })();
+                let mut released = Ok(());
+                for argument in arguments {
+                    let cleanup = release_expr_result(argument, context, values);
+                    if released.is_ok() { released = cleanup; }
+                }
+                let result = match (result, released) {
+                    (Ok(object), Err(status)) => {
+                        let _ = release_expr_result(object, context, values);
+                        Err(status)
+                    }
+                    (result, _) => result,
+                };
+                finish_activation_scope(&mut scope, result, context, values)
+            })?;
+        }
+        Ok(out.finish())
+    })())
 }
