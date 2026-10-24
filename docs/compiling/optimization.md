@@ -509,7 +509,8 @@ index reuses the first record address, and accesses to other indexes share one
 resolution. Anything between the reads that could change the property or free
 the buffer keeps them apart: a store to that property or `unset()` on any
 object, a `buffer_free()`, any function or method call, a release, a warning or
-output. A change to the index variable keeps the record addresses apart.
+output. A change to the index variable keeps the record addresses apart. See
+`examples/buffer-property-table/main.php`.
 
 Packed field reads and writes are also known to be plain loads and stores, so
 the loop index and locals stored into packed fields stay in registers and no

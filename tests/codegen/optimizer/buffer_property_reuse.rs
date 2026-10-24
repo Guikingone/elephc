@@ -105,13 +105,15 @@ final class Holder
     public function readAcrossFree(): int
     {
         $first = $this->cells[0]->value;
-        buffer_free($this->cells);
+        $cells = $this->cells;
+        buffer_free($cells);
         return $first + $this->cells[0]->value;
     }
 
     public function release(): void
     {
-        buffer_free($this->cells);
+        $cells = $this->cells;
+        buffer_free($cells);
     }
 
     public function readAcrossCall(): int
@@ -263,4 +265,17 @@ fn test_call_between_property_reads_keeps_the_fatal() {
     let ir = function_ir(&source, true, "Holder::readAcrossCall");
     assert_eq!(ir.matches("= buffer_get ").count(), 2, "{ir}");
     assert_both_modes_fail_after(&source, "before\n", "use of buffer after buffer_free()");
+}
+
+/// The documented example reads its slot table once per `matches()` call and prints the same
+/// result with the optimizer on and off.
+#[test]
+fn test_buffer_property_table_example_shares_property_reads() {
+    let source = include_str!("../../../examples/buffer-property-table/main.php");
+    for method in ["Entities::matches", "Entities::destroy"] {
+        let ir = function_ir(source, true, method);
+        assert_eq!(buffer_property_reads(&ir), 1, "{method}: {ir}");
+        assert_eq!(ir.matches("= buffer_get ").count(), 1, "{method}: {ir}");
+    }
+    assert_both_modes_print(source, "entities=10; moving=5\n");
 }
