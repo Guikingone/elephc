@@ -64,6 +64,43 @@ pub(super) fn take_owned_temp(
     value
 }
 
+/// Types one arm of a lazy merge the way its own lowering will see it: an array or hash literal
+/// through the context-aware literal typer, anything else through
+/// `materialized_expr_type_for_merge`. Called once per arm, so a merge nested in a literal arm is
+/// scanned once per level.
+fn merge_arm_type(ctx: &LoweringContext<'_, '_>, arm: &Expr) -> PhpType {
+    match &arm.kind {
+        ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, arm),
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            super::assoc_array_literals::assoc_array_literal_type_for_ir(ctx, pairs, arm)
+        }
+        _ => materialized_expr_type_for_merge(ctx, arm),
+    }
+}
+
+/// The type an arm contributes to the ordinary merge: a literal of buffers keeps its contextual
+/// type, every other literal the syntactic fallback it always had, and any other arm the
+/// materialized type `merge_arm_type` found.
+fn generic_arm_type(arm: &Expr, contextual: &PhpType) -> PhpType {
+    if matches!(arm.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) {
+        buffer_container_or_fallback(contextual.clone(), arm)
+    } else {
+        contextual.clone()
+    }
+}
+
+/// Keeps `ty` when it is an array or hash of buffer handles, otherwise answers the syntactic
+/// fallback type of `expr`, as every other literal is typed for a merge.
+fn buffer_container_or_fallback(ty: PhpType, expr: &Expr) -> PhpType {
+    let is_buffer_container = super::indexed_array_literals::literal_raw_word_element_type(&ty)
+        .is_some_and(|elem| matches!(elem, PhpType::Buffer(_)));
+    if is_buffer_container {
+        ty
+    } else {
+        fallback_expr_type(expr)
+    }
+}
+
 /// Chooses a merge temp type from contextual branch materialization and fallback metadata.
 pub(super) fn branch_merge_result_type(
     ctx: &LoweringContext<'_, '_>,
@@ -71,11 +108,12 @@ pub(super) fn branch_merge_result_type(
     else_expr: &Expr,
     expr: &Expr,
 ) -> PhpType {
-    if let Some(pointer_array) = pointer_array_branch_merge_type(ctx, [then_expr, else_expr]) {
-        return pointer_array;
+    let arms = [(then_expr, merge_arm_type(ctx, then_expr)), (else_expr, merge_arm_type(ctx, else_expr))];
+    if let Some(raw_words) = pointer_array_branch_merge_type(&arms) {
+        return raw_words;
     }
-    let then_ty = materialized_expr_type_for_merge(ctx, then_expr);
-    let else_ty = materialized_expr_type_for_merge(ctx, else_expr);
+    let then_ty = generic_arm_type(then_expr, &arms[0].1);
+    let else_ty = generic_arm_type(else_expr, &arms[1].1);
     let branch_ty = nullable_aware_branch_merge_type(&then_ty, &else_ty);
     // A pointer merge (a `ptr<T>` or packed record address on both sides) is already exact; the
     // syntactic fallback would answer `int` for the ternary and widen the word into `Mixed`.
@@ -97,14 +135,18 @@ pub(super) fn match_merge_result_type(
     default: Option<&Expr>,
     expr: &Expr,
 ) -> PhpType {
-    if let Some(pointer_array) =
-        pointer_array_branch_merge_type(ctx, arms.iter().map(|(_, result)| result).chain(default))
-    {
-        return pointer_array;
+    let typed_arms: Vec<(&Expr, PhpType)> = arms
+        .iter()
+        .map(|(_, result)| result)
+        .chain(default)
+        .map(|result| (result, merge_arm_type(ctx, result)))
+        .collect();
+    if let Some(raw_words) = pointer_array_branch_merge_type(&typed_arms) {
+        return raw_words;
     }
     let mut merged: Option<PhpType> = None;
-    for result in arms.iter().map(|(_, result)| result).chain(default) {
-        let arm_ty = materialized_expr_type_for_merge(ctx, result);
+    for (result, contextual) in &typed_arms {
+        let arm_ty = generic_arm_type(result, contextual);
         merged = Some(match merged {
             Some(acc) => nullable_aware_branch_merge_type(&acc, &arm_ty),
             None => arm_ty,
@@ -130,11 +172,12 @@ pub(super) fn short_ternary_merge_result_type(
     value: &Expr,
     default: &Expr,
 ) -> PhpType {
-    if let Some(pointer_array) = pointer_array_branch_merge_type(ctx, [value, default]) {
-        return pointer_array;
+    let arms = [(value, merge_arm_type(ctx, value)), (default, merge_arm_type(ctx, default))];
+    if let Some(raw_words) = pointer_array_branch_merge_type(&arms) {
+        return raw_words;
     }
-    let value_ty = materialized_expr_type_for_merge(ctx, value);
-    let default_ty = materialized_expr_type_for_merge(ctx, default);
+    let value_ty = generic_arm_type(value, &arms[0].1);
+    let default_ty = generic_arm_type(default, &arms[1].1);
     // A `?ptr<T>` side keeps the merge nullable: its codegen form is the bare pointer word, and
     // joining that would type a null result as a set pointer.
     if crate::types::is_nullable_pointer_type(&value_ty)
@@ -156,42 +199,64 @@ pub(super) fn nullable_aware_branch_merge_type(left: &PhpType, right: &PhpType) 
     materialized_merge_type(left, right)
 }
 
-/// Returns the pointer array or hash storage that merged branches share, if any.
+/// Returns the pointer or buffer array (or hash) storage that merged branches share, if any.
 ///
 /// Every branch must be a pointer array (or hash) value or a literal of only `null`s, with at
 /// least one of them holding pointers and all of them the same shape. A `[null]` branch types
 /// as `array<mixed>` on its own, so the ordinary merge would box the pointer branches, while the
 /// checker joins `ptr<T>` and `null` into one pointer element.
-pub(super) fn pointer_array_branch_merge_type<'e>(
-    ctx: &LoweringContext<'_, '_>,
-    branches: impl IntoIterator<Item = &'e Expr>,
-) -> Option<PhpType> {
+///
+/// Arrays of buffer handles are raw words too: every branch must then hold the same `buffer<T>`
+/// (a null literal cannot be a buffer element), so `$a ?: [$b]` keeps the handles as words
+/// instead of boxing both branches into `array<mixed>` and reading the cells back as handles.
+///
+/// Each arm comes with the type `merge_arm_type` gave it, so the arms are typed once whether
+/// the raw-word storage or the ordinary merge wins: typing them here again would scan a nested
+/// merge twice per level.
+pub(super) fn pointer_array_branch_merge_type(arms: &[(&Expr, PhpType)]) -> Option<PhpType> {
     let mut merged: Option<PhpType> = None;
     let mut null_literal_shapes = Vec::new();
-    for branch in branches {
+    let mut holds_buffers = false;
+    let mut empty_literal_shapes = Vec::new();
+    for (branch, contextual) in arms {
         if super::indexed_array_literals::is_null_only_literal(branch) {
             null_literal_shapes.push(matches!(branch.kind, ExprKind::ArrayLiteralAssoc(_)));
             continue;
         }
         // A literal branch is typed the way its own lowering stamps it.
-        let ty = match &branch.kind {
-            ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, branch),
-            ExprKind::ArrayLiteralAssoc(pairs) => {
-                super::assoc_array_literals::assoc_array_literal_type_for_ir(ctx, pairs, branch)
+        let ty = contextual.codegen_repr();
+        let Some(elem) = super::indexed_array_literals::literal_raw_word_element_type(&ty) else {
+            // `[]` holds no word to type; it only has to match the merged shape.
+            if super::indexed_array_literals::is_empty_literal(branch) {
+                empty_literal_shapes.push(matches!(branch.kind, ExprKind::ArrayLiteralAssoc(_)));
+                continue;
             }
-            _ => materialized_expr_type_for_merge(ctx, branch),
-        }
-        .codegen_repr();
-        super::indexed_array_literals::literal_pointer_element_type(&ty)?;
+            return None;
+        };
+        holds_buffers |= matches!(elem, PhpType::Buffer(_));
         merged = Some(match merged {
             None => ty,
             Some(acc) => merge_pointer_containers(acc, ty)?,
         });
     }
     let merged = merged?;
+    if holds_buffers {
+        // Differing buffer types (or a buffer beside a pointer) widen the element to `mixed`,
+        // and a null literal has no buffer word: both keep the ordinary merge.
+        let same_buffer = super::indexed_array_literals::literal_raw_word_element_type(&merged)
+            .is_some_and(|elem| matches!(elem, PhpType::Buffer(_)));
+        if !same_buffer || !null_literal_shapes.is_empty() {
+            return None;
+        }
+    } else if !empty_literal_shapes.is_empty() {
+        // A pointer merge keeps its ordinary path for `[]`: the boxed result is rewritten into
+        // pointer words by the destination conversions.
+        return None;
+    }
     let merged_is_hash = matches!(merged, PhpType::AssocArray { .. });
     null_literal_shapes
         .into_iter()
+        .chain(empty_literal_shapes)
         .all(|is_hash| is_hash == merged_is_hash)
         .then_some(merged)
 }
@@ -312,6 +377,16 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         }
         ExprKind::ClosureCall { var, .. } => closure_call_type_for_merge(ctx, var),
         ExprKind::ExprCall { .. } => PhpType::Mixed,
+        // A literal of buffers keeps its context-aware type: the syntactic fallback would type
+        // the handles as integers, and a merge with `null` or a `??` default would then box the
+        // array into cells that the buffer readers take for handles.
+        ExprKind::ArrayLiteral(items) => {
+            buffer_container_or_fallback(array_literal_type_for_ir(ctx, items, expr), expr)
+        }
+        ExprKind::ArrayLiteralAssoc(pairs) => buffer_container_or_fallback(
+            super::assoc_array_literals::assoc_array_literal_type_for_ir(ctx, pairs, expr),
+            expr,
+        ),
         _ => fallback_expr_type(expr),
     }
 }

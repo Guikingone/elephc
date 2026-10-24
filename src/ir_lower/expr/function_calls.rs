@@ -263,16 +263,18 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
     let call = emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal);
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    unbox_nullable_pointer_builtin_result(ctx, call, expr.span)
+    unbox_raw_word_builtin_result(ctx, call, expr.span)
 }
 
-/// Returns a boxed builtin result as the `?ptr<T>` word the checker typed the call as.
+/// Returns a boxed builtin result as the `?ptr<T>` or `buffer<T>` word the checker typed the
+/// call as.
 ///
-/// `array_pop()` and `array_shift()` hand every element out boxed, a pointer element as an
-/// integer-like cell and the null word (or an empty array) as PHP null, while the checker types
-/// a pointer element as `?ptr<T>`. The box is cast back to the word (null casts to 0) so field
-/// access, comparisons and `?ptr<T>` parameters see the pointer.
-fn unbox_nullable_pointer_builtin_result(
+/// `array_pop()` and `array_shift()` hand every element out boxed, a pointer or buffer element
+/// as an integer-like cell and the null word (or an empty array) as PHP null, while the checker
+/// types a pointer element as `?ptr<T>` and a buffer element as `buffer<T>`. The box is cast
+/// back to the word (null casts to 0: the null pointer, or the invalid buffer handle) so field
+/// access, comparisons, `?ptr<T>` parameters and buffer element reads see the word.
+fn unbox_raw_word_builtin_result(
     ctx: &mut LoweringContext<'_, '_>,
     call: LoweredValue,
     span: Span,
@@ -283,9 +285,9 @@ fn unbox_nullable_pointer_builtin_result(
     let Some(checked) = ctx.builtin_call_types.get(&span).cloned() else {
         return call;
     };
-    if !crate::types::is_nullable_pointer_type(&checked)
-        || ctx.builder.value_php_type(call.value).codegen_repr() != PhpType::Mixed
-    {
+    let raw_word = crate::types::is_nullable_pointer_type(&checked)
+        || matches!(checked, PhpType::Buffer(_));
+    if !raw_word || ctx.builder.value_php_type(call.value).codegen_repr() != PhpType::Mixed {
         return call;
     }
     let word = coerce_to_int_at_span(ctx, call, Some(span));
@@ -650,6 +652,30 @@ fn declared_type_is_a_safe_fallback(declared: &PhpType, checked: Option<&PhpType
     is_a_php_value(checked) == is_a_php_value(declared)
 }
 
+/// Is a boxed builtin result cast back to the raw word the checker typed the call as?
+///
+/// `array_pop()` and `array_shift()` declare `mixed` (an empty array yields null) and check as
+/// their element type, which for an array of pointers is `?ptr<T>` and for an array of buffers
+/// `buffer<T>`: raw words, not boxed cells. The declared `mixed` is the representation the call
+/// really produces, and `unbox_raw_word_builtin_result` casts that box back to the word after
+/// every call the checker filed, so this pair is a conversion the lowering owns rather than a
+/// fallback that changes representation.
+fn raw_word_result_is_unboxed(
+    def: &crate::builtins::registry::BuiltinDef,
+    checked: Option<&PhpType>,
+) -> bool {
+    let Some(checked) = checked else {
+        return false;
+    };
+    matches!(
+        def.spec.semantics.lowering,
+        crate::builtins::semantics::BuiltinLowering::Runtime(crate::ir::RuntimeCallTarget::Function(
+            crate::ir::RuntimeFnId::ArrayPop | crate::ir::RuntimeFnId::ArrayShift
+        ))
+    ) && matches!(def.return_type, PhpType::Mixed)
+        && (crate::types::is_nullable_pointer_type(checked) || matches!(checked, PhpType::Buffer(_)))
+}
+
 /// Resolves a registry builtin's result type from its descriptor, its lowered operands, and the
 /// checker's result type for this very call when one is available.
 ///
@@ -666,7 +692,8 @@ pub(super) fn resolve_registry_builtin_result_type(
 ) -> Option<PhpType> {
     let def = crate::builtins::registry::lookup(name)?;
     debug_assert!(
-        declared_type_is_a_safe_fallback(&def.return_type, checked.as_ref()),
+        declared_type_is_a_safe_fallback(&def.return_type, checked.as_ref())
+            || raw_word_result_is_unboxed(def, checked.as_ref()),
         "builtin `{name}` checks as {:?} but declares {:?}. Every path that cannot name this \
          call — a callable dispatched at runtime, a span the checker never filed — falls back to \
          the DECLARED type, so a declaration of a different representation is a miscompile \

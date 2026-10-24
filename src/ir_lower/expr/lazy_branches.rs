@@ -132,6 +132,9 @@ pub(super) fn null_coalesce_merge_type(
 ) -> PhpType {
     let raw_value_ty = value_ty;
     let value_ty = strip_void_from_union(raw_value_ty.clone()).codegen_repr();
+    // Typed once: the pointer and buffer checks below and the ordinary merge all read it, and a
+    // nested merge inside the default must not be scanned per check.
+    let declared_default_ty = materialized_expr_type_for_merge(ctx, default);
     // A pointer array beside a `[null]` (or another pointer array) default keeps pointer storage.
     if super::indexed_array_literals::literal_pointer_element_type(&value_ty).is_some() {
         if super::indexed_array_literals::is_null_only_literal(default) {
@@ -141,7 +144,7 @@ pub(super) fn null_coalesce_merge_type(
                 return value_ty;
             }
         } else {
-            let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
+            let default_ty = declared_default_ty.codegen_repr();
             if super::indexed_array_literals::literal_pointer_element_type(&default_ty).is_some() {
                 if let Some(merged) =
                     super::merge_temps::merge_pointer_containers(value_ty.clone(), default_ty)
@@ -151,7 +154,15 @@ pub(super) fn null_coalesce_merge_type(
             }
         }
     }
-    let declared_default_ty = materialized_expr_type_for_merge(ctx, default);
+    // A buffer array beside an empty literal default keeps its storage: `[]` adds no element.
+    if super::indexed_array_literals::literal_raw_word_element_type(&value_ty)
+        .is_some_and(|elem| matches!(elem, PhpType::Buffer(_)))
+        && super::indexed_array_literals::is_empty_literal(default)
+        && matches!(default.kind, ExprKind::ArrayLiteralAssoc(_))
+            == matches!(value_ty, PhpType::AssocArray { .. })
+    {
+        return value_ty;
+    }
     // A `?ptr<T>` on either side keeps the merge nullable when the other side may be null: the
     // codegen form of both (the bare pointer, or `Void` for a literal null) would drop that.
     // `$p ?? null` with a non-null `ptr<T>` keeps the plain pointer, its default being dead.

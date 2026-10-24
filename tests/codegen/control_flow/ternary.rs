@@ -426,3 +426,25 @@ var_dump(match ($argc) { 1 => array_shift($floats), default => 2.5 });
         "NULL\nNULL\nNULL\nNULL\nstring(8) \"fallback\"\nfloat(2.5)\nstring(4) \"word\"\nfloat(1.5)\n"
     );
 }
+
+/// Verifies the merge typing of nested ternaries of array literals stays linear: each arm is
+/// typed once per level, whichever storage the merge picks. An arm typed twice per level made a
+/// 22-deep nesting exceed 15 seconds, so a 24-deep one must compile well inside the bound.
+#[test]
+fn test_nested_array_literal_ternaries_compile_in_linear_time() {
+    let mut nested = String::from("$n");
+    for _ in 0..24 {
+        nested = format!("($flag ? [{nested}] : [])");
+    }
+    let source = format!(
+        "<?php\n$flag = $argc > 0;\n$n = $argc;\n$a = {nested};\necho count($a), \"\\n\";\n"
+    );
+    let started = std::time::Instant::now();
+    let out = compile_and_run(&source);
+    let elapsed = started.elapsed();
+    assert_eq!(out, "1\n");
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "nested ternary merge typing took {elapsed:?}"
+    );
+}

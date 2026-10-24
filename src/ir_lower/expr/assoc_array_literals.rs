@@ -70,27 +70,52 @@ pub(super) fn lower_assoc_array_literal_as(
 /// Returns the associative-array type for a literal that contains at least one associative
 /// spread. Mirrors the type checker's `assoc_spread_literal_value_type` so EIR storage matches
 /// the value types actually lowered into the hash.
+///
+/// `spread_storage` holds, per item, the codegen storage `spread_source_storage_type_for_ir`
+/// gave a spread's source (`None` for a plain item), typed once by the caller.
 pub(super) fn assoc_array_literal_type_from_spreads(
     ctx: &LoweringContext<'_, '_>,
     items: &[Expr],
     expr: &Expr,
+    spread_storage: &[Option<PhpType>],
 ) -> PhpType {
+    // Every item is typed once for the pointer probe and the merge below, so an item or spread
+    // source holding a nested merge is scanned once per nesting level. The merge types a spread
+    // source as an element; that is what the source's storage already is for a merge or a
+    // literal source, the sources that cost a scan per level, so those reuse the storage.
+    let item_types: Vec<Option<PhpType>> = items
+        .iter()
+        .zip(spread_storage)
+        .map(|(item, storage)| match (&item.kind, storage) {
+            (ExprKind::Spread(_), Some(storage)) => Some(spread_storage_probe_element_type(storage)),
+            (ExprKind::Spread(_), None) => None,
+            _ => Some(array_literal_element_type_for_ir(ctx, item)),
+        })
+        .collect();
     // Pointers and `null`s (direct, or a spread of a null-only literal) share pointer storage.
-    if let Some(pointer) = pointer_literal_element_type(ctx, items) {
+    if let Some(pointer) = pointer_literal_element_type(ctx, items, &item_types) {
         return PhpType::AssocArray {
             key: Box::new(PhpType::Mixed),
             value: Box::new(pointer),
         };
     }
     let mut value_ty = PhpType::Never;
-    for item in items {
-        let next = match &item.kind {
-            ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
-                PhpType::Array(elem) => elem.codegen_repr(),
-                PhpType::AssocArray { value, .. } => value.codegen_repr(),
-                _ => PhpType::Mixed,
+    for ((item, storage), item_ty) in items.iter().zip(spread_storage).zip(item_types) {
+        let next = match (&item.kind, storage) {
+            (ExprKind::Spread(inner), Some(storage)) if spread_source_is_typed_as_element(inner) => {
+                spread_storage_probe_element_type(storage)
+            }
+            (ExprKind::Spread(inner), _) => {
+                match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
+                    PhpType::Array(elem) => elem.codegen_repr(),
+                    PhpType::AssocArray { value, .. } => value.codegen_repr(),
+                    _ => PhpType::Mixed,
+                }
+            }
+            (_, _) => match item_ty {
+                Some(ty) => ty.codegen_repr(),
+                None => array_literal_element_type_for_ir(ctx, item).codegen_repr(),
             },
-            _ => array_literal_element_type_for_ir(ctx, item).codegen_repr(),
         };
         value_ty = merge_ir_assoc_value_type(value_ty, next);
     }
@@ -101,6 +126,20 @@ pub(super) fn assoc_array_literal_type_from_spreads(
         key: Box::new(PhpType::Mixed),
         value: Box::new(value_ty),
     }
+}
+
+/// Returns true when `spread_source_storage_type_for_ir` types `source` exactly as
+/// `array_literal_element_type_for_ir` does, so a merge may reuse the storage it already has.
+///
+/// The storage typer special-cases three kinds only: `@expr` (typed through its operand), a
+/// function call (typed from its signature when one is known) and an array read (whose logical
+/// null is stripped); every other source, a lazy merge, a nested literal, an `(array)` cast, a
+/// variable or a property read, goes straight to the element typer.
+fn spread_source_is_typed_as_element(source: &Expr) -> bool {
+    !matches!(
+        source.kind,
+        ExprKind::ErrorSuppress(_) | ExprKind::FunctionCall { .. } | ExprKind::ArrayAccess { .. }
+    )
 }
 
 /// Returns the associative-array type that the EIR backend can faithfully materialize.
@@ -117,9 +156,26 @@ pub(super) fn assoc_array_literal_type_for_ir(
     // every literal's key type.
     let mut key_ty: Option<PhpType> = None;
     let mut value_ty: Option<PhpType> = None;
+    // The pointer probe below reuses a value's type where both typers agree (a lazy merge or a
+    // nested literal, the values that cost a scan per nesting level); other values keep the
+    // probe's own element typing, so its pointer verdict does not change.
+    let mut probe_types: Vec<Option<PhpType>> = Vec::with_capacity(pairs.len());
     for (key, value) in pairs {
         let next_key = normalized_array_key_type(key, infer_expr_type_syntactic(key));
         let next_value = assoc_array_literal_value_type_for_ir(ctx, value);
+        probe_types.push(
+            matches!(
+                value.kind,
+                ExprKind::Ternary { .. }
+                    | ExprKind::ShortTernary { .. }
+                    | ExprKind::Match { .. }
+                    | ExprKind::NullCoalesce { .. }
+                    | ExprKind::Assignment { .. }
+                    | ExprKind::ArrayLiteral(_)
+                    | ExprKind::ArrayLiteralAssoc(_)
+            )
+            .then(|| next_value.clone()),
+        );
         key_ty = Some(match key_ty {
             Some(current) => merge_array_key_types(current, next_key),
             None => next_key,
@@ -132,8 +188,9 @@ pub(super) fn assoc_array_literal_type_for_ir(
     let (Some(key_ty), Some(value_ty)) = (key_ty, value_ty) else {
         return fallback_expr_type(expr);
     };
-    let value_ty = pointer_literal_element_type(ctx, pairs.iter().map(|(_, value)| value))
-        .unwrap_or(value_ty);
+    let value_ty =
+        pointer_literal_element_type(ctx, pairs.iter().map(|(_, value)| value), &probe_types)
+            .unwrap_or(value_ty);
     PhpType::AssocArray {
         key: Box::new(key_ty),
         value: Box::new(value_ty),

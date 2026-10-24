@@ -38,3 +38,32 @@ for ($i = 0; $i < $count; $i++) {
 }
 echo "particles=", $count, "; sum=", $sum, "\n";
 buffer_free($p);
+
+// Arrays of buffers: a particle system per layer, stepped and summed through one list. The
+// list holds the buffer handles, so foreach and element reads hand the buffers back as they are.
+$layers = [];
+for ($layer = 0; $layer < 3; $layer++) {
+    $particles = buffer_new<Particle>($count);
+    for ($i = 0; $i < $count; $i++) {
+        $particles[$i]->x = $i * 10.0 + 1.0 * $layer;
+        $particles[$i]->vx = 2.5;
+    }
+    $layers[] = $particles;
+}
+foreach ($layers as $particles) {
+    step($particles, $count, 1.0);
+}
+$total = 0.0;
+foreach ($layers as $layer => $particles) {
+    $layerSum = 0.0;
+    for ($i = 0; $i < $count; $i++) {
+        $layerSum += $particles[$i]->x;
+    }
+    echo "layer ", $layer, ": sum=", $layerSum, "\n";
+    $total += $layerSum;
+}
+echo "layers=", count($layers), "; total=", $total, "\n";
+while (count($layers) > 0) {
+    $particles = array_pop($layers);
+    buffer_free($particles);
+}

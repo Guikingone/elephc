@@ -1874,7 +1874,11 @@ fn lower_array_set_aarch64(
     ctx.load_value_to_reg(array, "x0")?;
     ctx.load_value_to_reg(index, "x1")?;
     match value_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Float
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.load_value_to_reg(value, "x2")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
         }
@@ -2021,7 +2025,11 @@ fn lower_array_set_x86_64(
     ctx.load_value_to_reg(array, "rdi")?;
     ctx.load_value_to_reg(index, "rsi")?;
     match value_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Float
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.load_value_to_reg(value, "rdx")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
         }
@@ -2091,7 +2099,11 @@ fn emit_array_get_in_bounds_aarch64(
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter
                 .instruction(
                 &format!("add {}, {}, #24", array_reg, array_reg)
@@ -2229,7 +2241,11 @@ fn emit_array_get_in_bounds_x86_64(
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter
                 .instruction(
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
@@ -2319,7 +2335,11 @@ fn materialize_widened_array_payload_aarch64(
     result_ty: &PhpType,
 ) {
     match elem_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction("mov x0, x1");                              // move the unboxed low word into the integer result register
             if matches!(elem_ty, PhpType::Callable) {
                 abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
@@ -2350,7 +2370,11 @@ fn materialize_widened_array_payload_x86_64(
     result_ty: &PhpType,
 ) {
     match elem_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed low word into the integer result register
             if matches!(elem_ty, PhpType::Callable) {
                 abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
@@ -2608,8 +2632,9 @@ pub(super) fn emit_array_get_null_fallback(
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             }
         },
-        // A missing pointer element reads as the null pointer word, which is PHP null there.
-        PhpType::Pointer(_) => {
+        // A missing pointer element reads as the null pointer word, which is PHP null there; a
+        // missing buffer element reads as handle 0, which every buffer operation rejects.
+        PhpType::Pointer(_) | PhpType::Buffer(_) => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         }
         _ => {
@@ -2641,7 +2666,7 @@ fn lower_array_push_aarch64(
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::TaggedScalar => {
             lower_array_push_tagged_scalar_aarch64(ctx, array, value)?;
         }
-        PhpType::Int | PhpType::Bool | PhpType::Pointer(_) => {
+        PhpType::Int | PhpType::Bool | PhpType::Pointer(_) | PhpType::Buffer(_) => {
             ctx.load_value_to_reg(value, "x1")?;
             ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
@@ -2753,7 +2778,7 @@ fn lower_array_push_x86_64(
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::TaggedScalar => {
             lower_array_push_tagged_scalar_x86_64(ctx, array, value)?;
         }
-        PhpType::Int | PhpType::Bool | PhpType::Pointer(_) => {
+        PhpType::Int | PhpType::Bool | PhpType::Pointer(_) | PhpType::Buffer(_) => {
             ctx.load_value_to_reg(array, "r11")?;
             ctx.load_value_to_reg(value, "rsi")?;
             ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper
@@ -2922,7 +2947,12 @@ fn lower_array_push_unboxed_mixed_aarch64(
     ctx.load_value_to_reg(value, "x0")?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match elem_ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Float
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction("mov x11, x1");                             // keep the unboxed scalar payload while loading the array receiver
             ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x1, x11");                             // pass the unboxed scalar payload to the append helper
@@ -2965,7 +2995,12 @@ fn lower_array_push_unboxed_mixed_x86_64(
     ctx.load_value_to_reg(value, "rax")?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match elem_ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float | PhpType::Pointer(_) => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Float
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction("mov r10, rdi");                            // keep the unboxed scalar payload while loading the array receiver
             ctx.load_value_to_reg(array, "r11")?;
             ctx.emitter.instruction("mov rsi, r10");                            // pass the unboxed scalar payload to the append helper
@@ -3329,6 +3364,7 @@ fn require_supported_array_set_value(value_ty: PhpType, inst: &Instruction) -> R
             | PhpType::Str
             | PhpType::TaggedScalar
             | PhpType::Pointer(_)
+            | PhpType::Buffer(_)
     ) {
         return Ok(value_ty);
     }
@@ -3373,6 +3409,12 @@ fn require_array_get_result(elem_ty: &PhpType, inst: &Instruction) -> Result<()>
     }
     // A pointer element is one raw word whatever its target tag, as in pointer properties.
     if matches!((elem_ty, &result_ty), (PhpType::Pointer(_), PhpType::Pointer(_))) {
+        return Ok(());
+    }
+    // A buffer handle is one raw word too, boxed like an integer for a `mixed` result.
+    if matches!(elem_ty, PhpType::Buffer(_))
+        && (result_ty == *elem_ty || result_ty == PhpType::Mixed)
+    {
         return Ok(());
     }
     if elem_ty.is_refcounted() && result_ty == *elem_ty {

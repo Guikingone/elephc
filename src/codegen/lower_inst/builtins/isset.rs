@@ -86,8 +86,10 @@ fn emit_isset_missing_result(ctx: &mut FunctionContext<'_>, value: ValueId) -> R
 
 /// Emits 1 when a loaded scalar, boxed Mixed, or null-like value is absent for `isset`.
 fn emit_loaded_isset_missing_result(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
-    // A `?ptr<T>` is one pointer word where 0 is null.
-    if crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(value)?) {
+    // A `?ptr<T>` is one pointer word where 0 is null, and a buffer handle one raw word where 0
+    // is the missing element of a buffer array; neither is set when 0.
+    let raw_ty = ctx.raw_value_php_type(value)?;
+    if crate::types::is_nullable_pointer_type(&raw_ty) || matches!(raw_ty, PhpType::Buffer(_)) {
         ctx.load_value_to_result(value)?;
         super::emit_int_result_zero_bool(ctx);
         return Ok(());
@@ -330,7 +332,8 @@ fn emit_isset_hash_found_null_check_aarch64(
     value_ty: &PhpType,
     missing: &str,
 ) -> Result<()> {
-    let pointer = matches!(value_ty.codegen_repr(), PhpType::Pointer(_));
+    // A buffer handle is a raw word too: 0 is the missing element, so it is not set.
+    let pointer = matches!(value_ty.codegen_repr(), PhpType::Pointer(_) | PhpType::Buffer(_));
     if pointer {
         // -- a stored null pointer word is a missing entry for isset --
         ctx.emitter.instruction(&format!("cbz x1, {}", missing));               // a stored null pointer word is PHP null for isset
@@ -367,7 +370,8 @@ fn emit_isset_hash_found_null_check_x86_64(
     value_ty: &PhpType,
     missing: &str,
 ) -> Result<()> {
-    let pointer = matches!(value_ty.codegen_repr(), PhpType::Pointer(_));
+    // A buffer handle is a raw word too: 0 is the missing element, so it is not set.
+    let pointer = matches!(value_ty.codegen_repr(), PhpType::Pointer(_) | PhpType::Buffer(_));
     if pointer {
         // -- a stored null pointer word is a missing entry for isset --
         ctx.emitter.instruction("test rdi, rdi");                               // a stored null pointer word is PHP null for isset
@@ -579,7 +583,8 @@ fn emit_isset_array_in_bounds_missing_aarch64(
             ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 means the indexed-array element is PHP null
             ctx.emitter.instruction("cset x0, eq");                             // return missing when the in-bounds Mixed element is null
         }
-        PhpType::Pointer(_) => {
+        // A buffer element is a raw word too, and handle 0 is the missing element.
+        PhpType::Pointer(_) | PhpType::Buffer(_) => {
             // -- a null pointer element is missing for isset --
             // An array built without a pointer destination (a merged or spread literal) reaches a
             // pointer slot with mixed storage, so its runtime value type decides how to read it.
@@ -639,7 +644,8 @@ fn emit_isset_array_in_bounds_missing_x86_64(
             ctx.emitter.instruction("sete al");                                 // return missing when the in-bounds Mixed element is null
             ctx.emitter.instruction("movzx rax, al");                           // widen the Mixed null-check result into the integer result register
         }
-        PhpType::Pointer(_) => {
+        // A buffer element is a raw word too, and handle 0 is the missing element.
+        PhpType::Pointer(_) | PhpType::Buffer(_) => {
             // -- a null pointer element is missing for isset --
             // An array built without a pointer destination (a merged or spread literal) reaches a
             // pointer slot with mixed storage, so its runtime value type decides how to read it.

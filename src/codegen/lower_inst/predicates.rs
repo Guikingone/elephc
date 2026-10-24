@@ -153,6 +153,13 @@ pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId)
     }
     match ctx.value_php_type(value)? {
         PhpType::Mixed | PhpType::Union(_) => emit_mixed_tag_eq(ctx, value, 8),
+        // A buffer handle is one raw word and 0 is never issued: a missed element or key read
+        // and an empty `array_pop()`/`array_shift()` answer it, so `??` takes its default.
+        PhpType::Buffer(_) => {
+            ctx.load_value_to_result(value)?;
+            super::builtins::emit_int_result_zero_bool(ctx);
+            Ok(())
+        }
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
             Ok(())
