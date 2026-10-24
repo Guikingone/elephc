@@ -129,19 +129,16 @@ pub(super) fn assoc_array_literal_type_from_spreads(
 }
 
 /// Returns true when `spread_source_storage_type_for_ir` types `source` exactly as
-/// `array_literal_element_type_for_ir` does: a lazy merge or a nested literal, the sources that
-/// hold the nesting a literal merge pays for per level. Calls, reads and other sources keep
-/// their own spread typing.
+/// `array_literal_element_type_for_ir` does, so a merge may reuse the storage it already has.
+///
+/// The storage typer special-cases three kinds only: `@expr` (typed through its operand), a
+/// function call (typed from its signature when one is known) and an array read (whose logical
+/// null is stripped); every other source, a lazy merge, a nested literal, an `(array)` cast, a
+/// variable or a property read, goes straight to the element typer.
 fn spread_source_is_typed_as_element(source: &Expr) -> bool {
-    matches!(
+    !matches!(
         source.kind,
-        ExprKind::Ternary { .. }
-            | ExprKind::ShortTernary { .. }
-            | ExprKind::Match { .. }
-            | ExprKind::NullCoalesce { .. }
-            | ExprKind::Assignment { .. }
-            | ExprKind::ArrayLiteral(_)
-            | ExprKind::ArrayLiteralAssoc(_)
+        ExprKind::ErrorSuppress(_) | ExprKind::FunctionCall { .. } | ExprKind::ArrayAccess { .. }
     )
 }
 
