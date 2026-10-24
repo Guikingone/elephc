@@ -494,6 +494,23 @@ only reads state (or ends in a fatal error) does not block the rewrite.
 Generators, functions with `try`, dynamic `eval`, and programs that call
 `pcntl_async_signals()` are left alone.
 
+A method that reads the same buffer property several times shares that work
+too, inside or outside a loop:
+
+```php
+public function matches(int $index, int $components): bool {
+    return $this->slots[$index]->alive
+        && ($this->slots[$index]->mask & $components) === $components;
+}
+```
+
+The property is read and its handle resolved once, the second access to the same
+index reuses the first record address, and accesses to other indexes share one
+resolution. Anything between the reads that could change the property or free
+the buffer keeps them apart: a store to that property or `unset()` on any
+object, a `buffer_free()`, any function or method call, a release, a warning or
+output. A change to the index variable keeps the record addresses apart.
+
 Packed field reads and writes are also known to be plain loads and stores, so
 the loop index and locals stored into packed fields stay in registers and no
 `concat_reset` is kept between statements. The rewrite is target-independent and
