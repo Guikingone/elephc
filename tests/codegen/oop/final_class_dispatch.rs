@@ -43,19 +43,19 @@ class DispatchAnimal {}
 class DispatchDog extends DispatchAnimal {}
 final class VariantDispatch<+T> {
     public function __construct(private T $value) {}
-    public function kind(): string { return self::class; }
-    final public function finalKind(): string { return self::class; }
+    public function kind(false $value): string { return self::class; }
+    final public function finalKind(null $value): string { return self::class; }
 }
 function read_final(SealedDispatch $object, int $value): int { return $object->value($value); }
 function read_inherited(SealedDispatch $object, int $value): int { return $object->inherited($value); }
 function read_nullable(?SealedDispatch $object, int $value): int { return $object->value($value); }
 function read_base(ParentDispatch $object, int $value): int { return $object->value($value); }
-function read_variant(VariantDispatch<DispatchAnimal> $object): string { return $object->kind(); }
-function read_variant_final(VariantDispatch<DispatchAnimal> $object): string { return $object->finalKind(); }
+function read_variant(VariantDispatch<DispatchAnimal> $object, mixed $value): string { return $object->kind($value); }
+function read_variant_final(VariantDispatch<DispatchAnimal> $object, mixed $value): string { return $object->finalKind($value); }
 $object = new SealedDispatch();
 echo read_final($object, $argc), read_inherited($object, $argc), read_nullable($object, $argc), read_base($object, $argc);
 $variant = new VariantDispatch<DispatchDog>(new DispatchDog());
-echo read_variant($variant), read_variant_final($variant);
+echo read_variant($variant, false), read_variant_final($variant, null);
 "#).unwrap();
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let output = elephc_cli_command(&dir.0)
@@ -78,6 +78,10 @@ echo read_variant($variant), read_variant_final($variant);
             let body = function_body(&assembly, function);
             assert!(body.contains("_class_source_vtable_ptrs") || body.contains("_class_vtable_ptrs"),
                 "{target}: runtime-selected {function} dispatch became direct: {body}");
+            if function != "read_base" {
+                assert!(body.contains("literal_param_ok"), "{target}: missing fixed literal guard: {body}");
+                assert!(!body.contains("interface_literal_class"), "{target}: literal guard depends on sibling class id: {body}");
+            }
         }
     }
 }
@@ -148,12 +152,15 @@ final class CovariantDispatch<+T> {
     public function __construct(private T $value) { self::$made++; }
     public function kind(): string { return self::class . ':' . self::$made; }
     final public function finalKind(): string { return self::class . ':' . self::$made; }
+    public function onlyFalse(false $value): string { return 'wrong'; }
+    final public function onlyNull(null $value): string { return 'wrong'; }
 }
-final class ContravariantDispatch<-T> {
+class ContravariantDispatch<-T> {
     private static int $made = 0;
     public function __construct() { self::$made++; }
     public function consume(T $value): string { return self::class . ':' . self::$made; }
     final public function finalConsume(T $value): string { return self::class . ':' . self::$made; }
+    final public function onlyFalse(false $value): string { return 'wrong'; }
 }
 function inspect_covariant(CovariantDispatch<DispatchAnimal> $object): string {
     return $object->kind() . '|' . $object->finalKind();
@@ -161,11 +168,43 @@ function inspect_covariant(CovariantDispatch<DispatchAnimal> $object): string {
 function inspect_contravariant(ContravariantDispatch<DispatchDog> $object, DispatchDog $dog): string {
     return $object->consume($dog) . '|' . $object->finalConsume($dog);
 }
+function inspect_covariant_literals(?CovariantDispatch<DispatchAnimal> $object, mixed $value): void {
+    try { echo $object->onlyFalse($value); } catch (TypeError $error) { echo 'false-error'; }
+    echo ':';
+    try { echo $object->onlyNull($value); } catch (TypeError $error) { echo 'null-error'; }
+}
+function inspect_contravariant_literal(ContravariantDispatch<DispatchDog> $object, mixed $value): void {
+    try { echo $object->onlyFalse($value); } catch (TypeError $error) { echo 'final-error'; }
+}
 $dog = new DispatchDog();
-echo inspect_covariant(new CovariantDispatch<DispatchDog>($dog)), '|';
-echo inspect_contravariant(new ContravariantDispatch<DispatchAnimal>(), $dog);
+$covariant = new CovariantDispatch<DispatchDog>($dog);
+$contravariant = new ContravariantDispatch<DispatchAnimal>();
+echo inspect_covariant($covariant), '|', inspect_contravariant($contravariant, $dog), '|';
+inspect_covariant_literals($covariant, $argc > 0);
+echo '|';
+inspect_contravariant_literal($contravariant, $argc > 0);
 "#;
-    let expected = "CovariantDispatch<DispatchDog>:1|CovariantDispatch<DispatchDog>:1|ContravariantDispatch<DispatchAnimal>:1|ContravariantDispatch<DispatchAnimal>:1";
+    let expected = "CovariantDispatch<DispatchDog>:1|CovariantDispatch<DispatchDog>:1|ContravariantDispatch<DispatchAnimal>:1|ContravariantDispatch<DispatchAnimal>:1|false-error:null-error|final-error";
     assert_eq!(compile_and_run(source), expected);
     without_ir_opt(|| assert_eq!(compile_and_run(source), expected));
+}
+
+/// Rebound closure receivers stay boxed and select their actual class before method resolution.
+#[test]
+fn test_final_class_dispatch_rebound_closure_receivers() {
+    let source = r#"<?php
+class ClosureDispatchAnimal { public function speak(): string { return 'animal'; } }
+final class ClosureDispatchDog extends ClosureDispatchAnimal {
+    public string $name = 'rex';
+    public function speak(): string { return 'dog ' . $this->name; }
+    public function speaker() { return function () { return $this->speak(); }; }
+}
+echo (new ClosureDispatchAnimal())->speak(), '|';
+$speaker = (new ClosureDispatchDog())->speaker();
+echo $speaker->bindTo(new ClosureDispatchAnimal())(), '|';
+echo $speaker->call(new ClosureDispatchAnimal()), '|';
+echo Closure::bind($speaker, new ClosureDispatchAnimal())();
+"#;
+    assert_eq!(compile_and_run(source), "animal|animal|animal|animal");
+    without_ir_opt(|| assert_eq!(compile_and_run(source), "animal|animal|animal|animal"));
 }

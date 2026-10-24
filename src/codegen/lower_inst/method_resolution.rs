@@ -105,6 +105,21 @@ pub(super) fn resolve_method_call_target(
     })
 }
 
+/// Reports whether an override can change a call's literal parameter declarations.
+///
+/// Object-only generic variance can select another body, but it cannot change a final
+/// class's or final method's `false`/`null` parameters. Their guards remain static.
+pub(super) fn method_requires_runtime_literal_guards(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    target: &MethodCallTarget,
+) -> bool {
+    target.dynamic_slot.is_some()
+        && ctx.module.class_infos.get(class_name.trim_start_matches('\\')).is_none_or(|class| {
+            !class.is_final && !class.final_methods.contains(&target.method_key)
+        })
+}
+
 /// Emits an indirect instance call through either the physical or source-ABI vtable.
 pub(super) fn emit_dynamic_instance_method_call_with_abi(
     ctx: &mut FunctionContext<'_>,

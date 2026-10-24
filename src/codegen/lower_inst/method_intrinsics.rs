@@ -121,7 +121,7 @@ pub(super) fn lower_nullable_receiver_method_call(
     let done_label = ctx.next_label("method_receiver_done");
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
     objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, receiver_reg)?;
-    if target.dynamic_slot.is_some() {
+    if super::method_resolution::method_requires_runtime_literal_guards(ctx, class_name, &target) {
         emit_hierarchy_literal_parameter_guards(
             ctx, inst, class_name, method_name, receiver_reg,
         )?;
