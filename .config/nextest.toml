@@ -112,7 +112,7 @@ path = "debug/libelephc_xml.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
 path = "debug/libelephc_tokenizer.a"
-on-missing = "error"
+relative-to = "target"
 [[profile.ci.archive.include]]
 path = "debug/libelephc_magician.a"
 relative-to = "target"
