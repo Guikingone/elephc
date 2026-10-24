@@ -105,6 +105,34 @@ echo $sum, "\n";
     );
 }
 
+/// An accessor a final class inherits reads the parent's private property, not the subclass's
+/// shadowing one, once its parent body is spliced into a free function.
+#[test]
+fn test_method_inline_inherited_accessor_reads_the_parent_private_property() {
+    let source = r#"<?php
+class Base
+{
+    private int $secret;
+    public function __construct(int $secret) { $this->secret = $secret; }
+    public function secret(): int { return $this->secret; }
+}
+
+final class Leaf extends Base
+{
+    private int $secret = 99;
+    public function own(): int { return $this->secret; }
+}
+
+function read(Leaf $leaf): int
+{
+    return $leaf->secret() * 1000 + $leaf->own();
+}
+
+echo read(new Leaf($argc + 6)), "\n";
+"#;
+    assert_both_modes(source, true, "7099\n");
+}
+
 /// A spliced call borrows its receiver: a local object and a temporary both reach their
 /// destructor exactly where the real call would release them.
 #[test]

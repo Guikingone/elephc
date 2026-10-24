@@ -174,6 +174,57 @@ fn final_class_methods_are_spliced_with_their_scope_on_every_target() {
     }
 }
 
+/// An accessor a final class inherits splices the PARENT's body: its private-property read
+/// keeps the parent's class scope although the subclass shadows that property name, while the
+/// subclass's own accessor keeps the subclass scope.
+#[test]
+fn inherited_accessor_on_a_final_subclass_keeps_the_parent_scope() {
+    let source = r#"<?php
+class Base
+{
+    private int $secret;
+    public function __construct(int $secret) { $this->secret = $secret; }
+    public function secret(): int { return $this->secret; }
+}
+final class Leaf extends Base
+{
+    private int $secret = 99;
+    public function own(): int { return $this->secret; }
+}
+function read(Leaf $leaf): int { return $leaf->secret() * 1000 + $leaf->own(); }
+echo read(new Leaf($argc + 6)), "\n";
+"#;
+    for target in TARGETS {
+        let module = optimized(source, target);
+        let read = function(&module, "read");
+        let calls = called_methods(&module, read);
+        assert!(calls.is_empty(), "{target}: read() still calls {calls:?}");
+        let mut scopes: Vec<&str> = read
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter().copied())
+            .filter(|&id| {
+                read.instruction(id).is_some_and(|inst| {
+                    inst.op == Op::PropGet && !read.is_packed_field_access(inst)
+                })
+            })
+            .filter_map(|id| read.inlined_scopes.get(&id).map(String::as_str))
+            .collect();
+        scopes.sort_unstable();
+        assert_eq!(
+            scopes,
+            vec!["Base", "Leaf"],
+            "{target}: each spliced read must keep the scope of the body it came from"
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        assert!(
+            !assembly.contains("Cannot access private property"),
+            "{target}: an inherited private-property read was resolved from the wrong scope"
+        );
+    }
+}
+
 /// A method called on the host method's own `$this` needs no receiver check: PHP never binds
 /// `$this` to null, so the splice adds no `is_null` and no `throw_error`.
 #[test]
