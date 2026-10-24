@@ -1165,3 +1165,26 @@ echo $v[1]->x, "\n";
     );
     assert_eq!(out, "x4|null|x4:4|null|0:4|0\n");
 }
+
+/// Verifies a by-value capture of a `null` local that the closure body assigns pointers in a
+/// loop starts as address 0. The capture is a hidden `null` parameter with no ABI value, so a
+/// call whose loop never runs, made right after one that stored a pointer in the same frame,
+/// must still read PHP null rather than the stale slot.
+#[test]
+fn test_null_capture_assigned_pointers_in_a_loop_starts_null() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function first(buffer<Vec2> $v): ptr<Vec2> { return $v[0]; }
+$v = buffer_new<Vec2>(1);
+$v[0]->x = 7;
+$c = null;
+$f = function (buffer<Vec2> $v, int $n) use ($c): string {
+    for ($i = 0; $i < $n; $i++) { $c = first($v); }
+    return $c === null ? "null" : "x" . $c->x;
+};
+echo $f($v, 1), "|", $f($v, 0), "|", $f($v, 2), "|", $f($v, 0), "\n";
+"#,
+    );
+    assert_eq!(out, "x7|null|x7|null\n");
+}
