@@ -86,21 +86,35 @@ fn merge_arm_type(ctx: &LoweringContext<'_, '_>, arm: &Expr) -> PhpType {
 /// the way it types a `[null]` local: beside a pointer array the `null` element joins into
 /// `?ptr<T>`, so `$ps ?: f()` and `$m ?? f()` keep pointer storage and the call result is
 /// converted into it. A merge that stays all-null is stored with `mixed` slots
-/// (`null_only_merge_storage`).
+/// (`null_only_merge_storage`). The call may be suppressed, assigned, or made through a local
+/// statically bound to the function (`$f = f(...); $f()`), as `materialized_expr_type_for_merge`
+/// reads those shapes.
 pub(super) fn null_only_call_merge_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpType> {
-    // `@f()` is the call itself, as `materialized_expr_type_for_merge` reads it.
     let mut call = expr;
-    while let ExprKind::ErrorSuppress(inner) = &call.kind {
-        call = inner;
+    loop {
+        match &call.kind {
+            ExprKind::ErrorSuppress(inner) => call = inner,
+            ExprKind::Assignment { value, result_target, prelude, .. } => {
+                call = assignment_result_expr(value, result_target.as_deref(), prelude);
+            }
+            _ => break,
+        }
     }
-    let ExprKind::FunctionCall { name, .. } = &call.kind else {
-        return None;
+    let canonical = match &call.kind {
+        ExprKind::FunctionCall { name, .. } => {
+            let canonical = name.as_str().to_string();
+            if source_prefers_extension_builtin(&canonical) {
+                return None;
+            }
+            canonical
+        }
+        ExprKind::ClosureCall { var, .. } => match ctx.static_callable_local(var) {
+            Some(StaticCallableBinding::UserFunction(name)) => name,
+            _ => return None,
+        },
+        _ => return None,
     };
-    let canonical = name.as_str();
-    if source_prefers_extension_builtin(canonical) {
-        return None;
-    }
-    let signature = ctx.functions.get(canonical)?;
+    let signature = ctx.functions.get(canonical.as_str())?;
     let checker = crate::types::dynamic_params::caller_visible_checker_return_type(signature);
     (crate::types::dynamic_params::null_only_container_return_storage(&checker) != checker)
         .then_some(checker)
