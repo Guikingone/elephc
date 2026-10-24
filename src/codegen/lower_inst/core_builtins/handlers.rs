@@ -188,7 +188,7 @@ pub(super) fn lower_restore_exception_handler(ctx: &mut FunctionContext<'_>) -> 
 pub(super) fn lower_trigger_error(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
-    internal_warning: bool,
+    internal_category: Option<&[u8]>,
 ) -> Result<()> {
     let message = expect_operand(inst, 0)?;
     let level = expect_operand(inst, 1)?;
@@ -197,7 +197,7 @@ pub(super) fn lower_trigger_error(
     let default_label = ctx.next_label("trigger_error_default");
     let done_label = ctx.next_label("trigger_error_done");
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
-    if !internal_warning { emit_validate_trigger_error_level(ctx, level)?; }
+    if internal_category.is_none() { emit_validate_trigger_error_level(ctx, level)?; }
     abi::emit_load_symbol_to_reg(
         ctx.emitter,
         descriptor_reg,
@@ -226,7 +226,7 @@ pub(super) fn lower_trigger_error(
     emit_bool_result(ctx, true);
     ctx.emitter.instruction(&branch_instruction(ctx, &done_label));             // skip PHP's default diagnostic after handler suppression
     ctx.emitter.label(&default_label);
-    emit_default_user_error(ctx, message, level, file, line, internal_warning)?;
+    emit_default_user_error(ctx, message, level, file, line, internal_category)?;
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -432,7 +432,7 @@ fn emit_default_user_error(
     level: ValueId,
     file: ValueId,
     line: ValueId,
-    internal_warning: bool,
+    internal_category: Option<&[u8]>,
 ) -> Result<()> {
     let skip_output = ctx.next_label("trigger_error_skip_output");
     load_integer_operand(ctx, level)?;
@@ -441,7 +441,7 @@ fn emit_default_user_error(
     let mask_reg = abi::secondary_scratch_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, mask_reg, "_php_error_reporting", 0);
     emit_branch_if_no_mask_overlap(ctx, mask_reg, level_reg, &skip_output);
-    if internal_warning { emit_user_error_fragment(ctx, b"Warning: "); }
+    if let Some(category) = internal_category { emit_user_error_fragment(ctx, category); }
     else { emit_user_error_category(ctx, level_reg); }
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.load_string_value_to_regs(message, "x1", "x2")?,

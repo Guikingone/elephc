@@ -57,7 +57,9 @@ those options, including on failure. Passing `FILEINFO_NONE` to a query uses the
 instance's persistent options.
 
 Like PHP 8, `finfo_close($info)` returns true and leaves the object usable. The
-object releases its native state automatically. Cloning and serialization are
+object releases its native state automatically. In the PHP 8.5 and later profiles,
+`finfo_close()` and an explicitly supplied `finfo_buffer()` / `finfo::buffer()`
+context emit `E_DEPRECATED`; older profiles retain their original behavior. Cloning and serialization are
 refused. Content descriptions and the set of recognized file formats follow the
 pinned upstream libmagic database, which can differ from the database bundled by
 a particular PHP release.

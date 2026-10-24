@@ -1838,3 +1838,9 @@ Compiler preludes raise engine warnings through the internal
 operation. It carries source metadata and `E_WARNING` through the ordinary handler
 and reporting machinery, while PHP's public `trigger_error()` retains its restricted
 user-level error categories.
+
+Version-gated prelude deprecations use the corresponding
+`__elephc_builtin_deprecated` alias and `CoreBuiltinOp::BuiltinDeprecated`, with
+`E_DEPRECATED`. Public buffer wrappers inspect the actual source argument count
+before calling their native engine helper, so an omitted context stays distinct
+from an explicitly supplied null context.

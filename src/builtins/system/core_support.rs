@@ -148,12 +148,9 @@ pub fn lower_core_builtin(
         }
         CoreBuiltinOp::SetErrorHandler => lower_handler_operands(ctx, call, true)?,
         CoreBuiltinOp::SetExceptionHandler => lower_handler_operands(ctx, call, false)?,
-        CoreBuiltinOp::TriggerError => lower_trigger_operands(ctx, call)?,
-        CoreBuiltinOp::BuiltinWarning => {
-            let mut operands = lower_trigger_operands(ctx, call)?;
-            operands[1] = operand_or_const_int(ctx, call, 1, 2);
-            operands
-        }
+        CoreBuiltinOp::TriggerError => lower_trigger_operands(ctx, call, 1_024)?,
+        CoreBuiltinOp::BuiltinWarning => lower_trigger_operands(ctx, call, 2)?,
+        CoreBuiltinOp::BuiltinDeprecated => lower_trigger_operands(ctx, call, 8_192)?,
         CoreBuiltinOp::GetDefinedConstants => {
             vec![operand_or_const_bool(ctx, call, 0, false)]
         }
@@ -310,6 +307,7 @@ fn lower_handler_operands(
 fn lower_trigger_operands(
     ctx: &mut dyn BuiltinLoweringContext,
     call: &NormalizedBuiltinCall<'_>,
+    default_level: i64,
 ) -> Result<Vec<crate::ir::ValueId>, BuiltinLoweringError> {
     let file = ctx.source_path().unwrap_or("unknown").to_string();
     let file_data = ctx.intern_string(&file);
@@ -331,7 +329,7 @@ fn lower_trigger_operands(
     );
     Ok(vec![
         call.operand(0)?,
-        operand_or_const_int(ctx, call, 1, 1_024),
+        operand_or_const_int(ctx, call, 1, default_level),
         file.value,
         line.value,
     ])

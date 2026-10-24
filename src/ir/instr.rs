@@ -670,6 +670,8 @@ pub enum CoreBuiltinOp {
     GetExceptionHandler = 16,
     /// An internal prelude warning at PHP E_WARNING severity.
     BuiltinWarning = 17,
+    /// An internal version-gated PHP E_DEPRECATED diagnostic.
+    BuiltinDeprecated = 18,
 }
 
 impl CoreBuiltinOp {
@@ -693,7 +695,7 @@ impl CoreBuiltinOp {
             | Self::ErrorReporting
             | Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
-            | Self::TriggerError | Self::BuiltinWarning => BuiltinResultOwnership::NonHeap,
+            | Self::TriggerError | Self::BuiltinWarning | Self::BuiltinDeprecated => BuiltinResultOwnership::NonHeap,
         }
     }
 
@@ -723,6 +725,7 @@ impl CoreBuiltinOp {
             15 => Some(Self::GetErrorHandler),
             16 => Some(Self::GetExceptionHandler),
             17 => Some(Self::BuiltinWarning),
+            18 => Some(Self::BuiltinDeprecated),
             _ => None,
         }
     }
@@ -738,7 +741,7 @@ impl CoreBuiltinOp {
             | Self::GetResources => 1,
             Self::SetErrorHandler => 3,
             Self::SetExceptionHandler => 2,
-            Self::TriggerError | Self::BuiltinWarning => 4,
+            Self::TriggerError | Self::BuiltinWarning | Self::BuiltinDeprecated => 4,
             Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
             | Self::GetDefinedVars
@@ -769,7 +772,7 @@ impl CoreBuiltinOp {
                     | E::REFCOUNT_OP.bits()
                     | E::MAY_THROW.bits(),
             ),
-            Self::DebugPrintBacktrace | Self::TriggerError | Self::BuiltinWarning => E::all(),
+            Self::DebugPrintBacktrace | Self::TriggerError | Self::BuiltinWarning | Self::BuiltinDeprecated => E::all(),
             Self::ErrorReporting => {
                 Effects::from_bits_retain(E::READS_GLOBAL.bits() | E::WRITES_GLOBAL.bits())
             }

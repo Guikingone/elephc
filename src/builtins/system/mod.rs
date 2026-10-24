@@ -51,6 +51,7 @@ pub mod class_attribute_args;
 pub mod class_attribute_names;
 pub mod class_get_attributes;
 pub mod constant;
+pub mod __elephc_builtin_deprecated;
 pub mod __elephc_builtin_warning;
 pub mod core_support;
 pub mod date;

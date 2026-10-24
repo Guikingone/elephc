@@ -35,6 +35,15 @@ fn context_check() -> Stmt {
         e_not(e_call("is_resource", vec![e_var("context")]))), "TypeError", "Fileinfo context must be of type resource or null")
 }
 
+/// Emits PHP 8.5 deprecations while leaving older selected profiles unchanged.
+fn deprecated(message: &str, supplied_context: Option<i64>) -> Stmt {
+    let mut condition = e_binop(e_const("PHP_VERSION_ID"), BinOp::GtEq, e_int(80500));
+    if let Some(count) = supplied_context {
+        condition = e_binop(condition, BinOp::And, e_binop(e_call("func_num_args", vec![]), BinOp::Gt, e_int(count)));
+    }
+    s_if(condition, vec![s_expr(e_call("__elephc_builtin_deprecated", vec![e_str(message)]))], vec![], None)
+}
+
 /// Builds one query method, preserving bytes and PHP stream-context behavior.
 fn query_engine(file: bool) -> crate::synthetic_class::MethodBuilder {
     let (name, parameter) = if file { ("file", "filename") } else { ("buffer", "string") };
@@ -70,12 +79,17 @@ fn query_engine(file: bool) -> crate::synthetic_class::MethodBuilder {
 /// Public method dispatch remains overridable; procedural calls use the final engine helper.
 fn query_method(file: bool) -> crate::synthetic_class::MethodBuilder {
     let (name, parameter) = if file { ("file", "filename") } else { ("buffer", "string") };
+    let mut body = Vec::new();
+    if !file {
+        body.push(deprecated("finfo::buffer(): The $context parameter has no effect for finfo_buffer()", Some(2)));
+    }
+    body.push(s_return(e_method_call(e_this(), &format!("__elephc_{name}"), vec![
+        e_str(&format!("finfo::{name}")), e_var(parameter), e_var("flags"), e_var("context"),
+    ])));
     method(name).param(parameter, TypeExpr::Str)
         .param_default("flags", TypeExpr::Int, e_int(0))
         .param_default("context", t_mixed(), e_null()).returns(result_type())
-        .returning(e_method_call(e_this(), &format!("__elephc_{name}"), vec![
-            e_str(&format!("finfo::{name}")), e_var(parameter), e_var("flags"), e_var("context"),
-        ]))
+.body(body)
 }
 
 /// Builds the owning class, including PHP's clone and serialization restrictions.
@@ -136,13 +150,19 @@ fn functions() -> Program {
                     s_expr(e_call("__elephc_builtin_warning", vec![e_method_call(e_var("_error"), "getMessage", vec![])])),
                     s_return(e_bool(false)),
                 ])], None)]).build(),
-        function("finfo_close").param("finfo", t_class("finfo")).returns(TypeExpr::Bool).returning(e_bool(true)).build(),
+        function("finfo_close").param("finfo", t_class("finfo")).returns(TypeExpr::Bool).body(vec![
+            deprecated("Function finfo_close() is deprecated since 8.5, as finfo objects are freed automatically", None),
+            s_return(e_bool(true)),
+        ]).build(),
         function("finfo_set_flags").param("finfo", t_class("finfo")).param("flags", TypeExpr::Int)
             .returns(TypeExpr::Bool).returning(e_method_call(e_var("finfo"), "__elephc_set_flags", vec![e_var("flags")])).build(),
     ];
     out.push(function("finfo_buffer").param("finfo", t_class("finfo")).param("string", TypeExpr::Str)
         .param_default("flags", TypeExpr::Int, e_int(0)).param_default("context", t_mixed(), e_null())
-        .returns(result_type()).returning(e_method_call(e_var("finfo"), "__elephc_buffer", vec![e_str("finfo_buffer"), e_var("string"), e_var("flags"), e_var("context")])).build());
+        .returns(result_type()).body(vec![
+            deprecated("finfo_buffer(): The $context parameter has no effect for finfo_buffer()", Some(3)),
+            s_return(e_method_call(e_var("finfo"), "__elephc_buffer", vec![e_str("finfo_buffer"), e_var("string"), e_var("flags"), e_var("context")])),
+        ]).build());
     out.push(function("finfo_file").param("finfo", t_class("finfo")).param("filename", TypeExpr::Str)
         .param_default("flags", TypeExpr::Int, e_int(0)).param_default("context", t_mixed(), e_null())
         .returns(result_type()).returning(e_method_call(e_var("finfo"), "__elephc_file", vec![e_str("finfo_file"), e_var("filename"), e_var("flags"), e_var("context")])).build());

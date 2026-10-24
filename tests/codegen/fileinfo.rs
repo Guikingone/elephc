@@ -228,3 +228,26 @@ echo finfo_file($f, "data://text/plain,hello"), "\n";
 "#);
     assert_eq!(out, "override\ntext/plain\nus-ascii\nus-ascii\n");
 }
+
+/// PHP 8.5 deprecates finfo_close and explicitly supplied buffer contexts only.
+#[test]
+fn test_fileinfo_php_profile_deprecations() {
+    if fileinfo_native::skip("test_fileinfo_php_profile_deprecations") { return; }
+    let source = r#"<?php
+$f = new finfo(FILEINFO_MIME_TYPE);
+set_error_handler(function(int $errno, string $_message, string $_file, int $_line): bool {
+    echo $errno, "|";
+    return true;
+});
+echo $f->buffer("hello"), "|";
+echo finfo_buffer($f, "hello"), "|";
+echo $f->buffer("hello", 0, null), "|";
+echo finfo_buffer($f, "hello", 0, null), "|";
+echo finfo_close($f) ? "closed" : "bad";
+restore_error_handler();
+"#;
+    assert_eq!(compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php85),
+        "text/plain|text/plain|8192|text/plain|8192|text/plain|8192|closed");
+    assert_eq!(compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php84),
+        "text/plain|text/plain|text/plain|text/plain|closed");
+}
