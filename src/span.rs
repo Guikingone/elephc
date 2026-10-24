@@ -14,6 +14,9 @@
 //!   preserving the AST and parser-frame size while distinguishing equal source coordinates.
 //!   A pair too wide for those bits (a column past 65535, or a very late source identity) is
 //!   interned in a process-wide table instead, so no source is ever too wide to compile.
+//! - Every physical file a compile loads besides the entry (each include execution, each
+//!   autoloaded class file) gets its own identity from one counter that only the ROOT include
+//!   resolution rewinds.
 
 /// The first line number handed out to synthetically built nodes.
 ///
@@ -90,12 +93,12 @@ std::thread_local! {
     static NEXT_SOURCE_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
     /// Source identities for synthetic parses (literal `eval` fragments).
     ///
-    /// A SEPARATE counter from [`NEXT_SOURCE_ID`], which [`Span::reset_source_ids`] rewinds per
-    /// include-resolution unit: sharing it let a fragment parsed after a reset alias an included
-    /// file's identity in span-keyed maps such as `builtin_call_types` (issue #1291). Starting
-    /// above [`SOURCE_ID_MASK`] keeps every synthetic id clear of the include range for any
-    /// realistic include count (an include id only reaches that range after 16_383 includes in
-    /// one resolution unit, which is pathological).
+    /// A SEPARATE counter from [`NEXT_SOURCE_ID`], which [`Span::reset_source_ids`] rewinds at
+    /// the start of every compile: sharing it let a fragment parsed after a reset alias an
+    /// included file's identity in span-keyed maps such as `builtin_call_types` (issue #1291).
+    /// Starting above [`SOURCE_ID_MASK`] keeps every synthetic id clear of the include range for
+    /// any realistic file count (an include or autoload id only reaches that range after 16_383
+    /// file parses in one compile, which is pathological).
     static NEXT_SYNTHETIC_SOURCE_ID: std::cell::Cell<u32> =
         const { std::cell::Cell::new(SOURCE_ID_MASK + 1) };
 }
@@ -157,7 +160,11 @@ impl Span {
         }
     }
 
-    /// Returns a fresh source identity for a separately parsed included file.
+    /// Returns a fresh source identity for a separately parsed included or autoloaded file.
+    ///
+    /// Unique within one compile: only the root include resolution rewinds the counter
+    /// ([`Span::reset_source_ids`]), so an autoloaded class file and the includes it pulls in
+    /// never reuse the identity of a file the entry's resolution already handed out.
     pub fn fresh_source_id() -> u32 {
         NEXT_SOURCE_ID.with(|next| {
             let id = next.get();
@@ -168,7 +175,12 @@ impl Span {
         })
     }
 
-    /// Resets source identities at the beginning of a new include-resolution unit.
+    /// Resets source identities at the beginning of a compile's root include resolution.
+    ///
+    /// Called once per compile, before the entry file's includes are parsed. Autoloaded files are
+    /// loaded later in the same compile and must NOT reset again: a reset there handed their
+    /// includes the identities of the entry's includes, so span-keyed checker results (a readonly
+    /// write guard, a builtin call type, a binding decision) leaked between files (issue #1445).
     pub fn reset_source_ids() {
         NEXT_SOURCE_ID.with(|next| next.set(1));
     }
@@ -177,8 +189,8 @@ impl Span {
     /// rewind.
     ///
     /// Used for literal `eval` fragments: an included file's identity is only unique WITHIN one
-    /// include-resolution unit, so a fragment sharing that counter could alias an already-stored
-    /// include id in span-keyed maps such as `builtin_call_types` (issue #1291).
+    /// compile, so a fragment sharing that counter could alias an already-stored include id in
+    /// span-keyed maps such as `builtin_call_types` (issue #1291).
     pub fn fresh_synthetic_source_id() -> u32 {
         NEXT_SYNTHETIC_SOURCE_ID.with(|next| {
             let id = next.get();
