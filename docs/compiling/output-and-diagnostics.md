@@ -124,9 +124,11 @@ warning[src/Helpers.php:14:9]: Unreachable code
 
 The file is the entry file as given on the command line, or the included or
 autoloaded file that holds the statement, so a diagnostic in a large autoloaded
-tree points at the right file. A position whose source file is not known (a
-compiler-synthesized node) prints `kind[line:col]`, and a diagnostic with no
-source position at all (some whole-program checks) prints `kind: message`.
+tree points at the right file. The entry path is registered before frontend and
+autoload processing, so early autoload warnings name it too. A position whose
+source file is not known (a compiler-synthesized node) prints `kind[line:col]`,
+and a diagnostic with no source position at all (some whole-program checks)
+prints `kind: message`.
 Profile `note[…]` lines keep their `note[line:col]` form.
 
 ### `--quiet` / `-q`

@@ -187,6 +187,10 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     }
     let mut timings = CompileTimings::new(emit_timings);
 
+    // The entry file uses source ID 0. Register it before any frontend or autoload diagnostic,
+    // including warnings from rejected autoload closures. The resolver only resets IDs from 1
+    // upwards and leaves the path registry intact.
+    Span::register_source_path(0, filename.to_string());
     let parsed = frontend::read_and_parse(
         filename, source_mode, &defines, &mut timings,
         entry.generated_source(),
@@ -226,11 +230,6 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
 
     crate::progress::phase("resolve");
     let phase_started = Instant::now();
-    // The entry file lexes with the default source identity 0, which the resolver never hands
-    // out again (it rewinds the include counter to 1, and that does not touch the path registry).
-    // Registered before the resolver so an include error in the entry file names it too
-    // (`error[main.php:2:1]: Required file not found`).
-    Span::register_source_path(0, filename.to_string());
     // `resolve_collecting_includes` also hands back the canonical path of every file the
     // resolver statically inlined — group 2 of the OPcache script manifest.
     let (ast, opcache_included_files) =

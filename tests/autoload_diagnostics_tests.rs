@@ -68,6 +68,24 @@ fn check(dir: &Path) -> Output {
 
 const COMPOSER: &str = r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#;
 
+/// Autoload registration warnings are emitted before include resolution and still name the entry.
+#[test]
+fn early_autoload_warning_names_the_entry_file() {
+    let dir = project(
+        "elephc_early_autoload_warning",
+        &[("main.php", "<?php\n$base = __DIR__;\nspl_autoload_register(function ($name) use ($base) {});\necho 'ok';\n")],
+    );
+    let output = check(&dir);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let expected = format!(
+        "warning[{}:3:1]: spl_autoload_register: closure rejected", dir.join("main.php").display(),
+    );
+    fs::remove_dir_all(&dir).unwrap();
+    assert!(output.status.success(), "autoload warning must remain non-fatal:\n{stderr}");
+    assert!(stderr.contains(&expected),
+        "early warning should name the entry file ({expected}), got:\n{stderr}");
+}
+
 /// A checker error inside an autoloaded class file names that file, not just a line.
 #[test]
 fn checker_error_in_an_autoloaded_file_names_the_file() {
