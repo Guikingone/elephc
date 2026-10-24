@@ -235,7 +235,7 @@ fn test_buffer_element_incdec_allocations_stay_flat_without_ir_opt() {
     }
 }
 
-/// Buffer updates stage no boxed value in either IR mode, and the optimizer hoists their loops.
+/// Buffer updates stage no boxed value in either IR mode, and their loops can be hoisted.
 ///
 /// The tally keeps every counter in a buffer, so any boxed or checked `mixed` instruction in its
 /// functions would come from an element update. The grid's int loop counters are boxed without
@@ -268,10 +268,17 @@ fn test_buffer_element_incdec_eir_has_no_mixed_staging() {
             assert!(function_body(&grid, "histogram").contains("= ichecked_add_to_int "));
         }
     }
+    // The boxed staging allocated, which kept `buffer_access` from hoisting any handle of the
+    // loop. With a typed update the loop qualifies, so the parameter's handle is resolved once;
+    // `$counts` itself stays per-access because `address_escaping_slots` counts its later
+    // `buffer_free` call as an escaping use of the slot.
     let optimized = emit_ir(GRID, true);
     let histogram = function_body(&optimized, "histogram");
-    assert!(histogram.contains("buffer_set_resolved") && !histogram.contains("= str_inc_dec "),
-        "a typed update no longer keeps the loop's buffer handle from being hoisted\n{histogram}");
+    for staged in ["= str_inc_dec ", "= mixed_clone ", "= mixed_box "] {
+        assert!(!histogram.contains(staged), "optimized histogram: {staged}\n{histogram}");
+    }
+    assert!(histogram.contains("= buffer_resolve ") && histogram.contains("= buffer_get_resolved "),
+        "a typed update leaves the counting loop eligible for handle hoisting\n{histogram}");
 }
 
 /// Statement and expression updates of local and property buffers match the same PHP array code.
