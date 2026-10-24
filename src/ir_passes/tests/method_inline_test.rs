@@ -294,3 +294,6 @@ echo use_probe(new Probe()), "\n";
         );
     }
 }
+
+#[path = "method_inline_effects_test.rs"]
+mod effects;

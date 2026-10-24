@@ -12,9 +12,10 @@
 //!   `method_resolution::resolve_method_call_target` would call directly.
 //! - A spliced body loses its own frame, so only bodies whose lowering cannot observe that are
 //!   admitted: every instruction is in `op_is_frame_independent`, whose codegen never reads the
-//!   enclosing function's name, flags or signature. The one scope-sensitive op admitted, a
-//!   property read, keeps running in the method's class through `Function::inlined_scopes`.
-//! - Property reads are limited to `$this` and packed records: neither receiver can be null, so
+//!   enclosing function's name, flags or signature. Scope-sensitive property and call operations
+//!   keep running in the method's class through `Function::inlined_scopes`.
+//! - Property accesses and nested method calls are limited to `$this` and packed records:
+//!   neither receiver can be null, so
 //!   the read can never reach the null-receiver warning, which would otherwise report the line
 //!   of whatever call the host published last instead of the method call's.
 //! - Modules that can request a backtrace directly or through the eval bridge
@@ -61,7 +62,7 @@ impl MethodTargets {
         }
         let mut body_by_implementation: HashMap<(String, String), usize> = HashMap::new();
         for (index, function) in module.class_methods.iter().enumerate() {
-            if !body_is_candidate(function) {
+            if !body_is_candidate(module, function) {
                 continue;
             }
             let Some((class, method)) = function.name.rsplit_once("::") else {
@@ -147,12 +148,19 @@ impl MethodTargets {
         if class_name.is_empty() || receiver.ir_type != IrType::Heap(IrHeapKind::Object) {
             return None;
         }
-        self.targets
-            .get(&(
-                class_name.trim_start_matches('\\').to_string(),
-                php_symbol_key(method),
-            ))
-            .copied()
+        let body = self.targets.get(&(
+            class_name.trim_start_matches('\\').to_string(),
+            php_symbol_key(method),
+        )).copied()?;
+        // Initializer-only property-store compatibility must never apply to a spliced setter.
+        // Same-class splices intentionally have no scope-map entry to distinguish their origin.
+        if host.name.starts_with("_class_propinit_")
+            && self.bodies[body].instructions.iter()
+                .any(|inst| matches!(inst.op, Op::PropSet | Op::PropGetForWrite))
+        {
+            return None;
+        }
+        Some(body)
     }
 }
 
@@ -202,7 +210,7 @@ fn signature_is_candidate(method_key: &str, signature: &FunctionSig) -> bool {
 ///
 /// The body-independent rules (size, recursion, ownership, loops, return shape) are the
 /// ordinary inliner rules applied per site; this adds what only a method needs.
-fn body_is_candidate(function: &Function) -> bool {
+fn body_is_candidate(module: &Module, function: &Function) -> bool {
     let flags = &function.flags;
     if !flags.is_method
         || flags.is_static
@@ -249,34 +257,65 @@ fn body_is_candidate(function: &Function) -> bool {
         .iter()
         .flat_map(|block| block.instructions.iter())
         .filter_map(|&inst| function.instruction(inst))
-        .all(|inst| instruction_is_frame_independent(function, inst))
+        .all(|inst| instruction_is_frame_independent(module, function, inst))
+}
+
+/// Resolves a user static method with an explicit class, excluding lexical and runtime intrinsics.
+pub(super) fn explicit_static_method_name(module: &Module, inst: &Instruction) -> Option<String> {
+    if inst.op != Op::StaticMethodCall { return None; }
+    let Some(Immediate::Data(id)) = inst.immediate else { return None; };
+    let (class, method) = module.data.strings.get(id.as_raw() as usize)?.rsplit_once("::")?;
+    let class = class.trim_start_matches('\\');
+    if matches!(class, "self" | "parent" | "static") { return None; }
+    let info = module.class_infos.get(class)?;
+    if info.is_internal { return None; }
+    let key = php_symbol_key(method);
+    info.static_methods.get(&key)?;
+    let implementation = info.static_method_impl_classes.get(&key).map(String::as_str).unwrap_or(class);
+    if module.class_infos.get(implementation)?.is_internal { return None; }
+    Some(format!("{implementation}::{key}"))
+}
+
+/// Resolves statically bound instance bodies for cycle detection even when they cannot be inlined.
+pub(super) fn bound_method_name(module: &Module, function: &Function, inst: &Instruction) -> Option<String> {
+    if inst.op != Op::MethodCall { return None; }
+    let Some(Immediate::Data(id)) = inst.immediate else { return None; };
+    let method = module.data.strings.get(id.as_raw() as usize)?;
+    let PhpType::Object(class) = &function.value(*inst.operands.first()?)?.php_type else { return None; };
+    let class = class.trim_start_matches('\\');
+    let info = module.class_infos.get(class)?;
+    if info.is_internal || module.interface_infos.contains_key(class) { return None; }
+    let key = php_symbol_key(method);
+    if info.vtable_slots.contains_key(&key) && !info.is_final && !info.final_methods.contains(&key) {
+        return None;
+    }
+    info.methods.get(&key)?;
+    let implementation = info.method_impl_classes.get(&key).map(String::as_str).unwrap_or(class);
+    Some(format!("{implementation}::{key}"))
 }
 
 /// Returns whether a method-body instruction lowers the same in any enclosing function.
-fn instruction_is_frame_independent(function: &Function, inst: &Instruction) -> bool {
-    if !op_is_frame_independent(inst.op) {
-        return false;
+fn instruction_is_frame_independent(module: &Module, function: &Function, inst: &Instruction) -> bool {
+    if !op_is_frame_independent(inst.op) { return false; }
+    if inst.op == Op::StaticMethodCall {
+        return explicit_static_method_name(module, inst).is_some();
     }
-    if inst.op != Op::PropGet {
+    if !matches!(inst.op, Op::PropGet | Op::PropSet | Op::PropGetForWrite | Op::MethodCall) {
         return true;
     }
-    if !matches!(inst.immediate, Some(Immediate::Data(_))) {
-        return false;
-    }
+    if !matches!(inst.immediate, Some(Immediate::Data(_))) { return false; }
     function.is_packed_field_access(inst)
-        || inst
-            .operands
-            .first()
-            .is_some_and(|&receiver| value_loads_slot(function, receiver, receiver_slot()))
+        || inst.operands.first().is_some_and(|&receiver| {
+            value_loads_slot(function, receiver, receiver_slot())
+        })
 }
 
 /// Returns whether an opcode's codegen never consults the enclosing function's identity.
 ///
-/// Every op here lowers from its operands, immediate and the module tables alone. The single
-/// scope-sensitive member, `PropGet`, resolves through `FunctionContext::lexical_class`, which
-/// honors the scope the inliner records. Anything that reads the function's name, flags or
-/// signature (`static::`, `self::` callables, static locals, `func_get_args()`, backtraces,
-/// eval scopes) or that enters another PHP frame is deliberately absent.
+/// These ops lower from operands, immediates, module metadata and the recorded lexical class.
+/// Explicit static calls are checked separately; lexical `self`/`parent`/`static` calls, static
+/// locals, `func_get_args()`, backtraces and eval scopes remain excluded. Nested calls retain
+/// their instruction spans, so each call still publishes its own source line before execution.
 fn op_is_frame_independent(op: Op) -> bool {
     matches!(
         op,
@@ -324,6 +363,15 @@ fn op_is_frame_independent(op: Op) -> bool {
             | Op::BufferGet
             | Op::BufferLen
             | Op::PropGet
+            | Op::PropGetForWrite
+            | Op::PropSet
+            | Op::Call
+            | Op::FunctionVariantCall
+            | Op::MethodCall
+            | Op::StaticMethodCall
+            | Op::StrConcat
+            | Op::StrAppend
+            | Op::StrLen
             // A message fixed at lowering, such as a receiver null check an earlier round
             // spliced into this body: `emit_error` reads nothing from the frame.
             | Op::ThrowError

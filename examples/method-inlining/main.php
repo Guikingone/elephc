@@ -1,5 +1,5 @@
 <?php
-// Small accessor and predicate methods on a final class, called in a hot loop.
+// Small accessors, nested static calls and string-building methods on a final class.
 //
 // The optimizer splices a direct call to a small method it can bind statically
 // (final class, final method, or a method nothing can override) into the caller,
@@ -13,6 +13,14 @@ packed class Slot
 {
     public bool $alive;
     public int $mask;
+}
+
+final class Component
+{
+    public static function contains(int $mask, int $required): bool
+    {
+        return ($mask & $required) === $required;
+    }
 }
 
 final class Table
@@ -40,6 +48,11 @@ final class Table
         buffer_free($slots);
     }
 
+    public function heading(string $name): string
+    {
+        return $name . ": ";
+    }
+
     public function highWater(): int
     {
         return $this->highWater;
@@ -48,7 +61,7 @@ final class Table
     public function matches(int $index, int $components): bool
     {
         return $this->slots[$index]->alive
-            && ($this->slots[$index]->mask & $components) === $components;
+            && Component::contains($this->slots[$index]->mask, $components);
     }
 }
 
@@ -75,6 +88,6 @@ for ($i = 0; $i < $count; $i++) {
     $table->add($i % 4 === 3 ? POSITION : POSITION | VELOCITY);
 }
 
-echo "entities: ", $table->highWater(), "\n";
-echo "moving: ", countMoving($table), "\n";
+echo $table->heading("entities"), $table->highWater(), "\n";
+echo $table->heading("moving"), countMoving($table), "\n";
 $table->release();
