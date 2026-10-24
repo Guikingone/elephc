@@ -105,19 +105,20 @@ pub(super) fn resolve_method_call_target(
     })
 }
 
-/// Reports whether an override can change a call's literal parameter declarations.
+/// Reports whether literal guards need a runtime signature or declaring-class diagnostic.
 ///
-/// Object-only generic variance can select another body, but it cannot change a final
-/// class's or final method's `false`/`null` parameters. Their guards remain static.
+/// Object-only variance preserves final literal parameters, but the actual generic
+/// instantiation still supplies the class name in an argument TypeError.
 pub(super) fn method_requires_runtime_literal_guards(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     target: &MethodCallTarget,
 ) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
     target.dynamic_slot.is_some()
-        && ctx.module.class_infos.get(class_name.trim_start_matches('\\')).is_none_or(|class| {
+        && (normalized.contains('<') || ctx.module.class_infos.get(normalized).is_none_or(|class| {
             !class.is_final && !class.final_methods.contains(&target.method_key)
-        })
+        }))
 }
 
 /// Emits an indirect instance call through either the physical or source-ABI vtable.

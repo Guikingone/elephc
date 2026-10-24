@@ -79,8 +79,8 @@ echo read_variant($variant, false), read_variant_final($variant, null);
             assert!(body.contains("_class_source_vtable_ptrs") || body.contains("_class_vtable_ptrs"),
                 "{target}: runtime-selected {function} dispatch became direct: {body}");
             if function != "read_base" {
-                assert!(body.contains("literal_param_ok"), "{target}: missing fixed literal guard: {body}");
-                assert!(!body.contains("interface_literal_class"), "{target}: literal guard depends on sibling class id: {body}");
+                assert!(body.contains("literal_param_ok"), "{target}: missing literal guard: {body}");
+                assert!(body.contains("interface_literal_class"), "{target}: guard lost runtime declaring-class diagnostics: {body}");
             }
         }
     }
@@ -169,12 +169,12 @@ function inspect_contravariant(ContravariantDispatch<DispatchDog> $object, Dispa
     return $object->consume($dog) . '|' . $object->finalConsume($dog);
 }
 function inspect_covariant_literals(?CovariantDispatch<DispatchAnimal> $object, mixed $value): void {
-    try { echo $object->onlyFalse($value); } catch (TypeError $error) { echo 'false-error'; }
+    try { echo $object->onlyFalse($value); } catch (TypeError $error) { echo $error->getMessage(); }
     echo ':';
-    try { echo $object->onlyNull($value); } catch (TypeError $error) { echo 'null-error'; }
+    try { echo $object->onlyNull($value); } catch (TypeError $error) { echo $error->getMessage(); }
 }
 function inspect_contravariant_literal(ContravariantDispatch<DispatchDog> $object, mixed $value): void {
-    try { echo $object->onlyFalse($value); } catch (TypeError $error) { echo 'final-error'; }
+    try { echo $object->onlyFalse($value); } catch (TypeError $error) { echo $error->getMessage(); }
 }
 $dog = new DispatchDog();
 $covariant = new CovariantDispatch<DispatchDog>($dog);
@@ -184,7 +184,13 @@ inspect_covariant_literals($covariant, $argc > 0);
 echo '|';
 inspect_contravariant_literal($contravariant, $argc > 0);
 "#;
-    let expected = "CovariantDispatch<DispatchDog>:1|CovariantDispatch<DispatchDog>:1|ContravariantDispatch<DispatchAnimal>:1|ContravariantDispatch<DispatchAnimal>:1|false-error:null-error|final-error";
+    let expected = concat!(
+        "CovariantDispatch<DispatchDog>:1|CovariantDispatch<DispatchDog>:1|",
+        "ContravariantDispatch<DispatchAnimal>:1|ContravariantDispatch<DispatchAnimal>:1|",
+        "CovariantDispatch<DispatchDog>::onlyfalse(): Argument #1 ($value) must be of type false, true given:",
+        "CovariantDispatch<DispatchDog>::onlynull(): Argument #1 ($value) must be of type null, true given|",
+        "ContravariantDispatch<DispatchAnimal>::onlyfalse(): Argument #1 ($value) must be of type false, true given",
+    );
     assert_eq!(compile_and_run(source), expected);
     without_ir_opt(|| assert_eq!(compile_and_run(source), expected));
 }
