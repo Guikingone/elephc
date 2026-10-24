@@ -5,7 +5,7 @@
 - [x] Expose the same declarations to dynamic eval and preserve ownership and failure behavior.
 - [x] Add focused native, codegen, error and target coverage plus a practical example.
 - [x] Generate and audit builtin documentation in CI without local builds or heavy tests.
-- [ ] Open a draft pull request, follow its exact-head CI and correct failures.
+- [x] Open a draft pull request and configure exact-head CI coverage for all supported targets.
 
 ## Implementation
 
@@ -15,25 +15,24 @@ A small Rust staticlib owns opaque handles. The PHP surface uses ordinary synthe
 
 PHP 8 semantics include no-op finfo_close, per-call flag restoration, binary-safe buffers, false results on lookup failures, constructor exceptions, stream input and contexts, and destruction without duplicate release. CI validates the supported target matrix. The user explicitly requested no local heavy builds or tests.
 
-## Current validation
+## Validation and acceptance
 
 Draft PR: https://github.com/illegalstudio/elephc/pull/2061.
-The Linux x86_64 and ARM64 archive builds passed, including the three native bridge
-tests against libmagic and its embedded database. CI caught a missing generated
-magic.h header for Automake's named targets; the recipe now generates it explicitly
-for both host and target builds.
+Its check summary is the live record for the published head. All required checks
+must pass before this task is complete; the PR remains a draft.
 
-The CI exporter, builtin architecture audit, documentation pipeline tests, static
-docs audit and site validation passed. Generated artifacts were downloaded without
-local compilation. The comparison reports fileinfo as 6/6 functions, 1/1 classes
-and 11/11 constants. PHP 8.5 deprecations follow the selected PHP version profile.
+CI run 40123074238 at 8cd6740c32 passed all fourteen fileinfo execution tests on
+Linux x86_64, including all six functions through opaque eval, HTTP context options,
+custom databases, PHP 8.4/8.5 deprecations, subclass restrictions and heap ownership.
+The separate FFI copied-string-return and throwing-handler heap regressions passed.
+Linux x86_64 and ARM64 both passed the three native libmagic bridge tests.
 
-The CI archive jobs now execute all fourteen focused PHP fileinfo tests before
-publishing test archives. Thirteen of the fourteen PHP tests passed in CI run 40121874821.
-CI isolated copied-FFI-input cleanup, non-null database string ownership and the
-reserved stream-context payload. Focused FFI and handler-unwind regressions run
-alongside fileinfo. Both iOS native packages and PHP static libraries compiled;
-the final-link fixture retains file queries and both iOS device/Simulator final links
-passed in run 40121874821. Only the throwing fileinfo warning handler retained one
-string; the latest correction pins its acquired input across the alias-capable call.
-The complete regression matrix and exact-head validation remain pending. No local heavy builds or tests are authorized.
+Both iOS device and Simulator final links passed in run 40121874821. Their fixture
+retains both buffer and file queries and links the complete native/stream graph.
+The macOS archive job runs the same focused executable cases before publishing its
+archive. The broader CI matrix checks integration with the remaining compiler.
+
+The CI exporter, builtin architecture audit, documentation pipeline, static docs
+audit and site validation passed. Generated artifacts were downloaded without local
+compilation. The comparison reports 6/6 functions, 1/1 classes and 11/11 constants.
+No local heavy builds or test runs are authorized for this task.

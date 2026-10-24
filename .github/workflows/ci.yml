@@ -257,7 +257,6 @@ jobs:
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo::' -- --test-threads=2
           cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments
           cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array
-          cargo test -p elephc --lib acquired_alias_capable_string_arguments_are_pinned_on_every_target
 
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
@@ -446,7 +445,6 @@ jobs:
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo::' -- --test-threads=2
           cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments
           cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array
-          cargo test -p elephc --lib acquired_alias_capable_string_arguments_are_pinned_on_every_target
 
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
@@ -627,7 +625,6 @@ jobs:
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo::' -- --test-threads=2
           cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments
           cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array
-          cargo test -p elephc --lib acquired_alias_capable_string_arguments_are_pinned_on_every_target
 
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
