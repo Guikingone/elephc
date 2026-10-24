@@ -23,15 +23,17 @@ pub fn inject_if_used(
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
-    let usage = crate::prelude_prune::usage::collect(&program);
-    let used = force || usage.introspects || usage.dynamic_function_call || usage.constructs_dynamic_class
-        || ["token_get_all", "token_name"].iter().any(|name| usage.references(name) || usage.literals.contains(*name))
-        || usage.classes.contains("phptoken") || usage.literals.contains("phptoken");
-    if !used { return program; }
-    let mut declarations = tokenizer_declarations();
-    inventory.record_program("tokenizer", &declarations);
-    declarations.extend(program);
-    declarations
+    crate::compiler_stack::with_compiler_stack(|| {
+        let usage = crate::prelude_prune::usage::collect(&program);
+        let used = force || usage.introspects || usage.dynamic_function_call || usage.constructs_dynamic_class
+            || ["token_get_all", "token_name"].iter().any(|name| usage.references(name) || usage.literals.contains(*name))
+            || usage.classes.contains("phptoken") || usage.literals.contains("phptoken");
+        if !used { return program; }
+        let mut declarations = tokenizer_declarations();
+        inventory.record_program("tokenizer", &declarations);
+        declarations.extend(program);
+        declarations
+    })
 }
 
 /// PHP surface shared by every target, compiled through AST, EIR and target-aware extern ABI.

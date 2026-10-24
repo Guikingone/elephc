@@ -137560,7 +137560,7 @@
       "checker_line": null,
       "codegen_file": "src/tokenizer_prelude.rs",
       "codegen_function": "token_get_all",
-      "codegen_line": 48,
+      "codegen_line": 50,
       "notes": [
         "Implemented by the compiler-injected tokenizer prelude."
       ],
@@ -137651,7 +137651,7 @@
       "checker_line": null,
       "codegen_file": "src/tokenizer_prelude.rs",
       "codegen_function": "token_name",
-      "codegen_line": 75,
+      "codegen_line": 77,
       "notes": [
         "Implemented by the compiler-injected tokenizer prelude."
       ],
