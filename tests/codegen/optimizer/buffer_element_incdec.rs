@@ -469,3 +469,82 @@ fn test_buffer_counting_sort_example_runs_in_both_ir_modes() {
         assert_eq!(run_clean(source, optimized), expected, "ir-opt={optimized}");
     }
 }
+
+/// A get hook that rebinds the receiver during the element read, and a nullable receiver.
+///
+/// An expression reads the element where the parser's prelude reads it, before the write loads
+/// its receiver, so the write lands on the receiver the hook bound; a statement loads its write
+/// receiver before the value, so it keeps the original one. Both orders are the generic paths'.
+/// A nullable receiver takes the typed statement path behind the write guard and the generic
+/// expression path, and both leave the values a PHP array update would.
+#[test]
+fn test_buffer_element_incdec_receiver_replacement_and_nullable_receivers() {
+    let source = r#"<?php
+class HookedCells {
+    public static $onRead = null;
+    public buffer<int> $cells {
+        get {
+            $swap = self::$onRead;
+            self::$onRead = null;
+            if ($swap !== null) {
+                $swap();
+            }
+            return $this->cells;
+        }
+        set {
+            $this->cells = $value;
+        }
+    }
+    public function __construct(int $seed) {
+        $this->cells = buffer_new<int>(1);
+        $this->cells[0] = $seed;
+    }
+    public function release(): void {
+        $cells = $this->cells;
+        buffer_free($cells);
+    }
+}
+class PlainCells {
+    public buffer<int> $cells;
+    public function __construct() { $this->cells = buffer_new<int>(1); }
+    public function release(): void {
+        $cells = $this->cells;
+        buffer_free($cells);
+    }
+}
+function expressionAfterRebind(HookedCells $first, HookedCells $spare): string {
+    $owner = $first;
+    HookedCells::$onRead = function () use (&$owner, $spare) { $owner = $spare; };
+    $old = $owner->cells[0]++;
+    return $old . ' ' . $first->cells[0] . ' ' . $spare->cells[0];
+}
+function statementAfterRebind(HookedCells $first, HookedCells $spare): string {
+    $owner = $first;
+    HookedCells::$onRead = function () use (&$owner, $spare) { $owner = $spare; };
+    $owner->cells[0]++;
+    return $first->cells[0] . ' ' . $spare->cells[0];
+}
+function nullableReceiver(?PlainCells $owner): string {
+    $owner->cells[0]++;
+    $old = $owner->cells[0]--;
+    $new = ++$owner->cells[0];
+    return $old . ' ' . $new . ' ' . $owner->cells[0];
+}
+$first = new HookedCells(10);
+$spare = new HookedCells(100);
+echo expressionAfterRebind($first, $spare), "\n";
+$first->release();
+$spare->release();
+$first = new HookedCells(10);
+$spare = new HookedCells(100);
+echo statementAfterRebind($first, $spare), "\n";
+$first->release();
+$spare->release();
+$plain = new PlainCells();
+echo nullableReceiver($plain), "\n";
+$plain->release();
+"#;
+    for optimized in [false, true] {
+        assert_eq!(run_clean(source, optimized), "10 10 11\n11 100\n1 1 1\n", "ir-opt={optimized}");
+    }
+}
