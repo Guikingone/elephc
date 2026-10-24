@@ -33,6 +33,13 @@ final class Table
         $this->highWater = $index + 1;
     }
 
+    // Buffers have no automatic cleanup: the table releases its storage explicitly.
+    public function release(): void
+    {
+        $slots = $this->slots;
+        buffer_free($slots);
+    }
+
     public function highWater(): int
     {
         return $this->highWater;
@@ -70,3 +77,4 @@ for ($i = 0; $i < $count; $i++) {
 
 echo "entities: ", $table->highWater(), "\n";
 echo "moving: ", countMoving($table), "\n";
+$table->release();
