@@ -8,7 +8,7 @@
 //! - Objects exclusively own native handles; finfo_close is a PHP 8 no-op.
 //! - Query overrides are temporary. Streams use existing PHP stream wrappers.
 
-use crate::parser::ast::{BinOp, CType, Expr, Program, Stmt, TypeExpr};
+use crate::parser::ast::{BinOp, CastType, CType, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::*;
 
 /// Returns a comparison with strict identity semantics.
@@ -57,6 +57,7 @@ fn query_engine(file: bool) -> crate::synthetic_class::MethodBuilder {
             reject(e_binop(e_call("strpos", vec![e_var(parameter), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)), "ValueError", "finfo::file(): Argument #1 ($filename) must not contain any null bytes"),
             super::streams::data_uri(),
             super::streams::file_uri(),
+            super::streams::network_uri(),
             s_if(e_call("is_dir", vec![e_var(parameter)]), vec![s_return(e_str("directory"))], vec![], None),
             s_if(e_binop(e_call("strpos", vec![e_var(parameter), e_str("://")]), BinOp::StrictNotEq, e_bool(false)), vec![
                 s_assign("_stream", e_call("fopen", vec![e_var(parameter), e_str("rb"), e_bool(false), e_var("context")])),
@@ -97,7 +98,7 @@ fn query_method(file: bool) -> crate::synthetic_class::MethodBuilder {
 /// Builds the owning class, including PHP's clone and serialization restrictions.
 fn finfo_class() -> Stmt {
     let mut constructor = vec![
-        s_assign("_database", e_null_coalesce(e_var("magic_database"), e_str(""))),
+        s_assign("_database", e_cast(CastType::String, e_var("magic_database"))),
         reject(e_binop(e_call("strpos", vec![e_var("_database"), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)), "ValueError", "finfo::__construct(): Argument #2 ($magic_database) must not contain any null bytes"),
         s_prop_assign(e_this(), "__elephc_handle", e_int(0)),
         s_prop_assign(e_this(), "__elephc_owner", e_null()),

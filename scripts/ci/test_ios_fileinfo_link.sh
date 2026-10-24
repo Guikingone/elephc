@@ -54,12 +54,14 @@ echo "==> building compiler and materializing libmagic for $ELEPHC_TARGET"
   --target "$ELEPHC_TARGET" \
   --manifest-path "$PROJECT_DIR/examples/fileinfo/elephc.toml"
 
-echo "==> cross-building the Rust fileinfo and phar bridges for $RUST_TARGET"
-(cd "$PROJECT_DIR" && cargo build -p elephc-fileinfo -p elephc-phar --target "$RUST_TARGET")
+echo "==> cross-building the Rust fileinfo, phar and TLS bridges for $RUST_TARGET"
+(cd "$PROJECT_DIR" && cargo build -p elephc-fileinfo -p elephc-phar -p elephc-tls --target "$RUST_TARGET")
 BRIDGE_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_fileinfo.a"
 PHAR_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_phar.a"
+TLS_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_tls.a"
 test -s "$BRIDGE_ARCHIVE"
 test -s "$PHAR_ARCHIVE"
+test -s "$TLS_ARCHIVE"
 
 find_native_archive() {
   local package="$1"
@@ -110,6 +112,7 @@ xcrun --sdk "$APPLE_SDK" clang \
   "$WORK_DIR/libmain.a" \
   "$BRIDGE_ARCHIVE" \
   "$PHAR_ARCHIVE" \
+  "$TLS_ARCHIVE" \
   "$SHIM_ARCHIVE" \
   "$LIBMAGIC_ARCHIVE" \
   -lz \

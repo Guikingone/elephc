@@ -41,3 +41,18 @@ pub(super) fn file_uri() -> Stmt {
         s_if(e_not(e_call("str_starts_with", vec![e_var("filename"), e_str("/")])), invalid("Remote host file access is not supported"), vec![], None),
     ], vec![], None)
 }
+
+/// Uses the runtime network reader and the existing stream-context option store.
+pub(super) fn network_uri() -> Stmt {
+    let mut network = e_bool(false);
+    for scheme in ["http://", "https://", "ftp://", "ftps://"] {
+        network = e_binop(network, BinOp::Or, e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("filename")]), e_str(scheme)]));
+    }
+    s_if(network, vec![
+        // Context resources share the stream layer's option store. Passing literal null
+        // selects that store without hitting file_get_contents' dynamic-context ABI guard.
+        s_assign("_url_data", e_call("file_get_contents", vec![e_var("filename"), e_bool(false), e_null(), e_int(0), e_int(7340032)])),
+        s_if(e_binop(e_var("_url_data"), BinOp::StrictEq, e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
+        s_return(e_method_call(e_this(), "__elephc_buffer", vec![e_var("_function"), e_var("_url_data"), e_var("flags")])),
+    ], vec![], None)
+}

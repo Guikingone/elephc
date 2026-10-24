@@ -39,18 +39,50 @@ if ($f === false) { throw new RuntimeException("Could not open fileinfo"); }
 $p = tempnam(sys_get_temp_dir(), "finfo");
 file_put_contents($p, "hello\n");
 echo finfo_file($f, $p), "\n";
+echo $f->file("file://" . $p), "\n";
 echo mime_content_type($p), "\n";
 $s = fopen($p, "rb");
 fseek($s, 3);
 echo mime_content_type($s), ":", ftell($s), "\n";
 fclose($s);
 $context = stream_context_create();
+echo get_resource_type($context), "\n";
 echo $f->file("data://text/plain;base64,aGVsbG8=", 0, $context), "\n";
 echo $f->file(sys_get_temp_dir()), "\n";
 echo $f->file("/dev/null"), "\n";
 unlink($p);
 "#);
-    assert_eq!(out, "text/plain\ntext/plain\ntext/plain:3\ntext/plain\ndirectory\napplication/x-empty\n");
+    assert_eq!(out, "text/plain\ntext/plain\ntext/plain\ntext/plain:3\nstream-context\ntext/plain\ndirectory\napplication/x-empty\n");
+}
+
+/// Network inputs inspect response bytes and use the stream layer's HTTP context options.
+#[test]
+fn test_fileinfo_network_stream_context() {
+    use std::io::{Read, Write};
+    if fileinfo_native::skip("test_fileinfo_network_stream_context") { return; }
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0u8; 1];
+        while stream.read(&mut byte).unwrap_or(0) == 1 {
+            request.push(byte[0]);
+            if request.ends_with(b"\r\n\r\n") { break; }
+        }
+        stream.write_all(b"HTTP/1.0 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: 5\r\n\r\nhello").unwrap();
+        String::from_utf8(request).unwrap()
+    });
+    let out = compile_and_run(&format!(r#"<?php
+$context = stream_context_create(["http" => ["method" => "POST", "header" => "X-Fileinfo: yes\r\n"]]);
+$f = new finfo(FILEINFO_MIME_TYPE);
+echo $f->file("http://127.0.0.1:{port}/payload", 0, $context);
+"#));
+    assert_eq!(out, "text/plain");
+    let request = server.join().unwrap();
+    assert!(request.starts_with("POST /payload HTTP/"), "{request}");
+    assert!(request.contains("X-Fileinfo: yes\r\n"), "{request}");
 }
 
 /// User databases support descriptions, MIME annotations, extensions and persistent options.
