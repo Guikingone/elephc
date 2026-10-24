@@ -48,7 +48,10 @@ fn query_engine(file: bool) -> crate::synthetic_class::MethodBuilder {
             reject(e_binop(e_call("strpos", vec![e_var(parameter), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)), "ValueError", "finfo::file(): Argument #1 ($filename) must not contain any null bytes"),
             s_if(e_call("is_dir", vec![e_var(parameter)]), vec![s_return(e_str("directory"))], vec![], None),
             s_if(e_binop(e_call("strpos", vec![e_var(parameter), e_str("://")]), BinOp::StrictNotEq, e_bool(false)), vec![
-                s_assign("_data", e_call("file_get_contents", vec![e_var(parameter), e_bool(false), e_var("context"), e_int(0), e_int(7340032)])),
+                s_assign("_stream", e_call("fopen", vec![e_var(parameter), e_str("rb"), e_bool(false), e_var("context")])),
+                s_if(eq(e_var("_stream"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
+                s_assign("_data", e_call("stream_get_contents", vec![e_var("_stream"), e_int(7340032)])),
+                s_expr(e_call("fclose", vec![e_var("_stream")])),
                 s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
                 s_return(e_method_call(e_this(), "__elephc_buffer", vec![e_var("_function"), e_var("_data"), e_var("flags")])),
             ], vec![], None),
