@@ -1702,9 +1702,11 @@ fn test_pcntl_eval_dispatch_inside_aot_handler_keeps_unwind_mask() {
             function kill(int $pid, int $signal): int;
         }
         $code = $argc > 0 ? 'pcntl_signal_dispatch();' : '';
-        pcntl_signal(SIGUSR1, function() use ($code): void {
+        $shouldThrow = true;
+        pcntl_signal(SIGUSR1, function() use ($code, &$shouldThrow): void {
             eval($code);
-            throw new RuntimeException('caught');
+            pcntl_signal_dispatch();
+            if ($shouldThrow) { throw new RuntimeException('caught'); }
         });
         $original = [];
         pcntl_sigprocmask(SIG_UNBLOCK, [SIGUSR1], $original);
@@ -1715,10 +1717,16 @@ fn test_pcntl_eval_dispatch_inside_aot_handler_keeps_unwind_mask() {
             pcntl_sigprocmask(SIG_BLOCK, [SIGUSR2], $current);
             echo $error->getMessage(), ':', in_array(SIGUSR1, $current) ? 'blocked' : 'clear';
         }
+        $shouldThrow = false;
+        kill(getpid(), SIGUSR1);
+        pcntl_signal_dispatch();
+        $current = [];
+        pcntl_sigprocmask(SIG_BLOCK, [SIGUSR2], $current);
+        echo '|returned:', in_array(SIGUSR1, $current) ? 'blocked' : 'clear';
         pcntl_sigprocmask(SIG_SETMASK, $original);
         pcntl_signal(SIGUSR1, SIG_DFL);
     "#);
-    assert_eq!(out, "caught:clear");
+    assert_eq!(out, "caught:clear|returned:clear");
 }
 
 /// Reaps a real child through `pcntl_waitid()` and exposes target-aware siginfo fields.
