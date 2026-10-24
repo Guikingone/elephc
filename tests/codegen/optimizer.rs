@@ -72,6 +72,8 @@ mod generator_yield;
 mod peephole;
 #[path = "optimizer/property_receiver_ownership.rs"]
 mod property_receiver_ownership;
+#[path = "optimizer/receiver_value_alias.rs"]
+mod receiver_value_alias;
 #[path = "optimizer/read_result_cleanup.rs"]
 mod read_result_cleanup;
 #[path = "optimizer/fresh_mixed_transfer.rs"]
