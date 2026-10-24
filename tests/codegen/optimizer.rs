@@ -89,6 +89,7 @@ mod memory_model_propagation;
 #[path = "optimizer/mem2reg.rs"]
 mod mem2reg;
 mod buffer_access;
+mod buffer_property_reuse;
 #[path = "optimizer/warning_globals.rs"]
 mod warning_globals;
 
