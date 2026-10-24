@@ -294,3 +294,68 @@ echo use_probe(new Probe()), "\n";
         );
     }
 }
+
+/// Buffer reuse must retain the separate private slots after a parent accessor is spliced.
+#[test]
+fn shadowed_private_buffers_keep_their_original_scopes_on_every_target() {
+    let source = r#"<?php
+packed class ScopeCell { public int $value; }
+class ParentBuffers {
+    private buffer<ScopeCell> $cells;
+    public function __construct() { $this->cells = buffer_new<ScopeCell>(2); }
+    public function parentValue(int $i): int { return $this->cells[$i]->value; }
+}
+final class ChildBuffers extends ParentBuffers {
+    private buffer<ScopeCell> $cells;
+    public function __construct() {
+        parent::__construct();
+        $this->cells = buffer_new<ScopeCell>(2);
+    }
+    public function combined(int $i, int $j): int {
+        return $this->parentValue($i) * 100 + $this->cells[$i]->value * 10 + $this->parentValue($j);
+    }
+}
+echo (new ChildBuffers())->combined($argc - 1, $argc), "\n";
+"#;
+    for target in TARGETS {
+        let module = optimized(source, target);
+        let combined = method(&module, "ChildBuffers::combined");
+        assert!(called_methods(&module, combined).is_empty(), "{target}: accessor must splice");
+        let scopes: Vec<_> = combined
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter().copied())
+            .filter(|&id| combined.instruction(id).is_some_and(|inst| {
+                inst.op == Op::PropGet && matches!(inst.result_php_type, crate::types::PhpType::Buffer(_))
+            }))
+            .map(|id| combined.inlined_scopes.get(&id).map(String::as_str))
+            .collect();
+        assert_eq!(scopes.len(), 2, "{target}: separate private properties: {scopes:?}");
+        assert!(scopes.contains(&Some("ParentBuffers")), "{target}: parent scope: {scopes:?}");
+        assert!(scopes.contains(&None), "{target}: original child scope: {scopes:?}");
+    }
+}
+
+/// Variance keeps real calls for ordinary and final methods on instantiated final-class receivers.
+#[test]
+fn instantiated_final_class_methods_remain_real_calls_on_every_target() {
+    let source = r#"<?php
+class InlineAnimal {}
+class InlineDog extends InlineAnimal {}
+final class VarianceBox<+T> {
+    public function __construct(private T $value) {}
+    public function kind(): string { return 'kind'; }
+    final public function finalKind(): string { return 'final'; }
+}
+function inspect(VarianceBox<InlineAnimal> $box): string { return $box->kind() . $box->finalKind(); }
+echo inspect(new VarianceBox<InlineDog>(new InlineDog())), "\n";
+"#;
+    for target in TARGETS {
+        let module = optimized(source, target);
+        let calls = called_methods(&module, function(&module, "inspect"));
+        for name in ["kind", "finalKind"] {
+            assert!(calls.iter().any(|call| call == name),
+                "{target}: {name} must stay a real call: {calls:?}");
+        }
+    }
+}

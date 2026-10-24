@@ -8,7 +8,9 @@
 //! Key details:
 //! - A `method_call` is bound statically only when codegen itself would not dispatch through
 //!   the vtable to a different body: the receiver's static class is final, the method is final,
-//!   or the class has no vtable slot for it. The selected body is the one
+//!   or the class has no vtable slot for it. Instantiated generic receivers with a vtable slot
+//!   keep a real call, since variance can change the actual instantiation without inheritance.
+//!   The selected body is the one
 //!   `method_resolution::resolve_method_call_target` would call directly.
 //! - A spliced body loses its own frame, so only bodies whose lowering cannot observe that are
 //!   admitted: every instruction is in `op_is_frame_independent`, whose codegen never reads the
@@ -84,9 +86,10 @@ impl MethodTargets {
                 if !signature_is_candidate(method_key, signature) {
                     continue;
                 }
+                // Variance can widen an instantiated receiver without an inheritance edge.
                 let dispatches_dynamically = class_info.vtable_slots.contains_key(method_key)
-                    && !class_info.final_methods.contains(method_key)
-                    && !class_info.is_final;
+                    && (class_name.contains('<')
+                        || (!class_info.final_methods.contains(method_key) && !class_info.is_final));
                 if dispatches_dynamically {
                     continue;
                 }

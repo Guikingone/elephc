@@ -442,6 +442,8 @@ function scan(Table $t, int $n): int
 A `$receiver->method()` call is a candidate when the receiver's static type is a plain
 (non-nullable) user class and the call cannot reach a different body at run time: the
 class is `final`, the method is `final`, or the class has no vtable slot for it. The
+exception is an instantiated generic receiver with a vtable slot: variance can change
+its actual instantiation, so even a final class or final method keeps a real call. The
 method body then has to pass the function rules above (the `$this` receiver is the one
 object they accept, as a borrowed argument) plus a few of its own:
 
@@ -555,7 +557,9 @@ public function matches(int $index, int $components): bool {
 
 The property is read and its handle resolved once, the second access to the same
 index reuses the first record address, and accesses to other indexes share one
-resolution. Anything between the reads that could change the property or free
+resolution. Reads from different inlined class scopes stay separate, so a parent's
+private buffer never aliases a shadowing private property in the child. Anything
+between the reads that could change the property or free
 the buffer keeps them apart: a store to that property or `unset()` on any
 object, a `buffer_free()`, any function or method call, a release, a warning or
 output. A property read on any other object counts too, because it warns when

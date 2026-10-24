@@ -264,6 +264,43 @@ fn test_repeated_property_buffer_reads_share_one_record() {
     assert_both_modes_print(TABLE_SOURCE, TABLE_OUTPUT);
 }
 
+/// Inlining an inherited accessor keeps its parent's private buffer distinct from the child's.
+#[test]
+fn test_shadowed_private_buffers_remain_distinct_after_method_inlining() {
+    let source = r#"<?php
+packed class ScopeCell { public int $value; }
+class ParentBuffers {
+    private buffer<ScopeCell> $cells;
+    public function __construct() {
+        $this->cells = buffer_new<ScopeCell>(2);
+        $this->cells[0]->value = 2;
+        $this->cells[1]->value = 3;
+    }
+    public function parentValue(int $i): int { return $this->cells[$i]->value; }
+}
+final class ChildBuffers extends ParentBuffers {
+    private buffer<ScopeCell> $cells;
+    public function __construct() {
+        parent::__construct();
+        $this->cells = buffer_new<ScopeCell>(2);
+        $this->cells[0]->value = 7;
+        $this->cells[1]->value = 8;
+    }
+    public function combined(int $i, int $j): int {
+        return $this->parentValue($i) * 100 + $this->cells[$i]->value * 10 + $this->parentValue($j);
+    }
+}
+echo (new ChildBuffers())->combined($argc - 1, $argc), "\n";
+"#;
+    let ir = function_ir(source, true, "ChildBuffers::combined");
+    assert!(!ir.contains("= method_call "), "the parent accessor must splice: {ir}");
+    assert_eq!(buffer_property_reads(&ir), 2, "private slots stay distinct: {ir}");
+    assert_eq!(ir.matches("= buffer_resolve ").count(), 1, "parent indexes share: {ir}");
+    assert_eq!(ir.matches("= buffer_get_resolved ").count(), 2, "{ir}");
+    assert_eq!(ir.matches("= buffer_get ").count(), 1, "child has its own record: {ir}");
+    assert_both_modes_print(source, "273\n");
+}
+
 /// Accesses to two indexes of one property read share a single descriptor, and each index keeps
 /// one record address across the swap.
 #[test]

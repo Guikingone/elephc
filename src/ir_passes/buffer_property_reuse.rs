@@ -190,9 +190,9 @@ fn merge_property_reads(function: &mut Function, facts: &Facts) -> bool {
 
 /// Returns whether two property reads, `earlier` dominating `later`, load the same handle.
 ///
-/// They must name the same property of matching receivers, and nothing between the earliest
-/// instruction either depends on and `later` may write a property, run user code or write the
-/// slot a matched receiver load reads. A read that did not throw at `earlier` cannot throw at
+/// They must name the same property in the same inlined class scope on matching receivers.
+/// Nothing between the earliest instruction either depends on and `later` may write a property,
+/// run user code or write the slot a matched receiver load reads. A read that did not throw at
 /// `later` either, since the property's state is unchanged.
 fn same_property_value(function: &Function, facts: &Facts, earlier: InstId, later: InstId) -> bool {
     let (first, second) = (
@@ -206,6 +206,7 @@ fn same_property_value(function: &Function, facts: &Facts, earlier: InstId, late
     };
     if first.immediate != second.immediate
         || first.result_php_type != second.result_php_type
+        || function.inlined_scopes.get(&earlier) != function.inlined_scopes.get(&later)
         || !facts.dominates(first_point, second_point)
     {
         return false;
