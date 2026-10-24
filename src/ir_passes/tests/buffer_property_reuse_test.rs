@@ -552,7 +552,7 @@ fn loop_method(after_second: impl FnOnce(&mut Builder<'_>, Locals, ValueId)) -> 
         by_ref: false,
         variadic: false,
     });
-    let (entry, first_property, first_record, second_record, second_field);
+    let (entry, first_property, second_property, first_record, second_record, second_field);
     {
         let mut b = Builder::new(&mut function);
         entry = b.create_named_block("entry", vec![]);
@@ -593,6 +593,7 @@ fn loop_method(after_second: impl FnOnce(&mut Builder<'_>, Locals, ValueId)) -> 
         b.position_at_end(body);
         let receiver = b.emit_load_local(locals.this, object, table_type());
         let property = emit_slots_read(&mut b, receiver);
+        second_property = property;
         let index = b.emit_load_local(locals.index, IrType::I64, PhpType::Int);
         second_record = emit_record_read(&mut b, property, index);
         second_field = emit_field_read(&mut b, second_record);
@@ -604,7 +605,7 @@ fn loop_method(after_second: impl FnOnce(&mut Builder<'_>, Locals, ValueId)) -> 
         b.position_at_end(exit);
         b.terminate(Terminator::Return { value: None });
     }
-    Method { function, entry, first_property, first_record, second_record, second_field }
+    Method { function, entry, first_property, second_property, first_record, second_record, second_field }
 }
 
 /// A read before a loop serves the same read at the top of a body that leaves the property and
