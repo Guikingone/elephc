@@ -84,8 +84,9 @@ fn merge_arm_type(ctx: &LoweringContext<'_, '_>, arm: &Expr) -> PhpType {
 ///
 /// The call hands back boxed `mixed` slots (`caller_visible_return_type`), but a merge types it
 /// the way it types a `[null]` local: beside a pointer array the `null` element joins into
-/// `?ptr<T>`, so `$ps ?: f()` and `$m ?? f()` keep pointer storage and the call result is
-/// converted into it. A merge whose arms are all such calls keeps `array<void>`, as on main. The
+/// `?ptr<T>`, so `$ps ?: f()`, `$m ?? f()` and `$ps ?: (f() ?? [])` keep pointer storage and the
+/// call result is converted into it. A merge whose arms are all such calls keeps `array<void>`, as
+/// on main. The
 /// call may be suppressed, assigned, or made through a local statically bound to the function
 /// (`$f = f(...); $f()`), as `materialized_expr_type_for_merge` reads those shapes.
 pub(super) fn null_only_call_merge_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpType> {
@@ -465,7 +466,8 @@ pub(super) fn assignment_result_expr<'e>(
 fn null_coalesce_value_type_for_merge(ctx: &LoweringContext<'_, '_>, value: &Expr) -> PhpType {
     match &value.kind {
         ExprKind::Variable(name) => normalize_value_php_type(ctx.local_type(name)),
-        _ => materialized_expr_type_for_merge(ctx, value),
+        _ => null_only_call_merge_type(ctx, value)
+            .unwrap_or_else(|| materialized_expr_type_for_merge(ctx, value)),
     }
 }
 

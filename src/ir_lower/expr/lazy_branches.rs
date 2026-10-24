@@ -16,7 +16,8 @@ pub(super) fn lower_null_coalesce(
     default: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    let value = lower_null_coalesce_value(ctx, value);
+    let value_expr = value;
+    let value = lower_null_coalesce_value(ctx, value_expr);
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![value.value],
@@ -25,7 +26,12 @@ pub(super) fn lower_null_coalesce(
         Op::IsNull.default_effects(),
         Some(expr.span),
     );
-    let result_type = null_coalesce_result_type(ctx, value.value, default);
+    // An all-null user call on the value side merges as the checker types it, as `?:` does
+    // (`null_only_call_merge_type`); its `array<mixed>` value is converted into the temp.
+    let result_type = match super::merge_temps::null_only_call_merge_type(ctx, value_expr) {
+        Some(checker) => null_coalesce_merge_type(ctx, checker, default),
+        None => null_coalesce_result_type(ctx, value.value, default),
+    };
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();
     let default_block = ctx
