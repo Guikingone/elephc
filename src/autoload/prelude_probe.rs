@@ -15,9 +15,9 @@
 //!   result with each prelude's own detector, and hands back the groups found. The real pass then
 //!   injects them exactly as if the entry file had used them, so the outcome is the one
 //!   `--with-<crate>` gives, without forcing the whole surface past reachability pruning.
-//! - The copy's work is discarded, including every counter it advanced (source identities,
-//!   synthetic spans, anonymous-class numbers, the resolver's hidden temporaries), so the real
-//!   pass numbers its files, classes and temporaries exactly as it would without the probe.
+//! - The copy's work is discarded, restoring thread-local source IDs and anonymous-class
+//!   numbers so the real parse keeps those identities. Process-global synthetic spans and
+//!   include temporaries remain monotonic, preserving identities other threads allocated.
 //! - A probe failure is not reported here: the real pass hits the same error and reports it.
 
 use std::collections::HashSet;
@@ -27,6 +27,10 @@ use crate::parser::ast::{Program, Stmt};
 use crate::span::Span;
 
 use super::Registry;
+
+#[cfg(test)]
+#[path = "prelude_probe_tests.rs"]
+mod tests;
 
 /// Every prelude group the probe can report, with the detector that decides it.
 const PROBED_GROUPS: &[(&str, fn(&[Stmt]) -> bool)] = &[
@@ -54,7 +58,6 @@ pub fn autoloaded_prelude_groups(
         return HashSet::new();
     }
     let span_counters = Span::counters_checkpoint();
-    let resolver_counters = crate::resolver::counters_checkpoint();
     let anonymous_classes = crate::parser::anonymous_class_counter();
     let closure = crate::name_resolver::resolve(program.clone())
         .ok()
@@ -62,7 +65,6 @@ pub fn autoloaded_prelude_groups(
             super::run_collecting_included_with_defines(resolved, base_dir, registry, defines).ok()
         });
     Span::restore_counters(span_counters);
-    crate::resolver::restore_counters(resolver_counters);
     crate::parser::restore_anonymous_class_counter(anonymous_classes);
     let Some((closure, _)) = closure else {
         return HashSet::new();

@@ -108,12 +108,11 @@ std::thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// The span counters at one moment; see [`Span::counters_checkpoint`].
+/// The thread-local source-ID counters at one moment; see [`Span::counters_checkpoint`].
 #[derive(Debug, Clone, Copy)]
 pub struct SpanCounters {
     next_source_id: u32,
     next_synthetic_source_id: u32,
-    next_synthetic_line: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -203,25 +202,21 @@ impl Span {
         NEXT_SOURCE_ID.with(|next| next.set(1));
     }
 
-    /// Captures every span counter (include and synthetic source identities, synthetic lines),
-    /// to hand back to [`Span::restore_counters`] after work whose spans are discarded.
+    /// Captures thread-local include and synthetic source IDs for discarded work.
+    ///
+    /// Process-global synthetic lines stay monotonic: another thread may allocate live spans
+    /// while an autoload prelude probe is in progress.
     pub fn counters_checkpoint() -> SpanCounters {
         SpanCounters {
             next_source_id: NEXT_SOURCE_ID.with(|next| next.get()),
             next_synthetic_source_id: NEXT_SYNTHETIC_SOURCE_ID.with(|next| next.get()),
-            next_synthetic_line: NEXT_SYNTHETIC_LINE.load(std::sync::atomic::Ordering::Relaxed),
         }
     }
 
-    /// Rewinds the span counters to a [`Span::counters_checkpoint`], so a discarded trial parse
-    /// (the autoload prelude probe) leaves the numbering the real pass will use.
+    /// Restores thread-local source IDs after a discarded parse, leaving global spans fresh.
     pub fn restore_counters(checkpoint: SpanCounters) {
         NEXT_SOURCE_ID.with(|next| next.set(checkpoint.next_source_id));
         NEXT_SYNTHETIC_SOURCE_ID.with(|next| next.set(checkpoint.next_synthetic_source_id));
-        NEXT_SYNTHETIC_LINE.store(
-            checkpoint.next_synthetic_line,
-            std::sync::atomic::Ordering::Relaxed,
-        );
     }
 
     /// Returns a source identity for a synthetic parse that [`Span::reset_source_ids`] must not
@@ -388,6 +383,24 @@ impl Span {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Restoring discarded source IDs must not recycle synthetic spans allocated on another thread.
+    #[test]
+    fn probe_source_restore_keeps_concurrent_synthetic_spans_monotonic() {
+        let checkpoint = Span::counters_checkpoint();
+        let source_id = Span::fresh_source_id();
+        let synthetic_source_id = Span::fresh_synthetic_source_id();
+        let concurrent_span = std::thread::spawn(Span::synthetic).join().unwrap();
+
+        Span::restore_counters(checkpoint);
+
+        assert_eq!(Span::fresh_source_id(), source_id);
+        assert_eq!(Span::fresh_synthetic_source_id(), synthetic_source_id);
+        assert!(
+            Span::synthetic().line > concurrent_span.line,
+            "restoring thread-local IDs must preserve another thread's synthetic span"
+        );
+    }
 
     /// Spans are embedded in every token and AST node and flow through the
     /// recursive-descent parser's stack frames; growing this struct directly

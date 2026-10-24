@@ -100,9 +100,11 @@ Physical source (.php or .lfc)
   a prelude needed only by an autoloaded file would be missed. When autoload
   rules exist, a probe (`src/autoload/prelude_probe.rs`) first runs name
   resolution and the autoload pass on a copy of the program, asks each
-  prelude's detector about the result, and rewinds every counter it advanced,
-  so the real pass injects those preludes and numbers its files, classes and
-  temporaries exactly as it would without the probe. Every included and
+  prelude's detector about the result, and restores the thread-local source IDs
+  and anonymous-class counter. Process-global synthetic spans and include
+  temporaries stay monotonic, so discarding a probe cannot recycle identities
+  allocated by another compilation thread. The real pass injects the detected
+  preludes with fresh global identities. Every included and
   autoloaded file gets its own source identity, which is how diagnostics name
   the file they come from.
 - **opcache-manifest-bake** — after autoload insertion and argument-introspection

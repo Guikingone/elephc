@@ -738,6 +738,8 @@ Warnings are returned through `CheckResult` and printed by the CLI without faili
 
 Checker errors and warnings carry only a `Span`. Each file the resolver or the autoload pass lexes gets its own source identity, and `Span::register_source_path` records which physical file that identity came from; `print_error` / `print_warning` fall back to `Span::source_path` when a diagnostic was not tagged with a file, so every positioned diagnostic prints as `kind[file:line:col]`. Class schema errors (circular inheritance, extending a `final` class, duplicate or unknown parent classes) point at the class declaration.
 
+The discarded autoload prelude probe restores only thread-local source IDs and anonymous-class numbering. Synthetic spans and hidden value-include temporaries use monotonic process-global counters, so a probe cannot recycle identities allocated by another compiler thread. Gaps left by discarded work do not affect PHP values or name resolution.
+
 ### Lookup indexes
 
 Large programs (thousands of classes) made several per-member scans of the whole class table dominate checking time. The checker keeps lazily built indexes for them, each stored with the `classes.len()` it was built for, so registering a class invalidates it:
