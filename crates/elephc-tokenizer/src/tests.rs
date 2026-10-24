@@ -122,6 +122,10 @@ fn fixtures() -> Vec<Vec<u8>> {
         "<?php class C { public const PUBLIC = 1; public function match() {} }",
         "<?php $x->class; $x?->match; $x-> /*comment*/ function; C::class; C::match();",
         "<?php namespace A\\B; use Foo\\Bar as B; \\strlen('x'); namespace\\x();",
+        "<?php (int\n)$x; (i n t)$x; ( int )$x; (int\r\n);",
+        "<?php $x->foo\\bar; $x?->namespace\\name;",
+        r#"<?php $s = "\u{110000}";"#, r#"<?php $s = "\u{}";"#,
+        r#"<?php $s = "\u{unterminated";"#,
         "<?php class C { public function class() {} public function clone() {} } C::class; clone($x);",
         "<?php (real)$x;", "<?php (unset)$x;", "<?php (void)$x;", "<?=?>",
         "<?php echo 1,;", "<?php print;", "<?php throw;", "<?php yield from;",
@@ -146,6 +150,7 @@ fn fixtures() -> Vec<Vec<u8>> {
         "<?php 'unfinished", "<?php \"unfinished", "<?php /*unfinished", "<?php /** unfinished",
         "<?php 09; 0x; 0b; 1e;", "<?php }", "<?php $a = [1,;", "<?php \"{$a[\"b\"]}\";",
     ].into_iter().map(|s| s.as_bytes().to_vec()).collect::<Vec<_>>();
+    sources.push(b"<?php \x0b\x0c\t echo 1;".to_vec());
     sources.push(b"<?php \0\x01\x7f; $\xff = '\xfe\0'; ?>\xff".to_vec());
     sources.push("<?php $città = 'è'; echo $città;".as_bytes().to_vec());
     sources

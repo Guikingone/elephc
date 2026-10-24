@@ -18,7 +18,7 @@ use crate::{id, newline_count, Token};
 #[derive(Default)]
 struct StringFrame { delimiter: u8, depth: usize }
 
-/// Masks invalid full opening tags without changing byte offsets or lexical structure.
+/// Normalizes PHP tag, cast and whitespace boundaries while preserving source offsets.
 pub(crate) fn normalize_tags(source: &[u8]) -> Vec<u8> {
     let mut input = source.to_vec();
     let mut offset = 0;
@@ -26,9 +26,20 @@ pub(crate) fn normalize_tags(source: &[u8]) -> Vec<u8> {
         let mut lexer = Lexer::new(Input::anchored_at(FileId::zero(), &input[offset..], mago_span::Position::new(offset as u32)),
             LexerSettings { enable_short_tags: false });
         let mut invalid = None;
+        let mut edits = Vec::new();
         while let Some(next) = lexer.advance() {
             if let Ok(t) = next {
                 let at = t.start.offset as usize;
+                if t.kind == TokenKind::Whitespace {
+                    edits.extend(t.value.iter().enumerate().filter(|(_, b)| matches!(b, 0x0b | 0x0c)).map(|(i, _)| (at + i, 0)));
+                }
+                if is_cast(t.kind) {
+                    let body = &t.value[1..t.value.len() - 1];
+                    if body.iter().any(|b| b.is_ascii_whitespace() && !matches!(b, b' ' | b'\t'))
+                        || !body.trim_ascii().iter().all(u8::is_ascii_alphabetic) {
+                        if let Some(letter) = t.value.iter().position(u8::is_ascii_alphabetic) { edits.push((at + letter, b'z')); }
+                    }
+                }
                 if t.kind == TokenKind::OpenTag && source.get(at + 5).is_some_and(|b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n')) {
                     invalid = Some(at);
                     break;
@@ -36,6 +47,7 @@ pub(crate) fn normalize_tags(source: &[u8]) -> Vec<u8> {
             }
         }
         drop(lexer);
+        for (at, byte) in edits { input[at] = byte; }
         match invalid {
             Some(at) => { input[at] = b'x'; offset = at + 5; }
             None => return input,
@@ -94,6 +106,15 @@ pub(super) fn tokenize(source: &[u8]) -> Vec<Token> {
                 Some([b'\n' | b'\r', ..]) => 1,
                 _ => 0,
             };
+        }
+        if property && kind == Some(TokenKind::QualifiedIdentifier) {
+            if let Some(separator) = raw.iter().position(|b| *b == b'\\') {
+                push(&mut result, id("T_STRING"), start, start + separator, &mut line, source);
+                push(&mut result, id("T_NAME_FULLY_QUALIFIED"), start + separator, end, &mut line, source);
+                cursor = end;
+                property = false;
+                continue;
+            }
         }
         if property && is_identifier(raw) {
             token_id = id("T_STRING");
@@ -267,4 +288,11 @@ fn integer_id(raw: &[u8]) -> i64 {
     };
     let number = std::str::from_utf8(&digits[skip..]).ok().and_then(|s| i64::from_str_radix(s, base).ok());
     id(if number.is_some() || digits == b"0" { "T_LNUMBER" } else { "T_DNUMBER" })
+}
+
+/// Identifies the cast tokens whose PHP spelling permits spaces and tabs only.
+fn is_cast(kind: TokenKind) -> bool {
+    use TokenKind::*;
+    matches!(kind, IntCast | IntegerCast | BoolCast | BooleanCast | FloatCast | DoubleCast | RealCast
+        | StringCast | BinaryCast | ArrayCast | ObjectCast | UnsetCast | VoidCast)
 }
