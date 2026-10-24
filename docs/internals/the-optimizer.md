@@ -694,7 +694,8 @@ skip the phase, so no trusted read dispatches to user code. A property store or
 an allocation, a warning or output ends the region.
 
 1. A dominated buffer-typed `prop_get` of the same property on a matching
-   receiver is replaced by the dominating read. A read that did not throw first
+   receiver in the same inlined class scope (`Function::inlined_scopes`) is replaced
+   by the dominating read. A read that did not throw first
    cannot throw the second time, because nothing changed the property.
 2. A dominated packed `buffer_get` of the same property-read handle and a
    matching index reuses the dominating record address.
