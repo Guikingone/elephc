@@ -398,15 +398,12 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
                 .or_else(|| property_access_expr_type_for_ir(ctx, object, property))
                 .unwrap_or_else(|| fallback_expr_type(expr))
         }
-        // Only a `?ptr<T>` static property is resolved here, so its null member survives the
-        // merge; other static reads keep the syntactic answer.
+        // A static property holding one raw word is resolved here: a `?ptr<T>` keeps its null
+        // member through the merge, and a `buffer<T>` or `ptr<T>` keeps its handle or address
+        // instead of the syntactic `int`. Other static reads keep the syntactic answer.
         ExprKind::StaticPropertyAccess { receiver, property } => {
-            let loaded = static_property_result_type(ctx, receiver, property, expr);
-            if crate::types::is_nullable_pointer_type(&loaded) {
-                loaded
-            } else {
-                fallback_expr_type(expr)
-            }
+            static_property_word_type(ctx, receiver, property, expr)
+                .unwrap_or_else(|| fallback_expr_type(expr))
         }
         // Calls are typed from the return metadata their own lowering uses. The syntactic
         // fallback answers `int` for every call outside its builtin allowlist, and a merge temp
