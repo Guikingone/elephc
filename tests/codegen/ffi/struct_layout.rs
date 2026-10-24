@@ -11,7 +11,8 @@
 //! - C fills fields that PHP reads by name and checks fields PHP wrote, which pins both the
 //!   offsets and the per-width extension, truncation, `f32` rounding and one-byte `bool`.
 //! - The fixture is assembled into the test program itself, so no shared library is needed.
-//! - Values whose type is only known at run time are narrowed strictly into scalar fields.
+//! - Values whose type is only known at run time are narrowed strictly into scalar fields, and
+//!   field reads keep their declared type inside array literals and branch merges.
 
 use super::*;
 
@@ -377,6 +378,25 @@ var_dump($a->f64, $a->flag);
          Extern field All::$f64 must be of type float, string given\n\
          Extern field All::$flag must be of type bool, int given\n\
          float(3)\nbool(true)\n"
+    );
+}
+
+/// Verifies scalar extern field reads keep their type in array literals and branch merges, where
+/// the lowering used to type every property read `int`: floats truncated, a bool read as `1`
+/// and a `string` field as `0`.
+#[test]
+fn test_ffi_extern_class_field_reads_keep_their_type_in_literals_and_merges() {
+    let out = run_struct_program(
+        r#"
+$a = elephc_test_all_filled();
+var_dump([$a->f32, $a->f64, $a->flag, $a->u8, $a->name]);
+$picked = $argc > 5 ? 0 : $a->f64;
+var_dump($picked);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(5) {\n  [0]=>\n  float(1.5)\n  [1]=>\n  float(2.25)\n  [2]=>\n  bool(true)\n  [3]=>\n  int(250)\n  [4]=>\n  string(3) \"sdl\"\n}\nfloat(2.25)\n"
     );
 }
 

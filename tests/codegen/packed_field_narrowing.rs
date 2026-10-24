@@ -1,6 +1,7 @@
 //! Purpose:
 //! Regression tests for values whose type is only known at run time crossing packed class
-//! fields: boxed values stored into `float`, `f32`, `bool` and integer fields.
+//! fields: boxed values stored into `float`, `f32`, `bool` and integer fields, and scalar field
+//! reads feeding array literals and branch merges.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -210,4 +211,36 @@ buffer_free($pts);
             out.stderr
         );
     }
+}
+
+/// Verifies scalar packed field reads keep their type in array literals and branch merges:
+/// the lowering typed every such read `int`, which truncated a float in an indexed literal,
+/// stored its raw bits under the int tag in an associative one, and read a bool as `1`.
+#[test]
+fn test_packed_field_reads_keep_their_type_in_literals_and_merges() {
+    let out = compile_and_run(
+        r#"<?php
+extern function calloc(u64 $count, u64 $size): ptr;
+packed class Vec2 { public float $x; public f32 $y; public bool $live; public u8 $tag; }
+$pts = buffer_new<Vec2>(1);
+$pts[0]->x = 2.5;
+$pts[0]->y = 0.25;
+$pts[0]->live = true;
+$pts[0]->tag = 7;
+$q = ptr_cast<Vec2>(calloc(1, ptr_sizeof("Vec2")));
+$q->x = -1.5;
+var_dump([$pts[0]->x, $pts[0]->y, $pts[0]->live, $pts[0]->tag]);
+var_dump(["x" => $q->x, "live" => $pts[0]->live]);
+$merged = $argc > 5 ? 9 : $pts[0]->x;
+var_dump($merged);
+var_dump([$q->x]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(4) {\n  [0]=>\n  float(2.5)\n  [1]=>\n  float(0.25)\n  [2]=>\n  bool(true)\n  [3]=>\n  int(7)\n}\n\
+         array(2) {\n  [\"x\"]=>\n  float(-1.5)\n  [\"live\"]=>\n  bool(true)\n}\n\
+         float(2.5)\n\
+         array(1) {\n  [0]=>\n  float(-1.5)\n}\n"
+    );
 }
