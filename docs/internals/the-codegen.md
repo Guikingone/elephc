@@ -584,10 +584,13 @@ register allocator's pools, so `frame::layout_for_function` gives a frame a save
 slot for it, and the prologue and every epilogue save and restore it with the
 allocator's own callee-saved registers.
 
-The slot is the default. A frame skips it only when every instruction is one of
-the register-neutral opcodes in `frame::op_is_nested_call_reg_neutral`
-(constants, frame-local loads and stores, scalar arithmetic, comparisons and
-conversions, moves, `Nop` and `ConcatReset`). Deciding it the other way round, by
+The slot is the default. A frame skips it only when every local is a one-word
+scalar and every instruction is one of the register-neutral opcodes in
+`frame::op_is_nested_call_reg_neutral` (scalar constants, integer and float
+arithmetic, comparisons, int-to-float promotion, moves, `Nop` and
+`ConcatReset`), whose lowerings stay inline and make no call that returns to the
+frame. Calls into runtime helpers do not qualify: some x86_64 helpers use `r12`
+as scratch. Deciding it the other way round, by
 listing the users, missed a direct method call on a typed receiver: a destructor
 calling `$this->close()` while an exception unwound returned into
 `__rt_exception_cleanup_frames` and the frame cleanup callback with the register

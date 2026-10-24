@@ -12,8 +12,8 @@
 //!   `_concat_buf` slices that were passed in by the caller.
 //! - Executable and library PHP frames publish cleanup activations so escaping exceptions
 //!   release owned locals before control reaches the surviving catch or native host.
-//! - Every frame saves the reserved nested-call register (x19/r12) unless all of its
-//!   instructions are register-neutral, so the unwinder, frame cleanup callbacks, generator
+//! - Every frame saves the reserved nested-call register (x19/r12) unless it is a scalar leaf
+//!   of register-neutral instructions, so the unwinder, frame cleanup callbacks, generator
 //!   wrappers and native hosts that keep state in it across PHP calls get it back intact.
 
 use std::collections::{HashMap, HashSet};
@@ -392,40 +392,42 @@ fn nested_call_reg_name(arch: Arch) -> &'static str {
 /// and a generator body returned through a wrapper that had lost its Generator pointer.
 ///
 /// The rule is therefore inverted: every frame saves the register unless all of its
-/// instructions are register-neutral (see `op_is_nested_call_reg_neutral`). Leaving an opcode
-/// out of that set costs one store and one load per activation; only adding one wrongly can
-/// lose the caller's register, which is why the set stays small and audited.
+/// instructions are register-neutral (see `op_is_nested_call_reg_neutral`) and every local is
+/// a one-word scalar, so neither the body nor the prologue's parameter retains nor the
+/// epilogue's local releases call anything that returns to this frame. Some x86_64 runtime
+/// helpers treat r12 as scratch, so even a frame that only calls runtime code must save it.
+/// Leaving an opcode out of the neutral set costs one store and one load per activation; only
+/// adding one wrongly can lose the caller's register, which is why the set stays small.
 fn function_may_use_nested_call_reg(function: &Function) -> bool {
-    !function
-        .instructions
+    let scalar_locals = function
+        .locals
         .iter()
-        .all(|inst| op_is_nested_call_reg_neutral(inst.op))
+        .all(|local| matches!(local.ir_type, crate::ir::IrType::I64 | crate::ir::IrType::F64));
+    !(scalar_locals
+        && function
+            .instructions
+            .iter()
+            .all(|inst| op_is_nested_call_reg_neutral(inst.op)))
 }
 
 /// Returns true for opcodes whose lowering never writes the reserved nested-call register.
 ///
-/// Each member lowers to frame loads and stores, fixed scratch registers, or calls into
-/// runtime helpers, which already have to preserve the register because every dispatch path
-/// keeps its receiver there across them; none of them dispatches into PHP code through a
-/// receiver or descriptor held in the nested-call register. Error paths
-/// (division by zero, negative shifts) throw through the unwinder and never return here. The
-/// default is `false`, so a new opcode saves the register until its lowering is audited.
+/// Each member lowers inline to the result and fixed scratch registers and makes no call that
+/// returns to this frame: the only calls are on error paths (a zero divisor, a negative shift
+/// count), which throw through the unwinder. The default is `false`,
+/// so a new opcode saves the register until its lowering is audited.
 fn op_is_nested_call_reg_neutral(op: Op) -> bool {
     matches!(
         op,
-        // Constants materialized into the result registers.
-        Op::ConstI64 | Op::ConstBool | Op::ConstNull | Op::ConstF64 | Op::ConstStr
-        // Frame-local slots (`lower_inst::local_loads` / `local_stores`); releases go through
-        // the runtime ownership helpers.
-        | Op::LoadLocal | Op::StoreLocal | Op::UnsetLocal | Op::ZeroLocalSlot
+        // Scalar constants materialized into the result register.
+        Op::ConstI64 | Op::ConstBool | Op::ConstNull | Op::ConstF64
         // Integer arithmetic, bitwise and shifts (`lower_inst::arithmetic`).
         | Op::IAdd | Op::ISub | Op::IMul | Op::INeg | Op::IDiv | Op::ISMod
-        | Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedPow
         | Op::IBitAnd | Op::IBitOr | Op::IBitXor | Op::IBitNot | Op::IShl | Op::IShrA
         // Floating-point arithmetic (`lower_inst::floats` and `arithmetic::lower_float_div`).
-        | Op::FAdd | Op::FSub | Op::FMul | Op::FDiv | Op::FPow | Op::FNeg
-        // Scalar comparisons and numeric conversions.
-        | Op::ICmp | Op::FCmp | Op::IToF | Op::FToI
+        | Op::FAdd | Op::FSub | Op::FMul | Op::FDiv | Op::FNeg
+        // Scalar comparisons and int-to-float promotion.
+        | Op::ICmp | Op::FCmp | Op::IToF
         // Value forwarding and statement markers.
         | Op::Move | Op::Borrow | Op::Nop | Op::ConcatReset
     )

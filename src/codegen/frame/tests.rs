@@ -210,10 +210,13 @@ fn dispatching_frames_preserve_the_nested_receiver_register() {
     }
 }
 
-/// A frame made only of register-neutral scalar work keeps the nested-call register unsaved.
+/// A frame made only of register-neutral scalar work keeps the nested-call register unsaved,
+/// and the same body saves it as soon as the frame owns a refcounted local.
 ///
 /// The save is the default for every other opcode, so this pins the one exemption: pure
 /// constant/arithmetic leaves do not pay a store and a load for a register they never touch.
+/// A heap local brings prologue retains and epilogue releases into runtime helpers, some of
+/// which use r12 as scratch on x86_64, so it removes the exemption even with a neutral body.
 #[test]
 fn scalar_leaf_frames_skip_the_nested_receiver_register_save() {
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -231,11 +234,23 @@ fn scalar_leaf_frames_skip_the_nested_receiver_register_save() {
                 .expect("the addition produces a value");
             builder.terminate(Terminator::Return { value: Some(sum) });
         }
+        let register = nested_call_reg_name(target.arch);
         for regalloc in [false, true] {
             let layout = layout_for_function(&function, target, regalloc, false, false);
-            let register = nested_call_reg_name(target.arch);
             assert!(layout.callee_saved_offsets.iter().all(|(saved, _)| *saved != register),
                 "{name}: register allocation {regalloc}");
+        }
+
+        function.add_local(
+            Some("owner".into()),
+            IrType::Heap(crate::ir::IrHeapKind::Object),
+            PhpType::Object("Thing".into()),
+            LocalKind::PhpLocal,
+        );
+        for regalloc in [false, true] {
+            let layout = layout_for_function(&function, target, regalloc, false, false);
+            assert_eq!(layout.callee_saved_offsets.iter().filter(|(saved, _)| *saved == register).count(),
+                1, "{name}: heap local, register allocation {regalloc}");
         }
     }
 }
