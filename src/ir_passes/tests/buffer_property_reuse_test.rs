@@ -11,14 +11,15 @@
 //! - Each method reads `$this->slots[$index]` in `entry`, branches, and reads it again in `rhs`,
 //!   in the shape `return $this->slots[$i]->alive && $this->slots[$i]->mask ...` lowers to, with
 //!   the property reads refined to `reads_heap, may_throw` the way effect refinement leaves a
-//!   declared property. The module pass runs directly; end-to-end behaviour lives in
+//!   declared property. `$this` is the method's first parameter and slot 0, as lowering makes it.
+//!   The module pass runs directly; end-to-end behaviour lives in
 //!   `tests/codegen/optimizer/buffer_property_reuse.rs`.
 
 use crate::codegen::platform::{Arch, Platform, Target};
 use crate::ir::{
-    validate_function, BlockId, Builder, DataId, Effects, Function, Immediate, IrHeapKind, IrType,
-    LocalKind, LocalSlotId, Module, Op, Ownership, RuntimeCallTarget, RuntimeFnId, Terminator,
-    ValueDef, ValueId,
+    validate_function, BlockId, Builder, DataId, Effects, Function, FunctionParam, Immediate,
+    IrHeapKind, IrType, LocalKind, LocalSlotId, Module, Op, Ownership, RuntimeCallTarget,
+    RuntimeFnId, Terminator, ValueDef, ValueId,
 };
 use crate::ir_passes::buffer_access::hoist_buffer_resolution;
 use crate::types::PhpType;
@@ -132,10 +133,19 @@ fn emit_field_read(builder: &mut Builder<'_>, record: ValueId) -> ValueId {
         .expect("field read produces a value")
 }
 
-/// Builds `entry: $this->slots[$index]; interpose; cond_br rhs, exit` and
-/// `rhs: <second>->slots[...]` followed by a field read of the second record.
+/// Builds the method `entry: $this->slots[$index]; interpose; cond_br rhs, exit` and
+/// `rhs: <second>->slots[...]` followed by a field read of the second record, with `$this` as
+/// its receiver parameter in slot 0.
 fn method(second: Second, interpose: impl FnOnce(&mut Builder<'_>, Locals, ValueId)) -> Method {
     let mut function = Function::new("Table::matches".to_string(), IrType::Void, PhpType::Void);
+    function.flags.is_method = true;
+    function.params.push(FunctionParam {
+        name: "this".to_string(),
+        ir_type: IrType::Heap(IrHeapKind::Object),
+        php_type: table_type(),
+        by_ref: false,
+        variadic: false,
+    });
     let (entry, first_property, first_record, second_record, second_field);
     {
         let mut b = Builder::new(&mut function);
@@ -347,6 +357,38 @@ fn keeps_reads_apart_across_buffer_free() {
             None,
         );
     });
+}
+
+/// A property read on a receiver other than `$this` may warn on null even though effect
+/// refinement leaves its effects at `reads_heap, may_throw`, and the warning can run a user error
+/// handler that replaces or frees the buffer.
+#[test]
+fn keeps_reads_apart_across_a_property_read_of_another_receiver() {
+    assert_reads_stay_apart("prop_get", |b, locals, _| {
+        let other = b.emit_load_local(locals.other, IrType::Heap(IrHeapKind::Object), table_type());
+        b.emit_with_effects(
+            Op::PropGet,
+            vec![other],
+            Some(Immediate::Data(DataId::from_raw(3))),
+            IrType::I64,
+            PhpType::Int,
+            Ownership::NonHeap,
+            Effects::READS_HEAP | Effects::MAY_THROW,
+            None,
+        );
+    });
+}
+
+/// Outside a method there is no `$this`, so nothing is shared.
+#[test]
+fn leaves_functions_without_a_receiver_alone() {
+    let mut built = method(Second::SameRecord, |_, _, _| {});
+    built.function.flags.is_method = false;
+    built.function.params.clear();
+    let (changed, function) = run(built.function);
+    assert!(!changed);
+    assert_eq!(count_property_reads(&function), 2);
+    assert_eq!(count_ops(&function, Op::BufferGet), 2);
 }
 
 /// Even a user call whose effect summary is read-only keeps the reads apart: the region never

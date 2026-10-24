@@ -682,8 +682,14 @@ local slots unchanged. The classifier is default-deny: the loop allowlist minus
 every opcode that can run user code (even a call whose effect summary is
 read-only, since summaries drop the callee's local effects and matched slots are
 not proven free of address escapes), plus
-the no-op `acquire` and `release` of a buffer handle and named property reads
-refined to `reads_heap, may_throw`. A property store or `unset` on any object
+the no-op `acquire` and `release` of a buffer handle and named property reads of
+`$this` refined to `reads_heap, may_throw`. Only the method receiver is trusted,
+as a candidate and inside a region: effect refinement drops the null-receiver
+warning of any other receiver (a nullable one, or a non-nullable parameter a
+dynamic call passed `null`), and that warning can run a user error handler.
+Modules where a class declares `__get`, or where the eval bridge can declare one,
+skip the phase, so no trusted read dispatches to user code. A property store or
+`unset` on any object
 (another reference may alias the receiver), `buffer_free()`, a call, a release,
 an allocation, a warning or output ends the region.
 

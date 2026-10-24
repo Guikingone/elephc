@@ -65,6 +65,7 @@ pub(super) fn hoist_buffer_resolution(module: &mut Module) -> bool {
     if module.uses_pcntl_runtime(crate::ir::PcntlRuntime::AsyncSignals) {
         return false;
     }
+    let property_reuse = super::buffer_property_reuse::module_allows_property_reuse(module);
     let Module {
         functions,
         class_methods,
@@ -85,14 +86,14 @@ pub(super) fn hoist_buffer_resolution(module: &mut Module) -> bool {
         .chain(extern_callback_trampolines.iter_mut())
         .chain(runtime_callable_invokers.iter_mut())
     {
-        changed |= optimize_function(function);
+        changed |= optimize_function(function, property_reuse);
     }
     changed
 }
 
-/// Rewrites the buffer accesses of one function: loop hoisting first, then the straight-line
-/// reuse of buffer-typed property reads.
-fn optimize_function(function: &mut Function) -> bool {
+/// Rewrites the buffer accesses of one function: loop hoisting first, then, when the module
+/// allows it, the straight-line reuse of buffer-typed property reads.
+fn optimize_function(function: &mut Function, property_reuse: bool) -> bool {
     if !function
         .instructions
         .iter()
@@ -105,7 +106,8 @@ fn optimize_function(function: &mut Function) -> bool {
         return false;
     }
     let hoisted = hoist_loops(function);
-    super::buffer_property_reuse::reuse_property_buffers(function) || hoisted
+    let reused = property_reuse && super::buffer_property_reuse::reuse_property_buffers(function);
+    hoisted || reused
 }
 
 /// Hoists buffer resolution out of every qualifying loop of one function, outermost first.

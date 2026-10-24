@@ -125,6 +125,33 @@ final class Holder
 }
 "#;
 
+/// A method whose two reads of one buffer property have a property read on a nullable receiver
+/// between them; on `null` that read warns and runs the error handler the driver installs.
+const NULLABLE_PROBE_CLASS: &str = r#"<?php
+packed class Cell { public int $value; }
+final class Probe { public int $n = 0; }
+final class Holder
+{
+    public buffer<Cell> $cells;
+
+    public function __construct(public buffer<Cell> $spare)
+    {
+        $this->cells = buffer_new<Cell>(2);
+        $this->cells[0]->value = 1;
+    }
+
+    public function readAcrossNullableProbe(?Probe $probe): int
+    {
+        $first = $this->cells[0]->value;
+        $probe->n;
+        return $this->cells[0]->value - $first;
+    }
+}
+$spare = buffer_new<Cell>(1);
+$spare[0]->value = 3;
+$h = new Holder($spare);
+"#;
+
 /// Emits one named function's optimized or unoptimized textual EIR.
 fn function_ir(source: &str, optimized: bool, name: &str) -> String {
     let dir = make_cli_test_dir("elephc_buffer_property_reuse_ir");
@@ -278,4 +305,40 @@ fn test_buffer_property_table_example_shares_property_reads() {
         assert_eq!(ir.matches("= buffer_get ").count(), 1, "{method}: {ir}");
     }
     assert_both_modes_print(source, "entities=10; moving=5\n");
+}
+
+/// A warning between two reads (a property read on a `null` receiver) runs the error handler,
+/// which here replaces the buffer property, so the second read must see the new buffer.
+#[test]
+fn test_error_handler_replacing_the_property_keeps_the_second_read() {
+    let source = format!(
+        "{NULLABLE_PROBE_CLASS}set_error_handler(function (int $errno, string $message) use ($h): bool {{\n    $h->cells = $h->spare;\n    return $errno > 0 || $message !== '';\n}});\necho $h->readAcrossNullableProbe(null), \"\\n\";\n"
+    );
+    let ir = function_ir(&source, true, "Holder::readAcrossNullableProbe");
+    assert_eq!(buffer_property_reads(&ir), 2, "{ir}");
+    assert_eq!(ir.matches("= buffer_get ").count(), 2, "{ir}");
+    assert_both_modes_print(&source, "2\n");
+}
+
+/// An error handler that frees the buffer between two reads makes the second one report the
+/// use-after-free in both optimizer modes.
+#[test]
+fn test_error_handler_freeing_the_buffer_keeps_the_fatal() {
+    let source = format!(
+        "{NULLABLE_PROBE_CLASS}set_error_handler(function (int $errno, string $message) use ($h): bool {{\n    $cells = $h->cells;\n    buffer_free($cells);\n    return $errno > 0 || $message !== '';\n}});\necho \"before\\n\";\necho $h->readAcrossNullableProbe(null), \"\\n\";\n"
+    );
+    assert_both_modes_fail_after(&source, "before\n", "use of buffer after buffer_free()");
+}
+
+/// A class declaring `__get` anywhere in the program turns the reuse off, since a property read
+/// could then run user code.
+#[test]
+fn test_magic_get_in_the_program_disables_property_reuse() {
+    let source = format!(
+        "{TABLE_SOURCE}\nfinal class Magic {{ public function __get(string $name): int {{ return strlen($name); }} }}\necho (new Magic())->size, \"\\n\";\n"
+    );
+    let ir = function_ir(&source, true, "Table::matches");
+    assert_eq!(buffer_property_reads(&ir), 2, "{ir}");
+    assert_eq!(ir.matches("= buffer_get ").count(), 2, "{ir}");
+    assert_both_modes_print(&source, &format!("{TABLE_OUTPUT}4\n"));
 }

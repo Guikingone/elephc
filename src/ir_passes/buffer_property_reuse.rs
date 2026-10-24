@@ -28,14 +28,19 @@
 //!   `buffer_resolve` inserted right before that leader and become `buffer_*_resolved`, so a stale
 //!   handle still dies with the use-after-free fatal at the leader, as before.
 //! - Buffer `acquire`/`release` emit no code; a pair left with nothing but releases is dropped.
+//! - Only property reads on the method receiver `$this` are trusted, as candidates and inside a
+//!   region: effect refinement drops the null-receiver warning of any other receiver (a nullable
+//!   one, or a non-nullable parameter a dynamic call passed `null`), and that warning can run a
+//!   user error handler. Modules where a class declares `__get`, or where eval can declare one,
+//!   skip the phase, so no trusted property read dispatches to user code.
 //! - Only handles read from a property are rewritten. Local buffer handles in straight-line code
 //!   keep their per-access form.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::{
-    BlockId, Effects, Function, Immediate, InstId, Instruction, IrType, LocalKind, LocalSlotId, Op,
-    PassOrigin, ValueDef, ValueId,
+    BlockId, Effects, Function, Immediate, InstId, Instruction, IrType, LocalKind, LocalSlotId,
+    Module, Op, PassOrigin, ValueDef, ValueId,
 };
 use crate::types::PhpType;
 
@@ -119,6 +124,15 @@ impl Facts {
             .filter(|&inst_id| keep(&function.instructions[inst_id.as_raw() as usize]))
             .collect()
     }
+}
+
+/// Returns whether no named property read in the module can dispatch to a user `__get`: no class
+/// declares one and no eval bridge can declare a class later.
+pub(super) fn module_allows_property_reuse(module: &Module) -> bool {
+    !module.required_runtime_features.eval_bridge
+        && !module.class_infos.values().any(|class| {
+            class.methods.keys().any(|method| method.eq_ignore_ascii_case("__get"))
+        })
 }
 
 /// Shares buffer-typed property reads, record addresses and descriptors in one function, and
@@ -586,7 +600,9 @@ fn blocks_reached_avoiding(
 fn keeps_reads_stable(function: &Function, inst: &Instruction) -> bool {
     match inst.op {
         Op::Acquire | Op::Release => is_buffer_refcount_no_op(function, inst),
-        Op::PropGet if !function.is_packed_field_access(inst) => is_plain_property_read(inst),
+        Op::PropGet if !function.is_packed_field_access(inst) => {
+            is_plain_property_read(inst) && reads_the_method_receiver(function, inst)
+        }
         op if may_run_user_code(op) => false,
         _ => instruction_preserves_buffers(function, inst),
     }
@@ -639,12 +655,28 @@ fn is_plain_property_read(inst: &Instruction) -> bool {
         && inst.effects.difference(Effects::READS_HEAP | Effects::MAY_THROW).is_empty()
 }
 
-/// Returns whether an instruction is a plain read of a buffer-typed property of one receiver.
+/// Returns whether a property read's receiver is the method's own `$this`, which PHP never lets
+/// be null, reassigned or bound by reference inside the method, so the read cannot warn.
+fn reads_the_method_receiver(function: &Function, inst: &Instruction) -> bool {
+    function.flags.is_method
+        && function.params.first().is_some_and(|param| param.name == "this")
+        && inst
+            .operands
+            .first()
+            .and_then(|&receiver| defining_instruction(function, receiver))
+            .is_some_and(|load| {
+                load.op == Op::LoadLocal
+                    && load.immediate == Some(Immediate::LocalSlot(LocalSlotId::from_raw(0)))
+            })
+}
+
+/// Returns whether an instruction is a plain read of a buffer-typed property of `$this`.
 fn is_buffer_property_read(function: &Function, inst: &Instruction) -> bool {
     inst.op == Op::PropGet
         && inst.operands.len() == 1
         && !function.is_packed_field_access(inst)
         && is_plain_property_read(inst)
+        && reads_the_method_receiver(function, inst)
         && inst
             .result
             .and_then(|result| function.value(result))
