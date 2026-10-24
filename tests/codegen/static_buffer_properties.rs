@@ -452,8 +452,10 @@ echo "|", $list[1][0], "|", $named["front"][0];
 
 /// Verifies static `ptr<T>` and `?ptr<T>` properties exchange values with locals that hold
 /// `null` and record addresses as one pointer word (PR #2046): a loop result stored into a
-/// `?ptr<T>` static, a static read into a local that starts as `null`, and a ternary of a record
-/// address and a `ptr<T>` static that stays a pointer.
+/// `?ptr<T>` static, a static read into a local that starts as `null` and is stored back into a
+/// static, and a ternary of a record address and a `ptr<T>` static that stays a pointer. The
+/// branch-assigned local is not dereferenced directly: DCE sinks the statements after its `if`
+/// into the arm that keeps `null`, where a field read fails in codegen (task f1688e8f).
 #[test]
 fn test_static_pointer_properties_with_null_or_pointer_locals() {
     let out = compile_and_run(
@@ -476,17 +478,20 @@ for ($i = 0; $i < buffer_len($items); $i++) {
     }
 }
 Cursor::$best = $best;
+echo Cursor::$best === null ? "none" : Cursor::$best->x, "|";
 Cursor::$at = $items[2];
 $cur = null;
 if ($argc > 0) {
     $cur = Cursor::$at;
 }
-echo Cursor::$best === null ? "none" : Cursor::$best->x, "|", $cur === null ? "none" : $cur->x;
+echo $cur === null ? "none" : "set", "|";
+Cursor::$best = $cur;
+echo Cursor::$best === null ? "none" : Cursor::$best->x, "|";
 $pick = $argc > 1 ? $items[0] : Cursor::$at;
-echo "|", $pick->x;
+echo $pick->x;
 "#,
     );
-    assert_eq!(out, "9|6|6");
+    assert_eq!(out, "9|set|6|6");
 }
 
 /// Verifies the static-buffer-tables example compiles and prints its documented output.
