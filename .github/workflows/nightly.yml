@@ -254,6 +254,8 @@ jobs:
       # list instead of adding a third.
       - name: Copy mbstring data notices
         run: |
+          mkdir -p target/release/fileinfo-notices
+          cp crates/elephc-fileinfo/NOTICE.md target/release/fileinfo-notices/
           mkdir -p target/release/mbstring-notices
           cp crates/elephc-mbstring/NOTICE.md target/release/mbstring-notices/
           cp crates/elephc-mbstring/src/unicode/data/LICENSE-UNICODE target/release/mbstring-notices/
@@ -263,7 +265,7 @@ jobs:
         run: |
           cd target/release
           TARBALL="elephc-nightly-${{ matrix.target }}.tar.gz"
-          tar czf "$TARBALL" elephc libelephc_*.a mbstring-notices
+          tar czf "$TARBALL" elephc libelephc_*.a mbstring-notices fileinfo-notices
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$TARBALL" > "$TARBALL.sha256"
           else

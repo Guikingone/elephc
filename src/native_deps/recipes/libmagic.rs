@@ -21,6 +21,8 @@ const FLAGS: &[&str] = &[
     "--disable-shared", "--enable-static", "--disable-zlib", "--disable-bzlib",
     "--disable-xzlib", "--disable-zstdlib", "--disable-lzlib", "--disable-lrziplib",
     "--disable-libseccomp", "CFLAGS=-O2 -fPIC",
+    // Fileinfo does not launch external decompressors, including on iOS.
+    "ac_cv_func_fork=no", "ac_cv_func_vfork=no", "ac_cv_func_posix_spawnp=no",
 ];
 
 /// Builds the host database compiler when needed, then the target archives and database.

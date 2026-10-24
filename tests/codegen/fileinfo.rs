@@ -125,3 +125,39 @@ echo FILEINFO_NONE, ",", FILEINFO_SYMLINK, ",", FILEINFO_DEVICES, ",", FILEINFO_
 "#);
     assert_eq!(out, "0,2,8,16,32,128,256,1024,1040,2048,16777216");
 }
+
+/// Continuation, raw descriptions, Apple metadata and extension flags use the magic engine.
+#[test]
+fn test_fileinfo_extended_options() {
+    if fileinfo_native::skip("test_fileinfo_extended_options") { return; }
+    let out = compile_and_run(r#"<?php
+$p = tempnam(sys_get_temp_dir(), "magic");
+file_put_contents($p, "0 string ELEPHC First document\n!:apple ELPHDocu\n!:ext elph\n0 string ELEPHC Second document\n");
+$f = new finfo(FILEINFO_NONE, $p);
+echo $f->buffer("ELEPHC\0data", FILEINFO_APPLE), "\n";
+echo $f->buffer("ELEPHC\0data", FILEINFO_EXTENSION), "\n";
+$description = $f->buffer("ELEPHC\0data", FILEINFO_CONTINUE | FILEINFO_RAW);
+echo strpos($description, "First document") !== false ? "first\n" : "bad\n";
+echo strpos($description, "Second document") !== false ? "second\n" : "bad\n";
+unlink($p);
+"#);
+    assert_eq!(out, "ELPHDocu\nelph\nfirst\nsecond\n");
+}
+
+/// Native storage is freed even when a PHP subclass provides its own destructor.
+#[test]
+fn test_fileinfo_subclass_native_ownership() {
+    if fileinfo_native::skip("test_fileinfo_subclass_native_ownership") { return; }
+    let out = compile_and_run(r#"<?php
+extern "elephc_fileinfo" { fn elephc_fileinfo_live_handles(): int; }
+class DocumentInfo extends finfo {
+    public function __destruct() { echo "destroyed\n"; }
+}
+$before = elephc_fileinfo_live_handles();
+$f = new DocumentInfo(FILEINFO_MIME_TYPE);
+echo $f->buffer("hello"), "\n";
+unset($f);
+echo elephc_fileinfo_live_handles() === $before ? "clean\n" : "leak\n";
+"#);
+    assert_eq!(out, "text/plain\ndestroyed\nclean\n");
+}

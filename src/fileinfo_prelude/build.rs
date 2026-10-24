@@ -67,36 +67,45 @@ fn query_method(file: bool) -> crate::synthetic_class::MethodBuilder {
 /// Builds the owning class, including PHP's clone and serialization restrictions.
 fn finfo_class() -> Stmt {
     let mut constructor = vec![
-        s_assign("_old", e_this_prop("__elephc_handle")),
         s_prop_assign(e_this(), "__elephc_handle", e_int(0)),
-        s_expr(e_call("elephc_fileinfo_free", vec![e_var("_old")])),
+        s_prop_assign(e_this(), "__elephc_owner", e_null()),
         s_assign("_database", e_null_coalesce(e_var("magic_database"), e_str(""))),
         reject(e_binop(e_call("strpos", vec![e_var("_database"), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)), "ValueError", "finfo::__construct(): Argument #2 ($magic_database) must not contain any null bytes"),
         s_assign("_raw", e_call("elephc_fileinfo_open", vec![e_var("flags"), e_var("_database")])),
     ];
     constructor.push(s_if(eq(e_var("_raw"), e_int(0)), vec![s_throw(e_new_fq("Exception", vec![e_call("elephc_fileinfo_error", vec![])]))], vec![], None));
+    constructor.push(s_prop_assign(e_this(), "__elephc_owner", e_new_fq("__ElephcFinfoHandle", vec![e_var("_raw")])));
     constructor.push(s_prop_assign(e_this(), "__elephc_handle", e_var("_raw")));
     let mut set_flags = require_handle();
     set_flags.extend([s_expr(e_call("elephc_fileinfo_set_flags", vec![e_var("_raw"), e_var("flags")])), s_return(e_bool(true))]);
     class("finfo")
-        .prop("__elephc_handle", TypeExpr::Int, Some(e_int(0)))
+        .private_prop("__elephc_handle", TypeExpr::Int, Some(e_int(0)))
+        .private_prop("__elephc_owner", t_nullable(t_class("__ElephcFinfoHandle")), Some(e_null()))
         .method(method("__construct").param_default("flags", TypeExpr::Int, e_int(0))
             .param_default("magic_database", t_nullable(TypeExpr::Str), e_null()).body(constructor))
-        .method(method("__destruct").body(vec![
-            s_assign("_raw", e_this_prop("__elephc_handle")),
-            s_prop_assign(e_this(), "__elephc_handle", e_int(0)),
-            s_expr(e_call("elephc_fileinfo_free", vec![e_var("_raw")])),
-        ]))
         .method(query_method(false)).method(query_method(true))
         .method(method("set_flags").param("flags", TypeExpr::Int).returns(TypeExpr::Bool).body(set_flags))
         .method(method("__debugInfo").returns(t_array()).returning(e_array(vec![])))
         .method(method("__clone").final_().returns(TypeExpr::Void).body(vec![
             s_prop_assign(e_this(), "__elephc_handle", e_int(0)),
+            s_prop_assign(e_this(), "__elephc_owner", e_null()),
             s_throw(e_new_fq("Error", vec![concat(e_str("Trying to clone an uncloneable object of class "), e_call("get_class", vec![e_this()]))])),
         ]))
         .method(method("__serialize").returns(t_array()).body(vec![s_throw(e_new_fq("Exception", vec![e_str("Serialization of 'finfo' is not allowed")]))]))
         .method(method("__unserialize").param("data", t_array()).returns(TypeExpr::Void).body(vec![s_throw(e_new_fq("Exception", vec![e_str("Unserialization of 'finfo' is not allowed")]))]))
         .build()
+}
+
+/// Keeps native cleanup independent of a finfo subclass's user-defined destructor.
+fn handle_owner() -> Stmt {
+    class("__ElephcFinfoHandle").final_()
+        .private_prop("handle", TypeExpr::Int, Some(e_int(0)))
+        .method(method("__construct").param("handle", TypeExpr::Int).body(vec![s_prop_assign(e_this(), "handle", e_var("handle"))]))
+        .method(method("__destruct").body(vec![
+            s_assign("_handle", e_this_prop("handle")),
+            s_prop_assign(e_this(), "handle", e_int(0)),
+            s_expr(e_call("elephc_fileinfo_free", vec![e_var("_handle")])),
+        ])).build()
 }
 
 /// Builds procedural wrappers with the shared contract's PHP parameter names.
@@ -148,6 +157,7 @@ pub(super) fn declarations() -> Program {
             extern_fn("elephc_fileinfo_buffer", "elephc_fileinfo").param("handle", CType::Int).param("data", CType::Str).param("length", CType::Int).param("flags", CType::Int).returns(CType::Str).build(),
             extern_fn("elephc_fileinfo_ok", "elephc_fileinfo").returns(CType::Int).build(),
             extern_fn("elephc_fileinfo_error", "elephc_fileinfo").returns(CType::Str).build(),
+            handle_owner(),
             finfo_class(),
         ];
         out.extend(functions());

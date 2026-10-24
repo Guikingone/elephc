@@ -14,3 +14,12 @@ Use upstream file/libmagic 5.46, pinned by source size and SHA-256. Build a host
 A small Rust staticlib owns opaque handles. The PHP surface uses ordinary synthetic declarations and shared contracts, following the existing XML prelude and native-function eval bridge. All generated code uses the existing EIR and extern ABI paths.
 
 PHP 8 semantics include no-op finfo_close, per-call flag restoration, binary-safe buffers, false results on lookup failures, constructor exceptions, stream input and contexts, and destruction without duplicate release. CI validates the supported target matrix. The user explicitly requested no local heavy builds or tests.
+
+## Current validation
+
+Draft PR: https://github.com/illegalstudio/elephc/pull/2061.
+The remote compiler and exporter build successfully. CI found stale function-count
+snapshots and a missing docs prelude-source mapping; those are being corrected.
+Native behavior and the full target matrix remain under CI verification.
+Native ownership uses a private final owner object so a finfo subclass destructor
+cannot bypass release of its libmagic instance.

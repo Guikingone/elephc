@@ -174,3 +174,9 @@ pub extern "C" fn elephc_fileinfo_error() -> *const c_char { ERROR.with(|slot| s
 
 #[cfg(all(test, elephc_fileinfo_native))]
 mod tests;
+
+/// Returns the number of live opaque instances for ownership diagnostics.
+#[no_mangle]
+pub extern "C" fn elephc_fileinfo_live_handles() -> i64 {
+    guard(|| registry().lock().unwrap_or_else(|e| e.into_inner()).instances.len() as i64)
+}

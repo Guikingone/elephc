@@ -588,6 +588,18 @@ mod tests {
         assert_eq!(version.supported_targets, TARGETS);
     }
 
+    /// The fileinfo package embeds its database before libmagic and supports every target.
+    #[test]
+    fn fileinfo_libmagic_catalog_is_pinned_and_target_complete() {
+        let spec = version("libmagic", None).expect("fileinfo native package");
+        assert_eq!(spec.version, "5.46");
+        assert_eq!(spec.source.exact_size, 1_312_892);
+        assert_eq!(spec.source.sha256, "c9cc77c7c560c543135edc555af609d5619dbef011997e988ce40a3d75d86088");
+        assert_eq!(spec.supported_targets, TARGETS);
+        assert_eq!(spec.ordered_link_outputs, &["lib/libelephc_magic_database.a", "lib/libmagic.a"]);
+        assert!(spec.dependencies.is_empty());
+    }
+
     /// Verifies the official libxml2 source identity, the shim-first static archive contract, and
     /// the complete public header set (45 shipped plus the generated `xmlversion.h`). libxml2 is
     /// the first `.tar.xz` source, so the derived archive format is pinned here too.

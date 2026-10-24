@@ -44,6 +44,7 @@ macro_rules! class {
 }
 
 pub(crate) static CLASSES: &[ClassContract] = &[
+    class!("__ElephcFinfoHandle", "__elephcfinfohandle", Class, Elephc, Prelude, internal: true),
     class!("__ElephcCallableSessionHandler", "__elephccallablesessionhandler", Class, Elephc, Prelude, internal: true),
     class!("__ElephcDOMNodeListIterator", "__elephcdomnodelistiterator", Class, Elephc, Prelude, internal: true),
     class!("__ElephcMysqliResultIterator", "__elephcmysqliresultiterator", Class, Elephc, Prelude, internal: true),
