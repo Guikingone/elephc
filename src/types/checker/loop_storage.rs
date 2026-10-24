@@ -423,6 +423,9 @@ fn join_loop_flow_type(existing: PhpType, incoming: PhpType) -> PhpType {
     if existing == incoming {
         return existing;
     }
+    if let Some(pointer) = join_pointer_flow_types(&existing, &incoming) {
+        return pointer;
+    }
     if existing.is_php_array() || incoming.is_php_array() {
         // A boxed representation need not erase a proven packed-or-hash array contract.
         return if is_array_like(&existing) && is_array_like(&incoming) {
@@ -473,6 +476,39 @@ fn join_loop_flow_type(existing: PhpType, incoming: PhpType) -> PhpType {
         (left, right) if left.codegen_repr() == right.codegen_repr() => left,
         _ => PhpType::Mixed,
     }
+}
+
+/// Joins `null` and pointer values of one local into the pointer word they share.
+///
+/// A `?ptr<T>` is one pointer word where `null` is address 0, so `null`, pointers and `?ptr<T>`
+/// values join to that pointer (`?ptr<T>` when either side can be `null`) instead of boxed
+/// `mixed`. Pointer targets merge as the checker's assignment merge does
+/// (`merge_local_pointer_targets`). Returns `None` unless both sides are one of these shapes and
+/// at least one of them holds a pointer.
+fn join_pointer_flow_types(existing: &PhpType, incoming: &PhpType) -> Option<PhpType> {
+    /// Splits a flow type into its pointer (none for `null`) and whether it can be `null`.
+    fn split(ty: &PhpType) -> Option<(Option<PhpType>, bool)> {
+        match ty {
+            PhpType::Pointer(_) => Some((Some(ty.clone()), false)),
+            PhpType::Void | PhpType::Never => Some((None, true)),
+            PhpType::Union(members) => {
+                crate::types::nullable_pointer_union_member(members).map(|p| (Some(p), true))
+            }
+            _ => None,
+        }
+    }
+    let (left, left_null) = split(existing)?;
+    let (right, right_null) = split(incoming)?;
+    let pointer = match (left, right) {
+        (Some(left), Some(right)) => crate::types::merge_local_pointer_targets(&left, &right),
+        (Some(pointer), None) | (None, Some(pointer)) => pointer,
+        (None, None) => return None,
+    };
+    Some(if left_null || right_null {
+        PhpType::Union(vec![pointer, PhpType::Void])
+    } else {
+        pointer
+    })
 }
 
 /// Joins array payload types so every live element has one stable runtime representation.
@@ -552,12 +588,19 @@ fn is_array_like(ty: &PhpType) -> bool {
 /// and still sees null. `Mixed` is the one representation that holds both on every path, which
 /// is also what makes the `=== null` guard a real runtime tag test instead of a folded
 /// constant.
+///
+/// A local assigned only pointers (packed record addresses read from a buffer included) gets
+/// `?ptr<T>` instead: one pointer word holds both on every path, with `null` as address 0, so
+/// `=== null` tests the address and field reads reach the record rather than a boxed cell.
 fn null_entry_contract(entry_ty: &PhpType, fixed_ty: &PhpType) -> Option<PhpType> {
     if !matches!(entry_ty.codegen_repr(), PhpType::Void) {
         return None;
     }
     if matches!(fixed_ty.codegen_repr(), PhpType::Void) {
         return None;
+    }
+    if crate::types::is_nullable_pointer_type(fixed_ty) {
+        return Some(fixed_ty.clone());
     }
     Some(PhpType::Mixed)
 }
