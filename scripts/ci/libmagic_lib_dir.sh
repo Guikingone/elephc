@@ -1,11 +1,11 @@
 #!/bin/sh
 # Print the `lib/` directory of the NEWEST managed native libmagic artifact for one
-# elephc target, so a shell step can export it as ELEPHC_XML_LIBXML2_LIB_DIR for
-# `cargo test -p elephc-xml` (crates/elephc-xml/build.rs reads that variable, links
+# elephc target, so a shell step can export it as ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR for
+# `cargo test -p elephc-fileinfo` (crates/elephc-fileinfo/build.rs reads that variable, links
 # libelephc_magic_database.a + libmagic.a from it, and compiles the libmagic-calling unit
-# tests in behind cfg(elephc_xml_native)).
+# tests in behind cfg(elephc_fileinfo_native)).
 #
-# This is the shell twin of tests/codegen/support/xml_native.rs: it reads the same
+# This is the shell twin of tests/codegen/support/fileinfo_native.rs: it reads the same
 # durable cache the production resolver writes (ELEPHC_NATIVE_CACHE, else
 # $XDG_CACHE_HOME/elephc/native, else $HOME/.cache/elephc/native), walks
 #   artifacts/libmagic/<version>/r<recipe>/<source-sha>/<target>/<abi>/<toolchain>/lib
