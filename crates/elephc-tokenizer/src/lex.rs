@@ -79,6 +79,9 @@ pub(super) fn tokenize(source: &[u8]) -> Vec<Token> {
             None if raw.len() == 1 => id("T_BAD_CHARACTER"),
             None => id("T_ENCAPSED_AND_WHITESPACE"),
         };
+        if matches!(kind, Some(TokenKind::SingleLineComment | TokenKind::HashComment)) {
+            while source.get(end).is_some_and(|b| !matches!(b, b'\r' | b'\n')) && source.get(end..end + 2) != Some(b"?>") { end += 1; }
+        }
         if matches!(kind, Some(TokenKind::OpenTag)) {
             end += match source.get(end..) {
                 Some([b'\r', b'\n', ..]) => 2,

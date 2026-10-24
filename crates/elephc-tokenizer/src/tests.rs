@@ -86,6 +86,7 @@ fn tokenizer_php85_differential_corpus() {
     assert!(output.status.success(), "PHP oracle failed: {}", String::from_utf8_lossy(&output.stderr));
     let expected: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
     let mut case = 0;
+    let mut mismatches = Vec::new();
     for source in sources {
         for flags in [0, TOKEN_PARSE] {
             let got = match tokenize(&source, flags) {
@@ -95,10 +96,20 @@ fn tokenizer_php85_differential_corpus() {
                 ])).collect()),
                 Err(_) => json!("ParseError"),
             };
-            assert_eq!(got, expected[case], "flags={flags}, source={}", String::from_utf8_lossy(&source));
+            if got != expected[case] {
+                let detail = match (&got, &expected[case]) {
+                    (Value::Array(a), Value::Array(b)) => {
+                        let index = a.iter().zip(b).position(|(a,b)| a != b).unwrap_or(a.len().min(b.len()));
+                        format!("token {index}: got {:?}; expected {:?}; counts {} vs {}", a.get(index), b.get(index), a.len(), b.len())
+                    }
+                    _ => format!("got {}; expected {}", if got.is_array() { "tokens" } else { "ParseError" }, if expected[case].is_array() { "tokens" } else { "ParseError" }),
+                };
+                mismatches.push(format!("flags={flags}, source={}\n{detail}", String::from_utf8_lossy(&source)));
+            }
             case += 1;
         }
     }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n\n"));
 }
 
 /// Covers trivia, PHP 8.5 syntax, parser feedback, interpolation and malformed input.

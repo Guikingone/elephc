@@ -47,11 +47,12 @@ pub(super) fn validate(source: &[u8], tokens: &mut [Token]) -> Result<(), ParseE
 /// Collects local identifier positions, skipping AST nodes with dedicated PHP token kinds.
 fn collect_names(node: Node<'_, '_>, names: &mut HashSet<usize>) {
     if matches!(node, Node::MagicConstant(_)) { return; }
+    // `::class` remains T_CLASS, whereas a method named class receives feedback.
+    if let Node::ClassLikeConstantSelector(mago_syntax::cst::ClassLikeConstantSelector::Identifier(identifier)) = node {
+        if identifier.value.eq_ignore_ascii_case(b"class") { return; }
+    }
     if let Node::LocalIdentifier(identifier) = node {
-        // `::class` is a language token even though Mago represents it as an identifier.
-        if !identifier.value.eq_ignore_ascii_case(b"class") {
-            names.insert(identifier.span.start.offset as usize);
-        }
+        names.insert(identifier.span.start.offset as usize);
         return;
     }
     node.visit_children(|child| collect_names(child, names));
