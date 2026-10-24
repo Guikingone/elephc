@@ -23,7 +23,7 @@ use crate::ir::{
 };
 use crate::types::PhpType;
 
-use super::super::rewrite::neutralize_to_nop;
+use super::super::rewrite::{defining_instruction, neutralize_to_nop};
 use super::{instruction_uses, terminator_used_values};
 
 /// Largest literal subtrahend whose overflowing difference still rounds to exactly -2^63.
@@ -35,9 +35,15 @@ struct Plan {
     releases: Vec<InstId>,
 }
 
-/// Returns whether the function holds a checked subtraction this rewrite could apply to.
+/// Returns whether a PHP comparison in the function reads a bound this rewrite could unbox.
 pub(super) fn has_candidate(function: &Function) -> bool {
-    function.instructions.iter().any(|inst| candidate(function, inst))
+    function.instructions.iter().any(|inst| {
+        inst.op == Op::PhpRelCmp
+            && inst.operands.iter().any(|&operand| {
+                defining_instruction(function, operand)
+                    .is_some_and(|definition| candidate(function, definition))
+            })
+    })
 }
 
 /// Rewrites every bound whose observers are all strict comparisons; returns whether any changed.
