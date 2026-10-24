@@ -128,9 +128,9 @@ initialize(new Setter(), $argc);
     }
 }
 
-/// Variance keeps ordinary and final methods virtual across instantiated final-class receivers.
+/// Variance keeps real calls for ordinary and final methods on instantiated final-class receivers.
 #[test]
-fn method_effects_keep_instantiated_final_class_calls_virtual() {
+fn method_effects_keep_instantiated_final_class_calls_real() {
     let source = r#"<?php
 class InlineAnimal {}
 class InlineDog extends InlineAnimal {}
@@ -147,7 +147,7 @@ echo inspect(new VarianceBox<InlineDog>(new InlineDog())), "\n";
         let calls = called_methods(&module, function(&module, "inspect"));
         for name in ["kind", "finalKind"] {
             assert!(calls.iter().any(|call| call == name),
-                "{target}: {name} must retain its specialization dispatch: {calls:?}");
+                "{target}: {name} must stay a real call: {calls:?}");
         }
     }
 }

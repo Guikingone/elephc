@@ -461,7 +461,7 @@ object they accept, as a borrowed argument) plus a few of its own:
 - a source local assignment of an acquired concatenation keeps its real boundary, because
   that store implicitly resets the callee's string scratch. Direct returned concatenations
   remain eligible;
-- generic instantiations with a vtable slot keep runtime dispatch even when the class or
+- generic instantiations with a vtable slot keep a real call boundary even when the class or
   method is `final`: covariance and contravariance can pass a different monomorphized
   specialization through the receiver's static type, with its own lexical class and state;
 - the program does not observe PHP frames: when anything can call `debug_backtrace()` (or

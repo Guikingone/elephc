@@ -35,9 +35,9 @@ echo exercise(new Counter(), $argc), "\n";
     assert_both_modes(source, true, "4099\n");
 }
 
-/// Spliced string writes and concatenation never reset the caller's in-flight string scratch.
+/// Spliced string writes and directly returned concatenations preserve output and owners.
 #[test]
-fn test_method_effects_string_building_keeps_caller_scratch() {
+fn test_method_effects_string_building_and_property_write() {
     let source = r#"<?php
 final class Label {
     private string $prefix = '<';
