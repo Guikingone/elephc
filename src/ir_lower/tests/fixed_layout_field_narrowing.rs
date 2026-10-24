@@ -6,9 +6,9 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Float arithmetic over a loop counter is `float` to the checker but stays boxed in EIR, and a
-//!   `mixed` call result is boxed by definition; the packed store must receive the narrowed raw
-//!   payload, never the box.
+//! - A `mixed` call result is boxed by definition, whatever the loop-counter typing decides
+//!   for arithmetic, so it pins the lowering shape: the packed store must receive the narrowed
+//!   raw payload, never the box.
 
 use crate::ir::{IrType, Op};
 use crate::types::PhpType;
@@ -21,8 +21,8 @@ fn boxed_values_reach_packed_scalar_fields_through_strict_narrowing() {
         r#"<?php
 packed class Vec2 { public float $x; public bool $live; }
 function load(mixed $v) { return $v; }
-$pts = buffer_new<Vec2>(3);
-for ($i = 0; $i < 3; $i++) { $pts[$i]->x = 1.5 * ($i + 1); }
+$pts = buffer_new<Vec2>(1);
+$pts[0]->x = load(2.5);
 $pts[0]->live = load(true);
 "#,
     );

@@ -296,3 +296,55 @@ var_dump($m[1]);
     );
     assert_eq!(out, "float(2.5)\nbool(true)\n");
 }
+
+/// Verifies packed float and bool fields stored from buffer merges: an element of a ternary or
+/// `match` of two buffers is a plain scalar, and float arithmetic over it with a `mixed` value is
+/// narrowed into the field like any other runtime value.
+#[test]
+fn test_packed_fields_store_buffer_merge_elements() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Cell { public float $x; public bool $live; }
+function load(mixed $v) { return $v; }
+$fa = buffer_new<float>(1);
+$fb = buffer_new<float>(1);
+$fa[0] = 2.5;
+$fb[0] = 4.5;
+$flags = buffer_new<bool>(1);
+$flags[0] = true;
+$cells = buffer_new<Cell>(1);
+$cells[0]->x = ($argc > 0 ? $fa : $fb)[0];
+$picked = match ($argc) { 1 => $fb, default => $fa };
+$cells[0]->x += $picked[0] * load(2);
+$cells[0]->live = ($argc > 0 ? $flags : $flags)[0];
+echo $cells[0]->x, "\n";
+var_dump($cells[0]->live);
+"#,
+    );
+    assert_eq!(out, "11.5\nbool(true)\n");
+}
+
+/// Verifies stores through a local that starts as `null` and later holds a buffer element: the
+/// local is one pointer word, a `ptr<T>` receiver once narrowed, and boxed values written through
+/// it are narrowed into the record's float and bool fields.
+#[test]
+fn test_packed_fields_narrow_through_a_null_then_record_local() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Body { public float $x; public bool $live; }
+function load(mixed $v) { return $v; }
+$bodies = buffer_new<Body>(3);
+$hit = null;
+for ($i = 0; $i < 3; $i++) {
+    if ($i == 1) { $hit = $bodies[$i]; }
+}
+if ($hit !== null) {
+    $hit->x = 1.5 * ($argc + 1);
+    $hit->live = load(true);
+}
+echo $bodies[1]->x, " ", $bodies[0]->x, "\n";
+var_dump($bodies[1]->live);
+"#,
+    );
+    assert_eq!(out, "3 0\nbool(true)\n");
+}
