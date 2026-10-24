@@ -2,7 +2,7 @@
 title: "preg_match()"
 description: "Performs a regular expression match."
 sidebar:
-  order: 766
+  order: 772
 ---
 
 ## preg_match()

@@ -4,7 +4,7 @@
 - [ ] Add the optional fileinfo bridge and PHP finfo class, six functions and eleven constants.
 - [ ] Expose the same declarations to dynamic eval and preserve ownership and failure behavior.
 - [ ] Add focused native, codegen, error and target coverage plus a practical example.
-- [ ] Generate and audit builtin documentation in CI without local builds or heavy tests.
+- [x] Generate and audit builtin documentation in CI without local builds or heavy tests.
 - [ ] Open a draft pull request, follow its exact-head CI and correct failures.
 
 ## Implementation
@@ -23,3 +23,8 @@ snapshots and a missing docs prelude-source mapping; those are being corrected.
 Native behavior and the full target matrix remain under CI verification.
 Native ownership uses a private final owner object so a finfo subclass destructor
 cannot bypass release of its libmagic instance.
+
+The exact-head CI exporter and target architecture audit passed. The docs pipeline's
+16 tests, static docs audit (zero errors), site validation and PHP comparison tests
+passed. Generated artifacts were downloaded and copied without local compilation.
+The comparison now reports fileinfo as 6/6 functions, 1/1 classes and 11/11 constants.

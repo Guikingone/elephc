@@ -60,3 +60,24 @@ object releases its native state automatically. Cloning and serialization are
 refused. Content descriptions and the set of recognized file formats follow the
 pinned upstream libmagic database, which can differ from the database bundled by
 a particular PHP release.
+
+<!-- elephc:generated:symbols:begin -->
+
+## Functions {#functions}
+
+Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`finfo_buffer()`](./builtins/io/finfo_buffer.md) | `(finfo $finfo, string $string, int $flags = 0, ?resource $context = null): string|false` | `string|false` | ✓ | ✓ |
+| [`finfo_close()`](./builtins/io/finfo_close.md) | `(finfo $finfo): bool` | `bool` | ✓ | ✓ |
+| [`finfo_file()`](./builtins/io/finfo_file.md) | `(finfo $finfo, string $filename, int $flags = 0, ?resource $context = null): string|false` | `string|false` | ✓ | ✓ |
+| [`finfo_open()`](./builtins/io/finfo_open.md) | `(int $flags = 0, ?string $magic_database = null): finfo|false` | `finfo|false` | ✓ | ✓ |
+| [`finfo_set_flags()`](./builtins/io/finfo_set_flags.md) | `(finfo $finfo, int $flags): bool` | `bool` | ✓ | ✓ |
+| [`mime_content_type()`](./builtins/io/mime_content_type.md) | `(string|resource $filename): string|false` | `string|false` | ✓ | ✓ |
+
+Classes: `finfo`.
+
+Constants: `FILEINFO_APPLE`, `FILEINFO_CONTINUE`, `FILEINFO_DEVICES`, `FILEINFO_EXTENSION`, `FILEINFO_MIME`, `FILEINFO_MIME_ENCODING`, `FILEINFO_MIME_TYPE`, `FILEINFO_NONE`, `FILEINFO_PRESERVE_ATIME`, `FILEINFO_RAW`, `FILEINFO_SYMLINK`.
+
+<!-- elephc:generated:symbols:end -->

@@ -2,7 +2,7 @@
 title: "mb_strcut() - internals"
 description: "Compiler internals for mb_strcut(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 879
+  order: 885
 ---
 
 ## `mb_strcut()` - internals

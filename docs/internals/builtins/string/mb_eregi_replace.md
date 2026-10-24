@@ -2,7 +2,7 @@
 title: "mb_eregi_replace() - internals"
 description: "Compiler internals for mb_eregi_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 858
+  order: 864
 ---
 
 ## `mb_eregi_replace()` - internals
