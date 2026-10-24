@@ -76,8 +76,9 @@ echo $a ? "live" : "freed", "\n";
 }
 
 /// A `throw` arm beside buffer arms keeps the merge a buffer: `match` with a throwing default,
-/// a ternary, `??` and `?:` hand back the buffer when the throw is not taken and raise the
-/// exception when it is.
+/// a ternary, `??`, `??=` expressions on an element and on a literal dynamic property name
+/// (whose write is skipped once the throw arm ends its branch), and `?:` hand back the buffer
+/// when the throw is not taken and raise the exception when it is.
 #[test]
 fn test_buffer_merges_with_throw_arms() {
     let out = compile_and_run(
@@ -92,6 +93,7 @@ function pick(int $k, buffer<int> $a, buffer<int> $b): buffer<int> {
 function either(bool $first, buffer<int> $a, buffer<int> $b): buffer<int> {
     return $first ? $a : throw new RuntimeException("not first");
 }
+final class Holder { public buffer<int> $buf; }
 $a = buffer_new<int>(1);
 $b = buffer_new<int>(1);
 $a[0] = 3;
@@ -110,6 +112,12 @@ try {
 $list = [$a];
 $got = $list[0] ?? throw new RuntimeException("missing");
 echo $got[0], "|";
+$kept = ($list[0] ??= throw new RuntimeException("unset slot"));
+echo $kept[0], "|";
+$holder = new Holder();
+$holder->buf = $b;
+$viaName = ($holder->{'buf'} ??= throw new RuntimeException("no buf"));
+echo $viaName[0], "|";
 try {
     $none = @$list[5] ?: throw new RuntimeException("empty slot");
     echo $none[0];
@@ -118,7 +126,7 @@ try {
 }
 "#,
     );
-    assert_eq!(out, "34|3|no buffer 2|not first|3|empty slot\n");
+    assert_eq!(out, "34|3|no buffer 2|not first|3|3|4|empty slot\n");
 }
 
 /// Double-buffered state held in properties and chosen by methods with a ternary and a `match`:
