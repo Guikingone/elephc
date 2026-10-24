@@ -135,12 +135,12 @@ class PhpToken implements \Stringable {
         $pos = 0;
         foreach ($tokens as $token) {
             if (is_array($token)) {
-                $id = $token[0];
-                $text = $token[1];
-                $line = $token[2];
+                $id = (int)$token[0];
+                $text = (string)$token[1];
+                $line = (int)$token[2];
             } else {
                 $id = ord($token[strlen($token) - 1]);
-                $text = $token;
+                $text = (string)$token;
             }
             $result[] = new static($id, $text, $line, $pos);
             $pos += strlen($text);
