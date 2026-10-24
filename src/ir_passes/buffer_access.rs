@@ -45,6 +45,7 @@
 //!   dispatches signal handlers after every instruction.
 //! - Before resolving loops, `super::buffer_property_loops` relocates stable `$this` buffer
 //!   reads, adding a scalar entry guard when a zero-trip loop must not read the property.
+//!   Raw record addresses are shared before converting loop accesses to resolved forms.
 //! - After the loops, `super::buffer_property_reuse` shares the property read, the resolution and
 //!   the record address of repeated `$this->slots[$i]` accesses in straight-line code, under the
 //!   same function and module guards.
@@ -94,8 +95,8 @@ pub(super) fn hoist_buffer_resolution(module: &mut Module) -> bool {
     changed
 }
 
-/// Rewrites the buffer accesses of one function: loop hoisting first, then, when the module
-/// allows it, the straight-line reuse of buffer-typed property reads.
+/// Moves stable properties and shares raw record addresses before loop descriptor hoisting,
+/// then shares any remaining straight-line descriptors under the property-reuse gate.
 fn optimize_function(function: &mut Function, property_reuse: bool) -> bool {
     if !function
         .instructions
@@ -109,9 +110,11 @@ fn optimize_function(function: &mut Function, property_reuse: bool) -> bool {
         return false;
     }
     let properties = property_reuse && super::buffer_property_loops::hoist_property_reads(function);
+    let records = property_reuse
+        && super::buffer_property_reuse::reuse_property_reads_and_records(function);
     let hoisted = hoist_loops(function, property_reuse);
     let reused = property_reuse && super::buffer_property_reuse::reuse_property_buffers(function);
-    properties || hoisted || reused
+    properties || records || hoisted || reused
 }
 
 /// Hoists buffer resolution out of every qualifying loop of one function, outermost first.

@@ -556,6 +556,26 @@ fn shares_a_read_before_a_loop_with_the_loop_body() {
     );
 }
 
+/// A cached property handle still reuses its entry record before loop resolution can rewrite it.
+#[test]
+fn shares_a_cached_property_record_before_loop_resolution() {
+    let mut built = loop_method(|_, _, _| {});
+    let handle = defining_instruction(&built.function, built.second_record).operands[0];
+    let property = defining_instruction(&built.function, handle).operands[0];
+    let ValueDef::Instruction { inst: property_inst, .. } = built.function.values[property.as_raw() as usize].def
+        else { unreachable!("property read defines the handle"); };
+    crate::ir_passes::rewrite::replace_all_uses(
+        &mut built.function, &std::collections::HashMap::from([(property, built.first_property)]),
+    );
+    crate::ir_passes::rewrite::neutralize_to_nop(&mut built.function.instructions[property_inst.as_raw() as usize]);
+    let (changed, function) = run(built.function);
+    assert!(changed);
+    assert_eq!(count_ops(&function, Op::BufferGet), 1);
+    assert_eq!(count_ops(&function, Op::BufferGetResolved), 0);
+    assert_eq!(count_ops(&function, Op::BufferResolve), 0);
+    assert_eq!(defining_instruction(&function, built.second_field).operands, vec![built.first_record]);
+}
+
 /// Code after the second read in the loop body runs before that read's next iteration, so a
 /// property store or a `buffer_free()` there keeps every iteration's read apart from the one
 /// before the loop, although nothing separates the two on the path into the first iteration.

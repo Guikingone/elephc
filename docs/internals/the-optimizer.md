@@ -667,6 +667,12 @@ its original instruction id and lexical scope. Calls, property writes, frees,
 conditional reads, faulting prefixes and live-out header SSA values prevent
 property motion. See `examples/buffer-property-loop/main.php`.
 
+Raw packed-record addresses are shared before loop accesses become resolved
+forms. This preserves reuse of an address checked before the loop by an
+equivalent access in the body, including when its property handle was already
+cached outside the loop. Remaining straight-line descriptors are shared after
+loop resolution.
+
 Inside a rewritten loop, packed `buffer_get_resolved` instructions with the same
 descriptor and index compute the same record address, so a dominated access
 reuses its dominator's result. Index operands are compared after seeing through

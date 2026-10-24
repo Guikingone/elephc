@@ -157,6 +157,19 @@ pub(super) fn reuse_property_reads(function: &mut Function) -> bool {
     merge_property_reads(function, &Facts::of(function))
 }
 
+/// Shares raw packed addresses before loop resolution changes their access opcode.
+pub(super) fn reuse_property_reads_and_records(function: &mut Function) -> bool {
+    if !function.instructions.iter().any(|inst| is_buffer_property_read(function, inst)) {
+        return false;
+    }
+    let mut changed = reuse_property_reads(function);
+    let facts = Facts::of(function);
+    let mut released_handles = Vec::new();
+    changed |= share_record_addresses(function, &facts, &mut released_handles);
+    drop_release_only_acquires(function, &released_handles);
+    changed
+}
+
 /// Replaces each buffer-typed property read that a dominating read of the same property on the
 /// same receiver already made, across a clean region.
 fn merge_property_reads(function: &mut Function, facts: &Facts) -> bool {
