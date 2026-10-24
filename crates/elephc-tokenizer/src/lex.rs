@@ -129,6 +129,16 @@ pub(super) fn tokenize(source: &[u8]) -> Vec<Token> {
             }
             _ => {}
         }
+        if kind == Some(TokenKind::Whitespace) && strings.last().is_some_and(|f| f.delimiter == 0 && f.depth == 0) {
+            token_id = id("T_ENCAPSED_AND_WHITESPACE");
+        }
+        if kind == Some(TokenKind::PartialLiteralString) {
+            let prefix = usize::from(matches!(raw.first(), Some(b'b' | b'B')));
+            if raw.get(prefix) == Some(&b'"') {
+                push(&mut result, i64::from(b'"'), start, start + prefix + 1, &mut line, source);
+                start += prefix + 1;
+            }
+        }
         push(&mut result, token_id, start, end, &mut line, source);
         cursor = end;
         if let Some(remaining) = halt.as_mut() {
@@ -151,7 +161,7 @@ pub(super) fn tokenize(source: &[u8]) -> Vec<Token> {
 /// Appends a token and advances the PHP line counter, coalescing adjacent inline text.
 fn push(out: &mut Vec<Token>, token_id: i64, start: usize, end: usize, line: &mut usize, source: &[u8]) {
     if start == end { return; }
-    if token_id == id("T_INLINE_HTML") && out.last().is_some_and(|t| t.id == token_id && t.pos + t.len == start) {
+    if [id("T_INLINE_HTML"), id("T_ENCAPSED_AND_WHITESPACE")].contains(&token_id) && out.last().is_some_and(|t| t.id == token_id && t.pos + t.len == start) {
         out.last_mut().unwrap().len += end - start;
     } else { out.push(Token { id: token_id, pos: start, len: end - start, line: *line }); }
     *line += newline_count(&source[start..end]);

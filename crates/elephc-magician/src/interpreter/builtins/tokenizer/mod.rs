@@ -18,9 +18,10 @@ pub(in crate::interpreter) fn eval_builtin_tokenizer(
     name: &str, args: &[EvalExpr], context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut evaluated = Vec::with_capacity(args.len());
-    for arg in args { evaluated.push(eval_expr(arg, context, scope, values)?); }
-    eval_tokenizer_values(name, &evaluated, context, values)
+    let operands = args.iter().collect::<Vec<_>>();
+    with_eval_operands(&operands, context, scope, values, |args, context, _scope, values| {
+        eval_tokenizer_values(name, args, context, values)
+    })
 }
 
 /// Materializes PHP's array-or-character stream from the shared engine's token offsets.

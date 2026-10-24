@@ -67,4 +67,18 @@ See [the tokenizer example](https://github.com/illegalstudio/elephc/tree/main/ex
 for a source inspector that removes comments without changing the remaining text.
 
 <!-- elephc:generated:symbols:begin -->
+
+## Functions {#functions}
+
+Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`token_get_all()`](./builtins/string/token_get_all.md) | `(string $code, int $flags = 0): array` | `array` | ✓ | ✓ |
+| [`token_name()`](./builtins/string/token_name.md) | `(int $id): string` | `string` | ✓ | ✓ |
+
+Classes: `PhpToken`.
+
+Constants: 154 constants: `T_*` (153), `TOKEN_*` (1).
+
 <!-- elephc:generated:symbols:end -->
