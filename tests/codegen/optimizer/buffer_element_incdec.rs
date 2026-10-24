@@ -11,6 +11,7 @@
 //!   the int overflow boundary, and against the width rules of narrow and `f32` elements.
 //! - The allocation fixtures compare a small and a large visit count, so a boxed cell per update
 //!   shows up as thousands of extra allocations.
+//! - `examples/buffer-counting-sort` is run here as well, so its printed output stays pinned.
 
 use super::*;
 
@@ -97,9 +98,9 @@ final class CountingGrid {
             $this->cellStart[$cell] = $runEnds[$cell];
         }
         for ($box = 0; $box < $count; $box++) {
-            $cell = $boxCells[$box];
-            $this->cellStart[$cell]--;
-            $this->entries[$this->cellStart[$cell]] = $box;
+            $target = $boxCells[$box];
+            $this->cellStart[$target]--;
+            $this->entries[$this->cellStart[$target]] = $box;
         }
         return $counted | $this->entries[0] | $this->cellStart[1];
     }
@@ -234,25 +235,43 @@ fn test_buffer_element_incdec_allocations_stay_flat_without_ir_opt() {
     }
 }
 
-/// Grid updates lower to typed steps in both IR modes, and the optimizer hoists their accesses.
+/// Buffer updates stage no boxed value in either IR mode, and the optimizer hoists their loops.
+///
+/// The tally keeps every counter in a buffer, so any boxed or checked `mixed` instruction in its
+/// functions would come from an element update. The grid's int loop counters are boxed without
+/// the optimizer, so there it only checks the typed steps and the optimized handle hoisting.
 #[test]
 fn test_buffer_element_incdec_eir_has_no_mixed_staging() {
     for optimized in [false, true] {
-        let ir = emit_ir(GRID, optimized);
-        for name in ["CountingGrid::fill", "histogram"] {
+        let ir = emit_ir(TALLY, optimized);
+        for name in ["Tally::add", "Tally::take", "visit"] {
             let body = function_body(&ir, name);
-            for staged in ["= str_inc_dec ", "= mixed_clone ", "= mixed_box "] {
+            for staged in [
+                "= str_inc_dec ", "= mixed_clone ", "= mixed_box ", "= ichecked_add ", "= ichecked_sub ",
+            ] {
                 assert!(!body.contains(staged), "ir-opt={optimized} {name}: {staged}\n{body}");
             }
-            assert!(body.contains("= ichecked_add_to_int ") && body.contains(" true"),
-                "ir-opt={optimized} {name}: typed increment\n{body}");
         }
-        assert!(function_body(&ir, "CountingGrid::fill").contains("= ichecked_sub_to_int "),
-            "ir-opt={optimized}: typed decrement");
+        if !optimized {
+            for (name, steps) in [
+                ("Tally::add", &["= ichecked_add_to_int ", "= fadd "][..]),
+                ("Tally::take", &["= ichecked_sub_to_int "][..]),
+                ("visit", &["= ichecked_add_to_int ", "= ichecked_sub_to_int "][..]),
+            ] {
+                let body = function_body(&ir, name);
+                for step in steps {
+                    assert!(body.contains(*step), "{name}: {step}\n{body}");
+                }
+            }
+            let grid = emit_ir(GRID, false);
+            assert!(function_body(&grid, "CountingGrid::fill").contains("= ichecked_sub_to_int "));
+            assert!(function_body(&grid, "histogram").contains("= ichecked_add_to_int "));
+        }
     }
     let optimized = emit_ir(GRID, true);
-    assert!(function_body(&optimized, "histogram").contains("buffer_set_resolved"),
-        "a typed update no longer keeps the loop's buffer handle from being hoisted");
+    let histogram = function_body(&optimized, "histogram");
+    assert!(histogram.contains("buffer_set_resolved") && !histogram.contains("= str_inc_dec "),
+        "a typed update no longer keeps the loop's buffer handle from being hoisted\n{histogram}");
 }
 
 /// Statement and expression updates of local and property buffers match the same PHP array code.
@@ -431,5 +450,15 @@ echo 'after';
             assert_eq!(stdout, "before", "ir-opt={optimized}: {source}");
             assert!(stderr.contains(fatal), "ir-opt={optimized}: {stderr}");
         }
+    }
+}
+
+/// The counting-sort example prints the same counts, order and `f32` rounding in both IR modes.
+#[test]
+fn test_buffer_counting_sort_example_runs_in_both_ir_modes() {
+    let source = include_str!("../../../examples/buffer-counting-sort/main.php");
+    let expected = "cell counts: 2 1 3 2; sorted items: 1 5 4 0 3 6 2 7\nf32 after ++: 16777216\n";
+    for optimized in [false, true] {
+        assert_eq!(run_clean(source, optimized), expected, "ir-opt={optimized}");
     }
 }

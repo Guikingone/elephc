@@ -42,12 +42,12 @@ function postfixValues(buffer<int> $counts, buffer<float> $values, int $i): floa
 }
 function prefixFloat(buffer<f32> $singles, int $i): float { return ++$singles[$i]; }
 function prefixInt(buffer<int> $counts, int $i): mixed { return ++$counts[$i]; }
-$grid = new CellGrid($argc + 3);
+$grid = new CellGrid(8);
 $grid->enter($argc);
 $grid->leave($argc);
 $grid->weigh($argc);
 echo $grid->claim($argc);
-$counts = buffer_new<int>($argc + 3);
+$counts = buffer_new<int>(8);
 $bytes = buffer_new<u8>(4);
 $words = buffer_new<i16>(4);
 $values = buffer_new<float>(4);
