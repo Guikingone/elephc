@@ -82,10 +82,13 @@ fn test_reused_numeric_counter_compiles_under_strict_locals() {
 }
 
 /// No re-bind where the value may still borrow the old cell, where both bindings are already
-/// boxed, or where the reassignment is conditional.
+/// boxed, where the reassignment is conditional, or for a parameter, whose argument value
+/// backtrace frames read from its first slot.
 #[test]
 fn test_numeric_storage_rebind_requires_a_fresh_value_and_straight_line_code() {
     for source in [
+        // A parameter keeps one slot, so `debug_backtrace()` reports its current value.
+        "<?php function f(int $n): int { $n = $n - 1; return (int) $n; } echo f($argc);",
         // A ternary may evaluate to the old binding itself.
         "<?php function f(int $n): int { for ($i = 0; $i < $n; $i++) {} \
          $i = $n > 3 ? $i : $n - 1; return (int) $i; } echo f($argc);",

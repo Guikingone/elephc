@@ -219,6 +219,44 @@ echo retyped($argc + 2), '|', killed($argc + 2);
     }
 }
 
+/// A re-bound variable keeps the position of its first binding in `get_defined_vars()`, and a
+/// reassigned parameter keeps reporting its current value as a backtrace argument, like PHP.
+///
+/// A re-bind gives the name a newer frame slot, so ordering by the current slot listed `$a`
+/// after `$b`, and splitting a parameter would leave backtraces reading its first slot.
+#[test]
+fn test_rebinding_keeps_variable_order_and_backtrace_arguments() {
+    let source = r#"<?php
+function order(int $n): string {
+    $a = 0;
+    $b = 1;
+    $a = $n - 1;
+    return implode(',', array_keys(get_defined_vars()));
+}
+function retypedOrder(int $n): string {
+    $a = 0;
+    $b = 1;
+    $a = "s" . $n;
+    return implode(',', array_keys(get_defined_vars()));
+}
+function killedOrder(int $n): string {
+    $a = 0;
+    $b = 1;
+    unset($a);
+    $a = $n - 1;
+    return implode(',', array_keys(get_defined_vars()));
+}
+function traced(int $n): string {
+    $n = $n + 1;
+    return (string) debug_backtrace()[0]['args'][0];
+}
+echo order($argc), '|', retypedOrder($argc), '|', killedOrder($argc), '|', traced($argc);
+"#;
+    for optimized in [false, true] {
+        assert_eq!(run(source, optimized), "n,a,b|n,a,b|n,a,b|2");
+    }
+}
+
 /// Every supported target emits the reused-counter shapes in both IR modes.
 #[test]
 fn test_reused_loop_counters_emit_on_all_supported_targets() {

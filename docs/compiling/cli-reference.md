@@ -608,7 +608,8 @@ compile error:
   At the same eligibility, a COMPATIBLE reassignment between two different
   numeric types (`int`, `float`, `int|float`, `mixed`) also starts a fresh
   slot, with no warning, when the assigned value is a raw `int`/`float` or a
-  fresh arithmetic result: a counter name reused by a later loop
+  fresh arithmetic result and the name is not a parameter: a counter name
+  reused by a later loop
   (`for ($i = $n - 1; …)` after `for ($i = 0; …)`) then keeps one slot per
   loop. This is a storage decision with no typing effect, so `--strict-locals`
   does not change it.

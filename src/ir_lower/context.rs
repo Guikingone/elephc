@@ -1218,7 +1218,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ///
     /// The bound `$this` of a method frame is excluded for the separate, PHP-semantic reason
     /// spelled out at the filter below, and only here.
+    ///
+    /// PHP lists a variable at the position of its FIRST binding: reassigning it at another type,
+    /// or unsetting and assigning it again, never moves it. Ending a binding gives the name a
+    /// newer slot (a retype, an `unset` kill, a storage-only numeric re-bind), so the order key is
+    /// the first slot that ever carried the name rather than the one it holds now.
     pub(crate) fn visible_local_names(&self) -> Vec<String> {
+        let mut first_slots: HashMap<&str, u32> = HashMap::new();
+        for local in &self.builder.function().locals {
+            if let Some(name) = local.name.as_deref() {
+                first_slots.entry(name).or_insert(local.id.as_raw());
+            }
+        }
         let mut locals = self
             .local_slots
             .iter()
@@ -1242,7 +1253,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 (kind == LocalKind::PhpLocal
                     && self.initialized_slots.contains(slot)
                     && !matches!(self.local_types.get(name), Some(PhpType::Void | PhpType::Never)))
-                .then_some((slot.as_raw(), name.clone()))
+                .then(|| {
+                    let position = first_slots.get(name.as_str()).copied();
+                    (position.unwrap_or(slot.as_raw()), name.clone())
+                })
             })
             .collect::<Vec<_>>();
         locals.sort_by_key(|(slot, _)| *slot);

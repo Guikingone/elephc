@@ -1063,11 +1063,14 @@ fn merge_local_assignment_type(
             // A storage-only re-bind (see `splits_numeric_binding`), at the eligibility the
             // retype above uses. Nothing typing-visible changes: the environment still takes the
             // merged type and no warning is filed, so the decision is only which frame slot the
-            // store writes. `--strict-locals` does not veto it for the same reason.
+            // store writes. `--strict-locals` does not veto it for the same reason. A parameter
+            // keeps its one slot: backtrace frames read its current argument value by name from
+            // the first slot of that name (`debug_backtrace()[0]["args"]`).
             if stmt_form
                 && span.identifies_a_node()
                 && splits_numeric_binding(existing, ty, value)
                 && checker.local_binding_is_killable(name)
+                && !checker.local_parameter_names.contains(name)
                 && !checker.top_level_binding_is_program_global(name)
             {
                 checker
