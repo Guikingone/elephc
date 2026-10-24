@@ -76,9 +76,13 @@ pub(super) fn resolve_method_call_target(
             impl_class, method_name
         )));
     }
-    // A final receiver class cannot select an override, including for inherited methods.
+    // Variance can widen Box<Dog> to Box<Animal> without an inheritance edge, so even a
+    // final instantiation or method must keep its runtime-selected implementation.
+    let non_generic_receiver = !normalized.contains('<');
+    // A non-generic final receiver cannot select an override, including inherited methods.
     // Keep the vtable fallback when this module has no directly callable EIR body.
     let dynamic_slot = if has_direct_body
+        && non_generic_receiver
         && (class_info.is_final || class_info.final_methods.contains(&method_key))
     {
         None

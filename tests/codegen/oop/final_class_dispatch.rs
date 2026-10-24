@@ -39,12 +39,23 @@ class ParentDispatch {
 final class SealedDispatch extends ParentDispatch {
     public function value(int $value): int { return $value + 3; }
 }
+class DispatchAnimal {}
+class DispatchDog extends DispatchAnimal {}
+final class VariantDispatch<+T> {
+    public function __construct(private T $value) {}
+    public function kind(): string { return self::class; }
+    final public function finalKind(): string { return self::class; }
+}
 function read_final(SealedDispatch $object, int $value): int { return $object->value($value); }
 function read_inherited(SealedDispatch $object, int $value): int { return $object->inherited($value); }
 function read_nullable(?SealedDispatch $object, int $value): int { return $object->value($value); }
 function read_base(ParentDispatch $object, int $value): int { return $object->value($value); }
+function read_variant(VariantDispatch<DispatchAnimal> $object): string { return $object->kind(); }
+function read_variant_final(VariantDispatch<DispatchAnimal> $object): string { return $object->finalKind(); }
 $object = new SealedDispatch();
 echo read_final($object, $argc), read_inherited($object, $argc), read_nullable($object, $argc), read_base($object, $argc);
+$variant = new VariantDispatch<DispatchDog>(new DispatchDog());
+echo read_variant($variant), read_variant_final($variant);
 "#).unwrap();
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let output = elephc_cli_command(&dir.0)
@@ -63,9 +74,11 @@ echo read_final($object, $argc), read_inherited($object, $argc), read_nullable($
             assert!(!body.contains("_class_source_vtable_ptrs"), "{target}: {body}");
             assert!(!body.contains("_class_vtable_ptrs"), "{target}: {body}");
         }
-        let base = function_body(&assembly, "read_base");
-        assert!(base.contains("_class_source_vtable_ptrs") || base.contains("_class_vtable_ptrs"),
-            "{target}: overridable base dispatch became direct: {base}");
+        for function in ["read_base", "read_variant", "read_variant_final"] {
+            let body = function_body(&assembly, function);
+            assert!(body.contains("_class_source_vtable_ptrs") || body.contains("_class_vtable_ptrs"),
+                "{target}: runtime-selected {function} dispatch became direct: {body}");
+        }
     }
 }
 
@@ -122,4 +135,37 @@ echo ':';
 guarded($leaf, null);
 "#);
     assert_eq!(out, "true:false-only:null-error:false-error:null-only");
+}
+
+/// Variance keeps the actual generic body's lexical class and per-instantiation static state.
+#[test]
+fn test_final_class_dispatch_generic_variance() {
+    let source = r#"<?php
+class DispatchAnimal {}
+class DispatchDog extends DispatchAnimal {}
+final class CovariantDispatch<+T> {
+    private static int $made = 0;
+    public function __construct(private T $value) { self::$made++; }
+    public function kind(): string { return self::class . ':' . self::$made; }
+    final public function finalKind(): string { return self::class . ':' . self::$made; }
+}
+final class ContravariantDispatch<-T> {
+    private static int $made = 0;
+    public function __construct() { self::$made++; }
+    public function consume(T $value): string { return self::class . ':' . self::$made; }
+    final public function finalConsume(T $value): string { return self::class . ':' . self::$made; }
+}
+function inspect_covariant(CovariantDispatch<DispatchAnimal> $object): string {
+    return $object->kind() . '|' . $object->finalKind();
+}
+function inspect_contravariant(ContravariantDispatch<DispatchDog> $object, DispatchDog $dog): string {
+    return $object->consume($dog) . '|' . $object->finalConsume($dog);
+}
+$dog = new DispatchDog();
+echo inspect_covariant(new CovariantDispatch<DispatchDog>($dog)), '|';
+echo inspect_contravariant(new ContravariantDispatch<DispatchAnimal>(), $dog);
+"#;
+    let expected = "CovariantDispatch<DispatchDog>:1|CovariantDispatch<DispatchDog>:1|ContravariantDispatch<DispatchAnimal>:1|ContravariantDispatch<DispatchAnimal>:1";
+    assert_eq!(compile_and_run(source), expected);
+    without_ir_opt(|| assert_eq!(compile_and_run(source), expected));
 }
