@@ -10,7 +10,8 @@
 //!   the bytes), returns NULL on request, and echoes its argument pointer back, so both
 //!   directions and the copy-before-free ordering of a pass-through return are observable.
 //! - Arguments cover a literal string, a literal `null`, and boxed `string|null` values decided
-//!   only at runtime (`$argc`), because each takes a different lowering path.
+//!   only at runtime (`$argc`), because each takes a different lowering path. A `mixed` scalar
+//!   passes its string form; a `mixed` array or object is a fatal error.
 //! - `getenv()` checks a real libc NULL return on every target without a fixture.
 //! - The fixture is assembled into the test program itself, so no shared library is needed.
 
@@ -58,13 +59,14 @@ fn run_nullable_string_program(body: &str) -> String {
     )
 }
 
-/// Compiles the fixture declarations followed by `body` with `--gc-stats` together with the C
-/// fixture and returns the program output, so allocation and free counts can be compared.
-fn run_nullable_string_program_with_gc_stats(body: &str) -> ProgramOutput {
+/// Compiles the fixture declarations followed by `body` together with the C fixture, optionally
+/// with `--gc-stats`, and returns the whole program output (stdout, stderr, exit status), so a
+/// test can compare allocation and free counts or inspect a fatal error.
+fn run_nullable_string_program_capture(body: &str, gc_stats: bool) -> ProgramOutput {
     let dir = make_cli_test_dir("elephc_test_nullable_cstr");
     let source = format!("{NULLABLE_STRING_DECLS}{body}");
     let (mut assembly, runtime, libraries) =
-        compile_source_to_asm_with_options(&source, &dir, 8_388_608, true, false);
+        compile_source_to_asm_with_options(&source, &dir, 8_388_608, gc_stats, false);
     let fixture_asm = compile_c_fixture_asm(&dir, "fixture", NULLABLE_STRING_FIXTURE, &[]);
     append_c_fixture_asm(&mut assembly, &fixture_asm);
     let output = assemble_and_run_capture(
@@ -115,25 +117,56 @@ echo elephc_test_nullable_len($missing) . ";" . elephc_test_nullable_len($presen
 }
 
 /// Verifies a `mixed` argument reaches a `?string` parameter as its PHP string form: an int as
-/// its digits, `true` as "1", `false` as "", a string as itself, an object through
-/// `__toString()`, and null as NULL.
+/// its digits, a float as its PHP text, `true` as "1", `false` as "", a string as itself, and
+/// null as NULL.
 #[test]
-fn test_ffi_extern_nullable_string_param_casts_mixed_payloads() {
+fn test_ffi_extern_nullable_string_param_casts_mixed_scalars() {
     let out = run_nullable_string_program(
         r#"
-class Label {
-    public function __toString(): string {
-        return "label";
-    }
-}
 function len_of(mixed $value): int {
     return elephc_test_nullable_len($value);
 }
-echo len_of(42) . ";" . len_of(true) . ";" . len_of(false) . ";" . len_of("abc") . ";"
-    . len_of(new Label()) . ";" . len_of(null);
+echo len_of(42) . ";" . len_of(1.5) . ";" . len_of(true) . ";" . len_of(false) . ";"
+    . len_of("abc") . ";" . len_of(null);
 "#,
     );
-    assert_eq!(out, "2;1;0;3;5;-1");
+    assert_eq!(out, "2;3;1;0;3;-1");
+}
+
+/// Verifies an array or an object reaching a `?string` parameter through `mixed` is a fatal
+/// error, named after the extern function and parameter, instead of running `__toString()` or
+/// an error handler while earlier arguments' C-string copies cannot be released on a throw.
+#[test]
+fn test_ffi_extern_nullable_string_param_rejects_arrays_and_objects_at_runtime() {
+    for payload in ["[1, 2]", "new Label()"] {
+        let out = run_nullable_string_program_capture(
+            &format!(
+                r#"
+class Label {{
+    public function __toString(): string {{
+        return "label";
+    }}
+}}
+function len_of(mixed $value): int {{
+    return elephc_test_nullable_len($value);
+}}
+echo "before;";
+echo len_of({payload});
+echo "after";
+"#
+            ),
+            false,
+        );
+        assert!(!out.success, "{payload}: expected a fatal error, got {}", out.stdout);
+        assert_eq!(out.stdout, "before;", "{payload}");
+        assert!(
+            out.stderr.contains(
+                "Fatal error: Extern function elephc_test_nullable_len() parameter $s expects ?string, got an array or object"
+            ),
+            "{payload}: {}",
+            out.stderr
+        );
+    }
 }
 
 /// Verifies NULL and non-NULL `?string` arguments mix with a plain `string` parameter in one
@@ -221,7 +254,7 @@ var_dump(call_user_func($callback, "dynamic"));
 /// are released before the counts are printed.
 #[test]
 fn test_ffi_extern_nullable_string_calls_free_every_copy_and_box() {
-    let baseline = run_nullable_string_program_with_gc_stats(
+    let baseline = run_nullable_string_program_capture(
         r#"
 function forward(?string $s): int {
     return 0;
@@ -233,9 +266,10 @@ function run_calls(int $n): void {
 }
 run_calls($argc);
 "#,
+        true,
     );
     assert!(baseline.success, "baseline program failed: {}", baseline.stderr);
-    let out = run_nullable_string_program_with_gc_stats(
+    let out = run_nullable_string_program_capture(
         r#"
 function forward(?string $s): int {
     return elephc_test_nullable_len($s);
@@ -265,6 +299,7 @@ function run_calls(int $n): void {
 }
 run_calls($argc);
 "#,
+        true,
     );
     assert!(out.success, "program failed: {}", out.stderr);
     let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);

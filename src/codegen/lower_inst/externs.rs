@@ -27,7 +27,10 @@
 use crate::codegen::abi;
 use crate::codegen::callable_descriptor;
 use crate::codegen::platform::Arch;
-use crate::codegen::{emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
+use crate::codegen::{
+    emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+    emit_write_literal_stderr,
+};
 use crate::codegen_support::DeferredExternCallbackTrampoline;
 use crate::ir::{
     ExternDecl, ExternParamDecl, Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId,
@@ -70,7 +73,7 @@ pub(super) fn lower_extern_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let mut pushed_arg_bytes = 0usize;
     for (idx, param) in decl.params.iter().enumerate() {
         let value = expect_operand(inst, idx)?;
-        let pushed_ty = materialize_extern_arg(ctx, value, param)?;
+        let pushed_ty = materialize_extern_arg(ctx, value, param, &decl.name)?;
         if param_takes_cstr_copy(param) {
             abi::emit_temporary_stack_address(ctx.emitter, cleanup_base_reg, pushed_arg_bytes);
             abi::emit_store_to_address(
@@ -192,13 +195,16 @@ fn temp_slot_size(ty: &PhpType) -> usize {
 }
 
 /// Loads and coerces an SSA value into the ABI result register expected by an extern parameter.
+///
+/// `extern_name` is the declared PHP name of the callee, used in runtime diagnostics.
 fn materialize_extern_arg(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     param: &ExternParamDecl,
+    extern_name: &str,
 ) -> Result<PhpType> {
     if param.abi == ExternAbiType::NullableCStr {
-        materialize_nullable_cstr_arg(ctx, value, param)?;
+        materialize_nullable_cstr_arg(ctx, value, param, extern_name)?;
         return Ok(PhpType::Pointer(None));
     }
     let target_ty = param.php_type.codegen_repr();
@@ -301,12 +307,12 @@ fn materialize_mixed_extern_arg(
 /// Converts a `?string` argument into the `char*` the C callee receives.
 ///
 /// A string becomes a call-scoped null-terminated copy and PHP null becomes NULL. A boxed
-/// `string|null` value is decided from its runtime tag: null passes NULL, and any other payload
-/// becomes the same call-scoped copy of its string form.
+/// `string|null` value is decided from its runtime tag (`materialize_boxed_nullable_cstr_arg`).
 fn materialize_nullable_cstr_arg(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     param: &ExternParamDecl,
+    extern_name: &str,
 ) -> Result<()> {
     match ctx.value_php_type(value)? {
         PhpType::Str => {
@@ -316,7 +322,7 @@ fn materialize_nullable_cstr_arg(
         PhpType::Void => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         }
-        PhpType::Mixed => materialize_boxed_nullable_cstr_arg(ctx, value)?,
+        PhpType::Mixed => materialize_boxed_nullable_cstr_arg(ctx, value, param, extern_name)?,
         actual => {
             return Err(CodegenIrError::unsupported(format!(
                 "extern parameter ${} expects ?string, got {}",
@@ -327,54 +333,39 @@ fn materialize_nullable_cstr_arg(
     Ok(())
 }
 
-/// Converts a boxed `string|null` argument into NULL for PHP null, or into a call-scoped C
-/// string copy for any other payload.
+/// Converts a boxed `string|null` argument into the `char*` the C callee receives.
 ///
-/// A boxed string is copied straight from its borrowed payload. `__rt_mixed_cast_string` is
-/// only used for the other payloads a `mixed` value can hold (an int reads as its digits, an
-/// object through `__toString`), and the string it returns is released once copied: the object
-/// arm hands back an owned block the call-scoped cleanup would never see, while the scratch
-/// and static results of the other arms are ignored by `__rt_heap_free_safe`.
+/// The runtime tag decides: null passes NULL, a string is copied straight from its borrowed
+/// payload, and an int, float, bool or resource (reachable through `mixed`) is copied from its
+/// string form, which `__rt_mixed_cast_string` formats into scratch storage without calling
+/// PHP code. Any other payload (an array or an object) is a fatal error. Converting it would
+/// run PHP code (`__toString()`, or an error handler for the array-to-string warning) while
+/// earlier arguments' C-string copies exist only in this call's temporary stack, so an
+/// exception thrown there would skip their release.
 fn materialize_boxed_nullable_cstr_arg(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
+    param: &ExternParamDecl,
+    extern_name: &str,
 ) -> Result<()> {
     let null_label = ctx.next_label("extern_nullable_cstr_arg_null");
     let string_label = ctx.next_label("extern_nullable_cstr_arg_string");
+    let scalar_label = ctx.next_label("extern_nullable_cstr_arg_scalar");
     let done_label = ctx.next_label("extern_nullable_cstr_arg_done");
-    // -- dispatch on the boxed runtime tag: PHP null passes NULL, a string copies its bytes --
+    // -- dispatch on the boxed runtime tag of the ?string argument --
     ctx.load_value_to_result(value)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #8");                              // does the boxed ?string argument carry the PHP null tag?
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 8");                              // does the boxed ?string argument carry the PHP null tag?
-        }
+    emit_branch_if_unboxed_tag(ctx, 8, &null_label);
+    emit_branch_if_unboxed_tag(ctx, 1, &string_label);
+    for scalar_tag in [0, 2, 3, 9] {
+        emit_branch_if_unboxed_tag(ctx, scalar_tag, &scalar_label);
     }
-    abi::emit_branch_if_equal_wide(ctx.emitter, &null_label);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #1");                              // does the boxed ?string argument hold a string payload?
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 1");                              // does the boxed ?string argument hold a string payload?
-        }
-    }
-    abi::emit_branch_if_equal_wide(ctx.emitter, &string_label);
-    // -- any other payload is cast to a string, copied, and the cast result released --
+    emit_nullable_cstr_arg_type_fatal(ctx, param, extern_name);
+    // -- an int, float, bool or resource is copied from its scratch string form --
+    ctx.emitter.label(&scalar_label);
     load_value_to_first_int_arg(ctx, value)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
-    let (cast_ptr_reg, _) = abi::string_result_regs(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, cast_ptr_reg);
     abi::emit_call_label(ctx.emitter, "__rt_str_to_cstr");
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-    abi::emit_pop_reg(ctx.emitter, result_reg);
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
     abi::emit_jump(ctx.emitter, &done_label);
     // -- a boxed string is copied from its borrowed payload (pointer, length) --
     ctx.emitter.label(&string_label);
@@ -384,9 +375,40 @@ fn materialize_boxed_nullable_cstr_arg(
     abi::emit_call_label(ctx.emitter, "__rt_str_to_cstr");
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&null_label);
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     ctx.emitter.label(&done_label);
     Ok(())
+}
+
+/// Branches to `label` when the runtime tag `__rt_mixed_unbox` left in the integer result
+/// register equals `tag`, with the wide AArch64 branch range.
+fn emit_branch_if_unboxed_tag(ctx: &mut FunctionContext<'_>, tag: u8, label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp x0, #{}", tag));              // compare the unboxed ?string argument tag with the expected runtime tag
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp rax, {}", tag));              // compare the unboxed ?string argument tag with the expected runtime tag
+        }
+    }
+    abi::emit_branch_if_equal_wide(ctx.emitter, label);
+}
+
+/// Writes the fatal diagnostic for an array or object passed to a `?string` extern parameter
+/// to stderr and exits with status 1.
+fn emit_nullable_cstr_arg_type_fatal(
+    ctx: &mut FunctionContext<'_>,
+    param: &ExternParamDecl,
+    extern_name: &str,
+) {
+    let message = format!(
+        "Fatal error: Extern function {}() parameter ${} expects ?string, got an array or object\n",
+        extern_name.trim_start_matches('\\'),
+        param.name
+    );
+    let (label, len) = ctx.data.add_string(message.as_bytes());
+    emit_write_literal_stderr(ctx.emitter, &label, len);
+    abi::emit_exit(ctx.emitter, 1);
 }
 
 /// Materializes a constant string callback as a direct C function pointer.

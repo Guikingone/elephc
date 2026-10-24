@@ -195,6 +195,10 @@ On the PHP side the type is `?string` (`string|null`):
   temporary null-terminated copy a `string` parameter gets, freed after the
   call. A `?string` value, such as a `?string` variable or
   `$flag ? "a" : null`, is checked at runtime and passes whichever it holds.
+  A `mixed` value holding an int, float or bool passes its PHP string form;
+  one holding an array or an object is a fatal error, so convert it first
+  (`(string) $value`), because elephc does not run `__toString()` or an error
+  handler in the middle of building the C arguments.
 - **Returns**: a `NULL` return reads as PHP `null`; any other pointer is copied
   up to its terminator into an owned string, exactly like a `string` return.
 
