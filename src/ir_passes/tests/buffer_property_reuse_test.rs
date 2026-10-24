@@ -2,7 +2,8 @@
 //! Tests for the straight-line reuse of buffer-typed property reads on hand-built methods: a
 //! repeated `$this->slots[$index]` read shares the property read and the record address, a read
 //! of another index shares one descriptor, and property stores, calls, `buffer_free()`, `unset`,
-//! index writes, other receivers and local handles keep the reads apart.
+//! index writes, other receivers and local handles keep the reads apart, also when the later read
+//! repeats in a loop body.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -470,4 +471,125 @@ fn leaves_local_handles_alone() {
     assert!(!changed);
     assert_eq!(count_ops(&function, Op::BufferGet), 2);
     assert_eq!(count_ops(&function, Op::BufferResolve), 0);
+}
+
+/// Builds a method that reads `$this->slots[$index]` in `entry` and again at the top of a loop
+/// body, where `after_second` emits what follows the second read before the back edge, so a
+/// later iteration's read runs after that code without passing `entry` again.
+fn loop_method(after_second: impl FnOnce(&mut Builder<'_>, Locals, ValueId)) -> Method {
+    let mut function = Function::new("Table::scan".to_string(), IrType::Void, PhpType::Void);
+    function.flags.is_method = true;
+    function.params.push(FunctionParam {
+        name: "this".to_string(),
+        ir_type: IrType::Heap(IrHeapKind::Object),
+        php_type: table_type(),
+        by_ref: false,
+        variadic: false,
+    });
+    let (entry, first_property, first_record, second_record, second_field);
+    {
+        let mut b = Builder::new(&mut function);
+        entry = b.create_named_block("entry", vec![]);
+        let header = b.create_named_block("header", vec![(IrType::I64, PhpType::Int)]);
+        let body = b.create_named_block("body", vec![]);
+        let exit = b.create_named_block("exit", vec![]);
+        b.set_entry(entry);
+        let object = IrType::Heap(IrHeapKind::Object);
+        let buffer = IrType::Heap(IrHeapKind::Buffer);
+        let locals = Locals {
+            this: b.add_local(Some("this".to_string()), object, table_type(), LocalKind::PhpLocal),
+            index: b.add_local(Some("index".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal),
+            other_index: b.add_local(Some("j".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal),
+            other: b.add_local(Some("other".to_string()), object, table_type(), LocalKind::PhpLocal),
+            spare: b.add_local(Some("spare".to_string()), buffer, packed_buffer_type(), LocalKind::PhpLocal),
+        };
+
+        b.position_at_end(entry);
+        let this = b.emit_load_local(locals.this, object, table_type());
+        first_property = emit_slots_read(&mut b, this);
+        let index = b.emit_load_local(locals.index, IrType::I64, PhpType::Int);
+        first_record = emit_record_read(&mut b, first_property, index);
+        emit_field_read(&mut b, first_record);
+        let zero = b.emit_const_i64(0);
+        b.terminate(Terminator::Br { target: header, args: vec![zero] });
+
+        b.position_at_end(header);
+        let counter = b.block_param(header, 0);
+        let cond = b.emit_const_bool(true);
+        b.terminate(Terminator::CondBr {
+            cond,
+            then_target: body,
+            then_args: vec![],
+            else_target: exit,
+            else_args: vec![],
+        });
+
+        b.position_at_end(body);
+        let receiver = b.emit_load_local(locals.this, object, table_type());
+        let property = emit_slots_read(&mut b, receiver);
+        let index = b.emit_load_local(locals.index, IrType::I64, PhpType::Int);
+        second_record = emit_record_read(&mut b, property, index);
+        second_field = emit_field_read(&mut b, second_record);
+        after_second(&mut b, locals, property);
+        let one = b.emit_const_i64(1);
+        let next = b.emit_iadd(counter, one);
+        b.terminate(Terminator::Br { target: header, args: vec![next] });
+
+        b.position_at_end(exit);
+        b.terminate(Terminator::Return { value: None });
+    }
+    Method { function, entry, first_property, first_record, second_record, second_field }
+}
+
+/// A read before a loop serves the same read at the top of a body that leaves the property and
+/// the buffer alone on every iteration.
+#[test]
+fn shares_a_read_before_a_loop_with_the_loop_body() {
+    let built = loop_method(|_, _, _| {});
+    let (changed, function) = run(built.function);
+    assert!(changed);
+    assert_eq!(count_property_reads(&function), 1);
+    assert_eq!(count_ops(&function, Op::BufferGet), 1);
+    assert_eq!(
+        defining_instruction(&function, built.second_field).operands,
+        vec![built.first_record],
+    );
+}
+
+/// Code after the second read in the loop body runs before that read's next iteration, so a
+/// property store or a `buffer_free()` there keeps every iteration's read apart from the one
+/// before the loop, although nothing separates the two on the path into the first iteration.
+#[test]
+fn keeps_a_loop_read_apart_from_writes_later_in_the_body() {
+    let store = loop_method(|b, locals, _| {
+        let other = b.emit_load_local(locals.other, IrType::Heap(IrHeapKind::Object), table_type());
+        let spare =
+            b.emit_load_local(locals.spare, IrType::Heap(IrHeapKind::Buffer), packed_buffer_type());
+        b.emit(
+            Op::PropSet,
+            vec![other, spare],
+            Some(slots_property()),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+    });
+    let free = loop_method(|b, _, property| {
+        b.emit_with_effects(
+            Op::RuntimeCall,
+            vec![property],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::BufferFree))),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            RuntimeFnId::BufferFree.effects(),
+            None,
+        );
+    });
+    for (name, built) in [("prop_set", store), ("buffer_free", free)] {
+        let (_, function) = run(built.function);
+        assert_eq!(count_property_reads(&function), 2, "{name}: the loop reads the property again");
+        assert_eq!(count_ops(&function, Op::BufferGet), 2, "{name}: and resolves it again");
+        assert_eq!(defining_op(&function, built.second_record), Op::BufferGet, "{name}");
+    }
 }

@@ -152,6 +152,40 @@ $spare[0]->value = 3;
 $h = new Holder($spare);
 "#;
 
+/// Whole-element reads and writes through a scalar buffer property, ending with a write through
+/// a handle freed before the call.
+const REGISTRY_SOURCE: &str = r#"<?php
+final class Registry
+{
+    private buffer<int> $ids;
+
+    public function __construct(int $n) { $this->ids = buffer_new<int>($n); }
+
+    public function assign(int $a, int $b, int $value): void
+    {
+        $this->ids[$a] = $value;
+        $this->ids[$b] = $value;
+    }
+
+    public function readAcrossWrite(int $a): int
+    {
+        $before = $this->ids[$a];
+        $this->ids[$a] = 9;
+        return $this->ids[$a] * 100 + $before;
+    }
+
+    public function ids(): buffer<int> { return $this->ids; }
+}
+$r = new Registry(3);
+$r->assign(0, 2, 40);
+echo $r->readAcrossWrite(2), "\n";
+$ids = $r->ids();
+echo $ids[0], " ", $ids[1], " ", $ids[2], "\n";
+buffer_free($ids);
+echo "before\n";
+$r->assign(1, 0, 5);
+"#;
+
 /// Emits one named function's optimized or unoptimized textual EIR.
 fn function_ir(source: &str, optimized: bool, name: &str) -> String {
     let dir = make_cli_test_dir("elephc_buffer_property_reuse_ir");
@@ -341,4 +375,26 @@ fn test_magic_get_in_the_program_disables_property_reuse() {
     assert_eq!(buffer_property_reads(&ir), 2, "{ir}");
     assert_eq!(ir.matches("= buffer_get ").count(), 2, "{ir}");
     assert_both_modes_print(&source, &format!("{TABLE_OUTPUT}4\n"));
+}
+
+/// Whole-element writes through one property read share a descriptor, a scalar element read after
+/// a write to the same element still loads the new value, and a write through a handle freed
+/// before the call still dies with the use-after-free fatal at the first access.
+#[test]
+fn test_scalar_property_buffer_accesses_share_one_descriptor() {
+    let assign = function_ir(REGISTRY_SOURCE, true, "Registry::assign");
+    assert_eq!(buffer_property_reads(&assign), 1, "{assign}");
+    assert_eq!(assign.matches("= buffer_resolve ").count(), 1, "{assign}");
+    assert_eq!(assign.matches(" buffer_set_resolved ").count(), 2, "{assign}");
+    assert!(!assign.contains(" buffer_set "), "{assign}");
+
+    let read = function_ir(REGISTRY_SOURCE, true, "Registry::readAcrossWrite");
+    assert_eq!(read.matches("= buffer_resolve ").count(), 1, "{read}");
+    assert_eq!(read.matches("= buffer_get_resolved ").count(), 2, "{read}");
+    assert_eq!(read.matches(" buffer_set_resolved ").count(), 1, "{read}");
+    assert_both_modes_fail_after(
+        REGISTRY_SOURCE,
+        "940\n40 0 9\nbefore\n",
+        "use of buffer after buffer_free()",
+    );
 }
