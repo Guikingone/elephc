@@ -19,7 +19,9 @@
 //! - THE ALLOWLIST IS DEFAULT-DENY. The callee signature (which parameters are
 //!   by-reference) is not available to a single-function pass, so any `load_local` result
 //!   consumed by an instruction that is not a proven value-only consumer counts as a
-//!   potential address escape. Terminator uses never alias and are ignored.
+//!   potential address escape. Operand zero of `prop_get` and `method_call` is a
+//!   value-only receiver on every lowering route; later method operands remain
+//!   conservative even when they repeat that receiver. Terminator uses never alias.
 //! - WHY IT IS SHARED. Two passes with different jobs need the identical, safety-critical
 //!   judgement; a second copy that drifted would reintroduce exactly the bug each of them
 //!   fixes. `immutable_local_loads` learned this the hard way: without the exclusion it

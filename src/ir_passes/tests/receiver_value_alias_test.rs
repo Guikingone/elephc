@@ -8,10 +8,12 @@
 //! - Method arguments keep the conservative alias rule, even when they reuse the receiver.
 
 use crate::ir::{
-    Builder, DataId, Function, Immediate, IrType, LocalKind, LocalSlotId, Op, Ownership,
+    validate_function, Builder, DataId, DataPool, Function, Immediate, IrType, LocalKind, LocalSlotId, Op, Ownership,
     Terminator,
 };
 use crate::ir_passes::by_ref_alias::address_escaping_slots;
+use crate::ir_passes::dead_store::DeadStore;
+use crate::ir_passes::driver::IrPass;
 use crate::types::PhpType;
 
 /// Builds a receiver consumer and optionally passes its loaded receiver as an argument too.
@@ -48,13 +50,54 @@ fn receiver_consumer(op: Op, php_type: PhpType, repeat_receiver: bool) -> (Funct
     (function, receiver_slot, argument_slot)
 }
 
-/// Concrete and boxed property receivers do not make their local slots address-escaping.
+/// Concrete, boxed and extern pointer receivers do not expose their local slot addresses.
 #[test]
 fn property_receiver_load_is_value_only() {
-    for php_type in [PhpType::Object("Receiver".into()), PhpType::Mixed] {
+    for php_type in [
+        PhpType::Object("Receiver".into()), PhpType::Mixed,
+        PhpType::Pointer(Some("ExternReceiver".into())),
+    ] {
         let (function, receiver, _) = receiver_consumer(Op::PropGet, php_type, false);
         assert!(!address_escaping_slots(&function).contains(&receiver));
     }
+}
+
+/// A pointer receiver keeps its observed store live while an overwritten prior store dies.
+#[test]
+fn pointer_property_receiver_allows_dead_store_elimination() {
+    let mut function = Function::new("pointer_receiver".into(), IrType::I64, PhpType::Int);
+    let pointer_type = PhpType::Pointer(Some("ExternReceiver".into()));
+    let slot = function.add_local(
+        Some("receiver".into()), IrType::I64, pointer_type.clone(), LocalKind::PhpLocal,
+    );
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        // Synthetic pointer constants are only inspected as EIR, never dereferenced.
+        let earlier = builder.emit(
+            Op::ConstI64, vec![], Some(Immediate::I64(32)),
+            IrType::I64, pointer_type.clone(), Ownership::NonHeap,
+        ).unwrap();
+        builder.emit_store_local(slot, earlier);
+        let later = builder.emit(
+            Op::ConstI64, vec![], Some(Immediate::I64(64)),
+            IrType::I64, pointer_type.clone(), Ownership::NonHeap,
+        ).unwrap();
+        builder.emit_store_local(slot, later);
+        let receiver = builder.emit_load_local(slot, IrType::I64, pointer_type);
+        let field = builder.emit(
+            Op::PropGet, vec![receiver], Some(Immediate::Data(DataId::from_raw(0))),
+            IrType::I64, PhpType::Int, Ownership::NonHeap,
+        ).unwrap();
+        builder.terminate(Terminator::Return { value: Some(field) });
+    }
+    validate_function(&function).expect("pointer receiver EIR is valid");
+    assert!(DeadStore.run(&mut function, &mut DataPool::default()));
+    assert_eq!(function.instructions[1].op, Op::Nop);
+    assert_eq!(function.instructions[3].op, Op::StoreLocal);
+    validate_function(&function).expect("dead store elimination preserves valid EIR");
 }
 
 /// Dispatch reads only the receiver by value while keeping ordinary arguments conservative.
