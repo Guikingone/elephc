@@ -1,9 +1,9 @@
 # PHP fileinfo
 
-- [ ] Add a pinned static libmagic native package with its embedded magic database on every target.
-- [ ] Add the optional fileinfo bridge and PHP finfo class, six functions and eleven constants.
-- [ ] Expose the same declarations to dynamic eval and preserve ownership and failure behavior.
-- [ ] Add focused native, codegen, error and target coverage plus a practical example.
+- [x] Add a pinned static libmagic native package with its embedded magic database on every target.
+- [x] Add the optional fileinfo bridge and PHP finfo class, six functions and eleven constants.
+- [x] Expose the same declarations to dynamic eval and preserve ownership and failure behavior.
+- [x] Add focused native, codegen, error and target coverage plus a practical example.
 - [x] Generate and audit builtin documentation in CI without local builds or heavy tests.
 - [ ] Open a draft pull request, follow its exact-head CI and correct failures.
 
@@ -18,13 +18,16 @@ PHP 8 semantics include no-op finfo_close, per-call flag restoration, binary-saf
 ## Current validation
 
 Draft PR: https://github.com/illegalstudio/elephc/pull/2061.
-The remote compiler and exporter build successfully. CI found stale function-count
-snapshots and a missing docs prelude-source mapping; those are being corrected.
-Native behavior and the full target matrix remain under CI verification.
-Native ownership uses a private final owner object so a finfo subclass destructor
-cannot bypass release of its libmagic instance.
+The Linux x86_64 and ARM64 archive builds passed, including the three native bridge
+tests against libmagic and its embedded database. CI caught a missing generated
+magic.h header for Automake's named targets; the recipe now generates it explicitly
+for both host and target builds.
 
-The exact-head CI exporter and target architecture audit passed. The docs pipeline's
-16 tests, static docs audit (zero errors), site validation and PHP comparison tests
-passed. Generated artifacts were downloaded and copied without local compilation.
-The comparison now reports fileinfo as 6/6 functions, 1/1 classes and 11/11 constants.
+The CI exporter, builtin architecture audit, documentation pipeline tests, static
+docs audit and site validation passed. Generated artifacts were downloaded without
+local compilation. The comparison reports fileinfo as 6/6 functions, 1/1 classes
+and 11/11 constants. PHP 8.5 deprecations follow the selected PHP version profile.
+
+The CI archive jobs now execute all thirteen focused PHP fileinfo tests before
+publishing test archives. PHP execution, the broader regression matrix and Apple
+target validation are still pending. No local heavy builds or tests are authorized.
