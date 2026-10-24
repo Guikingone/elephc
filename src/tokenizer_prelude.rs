@@ -107,12 +107,12 @@ class PhpToken implements \Stringable {
                 } elseif (is_string($entry)) {
                     if ($this->text === $entry) { return true; }
                 } else {
-                    throw new \TypeError("PhpToken::is(): Argument #1 ($kind) must only have elements of type string|int, " . get_debug_type($entry) . " given");
+                    throw new \TypeError("PhpToken::is(): Argument #1 ($kind) must only have elements of type string|int, " . (is_object($entry) ? get_class($entry) : (is_bool($entry) ? ($entry ? "true" : "false") : str_replace("double", "float", strtolower(gettype($entry))))) . " given");
                 }
             }
             return false;
         }
-        throw new \TypeError("PhpToken::is(): Argument #1 ($kind) must be of type string|int|array, " . get_debug_type($kind) . " given");
+        throw new \TypeError("PhpToken::is(): Argument #1 ($kind) must be of type string|int|array, " . (is_object($kind) ? get_class($kind) : (is_bool($kind) ? ($kind ? "true" : "false") : str_replace("double", "float", strtolower(gettype($kind))))) . " given");
     }
 
     public function isIgnorable(): bool {
@@ -124,8 +124,7 @@ class PhpToken implements \Stringable {
 
     public static function tokenize(string $code, int $flags = 0): array {
         $called = static::class;
-        $reflection = new \ReflectionClass($called);
-        if ($reflection->isAbstract()) { throw new \Error("Cannot instantiate abstract class " . $called); }
+        if (__elephc_class_is_abstract($called)) { throw new \Error("Cannot instantiate abstract class " . $called); }
         $tokens = token_get_all($code, $flags);
         $result = [];
         $line = 1;

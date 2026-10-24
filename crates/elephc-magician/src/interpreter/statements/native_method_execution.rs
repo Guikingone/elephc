@@ -451,7 +451,10 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
     let bound_args =
         bind_native_callable_bound_args_with_mode(signature, evaluated_args, by_ref_mode, context, values)?;
-    let result = if let Some(scope) = bridge_scope {
+    let result = (|| {
+        eval_tokenizer_static_class_precondition(signature_owner, method_name,
+            called_class_scope.unwrap_or(class_name), context, values)?;
+        if let Some(scope) = bridge_scope {
         eval_native_static_method_call_with_scope(
             scope,
             called_class_scope,
@@ -463,7 +466,8 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
         )
     } else {
         values.static_method_call(class_name, method_name, native_bound_arg_values(&bound_args))
-    };
+        }
+    })();
     let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
     let result = match (result, writeback) {
         (Ok(result), Err(status)) => {

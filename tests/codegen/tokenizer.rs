@@ -110,10 +110,13 @@ $p = PhpToken::tokenize("<?php echo 1;");
 echo get_class($p[1]), ":", $p[1]->text, ":", $p[1]->pos, "\n";
 try { token_get_all("<?php function broken(", TOKEN_PARSE); }
 catch (ParseError $e) { echo "ParseError"; }
+abstract class EvalAbstractSourceToken extends PhpToken {}
+try { EvalAbstractSourceToken::tokenize(""); echo "wrong"; }
+catch (Error $e) { echo ":abstract"; }
 ' : '';
 eval($code);
 "#);
-    assert_eq!(out, "T_ECHO:6\nT_FUNCTION\nPhpToken:echo:6\nParseError");
+    assert_eq!(out, "T_ECHO:6\nT_FUNCTION\nPhpToken:echo:6\nParseError:abstract");
 }
 
 /// Repeated token arrays and object graphs leave no live PHP allocations after scope cleanup.

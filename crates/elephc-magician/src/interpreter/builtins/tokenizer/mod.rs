@@ -88,3 +88,16 @@ fn tokenizer_int(
     }
     eval_int_value(value, values)
 }
+
+/// Enforces PhpToken::tokenize's construction precondition for eval-declared subclasses.
+pub(in crate::interpreter) fn eval_tokenizer_static_class_precondition(
+    owner: &str, method: &str, called_class: &str,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if owner.trim_start_matches('\\').eq_ignore_ascii_case("PhpToken")
+        && method.eq_ignore_ascii_case("tokenize")
+        && context.class(called_class).is_some_and(|class| class.is_abstract()) {
+        return eval_throw_error(&format!("Cannot instantiate abstract class {called_class}"), context, values);
+    }
+    Ok(())
+}
