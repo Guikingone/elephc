@@ -54,4 +54,3 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_class_is_abstract(
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
-
