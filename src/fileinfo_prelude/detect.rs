@@ -15,8 +15,8 @@ use crate::parser::ast::{
     TypeExpr,
 };
 
-/// The exact PHP functions of the fileinfo surface: every `Area::Fileinfo` contract in the shared
-/// catalog. Whole-segment matches ensure user helpers with an `fileinfo_` prefix do not silently
+/// The exact PHP functions of the fileinfo surface: every `PhpModule::Fileinfo` contract in the shared
+/// catalog. Whole-segment matches ensure user helpers with a `finfo_` prefix do not silently
 /// opt into the bridge.
 fn fileinfo_functions() -> &'static [&'static str] {
     static NAMES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();

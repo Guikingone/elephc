@@ -2,7 +2,7 @@
 title: "__elephc_phar_bzip2_archive() - internals"
 description: "Compiler internals for __elephc_phar_bzip2_archive(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1169
+  order: 1170
 ---
 
 ## `__elephc_phar_bzip2_archive()` - internals

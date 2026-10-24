@@ -19,14 +19,23 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Mutex, OnceLock};
 
 extern "C" {
+    /// Creates a native cookie with the requested options.
     fn magic_open(flags: c_int) -> *mut c_void;
+    /// Releases a native cookie and its database mappings.
     fn magic_close(cookie: *mut c_void);
+    /// Loads a custom textual or compiled database.
     fn magic_load(cookie: *mut c_void, path: *const c_char) -> c_int;
+    /// Loads the database embedded by the managed native recipe.
     fn elephc_magic_load_default(cookie: *mut c_void) -> c_int;
+    /// Replaces the native cookie configuration flags.
     fn magic_setflags(cookie: *mut c_void, flags: c_int) -> c_int;
+    /// Reads the current native cookie configuration flags.
     fn magic_getflags(cookie: *mut c_void) -> c_int;
+    /// Identifies a borrowed binary byte span.
     fn magic_buffer(cookie: *mut c_void, data: *const c_void, length: usize) -> *const c_char;
+    /// Identifies a borrowed open descriptor, preserving its position.
     fn magic_descriptor(cookie: *mut c_void, fd: c_int) -> *const c_char;
+    /// Borrows the cookie error message until the next native operation.
     fn magic_error(cookie: *mut c_void) -> *const c_char;
 }
 
