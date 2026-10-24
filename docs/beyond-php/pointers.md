@@ -145,7 +145,8 @@ if ($best !== null) {
 
 Where such a local can be `null` it behaves as a `?ptr<T>`: `=== null`, `is_null()`,
 `isset()` and `echo` test the address. Narrow it with `!== null` before passing it to an
-`extern` function that takes `ptr<T>`, as for any `?ptr<T>`.
+`extern` function that takes `ptr<T>`, as for any `?ptr<T>`. Like every pointer local, it is
+not part of the local scope that `eval()` code sees.
 
 A `?ptr<T> &$p` (or `ptr<T> &$p`) by-reference parameter writes the pointer word back
 through the caller's variable, so that variable must be stored as a pointer word: a pointer
