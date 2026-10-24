@@ -19,15 +19,15 @@ fn invalid(message: &str) -> Vec<Stmt> {
 /// Decodes a data URL and delegates its bytes to the object's final buffer implementation.
 pub(super) fn data_uri() -> Stmt {
     s_if(e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("filename")]), e_str("data://")]), vec![
-        s_assign("_comma", e_call("strpos", vec![e_var("filename"), e_str(",")])),
-        s_if(e_binop(e_var("_comma"), BinOp::StrictEq, e_bool(false)), invalid("Invalid data URL: missing comma"), vec![], None),
-        s_assign("_meta", e_call("substr", vec![e_var("filename"), e_int(7), e_binop(e_var("_comma"), BinOp::Sub, e_int(7))])),
-        s_assign("_payload", e_call("substr", vec![e_var("filename"), e_binop(e_var("_comma"), BinOp::Add, e_int(1))])),
-        s_if(e_call("str_ends_with", vec![e_call("strtolower", vec![e_var("_meta")]), e_str(";base64")]), vec![
-            s_assign("_data", e_call("base64_decode", vec![e_var("_payload"), e_bool(true)])),
-        ], vec![], Some(vec![s_assign("_data", e_call("rawurldecode", vec![e_var("_payload")]))])),
-        s_if(e_binop(e_var("_data"), BinOp::StrictEq, e_bool(false)), invalid("Invalid data URL: invalid base64 payload"), vec![], None),
-        s_return(e_method_call(e_this(), "__elephc_buffer", vec![e_var("_function"), e_call("substr", vec![e_var("_data"), e_int(0), e_int(7340032)]), e_var("flags")])),
+        s_assign("_uri_comma", e_call("strpos", vec![e_var("filename"), e_str(",")])),
+        s_if(e_binop(e_var("_uri_comma"), BinOp::StrictEq, e_bool(false)), invalid("Invalid data URL: missing comma"), vec![], None),
+        s_assign("_uri_meta", e_call("substr", vec![e_var("filename"), e_int(7), e_binop(e_var("_uri_comma"), BinOp::Sub, e_int(7))])),
+        s_assign("_uri_payload", e_call("substr", vec![e_var("filename"), e_binop(e_var("_uri_comma"), BinOp::Add, e_int(1))])),
+        s_if(e_call("str_ends_with", vec![e_call("strtolower", vec![e_var("_uri_meta")]), e_str(";base64")]), vec![
+            s_assign("_uri_data", e_call("base64_decode", vec![e_var("_uri_payload"), e_bool(true)])),
+        ], vec![], Some(vec![s_assign("_uri_data", e_call("rawurldecode", vec![e_var("_uri_payload")]))])),
+        s_if(e_binop(e_var("_uri_data"), BinOp::StrictEq, e_bool(false)), invalid("Invalid data URL: invalid base64 payload"), vec![], None),
+        s_return(e_method_call(e_this(), "__elephc_buffer", vec![e_var("_function"), e_call("substr", vec![e_var("_uri_data"), e_int(0), e_int(7340032)]), e_var("flags")])),
     ], vec![], None)
 }
 
