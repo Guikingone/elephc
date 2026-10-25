@@ -72,6 +72,7 @@ fn check_source_with_defines_and_options(
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     // Mirrors `pipeline::compile`: the object-cast prelude is injected past name resolution,
@@ -108,6 +109,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast)?;
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)?;
@@ -296,6 +298,8 @@ mod core_symbols;
 mod type_system;
 #[path = "error_tests/reference_detach.rs"]
 mod reference_detach;
+#[path = "error_tests/loop_counter_bindings.rs"]
+mod loop_counter_bindings;
 #[path = "error_tests/exceptions_enums_magic.rs"]
 mod exceptions_enums_magic;
 #[path = "error_tests/classes_traits.rs"]
@@ -306,6 +310,8 @@ mod property_default_scope;
 mod generics_review;
 #[path = "error_tests/extensions.rs"]
 mod extensions;
+#[path = "error_tests/buffer_merges.rs"]
+mod buffer_merges;
 #[path = "error_tests/data_widths.rs"]
 mod data_widths;
 #[path = "error_tests/strict_php.rs"]
@@ -350,6 +356,8 @@ mod curl;
 /// wrappers' argument contracts and `xml_parse_into_struct()`'s output requirements.
 #[path = "error_tests/xml.rs"]
 mod xml;
+#[path = "error_tests/tokenizer.rs"]
+mod tokenizer;
 
 // --- Iterator-related errors ---
 

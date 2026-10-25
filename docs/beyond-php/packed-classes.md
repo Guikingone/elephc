@@ -50,6 +50,40 @@ or `ptr<Vertex>` can be a class property, a method parameter or return type, a
 promoted constructor parameter, or a generic type argument. See
 [buffers in class members](buffers.md#buffers-in-class-members).
 
+## Values known only at run time
+
+A field takes a value of its own type (a `bool` field also takes `false`). Some values only
+have a type at run time: integer arithmetic, which can overflow to `float`, float arithmetic
+over such a result (`1.5 * ($i + 1)` with a loop counter), a `mixed` parameter or a
+`json_decode()` result. A scalar field accepts them and checks the value as it is stored:
+
+- an `int` field (every integer width) takes an int;
+- a `float` or `f32` field takes a float, or an int converted to the nearest float;
+- a `bool` field takes a bool.
+
+Any other value throws a catchable `TypeError` and the field keeps its previous value; it is
+never coerced the way a PHP cast would:
+
+```php
+<?php
+packed class Vec2 { public float $x; public float $y; }
+function load(mixed $v) { return $v; }
+
+$pts = buffer_new<Vec2>(3);
+for ($i = 0; $i < 3; $i++) {
+    $pts[$i]->x = 1.5 * ($i + 1);   // 1.5, 3, 4.5
+}
+$pts[0]->y = load(2);               // the int 2 is stored as 2.0
+try {
+    $pts[0]->y = load("2.5");
+} catch (TypeError $e) {
+    echo $e->getMessage();          // Packed field Vec2::$y must be of type float, string given
+}
+```
+
+A `ptr` field takes only a pointer-typed value: a pointer and an integer look the same once
+they are `mixed`, so `mixed` is a compile error there.
+
 ## Field widths
 
 A field declared with one of the C width names keeps that width in memory, so a packed class
@@ -135,11 +169,14 @@ cannot embed itself, directly or through other packed classes, because the recor
 no finite size.
 
 Reading a nested record (`$bodies[0]->pos`) yields the record's address, like reading a
-buffer element: a local holding it writes through to the buffer. Assigning a whole record
-to a nested field copies its bytes (including the odd tail of a record of width-declared
-fields), and the source must be a record of the same packed class: a buffer element, another
-nested field, or a `ptr<T>` typed pointer. Like C struct assignment, the copy assumes the
-source and the destination do not partially overlap.
+buffer element: a local holding it writes through to the buffer. A local that also holds
+`null` at some point (`$hit = null;` before a loop that stores `$hit = $bodies[$i];`) keeps
+that address as one pointer word with `null` as address 0, so it compares with `null` and
+reaches the fields like a `?ptr<T>` (see [Pointers](pointers.md#null-safety)). Assigning a
+whole record to a nested field copies its bytes (including the odd tail of a record of
+width-declared fields), and the source must be a record of the same packed class: a buffer
+element, another nested field, or a `ptr<T>` typed pointer. Like C struct assignment, the copy
+assumes the source and the destination do not partially overlap.
 
 ```php
 <?php

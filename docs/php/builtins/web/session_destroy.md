@@ -2,7 +2,7 @@
 title: "session_destroy()"
 description: "Destroys the data stored for the current session."
 sidebar:
-  order: 998
+  order: 1000
 ---
 
 ## session_destroy()

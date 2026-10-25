@@ -2,7 +2,7 @@
 title: "xmlwriter_text()"
 description: "Writes escaped text content."
 sidebar:
-  order: 1068
+  order: 1070
 ---
 
 ## xmlwriter_text()

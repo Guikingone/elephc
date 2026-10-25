@@ -2,7 +2,7 @@
 title: "__elephc_curl_easy_setopt_str() - internals"
 description: "Compiler internals for __elephc_curl_easy_setopt_str(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1116
+  order: 1119
 ---
 
 ## `__elephc_curl_easy_setopt_str()` - internals

@@ -1036,6 +1036,8 @@ pub enum Op {
     PdoAdapterAddr,
     /// Reports whether an AOT class selected by runtime name has a constructor.
     DynamicClassHasConstructor,
+    /// Reports whether an AOT class selected by runtime name is abstract.
+    DynamicClassIsAbstract,
     /// Classifies a runtime class name for PDO statement construction.
     DynamicPdoStatementClassStatus,
     /// Classifies a runtime late-static class name for `PDO::connect()`.
@@ -1130,6 +1132,21 @@ pub enum Op {
     /// of the `TypeError` message prefix (`"Packed field C::$f must be of type int, "`), to
     /// which codegen appends the runtime type word. Result: `I64`.
     PackedFieldMixedToInt,
+    /// Narrows a `Mixed` value to the raw `F64` payload a fixed-layout `float` or `f32` field
+    /// stores (a packed field, or an extern struct field reached through `ptr<T>`): a float
+    /// passes, an int widens to the nearest double like PHP's int-to-float coercion, and every
+    /// other runtime tag throws `TypeError`, so neither the box pointer nor a lax `(float)`
+    /// cast of a string, null or array reaches the field. Operand: the Mixed value.
+    /// Immediate: data id of the `TypeError` message prefix
+    /// (`"Packed field C::$f must be of type float, "`), to which codegen appends the runtime
+    /// type word. Result: `F64`.
+    PackedFieldMixedToFloat,
+    /// Narrows a `Mixed` value to the `0`/`1` payload a fixed-layout `bool` field stores: only
+    /// the bool tag passes and every other runtime tag throws `TypeError`, where a truthiness
+    /// cast would silently turn any value into a flag. Operand: the Mixed value. Immediate:
+    /// data id of the `TypeError` message prefix (`"Packed field C::$f must be of type bool, "`).
+    /// Result: `I64` holding a PHP `bool`.
+    PackedFieldMixedToBool,
     /// Narrows a value reaching a DECLARED `int` return boundary with PHP's coercive-mode
     /// verification, replacing the silent truncation the plain int coercion performs.
     /// Matching `php -n` 8.5: int/bool forward the payload, a numeric string coerces, an
@@ -1284,6 +1301,7 @@ impl Op {
             | CallablePtr
             | PdoAdapterAddr
             | DynamicClassHasConstructor
+            | DynamicClassIsAbstract
             | DynamicPdoStatementClassStatus
             | DynamicPdoCalledClassStatus
             | Move
@@ -1510,7 +1528,7 @@ impl Op {
             IterEnd => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_DEOPT,
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
             EnumBackingStringToInt | EnumBackingMixedToInt | PackedFieldMixedToInt
-            | ReturnBoundaryMixedToInt => {
+            | PackedFieldMixedToFloat | PackedFieldMixedToBool | ReturnBoundaryMixedToInt => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
             }
             EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
@@ -1813,6 +1831,7 @@ impl Op {
             NormalizeCallable => "normalize_callable",
             PdoAdapterAddr => "pdo_adapter_addr",
             DynamicClassHasConstructor => "dynamic_class_has_constructor",
+            DynamicClassIsAbstract => "dynamic_class_is_abstract",
             DynamicPdoStatementClassStatus => "dynamic_pdo_statement_class_status",
             DynamicPdoCalledClassStatus => "dynamic_pdo_called_class_status",
             DynamicPdoStatementConstructorCall => "dynamic_pdo_statement_constructor_call",
@@ -1841,6 +1860,8 @@ impl Op {
             EnumBackingStringToInt => "enum_backing_string_to_int",
             EnumBackingMixedToInt => "enum_backing_mixed_to_int",
             PackedFieldMixedToInt => "packed_field_mixed_to_int",
+            PackedFieldMixedToFloat => "packed_field_mixed_to_float",
+            PackedFieldMixedToBool => "packed_field_mixed_to_bool",
             ReturnBoundaryMixedToInt => "return_boundary_mixed_to_int",
             ClassConstant => "class_constant",
             ScopedConstantGet => "scoped_constant_get",

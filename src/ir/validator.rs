@@ -559,6 +559,8 @@ fn validate_instruction_immediate(
         | EnumBackingStringToInt
         | EnumBackingMixedToInt
         | PackedFieldMixedToInt
+        | PackedFieldMixedToFloat
+        | PackedFieldMixedToBool
         | ReturnBoundaryMixedToInt
         | PropInitialized
         | StaticPropInitialized
@@ -1001,6 +1003,7 @@ fn validate_opcode_rules(
         | NormalizeCallable
         | PdoAdapterAddr
         | DynamicClassHasConstructor
+        | DynamicClassIsAbstract
         | DynamicPdoStatementClassStatus
         | DynamicPdoCalledClassStatus => check_count(inst_id, inst, 1, "1"),
         DynamicPdoStatementConstructorCall => check_count(inst_id, inst, 3, "3"),

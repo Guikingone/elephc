@@ -55,10 +55,14 @@ functions, 1/1 classes and 11/11 constants.
 
 - [x] Keep the PR ready for review.
 - [ ] Obtain a clean Grok verdict on the final candidate.
-- [ ] Resolve integration conflicts with the moved main branch.
+- [x] Resolve integration conflicts with the moved main branch, retaining tokenizer and fileinfo wiring.
 - [ ] Push only after the external review is clean, then follow CI and Greptile.
 - [ ] Confirm CI, clean Grok review and Greptile 5/5 on one final head.
 
-The five-round limit requires a user decision before another external round.
+The user explicitly authorized continuing beyond the five-round limit. Further
+read-only Grok rounds continue until clean. The latest main integration retains
+both tokenizer and fileinfo and regenerates documentation from the merged JSON
+registries without a local build. Audits pass with 1082 catalog functions and
+2316 generated pages. Exporter parity and executable validation remain CI gates.
 Local corrections have not been pushed during this external review phase.
 No local builds or compiled tests were run; task-owned oracle files were removed.

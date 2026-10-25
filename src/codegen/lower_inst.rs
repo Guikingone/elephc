@@ -98,6 +98,9 @@ mod method_call_types;
 mod method_dispatch;
 mod method_intrinsics;
 mod method_resolution;
+#[cfg(test)]
+#[path = "lower_inst/null_parameter_guard_tests.rs"]
+mod null_parameter_guard_tests;
 mod mixed_array_runtime;
 mod mixed_property_runtime;
 mod output_values;
@@ -360,6 +363,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::CallablePtr => builtins::pointers::lower_elephc_callable_ptr(ctx, &inst),
         Op::NormalizeCallable => builtins::pointers::lower_elephc_normalize_callable(ctx, &inst),
         Op::PdoAdapterAddr => builtins::pointers::lower_elephc_pdo_adapter_addr(ctx, &inst),
+        Op::DynamicClassIsAbstract => objects::lower_dynamic_class_is_abstract(ctx, &inst),
         Op::DynamicClassHasConstructor => {
             builtins::system::lower_elephc_class_has_constructor(ctx, &inst)
         }
@@ -429,6 +433,16 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EnumBackingStringToInt => enums::lower_enum_backing_string_to_int(ctx, &inst),
         Op::EnumBackingMixedToInt => enums::lower_enum_backing_mixed_to_int(ctx, &inst),
         Op::PackedFieldMixedToInt => objects::lower_packed_field_mixed_to_int(ctx, &inst),
+        Op::PackedFieldMixedToFloat => mixed_narrowing::lower_fixed_field_mixed_narrowing(
+            ctx,
+            &inst,
+            mixed_narrowing::FixedFieldScalar::Float,
+        ),
+        Op::PackedFieldMixedToBool => mixed_narrowing::lower_fixed_field_mixed_narrowing(
+            ctx,
+            &inst,
+            mixed_narrowing::FixedFieldScalar::Bool,
+        ),
         Op::ReturnBoundaryMixedToInt => {
             mixed_narrowing::lower_return_boundary_mixed_to_int(ctx, &inst)
         }

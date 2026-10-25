@@ -415,7 +415,7 @@ have run under:
 
 ```
 $ elephc --php-version 8.2 app.php
-error[3:5]: this program needs PHP 8.4 (property hooks), but --php-version selected 8.2; a binary built for 8.2 could not have run this source
+error[app.php:3:5]: this program needs PHP 8.4 (property hooks), but --php-version selected 8.2; a binary built for 8.2 could not have run this source
 ```
 
 Detected today: the pipe operator `|>` (8.5), property hooks and asymmetric
@@ -511,7 +511,7 @@ See [Optimization and codegen controls](optimization.md).
 | `--link LIB` / `-l LIB` / `-lLIB` | library name | — | Link an extra native library (repeatable). |
 | `--link-path DIR` / `-L DIR` / `-LDIR` | directory | — | Add a library search path (repeatable). |
 | `--framework NAME` | framework name | — | Link a macOS framework (repeatable). |
-| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `mbstring`, `iconv`, `phar`, `tz`, `image`, `pcntl`, `xml`, `fileinfo`, `eval`, `regex`, `curl`, `mysqli`, `web` | - | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic and retains the `BcMath\Number` class for indirect calls and opaque eval source. `--with-mbstring`, `--with-iconv`, and `--with-pcntl` force-link their native support when static detection cannot see a call. `--with-xml` force-links the XML bridge and injects the `XMLParser`/`XMLWriter` prelude; the parser uses the managed `libxml2` package, so the project must declare it (`elephc native add libxml2`), exactly as auto-detected XML use does. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-web` is an alias for `--web`. An unknown name is an error. Run `elephc --print-capabilities` for the list a given binary actually accepts. |
+| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `mbstring`, `iconv`, `phar`, `tz`, `image`, `pcntl`, `xml`, `fileinfo`, `tokenizer`, `eval`, `regex`, `curl`, `mysqli`, `web` | - | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic and retains the `BcMath\Number` class for indirect calls and opaque eval source. `--with-mbstring`, `--with-iconv`, and `--with-pcntl` force-link their native support when static detection cannot see a call. `--with-tokenizer` retains PHP source tokenization and `PhpToken` for indirect use. `--with-xml` force-links the XML bridge and injects the `XMLParser`/`XMLWriter` prelude; the parser uses the managed `libxml2` package, so the project must declare it (`elephc native add libxml2`), exactly as auto-detected XML use does. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-web` is an alias for `--web`. An unknown name is an error. Run `elephc --print-capabilities` for the list a given binary actually accepts. |
 
 See [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md).
 
@@ -589,7 +589,9 @@ compile error:
 - **`unset()` kill.** `unset($a)` KILLS the binding when BOTH the binding's
   creating assignment and the `unset($a)` call itself sit at conditional depth
   0 — each a straight-line statement, not nested inside any
-  `if`/loop/`try`/`switch`/…. The creating assignment can occur anywhere in
+  `if`/loop/`try`/`switch`/…. A `for` loop's initializer counts as a
+  statement at the depth of the `for` itself, since it runs exactly once
+  whenever the loop does. The creating assignment can occur anywhere in
   the body, not only as its first statement; a CONDITIONAL `unset($a)` (one
   itself nested inside a branch or loop) does not kill, since the branch may
   never run. The name must also be never reference-aliased. A later read of a
@@ -603,6 +605,14 @@ compile error:
   ```text
   $a changes type from int to string; the previous value is discarded (compile with --strict-locals to make this an error)
   ```
+  At the same eligibility, a COMPATIBLE reassignment between two different
+  numeric types (`int`, `float`, `int|float`, `mixed`) also starts a fresh
+  slot, with no warning, when the assigned value is a raw `int`/`float` or a
+  fresh arithmetic result and the name is not a parameter: a counter name
+  reused by a later loop
+  (`for ($i = $n - 1; …)` after `for ($i = 0; …)`) then keeps one slot per
+  loop. This is a storage decision with no typing effect, so `--strict-locals`
+  does not change it.
 - **Branch-divergent assignment.** `if (…) { $a = 0; } else { $a = "ciao"; }`
   — and the same shape for a single-branch retype of an outer binding, or a
   heterogeneous loop-carried local — compiles instead of failing, as

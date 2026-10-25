@@ -212,6 +212,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("finfo", "finfo", Class, Fileinfo, Prelude, cloneable: false),
     class!("PharFileInfo", "pharfileinfo", Class, Phar, CheckerInjected),
     class!("php_user_filter", "php_user_filter", Class, Standard, CheckerInjected),
+    class!("PhpToken", "phptoken", Class, Tokenizer, Prelude),
     class!("PHPUnit\\Framework\\TestCase", "phpunit\\framework\\testcase", Class, Elephc, Prelude),
     class!("PropertyHookType", "propertyhooktype", Enum, Reflection, CheckerInjected, since: Php84),
     class!("RangeException", "rangeexception", Class, Spl, CheckerInjected),

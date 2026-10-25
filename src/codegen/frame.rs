@@ -12,6 +12,9 @@
 //!   `_concat_buf` slices that were passed in by the caller.
 //! - Executable and library PHP frames publish cleanup activations so escaping exceptions
 //!   release owned locals before control reaches the surviving catch or native host.
+//! - Every frame saves the reserved nested-call register (x19/r12) unless it is a scalar leaf
+//!   of register-neutral instructions, so the unwinder, frame cleanup callbacks, generator
+//!   wrappers and native hosts that keep state in it across PHP calls get it back intact.
 
 use std::collections::{HashMap, HashSet};
 
@@ -25,8 +28,8 @@ use crate::codegen::{
 use crate::codegen_support::data_section::DataWord;
 use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_SLOT_SIZE};
 use crate::ir::{
-    CoreBuiltinOp, Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op,
-    RuntimeCallTarget, ValueDef, ValueId,
+    Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op, RuntimeCallTarget,
+    ValueDef, ValueId,
 };
 use crate::ir_passes::{allocate_registers, Allocation};
 use crate::names::ir_global_symbol;
@@ -163,8 +166,8 @@ pub(super) fn layout_for_function(
     // Method/callable dispatch hand-uses the reserved nested-call register
     // (x19/r12) to hold a receiver across argument-lowering calls; it is
     // callee-saved but outside the allocator's tracking, so reserve a save slot
-    // when the function needs it (issue #511).
-    if function_uses_nested_call_reg(function) {
+    // unless the function provably never touches it (issue #511).
+    if function_may_use_nested_call_reg(function) {
         let reg = nested_call_reg_name(target.arch);
         if !callee_saved_offsets.iter().any(|(saved, _)| *saved == reg) {
             offset += 8;
@@ -201,37 +204,11 @@ pub(super) fn layout_for_function(
 }
 
 /// Returns whether any emitted EIR body can request a PHP Core backtrace.
+///
+/// The predicate lives on `Module` beside `Module::calls_php_backtrace`, the narrower question
+/// the inliner asks before splicing a method frame away.
 pub(super) fn module_uses_backtrace(module: &Module) -> bool {
-    if module.required_runtime_features.eval_bridge {
-        return true;
-    }
-    let functions = || {
-        module
-            .functions
-            .iter()
-            .chain(module.class_methods.iter())
-            .chain(module.closures.iter())
-            .chain(module.fiber_wrappers.iter())
-            .chain(module.callback_wrappers.iter())
-            .chain(module.extern_callback_trampolines.iter())
-            .chain(module.runtime_callable_invokers.iter())
-    };
-    if functions().any(function_keeps_backtrace_argument_snapshot) {
-        return true;
-    }
-    functions()
-        .flat_map(|function| function.instructions.iter())
-        .any(|inst| {
-            inst.op == Op::CoreBuiltin
-                && matches!(
-                    inst.immediate,
-                    Some(Immediate::I64(selector))
-                        if matches!(
-                            CoreBuiltinOp::from_i64(selector),
-                            Some(CoreBuiltinOp::DebugBacktrace | CoreBuiltinOp::DebugPrintBacktrace)
-                        )
-                )
-        })
+    module.uses_php_backtrace()
 }
 
 /// Returns whether an emitted body can observe per-request GC timing metrics.
@@ -295,33 +272,6 @@ fn module_uses_resource_inventory_cleanup(module: &Module) -> bool {
         })
 }
 
-/// Returns true when the frontend retained one frame's arguments for a dynamic backtrace.
-///
-/// Descriptor-only calls to `debug_backtrace()` and `debug_print_backtrace()` do not leave a
-/// `CoreBuiltin` instruction in EIR. The argument-introspection pass marks their reachability by
-/// retaining a generated collector, count, or source-variadic snapshot in each PHP frame. The
-/// physical EIR parameters are authoritative because public signature metadata may omit generated
-/// ABI slots. Reading both shapes here keeps activation emission aligned with the frontend gate. A
-/// frame using the same storage for `func_get_args()` is an intentional conservative match: it
-/// costs an inactive reader slot but cannot change PHP behavior.
-fn function_keeps_backtrace_argument_snapshot(function: &Function) -> bool {
-    function.params.iter().any(|param| {
-        matches!(
-            param.name.as_str(),
-            crate::func_args::HIDDEN_ARGS_PARAM | crate::func_args::HIDDEN_ARGC_PARAM
-        )
-    }) || function.signature.as_ref().is_some_and(|signature| {
-        crate::func_args::sig_collects_surplus_args(signature)
-            || crate::func_args::sig_has_hidden_argc_param(signature)
-    }) || function.locals.iter().any(|local| {
-        matches!(
-            local.name.as_deref(),
-            Some(crate::func_args::SNAPSHOT_KEY_LOCAL)
-                | Some(crate::func_args::SNAPSHOT_VALUE_LOCAL)
-        )
-    })
-}
-
 /// Saves the callee-saved registers the allocator used into their reserved
 /// frame slots, preserving the caller's values for the function's lifetime.
 fn emit_callee_saved_saves(ctx: &mut FunctionContext<'_>) {
@@ -378,44 +328,56 @@ fn nested_call_reg_name(arch: Arch) -> &'static str {
     }
 }
 
-/// Detects dispatch paths that preserve a receiver in the reserved nested-call register.
-/// Mixed/union method calls, dynamic construction and Mixed string coercion use this
-/// callee-saved register outside the allocator's tracking. Each function must therefore
-/// save and restore it explicitly, including when all SSA values are stack allocated.
-fn function_uses_nested_call_reg(function: &Function) -> bool {
-    function.instructions.iter().any(|inst| {
-        // Dynamic constructors preserve their receiver across managed reference-cell staging.
-        if matches!(inst.op, Op::DynamicObjectNew | Op::DynamicObjectNewMixed) {
-            return true;
-        }
-        // A runtime-name property write can dispatch a missing name to `__set`, preserving the
-        // selected receiver in the same callee-saved register while its arguments are staged.
-        if inst.op == Op::DynamicPropSet {
-            return true;
-        }
-        // A boxed-Mixed STRING context holds its `__toString` receiver in the same register
-        // and is neither of the method-call opcodes below, so it used to slip through: a
-        // function whose only use was `echo $mixed` wrote `mov x19, x1` under a prologue that
-        // saved nothing. No caller shape was found that turns that into a wrong answer — the
-        // receiver is established AFTER argument lowering, which closes the obvious window —
-        // so this restores the callee-saved discipline rather than fixing a reproduced
-        // failure; per the note above, over-detection costs one store and one load.
-        if crate::codegen::shared_mixed_string::instruction_uses_mixed_string_ladder(function, inst)
-        {
-            return true;
-        }
-        if !matches!(inst.op, Op::MethodCall | Op::NullsafeMethodCall) {
-            return false;
-        }
-        let Some(receiver) = inst.operands.first() else {
-            return false;
-        };
-        let Some(value) = function.value(*receiver) else {
-            return false;
-        };
-        matches!(value.php_type, PhpType::Union(_))
-            || matches!(value.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-    })
+/// Decides whether a frame must save the reserved nested-call register.
+///
+/// The register is callee-saved but hand-used outside the allocator's tracking by many
+/// lowerings: direct, virtual, interface and nullsafe method dispatch, closure and callable
+/// descriptor invocation, dynamic construction, `__set` dispatch, the `__toString` ladder,
+/// builtin callback dispatch, and x86_64 scratch sequences. A predicate that listed those users
+/// missed a concrete-receiver method call, so a destructor calling `$this->close()` overwrote
+/// the register the exception unwinder and its frame cleanup callbacks keep their state in,
+/// and a generator body returned through a wrapper that had lost its Generator pointer.
+///
+/// The rule is therefore inverted: every frame saves the register unless all of its
+/// instructions are register-neutral (see `op_is_nested_call_reg_neutral`) and every local is
+/// a one-word scalar, so neither the body nor the prologue's parameter retains nor the
+/// epilogue's local releases call anything that returns to this frame. Some x86_64 runtime
+/// helpers treat r12 as scratch, so even a frame that only calls runtime code must save it.
+/// Leaving an opcode out of the neutral set costs one store and one load per activation; only
+/// adding one wrongly can lose the caller's register, which is why the set stays small.
+fn function_may_use_nested_call_reg(function: &Function) -> bool {
+    let scalar_locals = function
+        .locals
+        .iter()
+        .all(|local| matches!(local.ir_type, crate::ir::IrType::I64 | crate::ir::IrType::F64));
+    !(scalar_locals
+        && function
+            .instructions
+            .iter()
+            .all(|inst| op_is_nested_call_reg_neutral(inst.op)))
+}
+
+/// Returns true for opcodes whose lowering never writes the reserved nested-call register.
+///
+/// Each member lowers inline to the result and fixed scratch registers and makes no call that
+/// returns to this frame: the only calls are on error paths (a zero divisor, a negative shift
+/// count), which throw through the unwinder. The default is `false`,
+/// so a new opcode saves the register until its lowering is audited.
+fn op_is_nested_call_reg_neutral(op: Op) -> bool {
+    matches!(
+        op,
+        // Scalar constants materialized into the result register.
+        Op::ConstI64 | Op::ConstBool | Op::ConstNull | Op::ConstF64
+        // Integer arithmetic, bitwise and shifts (`lower_inst::arithmetic`).
+        | Op::IAdd | Op::ISub | Op::IMul | Op::INeg | Op::IDiv | Op::ISMod
+        | Op::IBitAnd | Op::IBitOr | Op::IBitXor | Op::IBitNot | Op::IShl | Op::IShrA
+        // Floating-point arithmetic (`lower_inst::floats` and `arithmetic::lower_float_div`).
+        | Op::FAdd | Op::FSub | Op::FMul | Op::FDiv | Op::FNeg
+        // Scalar comparisons and int-to-float promotion.
+        | Op::ICmp | Op::FCmp | Op::IToF
+        // Value forwarding and statement markers.
+        | Op::Move | Op::Borrow | Op::Nop | Op::ConcatReset
+    )
 }
 
 /// Emits the process-entry prologue for the EIR main function.
@@ -510,6 +472,15 @@ pub(super) fn emit_function_prologue_with_label(
         }
         if param.by_ref && crate::types::is_nullable_pointer_type(&param.php_type) {
             normalize_nullable_pointer_ref_param(ctx, offset);
+        }
+        // A `null` parameter (such as a by-value capture of a `null` local) carries no ABI
+        // value, so nothing above wrote its slot. When the body also stores pointers or packed
+        // record addresses into it, the slot is a pointer word and must start as address 0.
+        if !param.by_ref
+            && matches!(param.php_type.codegen_repr(), PhpType::Void | PhpType::Never)
+            && matches!(local_ty.codegen_repr(), PhpType::Pointer(_))
+        {
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
         }
         if converted_to_owned_mixed {
             abi::emit_load(ctx.emitter, &param.php_type.codegen_repr(), offset);

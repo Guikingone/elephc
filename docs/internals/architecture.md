@@ -56,7 +56,9 @@ Source (.php or .lfc)
 ┌──────────────┐
 │   Preludes   │  src/{pdo,mysqli,tz,list_id,var_export,opcache,image,hash,curl,xml,dom_html,web,version}_prelude*
 │              │  Injects only the compiler-owned PHP surfaces required by
-│              │  resolved source usage, forced bridge flags, or --web.
+│              │  resolved source usage, forced bridge flags, or --web. Before
+│              │  injection, src/autoload/prelude_probe.rs scans an autoloaded
+│              │  copy for PDO/mysqli/tz/image/hash/curl/xml/var_export usage.
 └─────┬────────┘
       │
       ▼
@@ -518,8 +520,8 @@ src/
 │       ├── resource_ids.rs    Runtime resource-kind identifiers shared by cleanup paths
 │       ├── round_mode.rs      PHP rounding-mode constants used by runtime helpers
 │       ├── sysv_call_alignment.rs x86_64 SysV nested-call stack-alignment helpers
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (105 top-level Rust files + 62 nested Rust helpers)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (208 top-level Rust files + 9 nested target/debug/test helpers)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (106 top-level Rust files + 62 nested Rust helpers)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (210 top-level Rust files + 9 nested target/debug/test helpers)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (7 files)
 │       ├── compare/           Loose/strict comparison and truthiness helpers (5 files)
 │       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (126 top-level files + 1 nested response-metadata helper)
@@ -530,7 +532,7 @@ src/
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup frames, handler dispatch, dynamic instanceof, matching, throwing, and Throwable helpers (23 top-level Rust files + 2 nested cleanup helpers)
 │       ├── pdo/               Target-aware PDO callable callback adapters (5 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (50 top-level Rust files + 59 nested Rust files)
+│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (50 top-level Rust files + 61 nested Rust files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 top-level files) + `api/` (4 target-aware public API helper files)
 │       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (19 files)
@@ -605,8 +607,8 @@ reads the pre-declared class names rather than the finished class table.
 Extern calls differ from ordinary elephc function calls in four important ways:
 
 1. Codegen dispatches extern functions before built-ins, so an `extern function strlen(...)` declaration really calls C `strlen`, not the elephc builtin.
-2. `string` arguments are converted with `__rt_str_to_cstr`, which allocates a null-terminated C buffer that is valid for the duration of the native call and is released immediately after the call returns.
-3. `string` return values are converted with `__rt_cstr_to_str`, which treats the returned `char *` as borrowed and copies bytes back into an owned elephc string.
+2. `string` arguments are converted with `__rt_str_to_cstr`, which allocates a null-terminated C buffer that is valid for the duration of the native call and is released immediately after the call returns. A `?string` parameter (`ExternAbiType::NullableCStr`) passes PHP null as a NULL `char *` instead, deciding a boxed `string|null` argument from its runtime tag; its cleanup slot then holds NULL, which `__rt_heap_free` ignores. A boxed array or object is a fatal error there, so no PHP code (`__toString()`, an error handler) can throw while earlier arguments' C copies exist only on the temporary stack.
+3. `string` return values are converted with `__rt_cstr_to_str`, which treats the returned `char *` as borrowed and copies bytes back into an owned elephc string. A `?string` return boxes a NULL `char *` as PHP null and moves the owned copy of any other pointer into a Mixed box, because the call is typed `string|null`.
 4. `extern class` layouts are available to pointer-oriented codegen too, so `ptr_sizeof("StructName")` and `ptr_cast<StructName>($p)->field` use the same checked layout metadata recorded by the type checker. The checker lays fields out with natural C alignment (`ctype_field_layout` in `src/types/ffi.rs`) and keeps each field's C shape (`ExternFieldInfo::abi`), and `src/codegen/lower_inst/objects/extern_fields.rs` turns `prop_get`/`prop_set` on a `ptr<StructName>` receiver into width-aware loads and stores, the extern sibling of the packed-class `ptr<T>` route.
 
 `callable` FFI parameters pass a user-defined elephc function by address. The function name is provided as a string literal at the call site, and codegen loads the address of the compiled mangled function symbol before branching into C. Namespaced functions therefore still map to unique assembly labels after canonicalization.
@@ -732,6 +734,7 @@ Total size: `8 + (num_properties × 16)`. Properties are stored at fixed offsets
 
 - Instance methods: codegen resolves a stable slot number from the static class metadata, then uses the object's `class_id` to load the concrete class vtable entry and `blr` to the implementation. The object pointer is still passed as the first argument in `x0` (as `$this`).
 - Private instance methods are excluded from the vtable and emitted as direct calls within the declaring class, preserving PHP's lexical binding for parent-private helpers.
+- For non-generic receiver classes, final methods and methods on a statically known final class call the emitted implementation directly, including inherited implementations. Generic instantiations retain their vtable slots because variance can pass a different instantiation with its own lexical body and static storage. Literal-parameter guards on final generic declarations select the actual runtime class without requiring an inheritance edge, preserving the declaring instantiation's name in `TypeError` messages. Ordinary `->` calls on overridable base-class receivers retain their hierarchy-based guards and vtable dispatch. The same rule applies to nullable receivers after their null guard and uses the target's ordinary physical or source ABI entry. A method-defined closure captures `$this` as boxed `Mixed`, so rebinding selects the actual runtime class before this rule applies.
 - Interfaces and abstract classes are enforced at compile time. Runtime method calls still use the existing class vtables, while dedicated interface metadata tables are emitted alongside the class metadata for roadmap-aligned interface bookkeeping and future dispatch work.
 - Static methods: `bl _static_ClassName_methodName`. No object pointer is passed.
 - `self::method()` / `parent::method()`: emitted as direct lexical calls, but static targets still forward the current "called class" id for later `static::` lookups.

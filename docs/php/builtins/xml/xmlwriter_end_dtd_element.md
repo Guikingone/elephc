@@ -2,7 +2,7 @@
 title: "xmlwriter_end_dtd_element()"
 description: "Ends the current DTD element declaration."
 sidebar:
-  order: 1045
+  order: 1047
 ---
 
 ## xmlwriter_end_dtd_element()

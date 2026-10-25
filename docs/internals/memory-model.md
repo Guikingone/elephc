@@ -176,7 +176,11 @@ add/subtract/multiply and increment inputs preserve an existing float tag on lat
 iterations. Counters retain scalar lowering only after a discarded SSA/range trial
 proves every update safe; mutually observed counters are proved together, and nested
 loop invariants are simplified before the range check. Unknown aliases and dynamic
-scope access reject the proof.
+scope access reject the proof. The proof is per frame slot, and a slot is per
+binding: a straight-line reassignment between two different numeric types starts a
+new binding (see [Local retyping](the-type-checker.md#local-retyping-and-strict-locals-mode)),
+so a counter name reused by a later loop with a boxed seed does not widen the slot of
+an earlier, provably integer loop.
 
 These frame cells have no heap header and cannot own children. Proven retains and
 releases of their SSA pointers emit no refcount calls. A selected local may still
@@ -282,6 +286,8 @@ no heap reference, and tag 7 there had handed the payload to decref, clone and c
 
 Pointers are stored as raw 64-bit addresses. An opaque pointer and a typed `ptr<T>` value have the same runtime representation; the type tag only exists in the checker. Null pointers use address `0x0`, and dereference helpers explicitly trap on null via `__rt_ptr_check_nonnull`.
 
+A `?ptr<T>` uses the same word, with PHP `null` as address `0x0`. A PHP local that receives `null`, packed record addresses and pointers at different points gets that pointer-word frame slot too (`pointer_word_storage` in `src/ir/builder.rs`) instead of a boxed Mixed cell. The slot type is final only after the whole body is lowered, so codegen writes a `null` stored into such a slot as `0x0` and reads the slot back as the null sentinel where lowering knows the local holds `null`. Lowering types the local `?ptr<T>` where it can be either: at `if` merges, from a `?ptr<T>` loop contract the checker records for a local that enters a loop holding `null`, and after a null-only local is bound to a `?ptr<T>` by-reference parameter.
+
 ### Buffer handles, descriptors, and payloads
 
 A `buffer<T>` local stores an opaque 64-bit handle rather than a payload or header pointer:
@@ -304,6 +310,8 @@ Offset  Size  Field
 ```
 
 `__rt_buffer_resolve` validates the handle index, non-zero generation, active marker, and exact generation match before length, read, write, or free paths use descriptor metadata. `buffer_new<T>()` allocates exactly `length * stride` payload bytes from the compiler-managed heap and zeroes only that payload. `buffer_free()` marks the descriptor inactive before releasing the detached payload. Reusable descriptors enter the `_buffer_registry_free` list and receive a new generation for their next lifetime, which keeps stale aliases invalid after slot or heap reuse. A descriptor whose u32 generation reaches its maximum is retired instead of wrapping to zero.
+
+Buffers created inside `eval()` do not use `_buffer_registry`. Magician keeps its own thread-local registry (`crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_registry.rs`) with the same lifecycle: `buffer_new()` publishes a zeroed `calloc` payload of `length * 8` bytes in a slot and answers the handle `(generation << 32) | (1 << 31) | slot`, `buffer_len()` and `buffer_ptr()` resolve the handle before reading the slot, and `buffer_free()` unpublishes the slot before freeing the payload, so a stale alias dies with the same `use of buffer after buffer_free()` fatal. Bit 31 keeps eval handles disjoint from compiled descriptor indices, generations stop at `2^31 - 1` so every handle is a positive PHP integer, and a slot that reaches that generation is retired.
 
 ### Fiber stacks and scheduler state
 
@@ -1217,6 +1225,8 @@ Static properties are class-scoped storage rather than object fields. During `em
 
 The naming pattern comes from `static_property_symbol(...)`. Inherited static properties point back to the declaring class slot, so `Base::$count` and `Child::$count` share storage when the property is declared only on `Base`. When a subclass redeclares the static property, that subclass receives its own slot and `static::$count` dispatches to it through the called-class id at runtime. `_main` evaluates static-property defaults before user statements run, and later reads/writes load from or store to the resolved slot directly.
 
+A `buffer<T>`, `ptr` or `ptr<T>` static property keeps its handle or address in the slot's low word, as an instance property does. The word owns nothing: overwriting it frees no buffer, and shutdown releases nothing for it. Element writes (`Class::$buf[$i] = $v`) resolve the handle the slot holds and store into the buffer payload without writing the slot back. A typed pointer slot whose default is `null` is initialized to the zero word, while a typed buffer or pointer slot without a default carries the uninitialized marker in its high word until the first store.
+
 Converting a boxed `Mixed` value into a concrete scalar, string, or object property does not transfer the source box. EIR releases an owning temporary after the store and leaves borrowed boxes untouched. Scalar payloads need no owner; strings are persisted exactly once and object payloads are independently retained. Matching boxed-to-boxed storage instead transfers an owned box, or acquires a borrowed source before storing it.
 
 ### Pending compound append leases
@@ -1301,7 +1311,7 @@ read the same uniform heap header, including on the iOS targets.
 | Array capacity | Fixed at creation until grow/re-hash logic runs | `__rt_array_new` / `__rt_hash_new` validate the requested size first: negative capacities allocate an empty payload region, and a `capacity * elem_size` (or `capacity * 64`) that does not fit in a non-negative machine word aborts with "Fatal error: requested array size exceeds the maximum allowed array size" instead of wrapping to a small allocation |
 | Range element count | `range()` sizes its result from `\|end - start\| + 1` | An interval needing more than 1073741823 elements never reaches the allocator: the lowering guard raises reference PHP's catchable `ValueError` ("The supplied range exceeds the maximum array size: start=… end=… step=…") first, naming the ordered endpoints and `abs($step)`. The runtime's own overflow abort remains as the backstop |
 | Fill element count | `array_fill()` sizes its result from `$count` | A `$count` past `INT_MAX` (2147483647) never reaches the allocator: the lowering guard raises reference PHP's catchable `ValueError` ("array_fill(): Argument #2 ($count) is too large"). Counts at or below the bound whose payload does not fit the heap still report "Fatal error: heap memory exhausted", which is what reference PHP reports as a memory-limit fatal too |
-| Buffer length | Fixed at `buffer_new<T>()` | A negative length, or a `length * stride` that does not fit in a non-negative machine word, aborts with "Fatal error: buffer_new() length is negative or exceeds the maximum buffer size" |
+| Buffer length | Fixed at `buffer_new<T>()` | A negative length, a `length * stride` that does not fit in a non-negative machine word, or a runtime-converted length (int arithmetic, `mixed`, `int\|float`) that is not a whole number in the `int` range, aborts with "Fatal error: buffer_new() length is negative or exceeds the maximum buffer size" |
 | C-string buffers | `_cstr_buf`, `_cstr_buf2` = 4KB each, `_empty_str` = 1 byte | Long converted paths/strings are truncated to buffer size; `_empty_str` is a safe zero-length string pointer |
 | File descriptor state | `_eof_flags`, `_stream_read_filters`, `_stream_write_filters` = 256 bytes each; `_popen_files`, `_dir_handles`, `_glob_handles`, `_zstream_handles`, `_bzstream_handles`, `_iconv_handles`, `_tls_sessions`, `_stream_chunk_size` = 2048 bytes each; on Apple targets only, `_iconv_write_options` = 256 bytes | Per-fd stream, process, directory, compression, iconv, TLS, and chunk-size bookkeeping for up to 256 descriptors; `_iconv_write_options` holds each `convert.iconv` write filter's own `//TRANSLIT`/`//IGNORE` bits |
 | Stream filter scratch | `_stream_filter_buf`, `_stream_grow_scratch` = 64KB each | Scratch space for stream filters, including length-growing filters such as base64 and quoted-printable encoders |

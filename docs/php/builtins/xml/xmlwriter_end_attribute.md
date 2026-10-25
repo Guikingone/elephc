@@ -2,7 +2,7 @@
 title: "xmlwriter_end_attribute()"
 description: "Ends the current attribute."
 sidebar:
-  order: 1039
+  order: 1041
 ---
 
 ## xmlwriter_end_attribute()

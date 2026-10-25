@@ -17,6 +17,7 @@ use crate::ir::{print_module, Terminator};
 mod aggregate_operand_owners;
 mod argument_evaluation_owners;
 mod borrowed_string_reads;
+mod buffer_element_updates;
 mod ref_local_append;
 mod string_offset_lifetime;
 mod arrays;
@@ -29,6 +30,7 @@ mod call_coercion_owners;
 mod callable_flow_safety;
 mod loop_closures;
 mod method_loop_counters;
+mod reused_loop_counters;
 mod callable_property_owners;
 mod class_introspection_owners;
 mod closure_bind_owners;
@@ -57,6 +59,8 @@ mod preg_match_all_review;
 mod object_mixed_return_owners;
 mod numeric_string_comparisons;
 mod packed_record_addresses;
+mod fixed_layout_field_narrowing;
+mod buffer_lengths;
 mod boxed_array_write_owners;
 mod boxed_array_reduce;
 mod boxed_array_aggregates;
@@ -180,6 +184,7 @@ fn try_lower_source_at_for_target(
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::version_prelude::inject_if_used(
         ast,
