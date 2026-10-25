@@ -67,20 +67,21 @@ fn tokenizer_parse_distinguishes_echo_statements_from_constant_names() {
     }
 }
 
-/// Enum lookahead excludes exact keywords while allowing names with those prefixes.
+/// Zend excludes extends/implements prefixes from enum declaration lookahead.
 #[test]
-fn tokenizer_enum_lookahead_matches_complete_names() {
+fn tokenizer_enum_lookahead_preserves_php85_prefix_exclusions() {
     for name in ["extendsFoo", "implementsFoo", "ExTeNdS_Foo", "ImPlEmEnTs_Foo", "extendsé"] {
+        let source = format!("<?php enum {name} {{ case A; }}");
+        let tokens = tokenize(source.as_bytes(), 0).unwrap();
+        assert_eq!(tokens.iter().find(|t| t.pos == 6).unwrap().id, id("T_STRING"), "{source}");
+        assert!(tokenize(source.as_bytes(), TOKEN_PARSE).is_err(), "{source}");
+    }
+    for name in ["FooExtends", "FooImplements", "XextendsFoo", "XimplementsFoo"] {
         let source = format!("<?php enum {name} {{ case A; }}");
         for flags in [0, TOKEN_PARSE] {
             let tokens = tokenize(source.as_bytes(), flags).unwrap();
             assert_eq!(tokens.iter().find(|t| t.pos == 6).unwrap().id, id("T_ENUM"), "{source}, flags={flags}");
         }
-    }
-    for name in ["extends", "implements"] {
-        let source = format!("<?php enum {name};");
-        let tokens = tokenize(source.as_bytes(), 0).unwrap();
-        assert_eq!(tokens.iter().find(|t| t.pos == 6).unwrap().id, id("T_STRING"), "{source}");
     }
 }
 
@@ -173,6 +174,9 @@ fn fixtures() -> Vec<Vec<u8>> {
         "<?php enum extendsFoo { case A; } enum implementsFoo { case B; }",
         "<?php enum /*comment*/ ExTeNdS_Foo { case A; } enum ImPlEmEnTs_Foo { case B; }",
         "<?php enum extendsé { case A; }", "<?php enum extends;", "<?php enum implements;",
+        "<?php enum FooExtends { case A; } enum FooImplements { case B; }",
+        "<?php enum XextendsFoo { case A; } enum XimplementsFoo { case B; }",
+        "<?php function enum() {} enum();",
         "<?php $x = (int)1; (integer)$x; (bool)$x; (boolean)$x; (binary)$x; (double)$x; (real)$x; (float)$x; (array)$x; (object)$x; (unset)$x; (void)$x;",
         "<?php 0; 00; 0777; 0o77; 0xF; 0b11; 1_000; 1.5; .2; 2.; 1e3; 1E-2; 9223372036854775808; 0xffffffffffffffff;",
         "<?php echo __CLASS__, __TRAIT__, __METHOD__, __FUNCTION__, __PROPERTY__, __LINE__, __FILE__, __DIR__, __NAMESPACE__;",

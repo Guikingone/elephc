@@ -22,6 +22,11 @@ pub(super) fn validate(source: &[u8], tokens: &mut [Token]) -> Result<(), ParseE
     // Mask only trivia in that header; Zend permits it and ignores the later payload.
     let mut in_halt = false;
     for token in tokens.iter() {
+        // Zend's soft-keyword lookahead excludes extends/implements prefixes. Mago
+        // accepts them as enum names, so preserve Zend's identifier classification.
+        if token.id == id("T_STRING") && source[token.pos..token.pos + token.len].eq_ignore_ascii_case(b"enum") {
+            input[token.pos] = b'z';
+        }
         if token.id == id("T_HALT_COMPILER") { in_halt = true; }
         else if in_halt && [id("T_COMMENT"), id("T_DOC_COMMENT")].contains(&token.id) {
             for b in &mut input[token.pos..token.pos + token.len] { if !matches!(b, b'\n' | b'\r') { *b = b' '; } }
