@@ -90,18 +90,22 @@ fn guard<T: Default>(call: impl FnOnce() -> T) -> T {
 #[no_mangle]
 pub unsafe extern "C" fn elephc_fileinfo_open(flags: i64, path: *const c_char) -> i64 {
     guard(|| {
+        let path = match expand_database(path) {
+            Ok(path) => path,
+            Err(error) => { outcome(None, CString::new(error.to_string()).unwrap_or_default()); return 0; }
+        };
         let cookie = magic_open(flags as c_int);
         if cookie.is_null() {
             outcome(None, CString::new(format!("Invalid mode '{flags}'.")).unwrap());
             return 0;
         }
         let instance = Magic(cookie as usize);
-        let loaded = if path.is_null() || CStr::from_ptr(path).is_empty() {
+        let loaded = if path.is_empty() {
             elephc_magic_load_default(cookie)
-        } else { magic_load(cookie, path) };
+        } else { magic_load(cookie, path.as_ptr()) };
         if loaded != 0 {
             let mut message = b"Failed to load magic database at \"".to_vec();
-            if !path.is_null() { message.extend_from_slice(CStr::from_ptr(path).to_bytes()); }
+            message.extend_from_slice(path.as_bytes());
             message.push(b'"');
             outcome(None, CString::new(message).unwrap_or_default());
             return 0;
@@ -113,6 +117,22 @@ pub unsafe extern "C" fn elephc_fileinfo_open(flags: i64, path: *const c_char) -
         outcome(Some(CString::default()), CString::default());
         id
     })
+}
+
+/// Resolves custom database names like PHP's lexical CWD_EXPAND, retaining missing leaves.
+unsafe fn expand_database(path: *const c_char) -> std::io::Result<CString> {
+    if path.is_null() || CStr::from_ptr(path).is_empty() { return Ok(CString::default()); }
+    let path = std::path::Path::new(OsStr::from_bytes(CStr::from_ptr(path).to_bytes()));
+    let absolute = if path.is_absolute() { path.to_owned() } else { std::env::current_dir()?.join(path) };
+    let mut normalized = std::path::PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::CurDir => {},
+            std::path::Component::ParentDir => { normalized.pop(); },
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    Ok(CString::new(normalized.as_os_str().as_bytes()).unwrap_or_default())
 }
 
 /// Releases an owned handle; an already released handle is harmless.
@@ -132,6 +152,16 @@ pub extern "C" fn elephc_fileinfo_set_flags(handle: i64, flags: i64) -> i64 {
         let Some(owner) = instance(handle) else { return 0; };
         let instance = owner.lock().unwrap_or_else(|e| e.into_inner());
         i64::from(unsafe { magic_setflags(instance.0 as *mut c_void, flags as c_int) } == 0)
+    })
+}
+
+/// Reads the instance flags without holding its mutex while PHP stream callbacks execute.
+#[no_mangle]
+pub extern "C" fn elephc_fileinfo_get_flags(handle: i64) -> i64 {
+    guard(|| {
+        let Some(owner) = instance(handle) else { return 0; };
+        let instance = owner.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { i64::from(magic_getflags(instance.0 as *mut c_void)) }
     })
 }
 
@@ -203,6 +233,28 @@ pub extern "C" fn elephc_fileinfo_error() -> *const c_char { ERROR.with(|slot| s
 /// Distinguishes descriptor-open failures from magic errors for PHP stream warning formatting.
 #[no_mangle]
 pub extern "C" fn elephc_fileinfo_open_failed() -> i64 { OPEN_FAILURE.with(|slot| i64::from(*slot.borrow())) }
+
+/// Copies a connector's captured errno or thread-local TLS cause into fileinfo-owned storage.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_fileinfo_network_error(code: i64, detail: *const c_char) -> *const c_char {
+    guard(|| {
+        let message = if code > 0 {
+            std::io::Error::from_raw_os_error(code as c_int).to_string()
+        } else if code < 0 {
+            "Failed to resolve host".to_owned()
+        } else if !detail.is_null() && !CStr::from_ptr(detail).is_empty() {
+            CStr::from_ptr(detail).to_string_lossy().into_owned()
+        } else { "operation failed".to_owned() };
+        // Rust's native I/O display appends an implementation-specific errno suffix.
+        let text = message.rsplit_once(" (os error ").filter(|(_, code)|
+            code.strip_suffix(')').is_some_and(|code| !code.is_empty() && code.bytes().all(|byte| byte.is_ascii_digit())))
+            .map_or(message.as_str(), |(text, _)| text);
+        ERROR.with(|slot| {
+            *slot.borrow_mut() = CString::new(text).unwrap_or_default();
+            slot.borrow().as_ptr()
+        })
+    })
+}
 
 #[cfg(all(test, elephc_fileinfo_native))]
 mod tests;

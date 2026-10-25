@@ -57,21 +57,21 @@ fn query_engine(file: bool) -> crate::synthetic_class::MethodBuilder {
             filename_check(true),
             s_assign("_source_filename", e_var(parameter)),
             super::streams::file_uri(),
-            s_if(e_binop(e_binop(e_call("strpos", vec![e_var(parameter), e_str("://")]), BinOp::StrictNotEq, e_bool(false)), BinOp::Or, e_call("str_starts_with", vec![e_var(parameter), e_str("data:")])), vec![
-                s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![e_var(parameter), e_var("context")])),
+            s_if(e_method_call(e_this(), "__elephc_is_stream", vec![e_var(parameter), e_var("_function")]), vec![
+                s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![e_var(parameter), e_var("context"), e_var("_function")])),
                 s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
-                s_return(e_method_call(e_this(), "__elephc_buffer", vec![e_var("_function"), e_var("_data"), e_var("flags")])),
+                s_return(e_method_call(e_this(), "__elephc_buffer", vec![e_var("_function"), e_var("_data"), e_int(0)])),
             ], vec![], None),
-            s_assign("_result", e_call("elephc_fileinfo_file", vec![e_var("_raw"), e_var(parameter), e_var("flags")])),
+            s_assign("_result", e_call("elephc_fileinfo_file", vec![e_var("_raw"), e_var(parameter), e_int(0)])),
         ]);
     } else {
-        body.push(s_assign("_result", e_call("elephc_fileinfo_buffer", vec![e_var("_raw"), e_var(parameter), e_call("strlen", vec![e_var(parameter)]), e_var("flags")])));
+        body.push(s_assign("_result", e_call("elephc_fileinfo_buffer", vec![e_var("_raw"), e_var(parameter), e_call("strlen", vec![e_var(parameter)]), e_int(0)])));
     }
     body.push(s_if(eq(e_call("elephc_fileinfo_ok", vec![]), e_int(0)), failure(file), vec![], None));
     body.push(s_return(e_var("_result")));
     method(&format!("__elephc_{name}")).final_().param("_function", TypeExpr::Str).param(parameter, TypeExpr::Str)
         .param_default("flags", TypeExpr::Int, e_int(0))
-        .param_default("context", t_mixed(), e_null()).returns(result_type()).body(body)
+        .param_default("context", t_mixed(), e_null()).returns(result_type()).body(with_query_flags(body))
 }
 
 /// Public method dispatch remains overridable; procedural calls use the final engine helper.
@@ -111,7 +111,7 @@ fn finfo_class() -> Stmt {
             .param_default("magic_database", t_nullable(TypeExpr::Str), e_null()).body(constructor))
         .method(query_method(false)).method(query_method(true))
         .method(query_engine(false)).method(query_engine(true))
-        .method(super::wrappers::read_method()).method(super::wrappers::filter_method())
+        .method(super::wrappers::read_method()).method(super::wrappers::filter_method()).method(super::wrappers::routing_method())
         .method(method("set_flags").param("flags", TypeExpr::Int).returns(TypeExpr::Bool)
             .returning(e_method_call(e_this(), "__elephc_set_flags", vec![e_var("flags")])))
         .method(method("__elephc_set_flags").final_().param("flags", TypeExpr::Int).returns(TypeExpr::Bool).body(set_flags))
@@ -176,7 +176,7 @@ fn functions() -> Program {
             s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
             s_return(e_method_call(e_var("_finfo"), "__elephc_buffer", vec![e_str("mime_content_type"), e_var("_data")])),
         ], vec![], None),
-        reject(e_not(e_call("is_string", vec![e_var("filename")])), "TypeError", "mime_content_type(): Argument #1 ($filename) must be of type resource|string"),
+        mime_type_check(),
         reject(eq(e_var("filename"), e_str("")), "ValueError", "mime_content_type(): Argument #1 ($filename) must not be empty"),
         reject(e_binop(e_call("strpos", vec![e_var("filename"), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)), "TypeError", "mime_content_type(): Argument #1 ($filename) must not contain any null bytes"),
         s_return(e_method_call(e_var("_finfo"), "__elephc_file", vec![e_str("mime_content_type"), e_var("filename")])),
@@ -196,6 +196,12 @@ pub(super) fn declarations() -> Program {
             extern_fn("elephc_fileinfo_ok", "elephc_fileinfo").returns(CType::Int).build(),
             extern_fn("elephc_fileinfo_error", "elephc_fileinfo").returns(CType::Str).build(),
             extern_fn("elephc_fileinfo_open_failed", "elephc_fileinfo").returns(CType::Int).build(),
+            extern_fn("elephc_fileinfo_get_flags", "elephc_fileinfo").param("handle", CType::Int).returns(CType::Int).build(),
+            extern_fn("elephc_runtime_stream_has_wrapper", "System").param("scheme", CType::Str).returns(CType::Int).build(),
+            extern_fn("elephc_runtime_stream_reset_error", "System").build(),
+            extern_fn("elephc_runtime_stream_error_code", "System").returns(CType::Int).build(),
+            extern_fn("elephc_runtime_stream_tls_error", "System").returns(CType::Str).build(),
+            extern_fn("elephc_fileinfo_network_error", "elephc_fileinfo").param("code", CType::Int).param("detail", CType::Str).returns(CType::Str).build(),
             handle_owner(),
             finfo_class(),
         ];
@@ -235,15 +241,29 @@ fn query_failure(file: bool) -> Vec<Stmt> {
 
 /// Reports the PHP parameter number and ZPP type name for a non-resource context.
 fn context_type_error(function: Expr) -> Vec<Stmt> {
-    let type_name = e_call("gettype", vec![e_var("context")]);
-    let type_name = e_match(type_name.clone(), vec![
-        (vec![e_str("integer")], e_str("int")), (vec![e_str("double")], e_str("float")),
-        (vec![e_str("boolean")], e_str("bool")), (vec![e_str("object")], e_call("get_class", vec![e_var("context")])),
-    ], Some(type_name));
+    let type_name = php_type(e_var("context"));
     let argument = e_ternary(e_binop(eq(function.clone(), e_str("finfo_file")), BinOp::Or,
         eq(function.clone(), e_str("finfo_buffer"))), e_str("(): Argument #4 ($context) "), e_str("(): Argument #3 ($context) "));
     vec![s_throw(e_new_fq("TypeError", vec![concat(concat(concat(function, argument),
         e_str("must be of type resource or null, ")), concat(type_name, e_str(" given")))]))]
+}
+
+/// Returns the Zend argument-error spelling for a PHP value's runtime type.
+fn php_type(value: Expr) -> Expr {
+    let name = e_call("gettype", vec![value.clone()]);
+    e_match(name.clone(), vec![
+        (vec![e_str("integer")], e_str("int")), (vec![e_str("double")], e_str("float")),
+        (vec![e_str("boolean")], e_str("bool")), (vec![e_str("NULL")], e_str("null")),
+        (vec![e_str("object")], e_call("get_class", vec![value])),
+    ], Some(name))
+}
+
+/// Includes the offending runtime type in mime_content_type's mixed-argument diagnostic.
+fn mime_type_check() -> Stmt {
+    s_if(e_not(e_call("is_string", vec![e_var("filename")])), vec![
+        s_throw(e_new_fq("TypeError", vec![concat(e_str("mime_content_type(): Argument #1 ($filename) must be of type resource|string, "),
+            concat(php_type(e_var("filename")), e_str(" given")))])),
+    ], vec![], None)
 }
 
 /// Identifies values rejected by PHP's nullable-resource parameter parsing.
@@ -257,4 +277,20 @@ fn buffer_context(function: &str, supplied: i64) -> Stmt {
     s_if(non_resource_context(), context_type_error(e_str(function)), vec![], Some(vec![
         deprecated(&format!("{function}(): The $context parameter has no effect for finfo_buffer()"), Some(supplied)),
     ]))
+}
+
+/// Makes temporary options observable to stream/error callbacks and restores them on every exit.
+fn with_query_flags(body: Vec<Stmt>) -> Vec<Stmt> {
+    vec![
+        s_assign("_restore_flags", e_binop(e_var("flags"), BinOp::StrictNotEq, e_int(0))),
+        s_assign("_flags_handle", e_this_prop("__elephc_handle")),
+        s_assign("_saved_flags", e_int(0)),
+        s_if(e_var("_restore_flags"), vec![
+            s_assign("_saved_flags", e_call("elephc_fileinfo_get_flags", vec![e_var("_flags_handle")])),
+            s_expr(e_call("elephc_fileinfo_set_flags", vec![e_var("_flags_handle"), e_var("flags")])),
+        ], vec![], None),
+        s_try(body, vec![], Some(vec![s_if(e_var("_restore_flags"), vec![
+            s_expr(e_call("elephc_fileinfo_set_flags", vec![e_var("_flags_handle"), e_var("_saved_flags")])),
+        ], vec![], None)])),
+    ]
 }

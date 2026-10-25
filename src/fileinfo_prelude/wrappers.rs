@@ -38,7 +38,7 @@ fn filtered_url() -> Stmt {
         s_if(eq(e_var("_split"), e_bool(false)), vec![s_throw(e_new_fq("Error", vec![e_str("No URL resource specified")]))], vec![], None),
         s_assign("_resource", e_call("substr", vec![e_var("filename"), e_binop(e_var("_split"), BinOp::Add, e_int(10))])),
         s_if(eq(e_var("_resource"), e_str("")), invalid("Invalid php://filter URL: empty resource"), vec![], None),
-        s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![e_var("_resource"), e_var("context")])),
+        s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![e_var("_resource"), e_var("context"), e_var("_function")])),
         s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
         s_assign("_spec", e_str("")),
         s_if(e_binop(e_var("_split"), BinOp::Gt, e_int(13)), vec![
@@ -87,13 +87,43 @@ pub(super) fn read_method() -> MethodBuilder {
     body.push(s_if(e_binop(eq(e_call("strtolower", vec![e_var("filename")]), e_str("php://memory")), BinOp::Or,
         e_binop(eq(e_call("strtolower", vec![e_var("filename")]), e_str("php://temp")), BinOp::Or, prefix("php://temp/"))),
         vec![s_return(e_str(""))], vec![], None));
+    body.push(s_if(prefix("php://"), vec![
+        s_expr(e_call("__elephc_builtin_warning", vec![e_binop(e_var("_function"), BinOp::Concat, e_str("(): Invalid php:// URL specified"))])),
+    ].into_iter().chain(super::streams::failure(e_str("operation failed"))).collect(), vec![], None));
+    body.push(s_if(prefix("glob://"), super::streams::failure(e_str("wrapper does not support stream open")), vec![], None));
     body.extend([
         s_assign("_stream", e_call("fopen", vec![e_var("filename"), e_str("rb"), e_bool(false), e_var("context")])),
         s_if(eq(e_var("_stream"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
         read_owned(),
     ]);
     method("__elephc_read_stream").private().param("filename", TypeExpr::Str)
-        .param("context", t_mixed()).returns(t_union(vec![TypeExpr::Str, TypeExpr::False])).body(body)
+        .param("context", t_mixed()).param("_function", TypeExpr::Str).returns(t_union(vec![TypeExpr::Str, TypeExpr::False])).body(body)
+}
+
+/// Routes registered wrappers while preserving PHP's warned plain-file fallback for unknown schemes.
+pub(super) fn routing_method() -> MethodBuilder {
+    let mut body = vec![
+        s_if(e_call("str_starts_with", vec![e_var("filename"), e_str("data:")]), vec![s_return(e_bool(true))], vec![], None),
+        s_assign("_separator", e_call("strpos", vec![e_var("filename"), e_str("://")])),
+        s_if(eq(e_var("_separator"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
+        s_assign("_scheme", e_call("substr", vec![e_var("filename"), e_int(0), e_var("_separator")])),
+        s_if(e_binop(e_call("strlen", vec![e_var("_scheme")]), BinOp::Lt, e_int(2)), vec![s_return(e_bool(false))], vec![], None),
+        s_assign("_scheme_index", e_int(0)),
+        s_while(e_binop(e_var("_scheme_index"), BinOp::Lt, e_call("strlen", vec![e_var("_scheme")])), vec![
+            s_if(eq(e_call("strpos", vec![e_str("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-"),
+                e_call("substr", vec![e_var("_scheme"), e_var("_scheme_index"), e_int(1)])]), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
+            s_assign("_scheme_index", e_binop(e_var("_scheme_index"), BinOp::Add, e_int(1))),
+        ]),
+    ];
+    for scheme in ["data", "php", "http", "https", "ftp", "ftps", "compress.zlib", "compress.bzip2", "phar", "glob"] {
+        body.push(s_if(eq(e_call("strtolower", vec![e_var("_scheme")]), e_str(scheme)), vec![s_return(e_bool(true))], vec![], None));
+    }
+    body.push(s_if(eq(e_call("elephc_runtime_stream_has_wrapper", vec![e_var("_scheme")]), e_int(1)), vec![s_return(e_bool(true))], vec![], None));
+    let message = e_binop(e_binop(e_binop(e_var("_function"), BinOp::Concat, e_str("(): Unable to find the wrapper \"")),
+        BinOp::Concat, e_var("_scheme")), BinOp::Concat, e_str("\" - did you forget to enable it when you configured PHP?"));
+    for _ in 0..2 { body.push(s_expr(e_call("__elephc_builtin_warning", vec![message.clone()]))); }
+    body.push(s_return(e_bool(false)));
+    method("__elephc_is_stream").private().param("filename", TypeExpr::Str).param("_function", TypeExpr::Str).returns(TypeExpr::Bool).body(body)
 }
 
 /// Applies one filter through the existing stream implementation and its PHP callbacks.

@@ -44,6 +44,19 @@ fn fileinfo_native_failure_restores_flags() {
     }
 }
 
+/// Fileinfo copies transient TLS detail and removes Rust's errno display suffix.
+#[test]
+fn fileinfo_native_network_error_detail() {
+    unsafe {
+        let source = CString::new("Connection refused (os error 111)").unwrap();
+        let pointer = elephc_fileinfo_network_error(0, source.as_ptr());
+        drop(source);
+        assert_eq!(CStr::from_ptr(pointer).to_bytes(), b"Connection refused");
+        assert_eq!(CStr::from_ptr(elephc_fileinfo_network_error(2, c"".as_ptr())).to_bytes(), b"No such file or directory");
+        assert_eq!(CStr::from_ptr(elephc_fileinfo_network_error(0, c"".as_ptr())).to_bytes(), b"operation failed");
+    }
+}
+
 /// Directory results require a successful open and ignore MIME flags after descriptor stat.
 #[test]
 fn fileinfo_native_directory_open_permissions() {

@@ -32,6 +32,7 @@ mod file_get_contents;
 mod file_get_contents_range;
 mod file_get_contents_url;
 mod file_put_contents;
+mod fileinfo_streams;
 mod fd_write;
 mod fnmatch;
 mod fopen;
@@ -161,6 +162,7 @@ pub(crate) use file_get_contents_range::{
 pub(crate) use file_get_contents_url::emit_file_get_contents_url;
 pub(crate) use fd_write::emit_fd_write;
 pub(crate) use file_put_contents::emit_file_put_contents;
+pub(crate) use fileinfo_streams::emit_fileinfo_streams;
 pub(crate) use fnmatch::emit_fnmatch;
 pub(crate) use fopen::emit_fopen;
 pub(crate) use fputcsv::emit_fputcsv;
