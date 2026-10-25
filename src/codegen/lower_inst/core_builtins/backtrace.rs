@@ -46,8 +46,10 @@ pub(super) fn lower_diagnostic_caller_line(ctx: &mut FunctionContext<'_>) {
     let next = ctx.next_label("diagnostic_caller_next");
     let empty = ctx.next_label("diagnostic_caller_empty");
     let done = ctx.next_label("diagnostic_caller_done");
+    // -- initialize the activation cursor and source-coordinate bound --
     abi::emit_load_symbol_to_reg(ctx.emitter, cursor, "_exc_call_frame_top", 0);
     abi::emit_load_int_immediate(ctx.emitter, limit, i64::from(crate::span::SYNTHETIC_LINE_BASE));
+    // -- scan suspended frames for the nearest real PHP call site --
     ctx.emitter.label(&scan);
     ctx.emitter.instruction(&if arm { format!("cmp {cursor}, #0") } else { format!("test {cursor}, {cursor}") }); // detect the end of the activation chain
     ctx.emitter.instruction(&format!("{} {empty}", if arm { "b.eq" } else { "jz" })); // fall back when no source caller remains
@@ -59,6 +61,7 @@ pub(super) fn lower_diagnostic_caller_line(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&next);
     abi::emit_load_from_address(ctx.emitter, cursor, cursor, 0);
     abi::emit_jump(ctx.emitter, &scan);
+    // -- return an unknown line only when no source frame survives --
     ctx.emitter.label(&empty);
     abi::emit_load_int_immediate(ctx.emitter, result, 0);
     ctx.emitter.label(&done);
