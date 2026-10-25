@@ -284,6 +284,12 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
             property,
         )
         .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
+        // A static buffer or pointer slot holds a raw word the syntactic `int` would cast.
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_property_word_type(ctx, receiver, property, value)
+                .map(ir_array_storage_type)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+        }
         _ => ir_array_storage_type(infer_expr_type_syntactic(value)),
     }
 }

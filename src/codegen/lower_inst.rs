@@ -98,6 +98,9 @@ mod method_call_types;
 mod method_dispatch;
 mod method_intrinsics;
 mod method_resolution;
+#[cfg(test)]
+#[path = "lower_inst/null_parameter_guard_tests.rs"]
+mod null_parameter_guard_tests;
 mod mixed_array_runtime;
 mod mixed_property_runtime;
 mod output_values;
