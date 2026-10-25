@@ -61,6 +61,8 @@ preserves a literal plus byte. Base64 payloads retain their decoded binary bytes
 `mime_content_type($filename)` accepts a filename or an open stream resource and
 returns its MIME type. Stream identification seeks to the beginning and restores
 the previous stream position.
+Stream callback exceptions propagate with PHP warning behavior. A matching PHP
+error handler is not reentered for diagnostics emitted while an exception is pending.
 
 ## Configuration and ownership
 

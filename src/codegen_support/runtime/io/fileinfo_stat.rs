@@ -43,7 +43,11 @@ fn emit_exception_warning(emitter: &mut Emitter) {
     emitter.label_global(&name);
     abi::emit_load_symbol_to_reg(emitter, scratch, "_php_error_handler_callable", 0);
     emitter.instruction(if arm { "cmp x14, #0" } else { "test r11, r11" });     // a registered handler cannot run with a pending exception
-    emitter.instruction(if arm { "b.ne __rt_finfo_exception_warning_done" } else { "jnz __rt_finfo_exception_warning_done" }); // PHP suppresses this diagnostic when a handler is installed
+    emitter.instruction(if arm { "b.eq __rt_finfo_exception_warning_report" } else { "jz __rt_finfo_exception_warning_report" }); // no handler means ordinary default reporting
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_php_error_handler_mask", 0);
+    emitter.instruction(if arm { "tst x14, #2" } else { "test r11, 2" });       // only a matching E_WARNING handler suppresses the exception-time diagnostic
+    emitter.instruction(if arm { "b.ne __rt_finfo_exception_warning_done" } else { "jnz __rt_finfo_exception_warning_done" }); // PHP cannot enter the matching handler while an exception is pending
+    emitter.label("__rt_finfo_exception_warning_report");
     if arm {
         emitter.instruction("sub sp, sp, #48");                                 // reserve the warning inputs and caller linkage
         emitter.instruction("stp x29, x30, [sp, #32]");                         // preserve the caller frame and return address

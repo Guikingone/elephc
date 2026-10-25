@@ -45,6 +45,8 @@ fn read_pending() -> Vec<Stmt> {
         s_if(e_binop(e_binop(e_var("_mode"), BinOp::BitAnd, e_int(0o040000)), BinOp::NotEq, e_int(0)),
             vec![s_return(e_str("directory"))], vec![], None),
         s_if(e_not(e_method_call(e_this(), "__elephc_magic_stat", vec![e_var("_pending"), e_var("_function")])), vec![s_return(e_bool(false))], vec![], None),
+    ]);
+    body.push(super::stream_magic::read_phase(vec![
         s_assign("_data", e_call("stream_get_contents", vec![e_var("_pending"), e_int(7340032)])),
         s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
         s_assign("_cast_filtered", e_bool(false)),
@@ -61,8 +63,8 @@ fn read_pending() -> Vec<Stmt> {
             ], vec![], None)])),
             s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
         ]),
-        s_if(e_not(e_var("_cast_filtered")), vec![s_expr(e_method_call(e_this(), "__elephc_magic_cast", vec![e_var("_pending"), e_var("_function")]))], vec![], None),
-    ]);
+    ], e_var("_function")));
+    body.push(s_if(e_not(e_var("_cast_filtered")), vec![s_expr(e_method_call(e_this(), "__elephc_magic_cast", vec![e_var("_pending"), e_var("_function")]))], vec![], None));
     body
 }
 

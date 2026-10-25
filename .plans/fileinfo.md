@@ -47,7 +47,7 @@ retain ValueError for database NULs, platform-dependent flag validity, warned
 unknown-scheme local fallback and the illegal-parameter data URL reason. Later
 review rounds accepted those decisions.
 
-There are now 45 fileinfo execution tests, eight native bridge tests and a TLS
+There are now 46 fileinfo execution tests, eight native bridge tests and a TLS
 regression. New tests remain unexecuted until CI. PHP 8.5.12 reference oracles,
 static documentation audits and diff checks pass. The six generated builtin
 source anchors are unchanged; the compatibility table still reports 6/6
@@ -98,3 +98,16 @@ filter owners retain creation/close ordering without modifying read bytes.
 Exception-time diagnostics match PHP's registered-handler suppression, and
 normal reporting applies when no handler is installed. Three new execution
 fixtures have matching PHP 8.5.12 oracle output; compiled coverage awaits CI.
+
+
+The first round-8 delegation (65deb75e-24b4-4ee7-9d95-74b20621e800)
+terminated with exit143 and no result. Both processes stopped before edits.
+Three host-verified cases were corrected before restarting the full review:
+read and read-filter exceptions retain the cannot-read diagnostic; exception-time
+suppression checks the handler mask for E_WARNING; invalid cast owners survive
+until warning and TypeError construction, then retire in PHP finally. A guarded
+opaque return record transfers the owner across native allocation and is freed
+before its typed value destructor, preserving reentry and exception chaining.
+The new regression matches PHP8.5.12 across handler masks, resource reads,
+filter failures, destructor changes to error_reporting and a throwing destructor
+whose previous exception remains TypeError. Compiled tests still await CI.

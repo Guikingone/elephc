@@ -66,8 +66,9 @@ pub(super) fn cast_method() -> MethodBuilder {
         s_assign("_cast_class", e_call("elephc_runtime_stream_class", vec![e_var("_cast_id")])),
         s_if(e_call("__elephc_ptr_is_null", vec![e_var("_cast_class")]), vec![s_return_void()], vec![], None),
         s_assign("_cast_name", class_name("_cast_class")),
-        s_assign("_cast_status", e_call("elephc_runtime_fileinfo_cast", vec![e_var("_cast_id")])),
+        s_assign("_cast_result", e_call("elephc_runtime_fileinfo_cast", vec![e_var("_cast_id")])),
     ];
+    let mut work = vec![s_assign("_cast_status", e_call("elephc_runtime_fileinfo_cast_status", vec![e_var("_cast_result")]))];
     for (status, diagnostic) in [(1, "::stream_cast is not implemented!"), (2, "::stream_cast must return a stream resource"), (3, "::stream_cast must not return itself")] {
         let diagnostic = message(e_binop(e_var("_cast_name"), BinOp::Concat, e_str(diagnostic)));
         let mut failure = if status == 2 {
@@ -77,9 +78,19 @@ pub(super) fn cast_method() -> MethodBuilder {
         if status == 2 {
             failure.push(s_throw(e_new_fq("TypeError", vec![message(e_str("supplied argument is not a valid stream resource"))])));
         }
-        body.push(s_if(e_binop(e_var("_cast_status"), BinOp::Eq, e_int(status)), failure, vec![], None));
+        work.push(s_if(e_binop(e_var("_cast_status"), BinOp::Eq, e_int(status)), failure, vec![], None));
     }
+    body.push(s_try(work, vec![], Some(vec![s_expr(e_call("elephc_runtime_fileinfo_cast_release", vec![e_var("_cast_result")]))])));
     method("__elephc_magic_cast").final_().param("stream", t_mixed()).param("_function", TypeExpr::Str).returns(TypeExpr::Void).body(body)
+}
+
+/// Preserves magic_stream's cannot-read warning when a read or read-filter callback throws.
+pub(super) fn read_phase(body: Vec<Stmt>, function: Expr) -> Stmt {
+    s_try(body, vec![(vec!["Throwable"], Some("_read_error"), vec![
+        s_expr(e_call("elephc_runtime_stream_exception_warning", vec![e_binop(e_str("Warning: "), BinOp::Concat,
+            e_binop(function, BinOp::Concat, e_str("(): Failed identify data 0:cannot read `(null)'\n")))])),
+        s_throw(e_var("_read_error")),
+    ])], None)
 }
 
 /// Reads an existing resource without applying the URL-only false/directory stat gate.
@@ -93,8 +104,10 @@ pub(super) fn resource_query() -> Vec<Stmt> {
         s_assign("_resource_unwind", e_bool(false)),
         s_try(vec![
             s_if(e_not(e_method_call(e_var("_finfo"), "__elephc_magic_stat", vec![e_var("filename"), e_str("mime_content_type")])), vec![s_return(e_bool(false))], vec![], None),
-            s_assign("_data", e_call("stream_get_contents", vec![e_var("filename"), e_int(7340032)])),
-            s_if(e_binop(e_var("_data"), BinOp::StrictEq, e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
+            read_phase(vec![
+                s_assign("_data", e_call("stream_get_contents", vec![e_var("filename"), e_int(7340032)])),
+                s_if(e_binop(e_var("_data"), BinOp::StrictEq, e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
+            ], e_str("mime_content_type")),
             s_expr(e_method_call(e_var("_finfo"), "__elephc_magic_cast", vec![e_var("filename"), e_str("mime_content_type")])),
             s_return(e_method_call(e_var("_finfo"), "__elephc_buffer", vec![e_str("mime_content_type"), e_var("_data")])),
         ], vec![(vec!["Throwable"], Some("_resource_error"), vec![s_assign("_resource_unwind", e_bool(true)), s_throw(e_var("_resource_error"))])],

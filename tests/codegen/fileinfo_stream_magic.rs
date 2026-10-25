@@ -18,7 +18,7 @@ fn test_fileinfo_stream_cast_callbacks() {
     let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
 class FileinfoCastMissing {
     public $context;
-    private int $position = 0;
+    protected int $position = 0;
     public function stream_open($path, $mode, $options, &$opened): bool { return true; }
     public function stream_stat(): array { return ["mode" => 0100644, "size" => 5]; }
     public function stream_read(int $count): string { $s = substr("HELLO", $this->position, $count); $this->position += strlen($s); return $s; }
@@ -43,7 +43,7 @@ class FileinfoCastEmptyArray extends FileinfoCastMissing {
     public function stream_cast(int $kind): array { echo "cast ", $kind, "\n"; return []; }
 }
 class FileinfoCastZeroString extends FileinfoCastMissing {
-    public function stream_cast(int $kind): string { echo "cast ", $kind, "\n"; return "0"; }
+    public function stream_cast(int $kind): string { echo "cast ", $kind, "\n"; $s = str_repeat("0", $this->position + 1); return substr($s, $this->position); }
 }
 class FileinfoCastZeroFloat extends FileinfoCastMissing {
     public function stream_cast(int $kind): float { echo "cast ", $kind, "\n"; return 0.0; }
@@ -214,5 +214,80 @@ unset($f, $other, $stream, $e);
     let missing = "mime_content_type(): FileinfoMagicMissing::stream_stat is not implemented!\nmime_content_type(): FileinfoMagicMissing::stream_cast is not implemented!\ntext/plain\nclose\n";
     assert_eq!(out.stdout, format!("{normal}{normal}{failure}{normal}{procedural}{failure}stat 1\nstat 2\nsecond stat\n{missing}stat 1\nstat 2\nsecond stat\n"));
     assert!(out.stderr.contains("finfo::file(): Failed identify data 0:cannot read `(null)'"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Exception warnings honor handler masks and precede destruction of the invalid cast owner.
+#[test]
+fn test_fileinfo_magic_stream_exception_diagnostics() {
+    if fileinfo_native::skip("test_fileinfo_magic_stream_exception_diagnostics") { return; }
+    let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+class FileinfoExceptionValue {
+    private bool $fail = false;
+    public function __construct(bool $fail) { $this->fail = $fail; }
+    public function __destruct() { echo "value-dtor\n"; error_reporting(0); if ($this->fail) { throw new Error("dtor error"); } }
+}
+class FileinfoExceptionWrapper {
+    public $context;
+    private string $kind = "";
+    private int $position = 0;
+    public function stream_open($path, $mode, $options, &$opened): bool { $this->kind = substr($path, strrpos($path, "/") + 1); return true; }
+    public function stream_stat(): array { return ["mode" => 0100644, "size" => 5]; }
+    public function stream_read(int $count): string {
+        echo "read\n";
+        if ($this->kind == "read") { throw new Error("read error"); }
+        $s = substr("HELLO", $this->position, $count); $this->position += strlen($s); return $s;
+    }
+    public function stream_eof(): bool { return $this->position >= 5; }
+    public function stream_tell(): int { return $this->position; }
+    public function stream_seek(int $offset, int $whence): bool { $this->position = $offset; return true; }
+    public function stream_cast(int $kind): mixed {
+        echo "cast ", $kind, "\n";
+        if ($this->kind == "value") { return new FileinfoExceptionValue(false); }
+        if ($this->kind == "throwing") { return new FileinfoExceptionValue(true); }
+        return 1;
+    }
+    public function stream_close(): void { echo "close\n"; }
+}
+class FileinfoExceptionFilter extends php_user_filter {
+    public function onCreate(): bool { echo "create\n"; return true; }
+    public function onClose(): void { echo "unexpected filter close\n"; }
+    public function filter($in, $out, &$consumed, bool $closing): int {
+        echo "filter\n";
+        while ($bucket = stream_bucket_make_writeable($in)) { $consumed += $bucket->datalen; stream_bucket_append($out, $bucket); }
+        throw new Error("filter error");
+    }
+}
+function fileinfoExceptionQuery(finfo $f, string $path): void {
+    try { $f->file($path); } catch (Throwable $e) {
+        echo get_class($e), ": ", $e->getMessage(), "\n";
+        if (str_ends_with($path, "throwing")) { $p = $e->getPrevious(); echo $p === null ? "no previous\n" : get_class($p) . ": " . $p->getMessage() . "\n"; }
+    }
+}
+stream_wrapper_register("exceptionfileinfo", "FileinfoExceptionWrapper");
+stream_filter_register("fileinfo.exception", "FileinfoExceptionFilter");
+$f = new finfo(FILEINFO_MIME_TYPE);
+fileinfoExceptionQuery($f, "exceptionfileinfo://read");
+foreach ([E_WARNING, E_USER_WARNING] as $mask) {
+    set_error_handler(function(int $level, string $message): bool { echo "unexpected handler\n"; return true; }, $mask);
+    fileinfoExceptionQuery($f, "exceptionfileinfo://read");
+    fileinfoExceptionQuery($f, "exceptionfileinfo://int");
+    restore_error_handler();
+}
+fileinfoExceptionQuery($f, "exceptionfileinfo://value"); error_reporting(E_ALL);
+fileinfoExceptionQuery($f, "exceptionfileinfo://throwing"); error_reporting(E_ALL);
+$stream = fopen("exceptionfileinfo://read", "rb");
+try { mime_content_type($stream); } catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+fclose($stream);
+fileinfoExceptionQuery($f, "php://filter/read=fileinfo.exception/resource=exceptionfileinfo://normal");
+stream_wrapper_unregister("exceptionfileinfo"); unset($f, $stream, $mask, $e);
+"#);
+    let read_error = "read\nError: read error\n";
+    let invalid = "read\ncast 0\nTypeError: finfo::file(): supplied argument is not a valid stream resource\n";
+    let expected = format!("{read_error}{read_error}{invalid}{read_error}{invalid}read\ncast 0\nvalue-dtor\nTypeError: finfo::file(): supplied argument is not a valid stream resource\nread\ncast 0\nvalue-dtor\nError: dtor error\nTypeError: finfo::file(): supplied argument is not a valid stream resource\n{read_error}close\ncreate\nread\nfilter\nError: filter error\n");
+    assert_eq!(out.stdout, expected);
+    assert_eq!(out.stderr.matches("finfo::file(): Failed identify data 0:cannot read `(null)'").count(), 3, "{}", out.stderr);
+    assert_eq!(out.stderr.matches("mime_content_type(): Failed identify data 0:cannot read `(null)'").count(), 1, "{}", out.stderr);
+    assert_eq!(out.stderr.matches("FileinfoExceptionWrapper::stream_cast must return a stream resource").count(), 3, "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
