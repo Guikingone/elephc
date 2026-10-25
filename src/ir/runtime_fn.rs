@@ -2479,6 +2479,9 @@ impl RuntimeFnId {
                 // so the default `MayAliasArguments` bucket would only keep an owned subject
                 // temporary alive for the boxed result's whole lifetime.
                 | RuntimeFnId::Base64Decode
+                // Compression allocates independent output storage, including failure cells.
+                | RuntimeFnId::Gzdeflate
+                | RuntimeFnId::Gzinflate
                 // hexdec()/bindec()/octdec() box their `int|float` answer through
                 // `__rt_mixed_from_value`, so the cell handed back is a fresh allocation
                 // that cannot alias the parsed subject string.

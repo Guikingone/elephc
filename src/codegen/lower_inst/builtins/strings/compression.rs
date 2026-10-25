@@ -62,7 +62,7 @@ pub(crate) fn lower_gzinflate(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::AArch64 => inflate::lower_gzinflate_aarch64(ctx, &zero, &zeroed, &fail, &done),
         Arch::X86_64 => inflate::lower_gzinflate_x86_64(ctx, &zero, &zeroed, &fail, &done),
     }
-    box_string_or_false_result(ctx, "gzinflate");
+    box_owned_string_or_false_result(ctx, "gzinflate");
     store_if_result(ctx, inst)
 }
 

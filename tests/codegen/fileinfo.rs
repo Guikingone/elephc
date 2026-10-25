@@ -103,7 +103,7 @@ echo $f->file("php://filter/read=elephc.missing/resource=data://text/plain,HELLO
 restore_error_handler();
 echo @$f->file("compress.zlib://" . $gz) === false ? "gzip-unstatable\n" : "bad\n";
 echo @finfo_file($f, "compress.bzip2://" . $bz) === false ? "bzip-unstatable\n" : "bad\n";
-$code = $argc > 0 ? 'echo $f->file("php://filter/read=string.rot13/resource=" . $p), "\n"; echo $f->file("php://filter/read=zlib.inflate/resource=" . $raw), "\n"; echo $f->file("php://filter/read=bzip2.decompress/resource=" . $bz), "\n"; echo $f->file("compress.zlib://" . $gz) === false ? "gzip-unstatable\n" : "bad\n"; echo $f->file("compress.bzip2://" . $bz) === false ? "bzip-unstatable\n" : "bad\n";' : '';
+$code = $argc > 0 ? 'echo $f->file("php://filter/read=string.rot13/resource=" . $p), "\n"; echo $f->file("php://filter/read=zlib.inflate/resource=" . $raw), "\n"; echo $f->file("php://filter/read=bzip2.decompress/resource=" . $bz), "\n"; echo $f->file("compress.zlib://" . $gz) === false ? "gzip-unstatable\n" : "bad\n"; echo finfo_file($f, "compress.bzip2://" . $bz) === false ? "bzip-unstatable\n" : "bad\n";' : '';
 eval($code);
 unlink($db);
 unlink($p);
