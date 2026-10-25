@@ -142,7 +142,7 @@ pub fn aot_support(contract: &BuiltinContract) -> BackendSupport {
 
 /// Returns the expected Magician route for one shared contract.
 pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
-    if runtime_builtin_id(contract.id) == Some(RuntimeBuiltinId::SharedIni) {
+    if matches!(runtime_builtin_id(contract.id), Some(RuntimeBuiltinId::SharedIni | RuntimeBuiltinId::TokenizerErrorLocation)) {
         return BackendSupport::Implemented(BackendImplementation::Registry);
     }
     if contract.internal {
@@ -172,7 +172,7 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
 
 /// Prelude-provided surfaces outside `ext/curl` that Magician binds with its own eval homes.
 const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] =
-    &["hash_copy", "hash_final", "hash_init", "hash_update", "zend_version"];
+    &["hash_copy", "hash_final", "hash_init", "hash_update", "token_get_all", "token_name", "zend_version"];
 
 /// Returns the documented execution route for an eval-supported contract.
 pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
@@ -374,7 +374,8 @@ mod tests {
         // through forwarding homes (see `eval_support`).
         // Plus the four `ptr_read_f32`/`ptr_write_f32`/`ptr_read_f64`/`ptr_write_f64`
         // raw-memory builtins and `buffer_ptr`, bound in eval through their own registry homes.
-        assert_eq!(eval_registry, 688 + curl_surface);
+        // The tokenizer location helper also uses the shared runtime registry.
+        assert_eq!(eval_registry, 691 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -392,7 +393,7 @@ mod tests {
         // differs by `$force` and the non-forced arm reads the cache's recorded mtime.
         //
         // None of the eleven is callable from eval'd code.
-        assert_eq!(eval_internal, 125);
+        assert_eq!(eval_internal, 126);
         // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 353);
@@ -401,10 +402,11 @@ mod tests {
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
         // The four float pointer builtins (`ptr_read_f32`, `ptr_write_f32`, `ptr_read_f64`,
         // `ptr_write_f64`) and `buffer_ptr` are ordinary registry builtins on both backends.
-        assert_eq!(aot_registry, 757);
+        // The tokenizer location helper is a typed ordinary registry operation.
+        assert_eq!(aot_registry, 759);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
-        assert_eq!(aot_external, 409 + curl_surface);
+        assert_eq!(aot_external, 411 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -449,14 +451,15 @@ mod tests {
         }
 
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(shared_runtime, 85);
+        // Includes the internal tokenizer ParseError location operation.
+        assert_eq!(shared_runtime, 86);
         assert_eq!(hybrid_adapter, 2);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
         // interpreter adapters.
-        assert_eq!(interpreter_adapter, 601 + curl_surface);
+        assert_eq!(interpreter_adapter, 603 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own.
-        assert_eq!(unsupported, 478);
+        assert_eq!(unsupported, 479);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {
