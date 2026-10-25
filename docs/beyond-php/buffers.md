@@ -102,9 +102,25 @@ echo $buf[3];           // direct load
 
 $enemies[0]->x = 100;  // packed class field access
 echo $enemies[0]->x;   // 100
+
+$counts[$cell]++;      // in-place element update
+echo $counts[$cell]--; // the old value, then the element is one lower
 ```
 
 Buffer indices may be statically typed as `int` or `mixed`. A `mixed` index is converted to `int` at runtime before bounds checking; a statically known non-integer index is rejected at compile time.
+
+`++` and `--` on an element of a scalar buffer (any integer or float width) read the element
+once, step it by one and write it back, with the same bounds and freed-buffer checks as any
+access. The update itself allocates nothing, so it suits counting and histogram loops; only the
+value of a prefix expression on an integer element (`$x = ++$counts[$i]`) is a boxed `mixed`,
+because it can be the promoted `float` described below. An integer element
+steps as a PHP `int`: an increment past `PHP_INT_MAX` (or a decrement past `PHP_INT_MIN`)
+promotes to `float` as in PHP, and the element then stores that float the way any float written
+to the buffer is stored, by PHP's float-to-int conversion (`PHP_INT_MAX` plus one stores
+`PHP_INT_MIN`); a narrow width then keeps the low bits. A float element adds or subtracts `1.0`,
+and an `f32` element rounds the result when it is stored. The postfix form yields the element's
+old value; the prefix form yields the new value before the store's width conversion, which for an
+integer element past the integer range is the promoted `float`.
 
 ## Buffers in class members
 
@@ -288,10 +304,8 @@ result is a `ptr<T>`, as `$buf[0]` is; for every other element type it is the un
 The address stays valid until `buffer_free()`: `buffer_ptr()` of a freed buffer, or of an alias
 of one, aborts with the use-after-free error below, and a pointer taken earlier dangles once
 the payload is released. Unlike `buffer_free()`, `buffer_ptr()` accepts any buffer expression,
-including a property or a call result. Inside `eval()`, where a buffer is a raw allocation
-rather than a registry handle, no buffer operation has that diagnostic: `buffer_free()` releases
-the memory and nulls its own variable, and another copy of the handle dangles for
-`buffer_ptr()` exactly as it does for `buffer_len()` and the element reads.
+including a property or a call result. Code inside `eval()` follows the same liveness rules; see
+[Buffers inside eval()](#buffers-inside-eval).
 
 ## Freeing buffers
 
@@ -307,6 +321,40 @@ Restrictions:
 - Only accepts plain local variables
 - Freeing a local nullifies that local; freeing the same local again is a no-op
 - Existing aliases become stale and fail with the use-after-free fatal error, even if the descriptor slot and heap payload are later reused
+
+## Buffers inside eval()
+
+Code running inside `eval()` creates a buffer with the untyped `buffer_new($length)`, whose
+elements are 8-byte words. Its value is an opaque integer handle from a registry with
+generations, the same liveness model compiled buffers use, so `buffer_len()`, `buffer_ptr()` and
+`buffer_free()` check that the buffer is still alive:
+
+```php
+<?php
+eval('
+$buf = buffer_new(4);
+$alias = $buf;
+ptr_set(buffer_ptr($buf), 7);       // element 0 is the first word of the payload
+echo ptr_get(buffer_ptr($alias));   // 7
+buffer_free($buf);                  // releases the payload and nulls $buf
+buffer_free($buf);                  // no-op: $buf is null now
+echo buffer_len($alias);            // Fatal error: use of buffer after buffer_free()
+');
+```
+
+- `buffer_len()`, `buffer_ptr()` or `buffer_free()` of an alias of a freed buffer aborts with
+  `Fatal error: use of buffer after buffer_free()`, even after a later `buffer_new()` reuses the
+  released memory, because each reuse of a registry slot gets a new generation.
+- `buffer_free()` of a variable nulls that variable, and freeing the null again is a no-op, as in
+  compiled code. `buffer_len()` and `buffer_ptr()` of the null, or of any other value that is not
+  a live eval buffer, abort with the same fatal error.
+- The handle is not an address: the payload is reachable only through `buffer_ptr()`, and
+  element `$i` sits at `ptr_offset(buffer_ptr($buf), $i * 8)`. Element syntax (`$buf[0]`) does
+  not reach the payload inside `eval()`, where the handle is a plain integer.
+- Eval buffers and compiled buffers live in separate registries. A compiled buffer handle that
+  reaches `eval()` as an integer, for example through a `mixed` view of an array of buffers, is
+  not an eval buffer there, so the buffer builtins abort on it with the same fatal error. Eval
+  buffers do not count against the 4096 live compiled buffers.
 
 ## Bounds checking
 

@@ -38,6 +38,8 @@ mod constant_propagation;
 mod control_flow_normalization;
 #[path = "optimizer/checked_int_sink.rs"]
 mod checked_int_sink;
+#[path = "optimizer/buffer_element_incdec.rs"]
+mod buffer_element_incdec;
 #[path = "optimizer/bounded_mixed_counter.rs"]
 mod bounded_mixed_counter;
 #[path = "optimizer/method_loop_counters.rs"]
@@ -72,6 +74,8 @@ mod generator_yield;
 mod peephole;
 #[path = "optimizer/property_receiver_ownership.rs"]
 mod property_receiver_ownership;
+#[path = "optimizer/receiver_value_alias.rs"]
+mod receiver_value_alias;
 #[path = "optimizer/read_result_cleanup.rs"]
 mod read_result_cleanup;
 #[path = "optimizer/fresh_mixed_transfer.rs"]

@@ -1552,6 +1552,32 @@ typed opcode is implemented for macOS AArch64, Linux AArch64, and Linux x86_64.
 ownership rewrite cannot hand the sink a new integer-only use graph. See
 [Fresh Mixed Assignment Transfer](#fresh-mixed-assignment-transfer).
 
+### Scalar Buffer Element Increments
+
+`++` and `--` of one element of a scalar `buffer<T>` (an integer width, `float` or `f32`) lower
+in `src/ir_lower/stmt/buffer_element_updates.rs` to a typed `buffer_get`, one step and a typed
+`buffer_set`, in both IR modes. The parser writes a statement update as
+`$b[$k] = (new = ++(old = $b[$k]))` and an expression update as
+`old = $b[$k]; new = old + 1; $b[$k] = new` over generated locals; lowered generically, the
+working local is `mixed` because an int `++` may promote to float, so each update boxed its
+seed, ran `str_inc_dec` and copied the result with `mixed_clone` (or boxed `new` through
+`ichecked_add`).
+
+An int element steps with `ichecked_add_to_int`/`ichecked_sub_to_int` and the `true` cast
+immediate: in range it is one flag-setting add, and on overflow it recomputes the double and
+applies the shared PHP float-to-int conversion, which is what `buffer_set` stored from the boxed
+float before. A float element uses `fadd`/`fsub` with `1.0`. The statement paths decide from the
+loaded handle or the receiver's property type, the same facts that select `buffer_set`; the
+expression path decides at the element read, after the prelude has stabilized the receiver and
+the key, from the type `load_local` will give the receiver (a nullable receiver keeps the generic
+path), then reads and steps the element where the prelude did, before the write loads its handle
+or receiver, so user code run by the read is seen by the write as before. The key, the receiver
+lease, the bounds and freed-buffer checks and the width conversion of the store are the ordinary
+write path's. Only the value of a prefix expression on an int element stays a checked `mixed`
+(`ichecked_add`, emitted after the store), because PHP's prefix value is the promoted float past
+the integer range; the store beside it is still typed. Loops of such updates now pass the
+`buffer_access` allowlist, so their handle resolution is hoisted like any other buffer loop.
+
 ### Bounded Mixed Counters
 
 `src/ir_passes/bounded_mixed_counter.rs` considers ordinary Mixed locals updated
@@ -1755,8 +1781,11 @@ callee signatures (which parameters are by-reference), the pass uses a
 conservative default-deny allowlist: a slot is excluded whenever any of its
 `load_local` results is consumed by an instruction that is not a proven
 value-only consumer (arithmetic, comparison, cast, output, store, string, or
-refcount op). Every call, object construction, closure capture, property/array
-access, and any future opcode is treated as a possible by-reference escape.
+refcount op). Operand zero of `prop_get` and `method_call` is a value-only
+receiver on every lowering route. Later method operands remain conservative,
+even when they repeat the receiver value. Other call operands, object
+construction, closure capture, property/array access, and any future opcode
+are treated as possible by-reference escapes.
 Feeding a load into a value-only op first is safe because codegen only traces a
 *direct* `load_local` back to a slot.
 
