@@ -16,7 +16,7 @@ use std::ffi::{c_char, c_int, c_void, CStr, CString, OsStr};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 extern "C" {
     /// Creates a native cookie with the requested options.
@@ -39,7 +39,7 @@ extern "C" {
     fn magic_error(cookie: *mut c_void) -> *const c_char;
 }
 
-/// One owned opaque pointer; registry locking excludes all simultaneous access.
+/// One owned opaque pointer, accessed only while holding its instance mutex.
 struct Magic(usize);
 impl Drop for Magic {
     /// Releases exactly the native instance transferred to this owner.
@@ -47,12 +47,17 @@ impl Drop for Magic {
 }
 
 #[derive(Default)]
-struct Registry { next: i64, instances: HashMap<i64, Magic> }
+struct Registry { next: i64, instances: HashMap<i64, Arc<Mutex<Magic>>> }
 
 /// Returns the process registry without exposing any interior pointer.
 fn registry() -> &'static Mutex<Registry> {
     static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(Registry::default()))
+}
+
+/// Retains one instance without keeping the registry locked during native work.
+fn instance(handle: i64) -> Option<Arc<Mutex<Magic>>> {
+    registry().lock().unwrap_or_else(|e| e.into_inner()).instances.get(&handle).cloned()
 }
 
 thread_local! {
@@ -99,7 +104,7 @@ pub unsafe extern "C" fn elephc_fileinfo_open(flags: i64, path: *const c_char) -
         let mut state = registry().lock().unwrap_or_else(|e| e.into_inner());
         let Some(id) = state.next.checked_add(1) else { return 0; };
         state.next = id;
-        state.instances.insert(id, instance);
+        state.instances.insert(id, Arc::new(Mutex::new(instance)));
         outcome(Some(CString::default()), CString::default());
         id
     })
@@ -109,7 +114,8 @@ pub unsafe extern "C" fn elephc_fileinfo_open(flags: i64, path: *const c_char) -
 #[no_mangle]
 pub extern "C" fn elephc_fileinfo_free(handle: i64) -> i64 {
     guard(|| {
-        registry().lock().unwrap_or_else(|e| e.into_inner()).instances.remove(&handle);
+        let removed = registry().lock().unwrap_or_else(|e| e.into_inner()).instances.remove(&handle);
+        drop(removed);
         1
     })
 }
@@ -118,19 +124,19 @@ pub extern "C" fn elephc_fileinfo_free(handle: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_fileinfo_set_flags(handle: i64, flags: i64) -> i64 {
     guard(|| {
-        let state = registry().lock().unwrap_or_else(|e| e.into_inner());
-        let Some(instance) = state.instances.get(&handle) else { return 0; };
+        let Some(owner) = instance(handle) else { return 0; };
+        let instance = owner.lock().unwrap_or_else(|e| e.into_inner());
         i64::from(unsafe { magic_setflags(instance.0 as *mut c_void, flags as c_int) } == 0)
     })
 }
 
 /// Queries bytes or a local filename, restoring per-call flags after success or failure.
 unsafe fn query(handle: i64, data: *const c_char, length: i64, flags: i64, file: bool) {
-    let state = registry().lock().unwrap_or_else(|e| e.into_inner());
-    let Some(instance) = state.instances.get(&handle) else {
+    let Some(owner) = instance(handle) else {
         outcome(None, CString::new("Invalid finfo object").unwrap());
         return;
     };
+    let instance = owner.lock().unwrap_or_else(|e| e.into_inner());
     let cookie = instance.0 as *mut c_void;
     let old = magic_getflags(cookie);
     let selected = if flags == 0 { old } else { flags as c_int };

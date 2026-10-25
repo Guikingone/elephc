@@ -5,7 +5,7 @@
 //! - The synthetic finfo file query builder, after filename and context validation.
 //!
 //! Key details:
-//! - Data URLs preserve binary payloads, strict base64 errors and literal plus signs.
+//! - Data URLs preserve binary payloads and follow PHP's base64/form URL decoding.
 //! - Local file URLs use the same descriptor path and native flags as local filenames.
 
 use crate::parser::ast::{BinOp, Stmt};
@@ -16,7 +16,7 @@ fn invalid(message: &str) -> Vec<Stmt> {
     vec![s_expr(e_call("__elephc_builtin_warning", vec![e_str(message)])), s_return(e_bool(false))]
 }
 
-/// Decodes a data URL and delegates its bytes to the object's final buffer implementation.
+/// Decodes a data URL into bytes for the runtime stream reader.
 pub(super) fn data_uri() -> Stmt {
     s_if(e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("filename")]), e_str("data://")]), vec![
         s_assign("_uri_comma", e_call("strpos", vec![e_var("filename"), e_str(",")])),
@@ -25,9 +25,9 @@ pub(super) fn data_uri() -> Stmt {
         s_assign("_uri_payload", e_call("substr", vec![e_var("filename"), e_binop(e_var("_uri_comma"), BinOp::Add, e_int(1))])),
         s_if(e_call("str_ends_with", vec![e_call("strtolower", vec![e_var("_uri_meta")]), e_str(";base64")]), vec![
             s_assign("_uri_data", e_call("base64_decode", vec![e_var("_uri_payload"), e_bool(true)])),
-        ], vec![], Some(vec![s_assign("_uri_data", e_call("rawurldecode", vec![e_var("_uri_payload")]))])),
+        ], vec![], Some(vec![s_assign("_uri_data", e_call("urldecode", vec![e_var("_uri_payload")]))])),
         s_if(e_binop(e_var("_uri_data"), BinOp::StrictEq, e_bool(false)), invalid("Invalid data URL: invalid base64 payload"), vec![], None),
-        s_return(e_method_call(e_this(), "__elephc_buffer", vec![e_var("_function"), e_call("substr", vec![e_var("_uri_data"), e_int(0), e_int(7340032)]), e_var("flags")])),
+        s_return(e_call("substr", vec![e_var("_uri_data"), e_int(0), e_int(7340032)])),
     ], vec![], None)
 }
 
@@ -53,6 +53,6 @@ pub(super) fn network_uri() -> Stmt {
         // selects that store without hitting file_get_contents' dynamic-context ABI guard.
         s_assign("_url_data", e_call("file_get_contents", vec![e_var("filename"), e_bool(false), e_null(), e_int(0), e_int(7340032)])),
         s_if(e_binop(e_var("_url_data"), BinOp::StrictEq, e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
-        s_return(e_method_call(e_this(), "__elephc_buffer", vec![e_var("_function"), e_var("_url_data"), e_var("flags")])),
+        s_return(e_var("_url_data")),
     ], vec![], None)
 }

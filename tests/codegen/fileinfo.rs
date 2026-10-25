@@ -55,6 +55,85 @@ unlink($p);
     assert_eq!(out, "text/plain\ntext/plain\ntext/plain\ntext/plain:3\nstream-context\ntext/plain\ndirectory\napplication/x-empty\n");
 }
 
+/// Plain data URLs use form decoding while escaped and base64 plus bytes remain literal.
+#[test]
+fn test_fileinfo_data_url_decoding() {
+    if fileinfo_native::skip("test_fileinfo_data_url_decoding") { return; }
+    let out = compile_and_run(r#"<?php
+$p = tempnam(sys_get_temp_dir(), "magic");
+file_put_contents($p, "0 string Hello\\040world decoded-space\n0 string Hello+world decoded-plus\n");
+$f = new finfo(FILEINFO_NONE, $p);
+echo $f->file("data://text/plain,Hello+world"), "\n";
+echo finfo_file($f, "data://text/plain,Hello%2Bworld"), "\n";
+echo $f->file("data://text/plain;base64,SGVsbG8rd29ybGQ="), "\n";
+$code = $argc > 0 ? 'echo $f->file("data://text/plain,Hello+world"), "\n";' : '';
+eval($code);
+unlink($p);
+"#);
+    assert_eq!(out, "decoded-space\ndecoded-plus\ndecoded-plus\ndecoded-space\n");
+}
+
+/// Runtime wrapper names preserve filters, nested resources and PHP's compressed stat failures.
+#[test]
+fn test_fileinfo_runtime_stream_wrappers() {
+    if fileinfo_native::skip("test_fileinfo_runtime_stream_wrappers") { return; }
+    let out = compile_and_run(r#"<?php
+$db = tempnam(sys_get_temp_dir(), "magic");
+$p = tempnam(sys_get_temp_dir(), "finfo");
+$gz = tempnam(sys_get_temp_dir(), "gzip");
+$bz = tempnam(sys_get_temp_dir(), "bzip");
+file_put_contents($db, "0 string HELLO decoded-document\n");
+file_put_contents($p, "URYYB");
+file_put_contents($gz, base64_decode("H4sIAAAAAAAAA/Nw9fHxBwA2ZETBBQAAAA=="));
+file_put_contents($bz, base64_decode("QlpoOTFBWSZTWXMoMkUAAACEAAJEoAAhmmgzTQczi7kinChIOZQZIoA="));
+$f = new finfo(FILEINFO_NONE, $db);
+echo $f->file("php://filter/read=string.rot13/resource=" . $p), "\n";
+echo finfo_file($f, "php://filter/read=string.rot13|string.toupper/resource=data://text/plain,uryyb"), "\n";
+echo $f->file("php://filter/read=convert.base64-decode/resource=data://text/plain,SEVMTE8="), "\n";
+echo $f->file("php://filter/read=convert.quoted-printable-decode/resource=data://text/plain,=48=45=4c=4c=4f"), "\n";
+echo $f->file("php://filter/write=string.rot13/resource=data://text/plain,HELLO"), "\n";
+echo @$f->file("compress.zlib://" . $gz) === false ? "gzip-unstatable\n" : "bad\n";
+echo @finfo_file($f, "compress.bzip2://" . $bz) === false ? "bzip-unstatable\n" : "bad\n";
+$code = $argc > 0 ? 'echo $f->file("php://filter/read=string.rot13/resource=" . $p), "\n"; echo @$f->file("compress.zlib://" . $gz) === false ? "gzip-unstatable\n" : "bad\n"; echo @$f->file("compress.bzip2://" . $bz) === false ? "bzip-unstatable\n" : "bad\n";' : '';
+eval($code);
+unlink($db);
+unlink($p);
+unlink($gz);
+unlink($bz);
+"#);
+    assert_eq!(out, "decoded-document\n".repeat(5) + "gzip-unstatable\nbzip-unstatable\ndecoded-document\ngzip-unstatable\nbzip-unstatable\n");
+}
+
+/// Standard-input wrappers read their bytes without closing the process's borrowed descriptor.
+#[test]
+fn test_fileinfo_standard_input_wrapper() {
+    if fileinfo_native::skip("test_fileinfo_standard_input_wrapper") { return; }
+    let out = compile_and_run_with_stdin(r#"<?php
+$f = new finfo(FILEINFO_MIME_TYPE);
+echo $f->file("php://stdin"), "\n";
+echo $f->file("php://stdin"), "\n";
+echo get_resource_type(STDIN), "\n";
+"#, "hello\n");
+    assert_eq!(out, "text/plain\napplication/x-empty\nstream\n");
+}
+
+/// Filter stages release their byte buffers and temporary stream cells on normal returns.
+#[test]
+fn test_fileinfo_filtered_stream_heap_ownership() {
+    if fileinfo_native::skip("test_fileinfo_filtered_stream_heap_ownership") { return; }
+    let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+$f = new finfo(FILEINFO_MIME_TYPE);
+for ($i = 0; $i < 3; $i++) {
+    $value = $f->file("php://filter/read=string.rot13|string.toupper/resource=data://text/plain,uryyb");
+    unset($value);
+}
+unset($f);
+echo "ok\n";
+"#);
+    assert_eq!(out.stdout, "ok\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Network inputs inspect response bytes and use the stream layer's HTTP context options.
 #[test]
 fn test_fileinfo_network_stream_context() {

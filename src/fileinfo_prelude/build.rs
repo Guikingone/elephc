@@ -55,15 +55,10 @@ fn query_engine(file: bool) -> crate::synthetic_class::MethodBuilder {
                 e_binop(e_call("get_resource_type", vec![e_var("context")]), BinOp::StrictNotEq, e_str("stream-context"))), "TypeError", "finfo::file(): context must be a stream context resource"),
             reject(eq(e_var(parameter), e_str("")), "ValueError", "finfo::file(): Argument #1 ($filename) must not be empty"),
             reject(e_binop(e_call("strpos", vec![e_var(parameter), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)), "ValueError", "finfo::file(): Argument #1 ($filename) must not contain any null bytes"),
-            super::streams::data_uri(),
             super::streams::file_uri(),
-            super::streams::network_uri(),
             s_if(e_call("is_dir", vec![e_var(parameter)]), vec![s_return(e_str("directory"))], vec![], None),
             s_if(e_binop(e_call("strpos", vec![e_var(parameter), e_str("://")]), BinOp::StrictNotEq, e_bool(false)), vec![
-                s_assign("_stream", e_call("fopen", vec![e_var(parameter), e_str("rb"), e_bool(false), e_var("context")])),
-                s_if(eq(e_var("_stream"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
-                s_assign("_data", e_call("stream_get_contents", vec![e_var("_stream"), e_int(7340032)])),
-                s_expr(e_call("fclose", vec![e_var("_stream")])),
+                s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![e_var(parameter), e_var("context")])),
                 s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
                 s_return(e_method_call(e_this(), "__elephc_buffer", vec![e_var("_function"), e_var("_data"), e_var("flags")])),
             ], vec![], None),
@@ -116,6 +111,7 @@ fn finfo_class() -> Stmt {
             .param_default("magic_database", t_nullable(TypeExpr::Str), e_null()).body(constructor))
         .method(query_method(false)).method(query_method(true))
         .method(query_engine(false)).method(query_engine(true))
+        .method(super::wrappers::read_method()).method(super::wrappers::filter_method())
         .method(method("set_flags").param("flags", TypeExpr::Int).returns(TypeExpr::Bool)
             .returning(e_method_call(e_this(), "__elephc_set_flags", vec![e_var("flags")])))
         .method(method("__elephc_set_flags").final_().param("flags", TypeExpr::Int).returns(TypeExpr::Bool).body(set_flags))

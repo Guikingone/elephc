@@ -56,3 +56,54 @@ fn fileinfo_native_results_are_thread_local() {
         elephc_fileinfo_free(h);
     }
 }
+
+/// A FIFO waiting for a writer cannot stall queries or frees on independent handles.
+#[test]
+fn fileinfo_native_blocked_file_does_not_block_other_handles() {
+    use std::io::Write;
+    use std::sync::mpsc;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    struct Directory(std::path::PathBuf);
+    impl Drop for Directory {
+        /// Removes only this test's FIFO and its uniquely created parent directory.
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let directory = Directory(std::env::temp_dir().join(format!("elephc-fileinfo-{}-{nonce}", std::process::id())));
+    std::fs::create_dir(&directory.0).unwrap();
+    let fifo = directory.0.join("input");
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    let path = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    unsafe {
+        let blocked = open();
+        let peer = open();
+        let (started, waiting) = mpsc::channel();
+        let query = std::thread::spawn(move || {
+            started.send(()).unwrap();
+            elephc_fileinfo_file(blocked, path.as_ptr(), 0);
+            let succeeded = elephc_fileinfo_ok();
+            elephc_fileinfo_free(blocked);
+            succeeded
+        });
+        waiting.recv().unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        let (finished, result) = mpsc::channel();
+        let independent = std::thread::spawn(move || {
+            let flags = elephc_fileinfo_set_flags(peer, 1024);
+            let value = CStr::from_ptr(elephc_fileinfo_buffer(peer, c"hello".as_ptr(), 5, 0)).to_owned();
+            let freed = elephc_fileinfo_free(peer);
+            finished.send((freed, flags, value)).unwrap();
+        });
+        let completed = result.recv_timeout(Duration::from_secs(5));
+        // Always release the FIFO before asserting, including on the old global-lock path.
+        let mut writer = std::fs::File::create(&fifo).unwrap();
+        // libmagic may classify a FIFO without reading, closing its reader first.
+        let _ = writer.write_all(b"hello");
+        drop(writer);
+        assert_eq!(query.join().unwrap(), 1);
+        independent.join().unwrap();
+        let (freed, flags, value) = completed.expect("an unrelated fileinfo handle was blocked by the FIFO");
+        assert_eq!((freed, flags, value.to_bytes()), (1, 1, b"us-ascii".as_slice()));
+    }
+}

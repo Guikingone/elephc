@@ -40,6 +40,14 @@ contents are binary-safe. `finfo_file()` accepts stream-wrapper URLs and a nulla
 stream context. The context argument of `finfo_buffer()` has no effect, as in PHP.
 Directories return `directory`.
 
+Wrapper names may be built at runtime. File queries support `data://`, local
+`file://` URLs, network and Phar URLs, standard-input and temporary `php://`
+streams, and `php://filter` read chains.
+Read filters inspect the transformed bytes, including nested wrapper resources.
+As in PHP, compressed wrappers without stream stat support return `false`.
+Plain data URL payloads use PHP URL decoding: `+` becomes a space and `%2B`
+preserves a literal plus byte. Base64 payloads retain their decoded binary bytes.
+
 `mime_content_type($filename)` accepts a filename or an open stream resource and
 returns its MIME type. Stream identification seeks to the beginning and restores
 the previous stream position.
