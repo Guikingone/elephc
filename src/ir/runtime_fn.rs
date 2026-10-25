@@ -2482,6 +2482,8 @@ impl RuntimeFnId {
                 // Compression allocates independent output storage, including failure cells.
                 | RuntimeFnId::Gzdeflate
                 | RuntimeFnId::Gzinflate
+                // A newly boxed file descriptor never aliases its filename, mode or context.
+                | RuntimeFnId::Fopen
                 // hexdec()/bindec()/octdec() box their `int|float` answer through
                 // `__rt_mixed_from_value`, so the cell handed back is a fresh allocation
                 // that cannot alias the parsed subject string.
