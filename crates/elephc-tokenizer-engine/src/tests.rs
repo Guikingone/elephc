@@ -53,6 +53,37 @@ fn tokenizer_parse_validates_and_reclassifies_reserved_identifiers() {
     assert_eq!(raw.iter().map(|t| (t.pos,t.len,t.line)).collect::<Vec<_>>(), parsed.iter().map(|t| (t.pos,t.len,t.line)).collect::<Vec<_>>());
 }
 
+/// Echo statement validation must not reject a reserved word used as a constant name.
+#[test]
+fn tokenizer_parse_distinguishes_echo_statements_from_constant_names() {
+    let source = b"<?php class C { const ECHO = 1; } C::ECHO; echo C::ECHO;";
+    let parsed = tokenize(source, TOKEN_PARSE).expect("reserved constant names are valid PHP");
+    let names: Vec<_> = parsed.iter().filter(|t| &source[t.pos..t.pos + t.len] == b"ECHO").collect();
+    assert_eq!(names.len(), 3);
+    assert!(names.iter().all(|t| t.id == id("T_STRING")));
+    assert!(parsed.iter().any(|t| t.id == id("T_ECHO")));
+    for invalid in ["<?php echo;", "<?php echo /*comment*/ ;", "<?php echo 1,;", "<?=?>", "<?= ; ?>"] {
+        assert!(tokenize(invalid.as_bytes(), TOKEN_PARSE).is_err(), "{invalid}");
+    }
+}
+
+/// Enum lookahead excludes exact keywords while allowing names with those prefixes.
+#[test]
+fn tokenizer_enum_lookahead_matches_complete_names() {
+    for name in ["extendsFoo", "implementsFoo", "ExTeNdS_Foo", "ImPlEmEnTs_Foo", "extendsé"] {
+        let source = format!("<?php enum {name} {{ case A; }}");
+        for flags in [0, TOKEN_PARSE] {
+            let tokens = tokenize(source.as_bytes(), flags).unwrap();
+            assert_eq!(tokens.iter().find(|t| t.pos == 6).unwrap().id, id("T_ENUM"), "{source}, flags={flags}");
+        }
+    }
+    for name in ["extends", "implements"] {
+        let source = format!("<?php enum {name};");
+        let tokens = tokenize(source.as_bytes(), 0).unwrap();
+        assert_eq!(tokens.iter().find(|t| t.pos == 6).unwrap().id, id("T_STRING"), "{source}");
+    }
+}
+
 /// Compares the same corpus against PHP 8.5's Zend tokenizer in both flag modes.
 #[test]
 fn tokenizer_php85_differential_corpus() {
@@ -120,6 +151,8 @@ fn fixtures() -> Vec<Vec<u8>> {
         "<?php \t\r\n\r\necho 1; // comment\n# comment ?>html",
         "<?php /** doc */ /**not_doc*/ /**/ /****/ /* comment */ echo 1;",
         "<?php class C { public const PUBLIC = 1; public function match() {} }",
+        "<?php class C { const ECHO = 1; } C::ECHO; echo C::ECHO;",
+        "<?php class C { const ECHO = 1; } C::ECHO /*comment*/ ; ?>",
         "<?php $x->class; $x?->match; $x-> /*comment*/ function; C::class; C::match();",
         "<?php namespace A\\B; use Foo\\Bar as B; \\strlen('x'); namespace\\x();",
         "<?php (int\n)$x; (i n t)$x; ( int )$x; (int\r\n);",
@@ -137,6 +170,9 @@ fn fixtures() -> Vec<Vec<u8>> {
         "<?php function & /*comment*/ f(& /*comment*/ $x, &...$rest) { return $x; } $a & $b; $a & 1;",
         "<?php function f(){yield /*comment*/ from []; yield\nfrom []; yield fromx;}",
         "<?php enum A: string { case B = 'b'; } function enum() {} enum(); enum extends;",
+        "<?php enum extendsFoo { case A; } enum implementsFoo { case B; }",
+        "<?php enum /*comment*/ ExTeNdS_Foo { case A; } enum ImPlEmEnTs_Foo { case B; }",
+        "<?php enum extendsé { case A; }", "<?php enum extends;", "<?php enum implements;",
         "<?php $x = (int)1; (integer)$x; (bool)$x; (boolean)$x; (binary)$x; (double)$x; (real)$x; (float)$x; (array)$x; (object)$x; (unset)$x; (void)$x;",
         "<?php 0; 00; 0777; 0o77; 0xF; 0b11; 1_000; 1.5; .2; 2.; 1e3; 1E-2; 9223372036854775808; 0xffffffffffffffff;",
         "<?php echo __CLASS__, __TRAIT__, __METHOD__, __FUNCTION__, __PROPERTY__, __LINE__, __FILE__, __DIR__, __NAMESPACE__;",

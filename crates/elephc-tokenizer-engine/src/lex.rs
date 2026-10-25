@@ -244,9 +244,11 @@ fn token_id(kind: TokenKind, raw: &[u8], tail: &[u8]) -> i64 {
         Enum => {
             let at = skip_trivia(tail, 0);
             let rest = &tail[at..];
+            let end = rest.iter().position(|b| !identifier_part(*b)).unwrap_or(rest.len());
+            let word = &rest[..end];
             if at > 0 && rest.first().is_some_and(|b| identifier_part(*b) && !b.is_ascii_digit())
-                && !rest.get(..7).is_some_and(|s| s.eq_ignore_ascii_case(b"extends"))
-                && !rest.get(..10).is_some_and(|s| s.eq_ignore_ascii_case(b"implements")) { "T_ENUM" } else { "T_STRING" }
+                && !word.eq_ignore_ascii_case(b"extends")
+                && !word.eq_ignore_ascii_case(b"implements") { "T_ENUM" } else { "T_STRING" }
         }
         IntCast | IntegerCast => "T_INT_CAST", FloatCast | DoubleCast | RealCast => "T_DOUBLE_CAST",
         StringCast | BinaryCast => "T_STRING_CAST", BoolCast | BooleanCast => "T_BOOL_CAST",

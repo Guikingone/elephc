@@ -30,14 +30,6 @@ pub(super) fn validate(source: &[u8], tokens: &mut [Token]) -> Result<(), ParseE
             return Err(ParseError { message: "The (real) cast has been removed, use (float) instead".into(), line: token.line });
         }
     }
-    for (index, token) in tokens.iter().enumerate() {
-        if token.id == id("T_ECHO") || token.id == id("T_OPEN_TAG_WITH_ECHO") {
-            let next = tokens[index + 1..].iter().find(|t| ![id("T_WHITESPACE"), id("T_COMMENT"), id("T_DOC_COMMENT")].contains(&t.id));
-            if next.is_none_or(|t| t.id == i64::from(b';') || t.id == id("T_CLOSE_TAG")) {
-                return Err(ParseError { message: "syntax error, unexpected token, expecting an expression".into(), line: token.line });
-            }
-        }
-    }
     let arena = LocalArena::new();
     let program = parse_file_content_with_settings(&arena, FileId::zero(), &input, ParserSettings {
         lexer: LexerSettings { enable_short_tags: false }, ..ParserSettings::default()
@@ -92,6 +84,7 @@ fn collect_names(
             invalid_escape.get_or_insert((at as usize, message));
         }
     }
+    // Reserved words such as C::ECHO are identifiers here, not echo statements.
     let empty_or_trailing_echo = match node {
         Node::Echo(echo) if echo.values.nodes.is_empty() || echo.values.tokens.len() >= echo.values.nodes.len() => Some(echo.terminator.span()),
         Node::EchoTag(echo) if echo.values.nodes.is_empty() || echo.values.tokens.len() >= echo.values.nodes.len() => Some(echo.terminator.span()),
