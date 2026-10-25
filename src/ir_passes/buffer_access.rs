@@ -20,9 +20,10 @@
 //!   allowlist: buffer element and packed field accesses, local loads, stores of scalar
 //!   locals, concat resets, and instructions whose effects only read state or fatal. That
 //!   includes a user function or method call whose refined effect summary is read-only. Any
-//!   other call, and releases, allocations, warnings (user error handlers), output
-//!   (output-buffer callbacks) and throws disqualify it, because each can run user code that
-//!   frees a buffer through an alias. Blocks that leave the loop for good are outside the natural body, and coming
+//!   other call, allocations, warnings, output and user-code releases or throws disqualify it.
+//!   In property-reuse modules, no-op buffer acquire/release and plain `$this` property reads
+//!   that may throw without running PHP are also buffer-preserving. Blocks that leave the
+//!   loop for good are outside the natural body, and coming
 //!   back always passes the preheader, which resolves again.
 //! - The buffer operand must be loop-invariant: an SSA value defined outside the loop, or a
 //!   `load_local` of a slot nothing in the loop writes and no by-reference alias can reach.
@@ -42,6 +43,9 @@
 //! - Skipped entirely for generators (a `yield` lets the caller run), functions with exception
 //!   handlers or dynamic `eval`, and modules that enable `pcntl_async_signals()`, whose backend
 //!   dispatches signal handlers after every instruction.
+//! - Before resolving loops, `super::buffer_property_loops` relocates stable `$this` buffer
+//!   reads, adding a scalar entry guard when a zero-trip loop must not read the property.
+//!   Raw record addresses are shared before converting loop accesses to resolved forms.
 //! - After the loops, `super::buffer_property_reuse` shares the property read, the resolution and
 //!   the record address of repeated `$this->slots[$i]` accesses in straight-line code, under the
 //!   same function and module guards.
@@ -91,8 +95,8 @@ pub(super) fn hoist_buffer_resolution(module: &mut Module) -> bool {
     changed
 }
 
-/// Rewrites the buffer accesses of one function: loop hoisting first, then, when the module
-/// allows it, the straight-line reuse of buffer-typed property reads.
+/// Moves stable properties and shares raw record addresses before loop descriptor hoisting,
+/// then shares any remaining straight-line descriptors under the property-reuse gate.
 fn optimize_function(function: &mut Function, property_reuse: bool) -> bool {
     if !function
         .instructions
@@ -105,13 +109,16 @@ fn optimize_function(function: &mut Function, property_reuse: bool) -> bool {
     {
         return false;
     }
-    let hoisted = hoist_loops(function);
+    let properties = property_reuse && super::buffer_property_loops::hoist_property_reads(function);
+    let records = property_reuse
+        && super::buffer_property_reuse::reuse_property_reads_and_records(function);
+    let hoisted = hoist_loops(function, property_reuse);
     let reused = property_reuse && super::buffer_property_reuse::reuse_property_buffers(function);
-    hoisted || reused
+    properties || records || hoisted || reused
 }
 
 /// Hoists buffer resolution out of every qualifying loop of one function, outermost first.
-fn hoist_loops(function: &mut Function) -> bool {
+fn hoist_loops(function: &mut Function, property_reuse: bool) -> bool {
     let dominance = compute_dominance(function);
     let loops = compute_loops(function, &dominance);
     if loops.is_empty() {
@@ -127,7 +134,7 @@ fn hoist_loops(function: &mut Function) -> bool {
         let Some(preheader) = loop_ref.preheader else {
             continue;
         };
-        if !loop_preserves_buffers(function, loop_ref) {
+        if !loop_preserves_buffers(function, loop_ref, property_reuse) {
             continue;
         }
         changed |= hoist_loop(
@@ -207,7 +214,8 @@ fn hoist_loop(
         let handle = match source {
             HandleSource::Value(value) => value,
             HandleSource::Slot(slot) => {
-                let template = function.instructions[accesses[0].as_raw() as usize].operands[0];
+                let template = buffer_handle_value(function,
+                    function.instructions[accesses[0].as_raw() as usize].operands[0]);
                 let load = insert_slot_load(function, preheader, position, slot, template);
                 position += 1;
                 load
@@ -394,12 +402,17 @@ fn exact_i64_constant(function: &Function, value: ValueId) -> Option<i64> {
 }
 
 /// Returns whether no instruction in the loop body can free, allocate, or rebind a buffer.
-fn loop_preserves_buffers(function: &Function, loop_ref: &NaturalLoop) -> bool {
+fn loop_preserves_buffers(function: &Function, loop_ref: &NaturalLoop, property_reuse: bool) -> bool {
     loop_ref.blocks.iter().all(|&block| {
         function.blocks[block.as_raw() as usize]
             .instructions
             .iter()
-            .all(|&inst_id| instruction_preserves_buffers(function, &function.instructions[inst_id.as_raw() as usize]))
+            .all(|&inst_id| {
+                let inst = &function.instructions[inst_id.as_raw() as usize];
+                instruction_preserves_buffers(function, inst)
+                    || (property_reuse
+                        && super::buffer_property_reuse::keeps_reads_stable(function, inst))
+            })
     })
 }
 
@@ -485,6 +498,7 @@ fn handle_source(
     written: &HashSet<LocalSlotId>,
     escaping: &HashSet<LocalSlotId>,
 ) -> Option<HandleSource> {
+    let handle = buffer_handle_value(function, handle);
     match function.value(handle)?.def {
         ValueDef::BlockParam { block, .. } => {
             (!loop_ref.contains(block)).then_some(HandleSource::Value(handle))
@@ -505,6 +519,21 @@ fn handle_source(
             .then_some(HandleSource::Slot(slot))
         }
     }
+}
+
+/// Looks through buffer acquires, which copy manually managed handle words without refcounts.
+pub(super) fn buffer_handle_value(function: &Function, mut handle: ValueId) -> ValueId {
+    for _ in 0..function.values.len() {
+        let Some(ValueDef::Instruction { inst, .. }) = function.value(handle).map(|value| value.def)
+        else { break; };
+        let Some(inst) = function.instruction(inst) else { break; };
+        if inst.op != Op::Acquire
+            || !matches!(inst.result_php_type.codegen_repr(), PhpType::Buffer(_))
+        { break; }
+        let Some(&source) = inst.operands.first() else { break; };
+        handle = source;
+    }
+    handle
 }
 
 /// Returns the earliest preheader position at which resolving `source` yields the descriptor the

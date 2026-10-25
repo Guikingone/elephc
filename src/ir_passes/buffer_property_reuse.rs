@@ -4,9 +4,11 @@
 //! would otherwise reload the property, call `__rt_buffer_resolve` and recompute the address.
 //!
 //! Called from:
-//! - `crate::ir_passes::buffer_access::optimize_function`, after loop hoisting, for functions that
-//!   pass its generator, exception-handler and `eval` guards in modules without
+//! - `crate::ir_passes::buffer_access::optimize_function`, before and after loop descriptor
+//!   hoisting, for functions that pass its generator, exception-handler and `eval` guards without
 //!   `pcntl_async_signals()`.
+//! - `crate::ir_passes::buffer_property_loops`, for the shared clean-loop classifier and
+//!   property-read merging before descriptor hoisting.
 //!
 //! Key details:
 //! - Two reads agree only across a CLEAN REGION: every instruction on any path from the earliest
@@ -147,6 +149,24 @@ pub(super) fn reuse_property_buffers(function: &mut Function) -> bool {
     let mut released_handles = Vec::new();
     changed |= share_record_addresses(function, &facts, &mut released_handles);
     changed |= share_descriptors(function, &facts, &mut released_handles);
+    drop_release_only_acquires(function, &released_handles);
+    changed
+}
+
+/// Merges only redundant property reads, leaving descriptor placement to loop hoisting.
+pub(super) fn reuse_property_reads(function: &mut Function) -> bool {
+    merge_property_reads(function, &Facts::of(function))
+}
+
+/// Shares raw packed addresses before loop resolution changes their access opcode.
+pub(super) fn reuse_property_reads_and_records(function: &mut Function) -> bool {
+    if !function.instructions.iter().any(|inst| is_buffer_property_read(function, inst)) {
+        return false;
+    }
+    let mut changed = reuse_property_reads(function);
+    let facts = Facts::of(function);
+    let mut released_handles = Vec::new();
+    changed |= share_record_addresses(function, &facts, &mut released_handles);
     drop_release_only_acquires(function, &released_handles);
     changed
 }
@@ -599,7 +619,7 @@ fn blocks_reached_avoiding(
 /// print or run user code. A user call is rejected even with a read-only effect summary:
 /// summaries drop the callee's local effects, and matched slots are not proven free of address
 /// escapes, so the region never relies on how a callee could reach the caller's frame.
-fn keeps_reads_stable(function: &Function, inst: &Instruction) -> bool {
+pub(super) fn keeps_reads_stable(function: &Function, inst: &Instruction) -> bool {
     match inst.op {
         Op::Acquire | Op::Release => is_buffer_refcount_no_op(function, inst),
         Op::PropGet if !function.is_packed_field_access(inst) => {
@@ -673,7 +693,7 @@ fn reads_the_method_receiver(function: &Function, inst: &Instruction) -> bool {
 }
 
 /// Returns whether an instruction is a plain read of a buffer-typed property of `$this`.
-fn is_buffer_property_read(function: &Function, inst: &Instruction) -> bool {
+pub(super) fn is_buffer_property_read(function: &Function, inst: &Instruction) -> bool {
     inst.op == Op::PropGet
         && inst.operands.len() == 1
         && !function.is_packed_field_access(inst)
