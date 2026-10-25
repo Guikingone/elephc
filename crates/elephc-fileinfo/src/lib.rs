@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CStr, CString, OsStr};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -88,6 +89,9 @@ fn outcome(result: Option<CString>, error: CString) {
 fn guard<T: Default>(call: impl FnOnce() -> T) -> T {
     catch_unwind(AssertUnwindSafe(call)).unwrap_or_default()
 }
+
+/// Matches PHP fileinfo's directory-bit test, including socket and block-device mode bits.
+fn directory_mode(mode: u32) -> bool { mode & 0o040000 != 0 }
 
 /// Creates a native instance, loading a custom database or the embedded default.
 /// The path must be a valid NUL-terminated string for the duration of the call.
@@ -194,7 +198,7 @@ unsafe fn query(handle: i64, data: *const c_char, length: i64, flags: i64, file:
             }
         }
     } else { None };
-    if input.as_ref().is_some_and(|file| file.metadata().is_ok_and(|metadata| metadata.is_dir())) {
+    if input.as_ref().is_some_and(|file| file.metadata().is_ok_and(|metadata| directory_mode(metadata.mode()))) {
         magic_setflags(cookie, old);
         outcome(Some(CString::new("directory").unwrap()), CString::default());
         return;
@@ -269,7 +273,7 @@ pub unsafe extern "C" fn elephc_fileinfo_read(path: *const c_char) -> i64 {
         let path = std::path::Path::new(OsStr::from_bytes(CStr::from_ptr(path).to_bytes()));
         let mut bytes = Vec::new();
         let read = std::fs::File::open(path).and_then(|file| {
-            if file.metadata()?.is_dir() { return Ok(true); }
+            if directory_mode(file.metadata()?.mode()) { return Ok(true); }
             file.take(7340032).read_to_end(&mut bytes).map(|_| false)
         });
         if matches!(read, Ok(true)) { return -1; }

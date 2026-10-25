@@ -47,7 +47,7 @@ retain ValueError for database NULs, platform-dependent flag validity, warned
 unknown-scheme local fallback and the illegal-parameter data URL reason. Later
 review rounds accepted those decisions.
 
-There are now 42 fileinfo execution tests, seven native bridge tests and a TLS
+There are now 42 fileinfo execution tests, eight native bridge tests and a TLS
 regression. New tests remain unexecuted until CI. PHP 8.5.12 reference oracles,
 static documentation audits and diff checks pass. The six generated builtin
 source anchors are unchanged; the compatibility table still reports 6/6
@@ -80,3 +80,8 @@ native exception cleanup suppresses stream-close callbacks as PHP does and
 restores normal close behavior afterward. New codegen coverage and PHP reference
 oracles cover stat results, callback ordering, exceptions, mode coercion and
 all HTTP URL entry points. Compiled tests and exporter parity remain CI gates.
+
+Native descriptor classification uses the same PHP directory-bit rule as user
+wrapper metadata. An anonymous socket-pair metadata regression covers the
+non-directory POSIX mode whose directory bit PHP nevertheless recognizes; no
+physical device is opened or read.

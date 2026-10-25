@@ -9,6 +9,18 @@
 
 use super::*;
 
+/// Real socket metadata follows PHP's directory-bit rule without reading a device or pathname.
+#[test]
+fn fileinfo_native_php_directory_mode() {
+    let (socket, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+    let owned: std::os::fd::OwnedFd = socket.into();
+    let file = std::fs::File::from(owned);
+    assert!(directory_mode(file.metadata().unwrap().mode()));
+    assert!(directory_mode(0o060600));
+    assert!(!directory_mode(0o100644));
+    assert!(!directory_mode(0o020666));
+}
+
 /// Creates a MIME handle backed by the embedded database.
 unsafe fn open() -> i64 {
     let handle = elephc_fileinfo_open(16, c"".as_ptr());
