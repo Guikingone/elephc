@@ -2560,6 +2560,12 @@ jobs:
         # outcome; tests only elephc runs (the .lfc files) are informational.
         run: python3 scripts/test-differential.py examples/testing --elephc target/debug/elephc
 
+      - name: DOOM showcase suite
+        # Runs here because this job already builds the compiler. Map changes, specials,
+        # pickups and rendering against a small WAD the tests write themselves: no SDL,
+        # display or DOOM1.WAD needed.
+        run: target/debug/elephc test showcases/doom/tests
+
   curl-feature-contract:
     name: Curl feature contract coverage
     runs-on: ubuntu-latest
