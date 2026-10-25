@@ -64,7 +64,7 @@ See [showcases/http-server/](showcases/http-server/) for full source and build i
 
 ## DOOM rendered in PHP
 
-The flagship showcase: a real-time 3D renderer that loads original DOOM WAD files and renders E1M1 — BSP traversal, perspective projection, per-column fog, sector lighting, collision detection, step climbing — entirely in PHP compiled to a native binary.
+The flagship showcase: the shareware episode of DOOM played from the original `DOOM1.WAD`, entirely in PHP compiled to a native binary. A BSP column renderer draws DOOM's own 320x200 frame with textured walls, floors and sky, sprites and sector lighting, and the game runs doors, lifts, switches, pickups and the status bar at 35 tics per second.
 
 ![DOOM E1M1 rendered in PHP](showcases/doom/demo.gif)
 
@@ -449,7 +449,7 @@ cargo run -- hello.php
 | Showcase | Description |
 |---|---|
 | [HTTP server](showcases/http-server/) | Async HTTP/1.1 server with a non-blocking `poll()` event loop, one `Fiber` per connection, POSIX sockets via `extern` FFI, `ptr` buffers, HTTP parser and router |
-| [DOOM E1M1](showcases/doom/) | Real-time 3D WAD renderer with BSP traversal, SDL2 FFI, `packed class` geometry, `buffer<T>` storage, collision detection, HUD |
+| [DOOM](showcases/doom/) | DOOM's shareware episode from the original WAD: BSP column renderer, textures, sprites, lighting, doors and lifts, status bar; SDL2 FFI, `packed class` map records, `buffer<T>` storage |
 | [SDL framebuffer](examples/sdl_framebuffer/) | Pixel-level rendering with SDL2 via FFI |
 | [SDL audio](examples/sdl_audio/) | Audio playback with SDL2 via FFI |
 | [Hot-path buffers](examples/hot-path/) | `packed class` + `buffer<T>` for performance-critical data |
