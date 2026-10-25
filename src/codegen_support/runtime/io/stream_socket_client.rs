@@ -9,7 +9,7 @@
 //! - Opens a TCP connection: `socket` + `connect` on the parsed
 //!   `[tcp://]A.B.C.D:port` address; returns the descriptor or -1.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch, platform::Platform};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Platform};
 
 /// stream_socket_client: open a connected TCP socket to an IPv4 address.
 /// Input:  x0 = address string pointer, x1 = address string length
