@@ -42,6 +42,9 @@
 //! - Skipped entirely for generators (a `yield` lets the caller run), functions with exception
 //!   handlers or dynamic `eval`, and modules that enable `pcntl_async_signals()`, whose backend
 //!   dispatches signal handlers after every instruction.
+//! - After the loops, `super::buffer_property_reuse` shares the property read, the resolution and
+//!   the record address of repeated `$this->slots[$i]` accesses in straight-line code, under the
+//!   same function and module guards.
 
 use std::collections::{HashMap, HashSet};
 
@@ -62,6 +65,7 @@ pub(super) fn hoist_buffer_resolution(module: &mut Module) -> bool {
     if module.uses_pcntl_runtime(crate::ir::PcntlRuntime::AsyncSignals) {
         return false;
     }
+    let property_reuse = super::buffer_property_reuse::module_allows_property_reuse(module);
     let Module {
         functions,
         class_methods,
@@ -82,13 +86,14 @@ pub(super) fn hoist_buffer_resolution(module: &mut Module) -> bool {
         .chain(extern_callback_trampolines.iter_mut())
         .chain(runtime_callable_invokers.iter_mut())
     {
-        changed |= optimize_function(function);
+        changed |= optimize_function(function, property_reuse);
     }
     changed
 }
 
-/// Hoists buffer resolution out of every qualifying loop of one function, outermost first.
-fn optimize_function(function: &mut Function) -> bool {
+/// Rewrites the buffer accesses of one function: loop hoisting first, then, when the module
+/// allows it, the straight-line reuse of buffer-typed property reads.
+fn optimize_function(function: &mut Function, property_reuse: bool) -> bool {
     if !function
         .instructions
         .iter()
@@ -100,6 +105,13 @@ fn optimize_function(function: &mut Function) -> bool {
     {
         return false;
     }
+    let hoisted = hoist_loops(function);
+    let reused = property_reuse && super::buffer_property_reuse::reuse_property_buffers(function);
+    hoisted || reused
+}
+
+/// Hoists buffer resolution out of every qualifying loop of one function, outermost first.
+fn hoist_loops(function: &mut Function) -> bool {
     let dominance = compute_dominance(function);
     let loops = compute_loops(function, &dominance);
     if loops.is_empty() {
@@ -398,7 +410,7 @@ fn loop_preserves_buffers(function: &Function, loop_ref: &NaturalLoop) -> bool {
 /// buffer element or a packed field disqualifies the loop. A call passes only through the
 /// effects check: effect refinement gives a direct user call its callee's summary, so a callee
 /// proven to only read state or fatal cannot free a buffer either.
-fn instruction_preserves_buffers(function: &Function, inst: &Instruction) -> bool {
+pub(super) fn instruction_preserves_buffers(function: &Function, inst: &Instruction) -> bool {
     match inst.op {
         Op::Nop
         | Op::ConcatReset
@@ -445,7 +457,7 @@ fn slots_named_in_function(function: &Function) -> HashSet<LocalSlotId> {
 }
 
 /// Collects local slots that an instruction stream may read or write as storage rather than load.
-fn slots_named_as_storage<'a>(
+pub(super) fn slots_named_as_storage<'a>(
     instructions: impl Iterator<Item = &'a Instruction>,
 ) -> HashSet<LocalSlotId> {
     let mut written = HashSet::new();
@@ -567,7 +579,7 @@ fn insert_slot_load(
 ///
 /// The instructions from `position` on move one slot down, so the recorded definition index of
 /// each of their results is refreshed to keep the value table in step with the block layout.
-fn insert_instruction(
+pub(super) fn insert_instruction(
     function: &mut Function,
     block: BlockId,
     position: usize,
@@ -682,7 +694,7 @@ fn share_record_addresses(function: &mut Function, rewritten: &[InstId], dominan
 }
 
 /// Collects, for every block parameter, the arguments each incoming edge passes to it.
-fn incoming_arguments(function: &Function) -> HashMap<(BlockId, usize), Vec<ValueId>> {
+pub(super) fn incoming_arguments(function: &Function) -> HashMap<(BlockId, usize), Vec<ValueId>> {
     let mut incoming: HashMap<(BlockId, usize), Vec<ValueId>> = HashMap::new();
     for block in &function.blocks {
         let Some(terminator) = block.terminator.as_ref() else {
@@ -729,7 +741,7 @@ fn edge_arguments(terminator: &crate::ir::Terminator) -> Vec<(BlockId, &[ValueId
 /// no path changes it, so the loop index reaches the second half of an iteration as a fresh
 /// parameter equal to the header's. Seeing through such trivial parameters lets two accesses
 /// of `$b[$i]` on either side of an `if` share one record address.
-fn canonical_value(
+pub(super) fn canonical_value(
     function: &Function,
     incoming: &HashMap<(BlockId, usize), Vec<ValueId>>,
     value: ValueId,
