@@ -212,6 +212,7 @@ fn runtime_dispatch_labels() -> Vec<(RuntimeBuiltinId, String)> {
 fn emit_tokenizer_location_case(emitter: &mut Emitter, arch: Arch) {
     match arch {
         Arch::AArch64 => {
+            // -- validate the boxed receiver and source-line arguments --
             emitter.label("__elephc_runtime_builtin_v1_tokenizer_location");
             emitter.instruction("cmp x21, #2");                                 // require the receiver and source line cells
             emitter.instruction("b.ne __elephc_runtime_builtin_v1_unsupported"); // reject unsupported arities before reading cells
@@ -221,6 +222,7 @@ fn emit_tokenizer_location_case(emitter: &mut Emitter, arch: Arch) {
             emitter.instruction("b.ne __elephc_runtime_builtin_v1_fatal");      // reject malformed internal calls
             emitter.instruction("ldr x9, [x1]");                                // inspect the source line tag
             emitter.instruction("cbnz x9, __elephc_runtime_builtin_v1_fatal");  // zero is the integer tag
+            // -- stamp borrowed native metadata and box the plain result --
             emitter.instruction("ldr x0, [x0, #8]");                            // extract the borrowed object payload
             emitter.instruction("ldr x1, [x1, #8]");                            // extract the integer source line
             abi::emit_call_label(emitter, "__rt_tokenizer_error_location");
@@ -228,6 +230,7 @@ fn emit_tokenizer_location_case(emitter: &mut Emitter, arch: Arch) {
             emitter.instruction("b __elephc_runtime_builtin_v1_result");        // transfer a fresh boxed integer result
         }
         Arch::X86_64 => {
+            // -- validate the boxed receiver and source-line arguments --
             emitter.label("__elephc_runtime_builtin_v1_tokenizer_location_x86");
             emitter.instruction("cmp r13, 2");                                  // require the receiver and source line cells
             emitter.instruction("jne __elephc_runtime_builtin_v1_unsupported_x86"); // reject unsupported arities before reading cells
@@ -237,6 +240,7 @@ fn emit_tokenizer_location_case(emitter: &mut Emitter, arch: Arch) {
             emitter.instruction("jne __elephc_runtime_builtin_v1_fatal_x86");   // reject malformed internal calls
             emitter.instruction("cmp QWORD PTR [rcx], 0");                      // zero is the integer tag
             emitter.instruction("jne __elephc_runtime_builtin_v1_fatal_x86");   // preserve the setter's raw integer contract
+            // -- stamp borrowed native metadata and box the plain result --
             emitter.instruction("mov rax, QWORD PTR [rax + 8]");                // extract the borrowed object payload
             emitter.instruction("mov rcx, QWORD PTR [rcx + 8]");                // extract the integer source line
             abi::emit_call_label(emitter, "__rt_tokenizer_error_location");

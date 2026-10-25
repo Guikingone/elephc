@@ -76,8 +76,8 @@ pub(crate) mod serialize;
 pub(crate) mod spl;
 pub(crate) mod system;
 pub(crate) mod strings;
-pub(crate) mod types;
 pub(crate) mod tokenizer;
+pub(crate) mod types;
 
 pub(crate) use count_empty::*;
 pub(in crate::codegen::lower_inst) use eval_facade::*;

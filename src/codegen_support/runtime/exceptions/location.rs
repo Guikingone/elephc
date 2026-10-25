@@ -58,6 +58,7 @@ fn emit_borrowed_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cset x3, ne");                                         // record whether a native allocation supplied a line
     emitter.instruction("cmp x2, #0");                                          // an absent default filename cannot identify a source location
     emitter.instruction("csel x3, xzr, x3, eq");                                // require a default filename unless an override establishes a location
+    // -- decode an explicit tokenizer source-buffer location --
     emitter.instruction("tbz x0, #63, __rt_location_native_source");            // ordinary source lines have no scanned-buffer flag
     emitter.instruction(&format!("and x0, x0, #{}", !crate::codegen_support::sentinels::THROWABLE_SCANNED_LOCATION_FLAG)); // remove private metadata from the PHP-visible line
     emitter.instruction("mov x2, #0");                                          // tokenized buffers have an explicitly empty filename
@@ -114,6 +115,7 @@ fn emit_borrowed_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r11d, r11d");                                      // prepare the unknown-location value
     emitter.instruction("test rdx, rdx");                                       // an absent default filename cannot identify a source location
     emitter.instruction("cmovz r8, r11");                                       // require a default filename unless an override establishes a location
+    // -- decode an explicit tokenizer source-buffer location --
     emitter.instruction("test rcx, rcx");                                       // the private scanned-buffer bit is the sign bit
     emitter.instruction("jns __rt_location_native_source");                     // ordinary source lines are nonnegative u32 values
     emitter.instruction("btr rcx, 63");                                         // remove private metadata from the PHP-visible line

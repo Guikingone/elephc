@@ -374,7 +374,8 @@ mod tests {
         // through forwarding homes (see `eval_support`).
         // Plus the four `ptr_read_f32`/`ptr_write_f32`/`ptr_read_f64`/`ptr_write_f64`
         // raw-memory builtins and `buffer_ptr`, bound in eval through their own registry homes.
-        assert_eq!(eval_registry, 690 + curl_surface);
+        // The tokenizer location helper also uses the shared runtime registry.
+        assert_eq!(eval_registry, 691 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -401,7 +402,8 @@ mod tests {
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
         // The four float pointer builtins (`ptr_read_f32`, `ptr_write_f32`, `ptr_read_f64`,
         // `ptr_write_f64`) and `buffer_ptr` are ordinary registry builtins on both backends.
-        assert_eq!(aot_registry, 758);
+        // The tokenizer location helper is a typed ordinary registry operation.
+        assert_eq!(aot_registry, 759);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 411 + curl_surface);
@@ -449,7 +451,8 @@ mod tests {
         }
 
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(shared_runtime, 85);
+        // Includes the internal tokenizer ParseError location operation.
+        assert_eq!(shared_runtime, 86);
         assert_eq!(hybrid_adapter, 2);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
         // interpreter adapters.
