@@ -130,6 +130,7 @@ where
     emitter.instruction("ldr x0, [sp, #32]");                                   // close temp fd
     emitter.syscall(6); // close
 
+    // -- release transform storage on success and decompression failure --
     emitter.label(&decompress_fail);
     emitter.label(&common_done);
     emitter.instruction("ldr x0, [sp, #16]");                                   // release the transform buffer on every exit
@@ -239,6 +240,7 @@ where
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // temp fd to close after dup2
     emitter.instruction("call close");                                          // close the temporary descriptor
 
+    // -- release transform storage on success and decompression failure --
     emitter.label(&decompress_fail);
     emitter.label(&common_done);
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // release the transform buffer on every exit

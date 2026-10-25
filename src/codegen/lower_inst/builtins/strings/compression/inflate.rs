@@ -21,6 +21,7 @@ pub(super) fn lower_gzinflate_aarch64(
     let again = format!("{}_inflate_again", zero);
     let grow = format!("{}_inflate_grow", zero);
     let finish = format!("{}_inflate_finish", zero);
+    // -- save the source and allocate initial output storage --
     ctx.emitter.instruction("sub sp, sp, #176");                                // reserve z_stream storage plus scratch slots
     ctx.emitter.instruction("str x1, [sp, #112]");                              // save the source pointer
     ctx.emitter.instruction("str x2, [sp, #120]");                              // save the source length
@@ -35,6 +36,7 @@ pub(super) fn lower_gzinflate_aarch64(
     ctx.emitter.instruction("str x9, [x0, #-8]");                               // stamp the output buffer as a heap string
     ctx.emitter.instruction("str x0, [sp, #128]");                              // save the destination buffer pointer
 
+    // -- zero z_stream before initializing its allocator callbacks --
     ctx.emitter.instruction("mov x9, #0");                                      // initialize the z_stream clear index
     ctx.emitter.label(zero);
     ctx.emitter.instruction("cmp x9, #112");                                    // check whether every z_stream byte is cleared
@@ -44,6 +46,7 @@ pub(super) fn lower_gzinflate_aarch64(
     ctx.emitter.instruction(&format!("b {}", zero));                            // keep clearing the z_stream
     ctx.emitter.label(zeroed);
 
+    // -- initialize the raw DEFLATE decoder --
     ctx.emitter.instruction("mov x0, sp");                                      // pass the z_stream pointer
     ctx.emitter.instruction("mov x1, #-15");                                    // request raw inflate with negative window bits
     abi::emit_symbol_address(ctx.emitter, "x2", "_zlib_version");
@@ -51,6 +54,7 @@ pub(super) fn lower_gzinflate_aarch64(
     ctx.emitter.bl_c("inflateInit2_");                                          // initialize the raw-inflate zlib stream
     ctx.emitter.instruction("cmp w0, #0");                                      // check initialization before using zlib state
     ctx.emitter.instruction(&format!("b.ne {}", fail));                         // free the output buffer if initialization failed
+    // -- bind the borrowed input and owned output to z_stream --
     ctx.emitter.instruction("ldr x9, [sp, #112]");                              // reload the source pointer
     ctx.emitter.instruction("str x9, [sp, #0]");                                // set z_stream.next_in
     ctx.emitter.instruction("ldr x9, [sp, #120]");                              // reload the source length
@@ -59,6 +63,7 @@ pub(super) fn lower_gzinflate_aarch64(
     ctx.emitter.instruction("str x9, [sp, #24]");                               // set z_stream.next_out
     ctx.emitter.instruction("ldr x9, [sp, #144]");                              // reload the destination capacity
     ctx.emitter.instruction("str w9, [sp, #32]");                               // set z_stream.avail_out
+    // -- inflate until completion or exhaustion of the output buffer --
     ctx.emitter.label(&again);
     ctx.emitter.instruction("mov x0, sp");                                      // pass the z_stream pointer to inflate
     ctx.emitter.instruction("mov x1, #4");                                      // request a final inflate pass
@@ -72,7 +77,7 @@ pub(super) fn lower_gzinflate_aarch64(
     ctx.emitter.instruction(&format!("b.eq {}", grow));                         // check whether the output buffer is full
     ctx.emitter.instruction("cmn w0, #5");                                      // Z_BUF_ERROR can also signal exhausted output
     ctx.emitter.instruction(&format!("b.ne {}", finish));                       // preserve other decompression failures
-    // Expand exhausted output storage while retaining zlib state and its decoded prefix.
+    // -- grow exhausted output storage while retaining zlib state and decoded bytes --
     ctx.emitter.label(&grow);
     ctx.emitter.instruction("ldr w9, [sp, #32]");                               // inspect the remaining output space
     ctx.emitter.instruction(&format!("cbnz w9, {}", finish));                   // a non-full buffer means growth cannot help
@@ -99,7 +104,7 @@ pub(super) fn lower_gzinflate_aarch64(
     ctx.emitter.instruction("sub x9, x9, x10");                                 // compute space after the preserved prefix
     ctx.emitter.instruction("str w9, [sp, #32]");                               // update z_stream.avail_out for the next pass
     ctx.emitter.instruction(&format!("b {}", again));                           // continue the same inflate stream
-    // Release zlib state before either transferring or freeing the output owner.
+    // -- release zlib state before transferring or freeing the output owner --
     ctx.emitter.label(&finish);
     ctx.emitter.instruction("mov x0, sp");                                      // pass the z_stream pointer to inflateEnd
     ctx.emitter.bl_c("inflateEnd");                                             // release zlib's internal inflate state
@@ -109,11 +114,13 @@ pub(super) fn lower_gzinflate_aarch64(
     ctx.emitter.instruction("ldr x1, [sp, #128]");                              // return the decompressed string pointer
     ctx.emitter.instruction("ldr x2, [sp, #152]");                              // return the decompressed string length
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the failure sentinel after success
+    // -- release unpublished output storage on every failure --
     ctx.emitter.label(fail);
     ctx.emitter.instruction("ldr x0, [sp, #128]");                              // release the unpublished output buffer on failure
     abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
     ctx.emitter.instruction("mov x1, #0");                                      // use a null pointer as the failure sentinel
     ctx.emitter.instruction("mov x2, #0");                                      // clear the failure string length
+    // -- restore the caller stack after success or failure --
     ctx.emitter.label(done);
     ctx.emitter.instruction("add sp, sp, #176");                                // release z_stream scratch storage
 }
@@ -130,6 +137,7 @@ pub(super) fn lower_gzinflate_x86_64(
     let grow = format!("{}_inflate_grow", zero);
     let finish = format!("{}_inflate_finish", zero);
     let sized = format!("{}_sized", zero);
+    // -- save the source and allocate initial output storage --
     ctx.emitter.instruction("sub rsp, 176");                                    // reserve z_stream storage plus scratch slots
     ctx.emitter.instruction("mov QWORD PTR [rsp + 112], rax");                  // save the source pointer
     ctx.emitter.instruction("mov QWORD PTR [rsp + 120], rdx");                  // save the source length
@@ -148,6 +156,7 @@ pub(super) fn lower_gzinflate_x86_64(
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
     ctx.emitter.instruction("mov QWORD PTR [rsp + 128], rax");                  // save the destination buffer pointer
 
+    // -- zero z_stream before initializing its allocator callbacks --
     ctx.emitter.instruction("xor r9, r9");                                      // initialize the z_stream clear index
     ctx.emitter.label(zero);
     ctx.emitter.instruction("cmp r9, 112");                                     // check whether every z_stream byte is cleared
@@ -157,6 +166,7 @@ pub(super) fn lower_gzinflate_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", zero));                          // keep clearing the z_stream
     ctx.emitter.label(zeroed);
 
+    // -- initialize the raw DEFLATE decoder --
     ctx.emitter.instruction("mov rdi, rsp");                                    // pass the z_stream pointer
     ctx.emitter.instruction("mov esi, -15");                                    // request raw inflate with negative window bits
     abi::emit_symbol_address(ctx.emitter, "rdx", "_zlib_version");
@@ -164,6 +174,7 @@ pub(super) fn lower_gzinflate_x86_64(
     ctx.emitter.instruction("call inflateInit2_");                              // initialize the raw-inflate zlib stream
     ctx.emitter.instruction("test eax, eax");                                   // check initialization before using zlib state
     ctx.emitter.instruction(&format!("jnz {}", fail));                          // free the output buffer if initialization failed
+    // -- bind the borrowed input and owned output to z_stream --
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 112]");                   // reload the source pointer
     ctx.emitter.instruction("mov QWORD PTR [rsp + 0], r9");                     // set z_stream.next_in
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 120]");                   // reload the source length
@@ -172,6 +183,7 @@ pub(super) fn lower_gzinflate_x86_64(
     ctx.emitter.instruction("mov QWORD PTR [rsp + 24], r9");                    // set z_stream.next_out
     ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 144]");                   // reload the destination capacity
     ctx.emitter.instruction("mov DWORD PTR [rsp + 32], r9d");                   // set z_stream.avail_out
+    // -- inflate until completion or exhaustion of the output buffer --
     ctx.emitter.label(&again);
     ctx.emitter.instruction("mov rdi, rsp");                                    // pass the z_stream pointer to inflate
     ctx.emitter.instruction("mov esi, 4");                                      // request a final inflate pass
@@ -185,7 +197,7 @@ pub(super) fn lower_gzinflate_x86_64(
     ctx.emitter.instruction(&format!("je {}", grow));                           // check whether the output buffer is full
     ctx.emitter.instruction("cmp DWORD PTR [rsp + 136], -5");                   // Z_BUF_ERROR can signal exhausted output
     ctx.emitter.instruction(&format!("jne {}", finish));                        // preserve other decompression failures
-    // Expand exhausted output storage while retaining zlib state and its decoded prefix.
+    // -- grow exhausted output storage while retaining zlib state and decoded bytes --
     ctx.emitter.label(&grow);
     ctx.emitter.instruction("cmp DWORD PTR [rsp + 32], 0");                     // inspect the remaining output space
     ctx.emitter.instruction(&format!("jne {}", finish));                        // a non-full buffer means growth cannot help
@@ -216,7 +228,7 @@ pub(super) fn lower_gzinflate_x86_64(
     ctx.emitter.instruction("sub r9, r10");                                     // compute space after the preserved prefix
     ctx.emitter.instruction("mov DWORD PTR [rsp + 32], r9d");                   // update z_stream.avail_out for the next pass
     ctx.emitter.instruction(&format!("jmp {}", again));                         // continue the same inflate stream
-    // Release zlib state before either transferring or freeing the output owner.
+    // -- release zlib state before transferring or freeing the output owner --
     ctx.emitter.label(&finish);
     ctx.emitter.instruction("mov rdi, rsp");                                    // pass the z_stream pointer to inflateEnd
     ctx.emitter.instruction("call inflateEnd");                                 // release zlib's internal inflate state
@@ -225,11 +237,13 @@ pub(super) fn lower_gzinflate_x86_64(
     ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 128]");                  // return the decompressed string pointer
     ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 152]");                  // return the decompressed string length
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the failure sentinel after success
+    // -- release unpublished output storage on every failure --
     ctx.emitter.label(fail);
     ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 128]");                  // release the unpublished output buffer on failure
     abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
     ctx.emitter.instruction("xor eax, eax");                                    // use a null pointer as the failure sentinel
     ctx.emitter.instruction("xor edx, edx");                                    // clear the failure string length
+    // -- restore the caller stack after success or failure --
     ctx.emitter.label(done);
     ctx.emitter.instruction("add rsp, 176");                                    // release z_stream scratch storage
 }
