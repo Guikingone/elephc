@@ -65,12 +65,12 @@ pub(super) fn emit_fileinfo_cast(emitter: &mut Emitter) {
     emitter.instruction(if arm { "ldr x0, [x10, x9, lsl #3]" } else { "mov rdi, QWORD PTR [r10 + r9 * 8]" }); // borrow the live wrapper object
     emitter.instruction(if arm { "cmp x0, #0" } else { "test rdi, rdi" });      // detect a retired wrapper handle
     emitter.instruction(if arm { "b.eq __rt_finfo_cast_done" } else { "jz __rt_finfo_cast_done" }); // ignore closed handles
-    emitter.instruction(if arm { "ldr x9, [x0]" } else { "mov r9, QWORD PTR [rdi]" }); // read the wrapper class ID
+    emitter.instruction(if arm { "ldr x12, [x0]" } else { "mov r9, QWORD PTR [rdi]" }); // preserve the class ID across symbol-load scratch use
     abi::emit_load_symbol_to_reg(emitter, b, "_class_name_count", 0);
-    emitter.instruction(if arm { "cmp x9, x10" } else { "cmp r9, r10" });       // validate the dense class ID
+    emitter.instruction(if arm { "cmp x12, x10" } else { "cmp r9, r10" });      // validate the dense class ID
     emitter.instruction(if arm { "b.hs __rt_finfo_cast_done" } else { "jae __rt_finfo_cast_done" }); // avoid invalid class metadata
     abi::emit_symbol_address(emitter, b, "_user_wrapper_vtable_ptrs");
-    emitter.instruction(if arm { "ldr x10, [x10, x9, lsl #3]" } else { "mov r10, QWORD PTR [r10 + r9 * 8]" }); // borrow the class method table
+    emitter.instruction(if arm { "ldr x10, [x10, x12, lsl #3]" } else { "mov r10, QWORD PTR [r10 + r9 * 8]" }); // borrow the class method table
     emitter.instruction(if arm { "cmp x10, #0" } else { "test r10, r10" });     // tolerate an absent wrapper method table
     emitter.instruction(if arm { "b.eq __rt_finfo_cast_done" } else { "jz __rt_finfo_cast_done" }); // leave ordinary classes untouched
     abi::emit_load_from_address(emitter, a, b, USER_WRAPPER_VTABLE_CAST_RESULT_OFFSET);
