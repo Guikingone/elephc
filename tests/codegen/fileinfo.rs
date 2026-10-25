@@ -82,26 +82,36 @@ $db = tempnam(sys_get_temp_dir(), "magic");
 $p = tempnam(sys_get_temp_dir(), "finfo");
 $gz = tempnam(sys_get_temp_dir(), "gzip");
 $bz = tempnam(sys_get_temp_dir(), "bzip");
+$raw = tempnam(sys_get_temp_dir(), "deflate");
 file_put_contents($db, "0 string HELLO decoded-document\n");
 file_put_contents($p, "URYYB");
 file_put_contents($gz, base64_decode("H4sIAAAAAAAAA/Nw9fHxBwA2ZETBBQAAAA=="));
 file_put_contents($bz, base64_decode("QlpoOTFBWSZTWXMoMkUAAACEAAJEoAAhmmgzTQczi7kinChIOZQZIoA="));
+file_put_contents($raw, base64_decode("83D18fEHAA=="));
 $f = new finfo(FILEINFO_NONE, $db);
 echo $f->file("php://filter/read=string.rot13/resource=" . $p), "\n";
 echo finfo_file($f, "php://filter/read=string.rot13|string.toupper/resource=data://text/plain,uryyb"), "\n";
 echo $f->file("php://filter/read=convert.base64-decode/resource=data://text/plain,SEVMTE8="), "\n";
 echo $f->file("php://filter/read=convert.quoted-printable-decode/resource=data://text/plain,=48=45=4c=4c=4f"), "\n";
 echo $f->file("php://filter/write=string.rot13/resource=data://text/plain,HELLO"), "\n";
+echo $f->file("php://filter/read=zlib.inflate/resource=" . $raw), "\n";
+echo $f->file("php://filter/read=zlib.deflate|zlib.inflate/resource=data://text/plain,HELLO"), "\n";
+echo $f->file("php://filter/read=bzip2.decompress/resource=" . $bz), "\n";
+$warned = false;
+set_error_handler(function (int $level, string $message) use (&$warned) { $warned = $level === E_WARNING; return true; });
+echo $f->file("php://filter/read=elephc.missing/resource=data://text/plain,HELLO"), ":", $warned ? "warned\n" : "silent\n";
+restore_error_handler();
 echo @$f->file("compress.zlib://" . $gz) === false ? "gzip-unstatable\n" : "bad\n";
 echo @finfo_file($f, "compress.bzip2://" . $bz) === false ? "bzip-unstatable\n" : "bad\n";
-$code = $argc > 0 ? 'echo $f->file("php://filter/read=string.rot13/resource=" . $p), "\n"; echo @$f->file("compress.zlib://" . $gz) === false ? "gzip-unstatable\n" : "bad\n"; echo @$f->file("compress.bzip2://" . $bz) === false ? "bzip-unstatable\n" : "bad\n";' : '';
+$code = $argc > 0 ? 'echo $f->file("php://filter/read=string.rot13/resource=" . $p), "\n"; echo $f->file("php://filter/read=zlib.inflate/resource=" . $raw), "\n"; echo $f->file("php://filter/read=bzip2.decompress/resource=" . $bz), "\n"; echo @$f->file("compress.zlib://" . $gz) === false ? "gzip-unstatable\n" : "bad\n"; echo @$f->file("compress.bzip2://" . $bz) === false ? "bzip-unstatable\n" : "bad\n";' : '';
 eval($code);
 unlink($db);
 unlink($p);
 unlink($gz);
 unlink($bz);
+unlink($raw);
 "#);
-    assert_eq!(out, "decoded-document\n".repeat(5) + "gzip-unstatable\nbzip-unstatable\ndecoded-document\ngzip-unstatable\nbzip-unstatable\n");
+    assert_eq!(out, "decoded-document\n".repeat(8) + "decoded-document:warned\ngzip-unstatable\nbzip-unstatable\n" + &"decoded-document\n".repeat(3) + "gzip-unstatable\nbzip-unstatable\n");
 }
 
 /// Standard-input wrappers read their bytes without closing the process's borrowed descriptor.

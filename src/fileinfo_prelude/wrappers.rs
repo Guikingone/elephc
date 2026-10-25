@@ -9,7 +9,7 @@
 //! - Each filter stage owns a temporary stream and closes it even when a handler throws.
 //! - Standard descriptors are borrowed and never closed by a fileinfo query.
 
-use crate::parser::ast::{BinOp, Expr, Stmt, TypeExpr};
+use crate::parser::ast::{BinOp, CastType, Expr, Stmt, TypeExpr};
 use crate::synthetic_class::*;
 
 /// Compares two PHP values without coercion.
@@ -51,8 +51,12 @@ fn filtered_url() -> Stmt {
             ], vec![], None),
             s_foreach(e_call("explode", vec![e_str("|"), e_var("_part")]), None, "_filter", vec![
                 s_if(eq(e_var("_filter"), e_str("")), vec![s_continue(1)], vec![], None),
-                s_assign("_data", e_method_call(e_this(), "__elephc_filter_bytes", vec![e_var("_data"), e_var("_filter")])),
-                s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
+                // Keep the fallible result boxed while the loop's byte accumulator stays string-typed.
+                s_assign("_stage", e_array(vec![
+                    e_method_call(e_this(), "__elephc_filter_bytes", vec![e_var("_data"), e_var("_filter")]), e_bool(true),
+                ])),
+                s_if(eq(e_index(e_var("_stage"), e_int(0)), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
+                s_assign("_data", e_cast(CastType::String, e_index(e_var("_stage"), e_int(0)))),
             ]),
         ]),
         s_return(e_var("_data")),
@@ -93,20 +97,28 @@ pub(super) fn read_method() -> MethodBuilder {
 
 /// Applies one filter through the existing stream implementation and its PHP callbacks.
 pub(super) fn filter_method() -> MethodBuilder {
-    let mut attach = vec![s_expr(e_call("stream_filter_append", vec![e_var("_stream"), e_var("name"), e_const("STREAM_FILTER_READ")]))];
+    let mut attach = vec![s_assign("_attached", e_call("stream_filter_append", vec![e_var("_stream"), e_var("name"), e_const("STREAM_FILTER_READ")]))];
     for name in ["string.toupper", "string.tolower", "string.rot13", "string.strip_tags", "dechunk",
         "convert.base64-encode", "convert.base64-decode", "convert.quoted-printable-encode",
-        "convert.quoted-printable-decode"].into_iter().rev() {
+        "convert.quoted-printable-decode", "bzip2.decompress"].into_iter().rev() {
         attach = vec![s_if(eq(e_var("name"), e_str(name)), vec![
-            s_expr(e_call("stream_filter_append", vec![e_var("_stream"), e_str(name), e_const("STREAM_FILTER_READ")])),
+            s_assign("_attached", e_call("stream_filter_append", vec![e_var("_stream"), e_str(name), e_const("STREAM_FILTER_READ")])),
         ], vec![], Some(attach))];
     }
     let mut work = vec![s_expr(e_call("fwrite", vec![e_var("_stream"), e_var("data")])),
         s_expr(e_call("rewind", vec![e_var("_stream")]))];
     work.extend(attach);
+    work.push(s_if(eq(e_var("_attached"), e_bool(false)), vec![
+        s_expr(e_call("__elephc_builtin_warning", vec![e_binop(e_str("Unable to create filter: "), BinOp::Concat, e_var("name"))])),
+        // PHP warns about an unknown filter and leaves its input bytes unchanged.
+        s_return(e_var("data")),
+    ], vec![], None));
     work.push(s_return(e_call("stream_get_contents", vec![e_var("_stream"), e_int(7340032)])));
     method("__elephc_filter_bytes").private().param("data", TypeExpr::Str).param("name", TypeExpr::Str)
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False])).body(vec![
+            // PHP's filter default is raw DEFLATE, unlike the auto-detecting fopen helper.
+            s_if(eq(e_var("name"), e_str("zlib.inflate")), vec![s_return(e_call("gzinflate", vec![e_var("data")]))], vec![], None),
+            s_if(eq(e_var("name"), e_str("zlib.deflate")), vec![s_return(e_call("gzdeflate", vec![e_var("data")]))], vec![], None),
             s_assign("_stream", e_call("fopen", vec![e_str("php://temp"), e_str("w+b")])),
             s_if(eq(e_var("_stream"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
             s_try(work, vec![], Some(vec![s_expr(e_call("fclose", vec![e_var("_stream")]))])),
