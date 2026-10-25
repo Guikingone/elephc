@@ -111,7 +111,7 @@ fn finfo_class() -> Stmt {
             .param_default("magic_database", t_nullable(TypeExpr::Str), e_null()).body(constructor))
         .method(query_method(false)).method(query_method(true))
         .method(query_engine(false)).method(query_engine(true))
-        .method(super::wrappers::read_method()).method(super::wrappers::filter_method()).method(super::wrappers::routing_method())
+        .method(super::wrappers::read_method()).method(super::wrappers::filter_method()).method(super::wrappers::routing_method()).method(super::pending::prepare_method()).method(super::pending::cleanup_method())
         .method(method("set_flags").param("flags", TypeExpr::Int).returns(TypeExpr::Bool)
             .returning(e_method_call(e_this(), "__elephc_set_flags", vec![e_var("flags")])))
         .method(method("__elephc_set_flags").final_().param("flags", TypeExpr::Int).returns(TypeExpr::Bool).body(set_flags))
@@ -186,15 +186,7 @@ fn functions() -> Program {
 
 /// Keeps each query's descriptor classification local while recursive readers borrow its output flag.
 fn stream_query() -> Vec<Stmt> {
-    vec![
-        s_assign("_stream_directory", e_bool(false)),
-        s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![
-            e_var("filename"), e_var("context"), e_var("_function"), e_bool(true), e_var("_stream_directory"),
-        ])),
-        s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
-        s_if(e_var("_stream_directory"), vec![s_return(e_str("directory"))], vec![], None),
-        s_return(e_method_call(e_this(), "__elephc_buffer", vec![e_var("_function"), e_var("_data"), e_int(0)])),
-    ]
+    super::pending::query()
 }
 
 /// Builds externs first, followed by the class and six PHP functions.
@@ -219,6 +211,10 @@ pub(super) fn declarations() -> Program {
             extern_fn("elephc_fileinfo_read_data", "elephc_fileinfo").param("id", CType::Int).returns(CType::Ptr).build(),
             extern_fn("elephc_fileinfo_read_length", "elephc_fileinfo").param("id", CType::Int).returns(CType::Int).build(),
             extern_fn("elephc_fileinfo_read_release", "elephc_fileinfo").param("id", CType::Int).build(),
+            extern_fn("elephc_runtime_stream_missing_stat_class", "System").param("id", CType::Int).returns(CType::Ptr).build(),
+            extern_fn("elephc_runtime_stream_stat_name", "System").param("row", CType::Ptr).returns(CType::Ptr).build(),
+            extern_fn("elephc_runtime_stream_stat_name_length", "System").param("row", CType::Ptr).returns(CType::Int).build(),
+            extern_fn("elephc_runtime_stream_close_mode", "System").param("mode", CType::Int).returns(CType::Int).build(),
             handle_owner(),
             finfo_class(),
         ];

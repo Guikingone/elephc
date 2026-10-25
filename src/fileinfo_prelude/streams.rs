@@ -96,6 +96,7 @@ pub(super) fn network_uri() -> Stmt {
         s_if(e_binop(e_var("_url_data"), BinOp::StrictEq, e_bool(false)), failure(e_call("elephc_fileinfo_network_error", vec![
             e_call("elephc_runtime_stream_error_code", vec![]), e_call("elephc_runtime_stream_tls_error", vec![]),
         ])), vec![], None),
-        s_return(e_var("_url_data")),
+        // Direct network wrapper stat fails; a filter wrapper can expose the socket's stat instead.
+        s_assign("_pending", e_int(-2)), s_return(e_str("")),
     ], vec![], None)
 }

@@ -14,6 +14,7 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// Emits C ABI entry points whose names follow the target's external symbol convention.
 pub(crate) fn emit_fileinfo_streams(emitter: &mut Emitter) {
     emit_wrapper_query(emitter);
+    super::fileinfo_stat::emit_fileinfo_stat(emitter);
     // -- reset native and optional TLS diagnostics before the next URL operation --
     let name = emitter.target.extern_symbol("elephc_runtime_stream_reset_error");
     emitter.label_global(&name);

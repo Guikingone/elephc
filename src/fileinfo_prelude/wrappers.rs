@@ -25,12 +25,6 @@ fn invalid(message: &str) -> Vec<Stmt> {
     vec![s_expr(e_call("__elephc_builtin_warning", vec![e_str(message)])), s_return(e_bool(false))]
 }
 
-/// Reads and closes an owned stream, including exceptional filter callbacks.
-fn read_owned() -> Stmt {
-    s_try(vec![s_return(e_call("stream_get_contents", vec![e_var("_stream"), e_int(7340032)]))], vec![],
-        Some(vec![s_expr(e_call("fclose", vec![e_var("_stream")]))]))
-}
-
 /// Reads a wrapper recursively before applying its read-direction filters.
 fn filtered_url() -> Stmt {
     s_if(prefix("php://filter/"), vec![
@@ -38,8 +32,10 @@ fn filtered_url() -> Stmt {
         s_if(eq(e_var("_split"), e_bool(false)), vec![s_throw(e_new_fq("Error", vec![e_str("No URL resource specified")]))], vec![], None),
         s_assign("_resource", e_call("substr", vec![e_var("filename"), e_binop(e_var("_split"), BinOp::Add, e_int(10))])),
         s_if(eq(e_var("_resource"), e_str("")), super::streams::failure(e_str("operation failed")), vec![], None),
-        s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![e_var("_resource"), e_var("context"), e_var("_function"), e_bool(false), e_var("_directory")])),
+        s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![e_var("_resource"), e_var("context"), e_var("_function"), e_bool(false), e_var("_directory"), e_var("_pending"), e_var("_stages")])),
         s_if(eq(e_var("_data"), e_bool(false)), super::streams::failure(e_str("operation failed")), vec![], None),
+        // PHP's filter wrapper replaces the network wrapper's failing stat with socket stat.
+        s_if(eq(e_var("_pending"), e_int(-2)), vec![s_assign("_directory", e_bool(true))], vec![], None),
         s_assign("_spec", e_str("")),
         s_if(e_binop(e_var("_split"), BinOp::Gt, e_int(13)), vec![
             s_assign("_spec", e_call("substr", vec![e_var("filename"), e_int(13), e_binop(e_var("_split"), BinOp::Sub, e_int(13))])),
@@ -54,6 +50,12 @@ fn filtered_url() -> Stmt {
             s_foreach(e_call("explode", vec![e_str("|"), e_var("_part")]), None, "_filter", vec![
                 s_if(eq(e_var("_filter"), e_str("")), vec![s_continue(1)], vec![], None),
                 s_assign("_filter", e_index(e_call("explode", vec![e_str("\0"), e_call("urldecode", vec![e_var("_filter")])]), e_int(0))),
+                s_if(e_binop(e_var("_pending"), BinOp::StrictNotEq, e_null()), vec![
+                    s_assign("_prepared", e_method_call(e_this(), "__elephc_prepare_filter", vec![e_var("_filter"), e_var("_function")])),
+                    s_if(eq(e_var("_prepared"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
+                    s_expr(e_call("array_push", vec![e_var("_stages"), e_var("_prepared")])),
+                    s_continue(1),
+                ], vec![], None),
                 // Keep the fallible result boxed while the loop's byte accumulator stays string-typed.
                 s_assign("_stage", e_array(vec![
                     e_method_call(e_this(), "__elephc_filter_bytes", vec![e_var("_data"), e_var("_filter"), e_var("_function"), e_var("_directory")]), e_bool(true),
@@ -77,11 +79,14 @@ pub(super) fn read_method() -> MethodBuilder {
                 e_call("substr", vec![e_var("filename"), e_int(scheme.len() as i64)]), e_str("rb"), e_bool(false), e_var("context")])),
             s_if(eq(e_var("_stream"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
             s_expr(e_call("fclose", vec![e_var("_stream")])),
-            s_return(e_bool(false)),
+            s_assign("_pending", e_bool(false)), s_return(e_str("")),
         ], vec![], None));
     }
-    for (url, resource) in [("php://stdin", "STDIN"), ("php://input", "STDIN"),
-        ("php://stdout", "STDOUT"), ("php://output", "STDOUT"), ("php://stderr", "STDERR")] {
+    for url in ["php://input", "php://output"] {
+        body.push(s_if(eq(e_call("strtolower", vec![e_var("filename")]), e_str(url)),
+            vec![s_assign("_pending", e_bool(false)), s_return(e_str(""))], vec![], None));
+    }
+    for (url, resource) in [("php://stdin", "STDIN"), ("php://stdout", "STDOUT"), ("php://stderr", "STDERR")] {
         body.push(s_if(eq(e_call("strtolower", vec![e_var("filename")]), e_str(url)), vec![
             s_return(e_call("stream_get_contents", vec![e_const(resource), e_int(7340032)])),
         ], vec![], None));
@@ -97,11 +102,12 @@ pub(super) fn read_method() -> MethodBuilder {
     body.extend([
         s_assign("_stream", e_call("fopen", vec![e_var("filename"), e_str("rb"), e_bool(false), e_var("context")])),
         s_if(eq(e_var("_stream"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
-        read_owned(),
+        s_assign("_pending", e_var("_stream")), s_return(e_str("")),
     ]);
     method("__elephc_read_stream").private().param("filename", TypeExpr::Str)
         .param("context", t_mixed()).param("_function", TypeExpr::Str).param("_report_errors", TypeExpr::Bool)
-        .param_by_ref("_directory", Some(TypeExpr::Bool)).returns(t_union(vec![TypeExpr::Str, TypeExpr::False])).body(body)
+        .param_by_ref("_directory", Some(TypeExpr::Bool)).param_by_ref("_pending", None).param_by_ref("_stages", Some(t_array()))
+        .returns(t_union(vec![TypeExpr::Str, TypeExpr::False])).body(body)
 }
 
 /// Routes registered wrappers while preserving PHP's warned plain-file fallback for unknown schemes.
@@ -180,6 +186,8 @@ pub(super) fn filter_method() -> MethodBuilder {
             s_if(eq(e_var("name"), e_str("zlib.deflate")), vec![s_if(e_var("_directory"), vec![s_return(e_var("data"))], vec![], None), s_return(e_call("gzdeflate", vec![e_var("data")]))], vec![], None),
             s_assign("_stream", e_call("fopen", vec![e_str("php://temp"), e_str("w+b")])),
             s_if(eq(e_var("_stream"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
-            s_try(work, vec![], Some(vec![s_expr(e_call("fclose", vec![e_var("_stream")]))])),
+            s_assign("_filter_unwind", e_bool(false)),
+            s_try(work, vec![(vec!["Throwable"], Some("_filter_error"), vec![s_assign("_filter_unwind", e_bool(true)), s_throw(e_var("_filter_error"))])],
+                Some(vec![s_expr(e_method_call(e_this(), "__elephc_close_streams", vec![e_var("_stream"), e_array(vec![]), e_var("_filter_unwind")]))])),
         ])
 }

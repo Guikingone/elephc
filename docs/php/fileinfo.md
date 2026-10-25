@@ -41,10 +41,15 @@ stream context. The context argument of `finfo_buffer()` has no effect, as in PH
 Directories return `directory`.
 
 Wrapper names may be built at runtime. File queries support `data://`, local
-`file://` URLs, network and Phar URLs, standard-input and temporary `php://`
+`file://` URLs, Phar URLs, standard-input and temporary `php://`
 streams, and `php://filter` read chains.
 Read filters inspect the transformed bytes, including nested wrapper resources.
-As in PHP, compressed wrappers without stream stat support return `false`.
+Like PHP 8.5, file queries identify a wrapper only after stream stat succeeds.
+Direct network URLs still perform their request with the stream context, then
+return `false` because their wrapper stat fails. A `php://filter` layer can expose
+the underlying socket stat, which PHP 8.5 classifies as `directory`. Compressed
+wrappers without stream stat return `false`. User wrappers returning directory metadata
+produce `directory`; a failed `stream_stat()` returns `false` without reading.
 Plain data URL payloads use PHP URL decoding: `+` becomes a space and `%2B`
 preserves a literal plus byte. Base64 payloads retain their decoded binary bytes.
 

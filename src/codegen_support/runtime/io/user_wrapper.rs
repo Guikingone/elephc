@@ -67,6 +67,8 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #16]");                                   // save the synthetic file descriptor
 
     emit_aarch64_handle_lookup(emitter, "__rt_uwfclose_clear");                 // resolve obj into x0, fall through to slot-clear on missing handles
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_stream_close_silent", 0);
+    emitter.instruction("cbnz x9, __rt_uwfclose_clear");                        // native-extension exception cleanup retires the handle without PHP callbacks
     emit_aarch64_method_lookup(emitter, "__rt_uwfclose_clear", VTABLE_SLOT_CLOSE); // resolve stream_close method pointer into x11
 
     // -- call stream_close($this) --
@@ -96,6 +98,9 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the synthetic file descriptor
 
     emit_x86_handle_lookup(emitter, "__rt_uwfclose_clear_x86");                 // resolve obj into rdi, fall through on missing handles
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_stream_close_silent", 0);
+    emitter.instruction("test r9, r9");                                         // check the native-extension exception cleanup mode
+    emitter.instruction("jnz __rt_uwfclose_clear_x86");                         // retire the handle without invoking PHP while unwinding
     emit_x86_method_lookup(emitter, "__rt_uwfclose_clear_x86", VTABLE_SLOT_CLOSE); // resolve stream_close method pointer into r11
 
     // -- call stream_close($this) --
@@ -646,7 +651,7 @@ fn emit_user_wrapper_ftruncate_linux_x86_64(emitter: &mut Emitter) {
 /// `__rt_user_wrapper_url_stat` (url_stat).
 ///
 /// The vtable erases the method's static return type, so the shape is inspected
-/// at runtime via the heap-kind byte: `0` (scalar `false`/null) → boxed
+/// at runtime via the safe heap-kind probe: scalar/foreign values become boxed
 /// `false`; kind 5 (already a boxed Mixed cell, e.g. an `array|false` return) →
 /// returned verbatim; kind 3 (associative hash — the usual stat array) → boxed
 /// as a tag-5 Mixed; kind 2 (indexed array) → boxed as a tag-4 Mixed; any other
@@ -671,7 +676,10 @@ pub fn emit_box_wrapper_stat_result(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
     emitter.instruction("cbz x0, __rt_bwsr_false");                             // scalar false/null return → boxed false
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the returned value's heap-kind word
+    emitter.instruction("str x0, [sp, #16]");                                   // preserve the erased return while validating whether it is heap-backed
+    abi::emit_call_label(emitter, "__rt_heap_kind");                            // reject scalar and foreign returns before probing heap metadata
+    emitter.instruction("mov x9, x0");                                          // retain the validated kind tag
+    emitter.instruction("ldr x0, [sp, #16]");                                   // restore the original array or Mixed pointer
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low heap-kind byte
     emitter.instruction("cmp x9, #5");                                          // already a boxed Mixed cell (e.g. array|false return)?
     emitter.instruction("b.eq __rt_bwsr_ret");                                  // return it verbatim — ownership transfers to the caller
@@ -722,7 +730,10 @@ fn emit_box_wrapper_stat_result_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rax, rax");                                       // scalar false/null return?
     emitter.instruction("jz __rt_bwsr_false_x86");                              // → boxed false
-    emitter.instruction("mov r9, QWORD PTR [rax - 8]");                         // load the returned value's heap-kind word
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the erased return across the safe heap-kind query
+    abi::emit_call_label(emitter, "__rt_heap_kind");                            // reject scalar and foreign returns before probing heap metadata
+    emitter.instruction("mov r9, rax");                                         // retain the validated kind tag
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the original array or Mixed pointer
     emitter.instruction("and r9, 0xff");                                        // isolate the low heap-kind byte
     emitter.instruction("cmp r9, 5");                                           // already a boxed Mixed cell (e.g. array|false return)?
     emitter.instruction("je __rt_bwsr_ret_x86");                                // return it verbatim — ownership transfers to the caller

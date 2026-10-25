@@ -195,7 +195,7 @@ unset($db, $raw);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Network inputs inspect response bytes and use the stream layer's HTTP context options.
+/// Network opens preserve HTTP context options but PHP 8.5 rejects streams without stream stat.
 #[test]
 fn test_fileinfo_network_stream_context() {
     use std::io::{Read, Write};
@@ -217,9 +217,11 @@ fn test_fileinfo_network_stream_context() {
     let out = compile_and_run(&format!(r#"<?php
 $context = stream_context_create(["http" => ["method" => "POST", "header" => "X-Fileinfo: yes\r\n"]]);
 $f = new finfo(FILEINFO_MIME_TYPE);
-echo $f->file("http://127.0.0.1:{port}/payload", 0, $context);
+set_error_handler(function(int $n, string $message): bool {{ echo "unexpected:", $message; return true; }});
+echo $f->file("http://127.0.0.1:{port}/payload", 0, $context) === false ? "unstatable" : "bad";
+restore_error_handler();
 "#));
-    assert_eq!(out, "text/plain");
+    assert_eq!(out, "unstatable");
     let request = server.join().unwrap();
     assert!(request.starts_with("POST /payload HTTP/"), "{request}");
     assert!(request.contains("X-Fileinfo: yes\r\n"), "{request}");

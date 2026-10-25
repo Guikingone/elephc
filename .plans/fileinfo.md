@@ -47,7 +47,7 @@ retain ValueError for database NULs, platform-dependent flag validity, warned
 unknown-scheme local fallback and the illegal-parameter data URL reason. Later
 review rounds accepted those decisions.
 
-There are now 39 fileinfo execution tests, seven native bridge tests and a TLS
+There are now 42 fileinfo execution tests, seven native bridge tests and a TLS
 regression. New tests remain unexecuted until CI. PHP 8.5.12 reference oracles,
 static documentation audits and diff checks pass. The six generated builtin
 source anchors are unchanged; the compatibility table still reports 6/6
@@ -66,3 +66,17 @@ registries without a local build. Audits pass with 1082 catalog functions and
 2316 generated pages. Exporter parity and executable validation remain CI gates.
 Local corrections have not been pushed during this external review phase.
 No local builds or compiled tests were run; task-owned oracle files were removed.
+
+
+Grok round 6 (9660cadf-7936-4842-a6c5-405c8f875e80) accepted the integration
+and earlier fixes, then identified two P2 stream-stat defects. URL queries now
+create filters before stat and read user wrappers only after stat succeeds. A
+missing stat method uses the active public function and concrete wrapper class
+in its warning; failed stat is silent false. Directory identity bypasses magic.
+Already-open mime_content_type resources retain their direct read behavior.
+Successful network and compressed opens without stat return false. Pending
+streams and prepared filter stages are query-local and close on all paths;
+native exception cleanup suppresses stream-close callbacks as PHP does and
+restores normal close behavior afterward. New codegen coverage and PHP reference
+oracles cover stat results, callback ordering, exceptions, mode coercion and
+all HTTP URL entry points. Compiled tests and exporter parity remain CI gates.

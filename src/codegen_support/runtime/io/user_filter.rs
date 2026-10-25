@@ -680,6 +680,8 @@ pub fn emit_user_filter_release_fd(emitter: &mut Emitter) {
         abi::emit_symbol_address(emitter, "x9", "_user_filter_instances");
         emitter.instruction("ldr x11, [x9, x10, lsl #3]");                      // obj at instances[slot]
         emitter.instruction(&format!("cbz x11, {}", skip));                     // no instance attached → skip
+        abi::emit_load_symbol_to_reg(emitter, "x14", "_stream_close_silent", 0);
+        emitter.instruction(&format!("cbnz x14, {}", no_method));               // native-extension exception cleanup clears filters without callbacks
         // Look up onClose method (vtable slot 2 = offset 16).
         emitter.instruction("ldr x12, [x11]");                                  // class_id at obj head
         abi::emit_symbol_address(emitter, "x13", "_user_filter_vtable_ptrs");
@@ -714,8 +716,11 @@ fn emit_user_filter_release_fd_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
-    emitter.instruction("sub rsp, 16");                                         // allocate runtime stack frame
+    emitter.instruction("sub rsp, 48");                                         // allocate runtime stack frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save fd
+    emitter.instruction("mov QWORD PTR [rbp - 16], r12");                       // preserve the SysV callee-saved register across filter close callbacks
+    emitter.instruction("mov QWORD PTR [rbp - 24], r13");                       // preserve the SysV callee-saved register across filter close callbacks
+    emitter.instruction("mov QWORD PTR [rbp - 32], r14");                       // preserve the SysV callee-saved register across filter close callbacks
 
     for dir in 0..2usize {
         let skip = format!("__rt_ufrf_dir{}_skip_x86", dir);
@@ -730,6 +735,9 @@ fn emit_user_filter_release_fd_linux_x86_64(emitter: &mut Emitter) {
         emitter.instruction("mov r11, QWORD PTR [r9 + r10 * 8]");               // obj
         emitter.instruction("test r11, r11");                                   // check whether the runtime value is zero
         emitter.instruction(&format!("jz {}", skip));                           // branch when the checked value is zero or equal
+        abi::emit_load_symbol_to_reg(emitter, "r14", "_stream_close_silent", 0);
+        emitter.instruction("test r14, r14");                                   // check the native-extension exception cleanup mode
+        emitter.instruction(&format!("jnz {}", no_method));                     // clear the filter instance without invoking PHP while unwinding
         emitter.instruction("mov r12, QWORD PTR [r11]");                        // class_id
         abi::emit_symbol_address(emitter, "r13", "_user_filter_vtable_ptrs");   // load runtime data address
         emitter.instruction("mov r13, QWORD PTR [r13 + r12 * 8]");              // vtable
@@ -752,7 +760,10 @@ fn emit_user_filter_release_fd_linux_x86_64(emitter: &mut Emitter) {
     }
 
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // preserve fd
-    emitter.instruction("add rsp, 16");                                         // release runtime stack frame
+    emitter.instruction("mov r12, QWORD PTR [rbp - 16]");                       // restore the caller's preserved register
+    emitter.instruction("mov r13, QWORD PTR [rbp - 24]");                       // restore the caller's preserved register
+    emitter.instruction("mov r14, QWORD PTR [rbp - 32]");                       // restore the caller's preserved register
+    emitter.instruction("add rsp, 48");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
 }
