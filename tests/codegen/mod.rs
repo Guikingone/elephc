@@ -15,6 +15,7 @@ mod buffer_arrays;
 mod buffer_merges;
 mod static_buffer_properties;
 mod packed_nested_fields;
+mod packed_field_narrowing;
 mod data_widths;
 mod generics;
 mod generics_review;
