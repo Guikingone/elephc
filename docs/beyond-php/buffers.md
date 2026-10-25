@@ -162,8 +162,50 @@ $store = new Store<Vec2>(buffer_new<Vec2>(16));
 ```
 
 Packed element fields and whole scalar elements can be written through a
-buffer-typed property, as in `moveX()` and `setId()` above. A static property
-cannot hold a buffer yet.
+buffer-typed property, as in `moveX()` and `setId()` above.
+
+### Static buffer properties
+
+A static property can hold a buffer too, which suits engine-wide data such as lookup
+tables and scratch space that every caller shares:
+
+```php
+<?php
+packed class Vec2 { public float $x; public float $y; }
+
+final class Tables {
+    public static buffer<float> $squares;
+    public static buffer<Vec2> $points;
+
+    public static function init(int $n): void {
+        self::$squares = buffer_new<float>($n);
+        self::$points = buffer_new<Vec2>($n);
+        for ($i = 0; $i < $n; $i++) {
+            self::$squares[$i] = $i * $i * 1.0;
+            self::$points[$i]->x = $i * 0.5;
+        }
+    }
+}
+
+Tables::init(8);
+echo Tables::$squares[3];          // 9
+Tables::$squares[3] += 1.0;        // whole-element write through the static slot
+Tables::$points[2]->y = 4.0;       // packed field write through the static slot
+echo buffer_len(Tables::$points);  // 8
+```
+
+The slot holds the buffer handle, as an instance property or a local does: element reads and
+writes (including compound assignments, `++` and `--`), packed field access, `buffer_len()`,
+`buffer_ptr()` and passing the buffer to a function all work through `Class::$prop`,
+`self::$prop` and `static::$prop`, and `static::` picks the slot of a subclass that
+redeclares the property. A typed static buffer property has no default, so it is
+uninitialized until its first assignment: `isset()` answers `false`, and a read throws
+`Error: Typed static property Tables::$squares must not be accessed before initialization`.
+Assigning another buffer replaces the handle only. The previous buffer is not freed and stays
+valid through any other variable that holds it. `buffer_free()` takes a local, so free a
+static buffer through a copy (`$b = Tables::$squares; buffer_free($b);`); the property then
+holds a stale handle, and using it aborts with the use-after-free error below. Static `ptr`
+and `ptr<T>` properties work the same way (see [Pointers](pointers.md#null-safety)).
 
 ## Choosing a buffer
 
@@ -211,10 +253,11 @@ A `throw` arm can sit beside the buffer arms. Every other arm must have the same
 `mixed` form that could still be indexed. As in PHP, an element of the merge itself cannot be
 assigned (`($a ? $b : $c)[0] = 1.0` is rejected): assign the merge to a local and write through
 the local, or write a packed field (`(...)[0]->x = 1.0`) as above. `examples/buffer-double-buffering`
-runs this pattern. One gap remains: a `??` whose left side is a `buffer<T>` property reads that
-property through the probe that keeps an uninitialized property from raising, and the probe still
-boxes the handle, so an element read through `$o->a ?? $o->b` answers null. Pick between buffer
-properties with a ternary or `match`, or copy the property into a local first.
+runs this pattern. One gap remains: a `??` whose left side is a `buffer<T>` property, instance or
+static, reads that property through the probe that keeps an uninitialized property from raising,
+and the probe still boxes the handle, so an element read through `$o->a ?? $o->b` or
+`P::$a ?? P::$b` answers null. Pick between buffer properties with a ternary or `match`, or copy
+the property into a local first.
 
 A buffer in a condition (`if ($buf)`, `$buf ?: $other`, `!$buf`, `(bool) $buf`) tests its handle,
 not its length or its contents: every buffer `buffer_new<T>()` returns is true, while the invalid

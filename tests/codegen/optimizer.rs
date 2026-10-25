@@ -84,6 +84,8 @@ mod fresh_mixed_transfer;
 mod release_local_slot;
 #[path = "optimizer/inline.rs"]
 mod inline;
+#[path = "optimizer/method_inline.rs"]
+mod method_inline;
 #[path = "optimizer/integer_range.rs"]
 mod integer_range;
 #[path = "optimizer/memory_model_propagation.rs"]
@@ -91,6 +93,8 @@ mod memory_model_propagation;
 #[path = "optimizer/mem2reg.rs"]
 mod mem2reg;
 mod buffer_access;
+mod buffer_property_reuse;
+mod buffer_property_loops;
 #[path = "optimizer/warning_globals.rs"]
 mod warning_globals;
 
@@ -108,3 +112,5 @@ mod stack_numeric;
 mod numeric_continuation;
 #[path = "optimizer/reused_loop_counters.rs"]
 mod reused_loop_counters;
+#[path = "optimizer/loop_counter_checked_bounds.rs"]
+mod loop_counter_checked_bounds;

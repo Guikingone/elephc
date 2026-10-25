@@ -458,6 +458,12 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// When set, loop facts reuse `numeric_closure_sites` instead of seeding
     /// another proof from the now-Mixed slots.
     pub(crate) numeric_proof_sealed: bool,
+    /// Named storage epochs of counters whose checked-arithmetic seed (`$j = $i + 1`) the
+    /// numeric storage proof showed always fits an integer, keyed like `final_mixed_locals`.
+    ///
+    /// Set on replay only (`numeric_storage::lower_body`); `lower_assign` then records such a seed
+    /// as `int`, so the loop reads the counter exactly as after a `$j = 0` seed.
+    pub(crate) int_seed_bindings: HashMap<String, HashSet<usize>>,
     /// Locals bound to a pointer by-reference parameter, checked against their final frame
     /// storage once the body is lowered (`refuse_pointer_reference_bindings`).
     pointer_reference_bindings: Vec<PointerReferenceBinding>,
@@ -617,6 +623,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             numeric_tracked_locals: HashSet::new(),
             final_mixed_locals: HashMap::new(),
             numeric_proof_sealed: false,
+            int_seed_bindings: HashMap::new(),
             pointer_reference_bindings: Vec::new(),
             source_path,
         }
@@ -1074,6 +1081,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Applies a replay constraint only to its original binding, including before the first store.
     pub(crate) fn is_final_mixed_local(&self, name: &str) -> bool {
         self.final_mixed_locals.get(name).is_some_and(|bindings| {
+            bindings.contains(&self.local_binding_ordinal(name, self.local_slots.get(name).copied()))
+        })
+    }
+
+    /// Returns whether the current binding of `name` is a counter with a proven integer seed.
+    ///
+    /// Resolved like `is_final_mixed_local`, so the answer also holds before the binding's first
+    /// store mints its slot.
+    pub(crate) fn is_int_seed_binding(&self, name: &str) -> bool {
+        self.int_seed_bindings.get(name).is_some_and(|bindings| {
             bindings.contains(&self.local_binding_ordinal(name, self.local_slots.get(name).copied()))
         })
     }

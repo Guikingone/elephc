@@ -96,9 +96,8 @@ fn merge_arm_type(ctx: &LoweringContext<'_, '_>, arm: &Expr) -> PhpType {
 /// the way it types a `[null]` local: beside a pointer array the `null` element joins into
 /// `?ptr<T>`, so `$ps ?: f()`, `$m ?? f()` and `$ps ?: (f() ?? [])` keep pointer storage and the
 /// call result is converted into it. A merge whose arms are all such calls keeps `array<void>`, as
-/// on main. The
-/// call may be suppressed, assigned, or made through a local statically bound to the function
-/// (`$f = f(...); $f()`), as `materialized_expr_type_for_merge` reads those shapes.
+/// on main. The call may be suppressed, assigned, or made through a local statically bound to
+/// the function (`$f = f(...); $f()`), as `materialized_expr_type_for_merge` reads those shapes.
 pub(super) fn null_only_call_merge_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpType> {
     let mut call = expr;
     loop {
@@ -128,29 +127,6 @@ pub(super) fn null_only_call_merge_type(ctx: &LoweringContext<'_, '_>, expr: &Ex
     let checker = crate::types::dynamic_params::caller_visible_checker_return_type(signature);
     (crate::types::dynamic_params::null_only_container_return_storage(&checker) != checker)
         .then_some(checker)
-}
-
-/// The type an arm contributes to the ordinary merge: a literal of buffers keeps its contextual
-/// type, every other literal the syntactic fallback it always had, and any other arm the
-/// materialized type `merge_arm_type` found.
-fn generic_arm_type(arm: &Expr, contextual: &PhpType) -> PhpType {
-    if matches!(arm.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) {
-        buffer_container_or_fallback(contextual.clone(), arm)
-    } else {
-        contextual.clone()
-    }
-}
-
-/// Keeps `ty` when it is an array or hash of buffer handles, otherwise answers the syntactic
-/// fallback type of `expr`, as every other literal is typed for a merge.
-fn buffer_container_or_fallback(ty: PhpType, expr: &Expr) -> PhpType {
-    let is_buffer_container = super::indexed_array_literals::literal_raw_word_element_type(&ty)
-        .is_some_and(|elem| matches!(elem, PhpType::Buffer(_)));
-    if is_buffer_container {
-        ty
-    } else {
-        fallback_expr_type(expr)
-    }
 }
 
 /// Returns the `buffer<T>` type every arm that completes shares, if they all hold the same one.
@@ -194,9 +170,8 @@ pub(super) fn branch_merge_result_type(
     if let Some(buffer) = shared_buffer_merge_type(&arms) {
         return buffer;
     }
-    let then_ty = generic_arm_type(then_expr, &arms[0].1);
-    let else_ty = generic_arm_type(else_expr, &arms[1].1);
-    let branch_ty = nullable_aware_branch_merge_type(&then_ty, &else_ty);
+    let [(_, then_ty), (_, else_ty)] = &arms;
+    let branch_ty = nullable_aware_branch_merge_type(then_ty, else_ty);
     // A pointer merge (a `ptr<T>` or packed record address on both sides) is already exact; the
     // syntactic fallback would answer `int` for the ternary and widen the word into `Mixed`.
     if php_type_allows_null(&branch_ty)
@@ -230,8 +205,8 @@ pub(super) fn match_merge_result_type(
         return buffer;
     }
     let mut merged: Option<PhpType> = None;
-    for (result, contextual) in &typed_arms {
-        let arm_ty = generic_arm_type(result, contextual);
+    for (_, arm_ty) in &typed_arms {
+        let arm_ty = arm_ty.clone();
         merged = Some(match merged {
             Some(acc) => nullable_aware_branch_merge_type(&acc, &arm_ty),
             None => arm_ty,
@@ -267,14 +242,13 @@ pub(super) fn short_ternary_merge_result_type(
             return buffer;
         }
     }
-    let value_ty = generic_arm_type(value, &arms[0].1);
-    let default_ty = generic_arm_type(default, &arms[1].1);
+    let [(_, value_ty), (_, default_ty)] = &arms;
     // A `?ptr<T>` side keeps the merge nullable: its codegen form is the bare pointer word, and
     // joining that would type a null result as a set pointer.
-    if crate::types::is_nullable_pointer_type(&value_ty)
-        || crate::types::is_nullable_pointer_type(&default_ty)
+    if crate::types::is_nullable_pointer_type(value_ty)
+        || crate::types::is_nullable_pointer_type(default_ty)
     {
-        return nullable_aware_branch_merge_type(&value_ty, &default_ty);
+        return nullable_aware_branch_merge_type(value_ty, default_ty);
     }
     materialized_merge_type(&value_ty.codegen_repr(), &default_ty.codegen_repr())
 }
@@ -440,15 +414,12 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
                 .or_else(|| property_access_expr_type_for_ir(ctx, object, property))
                 .unwrap_or_else(|| fallback_expr_type(expr))
         }
-        // Only a `?ptr<T>` static property is resolved here, so its null member survives the
-        // merge; other static reads keep the syntactic answer.
+        // A static property holding one raw word is resolved here: a `?ptr<T>` keeps its null
+        // member through the merge, and a `buffer<T>` or `ptr<T>` keeps its handle or address
+        // instead of the syntactic `int`. Other static reads keep the syntactic answer.
         ExprKind::StaticPropertyAccess { receiver, property } => {
-            let loaded = static_property_result_type(ctx, receiver, property, expr);
-            if crate::types::is_nullable_pointer_type(&loaded) {
-                loaded
-            } else {
-                fallback_expr_type(expr)
-            }
+            static_property_word_type(ctx, receiver, property, expr)
+                .unwrap_or_else(|| fallback_expr_type(expr))
         }
         // Calls are typed from the return metadata their own lowering uses. The syntactic
         // fallback answers `int` for every call outside its builtin allowlist, and a merge temp
@@ -468,16 +439,15 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         }
         ExprKind::ClosureCall { var, .. } => closure_call_type_for_merge(ctx, var),
         ExprKind::ExprCall { .. } => PhpType::Mixed,
-        // A literal of buffers keeps its context-aware type: the syntactic fallback would type
-        // the handles as integers, and a merge with `null` or a `??` default would then box the
-        // array into cells that the buffer readers take for handles.
-        ExprKind::ArrayLiteral(items) => {
-            buffer_container_or_fallback(array_literal_type_for_ir(ctx, items, expr), expr)
+        // A literal is typed by the context-aware literal typer, the element storage its own
+        // lowering builds. The syntactic fallback types a buffer handle, a float local or a packed
+        // field read `int`, so a merge temp typed from it stored the literal under an int element
+        // type (no container coercion converts between typed elements) and read the payload bits
+        // back as integers, or boxed buffer handles into cells the buffer readers took for handles.
+        ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, expr),
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            super::assoc_array_literals::assoc_array_literal_type_for_ir(ctx, pairs, expr)
         }
-        ExprKind::ArrayLiteralAssoc(pairs) => buffer_container_or_fallback(
-            super::assoc_array_literals::assoc_array_literal_type_for_ir(ctx, pairs, expr),
-            expr,
-        ),
         _ => fallback_expr_type(expr),
     }
 }
