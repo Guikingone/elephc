@@ -18,10 +18,12 @@ fn invalid(message: &str) -> Vec<Stmt> {
 
 /// Decodes a data URL into bytes for the runtime stream reader.
 pub(super) fn data_uri() -> Stmt {
-    s_if(e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("filename")]), e_str("data://")]), vec![
+    s_if(e_binop(e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("filename")]), e_str("data://")]), BinOp::Or,
+        e_call("str_starts_with", vec![e_var("filename"), e_str("data:")])), vec![
+        s_assign("_uri_start", e_ternary(e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("filename")]), e_str("data://")]), e_int(7), e_int(5))),
         s_assign("_uri_comma", e_call("strpos", vec![e_var("filename"), e_str(",")])),
         s_if(e_binop(e_var("_uri_comma"), BinOp::StrictEq, e_bool(false)), invalid("Invalid data URL: missing comma"), vec![], None),
-        s_assign("_uri_meta", e_call("substr", vec![e_var("filename"), e_int(7), e_binop(e_var("_uri_comma"), BinOp::Sub, e_int(7))])),
+        s_assign("_uri_meta", e_call("substr", vec![e_var("filename"), e_var("_uri_start"), e_binop(e_var("_uri_comma"), BinOp::Sub, e_var("_uri_start"))])),
         s_assign("_uri_base64", e_bool(false)),
         metadata(),
         s_assign("_uri_payload", e_call("substr", vec![e_var("filename"), e_binop(e_var("_uri_comma"), BinOp::Add, e_int(1))])),

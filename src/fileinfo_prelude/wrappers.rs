@@ -51,6 +51,7 @@ fn filtered_url() -> Stmt {
             ], vec![], None),
             s_foreach(e_call("explode", vec![e_str("|"), e_var("_part")]), None, "_filter", vec![
                 s_if(eq(e_var("_filter"), e_str("")), vec![s_continue(1)], vec![], None),
+                s_assign("_filter", e_index(e_call("explode", vec![e_str("\0"), e_call("urldecode", vec![e_var("_filter")])]), e_int(0))),
                 // Keep the fallible result boxed while the loop's byte accumulator stays string-typed.
                 s_assign("_stage", e_array(vec![
                     e_method_call(e_this(), "__elephc_filter_bytes", vec![e_var("_data"), e_var("_filter")]), e_bool(true),

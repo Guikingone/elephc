@@ -36,7 +36,46 @@ fn fileinfo_native_failure_restores_flags() {
         let h = open();
         elephc_fileinfo_file(h, c"/elephc-fileinfo-missing/file".as_ptr(), 1024);
         assert_eq!(elephc_fileinfo_ok(), 0);
+        assert_eq!(elephc_fileinfo_open_failed(), 1);
+        assert_eq!(CStr::from_ptr(elephc_fileinfo_error()).to_bytes(), b"No such file or directory");
         assert_eq!(CStr::from_ptr(elephc_fileinfo_buffer(h, c"hello".as_ptr(), 5, 0)).to_bytes(), b"text/plain");
+        assert_eq!(elephc_fileinfo_open_failed(), 0);
+        elephc_fileinfo_free(h);
+    }
+}
+
+/// Directory results require a successful open and ignore MIME flags after descriptor stat.
+#[test]
+fn fileinfo_native_directory_open_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct Directory(std::path::PathBuf);
+    impl Drop for Directory {
+        /// Restores access before removing exactly this test's empty directory.
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+            let _ = std::fs::remove_dir(&self.0);
+        }
+    }
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let directory = Directory(std::env::temp_dir().join(format!("elephc-fileinfo-dir-{}-{nonce}", std::process::id())));
+    std::fs::create_dir(&directory.0).unwrap();
+    std::fs::set_permissions(&directory.0, std::fs::Permissions::from_mode(0)).unwrap();
+    let can_open = std::fs::File::open(&directory.0).is_ok();
+    let path = CString::new(directory.0.as_os_str().as_bytes()).unwrap();
+    unsafe {
+        let h = open();
+        let result = elephc_fileinfo_file(h, path.as_ptr(), 16);
+        assert_eq!(elephc_fileinfo_ok(), i64::from(can_open));
+        if can_open {
+            assert_eq!(CStr::from_ptr(result).to_bytes(), b"directory");
+        } else {
+            assert_eq!(elephc_fileinfo_open_failed(), 1);
+        }
+        std::fs::set_permissions(&directory.0, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(CStr::from_ptr(elephc_fileinfo_file(h, path.as_ptr(), 16)).to_bytes(), b"directory");
+        assert_eq!(elephc_fileinfo_ok(), 1);
         elephc_fileinfo_free(h);
     }
 }

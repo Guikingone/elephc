@@ -64,6 +64,7 @@ thread_local! {
     static RESULT: RefCell<CString> = RefCell::new(CString::default());
     static ERROR: RefCell<CString> = RefCell::new(CString::default());
     static SUCCESS: RefCell<bool> = const { RefCell::new(false) };
+    static OPEN_FAILURE: RefCell<bool> = const { RefCell::new(false) };
 }
 
 /// Copies a native string before libmagic can invalidate its backing storage.
@@ -73,6 +74,7 @@ unsafe fn copy_string(value: *const c_char) -> CString {
 
 /// Stores a call's outcome without returning storage shared with other threads.
 fn outcome(result: Option<CString>, error: CString) {
+    OPEN_FAILURE.with(|slot| *slot.borrow_mut() = false);
     SUCCESS.with(|slot| *slot.borrow_mut() = result.is_some());
     RESULT.with(|slot| *slot.borrow_mut() = result.unwrap_or_default());
     ERROR.with(|slot| *slot.borrow_mut() = error);
@@ -90,7 +92,7 @@ pub unsafe extern "C" fn elephc_fileinfo_open(flags: i64, path: *const c_char) -
     guard(|| {
         let cookie = magic_open(flags as c_int);
         if cookie.is_null() {
-            outcome(None, CString::new("Invalid mode").unwrap());
+            outcome(None, CString::new(format!("Invalid mode '{flags}'.")).unwrap());
             return 0;
         }
         let instance = Magic(cookie as usize);
@@ -98,7 +100,10 @@ pub unsafe extern "C" fn elephc_fileinfo_open(flags: i64, path: *const c_char) -
             elephc_magic_load_default(cookie)
         } else { magic_load(cookie, path) };
         if loaded != 0 {
-            outcome(None, copy_string(magic_error(cookie)));
+            let mut message = b"Failed to load magic database at \"".to_vec();
+            if !path.is_null() { message.extend_from_slice(CStr::from_ptr(path).to_bytes()); }
+            message.push(b'"');
+            outcome(None, CString::new(message).unwrap_or_default());
             return 0;
         }
         let mut state = registry().lock().unwrap_or_else(|e| e.into_inner());
@@ -147,11 +152,19 @@ unsafe fn query(handle: i64, data: *const c_char, length: i64, flags: i64, file:
             Ok(input) => Some(input),
             Err(error) => {
                 magic_setflags(cookie, old);
-                outcome(None, CString::new(error.to_string()).unwrap_or_default());
+                let message = error.to_string();
+                let suffix = error.raw_os_error().map(|code| format!(" (os error {code})")).unwrap_or_default();
+                outcome(None, CString::new(message.strip_suffix(&suffix).unwrap_or(&message)).unwrap_or_default());
+                OPEN_FAILURE.with(|slot| *slot.borrow_mut() = true);
                 return;
             }
         }
     } else { None };
+    if input.as_ref().is_some_and(|file| file.metadata().is_ok_and(|metadata| metadata.is_dir())) {
+        magic_setflags(cookie, old);
+        outcome(Some(CString::new("directory").unwrap()), CString::default());
+        return;
+    }
     let result = if let Some(input) = &input { magic_descriptor(cookie, input.as_raw_fd()) } else {
         magic_buffer(cookie, data.cast(), length.max(0) as usize)
     };
@@ -186,6 +199,10 @@ pub extern "C" fn elephc_fileinfo_ok() -> i64 { SUCCESS.with(|slot| i64::from(*s
 /// Returns the calling thread's last copied native error message.
 #[no_mangle]
 pub extern "C" fn elephc_fileinfo_error() -> *const c_char { ERROR.with(|slot| slot.borrow().as_ptr()) }
+
+/// Distinguishes descriptor-open failures from magic errors for PHP stream warning formatting.
+#[no_mangle]
+pub extern "C" fn elephc_fileinfo_open_failed() -> i64 { OPEN_FAILURE.with(|slot| i64::from(*slot.borrow())) }
 
 #[cfg(all(test, elephc_fileinfo_native))]
 mod tests;

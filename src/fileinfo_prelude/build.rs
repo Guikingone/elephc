@@ -22,8 +22,8 @@ fn reject(condition: Expr, class: &str, message: &str) -> Stmt {
     s_if(condition, vec![s_throw(e_new_fq(class, vec![e_str(message)]))], vec![], None)
 }
 /// Emits a PHP warning and returns false for a recoverable native failure.
-fn failure() -> Vec<Stmt> {
-    vec![s_expr(e_call("__elephc_builtin_warning", vec![concat(concat(e_var("_function"), e_str("(): ")), e_call("elephc_fileinfo_error", vec![]))])), s_return(e_bool(false))]
+fn failure(file: bool) -> Vec<Stmt> {
+    query_failure(file)
 }
 /// Requires a valid object handle before each operation.
 fn require_handle() -> Vec<Stmt> {
@@ -31,8 +31,8 @@ fn require_handle() -> Vec<Stmt> {
 }
 /// Validates the nullable resource accepted by fileinfo query methods.
 fn context_check() -> Stmt {
-    reject(e_binop(e_binop(e_var("context"), BinOp::StrictNotEq, e_null()), BinOp::And,
-        e_not(e_call("is_resource", vec![e_var("context")]))), "TypeError", "Fileinfo context must be of type resource or null")
+    s_if(non_resource_context(),
+        context_type_error(e_var("_function")), vec![], None)
 }
 
 /// Emits PHP 8.5 deprecations while leaving older selected profiles unchanged.
@@ -51,13 +51,13 @@ fn query_engine(file: bool) -> crate::synthetic_class::MethodBuilder {
     body.push(context_check());
     if file {
         body.extend([
-            reject(e_binop(e_binop(e_var("context"), BinOp::StrictNotEq, e_null()), BinOp::And,
-                e_binop(e_call("get_resource_type", vec![e_var("context")]), BinOp::StrictNotEq, e_str("stream-context"))), "TypeError", "finfo::file(): context must be a stream context resource"),
+            s_if(e_binop(e_binop(e_var("context"), BinOp::StrictNotEq, e_null()), BinOp::And,
+                e_binop(e_call("get_resource_type", vec![e_var("context")]), BinOp::StrictNotEq, e_str("stream-context"))), vec![s_throw(e_new_fq("TypeError", vec![concat(e_var("_function"), e_str("(): supplied resource is not a valid Stream-Context resource"))]))], vec![], None),
             filename_check(false),
             filename_check(true),
+            s_assign("_source_filename", e_var(parameter)),
             super::streams::file_uri(),
-            s_if(e_call("is_dir", vec![e_var(parameter)]), vec![s_return(e_str("directory"))], vec![], None),
-            s_if(e_binop(e_call("strpos", vec![e_var(parameter), e_str("://")]), BinOp::StrictNotEq, e_bool(false)), vec![
+            s_if(e_binop(e_binop(e_call("strpos", vec![e_var(parameter), e_str("://")]), BinOp::StrictNotEq, e_bool(false)), BinOp::Or, e_call("str_starts_with", vec![e_var(parameter), e_str("data:")])), vec![
                 s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![e_var(parameter), e_var("context")])),
                 s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
                 s_return(e_method_call(e_this(), "__elephc_buffer", vec![e_var("_function"), e_var("_data"), e_var("flags")])),
@@ -67,7 +67,7 @@ fn query_engine(file: bool) -> crate::synthetic_class::MethodBuilder {
     } else {
         body.push(s_assign("_result", e_call("elephc_fileinfo_buffer", vec![e_var("_raw"), e_var(parameter), e_call("strlen", vec![e_var(parameter)]), e_var("flags")])));
     }
-    body.push(s_if(eq(e_call("elephc_fileinfo_ok", vec![]), e_int(0)), failure(), vec![], None));
+    body.push(s_if(eq(e_call("elephc_fileinfo_ok", vec![]), e_int(0)), failure(file), vec![], None));
     body.push(s_return(e_var("_result")));
     method(&format!("__elephc_{name}")).final_().param("_function", TypeExpr::Str).param(parameter, TypeExpr::Str)
         .param_default("flags", TypeExpr::Int, e_int(0))
@@ -79,7 +79,7 @@ fn query_method(file: bool) -> crate::synthetic_class::MethodBuilder {
     let (name, parameter) = if file { ("file", "filename") } else { ("buffer", "string") };
     let mut body = Vec::new();
     if !file {
-        body.push(deprecated("finfo::buffer(): The $context parameter has no effect for finfo_buffer()", Some(2)));
+        body.push(buffer_context("finfo::buffer", 2));
     }
     body.push(s_return(e_method_call(e_this(), &format!("__elephc_{name}"), vec![
         e_str(&format!("finfo::{name}")), e_var(parameter), e_var("flags"), e_var("context"),
@@ -99,7 +99,7 @@ fn finfo_class() -> Stmt {
         s_prop_assign(e_this(), "__elephc_owner", e_null()),
         s_assign("_raw", e_call("elephc_fileinfo_open", vec![e_var("flags"), e_var("_database")])),
     ];
-    constructor.push(s_if(eq(e_var("_raw"), e_int(0)), vec![s_throw(e_new_fq("Exception", vec![e_call("elephc_fileinfo_error", vec![])]))], vec![], None));
+    constructor.push(s_if(eq(e_var("_raw"), e_int(0)), vec![s_throw(e_new_fq("ErrorException", vec![concat(e_str("finfo::__construct(): "), e_call("elephc_fileinfo_error", vec![])), e_int(0), e_const("E_WARNING")]))], vec![], None));
     constructor.push(s_prop_assign(e_this(), "__elephc_owner", e_new_fq("__ElephcFinfoHandle", vec![e_var("_raw")])));
     constructor.push(s_prop_assign(e_this(), "__elephc_handle", e_var("_raw")));
     let mut set_flags = require_handle();
@@ -145,8 +145,8 @@ fn functions() -> Program {
             .param_default("magic_database", t_nullable(TypeExpr::Str), e_null())
             .returns(t_union(vec![t_class("finfo"), TypeExpr::False]))
             .body(vec![s_try(vec![s_return(e_new_fq("finfo", vec![e_var("flags"), e_var("magic_database")]))],
-                vec![(vec!["Exception"], Some("_error"), vec![
-                    s_expr(e_call("__elephc_builtin_warning", vec![e_method_call(e_var("_error"), "getMessage", vec![])])),
+                vec![(vec!["ErrorException"], Some("_error"), vec![
+                    s_expr(e_call("__elephc_builtin_warning", vec![concat(e_str("finfo_open(): "), e_call("substr", vec![e_method_call(e_var("_error"), "getMessage", vec![]), e_int("finfo::__construct(): ".len() as i64)]))])),
                     s_return(e_bool(false)),
                 ])], None)]).build(),
         function("finfo_close").param("finfo", t_class("finfo")).returns(TypeExpr::Bool).body(vec![
@@ -159,7 +159,7 @@ fn functions() -> Program {
     out.push(function("finfo_buffer").param("finfo", t_class("finfo")).param("string", TypeExpr::Str)
         .param_default("flags", TypeExpr::Int, e_int(0)).param_default("context", t_mixed(), e_null())
         .returns(result_type()).body(vec![
-            deprecated("finfo_buffer(): The $context parameter has no effect for finfo_buffer()", Some(3)),
+            buffer_context("finfo_buffer", 3),
             s_return(e_method_call(e_var("finfo"), "__elephc_buffer", vec![e_str("finfo_buffer"), e_var("string"), e_var("flags"), e_var("context")])),
         ]).build());
     out.push(function("finfo_file").param("finfo", t_class("finfo")).param("filename", TypeExpr::Str)
@@ -195,6 +195,7 @@ pub(super) fn declarations() -> Program {
             extern_fn("elephc_fileinfo_buffer", "elephc_fileinfo").param("handle", CType::Int).param("data", CType::Str).param("length", CType::Int).param("flags", CType::Int).returns(CType::Str).build(),
             extern_fn("elephc_fileinfo_ok", "elephc_fileinfo").returns(CType::Int).build(),
             extern_fn("elephc_fileinfo_error", "elephc_fileinfo").returns(CType::Str).build(),
+            extern_fn("elephc_fileinfo_open_failed", "elephc_fileinfo").returns(CType::Int).build(),
             handle_owner(),
             finfo_class(),
         ];
@@ -220,4 +221,40 @@ fn filename_check(null_bytes: bool) -> Stmt {
             vec![s_throw(e_new_fq("TypeError", vec![message]))], vec![], Some(vec![error]))
     } else { error };
     s_if(condition, vec![error], vec![], None)
+}
+
+/// Formats local stream-open errors separately from errors returned by the magic engine.
+fn query_failure(file: bool) -> Vec<Stmt> {
+    let prefix = if file {
+        e_ternary(eq(e_call("elephc_fileinfo_open_failed", vec![]), e_int(1)),
+            concat(concat(concat(e_var("_function"), e_str("(")), e_var("_source_filename")), e_str("): Failed to open stream: ")),
+            concat(e_var("_function"), e_str("(): ")))
+    } else { concat(e_var("_function"), e_str("(): ")) };
+    vec![s_expr(e_call("__elephc_builtin_warning", vec![concat(prefix, e_call("elephc_fileinfo_error", vec![]))])), s_return(e_bool(false))]
+}
+
+/// Reports the PHP parameter number and ZPP type name for a non-resource context.
+fn context_type_error(function: Expr) -> Vec<Stmt> {
+    let type_name = e_call("gettype", vec![e_var("context")]);
+    let type_name = e_match(type_name.clone(), vec![
+        (vec![e_str("integer")], e_str("int")), (vec![e_str("double")], e_str("float")),
+        (vec![e_str("boolean")], e_str("bool")), (vec![e_str("object")], e_call("get_class", vec![e_var("context")])),
+    ], Some(type_name));
+    let argument = e_ternary(e_binop(eq(function.clone(), e_str("finfo_file")), BinOp::Or,
+        eq(function.clone(), e_str("finfo_buffer"))), e_str("(): Argument #4 ($context) "), e_str("(): Argument #3 ($context) "));
+    vec![s_throw(e_new_fq("TypeError", vec![concat(concat(concat(function, argument),
+        e_str("must be of type resource or null, ")), concat(type_name, e_str(" given")))]))]
+}
+
+/// Identifies values rejected by PHP's nullable-resource parameter parsing.
+fn non_resource_context() -> Expr {
+    e_binop(e_binop(e_var("context"), BinOp::StrictNotEq, e_null()), BinOp::And,
+        e_not(e_call("is_resource", vec![e_var("context")])))
+}
+
+/// Rejects malformed buffer contexts before emitting the PHP 8.5 deprecation.
+fn buffer_context(function: &str, supplied: i64) -> Stmt {
+    s_if(non_resource_context(), context_type_error(e_str(function)), vec![], Some(vec![
+        deprecated(&format!("{function}(): The $context parameter has no effect for finfo_buffer()"), Some(supplied)),
+    ]))
 }

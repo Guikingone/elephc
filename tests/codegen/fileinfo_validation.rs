@@ -44,14 +44,14 @@ foreach (["data://foo,HELLO", "data://text/plain;BASE64,SGVsbG8=", "data://;char
     echo finfo_file($f, $url) === false ? "rejected\n" : "bad\n";
 }
 echo $warnings === 6 ? "warned\n" : "bad\n";
-foreach (["data://,HELLO", "data://;base64,SEVMTE8=", "data://text/plain;charset=UTF-8;base64,SEVMTE8=", "data://text/plain;token=a=b,HELLO", "data://text/plain;base64=ordinary,HELLO"] as $url) {
+foreach (["data://,HELLO", "data://;base64,SEVMTE8=", "data://text/plain;charset=UTF-8;base64,SEVMTE8=", "data://text/plain;token=a=b,HELLO", "data://text/plain;base64=ordinary,HELLO", "data:text/plain,HELLO", "data:,HELLO", "data:;base64,SEVMTE8="] as $url) {
     echo $f->file($url), "\n";
 }
-$code = $argc > 0 ? 'echo finfo_file($f, "data://foo,HELLO") === false ? "eval-rejected\n" : "bad\n"; echo $f->file("data://text/plain;BASE64,SGVsbG8=") === false ? "eval-rejected\n" : "bad\n"; echo $f->file("data://;base64,SEVMTE8="), "\n";' : '';
+$code = $argc > 0 ? 'echo finfo_file($f, "data://foo,HELLO") === false ? "eval-rejected\n" : "bad\n"; echo $f->file("data://text/plain;BASE64,SGVsbG8=") === false ? "eval-rejected\n" : "bad\n"; echo $f->file("data://;base64,SEVMTE8="), "\n"; echo mime_content_type("data:,HELLO"), "\n";' : '';
 eval($code);
 restore_error_handler();
 "#);
-    assert_eq!(out, "rejected\n".repeat(6) + "warned\n" + &"text/plain\n".repeat(5) + "eval-rejected\neval-rejected\ntext/plain\n");
+    assert_eq!(out, "rejected\n".repeat(6) + "warned\n" + &"text/plain\n".repeat(8) + "eval-rejected\neval-rejected\ntext/plain\ntext/plain\n");
 }
 
 /// Filter resource errors throw, while read and write selectors ignore ASCII case.
@@ -65,9 +65,78 @@ $f = new finfo(FILEINFO_NONE, $db);
 try { finfo_file($f, "php://filter/read=string.rot13"); echo "bad\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
 echo $f->file("php://filter/READ=string.rot13/resource=data://text/plain,URYYB"), "\n";
 echo $f->file("php://filter/WrItE=string.rot13/resource=data://text/plain,HELLO"), "\n";
+echo $f->file("php://filter/read=string%2Erot13/resource=data:,URYYB"), "\n";
+echo $f->file("php://filter/read=string%2Erot13%00ignored/resource=data:,URYYB"), "\n";
 $code = $argc > 0 ? 'try { $f->file("php://filter/read=string.rot13"); echo "bad\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; } echo finfo_file($f, "php://filter/ReAd=string.rot13/resource=data://text/plain,URYYB"), "\n";' : '';
 eval($code);
 unlink($db);
 "#);
-    assert_eq!(out, "No URL resource specified\nfiltered-document\nfiltered-document\nNo URL resource specified\nfiltered-document\n");
+    assert_eq!(out, "No URL resource specified\n".to_owned() + &"filtered-document\n".repeat(4) + "No URL resource specified\nfiltered-document\n");
+}
+
+/// Context diagnostics identify the public call and reject types before deprecations.
+#[test]
+fn test_fileinfo_context_argument_diagnostics() {
+    if fileinfo_native::skip("test_fileinfo_context_argument_diagnostics") { return; }
+    let source = r#"<?php
+$f = new finfo(FILEINFO_MIME_TYPE);
+set_error_handler(function(int $level, string $message): bool { echo "unexpected warning\n"; return true; });
+try { finfo_file($f, "x", 0, 1); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { $f->file("x", 0, 1); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { finfo_buffer($f, "x", 0, 1); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { $f->buffer("x", 0, 1); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { $f->file("x", 0, true); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { $f->file("x", 0, 1.5); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { $f->file("x", 0, []); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { $f->file("x", 0, new stdClass()); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$stream = fopen("php://temp", "w+b");
+try { finfo_file($f, "x", 0, $stream); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { $f->file("x", 0, $stream); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+restore_error_handler();
+echo @$f->buffer("hello", 0, $stream), "\n";
+fclose($stream);
+"#;
+    let expected = "finfo_file(): Argument #4 ($context) must be of type resource or null, int given\nfinfo::file(): Argument #3 ($context) must be of type resource or null, int given\nfinfo_buffer(): Argument #4 ($context) must be of type resource or null, int given\nfinfo::buffer(): Argument #3 ($context) must be of type resource or null, int given\nfinfo::file(): Argument #3 ($context) must be of type resource or null, bool given\nfinfo::file(): Argument #3 ($context) must be of type resource or null, float given\nfinfo::file(): Argument #3 ($context) must be of type resource or null, array given\nfinfo::file(): Argument #3 ($context) must be of type resource or null, stdClass given\nfinfo_file(): supplied resource is not a valid Stream-Context resource\nfinfo::file(): supplied resource is not a valid Stream-Context resource\ntext/plain\n";
+    for profile in [elephc::php_version::PhpVersion::Php84, elephc::php_version::PhpVersion::Php85] {
+        assert_eq!(compile_and_run_with_php_version(source, profile), expected);
+    }
+}
+
+/// Constructors throw warning exceptions while procedural opens emit their own warning names.
+#[test]
+fn test_fileinfo_open_error_diagnostics() {
+    if fileinfo_native::skip("test_fileinfo_open_error_diagnostics") { return; }
+    let out = compile_and_run(r#"<?php
+try { new finfo(0, "/elephc-fileinfo-missing/magic"); } catch (ErrorException $e) { echo get_class($e), ":", $e->getSeverity(), ":", $e->getMessage(), "\n"; }
+set_error_handler(function(int $level, string $message): bool { echo $level, ":", $message, "\n"; return true; });
+echo finfo_open(0, "/elephc-fileinfo-missing/magic") === false ? "database\n" : "bad\n";
+$f = new finfo(FILEINFO_MIME_TYPE);
+echo $f->file("/elephc-fileinfo-missing/file") === false ? "method\n" : "bad\n";
+echo finfo_file($f, "/elephc-fileinfo-missing/file") === false ? "function\n" : "bad\n";
+echo mime_content_type("file:///elephc-fileinfo-missing/file") === false ? "mime\n" : "bad\n";
+restore_error_handler();
+echo $f->buffer("hello"), "\n";
+"#);
+    assert_eq!(out, "ErrorException:2:finfo::__construct(): Failed to load magic database at \"/elephc-fileinfo-missing/magic\"\n2:finfo_open(): Failed to load magic database at \"/elephc-fileinfo-missing/magic\"\ndatabase\n2:finfo::file(/elephc-fileinfo-missing/file): Failed to open stream: No such file or directory\nmethod\n2:finfo_file(/elephc-fileinfo-missing/file): Failed to open stream: No such file or directory\nfunction\n2:mime_content_type(file:///elephc-fileinfo-missing/file): Failed to open stream: No such file or directory\nmime\ntext/plain\n");
+}
+
+/// Directory identification requires an openable descriptor even when stat succeeds.
+#[test]
+fn test_fileinfo_directory_open_permissions() {
+    if fileinfo_native::skip("test_fileinfo_directory_open_permissions") { return; }
+    let out = compile_and_run(r#"<?php
+$dir = tempnam(sys_get_temp_dir(), "finfo-directory");
+unlink($dir);
+mkdir($dir, 0000);
+$probe = @fopen($dir, "rb");
+$can_open = $probe !== false;
+if ($can_open) { fclose($probe); }
+$f = new finfo(FILEINFO_MIME_TYPE);
+$result = @$f->file($dir);
+echo $can_open ? ($result === "directory" ? "ok\n" : "bad\n") : ($result === false ? "ok\n" : "bad\n");
+chmod($dir, 0700);
+echo $f->file($dir), "\n";
+rmdir($dir);
+"#);
+    assert_eq!(out, "ok\ndirectory\n");
 }
