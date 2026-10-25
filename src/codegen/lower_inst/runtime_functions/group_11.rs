@@ -52,6 +52,9 @@ pub(super) fn lower(
         RuntimeFnId::Getenv => Some({
             crate::codegen::lower_inst::builtins::system::lower_getenv(ctx, inst)
         }),
+        RuntimeFnId::Getmypid => Some({
+            crate::codegen::lower_inst::builtins::system::lower_getmypid(ctx, inst)
+        }),
         RuntimeFnId::Gmdate => Some({
             crate::codegen::lower_inst::builtins::system::lower_gmdate(ctx, inst)
         }),

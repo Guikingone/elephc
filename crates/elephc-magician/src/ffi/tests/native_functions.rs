@@ -10,6 +10,34 @@
 
 use super::*;
 
+/// The shape ABI distinguishes compiler-internal declarations from user and legacy callbacks.
+#[test]
+fn register_native_function_shape_preserves_declaration_origin() {
+    let mut ctx = ElephcEvalContext::new();
+    let name = b"opcache_reset";
+    let registered = unsafe {
+        __elephc_eval_register_native_function(
+            &mut ctx, name.as_ptr(), name.len() as u64,
+            1usize as *mut c_void, Some(fake_native_invoker), 0,
+        )
+    };
+    assert_eq!(registered, 1);
+    assert!(!ctx.native_function("opcache_reset").unwrap().is_internal());
+    for (flags, expected) in [
+        (crate::context::NATIVE_SHAPE_FLAG_INTERNAL, true),
+        (0, false),
+        (1 << 20, false),
+    ] {
+        let registered = unsafe {
+            __elephc_eval_register_native_function_shape(
+                &mut ctx, name.as_ptr(), name.len() as u64, 0, 0, flags,
+            )
+        };
+        assert_eq!(registered, 1);
+        assert_eq!(ctx.native_function("opcache_reset").unwrap().is_internal(), expected);
+    }
+}
+
 /// Verifies native AOT registration records function parameter metadata and defaults.
 #[test]
 fn register_native_function_reports_function_exists() {
@@ -141,4 +169,44 @@ fn register_native_function_reports_function_exists() {
         &[EvalParameterTypeVariant::Int]
     );
     assert_eq!(native.param_default(0), Some(&NativeCallableDefault::Int(42)));
+}
+
+/// Verifies the by-reference-return registration marks only the named native function, and
+/// fails closed for a function that was never registered.
+#[test]
+fn register_native_function_returns_reference_marks_the_declaration() {
+    let mut ctx = ElephcEvalContext::new();
+    let descriptor = 1usize as *mut c_void;
+    for name in [b"REF_PROBE".as_slice(), b"value_probe".as_slice()] {
+        let registered = unsafe {
+            __elephc_eval_register_native_function(
+                &mut ctx,
+                name.as_ptr(),
+                name.len() as u64,
+                descriptor,
+                Some(fake_native_invoker),
+                0,
+            )
+        };
+        assert_eq!(registered, 1);
+    }
+    let marked = unsafe {
+        __elephc_eval_register_native_function_returns_reference(
+            &mut ctx,
+            b"REF_PROBE".as_ptr(),
+            9,
+        )
+    };
+    let missing = unsafe {
+        __elephc_eval_register_native_function_returns_reference(
+            &mut ctx,
+            b"missing_probe".as_ptr(),
+            13,
+        )
+    };
+
+    assert_eq!(marked, 1);
+    assert_eq!(missing, 0);
+    assert!(ctx.native_function("ref_probe").expect("registered").returns_reference());
+    assert!(!ctx.native_function("value_probe").expect("registered").returns_reference());
 }

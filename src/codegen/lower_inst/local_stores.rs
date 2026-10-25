@@ -8,6 +8,7 @@
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
 
 use super::*;
+use crate::ir::RuntimeCallTarget;
 
 /// Lowers an addressable local store from one SSA operand.
 pub(super) fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -76,10 +77,11 @@ pub(in crate::codegen) enum RefCellStorePrevious {
     Keep,
 }
 
+/// Stores through a reference cell while preserving or retiring its previous payload as required.
 pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
-    let previous = if value_is_consuming_conversion_of_ref_cell(ctx, value, slot)? {
+    let previous = if value_is_consuming_mutation_of_ref_cell(ctx, value, slot)? {
         RefCellStorePrevious::Keep
     } else {
         retire_raw_occupant_before_ref_store(ctx, slot)?;
@@ -88,7 +90,7 @@ pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruc
     store_value_through_ref_cell_slot(ctx, slot, value, &inst.result_php_type, previous)
 }
 
-/// Returns true when `value` is `ArrayToHash(LoadRefCell(slot))` for the slot being stored.
+/// Returns true when a container mutation already consumed the ref-cell owner being replaced.
 ///
 /// `ArrayToHash` CONSUMES the array it converts: the convert path releases the source after the
 /// copy and returns a fresh hash, the already-a-hash path returns the source pointer itself. Either
@@ -98,7 +100,11 @@ pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruc
 /// (`function r(&...$items) { $items[0] = 1; $items["k"] = 2; }` called through a first-class
 /// callable), and the freed block's reuse by the persisted key string then walked that string as a
 /// hash on the next release.
-fn value_is_consuming_conversion_of_ref_cell(
+/// Concrete `ArrayFetchForWrite` calls have the same consuming contract when promoting or
+/// separating a nested parent. Boxed-receiver calls return a child, not a replacement container.
+/// An ensure may consume an `ArrayToHash` result rather than the original load directly, so the
+/// consuming chain is followed until the reference-cell load is found.
+fn value_is_consuming_mutation_of_ref_cell(
     ctx: &FunctionContext<'_>,
     value: ValueId,
     slot: LocalSlotId,
@@ -106,15 +112,34 @@ fn value_is_consuming_conversion_of_ref_cell(
     let Some(conversion) = instruction_for_value(ctx, value)? else {
         return Ok(false);
     };
-    if conversion.op != Op::ArrayToHash {
+    let consuming_fetch = conversion.op == Op::RuntimeCall
+        && matches!(conversion.immediate, Some(Immediate::RuntimeCall(
+            RuntimeCallTarget::ArrayFetchForWrite
+            | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed)))
+        && matches!(
+            conversion.result_php_type.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        );
+    if conversion.op != Op::ArrayToHash && !consuming_fetch {
         return Ok(false);
     }
     let Some(source) = conversion.operands.first().copied() else {
         return Ok(false);
     };
-    Ok(instruction_for_value(ctx, source)?.is_some_and(|load| {
+    if consuming_fetch
+        && !matches!(
+            ctx.value_php_type(source)?.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        )
+    {
+        return Ok(false);
+    }
+    if instruction_for_value(ctx, source)?.is_some_and(|load| {
         load.op == Op::LoadRefCell && load.immediate == Some(Immediate::LocalSlot(slot))
-    }))
+    }) {
+        return Ok(true);
+    }
+    value_is_consuming_mutation_of_ref_cell(ctx, source, slot)
 }
 
 /// Retires what a still-raw slot holds before a ref-cell store overwrites it.
@@ -456,6 +481,10 @@ pub(super) fn lower_release_local_slot(
     // occur only after this instruction, including after a loop exit.
     let ty = ctx.local_php_type(slot)?.codegen_repr();
     let offset = ctx.local_offset(slot)?;
+    if ctx.numeric_local_slots.contains(&slot) {
+        super::super::frame::emit_owned_local_cleanup(ctx, slot, offset, &ty);
+        return Ok(());
+    }
     if ctx.release_local_slot_may_observe_ref_cell(inst_id) {
         // A loop back-edge can promote the slot after this store was lowered.
         // Retire the replaced payload on both runtime representations without
@@ -567,6 +596,9 @@ fn mixed_value_is_statically_destructor_free(
     let Some(inst) = instruction_for_value(ctx, value)? else {
         return Ok(false);
     };
+    if super::super::stack_numeric::numeric_value(ctx.function, &ctx.numeric_values, value) {
+        return Ok(true);
+    }
     if matches!(inst.op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedPow) {
         return Ok(true);
     }
@@ -700,7 +732,8 @@ fn store_value_to_raw_ref_cell_as(
     target_ty: &PhpType,
     previous: RefCellStorePrevious,
 ) -> Result<()> {
-    let source_ty = ctx.load_value_to_result(value)?;
+    ctx.load_value_to_result(value)?;
+    let source_ty = ctx.mixed_box_type(value)?;
     let target_ty = target_ty.codegen_repr();
     reject_multiword_ref_param_local(&target_ty, "store")?;
     if target_ty == PhpType::Mixed
@@ -837,10 +870,12 @@ pub(super) fn coerce_ref_cell_store_value(
     source_ty: &PhpType,
     target_ty: &PhpType,
 ) -> Result<()> {
+    let declared_source_ty = source_ty;
     let source_ty = source_ty.codegen_repr();
     let target_ty = target_ty.codegen_repr();
     if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
-        emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+        // The declared type, so a `?ptr<T>` boxes address 0 as PHP null.
+        emit_box_current_value_as_mixed(ctx.emitter, declared_source_ty);
         return Ok(());
     }
     if target_ty == PhpType::TaggedScalar {

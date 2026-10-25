@@ -6,8 +6,13 @@
 //!
 //! Key details:
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
+//! - Numeric operators delegate to the shared PHP-equivalent arithmetic folder.
 
 use super::*;
+
+#[cfg(test)]
+#[path = "interface_method_names_tests.rs"]
+mod interface_method_names_tests;
 
 /// Returns the `__construct` member object metadata when the reflected class-like symbol has one.
 pub(super) fn reflection_constructor_member(
@@ -70,10 +75,11 @@ pub(super) fn reflection_member_flags(
         is_readonly,
         is_promoted,
         is_virtual: false,
+        is_inherited: false,
     }
 }
 
-/// Returns PHP case-insensitive method names declared by an interface and its parents.
+/// Returns interface method keys in PHP declaration order, followed by inherited methods.
 pub(super) fn reflection_interface_method_names(
     ctx: &FunctionContext<'_>,
     interface_name: &str,
@@ -81,14 +87,39 @@ pub(super) fn reflection_interface_method_names(
     let Some(interface_name) = resolve_reflection_interface(ctx, interface_name) else {
         return Vec::new();
     };
-    let Some(info) = ctx.module.interface_infos.get(interface_name) else {
-        return Vec::new();
-    };
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    push_unique_method_names(info.methods.keys(), &mut names, &mut seen);
-    push_unique_method_names(info.static_methods.keys(), &mut names, &mut seen);
+    let mut visited = std::collections::HashSet::new();
+    collect_reflection_interface_method_names(
+        &ctx.module.interface_infos, interface_name, &mut names, &mut seen, &mut visited,
+    );
     names
+}
+
+/// Visits each interface once, preserving depth-first declaration order across shared ancestors.
+fn collect_reflection_interface_method_names(
+    interfaces: &std::collections::HashMap<String, InterfaceInfo>,
+    interface_name: &str,
+    names: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+    visited: &mut std::collections::HashSet<String>,
+) {
+    if !visited.insert(php_symbol_key(interface_name.trim_start_matches('\\'))) {
+        return;
+    }
+    let Some(info) = interfaces.get(interface_name) else {
+        return;
+    };
+    push_unique_method_names(info.method_decls.iter().map(|method| &method.name), names, seen);
+    for parent in &info.parents {
+        collect_reflection_interface_method_names(interfaces, parent, names, seen, visited);
+    }
+    // Injected interfaces can carry signatures without source declarations.
+    push_unique_method_names(info.method_order.iter(), names, seen);
+    push_unique_method_names(info.static_method_order.iter(), names, seen);
+    let mut remaining = info.methods.keys().chain(info.static_methods.keys()).collect::<Vec<_>>();
+    remaining.sort_unstable();
+    push_unique_method_names(remaining.into_iter(), names, seen);
 }
 
 /// Returns PHP case-sensitive property names declared by an interface and its parents.
@@ -228,7 +259,9 @@ pub(super) fn reflection_constant_value(
         ExprKind::Null => Ok(ReflectionConstantValue::Null),
         ExprKind::Negate(inner) => {
             match reflection_constant_value(ctx, current_class, current_info, inner, depth + 1)? {
-                ReflectionConstantValue::Int(value) => Ok(ReflectionConstantValue::Int(-value)),
+                ReflectionConstantValue::Int(value) => Ok(value.checked_neg()
+                    .map(ReflectionConstantValue::Int)
+                    .unwrap_or_else(|| ReflectionConstantValue::Float(-(value as f64)))),
                 ReflectionConstantValue::Float(value) => Ok(ReflectionConstantValue::Float(-value)),
                 other => Err(unsupported_reflection_constant_value(other)),
             }
@@ -309,206 +342,6 @@ pub(super) fn reflection_constant_value(
     }
 }
 
-/// Folds one constant array literal's entries in PHP evaluation order into a list or hash
-/// constant value.
-///
-/// Bare elements claim the next free integer slot, explicit keys normalize with PHP's key
-/// rules, and a spread's integer keys renumber into a contiguous block starting after the
-/// destination's highest integer key (0 when it has none) while its string keys are kept in
-/// place. Duplicate keys collapse the way PHP's hash does (first position, last value wins).
-/// The result is a packed `Array` only when the final keys are exactly `0..n-1` in order.
-fn reflection_constant_array_entries_fold(
-    ctx: &FunctionContext<'_>,
-    current_class: &str,
-    current_info: Option<&crate::types::ClassInfo>,
-    entries: &[crate::parser::ast::ArrayEntry],
-    depth: usize,
-) -> Result<ReflectionConstantValue> {
-    let mut values: Vec<ReflectionConstantAssocEntry> = Vec::with_capacity(entries.len());
-    // The highest integer key seen so far; `None` means no integer key yet, so the next
-    // free slot is 0. PHP advances from the maximum (even a negative one), not from the
-    // lowest free slot.
-    let mut max_int: Option<i64> = None;
-    for entry in entries {
-        match entry {
-            crate::parser::ast::ArrayEntry::Value(expr) => {
-                let value = reflection_constant_value(
-                    ctx,
-                    current_class,
-                    current_info,
-                    expr,
-                    depth + 1,
-                )?;
-                let key = next_reflection_constant_int_key(
-                    max_int,
-                    crate::codegen::compile_php_version(),
-                )?;
-                max_int = Some(key);
-                values.push(ReflectionConstantAssocEntry {
-                    key: ReflectionDefaultArrayKey::Int(key),
-                    value,
-                });
-            }
-            crate::parser::ast::ArrayEntry::Keyed(key_expr, value_expr) => {
-                let key = reflection_constant_array_key_expr(
-                    ctx,
-                    current_class,
-                    current_info,
-                    key_expr,
-                    depth + 1,
-                )?;
-                let value = reflection_constant_value(
-                    ctx,
-                    current_class,
-                    current_info,
-                    value_expr,
-                    depth + 1,
-                )?;
-                if let ReflectionDefaultArrayKey::Int(candidate) = &key {
-                    let candidate = *candidate;
-                    max_int = Some(std::cmp::max(max_int.unwrap_or(candidate), candidate));
-                }
-                reflection_constant_insert_entry(&mut values, key, value);
-            }
-            crate::parser::ast::ArrayEntry::Spread(entry_expr) => {
-                // The parser stores the whole `...source` expression, so the source
-                // node itself is one level down.
-                let source = if let ExprKind::Spread(inner) = &entry_expr.kind {
-                    &**inner
-                } else {
-                    entry_expr
-                };
-                let source_value = reflection_constant_value(
-                    ctx,
-                    current_class,
-                    current_info,
-                    source,
-                    depth + 1,
-                )?;
-                let source_entries = match source_value {
-                    ReflectionConstantValue::Array(items) => items
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, value)| {
-                            (ReflectionDefaultArrayKey::Int(index as i64), value)
-                        })
-                        .collect::<Vec<_>>(),
-                    ReflectionConstantValue::AssocArray(source_entries) => source_entries
-                        .into_iter()
-                        .map(|entry| (entry.key, entry.value))
-                        .collect(),
-                    other => {
-                        return Err(CodegenIrError::unsupported(format!(
-                            "ReflectionClass constant metadata spread of a non-array constant ({})",
-                            reflection_constant_value_kind(&other)
-                        )))
-                    }
-                };
-                // PHP renumbers spread integer keys into a contiguous block starting
-                // after the destination's highest integer key (0 when it has none);
-                // string keys are kept in place. The start is computed lazily so a spread
-                // whose keys need no slot (all strings, or empty) cannot trigger a spurious
-                // overflow when the destination's highest key is i64::MAX.
-                let mut start: Option<i64> = None;
-                let mut slot: i64 = 0;
-                for (key, value) in source_entries {
-                    let key = match key {
-                        ReflectionDefaultArrayKey::Int(_) => {
-                            if start.is_none() {
-                                start = Some(next_reflection_constant_int_key(
-                                    max_int,
-                                    crate::codegen::compile_php_version(),
-                                )?);
-                            }
-                            let key = start
-                                .unwrap()
-                                .checked_add(slot)
-                                .ok_or_else(|| {
-                                    CodegenIrError::unsupported(
-                                        "ReflectionClass constant metadata integer key overflow",
-                                    )
-                                })?;
-                            slot += 1;
-                            max_int = Some(std::cmp::max(max_int.unwrap_or(key), key));
-                            ReflectionDefaultArrayKey::Int(key)
-                        }
-                        ReflectionDefaultArrayKey::Str(name) => {
-                            ReflectionDefaultArrayKey::Str(name)
-                        }
-                    };
-                    reflection_constant_insert_entry(&mut values, key, value);
-                }
-            }
-        }
-    }
-    // PHP treats an array whose keys are exactly 0..n-1 in order as a list; the packed
-    // `Array` shape keeps the metadata consistent with the parser's `ArrayLiteral`.
-    let is_list = values
-        .iter()
-        .enumerate()
-        .all(|(index, entry)| {
-            matches!(&entry.key, ReflectionDefaultArrayKey::Int(key) if *key == index as i64)
-        });
-    if is_list {
-        Ok(ReflectionConstantValue::Array(
-            values
-                .into_iter()
-                .map(|entry| entry.value)
-                .collect(),
-        ))
-    } else {
-        Ok(ReflectionConstantValue::AssocArray(values))
-    }
-}
-
-/// Returns the next free integer slot — `max + 1` for some highest key, `0` when the
-/// destination holds no integer key yet — or a compile error on overflow.
-fn next_reflection_constant_int_key(
-    max_int: Option<i64>,
-    php_version: crate::php_version::PhpVersion,
-) -> Result<i64> {
-    match max_int {
-        None => Ok(0),
-        Some(max_int) if max_int < 0 && php_version < crate::php_version::PhpVersion::Php83 => {
-            Ok(0)
-        }
-        Some(max_int) => max_int
-            .checked_add(1)
-            .ok_or_else(|| {
-                CodegenIrError::unsupported(
-                    "ReflectionClass constant metadata integer key overflow",
-                )
-            }),
-    }
-}
-
-/// Inserts one folded constant-array entry, collapsing duplicate keys the way PHP's hash
-/// does (first insertion position, last value wins).
-fn reflection_constant_insert_entry(
-    values: &mut Vec<ReflectionConstantAssocEntry>,
-    key: ReflectionDefaultArrayKey,
-    value: ReflectionConstantValue,
-) {
-    let duplicate = values.iter().position(|existing| {
-        match (&existing.key, &key) {
-            (
-                ReflectionDefaultArrayKey::Int(existing),
-                ReflectionDefaultArrayKey::Int(candidate),
-            ) => existing == candidate,
-            (
-                ReflectionDefaultArrayKey::Str(existing),
-                ReflectionDefaultArrayKey::Str(candidate),
-            ) => existing == candidate,
-            _ => false,
-        }
-    });
-    if let Some(index) = duplicate {
-        values[index].value = value;
-    } else {
-        values.push(ReflectionConstantAssocEntry { key, value });
-    }
-}
-
 /// Evaluates one supported binary operator in a static Reflection constant expression.
 pub(super) fn reflection_binary_constant_value(
     ctx: &FunctionContext<'_>,
@@ -519,45 +352,10 @@ pub(super) fn reflection_binary_constant_value(
     right: &Expr,
     depth: usize,
 ) -> Result<ReflectionConstantValue> {
+    let span = left.span;
     let left = reflection_constant_value(ctx, current_class, current_info, left, depth)?;
     let right = reflection_constant_value(ctx, current_class, current_info, right, depth)?;
     match (&left, op, &right) {
-        (
-            ReflectionConstantValue::Int(left),
-            BinOp::Add,
-            ReflectionConstantValue::Int(right),
-        ) => {
-            Ok(ReflectionConstantValue::Int(*left + *right))
-        }
-        (
-            ReflectionConstantValue::Int(left),
-            BinOp::Sub,
-            ReflectionConstantValue::Int(right),
-        ) => {
-            Ok(ReflectionConstantValue::Int(*left - *right))
-        }
-        (
-            ReflectionConstantValue::Int(left),
-            BinOp::Mul,
-            ReflectionConstantValue::Int(right),
-        ) => {
-            Ok(ReflectionConstantValue::Int(*left * *right))
-        }
-        (
-            ReflectionConstantValue::Int(left),
-            BinOp::Mod,
-            ReflectionConstantValue::Int(right),
-        ) if *right != 0 => {
-            Ok(ReflectionConstantValue::Int(*left % *right))
-        }
-        (
-            ReflectionConstantValue::Int(left),
-            BinOp::Pow,
-            ReflectionConstantValue::Int(right),
-        ) if *right >= 0 =>
-        {
-            Ok(ReflectionConstantValue::Int((*left).pow(*right as u32)))
-        }
         (
             ReflectionConstantValue::Str(left),
             BinOp::Concat,
@@ -565,9 +363,11 @@ pub(super) fn reflection_binary_constant_value(
         ) => Ok(ReflectionConstantValue::Str(format!("{}{}", left, right))),
         (
             left,
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow,
             right,
-        ) => reflection_float_binary_constant_value(left, op, right).ok_or_else(|| {
+        ) => super::constant_arithmetic::reflection_numeric_binary_constant_value(
+            left, op, right, span,
+        ).ok_or_else(|| {
             CodegenIrError::unsupported(format!(
                 "ReflectionClass constant metadata binary value {:?} {:?}",
                 reflection_constant_value_kind(left),
@@ -579,34 +379,6 @@ pub(super) fn reflection_binary_constant_value(
             reflection_constant_value_kind(left),
             reflection_constant_value_kind(right)
         ))),
-    }
-}
-
-/// Evaluates a numeric binary operator that must produce a float Reflection value.
-pub(super) fn reflection_float_binary_constant_value(
-    left: &ReflectionConstantValue,
-    op: &BinOp,
-    right: &ReflectionConstantValue,
-) -> Option<ReflectionConstantValue> {
-    let left = reflection_constant_value_as_float(left)?;
-    let right = reflection_constant_value_as_float(right)?;
-    let value = match op {
-        BinOp::Add => left + right,
-        BinOp::Sub => left - right,
-        BinOp::Mul => left * right,
-        BinOp::Div if right != 0.0 => left / right,
-        BinOp::Pow => left.powf(right),
-        _ => return None,
-    };
-    Some(ReflectionConstantValue::Float(value))
-}
-
-/// Returns the float representation of numeric Reflection constant metadata.
-pub(super) fn reflection_constant_value_as_float(value: &ReflectionConstantValue) -> Option<f64> {
-    match value {
-        ReflectionConstantValue::Int(value) => Some(*value as f64),
-        ReflectionConstantValue::Float(value) => Some(*value),
-        _ => None,
     }
 }
 
@@ -669,7 +441,7 @@ pub(super) fn reflection_scoped_constant_value(
 /// Resolves and evaluates one global constant reference for static Reflection metadata.
 ///
 /// The stored table carries no span of its own, so the synthesized expression takes
-/// `span` — the reference site. Nested expressions inside the stored kind keep their
+/// `span`, the reference site. Nested expressions inside the stored kind keep their
 /// definition-site spans; only failures attributed to the top-level expression point at
 /// the reference.
 pub(super) fn reflection_global_constant_value(
@@ -692,46 +464,6 @@ pub(super) fn reflection_global_constant_value(
         })?;
     let expr = crate::parser::ast::Expr::new(expr_kind, span);
     reflection_constant_value(ctx, "", None, &expr, depth + 1)
-}
-
-/// Normalizes one evaluated constant expression into a PHP array key form.
-pub(super) fn reflection_constant_array_key_expr(
-    ctx: &FunctionContext<'_>,
-    current_class: &str,
-    current_info: Option<&crate::types::ClassInfo>,
-    key: &Expr,
-    depth: usize,
-) -> Result<ReflectionDefaultArrayKey> {
-    if let Some(key) = reflection_default_array_key(key) {
-        return Ok(key);
-    }
-    let value = reflection_constant_value(ctx, current_class, current_info, key, depth)?;
-    reflection_constant_array_key(&value).ok_or_else(|| {
-        CodegenIrError::unsupported(
-            "ReflectionClass constant metadata array key that is not a scalar",
-        )
-    })
-}
-
-/// Returns the PHP array key form of one evaluated constant value.
-pub(super) fn reflection_constant_array_key(
-    value: &ReflectionConstantValue,
-) -> Option<ReflectionDefaultArrayKey> {
-    match value {
-        ReflectionConstantValue::Int(value) => Some(ReflectionDefaultArrayKey::Int(*value)),
-        ReflectionConstantValue::Bool(value) => {
-            Some(ReflectionDefaultArrayKey::Int(i64::from(*value)))
-        }
-        ReflectionConstantValue::Float(value) => {
-            // PHP 8.5 casts NAN and the infinities to 0; Rust `as` saturates infinities
-            // to ±i64::MAX, so only finite floats take the ordinary truncating cast.
-            let key = if value.is_finite() { *value as i64 } else { 0 };
-            Some(ReflectionDefaultArrayKey::Int(key))
-        }
-        ReflectionConstantValue::Str(value) => reflection_default_string_array_key(value),
-        ReflectionConstantValue::Null => Some(ReflectionDefaultArrayKey::Str(String::new())),
-        _ => None,
-    }
 }
 
 /// Returns an interface constant expression, including inherited parent interfaces.
@@ -762,7 +494,16 @@ pub(super) fn reflection_static_receiver_name(
     current_info: Option<&crate::types::ClassInfo>,
     receiver: &StaticReceiver,
 ) -> Result<String> {
+    // A receiver written `Box<int>::of()` names `Box` until instantiation renames
+    // it, and this pass can run on a generic function's template body — which is
+    // walked and then stripped, never instantiated.
+    let receiver = &receiver.written_class_receiver();
     match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
         StaticReceiver::Named(name) => Ok(name.as_str().trim_start_matches('\\').to_string()),
         StaticReceiver::Self_ | StaticReceiver::Static => Ok(current_class.to_string()),
         StaticReceiver::Parent => current_info

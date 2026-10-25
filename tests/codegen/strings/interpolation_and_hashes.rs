@@ -428,3 +428,54 @@ fn md5_sha1_parity_and_binary() {
 }
 
 // --- sscanf() ---
+
+/// A comment inside a complex `{$…}` interpolation is inert: a quote or brace in it does not end
+/// the capture. MEASURED on reference PHP 8.5.10, all four print `v|`; elephc refused each one
+/// ("Unterminated complex interpolation" or an unexpected token).
+#[test]
+fn test_string_interpolation_complex_with_comments() {
+    for source in [
+        "<?php $a = [\"k\" => \"v\"]; echo \"{$a[/**/\"k\"]}\", \"|\";",
+        "<?php $a = [\"k\" => \"v\"]; echo \"{$a[/***/\"k\"]}\", \"|\";",
+        "<?php $a = [\"k\" => \"v\"]; echo \"{$a[/* \" */ \"k\"]}\", \"|\";",
+        "<?php $a = [\"k\" => \"v\"]; echo \"{$a[/* } { */ \"k\"]}\", \"|\";",
+        "<?php $a = [\"k\" => \"v\"]; echo \"{$a[ // \" } \' \n\"k\"]}\", \"|\";",
+        "<?php $a = [\"k\" => \"v\"]; echo \"{$a[ # \" }\n\"k\"]}\", \"|\";",
+    ] {
+        assert_eq!(compile_and_run(source), "v|", "{source}");
+    }
+    // `#[` is an attribute, not a comment.
+    assert_eq!(
+        compile_and_run("<?php $f = fn($x) => \"F\"; echo \"{$f(#[A] fn() => 1)}\", \"|\";"),
+        "F|"
+    );
+}
+
+/// An empty block comment inside `{$…}` parses in runtime `eval()` source and in a dynamically
+/// included file, both of which go through the eval lexer rather than the compiler's.
+///
+/// That lexer skipped the first byte of a block comment's body, which for `/**/` is the closing
+/// star: `"{$a[/**/"k"]}"` ended in "Parse error: eval() fragment is invalid" where reference
+/// PHP 8.5.10 prints `v` (PR #968 review; MEASURED with these files). The eval source is read
+/// from a file so the compiler cannot see it, and the include path is only known at run time.
+#[test]
+fn test_empty_comments_in_interpolation_parse_in_eval_and_dynamic_includes() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "frag.txt",
+                "$a = [\"k\" => \"v\"]; echo \"eval:{$a[/**/\"k\"]}|{$a[/***/\"k\"]}|{$a[/*/ */\"k\"]}\\n\";",
+            ),
+            (
+                "lib.php",
+                "<?php\n$a = [\"k\" => \"v\"];\necho \"include:{$a[/**/\"k\"]}|{$a[/***/\"k\"]}|{$a[/*/ */\"k\"]}\\n\";\n",
+            ),
+            (
+                "main.php",
+                "<?php\neval(file_get_contents(__DIR__ . \"/frag.txt\"));\n$lib = __DIR__ . \"/\" . \"lib.php\";\neval('include $lib;');\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "eval:v|v|v\ninclude:v|v|v\n");
+}

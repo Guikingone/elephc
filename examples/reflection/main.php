@@ -48,3 +48,28 @@ $class = new ReflectionClass(Defaults::class);
 $constant = $class->getReflectionConstant("OPTIONS");
 echo "Reflected options: ", json_encode($constant->getValue()), "\n";
 echo "All constants: ", json_encode($class->getConstants()), "\n";
+// `__toString()` renders PHP's own dump, which is the fastest way to see
+// everything a reflector holds. The only line PHP prints that elephc does not
+// is `@@ <file> <line> - <line>`: a compiled binary has no honest answer for
+// it, since the source it was built from need not exist where it runs.
+echo "\n", $fn;
+
+class Inbox
+{
+    final protected static function route(string|int $id, int &$hits = 0, ...$rest): ?Mailer
+    {
+        return null;
+    }
+}
+
+echo "\n", new ReflectionMethod('Inbox', 'route');
+
+// One parameter renders on its own too.
+echo "\n", (new ReflectionMethod('Inbox', 'route'))->getParameters()[1], "\n";
+
+// A formatter can inspect collection, floating-point and escaped string defaults together.
+function configureReport(iterable $columns = [], float $ratio = 0.3, string $separator = "\n", int $flags = ENT_QUOTES): void
+{
+}
+
+echo "\n", new ReflectionFunction('configureReport');

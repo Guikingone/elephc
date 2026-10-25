@@ -19,6 +19,7 @@ use elephc_builtin_contract::{
 use super::super::*;
 use super::spec::{EvalArea, EvalBuiltinBinding, EvalBuiltinSpec};
 
+mod arity;
 mod binding;
 mod callable;
 mod callable_validation;
@@ -28,6 +29,7 @@ mod names;
 mod owned_arguments;
 mod signature;
 
+pub(in crate::interpreter) use arity::*;
 pub(in crate::interpreter) use binding::*;
 pub(in crate::interpreter) use callable::*;
 pub(in crate::interpreter) use callable_validation::*;

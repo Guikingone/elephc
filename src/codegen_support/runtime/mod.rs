@@ -64,6 +64,7 @@ pub(crate) fn curl_abi_slots() -> &'static [(&'static str, &'static str)] {
 /// `codegen::lower_inst::exceptions` that report their own synthesized errors without ever
 /// reaching `__rt_report_uncaught_exception`.
 pub(crate) use exceptions::UNCAUGHT_EXIT_STATUS;
+pub(crate) use exceptions::emit_creation_line_load;
 /// Invokes unary cleanup while accumulating destructor exceptions in the caller's frame slot.
 pub(crate) use exceptions::emit_guarded_cleanup_call;
 /// The PHP object-handle pool: binding a handle at allocation and reading one back.
@@ -89,6 +90,8 @@ pub(crate) use emitters::emit_runtime;
 pub(crate) use arrays::{emit_nan_bool_coercion_probe, nan_bool_coercion_warning_enabled};
 /// The `__rt_hash_map` callback result-kind selector, chosen by the `array_map()` lowering.
 pub(crate) use arrays::HashMapResultKind;
+/// Retire allocator payload-base metadata before bulk web arena reclamation.
+pub(crate) use arrays::heap_live_bases::emit_reset as emit_heap_live_bases_reset;
 /// The call-stack overflow guard's shared symbol name. Codegen's prologue check and the
 /// runtime emitter must name the same `.comm` word or the guard silently never fires.
 pub(crate) use system::STACK_LIMIT_SYMBOL;

@@ -63,7 +63,7 @@ return dyn();"#,
                 ))))],
             },
             EvalStmt::Return(Some(EvalExpr::NamespacedCall {
-                name: "eval\\ns\\dyn".to_string(),
+                name: "Eval\\Ns\\dyn".to_string(),
                 fallback_name: "dyn".to_string(),
                 args: Vec::new(),
             })),
@@ -107,7 +107,7 @@ return Alias(LocalValue, new BoxAlias\Inner());"#,
     assert_eq!(
         program.statements(),
         &[EvalStmt::Return(Some(EvalExpr::Call {
-            name: "lib\\strlen".to_string(),
+            name: "Lib\\strlen".to_string(),
             args: vec![
                 EvalCallArg::positional(EvalExpr::ConstFetch("Lib\\VALUE".to_string())),
                 EvalCallArg::positional(EvalExpr::NewObject {
@@ -178,7 +178,7 @@ return Alias(LocalValue, OTHER, new BoxAlias\Inner(), new Thing());"#,
     assert_eq!(
         program.statements(),
         &[EvalStmt::Return(Some(EvalExpr::Call {
-            name: "lib\\imported_func".to_string(),
+            name: "Lib\\imported_func".to_string(),
             args: vec![
                 EvalCallArg::positional(EvalExpr::ConstFetch("Lib\\VALUE".to_string())),
                 EvalCallArg::positional(EvalExpr::ConstFetch("Lib\\OTHER".to_string())),
@@ -219,11 +219,11 @@ return outer_func();"#,
         program.statements(),
         &[
             EvalStmt::Return(Some(EvalExpr::Call {
-                name: "lib\\inner_func".to_string(),
+                name: "Lib\\inner_func".to_string(),
                 args: Vec::new(),
             })),
             EvalStmt::Return(Some(EvalExpr::Call {
-                name: "lib\\outer_func".to_string(),
+                name: "Lib\\outer_func".to_string(),
                 args: Vec::new(),
             })),
         ]
@@ -252,11 +252,55 @@ function dyn() { return alias(); }"#,
             parameter_is_variadic: Vec::new(),
             return_type: None,
             body: vec![EvalStmt::Return(Some(EvalExpr::Call {
-                name: "lib\\target".to_string(),
+                name: "Lib\\target".to_string(),
                 args: Vec::new(),
             }))],
         }]
     );
+}
+/// Verifies a relative name `namespace\name` resolves in the current namespace (#825): once,
+/// with no `namespace` segment, no import alias and no global fallback. The eval parser read
+/// `namespace` as an ordinary first segment and prefixed the namespace again, so a call in
+/// `Eval\Rel` became `Eval\Rel\namespace\helper`.
+#[test]
+fn parse_fragment_resolves_relative_names_in_the_current_namespace() {
+    let program = parse_fragment(
+        br#"namespace Eval\Rel;
+use Lib\Box as Box;
+namespace\helper();
+return namespace\LIMIT;
+return new namespace\Box();"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::Expr(EvalExpr::Call {
+                name: "Eval\\Rel\\helper".to_string(),
+                args: Vec::new(),
+            }),
+            EvalStmt::Return(Some(EvalExpr::ConstFetch("Eval\\Rel\\LIMIT".to_string()))),
+            EvalStmt::Return(Some(EvalExpr::NewObject {
+                class_name: "Eval\\Rel\\Box".to_string(),
+                args: Vec::new(),
+            })),
+        ]
+    );
+}
+/// Verifies a relative name in the global namespace is the plain global name, and that PHP's
+/// refusal of a relative name in an import is kept.
+#[test]
+fn parse_fragment_resolves_global_relative_names_and_refuses_relative_imports() {
+    let program = parse_fragment(br#"return namespace\helper();"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Call {
+            name: "helper".to_string(),
+            args: Vec::new(),
+        }))]
+    );
+    assert!(parse_fragment(br#"namespace Eval\Rel; use namespace\Box;"#).is_err());
+    assert!(parse_fragment(br#"namespace Eval\Rel; use function namespace\helper;"#).is_err());
 }
 /// Verifies import declarations are rejected inside eval-declared function bodies.
 #[test]

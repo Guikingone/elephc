@@ -119,7 +119,12 @@ fn emit_constant_hash(
     allocate_mixed_hash(ctx, entries.len().saturating_mul(2).max(16));
     for (name, value, ty) in entries {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        emit_boxed_constant_value(ctx, value, ty)?;
+        if name == "PHP_BINARY" {
+            abi::emit_call_label(ctx.emitter, "__rt_php_binary");
+            emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
+        } else {
+            emit_boxed_constant_value(ctx, value, ty)?;
+        }
         insert_boxed_hash_value(ctx, name);
     }
     Ok(())
@@ -146,7 +151,38 @@ fn emit_boxed_constant_value(
     value: &ExprKind,
     declared_type: &PhpType,
 ) -> Result<()> {
+    let needs_resolution = match value {
+        ExprKind::ArrayLiteralMixed(_) => true,
+        ExprKind::ArrayLiteral(items) => items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))),
+        ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, _)| match &key.kind {
+            ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_) | ExprKind::BoolLiteral(_)
+                | ExprKind::Null => false,
+            ExprKind::Negate(inner) => !matches!(inner.kind, ExprKind::IntLiteral(_)),
+            _ => true,
+        }),
+        _ => false,
+    };
+    if needs_resolution {
+        let context = crate::codegen::const_default_values::ConstDefaultContext {
+            module: ctx.module, current_class: None,
+        };
+        let expression = Expr::new(value.clone(), crate::span::Span::synthetic());
+        let normalized = crate::codegen::const_default_values::resolve_const_default(&expression, &context)
+            .and_then(crate::codegen::const_default_values::resolved_literal_default)
+            .ok_or_else(|| unsupported_constant_value(value))?;
+        return emit_boxed_constant_value(ctx, &normalized, declared_type);
+    }
     match value {
+        ExprKind::ConstRef(name) => {
+            if elephc_builtin_contract::canonical_constant_name(name.as_str()) == "PHP_BINARY" {
+                abi::emit_call_label(ctx.emitter, "__rt_php_binary");
+                emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
+            } else {
+                let (value, ty) = ctx.module.global_constants.get(name.as_str()).cloned()
+                    .ok_or_else(|| unsupported_constant_value(value))?;
+                emit_boxed_constant_value(ctx, &value, &ty)?;
+            }
+        }
         ExprKind::IntLiteral(value) => {
             abi::emit_load_int_immediate(
                 ctx.emitter,

@@ -19,6 +19,9 @@ pub(super) fn lower(
     target: RuntimeFnId,
 ) -> Option<Result<()>> {
     match target {
+        RuntimeFnId::TokenizerErrorLocation => Some(
+            crate::codegen::lower_inst::builtins::tokenizer::lower_error_location(ctx, inst)
+        ),
         RuntimeFnId::Sqrt => Some({
             crate::codegen::lower_inst::builtins::math::lower_sqrt(ctx, inst)
         }),
@@ -43,6 +46,55 @@ pub(super) fn lower(
         RuntimeFnId::ElephcObjectPropValue => Some({
             crate::codegen::lower_inst::builtins::object_props::lower_object_prop_value(ctx, inst)
         }),
+        RuntimeFnId::ElephcOpcacheRtBlacklistEntry => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_blacklist_entry(
+                ctx, inst,
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtScriptField => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_script_field(
+                ctx, inst,
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtScriptPath => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_script_path(
+                ctx, inst,
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtIsCached => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
+                ctx, inst, "__elephc_opcache_rt_is_cached",
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtDiscard => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
+                ctx, inst, "__elephc_opcache_rt_discard",
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtSoftInvalidate => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
+                ctx, inst, "__elephc_opcache_rt_soft_invalidate",
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtInFileCache => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
+                ctx, inst, "__elephc_opcache_rt_in_file_cache",
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtCompile => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
+                ctx, inst, "__elephc_opcache_rt_compile",
+            )
+        }),
+        RuntimeFnId::ElephcOpcacheRtReset => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_reset(ctx, inst)
+        }),
+        RuntimeFnId::ElephcOpcacheRtStat => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_stat(ctx, inst)
+        }),
+        RuntimeFnId::ElephcOpcacheRtSwap => Some({
+            crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_swap(ctx, inst)
+        }),
         RuntimeFnId::ElephcPtrIsNull => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_is_null(ctx, inst)
         }),
@@ -57,6 +109,9 @@ pub(super) fn lower(
         }),
         RuntimeFnId::BufferLen => Some({
             crate::codegen::lower_inst::builtins::buffers::lower_buffer_len(ctx, inst)
+        }),
+        RuntimeFnId::BufferPtr => Some({
+            crate::codegen::lower_inst::builtins::buffers::lower_buffer_ptr(ctx, inst)
         }),
         RuntimeFnId::Ptr => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr(ctx, inst)
@@ -82,6 +137,12 @@ pub(super) fn lower(
         RuntimeFnId::PtrRead8 => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_read8(ctx, inst)
         }),
+        RuntimeFnId::PtrReadF32 => Some({
+            crate::codegen::lower_inst::builtins::pointers::lower_ptr_read_f32(ctx, inst)
+        }),
+        RuntimeFnId::PtrReadF64 => Some({
+            crate::codegen::lower_inst::builtins::pointers::lower_ptr_read_f64(ctx, inst)
+        }),
         RuntimeFnId::PtrReadString => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_read_string(ctx, inst)
         }),
@@ -99,6 +160,12 @@ pub(super) fn lower(
         }),
         RuntimeFnId::PtrWrite8 => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_write8(ctx, inst)
+        }),
+        RuntimeFnId::PtrWriteF32 => Some({
+            crate::codegen::lower_inst::builtins::pointers::lower_ptr_write_f32(ctx, inst)
+        }),
+        RuntimeFnId::PtrWriteF64 => Some({
+            crate::codegen::lower_inst::builtins::pointers::lower_ptr_write_f64(ctx, inst)
         }),
         RuntimeFnId::PtrWriteString => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_write_string(ctx, inst)

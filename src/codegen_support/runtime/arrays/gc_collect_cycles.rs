@@ -354,6 +354,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_free_init");
     emitter.instruction("bl __rt_gc_destructors");                              // protect candidate data and run destructors before reclamation
     emitter.instruction("cbnz x0, __rt_gc_collect_cycles_recount");             // observe mutations and resurrection before choosing doomed nodes
+    emitter.instruction("bl __rt_gc_weak_observers");                           // retire weak keys while candidate snapshots still protect callbacks
+    emitter.instruction("cbnz x0, __rt_gc_collect_cycles_recount");             // mark callback mutations and new allocations before sweeping
     emitter.instruction("bl __rt_gc_unpin_reachable");                          // surviving nodes keep only their real PHP owners
     emitter.instruction("bl __rt_gc_free_begin");                               // start timing graph reclamation separately
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_freeing_unreachable");
@@ -455,14 +457,14 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
     emitter.instruction("str xzr, [x9]");                                       // mark the collector as inactive again
     CLEANUP.finish(emitter);
-    emitter.instruction("cbz x0, __rt_gc_collect_cycles_cleanup_done");        // preserve a cleanup throw until the collector frame is gone
+    emitter.instruction("cbz x0, __rt_gc_collect_cycles_cleanup_done");         // preserve a cleanup throw until the collector frame is gone
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0);
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x1", "_gc_pending_throw", 0);
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x0", "_gc_pending_throw", 0);
     crate::codegen_support::abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     emitter.instruction("bl __rt_exception_chain");                             // keep an earlier destructor throw behind the cleanup throw
     emitter.label("__rt_gc_collect_cycles_cleanup_done");
-    emitter.instruction("ldr x0, [sp, #80]");                                  // return the collection count when no exception escaped
+    emitter.instruction("ldr x0, [sp, #80]");                                   // return the collection count when no exception escaped
     emitter.instruction("ldr x19, [sp, #48]");                                  // restore the callee-saved scratch register after collection
     emitter.instruction("ldr x20, [sp, #56]");                                  // restore the callee-saved payload-size register after collection
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
@@ -479,6 +481,7 @@ mod tests {
     use crate::codegen_support::platform::Target;
 
     #[test]
+    /// Verifies suppressed collection leaves the active flag unset on every AArch64 target.
     fn suppressed_aarch64_collection_does_not_set_active_flag() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
@@ -493,6 +496,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies AArch64 cycle-collector counters and cleanup state use distinct frame slots.
     fn aarch64_collector_keeps_count_rescan_and_cleanup_in_separate_frame_slots() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());

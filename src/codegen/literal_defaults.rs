@@ -167,10 +167,21 @@ pub(crate) fn literal_default_value(
     if let Some(folded) = fold_named_class_constant(expr) {
         return literal_default_value(context, php_type, &folded, op_name);
     }
-    // A spread-free mixed literal (`[-5 => "a", "b"]`) is the hash literal the active profile
-    // makes it; see `crate::codegen::mixed_array_literals`.
-    if let Some(folded) = crate::codegen::mixed_array_literals::fold_spreadless_mixed_array_literal(expr) {
+    if let Some(folded) = crate::types::fold_spreadless_mixed_array_literal(expr, crate::codegen_support::compile_php_version()) {
         return literal_default_value(context, php_type, &folded, op_name);
+    }
+    if php_type.coerces_integer_to_float() {
+        let integer = match expr {
+            ExprKind::IntLiteral(value) => Some(*value),
+            ExprKind::Negate(inner) => match inner.kind {
+                ExprKind::IntLiteral(value) => value.checked_neg(),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(value) = integer {
+            return literal_default_value(context, php_type, &ExprKind::FloatLiteral(value as f64), op_name);
+        }
     }
     match (php_type, expr) {
         (PhpType::Int, ExprKind::IntLiteral(value)) => Ok(LiteralDefaultValue::Int(*value)),
@@ -212,6 +223,12 @@ pub(crate) fn literal_default_value(
         }
         (php_type, ExprKind::Null) if php_type.codegen_repr() == PhpType::TaggedScalar => {
             Ok(LiteralDefaultValue::TaggedNull)
+        }
+        // A `?ptr<T>` slot holds a raw pointer word whose null is address 0, so its null
+        // default is the zero word. This arm must precede the `Union(_)` boxing arms: boxing
+        // would store a non-zero Mixed cell address that every later `=== null` reads as set.
+        (php_type, ExprKind::Null) if crate::types::is_nullable_pointer_type(php_type) => {
+            Ok(LiteralDefaultValue::Null)
         }
         (PhpType::Mixed | PhpType::Union(_), ExprKind::StringLiteral(value)) => {
             Ok(LiteralDefaultValue::BoxedStr(value.clone()))
@@ -567,7 +584,7 @@ fn literal_array_element(
     // will expect. A scalar element type cannot hold a container and is refused as before.
     // Delegating to `literal_default_value` shares the top-level arms, including PHP's implicit
     // `0,1,2,…` keys for a positional literal stored into hash storage (issue #1052).
-    if let Some(folded) = crate::codegen::mixed_array_literals::fold_spreadless_mixed_array_literal(expr) {
+    if let Some(folded) = crate::types::fold_spreadless_mixed_array_literal(expr, crate::codegen_support::compile_php_version()) {
         return literal_array_element(context, elem_type, &folded, op_name);
     }
     if matches!(expr, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) {
@@ -638,6 +655,11 @@ fn literal_array_element(
         },
         PhpType::Str => match expr {
             ExprKind::StringLiteral(value) => Ok(LiteralArrayElement::Str(value.clone())),
+            _ => Err(unsupported_literal_default(context, elem_type, op_name)),
+        },
+        // A pointer element's only literal is `null`, the null pointer word 0.
+        PhpType::Pointer(_) => match expr {
+            ExprKind::Null => Ok(LiteralArrayElement::Int(0)),
             _ => Err(unsupported_literal_default(context, elem_type, op_name)),
         },
         _ => Err(unsupported_literal_default(context, elem_type, op_name)),
@@ -798,7 +820,9 @@ fn append_array_literal_element(
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             append_refcounted_array_literal_element(ctx, value_type);
         }
-        PhpType::Int | PhpType::Bool => append_scalar_array_literal_element(ctx),
+        PhpType::Int | PhpType::Bool | PhpType::Pointer(_) | PhpType::Buffer(_) => {
+            append_scalar_array_literal_element(ctx)
+        }
         PhpType::Float => append_float_array_literal_element(ctx),
         PhpType::Str => append_string_array_literal_element(ctx),
         other => {
@@ -1083,12 +1107,13 @@ fn materialize_assoc_literal_concrete_value_x86_64(
     }
 }
 
-/// Returns the runtime value tag to pass for one literal hash insertion.
+/// Returns the runtime value tag to pass for one literal hash insertion. A pointer hash entry
+/// keeps its raw word under `POINTER_ARRAY_VALUE_TYPE`, as `hash_set` stores it.
 fn assoc_literal_value_tag(storage_value_type: &PhpType, actual_value_type: &PhpType) -> i64 {
     if matches!(storage_value_type.codegen_repr(), PhpType::Mixed | PhpType::Iterable) {
         runtime_value_tag(&actual_value_type.codegen_repr()) as i64
     } else {
-        runtime_value_tag(&storage_value_type.codegen_repr()) as i64
+        crate::codegen::container_value_tag(&storage_value_type.codegen_repr())
     }
 }
 
@@ -1105,6 +1130,8 @@ fn array_element_size(elem_type: &PhpType) -> Result<i64> {
         | PhpType::AssocArray { .. }
         | PhpType::Union(_)
         | PhpType::Iterable
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_)
         | PhpType::Void => Ok(8),
         other => Err(CodegenIrError::unsupported(format!(
             "array default element PHP type {:?}",
