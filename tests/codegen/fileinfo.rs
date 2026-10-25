@@ -103,7 +103,7 @@ echo $f->file("php://filter/read=elephc.missing/resource=data://text/plain,HELLO
 restore_error_handler();
 echo @$f->file("compress.zlib://" . $gz) === false ? "gzip-unstatable\n" : "bad\n";
 echo @finfo_file($f, "compress.bzip2://" . $bz) === false ? "bzip-unstatable\n" : "bad\n";
-$code = $argc > 0 ? 'echo $f->file("php://filter/read=string.rot13/resource=" . $p), "\n"; echo $f->file("php://filter/read=zlib.inflate/resource=" . $raw), "\n"; echo $f->file("php://filter/read=bzip2.decompress/resource=" . $bz), "\n"; echo @$f->file("compress.zlib://" . $gz) === false ? "gzip-unstatable\n" : "bad\n"; echo @$f->file("compress.bzip2://" . $bz) === false ? "bzip-unstatable\n" : "bad\n";' : '';
+$code = $argc > 0 ? 'echo $f->file("php://filter/read=string.rot13/resource=" . $p), "\n"; echo $f->file("php://filter/read=zlib.inflate/resource=" . $raw), "\n"; echo $f->file("php://filter/read=bzip2.decompress/resource=" . $bz), "\n"; echo $f->file("compress.zlib://" . $gz) === false ? "gzip-unstatable\n" : "bad\n"; echo $f->file("compress.bzip2://" . $bz) === false ? "bzip-unstatable\n" : "bad\n";' : '';
 eval($code);
 unlink($db);
 unlink($p);
@@ -136,11 +136,44 @@ $f = new finfo(FILEINFO_MIME_TYPE);
 for ($i = 0; $i < 3; $i++) {
     $value = $f->file("php://filter/read=string.rot13|string.toupper/resource=data://text/plain,uryyb");
     unset($value);
+    $decoded = $f->file("php://filter/read=bzip2.decompress/resource=data://application/octet-stream;base64,QlpoOTFBWSZTWXMoMkUAAACEAAJEoAAhmmgzTQczi7kinChIOZQZIoA=");
+    echo $decoded, "\n";
+    unset($decoded);
+    $broken = $f->file("php://filter/read=bzip2.decompress/resource=data://text/plain,invalid");
+    unset($broken);
 }
 unset($f);
 echo "ok\n";
 "#);
-    assert_eq!(out.stdout, "ok\n");
+    assert_eq!(out.stdout, "text/plain\ntext/plain\ntext/plain\nok\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Highly compressible filter input grows its output buffer and releases every allocation.
+#[test]
+fn test_fileinfo_high_ratio_inflate() {
+    if fileinfo_native::skip("test_fileinfo_high_ratio_inflate") { return; }
+    let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+$db = tempnam(sys_get_temp_dir(), "magic");
+$raw = tempnam(sys_get_temp_dir(), "deflate");
+file_put_contents($db, "700000 string ELEPHC expanded-document\n");
+$payload = str_repeat("x", 700000) . "ELEPHC" . str_repeat("y", 300000);
+$compressed = gzdeflate($payload);
+file_put_contents($raw, $compressed);
+$decoded = gzinflate($compressed);
+echo $decoded === $payload ? "complete\n" : "truncated\n";
+unset($decoded, $payload, $compressed);
+$f = new finfo(FILEINFO_NONE, $db);
+echo $f->file("php://filter/read=zlib.inflate/resource=" . $raw), "\n";
+unset($f);
+$invalid = @gzinflate("invalid");
+echo $invalid === false ? "invalid\n" : "bad\n";
+unset($invalid);
+unlink($db);
+unlink($raw);
+unset($db, $raw);
+"#);
+    assert_eq!(out.stdout, "complete\nexpanded-document\ninvalid\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
