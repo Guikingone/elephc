@@ -359,3 +359,6 @@ echo inspect(new VarianceBox<InlineDog>(new InlineDog())), "\n";
         }
     }
 }
+
+#[path = "method_inline_effects_test.rs"]
+mod effects;

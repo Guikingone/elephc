@@ -1,5 +1,5 @@
 <?php
-// Small accessor and predicate methods on a final class, called in a hot loop.
+// Small accessors, nested static calls and string-building methods on a final class.
 //
 // The optimizer splices a direct call to a small method it can bind statically
 // (final class, final method, or a method nothing can override) into the caller,
@@ -15,6 +15,14 @@ packed class Slot
     public int $mask;
 }
 
+final class Component
+{
+    public static function normalize(int $mask): int
+    {
+        return $mask & 3;
+    }
+}
+
 final class Table
 {
     private buffer<Slot> $slots;
@@ -27,10 +35,17 @@ final class Table
 
     public function add(int $mask): void
     {
+        $mask = $this->normalizeMask($mask);
         $index = $this->highWater;
         $this->slots[$index]->alive = true;
         $this->slots[$index]->mask = $mask;
         $this->highWater = $index + 1;
+    }
+
+    // A small wrapper around a nested static call splices during insertion, off the hot scan.
+    private function normalizeMask(int $mask): int
+    {
+        return Component::normalize($mask);
     }
 
     // Buffers have no automatic cleanup: the table releases its storage explicitly.
@@ -38,6 +53,11 @@ final class Table
     {
         $slots = $this->slots;
         buffer_free($slots);
+    }
+
+    public function heading(string $name): string
+    {
+        return $name . ": ";
     }
 
     public function highWater(): int
@@ -75,6 +95,6 @@ for ($i = 0; $i < $count; $i++) {
     $table->add($i % 4 === 3 ? POSITION : POSITION | VELOCITY);
 }
 
-echo "entities: ", $table->highWater(), "\n";
-echo "moving: ", countMoving($table), "\n";
+echo $table->heading("entities"), $table->highWater(), "\n";
+echo $table->heading("moving"), countMoving($table), "\n";
 $table->release();

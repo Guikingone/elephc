@@ -191,3 +191,6 @@ echo $x, "\n";
 "#;
     assert_both_modes(source, true, "Child 4 0\n123 120\n3\n");
 }
+
+#[path = "method_inline_effects.rs"]
+mod effects;

@@ -464,26 +464,35 @@ function scan(Table $t, int $n): int
 A `$receiver->method()` call is a candidate when the receiver's static type is a plain
 (non-nullable) user class and the call cannot reach a different body at run time: the
 class is `final`, the method is `final`, or the class has no vtable slot for it. The
-exception is an instantiated generic receiver with a vtable slot: variance can change
-its actual instantiation, so even a final class or final method keeps a real call. The
-method body then has to pass the function rules above (the `$this` receiver is the one
-object they accept, as a borrowed argument) plus a few of its own:
+exception is an instantiated generic receiver with a vtable slot: covariance and
+contravariance can select a different monomorphized specialization, with its own lexical
+class and state, so even a final class or final method keeps a real call. The method body
+then has to pass the function rules above (the `$this` receiver is the one object they
+accept, as a borrowed argument) plus a few of its own:
 
 - it is not static, magic (`__*`), deprecated, by-reference-returning or variadic, and has
   no by-reference parameter and no literal `false`/`null` parameter type (those carry a
   call-site argument guard the splice would skip);
 - every instruction is **frame-independent**: constants, locals, scalar arithmetic and
-  comparisons, `buffer<T>` element reads, and property reads on `$this` or on a packed
-  record. Anything whose meaning depends on the method's own frame keeps the call:
-  `static::` and other late static binding, static variables, `func_get_args()`, nested
-  calls, closures, string building, writes;
+  comparisons, `buffer<T>` element reads, property reads and writes on `$this` or packed
+  records, string concatenation/append/length, ordinary function calls, nested method calls
+  on `$this`, and static calls to an explicit user class. Nested calls retain their own
+  source spans for diagnostics. Lexical `self::`/`parent::`/`static::` calls, other late static
+  binding, static variables, `func_get_args()`, closures and eval scopes keep the call;
+- property-writing methods retain their real call boundary inside class initializers,
+  whose property-store rules are specific to that synthetic frame. The recursion graph
+  also follows statically bound instance and explicit static calls through bodies that
+  cannot themselves be inlined;
+- a source local assignment of an acquired concatenation keeps its real boundary, because
+  that store implicitly resets the callee's string scratch. Direct returned concatenations
+  remain eligible;
 - the program does not observe PHP frames: when anything can call `debug_backtrace()` (or
   the eval bridge is linked), every method call stays, so backtraces never lose a frame.
 
 The splice keeps what a real call does. A receiver that is null at run time still raises
 `Call to a member function m() on null` before the body runs (the check is omitted only
 for the host method's own `$this`). The spliced instructions still execute in the method's
-class scope, so private and protected property reads resolve exactly as inside the
+class scope, so private and protected property reads and writes resolve exactly as inside the
 method, even from a free function or another class. The method's locals are renamed so
 they never show up in the caller's eval scope or `get_defined_vars()`. The receiver is
 only borrowed, so destructors run where the real call would have released the object.

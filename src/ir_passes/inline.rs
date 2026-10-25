@@ -74,6 +74,7 @@ use crate::ir_passes::rewrite::neutralize_to_nop;
 use crate::types::PhpType; // used for void stores and plain-scalar checks
 
 mod methods;
+mod recursion;
 
 /// Backstop cap on inlines performed into a single host. Recursive-cycle
 /// exclusion already guarantees termination over the acyclic candidate graph;
@@ -232,62 +233,6 @@ fn callee_is_inline_safe(callee: &Function, receiver: bool) -> bool {
         return false;
     }
     true
-}
-
-/// Builds the set of candidate callee names that are recursive, directly or mutually,
-/// over the call graph of `module.functions` plus the candidate method bodies (edges via
-/// resolvable `Call`/`FunctionVariantCall` sites and statically bound `MethodCall` sites).
-/// A callee is recursive when it can reach itself; such callees are never inlined, which
-/// (with the per-function fuel cap) guarantees the inliner terminates instead of expanding
-/// a cycle forever. Function names never contain `::`, so one name set serves both kinds.
-fn compute_recursive_callees(
-    functions: &[Function],
-    name_to_idx: &HashMap<String, usize>,
-    resolver: &CallTargetResolver,
-    methods: &methods::MethodTargets,
-    strings: &[String],
-) -> HashSet<String> {
-    let nodes: Vec<&Function> = functions.iter().chain(methods.bodies().iter()).collect();
-    let n = nodes.len();
-    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for (i, func) in nodes.iter().enumerate() {
-        for inst in &func.instructions {
-            let target = if is_user_call_op(inst.op) {
-                resolver
-                    .resolve(inst)
-                    .and_then(|name| name_to_idx.get(&name).copied())
-            } else {
-                methods
-                    .resolve(func, inst, strings)
-                    .map(|method| functions.len() + method)
-            };
-            if let Some(j) = target {
-                adjacency[i].push(j);
-            }
-        }
-    }
-    let mut recursive = HashSet::new();
-    for start in 0..n {
-        // Depth-first reachability from `start`; if we re-reach it, it lies on a cycle.
-        let mut visited = vec![false; n];
-        let mut stack: Vec<usize> = adjacency[start].clone();
-        let mut reaches_self = false;
-        while let Some(node) = stack.pop() {
-            if node == start {
-                reaches_self = true;
-                break;
-            }
-            if visited[node] {
-                continue;
-            }
-            visited[node] = true;
-            stack.extend(adjacency[node].iter().copied());
-        }
-        if reaches_self {
-            recursive.insert(nodes[start].name.clone());
-        }
-    }
-    recursive
 }
 
 /// Returns `(saw_value, saw_void)` over the callee's `Return` terminators.
@@ -1451,13 +1396,7 @@ pub(crate) fn inline_small_functions(module: &mut Module) -> bool {
     // Snapshot callee bodies once (small); we only inline from the pre-mutation bodies,
     // and repeated inlining inside one host re-scans the updated host only.
     let callee_snapshots: Vec<Function> = module.functions.clone();
-    let recursive = compute_recursive_callees(
-        &callee_snapshots,
-        &name_to_idx,
-        &resolver,
-        &methods,
-        &module.data.strings,
-    );
+    let recursive = recursion::compute_recursive_callees(module, &name_to_idx, &resolver, &methods);
     let callees = Callees {
         functions: &callee_snapshots,
         name_to_idx: &name_to_idx,
