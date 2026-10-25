@@ -36,6 +36,34 @@ const CALLBACK_ARG_COUNT_OFFSET: usize = 16;
 const CALLBACK_PRINT_INDEX_OFFSET: usize = 24;
 const CALLBACK_PRINT_ARG_COUNT_OFFSET: usize = 32;
 
+/// Reads the nearest suspended source call site without materializing a PHP backtrace array.
+pub(super) fn lower_diagnostic_caller_line(ctx: &mut FunctionContext<'_>) {
+    let arm = ctx.emitter.target.arch == Arch::AArch64;
+    let result = abi::int_result_reg(ctx.emitter);
+    let cursor = abi::secondary_scratch_reg(ctx.emitter);
+    let limit = abi::tertiary_scratch_reg(ctx.emitter);
+    let scan = ctx.next_label("diagnostic_caller_scan");
+    let next = ctx.next_label("diagnostic_caller_next");
+    let empty = ctx.next_label("diagnostic_caller_empty");
+    let done = ctx.next_label("diagnostic_caller_done");
+    abi::emit_load_symbol_to_reg(ctx.emitter, cursor, "_exc_call_frame_top", 0);
+    abi::emit_load_int_immediate(ctx.emitter, limit, i64::from(crate::span::SYNTHETIC_LINE_BASE));
+    ctx.emitter.label(&scan);
+    ctx.emitter.instruction(&if arm { format!("cmp {cursor}, #0") } else { format!("test {cursor}, {cursor}") }); // detect the end of the activation chain
+    ctx.emitter.instruction(&format!("{} {empty}", if arm { "b.eq" } else { "jz" })); // fall back when no source caller remains
+    abi::emit_load_from_address(ctx.emitter, result, cursor, 32);
+    ctx.emitter.instruction(&if arm { format!("cmp {result}, #0") } else { format!("test {result}, {result}") }); // skip frames with no source coordinate
+    ctx.emitter.instruction(&format!("{} {next}", if arm { "b.eq" } else { "jz" })); // continue past generated frame entries
+    ctx.emitter.instruction(&format!("cmp {result}, {limit}"));                 // distinguish real PHP lines from synthetic AST identities
+    ctx.emitter.instruction(&format!("{} {done}", if arm { "b.lo" } else { "jb" })); // retain the nearest real call-site line
+    ctx.emitter.label(&next);
+    abi::emit_load_from_address(ctx.emitter, cursor, cursor, 0);
+    abi::emit_jump(ctx.emitter, &scan);
+    ctx.emitter.label(&empty);
+    abi::emit_load_int_immediate(ctx.emitter, result, 0);
+    ctx.emitter.label(&done);
+}
+
 /// Publishes the source line and a call-site-specific frame reader before a nested PHP call.
 pub(super) fn prepare_call_site(
     ctx: &mut FunctionContext<'_>,

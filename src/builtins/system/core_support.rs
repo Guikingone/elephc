@@ -319,14 +319,25 @@ fn lower_trigger_operands(
         Op::ConstStr.default_effects(),
         Some(call.span),
     );
-    let line = ctx.emit_value(
-        Op::ConstI64,
-        Vec::new(),
-        Some(Immediate::I64(i64::from(call.span.line))),
-        PhpType::Int,
-        Op::ConstI64.default_effects(),
-        Some(call.span),
-    );
+    let line = if !call.span.is_from_source() && default_level != 1_024 {
+        ctx.emit_value(
+            Op::CoreBuiltin,
+            Vec::new(),
+            Some(Immediate::I64(CoreBuiltinOp::DiagnosticCallerLine.as_i64())),
+            PhpType::Int,
+            CoreBuiltinOp::DiagnosticCallerLine.effects(),
+            Some(call.span),
+        )
+    } else {
+        ctx.emit_value(
+            Op::ConstI64,
+            Vec::new(),
+            Some(Immediate::I64(i64::from(call.span.line))),
+            PhpType::Int,
+            Op::ConstI64.default_effects(),
+            Some(call.span),
+        )
+    };
     Ok(vec![
         call.operand(0)?,
         operand_or_const_int(ctx, call, 1, default_level),

@@ -10,6 +10,45 @@
 
 use crate::support::*;
 
+/// Generated warning and deprecation frames retain the public source call line and default output.
+#[test]
+fn test_fileinfo_diagnostic_call_site_lines() {
+    if fileinfo_native::skip("test_fileinfo_diagnostic_call_site_lines") { return; }
+    let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+$expected = 0;
+function fileinfoLineCaller(finfo $f): bool {
+    global $expected;
+    $expected = __LINE__ + 1;
+    return finfo_close($f);
+}
+$f = new finfo(FILEINFO_MIME_TYPE);
+$context = fopen("php://memory", "w+b");
+set_error_handler(function(int $level, string $message, string $file, int $line) use (&$expected): bool {
+    echo $file === __FILE__ && $line === $expected ? "ok\n" : "bad:" . $line . ":" . $expected . "\n";
+    return true;
+});
+$expected = __LINE__ + 1;
+finfo_close($f);
+fileinfoLineCaller($f);
+$close = finfo_close(...);
+$expected = __LINE__ + 1;
+$close($f);
+$expected = __LINE__ + 1;
+$f->buffer("HELLO", 0, $context);
+$expected = __LINE__ + 1;
+finfo_file($f, "data:text");
+restore_error_handler();
+echo "default:", __LINE__ + 1, "\n";
+finfo_close($f);
+fclose($context); unset($f, $context, $close);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stdout.starts_with(&"ok\n".repeat(5)), "{}\n{}", out.stdout, out.stderr);
+    let line = out.stdout.lines().last().unwrap().strip_prefix("default:").unwrap();
+    assert!(out.stderr.contains(&format!("on line {line}\n")), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Argument errors retain their public function names and the selected PHP exception class.
 #[test]
 fn test_fileinfo_php_profile_argument_errors() {

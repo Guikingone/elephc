@@ -54,6 +54,7 @@ pub(super) fn lower_core_builtin(
         CoreBuiltinOp::TriggerError => handlers::lower_trigger_error(ctx, inst, None)?,
         CoreBuiltinOp::BuiltinDeprecated => handlers::lower_trigger_error(ctx, inst, Some(b"Deprecated: "))?,
         CoreBuiltinOp::BuiltinWarning => handlers::lower_trigger_error(ctx, inst, Some(b"Warning: "))?,
+        CoreBuiltinOp::DiagnosticCallerLine => backtrace::lower_diagnostic_caller_line(ctx),
         CoreBuiltinOp::GetDefinedConstants => constants::lower_get_defined_constants(ctx, inst)?,
         CoreBuiltinOp::GetDefinedVars => {
             return Err(CodegenIrError::invalid_module(

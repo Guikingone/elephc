@@ -672,6 +672,8 @@ pub enum CoreBuiltinOp {
     BuiltinWarning = 17,
     /// An internal version-gated PHP E_DEPRECATED diagnostic.
     BuiltinDeprecated = 18,
+    /// Reads the nearest source call site through compiler-generated diagnostic frames.
+    DiagnosticCallerLine = 19,
 }
 
 impl CoreBuiltinOp {
@@ -695,7 +697,8 @@ impl CoreBuiltinOp {
             | Self::ErrorReporting
             | Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
-            | Self::TriggerError | Self::BuiltinWarning | Self::BuiltinDeprecated => BuiltinResultOwnership::NonHeap,
+            | Self::TriggerError | Self::BuiltinWarning | Self::BuiltinDeprecated
+            | Self::DiagnosticCallerLine => BuiltinResultOwnership::NonHeap,
         }
     }
 
@@ -726,6 +729,7 @@ impl CoreBuiltinOp {
             16 => Some(Self::GetExceptionHandler),
             17 => Some(Self::BuiltinWarning),
             18 => Some(Self::BuiltinDeprecated),
+            19 => Some(Self::DiagnosticCallerLine),
             _ => None,
         }
     }
@@ -747,7 +751,8 @@ impl CoreBuiltinOp {
             | Self::GetDefinedVars
             | Self::GetIncludedFiles
             | Self::GetErrorHandler
-            | Self::GetExceptionHandler => 0,
+            | Self::GetExceptionHandler
+            | Self::DiagnosticCallerLine => 0,
             Self::GetDefinedFunctions => 1,
         }
     }
@@ -756,6 +761,9 @@ impl CoreBuiltinOp {
     pub const fn effects(self) -> Effects {
         use Effects as E;
         match self {
+            Self::DiagnosticCallerLine => Effects::from_bits_retain(
+                E::READS_GLOBAL.bits() | E::READS_HEAP.bits(),
+            ),
             Self::GetDefinedConstants
             | Self::GetDefinedFunctions
             | Self::GetDefinedVars
