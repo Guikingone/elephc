@@ -181,6 +181,7 @@ unset($db, $raw);
     for (label, source) in [
         ("invalid inflate", "<?php $value = @gzinflate('invalid'); unset($value); echo 'ok';"),
         ("compression", "<?php $source = str_repeat('x', 1000000); $packed = gzdeflate($source); $value = gzinflate($packed); unset($value, $packed, $source); echo 'ok';"),
+        ("payload concatenation", "<?php $source = str_repeat('x', 700000) . 'ELEPHC' . str_repeat('y', 300000); unset($source); echo 'ok';"),
         ("temporary paths", "<?php $db = tempnam(sys_get_temp_dir(), 'magic'); $raw = tempnam(sys_get_temp_dir(), 'deflate'); unlink($db); unlink($raw); unset($db, $raw); echo 'ok';"),
     ] {
         let (control, asm) = compile_and_run_with_heap_debug_and_asm(source);
