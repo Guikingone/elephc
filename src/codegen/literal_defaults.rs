@@ -546,7 +546,8 @@ fn materialize_assoc_literal_key_aarch64(ctx: &mut FunctionContext<'_>, key: &Li
             abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
         }
         LiteralArrayKey::Str(value) => {
-            let (label, len) = ctx.data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (label, len) = ctx.data.add_string(&bytes);
             abi::emit_symbol_address(ctx.emitter, "x1", &label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
@@ -565,7 +566,8 @@ fn materialize_assoc_literal_key_x86_64(ctx: &mut FunctionContext<'_>, key: &Lit
             abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
         }
         LiteralArrayKey::Str(value) => {
-            let (label, len) = ctx.data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (label, len) = ctx.data.add_string(&bytes);
             abi::emit_symbol_address(ctx.emitter, "rax", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
@@ -765,10 +767,7 @@ fn emit_array_element_value(
             Ok(PhpType::Float)
         }
         LiteralArrayElement::Str(value) => {
-            let (label, len) = ctx.data.add_string(value.as_bytes());
-            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
-            abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+            emit_string_literal_default_to_result(ctx, value);
             Ok(PhpType::Str)
         }
         LiteralArrayElement::Null => {

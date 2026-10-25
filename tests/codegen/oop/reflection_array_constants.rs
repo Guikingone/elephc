@@ -9,6 +9,42 @@
 
 use super::*;
 
+/// Reflection property strings quote the decoded default bytes with PHP's printable escapes.
+#[test]
+fn test_reflection_constant_bytes_keep_property_string_boundaries() {
+    let out = compile_and_run(r#"<?php
+class Name {}
+class PropertyStringDefaults {
+    public string $name = Name::class;
+    public string $bytes = "\xff\0A\n";
+}
+echo trim((new ReflectionProperty('PropertyStringDefaults', 'name'))->__toString()), '|';
+echo trim((new ReflectionProperty('PropertyStringDefaults', 'bytes'))->__toString());
+"#);
+    assert_eq!(out, r"Property [ public string $name = 'Name\xEE\x80\x80' ]|Property [ public string $bytes = '\xFF\x00A\n' ]");
+}
+
+/// Array property defaults decode PHP bytes and synthesized class names at every depth.
+#[test]
+fn test_reflection_constant_bytes_keep_property_array_boundaries() {
+    let out = compile_and_run(r#"<?php
+class Name {}
+class PropertyByteDefaults {
+    public array $names = [Name::class];
+    public static array $staticNames = [Name::class];
+    public array $bytes = [-5 => "\xff", "\xc3\xa9" => "old", "é" => ["\xff\0A"], "end"];
+    public static array $staticBytes = [-5 => "\xff", "\xc3\xa9" => "old", "é" => ["\xff\0A"], "end"];
+}
+$object = new PropertyByteDefaults();
+echo bin2hex($object->names[0]), '|', bin2hex(PropertyByteDefaults::$staticNames[0]), '|';
+echo count($object->bytes), ':', bin2hex($object->bytes[-5]), ':', bin2hex($object->bytes['é'][0]), ':', json_encode(array_keys($object->bytes)), '|';
+echo count(PropertyByteDefaults::$staticBytes), ':', bin2hex(PropertyByteDefaults::$staticBytes[-5]), ':', bin2hex(PropertyByteDefaults::$staticBytes['é'][0]), '|';
+$reflected = (new ReflectionProperty('PropertyByteDefaults', 'bytes'))->getDefaultValue();
+echo count($reflected), ':', bin2hex($reflected[-5]), ':', bin2hex($reflected['é'][0]);
+"#);
+    assert_eq!(out, "4e616d65ee8080|4e616d65ee8080|3:ff:ff0041:[-5,\"\\u00e9\",-4]|3:ff:ff0041|3:ff:ff0041");
+}
+
 /// Scalar default and constant ABI slots carry PHP bytes rather than literal marker text.
 #[test]
 fn test_reflection_constant_bytes_keep_eval_scalar_boundaries() {
