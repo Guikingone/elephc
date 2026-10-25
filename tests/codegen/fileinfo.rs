@@ -174,7 +174,24 @@ unlink($raw);
 unset($db, $raw);
 "#);
     assert_eq!(out.stdout, "complete\nexpanded-document\ninvalid\n");
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    let mut failures = Vec::new();
+    if !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+        failures.push(format!("high-ratio file query: {}", out.stderr));
+    }
+    for (label, source) in [
+        ("invalid inflate", "<?php $value = @gzinflate('invalid'); unset($value); echo 'ok';"),
+        ("compression", "<?php $source = str_repeat('x', 1000000); $packed = gzdeflate($source); $value = gzinflate($packed); unset($value, $packed, $source); echo 'ok';"),
+        ("temporary paths", "<?php $db = tempnam(sys_get_temp_dir(), 'magic'); $raw = tempnam(sys_get_temp_dir(), 'deflate'); unlink($db); unlink($raw); unset($db, $raw); echo 'ok';"),
+    ] {
+        let (control, asm) = compile_and_run_with_heap_debug_and_asm(source);
+        assert_eq!(control.stdout, "ok", "{label}");
+        if !control.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            let main = asm.lines().skip_while(|line| !line.trim_end().ends_with("main:")).take(550).collect::<Vec<_>>().join("\n");
+            eprintln!("Fileinfo {label} control assembly:\n{main}");
+            failures.push(format!("{label}: {}", control.stderr));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// Network inputs inspect response bytes and use the stream layer's HTTP context options.
