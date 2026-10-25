@@ -28,11 +28,32 @@ pub(super) fn lower_live_array_push_place(
     })?;
     let mixed_place = static_place_type(ctx, place)
         .is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed);
-    if (!is_array_place(ctx, place, &sig.params[0].1) && !mixed_place)
-        || !addressable(ctx, place) { return None; }
+    let plan = property_plan(ctx, place).cloned();
+    if (!is_array_place(ctx, place, &sig.params[0].1) && !mixed_place && plan.is_none())
+        || (plan.as_ref().and_then(|plan| plan.rejection.as_ref()).is_none()
+            && !addressable(ctx, place)) { return None; }
     begin_call_argument_evaluation(ctx);
     let mut snapshots = Vec::new();
     let frozen = freeze_place(ctx, place, &mut snapshots);
+    if let Some(message) = plan.as_ref().and_then(|plan| plan.rejection.as_deref()) {
+        if let Some(root) = property_root(&frozen) {
+            if let ExprKind::PropertyAccess { property, .. } = &root.kind {
+                let getter = crate::names::php_symbol_key(&crate::names::property_hook_get_method(property));
+                let reads_hook = !ctx.in_own_property_accessor(property)
+                    && plan.as_ref().and_then(|plan| ctx.classes.get(&plan.class_name))
+                        .and_then(|info| info.methods.get(&getter)).is_some_and(|sig| !sig.by_ref_return);
+                if reads_hook {
+                    let value = lower_expr(ctx, root);
+                    if ctx.value_is_owning_temporary(value) {
+                        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+                    }
+                }
+            }
+        }
+        let result = crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+            ctx, message, expr.span, PhpType::Int);
+        return Some(array_push_spread::finish_scope(ctx, result));
+    }
     let (alias, _) = prepare_scoped_addressable_ref_array_receiver(ctx, &frozen)
         .expect("preflighted native array place must be addressable");
     if let ExprKind::Variable(name) = &alias.kind {
@@ -62,7 +83,10 @@ fn addressable(ctx: &LoweringContext<'_, '_>, place: &Expr) -> bool {
     match &place.kind {
         ExprKind::Variable(_) => true,
         ExprKind::PropertyAccess { object, property } =>
-            container_property_slot_is_addressable(ctx, object, property),
+            container_property_slot_is_addressable(ctx, object, property)
+                || property_plan(ctx, place).is_some_and(|plan| plan.rejection.is_none()
+                    && ctx.classes.get(&plan.class_name).is_some_and(|info|
+                        info.reference_properties.contains(property))),
         ExprKind::StaticPropertyAccess { .. } => true,
         ExprKind::ArrayAccess { array, .. } => addressable(ctx, array),
         _ => false,
@@ -74,6 +98,12 @@ fn freeze_place(ctx: &mut LoweringContext<'_, '_>, place: &Expr, snapshots: &mut
     match &place.kind {
         ExprKind::PropertyAccess { object, property } => {
             let temp = array_push_spread::stage_value(ctx, object);
+            if let Some(plan) = property_plan(ctx, place) {
+                let class = plan.class_name.clone();
+                // The checker proved this non-null class at this exact source point.
+                // Frame storage may stay Mixed while the load recovers its native object view.
+                ctx.set_local_type(&temp, PhpType::Object(class));
+            }
             snapshots.push(temp.clone());
             Expr::new(ExprKind::PropertyAccess {
                 object: Box::new(Expr::new(ExprKind::Variable(temp), object.span)),
@@ -90,5 +120,26 @@ fn freeze_place(ctx: &mut LoweringContext<'_, '_>, place: &Expr, snapshots: &mut
             }, place.span)
         }
         _ => place.clone(),
+    }
+}
+
+/// Reads the checker's decision for the property at the root of a nested array place.
+fn property_plan<'a>(
+    ctx: &'a LoweringContext<'_, '_>, place: &Expr,
+) -> Option<&'a crate::types::ArrayPushPropertyPlan> {
+    match &place.kind {
+        ExprKind::PropertyAccess { .. } => ctx.array_push_property_plans
+            .get(&(ctx.loop_storage_scope.clone(), place.span)),
+        ExprKind::ArrayAccess { array, .. } | ExprKind::ErrorSuppress(array) => property_plan(ctx, array),
+        _ => None,
+    }
+}
+
+/// Finds the property fetch whose reference rules apply to a nested dimension argument.
+fn property_root(place: &Expr) -> Option<&Expr> {
+    match &place.kind {
+        ExprKind::PropertyAccess { .. } => Some(place),
+        ExprKind::ArrayAccess { array, .. } | ExprKind::ErrorSuppress(array) => property_root(array),
+        _ => None,
     }
 }

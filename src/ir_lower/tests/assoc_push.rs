@@ -23,6 +23,16 @@ array_push($mixed, ...$tail);
 class TargetPushBox { public array $items = ["a" => 1]; }
 $box = new TargetPushBox();
 array_push($box->items, ...$tail);
+$held = $box;
+array_push($box->items, (function () use (&$box) { $box = new TargetPushBox(); return 2; })());
+$box->items = ["a" => 1, PHP_INT_MAX - 1 => 2];
+try { array_push($box->items, 3, 4); } catch (Error $e) { echo $e->getMessage(); }
+class TargetReadonlyPushBox {
+    public readonly array $items;
+    public function __construct() { $this->items = ["a" => 1]; }
+}
+$readonly = new TargetReadonlyPushBox();
+try { array_push($readonly->items, 2); } catch (Error $e) { echo $e->getMessage(); }
 $rows = ["inner" => ["a" => 1]];
 array_push($rows["inner"], 2);
 echo json_encode($values), json_encode($copy), json_encode($mixed);

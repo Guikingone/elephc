@@ -409,3 +409,120 @@ echo $n, "|", json_encode($rows), "\n";
         .expect("heap debug must report its final ownership summary").to_owned();
     assert_eq!(summary(&out.stderr), summary(&baseline.stderr), "{}\ncontrol: {}", out.stderr, baseline.stderr);
 }
+
+/// Checker-selected classes survive opaque closure effects before a later partial append.
+#[test]
+fn test_associative_push_erased_receiver_class_preserves_partial_writes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ErasedPushBox { public array $h = ["a" => 1]; }
+$o = new ErasedPushBox();
+$held = $o;
+array_push($o->h, (function () use (&$o) { $o = new ErasedPushBox(); return 2; })());
+$o->h = ["a" => 1, PHP_INT_MAX - 1 => 2];
+try { array_push($o->h, 3, 4); }
+catch (Error $e) { echo count($o->h), ",", $o->h[PHP_INT_MAX], "\n"; }
+"#);
+    assert_eq!(out.stdout, "3,3\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Readonly property reference binding refuses direct, nested, zero-value and constructor calls.
+#[test]
+fn test_associative_push_readonly_property_errors_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function rejectedPushValue(): int { echo "value|"; return 2; }
+function rejectedPushKey(): string { echo "key|"; return "inner"; }
+class ReadonlyPushBox {
+    public readonly array $h;
+    public function __construct() { $this->h = ["inner" => [1]]; }
+}
+$o = new ReadonlyPushBox();
+try { array_push($o->h, rejectedPushValue()); }
+catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { array_push($o->h[rejectedPushKey()], rejectedPushValue()); }
+catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { array_push($o->h); }
+catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo json_encode($o->h), "\n";
+class UninitializedPushBox { public readonly array $h; }
+$empty = new UninitializedPushBox();
+try { array_push($empty->h, rejectedPushValue()); }
+catch (Error $e) { echo $e->getMessage(), "\n"; }
+class ConstructorPushBox {
+    public readonly array $h;
+    public function __construct() {
+        $this->h = ["a" => 1];
+        try { array_push($this->h, rejectedPushValue()); }
+        catch (Error $e) { echo $e->getMessage(), "\n"; }
+    }
+}
+$inside = new ConstructorPushBox();
+"#);
+    assert_eq!(out.stdout, concat!(
+        "Cannot indirectly modify readonly property ReadonlyPushBox::$h\n",
+        "key|Cannot indirectly modify readonly property ReadonlyPushBox::$h\n",
+        "Cannot indirectly modify readonly property ReadonlyPushBox::$h\n",
+        "{\"inner\":[1]}\n",
+        "Cannot indirectly modify readonly property UninitializedPushBox::$h\n",
+        "Cannot indirectly modify readonly property ConstructorPushBox::$h\n",
+    ), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Setter visibility guards indirect writes while class and descendant scopes keep legal access.
+#[test]
+fn test_associative_push_set_visibility_errors_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class PrivatePushBox {
+    public private(set) array $h = ["a" => 1];
+    public function add(): int { return array_push($this->h, 2); }
+}
+$o = new PrivatePushBox();
+try { array_push($o->h, 3); }
+catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo $o->add(), "|", json_encode($o->h), "\n";
+class ProtectedPushBox { public protected(set) array $h = ["a" => 1]; }
+class DescendantPushBox extends ProtectedPushBox {
+    public function add(): int { return array_push($this->h, 2); }
+}
+$child = new DescendantPushBox();
+try { array_push($child->h, 3); }
+catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo $child->add(), "|", json_encode($child->h), "\n";
+"#);
+    assert_eq!(out.stdout, concat!(
+        "Cannot indirectly modify private(set) property PrivatePushBox::$h from global scope\n",
+        "2|{\"a\":1,\"0\":2}\n",
+        "Cannot indirectly modify protected(set) property ProtectedPushBox::$h from global scope\n",
+        "2|{\"a\":1,\"0\":2}\n",
+    ), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// By-value property hooks reject indirect mutation after getter and dimension effects only.
+#[test]
+fn test_associative_push_hook_errors_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function hookedPushValue(): int { echo "value|"; return 3; }
+function hookedPushKey(): string { echo "key|"; return "inner"; }
+class SetHookPushBox {
+    public array $h = [1, 2] { set { echo "set|"; $this->h = $value; } }
+}
+$o = new SetHookPushBox();
+try { array_push($o->h, hookedPushValue()); }
+catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo json_encode($o->h), "\n";
+class GetHookPushBox {
+    public array $h { get { echo "get|"; return ["inner" => [1]]; } }
+}
+$get = new GetHookPushBox();
+try { array_push($get->h[hookedPushKey()], hookedPushValue()); }
+catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(out.stdout, concat!(
+        "Indirect modification of SetHookPushBox::$h is not allowed\n",
+        "[1,2]\n",
+        "key|get|Indirect modification of GetHookPushBox::$h is not allowed\n",
+    ), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

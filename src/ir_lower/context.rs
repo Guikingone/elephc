@@ -316,6 +316,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls in this source module.
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
+    /// Checked property classes and write refusals before opaque calls erase flow facts.
+    pub array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     /// Checker-authorized argument sites that may widen an ordinary local to boxed Mixed.
     pub boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
     pub first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
@@ -492,6 +494,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         extern_classes: &'m HashMap<String, ExternClassInfo>,
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
+        array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
         first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
         generic_call_sites: &'m HashMap<(String, Span), String>,
@@ -558,6 +561,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             extern_classes,
             throw_access_sites,
             builtin_call_types,
+            array_push_property_plans,
             boxed_reference_promotion_sites,
             first_class_builtin_call_types,
             generic_call_sites,

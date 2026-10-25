@@ -16,23 +16,59 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::Checker;
 
 impl Checker {
-    /// Gives array_push a managed cell for each native property in its receiver's array path.
-    /// The EIR call keeps this selected cell live while later arguments may replace the place.
+    /// Records property storage before argument effects erase EIR class facts.
+    /// Returns true when reference binding itself raises Error, including a nested Mixed read.
     pub(crate) fn record_array_push_reference_place(
         &mut self, receiver: &Expr, env: &TypeEnv,
-    ) -> Result<(), crate::errors::CompileError> {
+    ) -> Result<bool, crate::errors::CompileError> {
         match &receiver.kind {
             ExprKind::PropertyAccess { object, property } => {
-                if let Some((class, true)) = self.ref_property_slot_addressability(object, property, env)? {
+                let ty = self.infer_type(object, env)?;
+                if !matches!(ty.codegen_repr(), PhpType::Object(_)) { return Ok(false); }
+                let Some(class) = super::super::single_object_class_name(&ty) else { return Ok(false); };
+                let Some(info) = self.classes.get(class.as_str()) else { return Ok(false); };
+                let owner = info.property_declaring_classes.get(property)
+                    .cloned().unwrap_or_else(|| class.clone());
+                let get = crate::names::php_symbol_key(&crate::names::property_hook_get_method(property));
+                let set = crate::names::php_symbol_key(&crate::names::property_hook_set_method(property));
+                let in_accessor = self.current_class.as_deref() == Some(owner.as_str())
+                    && self.current_method.as_ref().is_some_and(|method| method == &get || method == &set);
+                let denied_hook = !in_accessor && (info.methods.contains_key(&set)
+                    || info.methods.get(&get).is_some_and(|sig| !sig.by_ref_return));
+                let setter = info.property_set_visibilities.get(property)
+                    .or_else(|| info.property_visibilities.get(property))
+                    .cloned().unwrap_or(crate::parser::ast::Visibility::Public);
+                let rejection = if denied_hook {
+                    Some(format!("Indirect modification of {owner}::${property} is not allowed"))
+                } else if info.readonly_properties.contains(property) {
+                    Some(format!("Cannot indirectly modify readonly property {owner}::${property}"))
+                } else if !self.can_access_member(&owner, &setter) {
+                    let scope = self.current_class.as_ref().map_or_else(
+                        || "global scope".to_string(), |class| format!("scope {class}"));
+                    Some(format!("Cannot indirectly modify {}(set) property {owner}::${property} from {scope}",
+                        Self::visibility_label(&setter)))
+                } else { None };
+                let plan = crate::types::ArrayPushPropertyPlan { class_name: class.clone(), rejection };
+                let key = (self.current_loop_storage_scope.clone(), receiver.span);
+                if self.array_push_property_plans.get(&key).is_some_and(|existing| existing != &plan) {
+                    return Err(crate::errors::CompileError::new(receiver.span,
+                        "array_push() property reference has ambiguous receiver classes at this source position"));
+                }
+                let permitted = plan.rejection.is_none();
+                self.array_push_property_plans.insert(key, plan);
+                if permitted && self.ref_property_slot_addressability(object, property, env)?
+                    .is_some_and(|(_, addressable)| addressable)
+                {
                     self.reference_property_promotions.insert((class, property.clone()));
                 }
+                return Ok(!permitted);
             }
             ExprKind::ArrayAccess { array, .. }
             | ExprKind::NamedArg { value: array, .. }
-            | ExprKind::ErrorSuppress(array) => self.record_array_push_reference_place(array, env)?,
+            | ExprKind::ErrorSuppress(array) => return self.record_array_push_reference_place(array, env),
             _ => {},
         }
-        Ok(())
+        Ok(false)
     }
 
     /// Records a local whose reference binding requires canonical boxed storage after the call.

@@ -445,6 +445,8 @@ pub(crate) struct Checker {
     /// Authoritative result type of each checked builtin call, keyed by call span.
     /// EIR lowering consumes this instead of reimplementing builtin return inference.
     pub builtin_call_types: HashMap<Span, PhpType>,
+    /// Native property reference plans retain checker facts across opaque argument effects.
+    pub array_push_property_plans: HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     /// Caller locals converted to canonical boxed storage by a validated by-reference call.
     /// Scoped call sites keep recursive signature checking from changing another body's env.
     pub boxed_reference_outputs: HashMap<(String, Span), HashMap<String, PhpType>>,
@@ -1341,6 +1343,7 @@ fn check_types_on_compiler_stack(
         warnings,
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
+        array_push_property_plans: checker.array_push_property_plans,
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
         buffer_read_sites: checker.buffer_read_observations.into_iter()
             .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),
