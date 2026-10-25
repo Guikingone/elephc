@@ -20,11 +20,6 @@ fn prefix(value: &str) -> Expr {
     e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("filename")]), e_str(value)])
 }
 
-/// Emits one recoverable stream warning and returns false.
-fn invalid(message: &str) -> Vec<Stmt> {
-    vec![s_expr(e_call("__elephc_builtin_warning", vec![e_str(message)])), s_return(e_bool(false))]
-}
-
 /// Reads a wrapper recursively before applying its read-direction filters.
 fn filtered_url() -> Stmt {
     s_if(prefix("php://filter/"), vec![
