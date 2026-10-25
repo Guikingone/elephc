@@ -512,6 +512,7 @@ pub(super) fn acquire_borrowed_return_value(
                 | Op::DynamicPropGet
                 | Op::NullsafePropGet
                 | Op::LoadStaticLocal
+                | Op::LoadStaticProperty
         )
     ) {
         return value;

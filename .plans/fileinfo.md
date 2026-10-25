@@ -46,7 +46,8 @@ also passed. Those failures are being corrected before a new complete review.
 
 The current candidate makes every filter-state array contract explicit,
 aligns wrapper fixtures with the raw string callback ABI, retires raw string
-argument temporaries after boxed user returns, and adds a focused heap regression.
+argument temporaries after boxed user returns, and adds focused heap regressions. Returning a static property retains its
+source owner independently of the caller, including stream-cast results.
 Connection-refused tests use valid FTP file paths. Captured programs must exit
 successfully, with stderr included when a failure interrupts their trace.
 
@@ -55,8 +56,8 @@ through the existing activation chain. Frame-sensitive optimization gates retain
 the needed frames. A new regression covers direct, nested and callable
 finfo_close, buffer deprecation, stream warnings and default diagnostic output.
 
-There are 47 fileinfo surface tests, 8 native tests, a focused string-ownership
-regression and a TLS regression. PHP 8.5.12 reference oracles and safe static
+There are 47 fileinfo surface tests, 8 native tests, two focused ownership
+regressions and a TLS regression. PHP 8.5.12 reference oracles and safe static
 documentation/site, assembly-comment and diff checks pass. The latest candidate
 still needs compiled CI validation and a full current-head Grok verdict.
 

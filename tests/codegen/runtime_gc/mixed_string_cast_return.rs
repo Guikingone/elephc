@@ -16,6 +16,35 @@
 
 use crate::support::*;
 
+/// Returning a static property's boxed value transfers an owner without retiring its source slot.
+#[test]
+fn test_fileinfo_static_property_returns_keep_independent_owners() {
+    let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+class FileinfoStaticReturnOwner {
+    public static mixed $slot = null;
+    public function value(): mixed { return FileinfoStaticReturnOwner::$slot; }
+    public static function staticValue(): mixed { return FileinfoStaticReturnOwner::$slot; }
+}
+$holder = new FileinfoStaticReturnOwner();
+FileinfoStaticReturnOwner::$slot = str_repeat("x", 40);
+$a = $holder->value(); unset($a);
+echo strlen(FileinfoStaticReturnOwner::$slot), "\n";
+$b = FileinfoStaticReturnOwner::staticValue();
+FileinfoStaticReturnOwner::$slot = null;
+echo strlen($b), "\n"; unset($b);
+$stream = fopen("php://memory", "w+b");
+FileinfoStaticReturnOwner::$slot = $stream;
+$c = $holder->value(); unset($c);
+$d = FileinfoStaticReturnOwner::staticValue();
+FileinfoStaticReturnOwner::$slot = null;
+fwrite($d, "alive"); rewind($stream); echo stream_get_contents($stream), "\n";
+fclose($stream); unset($d, $stream, $holder);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "40\n40\nalive\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Boxed conditional user returns retire fresh raw-string call and cast arguments on both branches.
 #[test]
 fn test_fileinfo_boxed_string_returns_release_raw_argument_temporaries() {
