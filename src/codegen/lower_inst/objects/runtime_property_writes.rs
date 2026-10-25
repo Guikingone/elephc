@@ -1229,7 +1229,7 @@ fn emit_magic_set_exception_handler(ctx: &mut FunctionContext<'_>, caught_label:
         abi::int_arg_reg_name(ctx.emitter.target, 0),
         MAGIC_SET_GUARD_HANDLER_OFFSET + TRY_HANDLER_JMP_BUF_OFFSET,
     );
-    ctx.emitter.bl_c("setjmp");
+    ctx.emitter.save_exception_handler();
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, caught_label);
 }
 

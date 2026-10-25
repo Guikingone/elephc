@@ -166,8 +166,17 @@ The fifth registered pass specializes a boxed checked-arithmetic operation
 every use of its result observes only the integer payload, removing the
 transient boxed `Mixed` allocation without changing overflow semantics.
 The same proof removes numeric local-slot retirement immediately before an
-overwrite. Retirement remains intact when a read, reference alias, or a value
+overwrite, or at the end of a binding when no later access to the slot is
+reachable (a counter whose name a later straight-line assignment re-binds).
+Retirement remains intact when a read, reference alias, or a value
 with a possible destructor prevents proving that the clear is unobservable.
+
+It also unboxes a loop bound written as `$n - c` with a literal `c` from 1 to 1024
+when its only uses are strict `$i < $n - c` comparisons against an integer. An
+overflowing `$n - c` is the float -2^63 in PHP, below every integer; the unboxed
+form yields `PHP_INT_MIN` there, which every integer also fails to be below. A
+non-strict `<=` keeps the PHP comparison, because PHP's `$i <= -2^63` holds for the
+513 integers from `PHP_INT_MIN` to `PHP_INT_MIN + 512`.
 
 ### Bounded mixed counters
 
@@ -181,6 +190,16 @@ call parameters can participate. References, escaping values, dynamic `eval`,
 suspension, exception handlers, uncertain type changes and unproven overflow
 keep their existing representation. Call targets and ABIs are unchanged. See
 `examples/bounded-closure-counter/main.php`.
+
+Two shapes that PHP code uses for pair loops are proven as well. A counter
+compared with a checked difference (`for ($i = 0; $i < $n - 1; $i++)`, also with
+`<=`) keeps PHP's comparison for the bound, which may be the float an overflow
+produced, while the counter itself becomes an integer: the bound can only overflow
+below every integer, so the counter stays at most `PHP_INT_MAX - 1` inside the loop.
+A counter seeded by checked arithmetic (`for ($j = $i + 1; $j < $n; $j++)` inside
+the `$i` loop) is proven together with the counter its seed reads, and only when
+range analysis shows the seed itself never overflows. Lowering then records that
+seed as an integer, exactly as for `$j = 0`. See `examples/pair-loops/main.php`.
 
 ### Canonical loop optimization
 
@@ -201,7 +220,10 @@ generators are conservatively excluded. See `examples/loop-optimization/main.php
 ### Integer range and induction-variable analysis
 
 The eighth registered pass propagates signed 64-bit integer intervals through
-constants, branch comparisons, block parameters, and arithmetic. Constant-step
+constants, branch comparisons, block parameters, and arithmetic. A PHP comparison
+of an integer with a checked `X - c` or `X + c` bound also bounds the integer by
+one step on the edge where the bound's one-sided overflow cannot be the reason the
+test holds. Constant-step
 loop counters can inherit bounds from their initial values and loop conditions.
 When every possible result stays within the integer range, checked addition,
 subtraction, and multiplication become ordinary scalar operations.
@@ -442,8 +464,11 @@ function scan(Table $t, int $n): int
 A `$receiver->method()` call is a candidate when the receiver's static type is a plain
 (non-nullable) user class and the call cannot reach a different body at run time: the
 class is `final`, the method is `final`, or the class has no vtable slot for it. The
-method body then has to pass the function rules above (the `$this` receiver is the one
-object they accept, as a borrowed argument) plus a few of its own:
+exception is an instantiated generic receiver with a vtable slot: covariance and
+contravariance can select a different monomorphized specialization, with its own lexical
+class and state, so even a final class or final method keeps a real call. The method body
+then has to pass the function rules above (the `$this` receiver is the one object they
+accept, as a borrowed argument) plus a few of its own:
 
 - it is not static, magic (`__*`), deprecated, by-reference-returning or variadic, and has
   no by-reference parameter and no literal `false`/`null` parameter type (those carry a
@@ -461,9 +486,6 @@ object they accept, as a borrowed argument) plus a few of its own:
 - a source local assignment of an acquired concatenation keeps its real boundary, because
   that store implicitly resets the callee's string scratch. Direct returned concatenations
   remain eligible;
-- generic instantiations with a vtable slot keep a real call boundary even when the class or
-  method is `final`: covariance and contravariance can pass a different monomorphized
-  specialization through the receiver's static type, with its own lexical class and state;
 - the program does not observe PHP frames: when anything can call `debug_backtrace()` (or
   the eval bridge is linked), every method call stays, so backtraces never lose a frame.
 
@@ -515,7 +537,11 @@ See `examples/tail-recursion/main.php` for Euclid and a deep mutual countdown.
 
 With `--ir-opt` enabled, a loop over `buffer<T>` elements resolves the buffer
 handle once in front of the loop instead of at every `$b[$i]`, and the packed
-field accesses of one iteration share a single bounds-checked record address:
+field accesses of one iteration share a single bounds-checked record address.
+The resolution runs before the loop-invariant values the optimizer moved in
+front of the loop are loaded, so a value such as `$dt` below stays in a
+register through the loop on every target, including Linux x86_64, whose ABI
+has no float register that survives a call:
 
 ```php
 function step(buffer<Particle> $p, int $count, float $dt): void {
@@ -543,12 +569,43 @@ or non-unit steps, and adjusted indexes such as `$b[$i + 1]` keep the check.
 
 The loop must not be able to free, allocate or rebind a buffer: a
 `buffer_free()`, an assignment to the buffer variable, output, a warning, a
-throw, or a call to anything that may do one of those inside it keeps the
+user-code throw, or a call to anything that may do one of those inside it keeps the
 ordinary per-access resolution, because user code could free the buffer through
 another handle. A call to a user function or method whose whole effect summary
 only reads state (or ends in a fatal error) does not block the rewrite.
 Generators, functions with `try`, dynamic `eval`, and programs that call
 `pcntl_async_signals()` are left alone.
+
+Loops over a buffer property of `$this` can also share one preheader read and
+resolution when no call, property write, free or other invalidating operation
+can change that property. Buffer acquire/release are word operations, and plain
+`$this` reads that may throw without running PHP do not invalidate descriptors.
+A body-only read moves behind a duplicate of the scalar entry condition, so a
+zero-trip loop never reads an uninitialized property. Conditional reads,
+faulting prefixes and header values used after the loop keep their original
+form. See the [buffer property loop example](../../examples/buffer-property-loop/main.php).
+
+A method that reads the same buffer property of `$this` several times shares
+that work too, inside or outside a loop:
+
+```php
+public function matches(int $index, int $components): bool {
+    return $this->slots[$index]->alive
+        && ($this->slots[$index]->mask & $components) === $components;
+}
+```
+
+The property is read and its handle resolved once, the second access to the same
+index reuses the first record address, and accesses to other indexes share one
+resolution. Reads from different inlined class scopes stay separate, so a parent's
+private buffer never aliases a shadowing private property in the child. Anything
+between the reads that could change the property or free
+the buffer keeps them apart: a store to that property or `unset()` on any
+object, a `buffer_free()`, any function or method call, a release, a warning or
+output. A property read on any other object counts too, because it warns when
+that object is `null`. A change to the index variable keeps the record addresses
+apart. Programs where a class declares `__get`, or that evaluate code at run
+time, keep every read. See `examples/buffer-property-table/main.php`.
 
 Packed field reads and writes are also known to be plain loads and stores, so
 the loop index and locals stored into packed fields stay in registers and no

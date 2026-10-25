@@ -52,7 +52,8 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
                 .flatten()
         })
         .unwrap_or_else(|| lower_expr(ctx, value));
-    // The checker recorded this assignment as an incompatible RE-BINDING of `$name`: end the old
+    // The checker recorded this assignment as a RE-BINDING of `$name` (an incompatible retype, or
+    // a storage-only split of two numeric bindings such as a reused loop counter): end the old
     // binding here, so the store below mints a fresh slot at the new type instead of widening a
     // slot the program will never read at the old type again.
     //
@@ -115,7 +116,19 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     if mixed_storage_site && !ctx.has_local_slot(name) {
         ctx.declare_local(name, PhpType::Mixed);
     }
-    let (lowered, php_type) = contextualize_local_assignment(ctx, name, value, lowered, span);
+    // A counter seeded by checked integer arithmetic (`$j = $i + 1`) that the numeric storage
+    // replay proved never overflows: the seed is the `int` it always is, so the loop reads the
+    // counter as an integer exactly as after a `$j = 0` seed (`numeric_storage::lower_body`).
+    // The fresh result is stored like the checked add of `$j++`, without an assignment copy:
+    // nothing else owns it, and `checked_int_sink` can then narrow the slot it seeds.
+    let int_seed = !mixed_storage_site
+        && ctx.is_int_seed_binding(name)
+        && crate::ir_lower::numeric_storage::is_checked_int_seed(ctx, lowered.value);
+    let (lowered, php_type) = if int_seed {
+        (lowered, PhpType::Int)
+    } else {
+        contextualize_local_assignment(ctx, name, value, lowered, span)
+    };
     let php_type = if mixed_storage_site {
         PhpType::Mixed
     } else {
@@ -283,7 +296,10 @@ pub(super) fn contextualize_local_assignment(
 /// the local stays a `?ptr<T>`: the raw-word slot must not hold the null sentinel, which a
 /// later `=== null` or by-reference binding would read as a live address. A packed record
 /// address is that pointer word too, so the slot keeps one raw-word representation instead of
-/// widening to a boxed `mixed`. Statement and expression assignments share this rule.
+/// widening to a boxed `mixed`. A pointer stored into a local whose loop-carried contract is
+/// `?ptr<T>` (it enters a loop holding `null`) keeps that type: the loop can also exit with the
+/// `null` it entered with, when the body never runs. Statement and expression assignments share
+/// this rule.
 pub(in crate::ir_lower) fn retype_value_for_pointer_local(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -308,6 +324,12 @@ pub(in crate::ir_lower) fn retype_value_for_pointer_local(
     if matches!(source_repr, PhpType::Packed(_)) {
         let retyped = ctx.retype_packed_address_for_pointer_sink(lowered, &local_ty, Some(span));
         return Some((retyped, local_ty));
+    }
+    if matches!(source_repr, PhpType::Pointer(_))
+        && crate::types::is_nullable_pointer_type(&local_ty)
+        && local_has_loop_storage_contract(ctx, name, &local_ty)
+    {
+        return Some((lowered, local_ty));
     }
     None
 }

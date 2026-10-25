@@ -36,6 +36,25 @@ fn test_error_buffer_new_rejects_union_element_type() {
     );
 }
 
+/// Verifies that a statically known float length is still rejected: only `int` lengths and the
+/// runtime-converted `mixed` / `int|float` lengths of int arithmetic size a buffer (task f9ea1d1e).
+#[test]
+fn test_error_buffer_new_rejects_static_float_length() {
+    expect_error(
+        "<?php function half(int $n): void { $values = buffer_new<int>($n / 2); } half(4);",
+        "buffer_new<T>() length must be integer",
+    );
+}
+
+/// Verifies that a statically known string length is still rejected, like a string buffer index.
+#[test]
+fn test_error_buffer_new_rejects_static_string_length() {
+    expect_error(
+        "<?php string $n = \"2\"; $values = buffer_new<int>($n);",
+        "buffer_new<T>() length must be integer",
+    );
+}
+
 /// Verifies a packed class reusing an ordinary class name (case-insensitively) is still a
 /// duplicate now that packed classes are registered before the class schema pass.
 #[test]
@@ -165,6 +184,60 @@ string $index = "0";
 $store->values[$index] = 1;
 "#,
         "Buffer index must be integer",
+    );
+}
+
+/// Verifies a static buffer property uses the same element mismatch diagnostic as a local buffer.
+#[test]
+fn test_error_static_buffer_property_scalar_assign_type_mismatch() {
+    expect_error(
+        r#"<?php
+final class StaticIntBuffer { public static buffer<int> $values; }
+StaticIntBuffer::$values = buffer_new<int>(1);
+StaticIntBuffer::$values[0] = "wrong";
+"#,
+        "Buffer element type mismatch: expected int, got string",
+    );
+}
+
+/// Verifies a statically known string index is rejected for a static buffer property write.
+#[test]
+fn test_error_static_buffer_property_write_rejects_static_string_index() {
+    expect_error(
+        r#"<?php
+final class StaticIndexedBuffer { public static buffer<int> $values; }
+StaticIndexedBuffer::$values = buffer_new<int>(1);
+string $index = "0";
+StaticIndexedBuffer::$values[$index] = 1;
+"#,
+        "Buffer index must be integer",
+    );
+}
+
+/// Verifies packed buffer elements cannot be assigned whole through a static property.
+#[test]
+fn test_error_static_buffer_property_packed_element_requires_field_assignment() {
+    expect_error(
+        r#"<?php
+packed class Vec2 { public float $x; public float $y; }
+final class StaticPoints { public static buffer<Vec2> $values; }
+StaticPoints::$values = buffer_new<Vec2>(1);
+StaticPoints::$values[0] = 1;
+"#,
+        "Assign packed buffer elements through field access like $buf[$i]->field",
+    );
+}
+
+/// Verifies an append to a static buffer property is rejected with the buffer push diagnostic.
+#[test]
+fn test_error_static_buffer_property_rejects_push() {
+    expect_error(
+        r#"<?php
+final class StaticPushBuffer { public static buffer<int> $values; }
+StaticPushBuffer::$values = buffer_new<int>(1);
+StaticPushBuffer::$values[] = 1;
+"#,
+        "buffer<T> does not support push; allocate with buffer_new<T>(len)",
     );
 }
 
@@ -479,6 +552,76 @@ fn test_error_extern_global_void_type() {
     expect_error(
         "<?php extern global void $bad;",
         "Extern global $bad uses an unsupported type",
+    );
+}
+
+/// Verifies `?` is accepted only before `string` in extern declarations, with a diagnostic that
+/// points at `ptr` for nullable pointers.
+#[test]
+fn test_error_extern_nullable_non_string_type() {
+    expect_error(
+        "<?php extern function f(?int $x): int;",
+        "Only ?string can be nullable in an extern declaration (a ptr already accepts null)",
+    );
+    expect_error(
+        "<?php extern function f(): ?ptr;",
+        "Only ?string can be nullable in an extern declaration",
+    );
+}
+
+/// Verifies `?string` is refused on extern class fields, whose `char*` loads and stores do not
+/// model NULL, instead of being laid out silently.
+#[test]
+fn test_error_extern_class_nullable_string_field() {
+    expect_error(
+        "<?php extern class Named { public ?string $label; }",
+        "Extern class 'Named' field $label cannot be ?string",
+    );
+}
+
+/// Verifies `?string` is refused on extern globals, which keep the plain `string` conversion.
+#[test]
+fn test_error_extern_global_nullable_string() {
+    expect_error(
+        "<?php extern global ?string $name;",
+        "Extern global $name cannot be ?string",
+    );
+}
+
+/// Verifies a `?string` extern parameter still rejects a non-string, non-null argument.
+#[test]
+fn test_error_extern_nullable_string_param_rejects_int() {
+    expect_error(
+        "<?php extern function f(?string $s): int; f(123);",
+        "Extern function 'f' parameter $s expects string|null, got int",
+    );
+}
+
+/// Verifies a `?string` extern return must be checked for null before it reaches a plain
+/// `string` extern parameter, which cannot pass NULL.
+#[test]
+fn test_error_extern_nullable_string_return_needs_null_check_for_string_param() {
+    expect_error(
+        "<?php extern function getenv(string $name): ?string; extern function strlen(string $s): u64; strlen(getenv(\"HOME\"));",
+        "Extern function 'strlen' parameter $s expects string, got string|null",
+    );
+}
+
+/// Verifies `?string` extern parameters accept strings, `null`, and `?string` values, and that a
+/// `?string` return becomes a `string` through `??` like any PHP `?string` value.
+#[test]
+fn test_extern_nullable_string_accepts_string_null_and_nullable_values() {
+    expect_no_error(
+        r#"<?php
+extern function f(?string $s): ?string;
+extern function strlen(string $s): u64;
+$a = f("x");
+$b = f(null);
+$c = f($a);
+$d = f($argc > 1 ? "y" : null);
+echo strlen($b ?? "");
+echo f($c) ?? "none";
+"#,
     );
 }
 
