@@ -106,14 +106,20 @@ class FileinfoStatOrder {
     public function stream_close(): void { echo "close\n"; }
 }
 class FileinfoStatFilter extends php_user_filter {
-    public function onCreate(): bool { echo "create\n"; if ($this->filtername === "fileinfo.stat.create") { throw new Error("create failed"); } return true; }
-    public function onClose(): void { echo "filter-close\n"; if ($this->filtername === "fileinfo.stat.close") { throw new Error("close failed"); } }
+    public function onCreate(): bool { echo "create\n"; return true; }
+    public function onClose(): void { echo "filter-close\n"; }
     public function filter($in, $out, &$consumed, $closing): int { echo "unexpected filter\n"; return PSFS_PASS_ON; }
+}
+class FileinfoStatCreateFilter extends FileinfoStatFilter {
+    public function onCreate(): bool { echo "create\n"; throw new Error("create failed"); }
+}
+class FileinfoStatCloseFilter extends FileinfoStatFilter {
+    public function onClose(): void { echo "filter-close\n"; throw new Error("close failed"); }
 }
 stream_wrapper_register("statorder", "FileinfoStatOrder");
 stream_filter_register("fileinfo.stat", "FileinfoStatFilter");
-stream_filter_register("fileinfo.stat.create", "FileinfoStatFilter");
-stream_filter_register("fileinfo.stat.close", "FileinfoStatFilter");
+stream_filter_register("fileinfo.stat.create", "FileinfoStatCreateFilter");
+stream_filter_register("fileinfo.stat.close", "FileinfoStatCloseFilter");
 $f = new finfo(FILEINFO_MIME_TYPE);
 echo var_export($f->file("php://filter/read=fileinfo.stat/resource=statorder://false"), true), "\n";
 try { $f->file("php://filter/read=fileinfo.stat/resource=statorder://throw"); } catch (Error $error) { echo $error->getMessage(), "\n"; }

@@ -135,5 +135,5 @@ pub(super) fn cleanup_method() -> MethodBuilder {
             e_binop(e_var("silent"), BinOp::Or, e_binop(e_var("_previous_mode"), BinOp::NotEq, e_int(0))))])),
         s_try(body, vec![], Some(vec![s_expr(e_call("elephc_runtime_stream_close_mode", vec![e_var("_previous_mode")]))])),
     ];
-    method("__elephc_close_streams").private().param("pending", t_mixed()).param("stages", t_array()).param("silent", TypeExpr::Bool).body(scoped)
+    method("__elephc_close_streams").private().param("pending", t_mixed()).param("stages", TypeExpr::Array(Box::new(t_mixed()))).param("silent", TypeExpr::Bool).body(scoped)
 }
