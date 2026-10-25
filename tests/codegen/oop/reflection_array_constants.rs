@@ -9,6 +9,28 @@
 
 use super::*;
 
+/// Parameter dumps keep the already normalized PHP profile keys, including nested arrays.
+#[test]
+fn test_reflection_constant_array_profile_keys_match_parameter_dump() {
+    let source = r#"<?php
+class ProfileBox { public function __construct(public array $value) {} }
+function profileDefault(array $value = [-5 => 'a', 'b'], array $nested = [[-5 => 'c', 'd']], ProfileBox $box = new ProfileBox([-5 => 'e', 'f'])) {}
+$parameter = new ReflectionParameter('profileDefault', 0);
+echo json_encode($parameter->getDefaultValue()), '|', $parameter->__toString(), '|';
+echo (new ReflectionParameter('profileDefault', 1))->__toString(), '|';
+echo (new ReflectionParameter('profileDefault', 2))->__toString();
+"#;
+    for (profile, key) in [
+        (elephc::php_version::PhpVersion::Php82, 0),
+        (elephc::php_version::PhpVersion::Php83, -4),
+    ] {
+        let expected = format!(
+            "{{\"-5\":\"a\",\"{key}\":\"b\"}}|Parameter #0 [ <optional> array $value = [-5 => 'a', {key} => 'b'] ]|Parameter #1 [ <optional> array $nested = [[-5 => 'c', {key} => 'd']] ]|Parameter #2 [ <optional> ProfileBox $box = new \\ProfileBox([-5 => 'e', {key} => 'f']) ]"
+        );
+        assert_eq!(compile_and_run_with_php_version(source, profile), expected);
+    }
+}
+
 /// Reflection property strings quote the decoded default bytes with PHP's printable escapes.
 #[test]
 fn test_reflection_constant_bytes_keep_property_string_boundaries() {
