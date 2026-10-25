@@ -15,6 +15,7 @@ use crate::ir::effects::Effects;
 use crate::ir::function::{FunctionId, LocalSlotId};
 use crate::ir::module::DataId;
 use crate::ir::runtime_call::RuntimeCallTarget;
+use crate::ir::runtime_fn::RuntimeFnId;
 use crate::ir::types::{IrHeapKind, IrType};
 use crate::ir::value::{Ownership, ValueId};
 use crate::span::Span;
@@ -65,16 +66,22 @@ const _: () = assert!(std::mem::size_of::<Instruction>() <= 112);
 /// Optimization pass recorded as an instruction's provenance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PassOrigin {
+    BufferAccess,
     ConstFold,
+    IntegerRange,
     Licm,
+    LoopOptimize,
 }
 
 impl PassOrigin {
     /// Returns the lower-case spelling used by source maps and the EIR printer.
     pub fn name(self) -> &'static str {
         match self {
+            PassOrigin::BufferAccess => "buffer_access",
             PassOrigin::ConstFold => "const_fold",
+            PassOrigin::IntegerRange => "integer_range",
             PassOrigin::Licm => "licm",
+            PassOrigin::LoopOptimize => "loop_optimize",
         }
     }
 }
@@ -110,6 +117,83 @@ impl Instruction {
     pub fn is_void(&self) -> bool {
         self.result.is_none() || self.result_type.is_void()
     }
+
+    /// Returns whether this instruction writes a FRESH transient string: new bytes in concat
+    /// scratch or, once the scratch is full, a new heap block stamped `CONCAT_TEMP_HEAP_KIND`.
+    ///
+    /// Only these results can be claimed with `EnsureOwned`. The other values whose release is a
+    /// no-op ([`Self::string_release_is_noop`]) include borrowed views: `substr($s, 0)`,
+    /// `ltrim($s)` with nothing to trim and `$s[0]` answer with a pointer into a live string, and
+    /// claiming one would hand the caller a release of storage another owner still holds.
+    pub fn creates_transient_string(&self) -> bool {
+        matches!(
+            self.op,
+            Op::StrConcat
+                | Op::StrInterpolate
+                | Op::IToStr
+                | Op::FToStr
+                | Op::BoolToStr
+                | Op::ResourceToStr
+        )
+    }
+
+    /// Returns whether ordinary string cleanup must skip this producer.
+    ///
+    /// Scratch values and borrowed views do not carry an owned string reference here. Producers
+    /// recognized by [`Self::creates_transient_string`] need a separate conditional release:
+    /// the backend frees their heap block only while its kind is still `CONCAT_TEMP_HEAP_KIND`.
+    /// If persistence has adopted the block, its owned-string reference belongs to the consumer;
+    /// scratch storage and these already adopted results stay untouched by producer cleanup.
+    /// Runtime calls skip ordinary release unless their result is fresh or independently owned.
+    pub fn string_release_is_noop(&self) -> bool {
+        if self.op == Op::RuntimeCall {
+            let result_is_releasable = match self.immediate {
+                Some(Immediate::RuntimeCall(
+                    RuntimeCallTarget::ArrayFetchForWrite
+                    | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+                    | RuntimeCallTarget::PendingAppendFetchForWrite
+                    | RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed,
+                )) => false,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target)))
+                | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                    target,
+                    ..
+                })) => {
+                    matches!(
+                        target.result_ownership(),
+                        crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                            | crate::builtins::semantics::BuiltinResultOwnership::Independent
+                    ) || matches!(target, RuntimeFnId::GetClass | RuntimeFnId::GetParentClass)
+                }
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::UnaryString(_))) => true,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ExecutablePath)) => true,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(target))) => matches!(
+                    target.result_ownership(),
+                    crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                ),
+                _ => false,
+            };
+            // Class-name lookups return static metadata or an owned eval string, never
+            // concat scratch. Validated release ignores metadata and retires detached copies.
+            // An Independent string lives in concat scratch while it fits and in an owned
+            // heap block past 64 KiB (`__rt_concat_reserve`); `acquire` duplicates both, so
+            // the original must still be released or every large result leaks. The heap
+            // block is never the `.` operator's takeover kind, and scratch is skipped.
+            return !result_is_releasable;
+        }
+        // MixedCastString detaches an owned buffer for string-tagged inputs. Its
+        // other tags return scratch or literals, both ignored by validated release.
+        matches!(
+            self.op,
+            Op::IToStr
+                | Op::FToStr
+                | Op::BoolToStr
+                | Op::ResourceToStr
+                | Op::StrConcat
+                | Op::StrCharAt
+                | Op::StrInterpolate
+        )
+    }
 }
 
 /// Literal or metadata operand attached to an opcode.
@@ -122,6 +206,8 @@ pub enum Immediate {
     FloatKeyDiagnostic,
     /// Converts a string offset with runtime cast diagnostics for boxed values.
     StringOffsetCast,
+    /// Binds an already validated float-shaped runtime argument to int with precision diagnostics.
+    ImplicitIntCast,
     Data(DataId),
     /// Data-pool reference carrying the strict-PHP profile of its physical call site.
     ProfiledData {
@@ -278,6 +364,7 @@ impl IterStartMetadata {
 }
 
 impl fmt::Debug for IterStartMetadata {
+    /// Formats iterator-start metadata with its unpacked state and reference mode.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("IterStartMetadata")
@@ -297,6 +384,7 @@ impl PackedIteratorState {
     const BY_REF: u32 = 1 << 31;
     const SLOT_MASK: u32 = !Self::BY_REF;
 
+    /// Packs an iterator-state slot with its by-reference flag, rejecting reserved high bits.
     fn new(state: LocalSlotId, by_ref: bool) -> Self {
         let raw = state.as_raw();
         assert_eq!(
@@ -307,10 +395,12 @@ impl PackedIteratorState {
         Self(raw | if by_ref { Self::BY_REF } else { 0 })
     }
 
+    /// Extracts the iterator-state local slot without the packed reference flag.
     fn state(self) -> LocalSlotId {
         LocalSlotId::from_raw(self.0 & Self::SLOT_MASK)
     }
 
+    /// Reports the reference-iteration flag stored in compact iterator metadata.
     fn is_by_ref(self) -> bool {
         self.0 & Self::BY_REF != 0
     }
@@ -323,6 +413,7 @@ struct PackedOptionalLocalSlot(u32);
 impl PackedOptionalLocalSlot {
     const NONE: u32 = u32::MAX;
 
+    /// Encodes an optional local slot while reserving the absent-slot sentinel.
     fn new(slot: Option<LocalSlotId>) -> Self {
         match slot {
             Some(slot) => {
@@ -334,6 +425,7 @@ impl PackedOptionalLocalSlot {
         }
     }
 
+    /// Decodes an optional local slot, treating the reserved sentinel as absent.
     fn get(self) -> Option<LocalSlotId> {
         (self.0 != Self::NONE).then(|| LocalSlotId::from_raw(self.0))
     }
@@ -403,6 +495,8 @@ impl PropertyFetchMode {
 pub enum PhpTypePredicate {
     Array,
     Bool,
+    /// `is_countable()`: an array, or an object whose class implements `Countable`.
+    Countable,
     Float,
     Int,
     Iterable,
@@ -418,6 +512,7 @@ impl PhpTypePredicate {
         match self {
             Self::Array => "array",
             Self::Bool => "bool",
+            Self::Countable => "countable",
             Self::Float => "float",
             Self::Int => "int",
             Self::Iterable => "iterable",
@@ -732,6 +827,10 @@ pub enum Op {
     LoadStaticLocal,
     StoreStaticLocal,
     InitStaticLocal,
+    /// Answers whether a static local's one-time initializer has not run yet: `I64` 1 before
+    /// the first `init_static_local` of the slot, 0 after. Lowering branches on it so the
+    /// initializer expression is evaluated only while the static is still unset.
+    StaticLocalUninitialized,
     LoadStaticProperty,
     /// Returns the address of a native static-property storage slot.
     ///
@@ -814,15 +913,20 @@ pub enum Op {
     MixedUnbox,
     MixedTagOf,
     ArrayToMixed,
+    /// Consumes an owned indexed array bound to a pointer-array slot and returns it with raw
+    /// `?ptr<T>` words: boxed Mixed slots (from a runtime bridge) become null or address words.
+    ArrayToPointerWords,
     HashToMixed,
     MixedCastBool,
     MixedCastInt,
     MixedCastFloat,
     MixedCastString,
     StrConcat,
+    /// Consumes a local string owner and returns its replacement for an adjacent store.
+    StrAppend,
     StrLen,
     StrPersist,
-    /// Reads a string offset; an optional Bool immediate controls missing-offset warnings.
+    /// Borrows a string offset view; an optional Bool immediate controls missing-offset warnings.
     StrCharAt,
     StrInterpolate,
     ConcatReset,
@@ -926,6 +1030,8 @@ pub enum Op {
     PdoAdapterAddr,
     /// Reports whether an AOT class selected by runtime name has a constructor.
     DynamicClassHasConstructor,
+    /// Reports whether an AOT class selected by runtime name is abstract.
+    DynamicClassIsAbstract,
     /// Classifies a runtime class name for PDO statement construction.
     DynamicPdoStatementClassStatus,
     /// Classifies a runtime late-static class name for `PDO::connect()`.
@@ -1020,6 +1126,21 @@ pub enum Op {
     /// of the `TypeError` message prefix (`"Packed field C::$f must be of type int, "`), to
     /// which codegen appends the runtime type word. Result: `I64`.
     PackedFieldMixedToInt,
+    /// Narrows a `Mixed` value to the raw `F64` payload a fixed-layout `float` or `f32` field
+    /// stores (a packed field, or an extern struct field reached through `ptr<T>`): a float
+    /// passes, an int widens to the nearest double like PHP's int-to-float coercion, and every
+    /// other runtime tag throws `TypeError`, so neither the box pointer nor a lax `(float)`
+    /// cast of a string, null or array reaches the field. Operand: the Mixed value.
+    /// Immediate: data id of the `TypeError` message prefix
+    /// (`"Packed field C::$f must be of type float, "`), to which codegen appends the runtime
+    /// type word. Result: `F64`.
+    PackedFieldMixedToFloat,
+    /// Narrows a `Mixed` value to the `0`/`1` payload a fixed-layout `bool` field stores: only
+    /// the bool tag passes and every other runtime tag throws `TypeError`, where a truthiness
+    /// cast would silently turn any value into a flag. Operand: the Mixed value. Immediate:
+    /// data id of the `TypeError` message prefix (`"Packed field C::$f must be of type bool, "`).
+    /// Result: `I64` holding a PHP `bool`.
+    PackedFieldMixedToBool,
     /// Narrows a value reaching a DECLARED `int` return boundary with PHP's coercive-mode
     /// verification, replacing the silent truncation the plain int coercion performs.
     /// Matching `php -n` 8.5: int/bool forward the payload, a numeric string coerces, an
@@ -1059,6 +1180,7 @@ pub enum Op {
     ExprCall,
     FirstClassCallableNew,
     CallableArrayNew,
+    /// Invokes a descriptor with callback, argument container, and optional source-strict Bool.
     CallableDescriptorInvoke,
     PipeCall,
     PtrCast,
@@ -1072,6 +1194,16 @@ pub enum Op {
     BufferLen,
     BufferGet,
     BufferSet,
+    /// Speculatively resolves a buffer handle to its static descriptor address, or 0 for an
+    /// invalid, freed, or stale handle. Never faults: the access that consumes the descriptor
+    /// reports the use-after-free, so the resolution can run ahead of it in a loop preheader.
+    BufferResolve,
+    /// `buffer_get` through a descriptor from `BufferResolve`: `[descriptor, index]`. Faults
+    /// on a zero descriptor; a true immediate records a same-buffer proof that omits bounds.
+    BufferGetResolved,
+    /// `buffer_set` through a descriptor from `BufferResolve`: `[descriptor, index, value]`.
+    /// A true immediate has the same proven-in-range meaning as `BufferGetResolved`.
+    BufferSetResolved,
     BufferFree,
     PackedFieldGet,
     PackedFieldSet,
@@ -1163,6 +1295,7 @@ impl Op {
             | CallablePtr
             | PdoAdapterAddr
             | DynamicClassHasConstructor
+            | DynamicClassIsAbstract
             | DynamicPdoStatementClassStatus
             | DynamicPdoCalledClassStatus
             | Move
@@ -1200,6 +1333,7 @@ impl Op {
             LoadGlobal
             | LoadStaticProperty
             | StaticPropInitialized
+            | StaticLocalUninitialized
             | LoadReflectionStaticProperty
             | ReflectionStaticPropertyInitialized
             | ScopedConstantGet
@@ -1224,11 +1358,17 @@ impl Op {
             IToStr | FToStr | ResourceToStr | StrConcat | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
             StrCharAt => E::ALLOC_CONCAT | E::MAY_WARN,
+            StrAppend => E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP
+                | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             ConcatReset => E::WRITES_GLOBAL,
             Cast => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL
             }
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
+            // Rewrites the (possibly split) array's slots and releases the boxed cells it replaces.
+            ArrayToPointerWords => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+            }
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
             | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
             | GeneratorNew => {
@@ -1239,9 +1379,13 @@ impl Op {
                 | E::WRITES_GLOBAL | E::ALLOC_HEAP | E::MAY_THROW | E::REFCOUNT_OP,
             IsNull | IsTruthy | TypePredicate | MixedUnbox | MixedCastBool | MixedCastInt
             | MixedCastFloat | BufferGet | BufferLen | PackedFieldGet | PtrRead
-            | PtrReadString => {
+            | PtrReadString | BufferGetResolved => {
                 E::READS_HEAP | E::MAY_FATAL
             }
+            // Reads the static descriptor registry and never faults.
+            BufferResolve => E::READS_HEAP,
+            // One scalar store into the validated payload: no refcounted element is replaced.
+            BufferSetResolved => E::WRITES_HEAP | E::MAY_FATAL,
             ArrayGetSilent | HashGetSilent | ArrayIsset | HashIsset | DescriptorArgKeyExists => {
                 E::READS_HEAP
             }
@@ -1378,7 +1522,7 @@ impl Op {
             IterEnd => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_DEOPT,
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
             EnumBackingStringToInt | EnumBackingMixedToInt | PackedFieldMixedToInt
-            | ReturnBoundaryMixedToInt => {
+            | PackedFieldMixedToFloat | PackedFieldMixedToBool | ReturnBoundaryMixedToInt => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
             }
             EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
@@ -1441,6 +1585,24 @@ impl Op {
             effects | Effects::REFCOUNT_OP | Effects::WRITES_HEAP
         } else {
             effects
+        }
+    }
+
+    /// Returns the exact effects of a `prop_get` or `prop_set` on a `packed class` record.
+    ///
+    /// The read is a single load from the record. The write is a single store of a scalar the
+    /// lowering already narrowed or, for a nested packed record field, a copy of the source
+    /// record, so it reads the heap as well; `MAY_FATAL` stays for the payload guard a
+    /// `false`-typed field keeps and the null check of a `ptr<T>` copy source. Neither can warn,
+    /// throw, run user code, or touch the concat scratch. Effect refinement attaches these to
+    /// packed receivers with already materialized values; boxed sources keep default effects.
+    /// The validator accepts exactly this value as the one refinement of an
+    /// otherwise default-only `prop_set`.
+    pub fn packed_field_access_effects(self) -> Effects {
+        if self == Op::PropSet {
+            Effects::READS_HEAP | Effects::WRITES_HEAP | Effects::MAY_FATAL
+        } else {
+            Effects::READS_HEAP
         }
     }
 
@@ -1519,6 +1681,7 @@ impl Op {
             LoadStaticLocal => "load_static_local",
             StoreStaticLocal => "store_static_local",
             InitStaticLocal => "init_static_local",
+            StaticLocalUninitialized => "static_local_uninitialized",
             LoadStaticProperty => "load_static_property",
             LoadStaticPropertyRefCell => "load_static_property_ref_cell",
             StoreStaticProperty => "store_static_property",
@@ -1588,12 +1751,14 @@ impl Op {
             MixedUnbox => "mixed_unbox",
             MixedTagOf => "mixed_tag_of",
             ArrayToMixed => "array_to_mixed",
+            ArrayToPointerWords => "array_to_pointer_words",
             HashToMixed => "hash_to_mixed",
             MixedCastBool => "mixed_cast_bool",
             MixedCastInt => "mixed_cast_int",
             MixedCastFloat => "mixed_cast_float",
             MixedCastString => "mixed_cast_string",
             StrConcat => "str_concat",
+            StrAppend => "str_append",
             StrLen => "str_len",
             StrPersist => "str_persist",
             StrCharAt => "str_char_at",
@@ -1660,6 +1825,7 @@ impl Op {
             NormalizeCallable => "normalize_callable",
             PdoAdapterAddr => "pdo_adapter_addr",
             DynamicClassHasConstructor => "dynamic_class_has_constructor",
+            DynamicClassIsAbstract => "dynamic_class_is_abstract",
             DynamicPdoStatementClassStatus => "dynamic_pdo_statement_class_status",
             DynamicPdoCalledClassStatus => "dynamic_pdo_called_class_status",
             DynamicPdoStatementConstructorCall => "dynamic_pdo_statement_constructor_call",
@@ -1688,6 +1854,8 @@ impl Op {
             EnumBackingStringToInt => "enum_backing_string_to_int",
             EnumBackingMixedToInt => "enum_backing_mixed_to_int",
             PackedFieldMixedToInt => "packed_field_mixed_to_int",
+            PackedFieldMixedToFloat => "packed_field_mixed_to_float",
+            PackedFieldMixedToBool => "packed_field_mixed_to_bool",
             ReturnBoundaryMixedToInt => "return_boundary_mixed_to_int",
             ClassConstant => "class_constant",
             ScopedConstantGet => "scoped_constant_get",
@@ -1730,6 +1898,9 @@ impl Op {
             BufferLen => "buffer_len",
             BufferGet => "buffer_get",
             BufferSet => "buffer_set",
+            BufferResolve => "buffer_resolve",
+            BufferGetResolved => "buffer_get_resolved",
+            BufferSetResolved => "buffer_set_resolved",
             BufferFree => "buffer_free",
             PackedFieldGet => "packed_field_get",
             PackedFieldSet => "packed_field_set",

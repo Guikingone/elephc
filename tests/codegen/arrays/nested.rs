@@ -9,6 +9,206 @@
 
 use crate::support::*;
 
+/// Keeps a class constant's integer storage type when it initializes an indexed array.
+#[test]
+fn test_indexed_array_class_constant_element_type() {
+    let out = compile_and_run(
+        r#"<?php
+class Message { public const NUMBER = 42; }
+$values = [Message::NUMBER];
+echo is_int($values[0]) ? "int" : "other";
+"#,
+    );
+    assert_eq!(out, "int");
+}
+
+/// Stores a null class constant as a nullable array element.
+#[test]
+fn test_indexed_array_null_class_constant_element_type() {
+    let out = compile_and_run(
+        r#"<?php
+class EmptyValue { public const NOTHING = null; }
+$values = [EmptyValue::NOTHING];
+echo count($values), ":", is_null($values[0]) ? "null" : "other";
+"#,
+    );
+    assert_eq!(out, "1:null");
+}
+
+/// Resolves nested class constants before stamping the outer array element storage.
+#[test]
+fn test_indexed_array_nested_class_constant_element_type() {
+    let out = compile_and_run(
+        r#"<?php
+class NumberValue { public const N = 5; }
+class NumberList { public const ITEMS = [NumberValue::N]; }
+$values = [NumberList::ITEMS];
+echo is_array($values[0]) ? "array" : "other", ":", $values[0][0];
+"#,
+    );
+    assert_eq!(out, "array:5");
+}
+
+/// Keeps a nested scoped constant's integer element type through an untyped arrow return.
+#[test]
+fn test_indexed_array_nested_class_constant_in_untyped_arrow_return() {
+    let out = compile_and_run(
+        r#"<?php
+class NumberValue { public const N = 5; }
+class NumberList { public const ITEMS = [NumberValue::N]; }
+$make = fn() => [NumberList::ITEMS];
+$values = $make();
+echo gettype($values[0][0]), ":", $values[0][0];
+"#,
+    );
+    assert_eq!(out, "integer:5");
+}
+
+/// Keeps a nested scoped constant's integer element type through an untyped closure return.
+#[test]
+fn test_indexed_array_nested_class_constant_in_untyped_closure_return() {
+    let out = compile_and_run(
+        r#"<?php
+class NumberValue { public const N = 5; }
+class NumberList { public const ITEMS = [NumberValue::N]; }
+$make = function () { return [NumberList::ITEMS]; };
+$values = $make();
+echo gettype($values[0][0]), ":", $values[0][0];
+"#,
+    );
+    assert_eq!(out, "integer:5");
+}
+
+/// Preserves a null class constant in an untyped arrow's returned array.
+#[test]
+fn test_scoped_constant_closure_null_arrow_return() {
+    let out = compile_and_run(
+        r#"<?php
+class EmptyValue { public const NOTHING = null; }
+$make = fn() => [EmptyValue::NOTHING];
+$values = $make();
+echo count($values), ":", gettype($values[0]);
+"#,
+    );
+    assert_eq!(out, "1:NULL");
+}
+
+/// Preserves a null class constant in an untyped closure's returned array.
+#[test]
+fn test_scoped_constant_closure_null_return() {
+    let out = compile_and_run(
+        r#"<?php
+class EmptyValue { public const NOTHING = null; }
+$make = function () { return [EmptyValue::NOTHING]; };
+$values = $make();
+echo count($values), ":", gettype($values[0]);
+"#,
+    );
+    assert_eq!(out, "1:NULL");
+}
+
+/// Keeps a null class constant boxed when returned directly by untyped callables.
+#[test]
+fn test_scoped_constant_closure_direct_null_return() {
+    let out = compile_and_run(
+        r#"<?php
+class EmptyValue { public const NOTHING = null; }
+$arrow = fn() => EmptyValue::NOTHING;
+$closure = function () { return EmptyValue::NOTHING; };
+echo gettype($arrow()), ":", gettype($closure());
+"#,
+    );
+    assert_eq!(out, "NULL:NULL");
+}
+
+/// Resolves inherited class and interface constants in an untyped arrow return.
+#[test]
+fn test_scoped_constant_closure_inherited_return() {
+    let out = compile_and_run(
+        r#"<?php
+interface Origin { public const FLAG = 9; }
+interface ExtendedOrigin extends Origin {}
+class BaseNumber { public const N = 5; }
+class DerivedNumber extends BaseNumber implements ExtendedOrigin {}
+$make = fn() => [DerivedNumber::N, DerivedNumber::FLAG];
+$values = $make();
+echo gettype($values[0]), ":", $values[0], ",", gettype($values[1]), ":", $values[1];
+"#,
+    );
+    assert_eq!(out, "integer:5,integer:9");
+}
+
+/// Resolves self, parent, and static receivers inside method-defined closures.
+#[test]
+fn test_scoped_constant_closure_relative_receivers() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseNumber { public const N = 5; }
+class DerivedNumber extends BaseNumber {
+    public function selfMaker() { return fn() => [self::N]; }
+    public function parentMaker() { return function () { return [parent::N]; }; }
+    public function staticMaker() { return fn() => [static::N]; }
+}
+$object = new DerivedNumber();
+$self = $object->selfMaker();
+$parent = $object->parentMaker();
+$static = $object->staticMaker();
+$a = $self(); $b = $parent(); $c = $static();
+echo gettype($a[0]), ":", $a[0], ",", gettype($b[0]), ":", $b[0], ",", gettype($c[0]), ":", $c[0];
+"#,
+    );
+    assert_eq!(out, "integer:5,integer:5,integer:5");
+}
+
+/// Keeps a late-static constant override's runtime type in a returned closure array.
+#[test]
+fn test_scoped_constant_closure_late_static_override_return() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseValue {
+    public const ITEM = 5;
+    public function maker() { return fn() => [static::ITEM]; }
+}
+class DerivedValue extends BaseValue { public const ITEM = "nine"; }
+$object = new DerivedValue();
+$make = $object->maker();
+$values = $make();
+echo gettype($values[0]), ":", $values[0];
+"#,
+    );
+    assert_eq!(out, "string:nine");
+}
+
+/// Preserves an enum case returned through an untyped arrow's array slot.
+#[test]
+fn test_scoped_constant_closure_enum_case_return() {
+    let out = compile_and_run(
+        r#"<?php
+enum Suit { case Hearts; }
+$make = fn() => [Suit::Hearts];
+$values = $make();
+echo $values[0] instanceof Suit ? "case" : "other";
+"#,
+    );
+    assert_eq!(out, "case");
+}
+
+/// Resolves nested constants in a mixed-key class-constant array through a closure return.
+#[test]
+fn test_scoped_constant_closure_mixed_key_array_return() {
+    let out = compile_and_run(
+        r#"<?php
+class NumberValue { public const N = 5; }
+class NumberList { public const ITEMS = [[NumberValue::N]]; }
+class Bag { public const ITEMS = [...NumberList::ITEMS, "name" => [NumberValue::N]]; }
+$make = fn() => [Bag::ITEMS];
+$values = $make();
+echo gettype($values[0][0][0]), ":", $values[0][0][0], ",", gettype($values[0]["name"][0]), ":", $values[0]["name"][0];
+"#,
+    );
+    assert_eq!(out, "integer:5,integer:5");
+}
+
 // --- Phase 14: Multi-dimensional arrays ---
 
 /// Compiles a 2D numeric array literal and verifies indexed access to all four elements.

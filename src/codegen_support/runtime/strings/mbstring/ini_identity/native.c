@@ -20,6 +20,7 @@ static void *const *functions;
 static uint64_t copies, frees;
 
 HIDDEN _Alignas(16) unsigned char heap[16384] __asm__("_heap_buf");
+HIDDEN unsigned char live_bases[sizeof(heap) / 64] __asm__("_heap_live_bases");
 HIDDEN uint64_t offset __asm__("_heap_off");
 HIDDEN uint64_t live __asm__("_gc_live");
 HIDDEN uint64_t free_count __asm__("_gc_frees");
@@ -55,6 +56,8 @@ void *mb_test_allocate(uint64_t size) {
 #else
     *(uint64_t *)(header + 8) = 0;
 #endif
+    uint64_t payload_offset = offset + 16;
+    live_bases[payload_offset >> 6] |= (unsigned char)(1U << ((payload_offset >> 3) & 7));
     offset += size + 16;
     live += size + 16;
     return header + 16;

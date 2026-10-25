@@ -307,7 +307,8 @@ pub(super) fn cast_loaded_mixed_pointer_to_result(
     let label = match target_ty {
         PhpType::Mixed | PhpType::Union(_) => return Ok(()),
         PhpType::Str => "__rt_mixed_cast_string",
-        PhpType::Int => "__rt_mixed_cast_int",
+        // A pointer result is the address word, cast like an int: PHP null becomes 0.
+        PhpType::Int | PhpType::Pointer(_) => "__rt_mixed_cast_int",
         PhpType::Float => "__rt_mixed_cast_float",
         PhpType::Bool => "__rt_mixed_cast_bool",
         PhpType::TaggedScalar => {

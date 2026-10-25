@@ -293,11 +293,16 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let synthetic_main = dir.join("test.php");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
+    // Mirrors `source::finalize_physical_program`: generic doc-comment annotations are applied
+    // per physical file, between the magic constants and the conditional pass. Skipping it here
+    // let a `@template` fixture compile as ordinary untyped PHP and still print the right
+    // values, so the surface looked tested while nothing exercised it.
+    let ast = elephc::docblock::apply(ast, source);
     let ast = elephc::conditional::apply(ast, defines);
     let (autoload_registry, ast) = elephc::autoload::Registry::build(dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
-    let resolved = elephc::autoload::collect_aliases(resolved);
+    let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     // Surface usage is decided BEFORE injection, mirroring `pipeline::compile`:
     // the harness seeds `set_linked_extensions` from the same bits so
@@ -332,13 +337,22 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved =
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::bcmath_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::testing_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::dom_html_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
+    let resolved = elephc::dom_html_prelude::inject_after_autoload(resolved, &mut prelude_inventory)
+        .expect("autoload DOM prelude injection failed");
     // Mirrors `pipeline::compile`: the object-cast prelude is injected AFTER autoloading, so a
     // `(object)` cast that only appears in an autoloaded class file is still detected.
+    let resolved = elephc::testing_prelude::inject_after_autoload(resolved, &mut prelude_inventory)
+        .expect("testing prelude post-autoload injection failed");
     let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)
         .expect("object-cast prelude injection failed");
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
@@ -346,8 +360,15 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
-    let mut check_result =
-        elephc::types::check_with_target(&resolved, target()).expect("type check failed");
+    // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint, so every
+    // reachable template has become an ordinary monomorphic declaration before lowering. A
+    // plain `check_with_target` here would leave templates in the program and hand the backend
+    // a call to a function that does not exist.
+    let (resolved, mut check_result) =
+        elephc::generics::monomorphize(resolved, |program, bounds| {
+            elephc::types::check_with_target_and_bounds(program, target(), bounds)
+        })
+        .expect("type check failed");
     set_fixture_linked_extensions(&check_result.required_libraries);
     let optimized =
         elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
@@ -364,13 +385,20 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         check_result.local_binding_decision_spans(),
     );
     let empty_roots = HashSet::new();
+    // Mirrors `pipeline::compile`: a generic instantiation is reachable by construction but no
+    // call site NAMES it in the AST — lowering resolves that from the checker's answer — so the
+    // pruner would otherwise drop every instantiation as unreferenced.
+    let instantiation_roots: HashSet<String> =
+        elephc::generics::instantiation_roots(&check_result.requested_instantiations)
+            .into_iter()
+            .collect();
     let optimized = elephc::optimize::prune_unreachable_declarations(
         optimized,
         &mut check_result,
         elephc::optimize::reachability::PruneOptions {
             inventory: &prelude_inventory,
             forced_groups: &empty_roots,
-            exported_functions: &empty_roots,
+            exported_functions: &instantiation_roots,
             eval_forced: false,
         },
     );
@@ -746,6 +774,68 @@ fn compile_and_run_capture_with_optional_regex(
 /// Provides the Compile and run with heap debug helper used by the compiler module.
 pub(crate) fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
     compile_and_run_with_heap_debug_and_asm(source).0
+}
+
+/// Compiles `source` ONCE and runs the binary once per argument vector, returning each run's
+/// stdout and asserting every run exits successfully.
+///
+/// `compile_and_run` always starts the program with no arguments, so `$argc` is 1 and a fixture
+/// whose control flow branches on `$argc` only ever executes one arm. Passing `&[&[], &["x"]]`
+/// runs the same binary at `$argc == 1` and `$argc == 2`, so both arms run under CI.
+pub(crate) fn compile_and_run_per_argv(source: &str, argvs: &[&[&str]]) -> Vec<String> {
+    compile_and_capture_per_argv(source, false, argvs)
+        .into_iter()
+        .zip(argvs)
+        .map(|(output, args)| {
+            assert!(
+                output.success,
+                "binary exited with an error for arguments {:?}\nstdout: {}\nstderr: {}",
+                args,
+                output.stdout,
+                output.stderr
+            );
+            output.stdout
+        })
+        .collect()
+}
+
+/// Heap-debug counterpart of [`compile_and_run_per_argv`]: compiles `source` once with heap
+/// debugging and returns every run's captured output, one per argument vector, without asserting
+/// success, so a fixture can check each arm's output and leak summary.
+pub(crate) fn compile_and_run_with_heap_debug_per_argv(
+    source: &str,
+    argvs: &[&[&str]],
+) -> Vec<ProgramOutput> {
+    compile_and_capture_per_argv(source, true, argvs)
+}
+
+/// Compiles `source` once and captures one run per argument vector.
+fn compile_and_capture_per_argv(
+    source: &str,
+    heap_debug: bool,
+    argvs: &[&[&str]],
+) -> Vec<ProgramOutput> {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_argv_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, heap_debug);
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let outputs = assemble_and_run_capture_per_argv(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+        argvs,
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    outputs
 }
 
 /// Returns the exact user assembly with a heap-debug fixture's output for target-specific CI diagnostics.

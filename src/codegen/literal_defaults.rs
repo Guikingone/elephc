@@ -164,6 +164,22 @@ pub(crate) fn literal_default_value(
     expr: &ExprKind,
     op_name: &str,
 ) -> Result<LiteralDefaultValue> {
+    if let Some(folded) = fold_named_class_constant(expr) {
+        return literal_default_value(context, php_type, &folded, op_name);
+    }
+    if php_type.coerces_integer_to_float() {
+        let integer = match expr {
+            ExprKind::IntLiteral(value) => Some(*value),
+            ExprKind::Negate(inner) => match inner.kind {
+                ExprKind::IntLiteral(value) => value.checked_neg(),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(value) = integer {
+            return literal_default_value(context, php_type, &ExprKind::FloatLiteral(value as f64), op_name);
+        }
+    }
     match (php_type, expr) {
         (PhpType::Int, ExprKind::IntLiteral(value)) => Ok(LiteralDefaultValue::Int(*value)),
         (PhpType::Int, ExprKind::Negate(inner)) => match &inner.kind {
@@ -204,6 +220,12 @@ pub(crate) fn literal_default_value(
         }
         (php_type, ExprKind::Null) if php_type.codegen_repr() == PhpType::TaggedScalar => {
             Ok(LiteralDefaultValue::TaggedNull)
+        }
+        // A `?ptr<T>` slot holds a raw pointer word whose null is address 0, so its null
+        // default is the zero word. This arm must precede the `Union(_)` boxing arms: boxing
+        // would store a non-zero Mixed cell address that every later `=== null` reads as set.
+        (php_type, ExprKind::Null) if crate::types::is_nullable_pointer_type(php_type) => {
+            Ok(LiteralDefaultValue::Null)
         }
         (PhpType::Mixed | PhpType::Union(_), ExprKind::StringLiteral(value)) => {
             Ok(LiteralDefaultValue::BoxedStr(value.clone()))
@@ -548,6 +570,9 @@ fn literal_array_element(
     expr: &ExprKind,
     op_name: &str,
 ) -> Result<LiteralArrayElement> {
+    if let Some(folded) = fold_named_class_constant(expr) {
+        return literal_array_element(context, elem_type, &folded, op_name);
+    }
     // A nested literal recurses rather than being refused. Under a Mixed-capable element type
     // the nested elements are typed `Mixed` for the same reason the outer ones are -- the
     // container has to accept a later write of any type. A container element type reached
@@ -626,6 +651,11 @@ fn literal_array_element(
             ExprKind::StringLiteral(value) => Ok(LiteralArrayElement::Str(value.clone())),
             _ => Err(unsupported_literal_default(context, elem_type, op_name)),
         },
+        // A pointer element's only literal is `null`, the null pointer word 0.
+        PhpType::Pointer(_) => match expr {
+            ExprKind::Null => Ok(LiteralArrayElement::Int(0)),
+            _ => Err(unsupported_literal_default(context, elem_type, op_name)),
+        },
         _ => Err(unsupported_literal_default(context, elem_type, op_name)),
     }
 }
@@ -650,6 +680,9 @@ fn literal_assoc_entries(
 /// string key, and numeric strings are normalized to integer keys later at emit time. Unsupported
 /// key forms fall through to the shared unsupported-default error rather than miscompiling.
 fn literal_array_key(context: &str, expr: &ExprKind, op_name: &str) -> Result<LiteralArrayKey> {
+    if let Some(folded) = fold_named_class_constant(expr) {
+        return literal_array_key(context, &folded, op_name);
+    }
     match expr {
         ExprKind::StringLiteral(value) => Ok(LiteralArrayKey::Str(value.clone())),
         ExprKind::IntLiteral(value) => Ok(LiteralArrayKey::Int(*value)),
@@ -781,7 +814,9 @@ fn append_array_literal_element(
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             append_refcounted_array_literal_element(ctx, value_type);
         }
-        PhpType::Int | PhpType::Bool => append_scalar_array_literal_element(ctx),
+        PhpType::Int | PhpType::Bool | PhpType::Pointer(_) | PhpType::Buffer(_) => {
+            append_scalar_array_literal_element(ctx)
+        }
         PhpType::Float => append_float_array_literal_element(ctx),
         PhpType::Str => append_string_array_literal_element(ctx),
         other => {
@@ -1066,12 +1101,13 @@ fn materialize_assoc_literal_concrete_value_x86_64(
     }
 }
 
-/// Returns the runtime value tag to pass for one literal hash insertion.
+/// Returns the runtime value tag to pass for one literal hash insertion. A pointer hash entry
+/// keeps its raw word under `POINTER_ARRAY_VALUE_TYPE`, as `hash_set` stores it.
 fn assoc_literal_value_tag(storage_value_type: &PhpType, actual_value_type: &PhpType) -> i64 {
     if matches!(storage_value_type.codegen_repr(), PhpType::Mixed | PhpType::Iterable) {
         runtime_value_tag(&actual_value_type.codegen_repr()) as i64
     } else {
-        runtime_value_tag(&storage_value_type.codegen_repr()) as i64
+        crate::codegen::container_value_tag(&storage_value_type.codegen_repr())
     }
 }
 
@@ -1088,11 +1124,29 @@ fn array_element_size(elem_type: &PhpType) -> Result<i64> {
         | PhpType::AssocArray { .. }
         | PhpType::Union(_)
         | PhpType::Iterable
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_)
         | PhpType::Void => Ok(8),
         other => Err(CodegenIrError::unsupported(format!(
             "array default element PHP type {:?}",
             other
         ))),
+    }
+}
+
+/// Folds `Foo::class` with a named receiver into the string literal it always is: the name
+/// as written, already resolved against the file's namespace and imports, with no leading
+/// `\`. `self::class`, `parent::class` and `static::class` depend on the class they appear in
+/// and stay as they are. Shared with the Reflection default metadata, so a folded default
+/// reflects as the same string it stores.
+pub(crate) fn fold_named_class_constant(expr: &ExprKind) -> Option<ExprKind> {
+    match expr {
+        ExprKind::ClassConstant {
+            receiver: crate::parser::ast::StaticReceiver::Named(name),
+        } => Some(ExprKind::StringLiteral(
+            name.as_str().trim_start_matches('\\').to_string(),
+        )),
+        _ => None,
     }
 }
 

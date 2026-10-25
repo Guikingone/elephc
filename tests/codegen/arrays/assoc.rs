@@ -9,6 +9,56 @@
 
 use crate::support::*;
 
+/// A reference created in the loop can advance the counter through another local.
+#[test]
+fn test_reference_counter_alias_inside_loop_takes_hash_storage() {
+    let source = r#"<?php
+$a = [];
+for ($i = 0; $i < 4; $i++) {
+    $r = &$i;
+    $r += 2;
+    $a[$i] = $i;
+}
+echo json_encode($a);
+"#;
+    assert_eq!(compile_and_run(source), "{\"2\":2,\"5\":5}");
+}
+
+/// References established before the loop invalidate the counter's packed-storage proof.
+#[test]
+fn test_reference_counter_alias_before_loop_takes_hash_storage() {
+    let source = r#"<?php
+$i = 0;
+$r = &$i;
+$a = [];
+for ($i = 0; $i < 4; $i++) {
+    $r += 2;
+    $a[$i] = $i;
+}
+echo json_encode($a);
+"#;
+    assert_eq!(compile_and_run(source), "{\"2\":2,\"5\":5}");
+}
+
+/// Foreach key and value variables can each overwrite the surrounding loop's counter.
+#[test]
+fn test_foreach_counter_rebinding_takes_hash_storage() {
+    let source = r#"<?php
+$a = [];
+for ($i = 0; $i < 3; $i++) {
+    foreach ([7] as $i) {}
+    $a[$i] = $i;
+}
+$b = [];
+for ($j = 0; $j < 3; $j++) {
+    foreach ([7 => 1] as $j => $value) {}
+    $b[$j] = $j;
+}
+echo json_encode($a), "|", json_encode($b);
+"#;
+    assert_eq!(compile_and_run(source), "{\"7\":7}|{\"7\":7}");
+}
+
 // --- Phase 12: v0.6 — Associative arrays, switch, match ---
 
 /// Compiles a PHP script with two static string-keyed entries and verifies the first value is echoed.
@@ -1027,159 +1077,260 @@ fn test_array_slice_builtin_types_do_not_collide_across_included_files() {
     );
     assert_eq!(out, "12|tf");
 }
-// --- Issue #1087: array_push() onto an associative receiver -------------------------------
-//
-// PHP has one array type and one append: `array_push($hash, $v)` is `$hash[] = $v`, inserting at
-// `max(int keys) + 1`, or `0` when the hash has no integer keys. AOT rejected every associative
-// receiver outright with `array_push() first argument must be array`, while the Magician and the
-// `array_unshift` contract both accepted one.
-//
-// The matrix below is the associative counterpart of
-// `test_array_push_accepts_phps_full_variadic_signature`: it walks the value counts, the key
-// forms a hash can already hold, every receiver place, and the return value. Each expected value
-// is verbatim host PHP 8.5.10 output for the same fixture.
 
-/// The full `array_push()` surface over an associative receiver.
+/// A variable index into a still-empty array makes it a hash, exactly as php does.
 ///
-/// Keys are read back with `foreach` rather than `array_keys()`: that builtin reads a hash key's
-/// DECLARED type rather than its runtime form, so it dies on exactly the mixed int/string key
-/// set an associative push produces (issue #1072). Using it here would assert that defect
-/// instead of this one.
+/// Packed storage has no keys — slot `n` IS key `n` — so writing slot 205 into an array of
+/// length 2 used to zero-fill 203 slots and answer `count($rows) === 206`. php promotes the
+/// array to a hash the moment an integer key skips, and answers 3.
 #[test]
-fn test_array_push_appends_to_an_associative_receiver() {
+fn test_gapped_variable_index_counts_entries_not_slots() {
     let out = compile_and_run(
         r#"<?php
-$a = ["a" => 1, "b" => 2]; $n = array_push($a, 3);       echo implode(",", $a), "|", $n, "\n";
-$b = ["a" => 1];           $n = array_push($b, 3, 4, 5); echo implode(",", $b), "|", $n, "\n";
-$c = ["a" => 1];           $n = array_push($c);          echo implode(",", $c), "|", $n, "\n";
-$d = [5 => "x", "k" => "y"];  array_push($d, "z");       foreach ($d as $k => $v) { echo $k, "="; } echo "\n";
-$e = [-3 => "a", 7 => "b"];   array_push($e, "c");       foreach ($e as $k => $v) { echo $k, "="; } echo "\n";
-function viaRef(array &$r): int { return array_push($r, "new"); }
-$p = ["k" => "v"]; $n = viaRef($p); echo implode(",", $p), "|", $n, "\n";
-class PushBox { public array $items = ["a" => 1]; }
-$box = new PushBox(); $n = array_push($box->items, 2); echo implode(",", $box->items), "|", $n, "\n";
-class PushShelf { public static array $items = ["a" => 1]; }
-$n = array_push(PushShelf::$items, 2); echo implode(",", PushShelf::$items), "|", $n, "\n";
-$rows = ["inner" => ["a" => 1]]; $n = array_push($rows["inner"], 2); echo implode(",", $rows["inner"]), "|", $n, "\n";
-$g = ["a" => 1]; echo array_push($g, 2, 3) + 10, "\n";
-$loop = ["k" => "v"]; for ($i = 0; $i < 5; $i++) { array_push($loop, (string) $i); }
-foreach ($loop as $k => $v) { echo $k, "="; } echo "\n";
+$rows = [];
+foreach ([101, 102, 205] as $id) { $rows[$id] = "row$id"; }
+echo count($rows), "|";
+foreach ($rows as $k => $v) { echo $k, "=", $v, ","; }
+echo json_encode($rows);
 "#,
     );
     assert_eq!(
         out,
-        concat!(
-            "1,2,3|3\n",
-            "1,3,4,5|4\n",
-            "1|1\n",
-            "5=k=6=\n",
-            "-3=7=8=\n",
-            "v,new|2\n",
-            "1,2|2\n",
-            "1,2|2\n",
-            "1,2|2\n",
-            "13\n",
-            "k=0=1=2=3=4=\n",
-        )
+        "3|101=row101,102=row102,205=row205,{\"101\":\"row101\",\"102\":\"row102\",\"205\":\"row205\"}"
     );
 }
 
-/// The receiver is republished after EVERY insert, not once at the end.
+/// The counter of the enclosing `for` loop is the one index that keeps packed storage.
 ///
-/// A hash insert can split the table for copy-on-write, so the pointer a later insert must
-/// address is the previous insert's result. Publishing once at the end wrote the pre-split
-/// pointer back and the appends vanished — `count()` stayed at its original value while the
-/// copy was, correctly, left alone. Both directions are asserted because only the pair
-/// distinguishes a lost write from a split that never happened.
+/// It is `0` at the first write into the empty array and advances one slot per iteration, so it
+/// can never run ahead of the length and no gap is reachable. `array_filter` is in here on
+/// purpose: it is one of the 25 array builtins that accept only an indexed array, so the program
+/// stops compiling altogether if the loop leaves packed storage.
+///
+/// Three elements, not five: a FOURTH string write into an array that started empty frees slot
+/// 0's payload. That reproduces on committed `main` with no loop in sight, and is a separate
+/// defect from anything this test is about.
 #[test]
-fn test_array_push_on_a_shared_associative_receiver_separates_it() {
+fn test_for_counter_index_keeps_packed_storage() {
     let out = compile_and_run(
         r#"<?php
-$h = ["a" => 1]; $b = $h; array_push($h, 2); echo count($h), ",", count($b), "\n";
-$i = ["a" => 1]; $c = $i; array_push($c, 2); echo count($i), ",", count($c), "\n";
+$a = [];
+for ($i = 0; $i < 3; $i++) { $a[$i] = "v$i"; }
+echo implode(",", $a), "|", count($a), "|", json_encode($a), "|";
+echo count(array_filter($a, fn($x) => $x !== "v2"));
 "#,
     );
-    assert_eq!(out, "2,1\n1,2\n");
+    assert_eq!(out, "v0,v1,v2|3|[\"v0\",\"v1\",\"v2\"]|2");
 }
 
-/// Appending to an associative receiver in a loop leaves no heap behind.
+/// A write the loop can SKIP is not covered by the counter exception, because a skipped
+/// iteration is exactly how a gap appears.
 ///
-/// Each insert goes through `__rt_hash_set`, which owns the growth and the copy-on-write split,
-/// and the caller republishes the table pointer afterwards. A missed release on the split-away
-/// table accumulates per iteration rather than showing up once.
+/// php keys this array 0, 2, 4 and counts 3; packed storage would have zero-filled slots 1 and 3
+/// and counted 5.
 #[test]
-fn test_array_push_on_an_associative_receiver_is_heap_clean() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-for ($i = 0; $i < 32; $i++) {
-    $a = ["x" => 1, "y" => 2];
-    array_push($a, 3, 4, 5);
-    $b = ["x" => "aa"];
-    $c = $b;
-    array_push($b, "bb", "cc");
-}
-echo count($a), count($b), count($c), "\n";
-"#,
-    );
-    assert_eq!(out.stdout, "531\n", "stderr: {}", out.stderr);
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "associative array_push leaked: {}",
-        out.stderr
-    );
-}
-
-/// Enough values to force `__rt_hash_grow`, which FREES the old table rather than merely
-/// decrementing it.
-///
-/// A fresh one-entry literal is allocated with sixteen slots and grows once the count reaches
-/// three quarters of that, so a five-value push never reaches the path at all: the earlier
-/// fixtures exercise only the copy-on-write split. Growth is where a stale republished pointer
-/// is a use-after-free instead of a stale read, so the shared receiver is included to make the
-/// sequence split-then-grow rather than grow alone.
-#[test]
-fn test_array_push_growing_an_associative_receiver_is_heap_clean() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-$a = ["a" => 1];
-$n = array_push($a, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21);
-$b = ["a" => 1];
-$shared = $b;
-$m = array_push($b, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21);
-class GrowBox { public array $h = ["a" => 1]; }
-$o = new GrowBox();
-$p = array_push($o->h, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21);
-echo $n, ",", $m, ",", count($shared), ",", $p, "\n";
-"#,
-    );
-    assert_eq!(out.stdout, "21,21,1,21\n", "stderr: {}", out.stderr);
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "growing an associative receiver leaked: {}",
-        out.stderr
-    );
-}
-
-/// A receiver that is a MISSED hash read is the in-band null-container sentinel, not a table.
-///
-/// An `AssocArray`-typed value can hold that sentinel at run time, and dereferencing it
-/// segfaulted — in the key scan when values were pushed, and in the count read when they were
-/// not, since with no values no insert happens and there is nothing to have made the receiver
-/// real. PHP answers with a `TypeError`, and so does this now, with php-src's wording.
-#[test]
-fn test_array_push_on_a_missed_associative_read_raises_a_type_error() {
+fn test_conditional_write_under_a_for_counter_still_uses_hash() {
     let out = compile_and_run(
         r#"<?php
-$h = ["a" => ["x" => 1]];
-try { array_push($h["missing"], 2); } catch (TypeError $e) { echo "with:", $e->getMessage(), "\n"; }
-try { array_push($h["absent"]); } catch (TypeError $e) { echo "without:", $e->getMessage(), "\n"; }
+$a = [];
+for ($i = 0; $i < 5; $i++) { if ($i % 2 === 0) { $a[$i] = $i; } }
+echo count($a), "|", json_encode($a);
 "#,
     );
-    assert_eq!(
-        out,
-        concat!(
-            "with:array_push(): Argument #1 ($array) must be of type array, null given\n",
-            "without:array_push(): Argument #1 ($array) must be of type array, null given\n",
-        )
+    assert_eq!(out, "3|{\"0\":0,\"2\":2,\"4\":4}");
+}
+
+/// A `continue` can skip the write just as an `if` can, so the counter exception drops there too.
+#[test]
+fn test_continue_in_a_for_body_still_uses_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 5; $i++) { if ($i === 2) { continue; } $a[$i] = $i; }
+echo count($a), "|", json_encode($a);
+"#,
     );
+    assert_eq!(out, "4|{\"0\":0,\"1\":1,\"3\":3,\"4\":4}");
+}
+
+
+/// A `for` counter the loop CONDITION rewrites is not a counter that tracks the array's length.
+///
+/// `packed_for_counter` was never given the condition, on the reasoning that a condition can only
+/// stop the loop earlier. It can also assign: `($i = 3) < 4` puts the counter at 3 before the
+/// first write, and packed storage has no keys, so the write zero-filled slots 0..2 and invented
+/// three entries php never has.
+#[test]
+fn test_a_for_condition_that_writes_the_counter_takes_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; ($i = 3) < 4; $i++) {
+    $a[$i] = 9;
+    break;
+}
+echo count($a), ":", json_encode($a);
+"#,
+    );
+    assert_eq!(out, "1:{\"3\":9}");
+}
+
+/// The same write, one level down: a counter advanced inside a larger expression.
+///
+/// `$z = $i++;` binds `$z`, so the statement's own shape says nothing about the counter — the
+/// increment is buried in its value, where a check that matched only the outermost node never
+/// looked. php promotes to a hash and keeps two entries; packed storage gapped to three.
+#[test]
+fn test_a_counter_advanced_inside_an_assigned_expression_takes_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 4; $i++) {
+    $a[$i] = 1;
+    $z = $i++;
+}
+echo count($a), ":", json_encode($a);
+"#,
+    );
+    assert_eq!(out, "2:{\"0\":1,\"2\":1}");
+}
+
+/// The counter exception itself, which must survive both of the above: a plain `for` that grows
+/// an array one slot at a time still keeps PACKED storage, which `json_encode` shows as a list
+/// rather than an object.
+#[test]
+fn test_a_plain_for_counter_still_keeps_packed_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$src = [10, 20, 30];
+$b = [];
+for ($j = 0; $j < count($src); $j++) {
+    $b[$j] = $src[$j] * 2;
+}
+echo json_encode($b), "|";
+$limit = 3;
+$c = [];
+for ($k = 0; $k < $limit; $k++) {
+    $c[$k] = $k;
+}
+echo json_encode($c);
+"#,
+    );
+    assert_eq!(out, "[20,40,60]|[0,1,2]");
+}
+
+/// A call can advance the counter through a reference without an assignment at the call site.
+#[test]
+fn test_by_ref_counter_function_calls_take_hash_storage() {
+    for call in ["bump($i)", "bump(value: $i)"] {
+        let source = format!(
+            r#"<?php
+function bump(&$value) {{ $value += 2; }}
+$a = [];
+for ($i = 0; $i < 4; $i++) {{
+    {call};
+    $a[$i] = $i;
+}}
+echo count($a), ":", json_encode($a);
+"#,
+        );
+        assert_eq!(compile_and_run(&source), "2:{\"2\":2,\"5\":5}", "{call}");
+    }
+}
+
+/// Instance, static and closure calls can all bind the counter to a reference parameter.
+#[test]
+fn test_by_ref_counter_method_and_closure_calls_take_hash_storage() {
+    for call in ["$b->bump($i)", "Bump::advance($i)", "$f($i)"] {
+        let source = format!(
+            r#"<?php
+class Bump {{
+    public function bump(&$value): void {{ $value += 2; }}
+    public static function advance(&$value): void {{ $value += 2; }}
+}}
+$b = new Bump();
+$f = function (&$value): void {{ $value += 2; }};
+$a = [];
+for ($i = 0; $i < 4; $i++) {{
+    {call};
+    $a[$i] = $i;
+}}
+echo json_encode($a);
+"#,
+        );
+        assert_eq!(compile_and_run(&source), "{\"2\":2,\"5\":5}", "{call}");
+    }
+}
+
+/// A reference mutation in the condition runs before the first indexed write too.
+#[test]
+fn test_by_ref_counter_condition_call_takes_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function advance(&$value): bool { $value += 2; return $value < 7; }
+$a = [];
+for ($i = 0; advance($i); $i++) { $a[$i] = $i; }
+echo json_encode($a);
+"#,
+    );
+    assert_eq!(out, "{\"2\":2,\"5\":5}");
+}
+
+/// A reference alias can advance the counter with nothing in the body naming it.
+///
+/// `$r = &$i` inside the body and the same alias made before the loop both let `$r += 2` skip
+/// slots; the proof only saw assignments to `$i`, kept packed storage, and zero-filled the gaps.
+#[test]
+fn test_reference_aliased_counter_takes_hash_storage() {
+    for (setup, step) in [("", "$r = &$i; $r += 2;"), ("$i = 0; $r = &$i;", "$r += 2;")] {
+        let source = format!(
+            r#"<?php
+$a = [];
+{setup}
+for ($i = 0; $i < 4; $i++) {{
+    {step}
+    $a[$i] = $i;
+}}
+echo json_encode($a);
+"#,
+        );
+        assert_eq!(compile_and_run(&source), "{\"2\":2,\"5\":5}", "{setup} {step}");
+    }
+}
+
+/// A `foreach` value is any element of its iterable, so indexing a still-empty array by it inside
+/// a loop takes hash storage, whether or not it rebinds the `for` counter.
+#[test]
+fn test_foreach_value_index_inside_a_loop_takes_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 3; $i++) { foreach ([7] as $i) {} $a[$i] = $i; }
+$b = [];
+$n = 0;
+while ($n < 1) { foreach ([7] as $k) {} $b[$k] = $k; $n++; }
+echo json_encode($a), "|", json_encode($b);
+"#,
+    );
+    assert_eq!(out, "{\"7\":7}|{\"7\":7}");
+}
+
+/// A `foreach` value written inside the `foreach` body takes hash storage too.
+///
+/// That write is marked skippable, and the skippable writes were exempt from the unbounded-key
+/// rule, so `foreach ([7] as $k) { $a[$k] = $k; }` inside a `for` or `while` built a packed array
+/// zero-filled up to 7.
+#[test]
+fn test_foreach_value_written_in_the_foreach_body_takes_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 1; $i++) { foreach ([7] as $k) { $a[$k] = $k; } }
+$b = [];
+$n = 0;
+while ($n < 1) { foreach ([7] as $k) { $b[$k] = $k; } $n++; }
+echo json_encode($a), "|", json_encode($b);
+"#,
+    );
+    assert_eq!(out, "{\"7\":7}|{\"7\":7}");
 }

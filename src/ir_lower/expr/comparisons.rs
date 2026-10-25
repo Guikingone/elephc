@@ -17,8 +17,25 @@ pub(super) fn lower_compare(
     right: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    let mut lhs = lower_expr(ctx, left);
-    let mut rhs = lower_expr(ctx, right);
+    let lhs = lower_expr(ctx, left);
+    let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, left.span);
+    let rhs = lower_expr(ctx, right);
+    unpin_in_flight_owners(ctx, left_pins, left.span);
+    if let Some(result) = object_operators::lower_object_binary_values(ctx, lhs, op, rhs, expr) {
+        return result;
+    }
+    if let Some(result) = object_operators::lower_dynamic_object_binary(ctx, lhs, op, rhs, expr, true,
+        |ctx| lower_compare_values(ctx, lhs, op, rhs, left, right, expr)) {
+        return result;
+    }
+    lower_compare_values(ctx, lhs, op, rhs, left, right, expr)
+}
+
+/// Lowers ordinary PHP comparisons after an internal value-class handler is excluded.
+fn lower_compare_values(
+    ctx: &mut LoweringContext<'_, '_>, mut lhs: LoweredValue, op: &BinOp,
+    mut rhs: LoweredValue, left: &Expr, right: &Expr, expr: &Expr,
+) -> LoweredValue {
     // DateTime-family value comparison: PHP orders `DateTime`/`DateTimeImmutable` by their absolute
     // instant (timestamp seconds + microsecond), independent of the stored timezone. Replace each
     // object operand with a monotonic integer instant key so `==`, `!=`, `<`, `<=`, `>`, `>=`, and
@@ -37,11 +54,18 @@ pub(super) fn lower_compare(
         lhs = lhs_key;
         rhs = rhs_key;
     }
+    // Two strings ORDER through the runtime rule, not through `StrCmp`. `__rt_strcmp` is
+    // byte-lexicographic — which is right for `strcmp()` and wrong for `<`, because PHP
+    // compares two NUMERIC strings numerically: `"10" > "9"` is true, where byte order says
+    // otherwise. `__rt_php_compare`'s two-string leg already implements exactly that rule,
+    // and `emit_runtime_ordering_compare` boxes plain operands for it (issue #507).
+    let string_ordering = lhs.ir_type == IrType::Str && rhs.ir_type == IrType::Str;
     let uses_runtime_relational_compare = matches!(
         op,
         BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
     )
-        && (needs_runtime_ordering_dispatch(ctx, lhs.value)
+        && (string_ordering
+            || needs_runtime_ordering_dispatch(ctx, lhs.value)
             || needs_runtime_ordering_dispatch(ctx, rhs.value));
     let opcode = match op {
         BinOp::StrictEq => Op::StrictEq,

@@ -26,12 +26,11 @@ builtin! {
     ),
 }
 
-/// Validates indexed arrays and boxed PHP array declarations for an `array_push` call.
+/// Validates indexed, associative and boxed PHP array receivers for an `array_push` call.
 ///
 /// Arity (at least 1 arg) is pre-validated by `check_arity`. Every argument is inferred so the
-/// appended values still produce their side effects; the first must be an indexed array or a
-/// declared PHP array (boxed packed-or-hash storage) or the call is rejected. Returns `Int` — the
-/// new element count.
+/// appended values still produce their side effects. The receiver must be indexed, associative
+/// or a declared PHP array with boxed storage. Returns the new element count as `Int`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     for index in 1..cx.args.len() {

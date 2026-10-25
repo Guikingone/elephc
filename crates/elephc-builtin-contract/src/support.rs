@@ -142,7 +142,7 @@ pub fn aot_support(contract: &BuiltinContract) -> BackendSupport {
 
 /// Returns the expected Magician route for one shared contract.
 pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
-    if runtime_builtin_id(contract.id) == Some(RuntimeBuiltinId::SharedIni) {
+    if matches!(runtime_builtin_id(contract.id), Some(RuntimeBuiltinId::SharedIni | RuntimeBuiltinId::TokenizerErrorLocation)) {
         return BackendSupport::Implemented(BackendImplementation::Registry);
     }
     if contract.internal {
@@ -172,7 +172,7 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
 
 /// Prelude-provided surfaces outside `ext/curl` that Magician binds with its own eval homes.
 const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] =
-    &["hash_copy", "hash_final", "hash_init", "hash_update", "zend_version"];
+    &["hash_copy", "hash_final", "hash_init", "hash_update", "token_get_all", "token_name", "zend_version"];
 
 /// Returns the documented execution route for an eval-supported contract.
 pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
@@ -372,19 +372,41 @@ mod tests {
         // The shared INI helper is internal but participates in both runtime registries.
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
         // through forwarding homes (see `eval_support`).
-        assert_eq!(eval_registry, 680 + curl_surface);
+        // Plus the four `ptr_read_f32`/`ptr_write_f32`/`ptr_read_f64`/`ptr_write_f64`
+        // raw-memory builtins and `buffer_ptr`, bound in eval through their own registry homes.
+        // The tokenizer location helper also uses the shared runtime registry.
+        assert_eq!(eval_registry, 691 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
-        // image prelude declares for its own use.
-        assert_eq!(eval_internal, 100);
+        // image prelude declares for its own use, plus the ELEVEN
+        // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
+        //
+        // Six REPORT on the cache: `_stat`, `_script_field` and `_script_path`, which the
+        // injected `opcache_get_status()` body reads; `_blacklist_entry`, which
+        // `opcache_get_configuration()` uses to list the resolved patterns; `_swap`, which
+        // `ini_set()` uses to install a directive on the live cache; and `_reset`, which
+        // `opcache_reset()` uses to schedule its restart.
+        //
+        // Five ACT on it, by path: `_is_cached`, `_discard`, `_soft_invalidate`, `_compile`
+        // and `_in_file_cache`. They are what let the natively compiled bodies answer about
+        // a dynamically included file, and about the on-disk cache, instead of only about
+        // the manifest. `opcache_invalidate` needs TWO of them because php-src's predicate
+        // differs by `$force` and the non-forced arm reads the cache's recorded mtime.
+        //
+        // None of the eleven is callable from eval'd code.
+        assert_eq!(eval_internal, 126);
         // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 353);
         // The shared mbstring catalog adds sixty-four registry contracts, including
-        // its internal INI helper, to the prior compiler registry surface.
-        assert_eq!(aot_registry, 724);
+        // its internal INI helper, to the prior compiler registry surface; the eleven
+        // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
+        // The four float pointer builtins (`ptr_read_f32`, `ptr_write_f32`, `ptr_read_f64`,
+        // `ptr_write_f64`) and `buffer_ptr` are ordinary registry builtins on both backends.
+        // The tokenizer location helper is a typed ordinary registry operation.
+        assert_eq!(aot_registry, 759);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
-        assert_eq!(aot_external, 409 + curl_surface);
+        assert_eq!(aot_external, 411 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -429,10 +451,15 @@ mod tests {
         }
 
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(shared_runtime, 85);
+        // Includes the internal tokenizer ParseError location operation.
+        assert_eq!(shared_runtime, 86);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 593 + curl_surface);
-        assert_eq!(unsupported, 453);
+        // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
+        // interpreter adapters.
+        assert_eq!(interpreter_adapter, 603 + curl_surface);
+        // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
+        // call from AOT code and have no eval execution route of their own.
+        assert_eq!(unsupported, 479);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

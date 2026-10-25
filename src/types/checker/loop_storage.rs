@@ -13,12 +13,15 @@
 //!   inference remains checker-owned.
 //! - EIR lowering consumes the checker-recorded contract instead of repeating expression
 //!   inference, keeping non-literal RHSs and cascading promotions aligned across both layers.
+//! - An `(array)` cast inside a literal uses the same `ArrayCast` classification as the checker,
+//!   so a loop-carried array of those casts does not collapse to `array<int>`.
 
 use std::collections::HashSet;
 
 use crate::parser::ast::{CastType, Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{
-    merge_array_key_types, normalized_array_key_type, PhpType, TypeEnv,
+    array_key_contiguity_is_unproven, merge_array_key_types, normalized_array_key_type, PhpType,
+    TypeEnv,
 };
 
 /// Source recorded for a local assignment that may affect a later loop-carried array rebind.
@@ -29,6 +32,13 @@ enum AssignedValue<'a> {
     Known(PhpType),
     /// A binding without a statically available RHS, such as a `foreach` value.
     Opaque,
+    /// `$i++` and friends: the type is the variable's OWN, which only the environment knows.
+    ///
+    /// Distinct from `Opaque` because an increment is not an unknown value. Treating it as one
+    /// made `$i` `Mixed` inside the storage fixed point, and a `$out[] = $i` then pinned `$out`
+    /// to `array<mixed>` — so `for ($i = 0; …) { $out[] = $i; } return $out;` could not satisfy
+    /// a declared `array<int>`, while appending a constant or a parameter always could.
+    Increment(&'a str),
 }
 
 /// One local array write, including an optional explicit key expression.
@@ -39,6 +49,12 @@ struct ArrayWrite<'a> {
     index: Option<&'a Expr>,
     /// Value stored in the array.
     value: &'a Expr,
+    /// Whether an iteration can reach the loop's end without performing this write.
+    ///
+    /// True under a branch or inside a nested loop. A counter only tracks an array's length while
+    /// every iteration writes once, so a skippable write can leave a gap and cannot keep packed
+    /// storage. Append forms carry `false` and never consult it — they have no key to gap.
+    skippable: bool,
 }
 
 /// Computes stable storage types for array locals already present at loop entry.
@@ -51,6 +67,7 @@ pub fn loop_carried_storage_types(
     body: &[Stmt],
     update: Option<&Stmt>,
     entry: &TypeEnv,
+    packed_counter: Option<&str>,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
 ) -> Vec<(String, PhpType)> {
     let mut assignments = Vec::new();
@@ -60,10 +77,14 @@ pub fn loop_carried_storage_types(
     }
 
     let mut writes = Vec::new();
-    collect_array_writes(body, &mut writes);
+    collect_array_writes(body, &mut writes, false);
     if let Some(update) = update {
-        collect_array_write_stmt(update, &mut writes);
+        collect_array_write_stmt(update, &mut writes, false);
     }
+    let mut foreach_keys = HashSet::new();
+    collect_foreach_key_names(body, &mut foreach_keys);
+    let mut foreach_values = HashSet::new();
+    collect_foreach_value_names(body, &mut foreach_values);
 
     let mut fixed = entry.clone();
     let mut whole_mixed_sources = HashSet::new();
@@ -75,7 +96,14 @@ pub fn loop_carried_storage_types(
             infer_value,
             &mut whole_mixed_sources,
         );
-        apply_array_write_evidence(&writes, &mut fixed, infer_value);
+        apply_array_write_evidence(
+            &writes,
+            &mut fixed,
+            packed_counter,
+            &foreach_keys,
+            &foreach_values,
+            infer_value,
+        );
         if fixed == previous {
             break;
         }
@@ -114,10 +142,18 @@ fn apply_assignment_evidence(
                 .unwrap_or(PhpType::Mixed),
             AssignedValue::Known(ty) => ty.clone(),
             AssignedValue::Opaque => PhpType::Mixed,
+            // PHP's `++` keeps an int an int and a float a float. On anything else it is not
+            // arithmetic at all — `++` on a string is a string increment, on null it yields 1 —
+            // so those stay as unknown as they were.
+            AssignedValue::Increment(variable) => match env.get(*variable) {
+                Some(PhpType::Int) => PhpType::Int,
+                Some(PhpType::Float) => PhpType::Float,
+                _ => PhpType::Mixed,
+            },
         };
         if env.get(*name).is_some_and(is_array_like)
             && matches!(incoming.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-            && !matches!(source, AssignedValue::Opaque)
+            && !matches!(source, AssignedValue::Opaque | AssignedValue::Increment(_))
         {
             whole_mixed_sources.insert((*name).to_string());
         }
@@ -134,6 +170,9 @@ fn apply_assignment_evidence(
 fn apply_array_write_evidence(
     writes: &[ArrayWrite<'_>],
     env: &mut TypeEnv,
+    packed_counter: Option<&str>,
+    foreach_keys: &HashSet<&str>,
+    foreach_values: &HashSet<&str>,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
 ) {
     for write in writes {
@@ -149,9 +188,32 @@ fn apply_array_write_evidence(
                 .unwrap_or(PhpType::Mixed);
             normalized_array_key_type(index, inferred)
         });
+        let array_is_still_empty =
+            matches!(&current, PhpType::Array(element) if matches!(element.as_ref(), PhpType::Never));
         let forces_hash = write.index.is_some_and(|index| {
-            matches!(key_type.as_ref(), Some(PhpType::Str))
-                && matches!(index.kind, ExprKind::StringLiteral(_) | ExprKind::Null)
+            let literal_string_key = matches!(key_type.as_ref(), Some(PhpType::Str))
+                && matches!(index.kind, ExprKind::StringLiteral(_) | ExprKind::Null);
+            // The same rule `check_array_assign` applies, and it has to be applied HERE too: this
+            // pass fixes the storage for the whole loop and emits the conversion, so a decision it
+            // makes alone is the one the body then has to live with.
+            // A `foreach` VALUE is any element of its iterable, so nothing bounds it against the
+            // array's length either. This pass often has no type for it (`Mixed`), and the write
+            // then reached `ArraySetMixedKey`, which keeps an integer key on packed storage and
+            // zero-filled the gap: `foreach ([7] as $k) {} $a[$k] = $k;` in a loop built
+            // `[null × 7, 7]` where php has `[7 => 7]`.
+            let foreach_value_key = matches!(
+                &index.kind,
+                ExprKind::Variable(name) if foreach_values.contains(name.as_str())
+            );
+            // Not even a write the loop may skip escapes it: one inside the `foreach` body is
+            // marked skippable, yet `foreach ([7] as $k) { $a[$k] = $k; }` still lands at 7.
+            let unbounded_integer_key = ((matches!(key_type.as_ref(), Some(PhpType::Int))
+                && !write.skippable)
+                || foreach_value_key)
+                && array_is_still_empty
+                && !index_is_trusted_counter(index, packed_counter, foreach_keys)
+                && array_key_contiguity_is_unproven(index);
+            literal_string_key || unbounded_integer_key
         });
         let updated = match current {
             PhpType::Array(element) if forces_hash => {
@@ -243,6 +305,10 @@ fn infer_storage_value_type(
 }
 
 /// Infers one indexed/associative literal element's concrete runtime storage representation.
+///
+/// An `(array)` cast is classified with `ArrayCast` from the source's type in this
+/// environment. The syntactic fallback answers `int` for a cast it does not recognise,
+/// which would record the surrounding literal as an array of ints.
 fn infer_array_literal_element_storage(
     item: &Expr,
     env: &TypeEnv,
@@ -280,6 +346,13 @@ fn infer_array_literal_element_storage(
             PhpType::AssocArray { value, .. } => *value,
             _ => PhpType::Mixed,
         },
+        ExprKind::Cast {
+            target: CastType::Array,
+            expr: inner,
+        } => crate::types::array_cast_result_type(&array_cast_source_type_for_storage(
+            inner, env, infer_value,
+        ))
+        .codegen_repr(),
         ExprKind::FunctionCall { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
@@ -288,6 +361,34 @@ fn infer_array_literal_element_storage(
             .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(item))
             .codegen_repr(),
         _ => crate::types::checker::infer_expr_type_syntactic(item).codegen_repr(),
+    }
+}
+
+/// Returns the PHP type an `(array)` cast inside a literal classifies.
+///
+/// Variables prefer the fixed-point environment, which is the storage the next iteration
+/// will load. The literal `null` is `Void` so the cast is an empty array; the element
+/// storage of a null literal is `Mixed` and would take the runtime-dispatch arm instead.
+/// Every cast, including nested `(object)` and `(array)`, uses the same result type as
+/// EIR lowering. A source the checker cannot type is `Mixed` rather than the syntactic
+/// `int` guess.
+fn array_cast_source_type_for_storage(
+    expr: &Expr,
+    env: &TypeEnv,
+    infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
+) -> PhpType {
+    match &expr.kind {
+        ExprKind::Null => PhpType::Void,
+        ExprKind::Variable(name) => env
+            .get(name)
+            .cloned()
+            .or_else(|| infer_value(expr, env))
+            .unwrap_or(PhpType::Mixed),
+        ExprKind::Cast { target, expr: inner } => crate::types::php_cast_result_type(
+            target,
+            &array_cast_source_type_for_storage(inner, env, infer_value),
+        ),
+        _ => infer_value(expr, env).unwrap_or(PhpType::Mixed),
     }
 }
 
@@ -321,6 +422,9 @@ fn merge_materialized_array_element(left: PhpType, right: PhpType) -> PhpType {
 fn join_loop_flow_type(existing: PhpType, incoming: PhpType) -> PhpType {
     if existing == incoming {
         return existing;
+    }
+    if let Some(pointer) = join_pointer_flow_types(&existing, &incoming) {
+        return pointer;
     }
     if existing.is_php_array() || incoming.is_php_array() {
         // A boxed representation need not erase a proven packed-or-hash array contract.
@@ -372,6 +476,42 @@ fn join_loop_flow_type(existing: PhpType, incoming: PhpType) -> PhpType {
         (left, right) if left.codegen_repr() == right.codegen_repr() => left,
         _ => PhpType::Mixed,
     }
+}
+
+/// Joins `null` and pointer values of one local into the pointer word they share.
+///
+/// A `?ptr<T>` is one pointer word where `null` is address 0, so `null`, pointers and `?ptr<T>`
+/// values join to that pointer (`?ptr<T>` when either side can be `null`) instead of boxed
+/// `mixed`. Two different targets, or a target and an untyped `ptr`, join to the untyped `ptr`,
+/// which nothing narrows again: the fixed point replays every assignment until the environment
+/// stops changing, so the join must only move up (`$p = $a; $p = $b; $p = $c;` over three
+/// targets would otherwise flip between `ptr` and the last target forever). Returns `None`
+/// unless both sides are one of these shapes and at least one of them holds a pointer.
+fn join_pointer_flow_types(existing: &PhpType, incoming: &PhpType) -> Option<PhpType> {
+    /// Splits a flow type into its pointer (none for `null`) and whether it can be `null`.
+    fn split(ty: &PhpType) -> Option<(Option<PhpType>, bool)> {
+        match ty {
+            PhpType::Pointer(_) => Some((Some(ty.clone()), false)),
+            PhpType::Void | PhpType::Never => Some((None, true)),
+            PhpType::Union(members) => {
+                crate::types::nullable_pointer_union_member(members).map(|p| (Some(p), true))
+            }
+            _ => None,
+        }
+    }
+    let (left, left_null) = split(existing)?;
+    let (right, right_null) = split(incoming)?;
+    let pointer = match (left, right) {
+        (Some(left), Some(right)) if left == right => left,
+        (Some(_), Some(_)) => PhpType::Pointer(None),
+        (Some(pointer), None) | (None, Some(pointer)) => pointer,
+        (None, None) => return None,
+    };
+    Some(if left_null || right_null {
+        PhpType::Union(vec![pointer, PhpType::Void])
+    } else {
+        pointer
+    })
 }
 
 /// Joins array payload types so every live element has one stable runtime representation.
@@ -451,12 +591,19 @@ fn is_array_like(ty: &PhpType) -> bool {
 /// and still sees null. `Mixed` is the one representation that holds both on every path, which
 /// is also what makes the `=== null` guard a real runtime tag test instead of a folded
 /// constant.
+///
+/// A local assigned only pointers (packed record addresses read from a buffer included) gets
+/// `?ptr<T>` instead: one pointer word holds both on every path, with `null` as address 0, so
+/// `=== null` tests the address and field reads reach the record rather than a boxed cell.
 fn null_entry_contract(entry_ty: &PhpType, fixed_ty: &PhpType) -> Option<PhpType> {
     if !matches!(entry_ty.codegen_repr(), PhpType::Void) {
         return None;
     }
     if matches!(fixed_ty.codegen_repr(), PhpType::Void) {
         return None;
+    }
+    if crate::types::is_nullable_pointer_type(fixed_ty) {
+        return Some(fixed_ty.clone());
     }
     Some(PhpType::Mixed)
 }
@@ -691,7 +838,7 @@ fn collect_value_assignments_from_expr<'a>(
         ExprKind::PreIncrement(name)
         | ExprKind::PostIncrement(name)
         | ExprKind::PreDecrement(name)
-        | ExprKind::PostDecrement(name) => out.push((name, AssignedValue::Opaque)),
+        | ExprKind::PostDecrement(name) => out.push((name, AssignedValue::Increment(name))),
         _ => visit_child_expressions(expr, &mut |child| {
             collect_value_assignments_from_expr(child, out)
         }),
@@ -699,20 +846,121 @@ fn collect_value_assignments_from_expr<'a>(
 }
 
 /// Collects local indexed/associative array element writes from executable statements.
-fn collect_array_writes<'a>(statements: &'a [Stmt], out: &mut Vec<ArrayWrite<'a>>) {
+fn collect_array_writes<'a>(
+    statements: &'a [Stmt],
+    out: &mut Vec<ArrayWrite<'a>>,
+    skippable: bool,
+) {
     for statement in statements {
-        collect_array_write_stmt(statement, out);
+        collect_array_write_stmt(statement, out, skippable);
+    }
+}
+
+/// Returns true when this index is the loop counter that provably tracks the array's length.
+///
+/// `packed_counter` is only ever `Some` for a `for` loop this pass is stabilizing, and only when
+/// `packed_counter::packed_for_counter` proved the shape: initialized to `0`, advanced by `$i++`,
+/// never reassigned, never jumped past by a `continue`. A `foreach` key is excluded even when it
+/// matches: it is a runtime-tagged cell that may hold a string, so `Op::ArraySetMixedKey` decides
+/// its storage at run time and this pass must not pin it.
+fn index_is_trusted_counter(
+    index: &Expr,
+    packed_counter: Option<&str>,
+    foreach_keys: &HashSet<&str>,
+) -> bool {
+    let ExprKind::Variable(name) = &index.kind else {
+        return false;
+    };
+    foreach_keys.contains(name.as_str()) || packed_counter == Some(name.as_str())
+}
+
+/// Collects every local bound as a `foreach` VALUE anywhere in a loop body.
+fn collect_foreach_value_names<'a>(statements: &'a [Stmt], out: &mut HashSet<&'a str>) {
+    for statement in statements {
+        if let StmtKind::Foreach {
+            value_var, body, ..
+        } = &statement.kind
+        {
+            out.insert(value_var.as_str());
+            collect_foreach_value_names(body, out);
+            continue;
+        }
+        for nested in nested_statement_bodies(statement) {
+            collect_foreach_value_names(nested, out);
+        }
+    }
+}
+
+/// Collects every local bound as a `foreach` KEY anywhere in a loop body.
+///
+/// The checker's own set is built as each `foreach` is CHECKED, which is after this pass runs for
+/// an enclosing loop, so the names have to be read back off the syntax here.
+fn collect_foreach_key_names<'a>(statements: &'a [Stmt], out: &mut HashSet<&'a str>) {
+    for statement in statements {
+        if let StmtKind::Foreach { key_var, body, .. } = &statement.kind {
+            out.extend(key_var.as_deref());
+            collect_foreach_key_names(body, out);
+            continue;
+        }
+        for nested in nested_statement_bodies(statement) {
+            collect_foreach_key_names(nested, out);
+        }
+    }
+}
+
+/// Returns the statement lists nested directly inside one statement.
+fn nested_statement_bodies(statement: &Stmt) -> Vec<&[Stmt]> {
+    match &statement.kind {
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            let mut bodies: Vec<&[Stmt]> = vec![then_body.as_slice()];
+            bodies.extend(elseif_clauses.iter().map(|(_, clause)| clause.as_slice()));
+            bodies.extend(else_body.as_deref().map(|stmts| stmts as &[Stmt]));
+            bodies
+        }
+        StmtKind::Switch { cases, default, .. } => {
+            let mut bodies: Vec<&[Stmt]> =
+                cases.iter().map(|(_, case)| case.as_slice()).collect();
+            bodies.extend(default.as_deref().map(|stmts| stmts as &[Stmt]));
+            bodies
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            let mut bodies: Vec<&[Stmt]> = vec![try_body.as_slice()];
+            bodies.extend(catches.iter().map(|catch| catch.body.as_slice()));
+            bodies.extend(finally_body.as_deref().map(|stmts| stmts as &[Stmt]));
+            bodies
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::For { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::NamespaceBlock { body, .. } => vec![body.as_slice()],
+        StmtKind::Synthetic(body) => vec![body.as_slice()],
+        _ => Vec::new(),
     }
 }
 
 /// Collects array growth/write sites from one statement and its nested bodies.
-fn collect_array_write_stmt<'a>(statement: &'a Stmt, out: &mut Vec<ArrayWrite<'a>>) {
+fn collect_array_write_stmt<'a>(
+    statement: &'a Stmt,
+    out: &mut Vec<ArrayWrite<'a>>,
+    skippable: bool,
+) {
     match &statement.kind {
         StmtKind::ArrayPush { array, value } => {
             out.push(ArrayWrite {
                 name: array,
                 index: None,
                 value,
+                skippable,
             });
             collect_growth_calls_from_expr(value, out);
         }
@@ -725,6 +973,7 @@ fn collect_array_write_stmt<'a>(statement: &'a Stmt, out: &mut Vec<ArrayWrite<'a
                 name: array,
                 index: Some(index),
                 value,
+                skippable,
             });
             collect_growth_calls_from_expr(index, out);
             collect_growth_calls_from_expr(value, out);
@@ -763,13 +1012,13 @@ fn collect_array_write_stmt<'a>(statement: &'a Stmt, out: &mut Vec<ArrayWrite<'a
             else_body,
         } => {
             collect_growth_calls_from_expr(condition, out);
-            collect_array_writes(then_body, out);
+            collect_array_writes(then_body, out, true);
             for (condition, body) in elseif_clauses {
                 collect_growth_calls_from_expr(condition, out);
-                collect_array_writes(body, out);
+                collect_array_writes(body, out, true);
             }
             if let Some(else_body) = else_body {
-                collect_array_writes(else_body, out);
+                collect_array_writes(else_body, out, true);
             }
         }
         StmtKind::IfDef {
@@ -777,18 +1026,18 @@ fn collect_array_write_stmt<'a>(statement: &'a Stmt, out: &mut Vec<ArrayWrite<'a
             else_body,
             ..
         } => {
-            collect_array_writes(then_body, out);
+            collect_array_writes(then_body, out, true);
             if let Some(else_body) = else_body {
-                collect_array_writes(else_body, out);
+                collect_array_writes(else_body, out, true);
             }
         }
         StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
             collect_growth_calls_from_expr(condition, out);
-            collect_array_writes(body, out);
+            collect_array_writes(body, out, true);
         }
         StmtKind::Foreach { array, body, .. } => {
             collect_growth_calls_from_expr(array, out);
-            collect_array_writes(body, out);
+            collect_array_writes(body, out, true);
         }
         StmtKind::For {
             init,
@@ -797,14 +1046,14 @@ fn collect_array_write_stmt<'a>(statement: &'a Stmt, out: &mut Vec<ArrayWrite<'a
             body,
         } => {
             if let Some(init) = init {
-                collect_array_write_stmt(init, out);
+                collect_array_write_stmt(init, out, skippable);
             }
             if let Some(condition) = condition {
                 collect_growth_calls_from_expr(condition, out);
             }
-            collect_array_writes(body, out);
+            collect_array_writes(body, out, true);
             if let Some(update) = update {
-                collect_array_write_stmt(update, out);
+                collect_array_write_stmt(update, out, true);
             }
         }
         StmtKind::Switch {
@@ -817,10 +1066,10 @@ fn collect_array_write_stmt<'a>(statement: &'a Stmt, out: &mut Vec<ArrayWrite<'a
                 for value in values {
                     collect_growth_calls_from_expr(value, out);
                 }
-                collect_array_writes(body, out);
+                collect_array_writes(body, out, true);
             }
             if let Some(default) = default {
-                collect_array_writes(default, out);
+                collect_array_writes(default, out, true);
             }
         }
         StmtKind::Try {
@@ -828,17 +1077,17 @@ fn collect_array_write_stmt<'a>(statement: &'a Stmt, out: &mut Vec<ArrayWrite<'a
             catches,
             finally_body,
         } => {
-            collect_array_writes(try_body, out);
+            collect_array_writes(try_body, out, true);
             for catch in catches {
-                collect_array_writes(&catch.body, out);
+                collect_array_writes(&catch.body, out, true);
             }
             if let Some(finally_body) = finally_body {
-                collect_array_writes(finally_body, out);
+                collect_array_writes(finally_body, out, true);
             }
         }
         StmtKind::IncludeOnceGuard { body, .. }
         | StmtKind::NamespaceBlock { body, .. }
-        | StmtKind::Synthetic(body) => collect_array_writes(body, out),
+        | StmtKind::Synthetic(body) => collect_array_writes(body, out, skippable),
         StmtKind::Assign { value, .. }
         | StmtKind::TypedAssign { value, .. }
         | StmtKind::ConstDecl { value, .. }
@@ -862,6 +1111,8 @@ fn collect_growth_calls_from_expr<'a>(expr: &'a Expr, out: &mut Vec<ArrayWrite<'
                     name: array_name,
                     index: None,
                     value: call_arg_value(argument),
+                    // An append has no key, so `skippable` is never consulted for it.
+                    skippable: false,
                 }));
             }
         }
@@ -872,7 +1123,7 @@ fn collect_growth_calls_from_expr<'a>(expr: &'a Expr, out: &mut Vec<ArrayWrite<'
 }
 
 /// Visits direct executable child expressions without descending into closure bodies.
-fn visit_child_expressions<'a>(expr: &'a Expr, visitor: &mut dyn FnMut(&'a Expr)) {
+pub(super) fn visit_child_expressions<'a>(expr: &'a Expr, visitor: &mut dyn FnMut(&'a Expr)) {
     match &expr.kind {
         ExprKind::BinaryOp { left, right, .. }
         | ExprKind::NullCoalesce {
@@ -1059,8 +1310,140 @@ fn call_arg_value(argument: &Expr) -> &Expr {
 
 #[cfg(test)]
 mod tests {
-    use super::{join_loop_flow_type, representation_contract};
-    use crate::types::PhpType;
+    use super::{
+        infer_storage_value_type, join_loop_flow_type, loop_carried_storage_types,
+        representation_contract,
+    };
+    use crate::parser::ast::{CastType, Expr, ExprKind, Stmt, StmtKind};
+    use crate::span::Span;
+    use crate::types::{PhpType, TypeEnv};
+
+    /// Builds an `(array)` cast expression for storage-inference fixtures.
+    fn array_cast(inner: Expr) -> Expr {
+        Expr::new(
+            ExprKind::Cast {
+                target: CastType::Array,
+                expr: Box::new(inner),
+            },
+            Span::dummy(),
+        )
+    }
+
+    /// Infers storage with the syntactic type standing in for the checker on literal sources.
+    fn storage_type(expr: &Expr, env: &TypeEnv) -> PhpType {
+        let mut infer = |expr: &Expr, _env: &TypeEnv| {
+            Some(crate::types::checker::infer_expr_type_syntactic(expr))
+        };
+        infer_storage_value_type(expr, env, &mut infer).expect("literal storage")
+    }
+
+    /// An `(array)` cast used as a literal element keeps the cast's array, for both indexed
+    /// and associative literals. The syntactic fallback used to answer `int` here.
+    #[test]
+    fn array_cast_literal_elements_keep_the_cast_result() {
+        let string_cast = array_cast(Expr::string_lit("x"));
+        let null_cast = array_cast(Expr::new(ExprKind::Null, Span::dummy()));
+        let int_cast = array_cast(Expr::int_lit(1));
+        assert_eq!(
+            storage_type(
+                &Expr::new(ExprKind::ArrayLiteral(vec![string_cast]), Span::dummy()),
+                &TypeEnv::new(),
+            ),
+            PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Str))))
+        );
+        assert_eq!(
+            storage_type(
+                &Expr::new(ExprKind::ArrayLiteral(vec![null_cast]), Span::dummy()),
+                &TypeEnv::new(),
+            ),
+            PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Never))))
+        );
+        let nested = Expr::new(
+            ExprKind::ArrayLiteral(vec![
+                array_cast(Expr::string_lit("x")),
+                array_cast(Expr::new(ExprKind::Null, Span::dummy())),
+            ]),
+            Span::dummy(),
+        );
+        assert_eq!(
+            storage_type(&nested, &TypeEnv::new()),
+            PhpType::Array(Box::new(PhpType::Mixed))
+        );
+        assert_eq!(
+            storage_type(
+                &Expr::new(
+                    ExprKind::ArrayLiteralAssoc(vec![(Expr::string_lit("k"), int_cast)]),
+                    Span::dummy(),
+                ),
+                &TypeEnv::new(),
+            ),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Array(Box::new(PhpType::Int))),
+            }
+        );
+
+        let mut env = TypeEnv::new();
+        env.insert("arr".to_string(), PhpType::Array(Box::new(PhpType::Int)));
+        env.insert("obj".to_string(), PhpType::Object("Box".to_string()));
+        env.insert("mix".to_string(), PhpType::Mixed);
+        assert_eq!(
+            storage_type(
+                &Expr::new(
+                    ExprKind::ArrayLiteral(vec![array_cast(Expr::var("arr"))]),
+                    Span::dummy(),
+                ),
+                &env,
+            ),
+            PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Int))))
+        );
+        assert_eq!(
+            storage_type(
+                &Expr::new(
+                    ExprKind::ArrayLiteralAssoc(vec![(
+                        Expr::string_lit("k"),
+                        array_cast(Expr::var("obj")),
+                    )]),
+                    Span::dummy(),
+                ),
+                &env,
+            ),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::AssocArray {
+                    key: Box::new(PhpType::Str),
+                    value: Box::new(PhpType::Mixed),
+                }),
+            }
+        );
+        assert_eq!(
+            storage_type(
+                &Expr::new(
+                    ExprKind::ArrayLiteral(vec![array_cast(Expr::var("mix"))]),
+                    Span::dummy(),
+                ),
+                &env,
+            ),
+            PhpType::Array(Box::new(PhpType::Mixed))
+        );
+        let object_cast = array_cast(Expr::new(
+            ExprKind::Cast {
+                target: CastType::Object,
+                expr: Box::new(Expr::var("obj")),
+            },
+            Span::dummy(),
+        ));
+        assert_eq!(
+            storage_type(
+                &Expr::new(ExprKind::ArrayLiteral(vec![object_cast]), Span::dummy()),
+                &env,
+            ),
+            PhpType::Array(Box::new(PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            }))
+        );
+    }
 
     /// Joining concrete storage with a declared array preserves the logical array proof.
     #[test]
@@ -1110,5 +1493,56 @@ mod tests {
                 PhpType::Mixed,
             );
         }
+    }
+
+    /// `null` and pointers join to one pointer word on the loop lattice, and the join only moves
+    /// up: different targets, or a target and an untyped `ptr`, stay the untyped `ptr`.
+    #[test]
+    fn null_and_pointer_loop_joins_keep_one_monotone_pointer_word() {
+        let typed = |name: &str| PhpType::Pointer(Some(name.to_string()));
+        let nullable = |pointer: PhpType| PhpType::Union(vec![pointer, PhpType::Void]);
+        assert_eq!(join_loop_flow_type(PhpType::Void, typed("A")), nullable(typed("A")));
+        assert_eq!(join_loop_flow_type(typed("A"), PhpType::Void), nullable(typed("A")));
+        assert_eq!(join_loop_flow_type(nullable(typed("A")), typed("A")), nullable(typed("A")));
+        assert_eq!(
+            join_loop_flow_type(nullable(typed("A")), typed("B")),
+            nullable(PhpType::Pointer(None)),
+        );
+        assert_eq!(
+            join_loop_flow_type(nullable(PhpType::Pointer(None)), typed("A")),
+            nullable(PhpType::Pointer(None)),
+        );
+        assert_eq!(join_loop_flow_type(typed("A"), PhpType::Int), PhpType::Mixed);
+    }
+
+    /// A local that enters a loop holding `null` and is assigned pointers to three different
+    /// targets reaches a fixed point (a join that narrowed `ptr` back to a typed target made the
+    /// analysis flip forever) and gets one untyped `?ptr` contract.
+    #[test]
+    fn null_entry_loop_over_three_pointer_targets_reaches_a_fixed_point() {
+        let assign = |source: &str| {
+            Stmt::new(
+                StmtKind::Assign {
+                    name: "p".to_string(),
+                    value: Expr::var(source),
+                },
+                Span::dummy(),
+            )
+        };
+        let body = vec![assign("a"), assign("b"), assign("c")];
+        let mut entry = TypeEnv::new();
+        entry.insert("p".to_string(), PhpType::Void);
+        entry.insert("a".to_string(), PhpType::Pointer(Some("A".to_string())));
+        entry.insert("b".to_string(), PhpType::Pointer(Some("B".to_string())));
+        entry.insert("c".to_string(), PhpType::Pointer(Some("C".to_string())));
+        let mut infer = |_expr: &Expr, _env: &TypeEnv| -> Option<PhpType> { None };
+        let contracts = loop_carried_storage_types(&body, None, &entry, None, &mut infer);
+        assert_eq!(
+            contracts,
+            vec![(
+                "p".to_string(),
+                PhpType::Union(vec![PhpType::Pointer(None), PhpType::Void]),
+            )],
+        );
     }
 }

@@ -449,7 +449,8 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
     // whatever the last helper left there as `$this`. Every other receiver-register dispatch
     // (`lower_mixed_method_call`, callable dispatch, the array-access and intrinsic paths)
     // already uses this register for the same reason, and `crate::codegen::frame` reserves
-    // its save slot for exactly the `NullsafeMethodCall` receivers this lowering handles.
+    // its save slot in every frame containing a `NullsafeMethodCall`, which is never
+    // register-neutral.
     let object_reg = abi::nested_call_reg(ctx.emitter);
     objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, object_reg)?;
     let receiver_ty = PhpType::Object(class_name);
@@ -476,7 +477,7 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
     if inst.result_php_type.codegen_repr() == PhpType::Mixed
         && target.return_ty.codegen_repr() != PhpType::Mixed
     {
-        emit_box_current_value_as_mixed(ctx.emitter, &target.return_ty.codegen_repr());
+        emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(&target.return_ty));
     }
     // THE WRITEBACKS RUN ON THE CALL ARM, BEFORE THE JUMP, because that is the only arm that
     // pushed the by-reference cell block: releasing it after `done_label` would also run on

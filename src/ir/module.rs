@@ -15,9 +15,10 @@ use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
 use crate::ir::function::{Function, FunctionId};
 use crate::ir::types::IrType;
-use crate::parser::ast::{ExprKind, Visibility};
+use crate::parser::ast::{Expr, ExprKind, Visibility};
 use crate::types::{
-    ClassInfo, EnumInfo, ExternClassInfo, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
+    ClassInfo, EnumInfo, ExternAbiType, ExternClassInfo, FunctionSig, InterfaceInfo,
+    PackedClassInfo, PhpType,
 };
 
 /// Data-pool identifier shared by string, float, and name tables.
@@ -48,6 +49,8 @@ pub struct TraitMethodInfo {
     /// Position in the trait's declaration, independent of hash-map iteration order.
     pub declaration_order: usize,
     pub signature: FunctionSig,
+    /// Source defaults preserve lexical constant names after semantic defaults are normalized.
+    pub source_defaults: Vec<Option<Expr>>,
     pub visibility: Visibility,
     pub is_static: bool,
     pub is_final: bool,
@@ -110,6 +113,8 @@ pub struct Module {
     pub declared_trait_source_lines: HashMap<String, u32>,
     pub declared_trait_uses: HashMap<String, Vec<String>>,
     pub declared_trait_method_names: HashMap<String, Vec<String>>,
+    /// Class methods imported from traits, including aliases, before lexical provenance is lost.
+    pub imported_trait_method_names: HashMap<String, HashSet<String>>,
     pub declared_trait_methods: HashMap<String, HashMap<String, TraitMethodInfo>>,
     pub declared_trait_property_names: HashMap<String, Vec<String>>,
     pub declared_trait_properties: HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
@@ -172,6 +177,7 @@ impl Module {
             declared_trait_source_lines: HashMap::new(),
             declared_trait_uses: HashMap::new(),
             declared_trait_method_names: HashMap::new(),
+            imported_trait_method_names: HashMap::new(),
             declared_trait_methods: HashMap::new(),
             declared_trait_property_names: HashMap::new(),
             declared_trait_properties: HashMap::new(),
@@ -209,6 +215,85 @@ impl Module {
         function.set_id(id);
         self.closures.push(function);
         id
+    }
+
+    /// Returns whether any function-like body calls one typed PCNTL runtime operation.
+    ///
+    /// `pcntl_async_signals()` makes the backend dispatch pending signal handlers after every
+    /// instruction, so optimizations that assume no user code runs between two instructions
+    /// must check it module-wide.
+    pub(crate) fn uses_pcntl_runtime(&self, target: crate::ir::PcntlRuntime) -> bool {
+        self.functions
+            .iter()
+            .chain(self.class_methods.iter())
+            .chain(self.closures.iter())
+            .chain(self.fiber_wrappers.iter())
+            .chain(self.callback_wrappers.iter())
+            .chain(self.extern_callback_trampolines.iter())
+            .chain(self.runtime_callable_invokers.iter())
+            .any(|function| {
+                function.instructions.iter().any(|inst| {
+                    matches!(
+                        inst.immediate,
+                        Some(crate::ir::Immediate::RuntimeCall(
+                            crate::ir::RuntimeCallTarget::Pcntl(found)
+                        )) if found == target
+                    )
+                })
+            })
+    }
+
+    /// Iterates every function-like body: functions, methods, closures and generated wrappers.
+    fn function_bodies(&self) -> impl Iterator<Item = &Function> + '_ {
+        self.functions
+            .iter()
+            .chain(self.class_methods.iter())
+            .chain(self.closures.iter())
+            .chain(self.fiber_wrappers.iter())
+            .chain(self.callback_wrappers.iter())
+            .chain(self.extern_callback_trampolines.iter())
+            .chain(self.runtime_callable_invokers.iter())
+    }
+
+    /// Returns whether any emitted EIR body can request a PHP Core backtrace.
+    ///
+    /// Codegen publishes per-frame backtrace activations only when this holds. It is
+    /// deliberately conservative: a frame that only collects surplus arguments for
+    /// `func_get_args()` (the core prelude's `ErrorException::__construct` does) counts too.
+    pub(crate) fn uses_php_backtrace(&self) -> bool {
+        self.calls_php_backtrace()
+            || self
+                .function_bodies()
+                .any(Function::keeps_backtrace_argument_snapshot)
+    }
+
+    /// Returns whether a backtrace can be requested by a direct call or through the eval bridge.
+    ///
+    /// A backtrace requested any other way (a `debug_backtrace` callable string, a descriptor)
+    /// makes the argument-introspection pass give EVERY PHP frame an argument snapshot, which
+    /// `Function::keeps_backtrace_argument_snapshot` reports per body. The inliner combines the
+    /// two: it keeps every method call when this holds, and never splices a body that keeps a
+    /// snapshot, so a method frame a backtrace could list always stays a real frame.
+    pub(crate) fn calls_php_backtrace(&self) -> bool {
+        if self.required_runtime_features.eval_bridge {
+            return true;
+        }
+        self.function_bodies()
+            .flat_map(|function| function.instructions.iter())
+            .any(|inst| {
+                inst.op == crate::ir::Op::CoreBuiltin
+                    && matches!(
+                        inst.immediate,
+                        Some(crate::ir::Immediate::I64(selector))
+                            if matches!(
+                                crate::ir::CoreBuiltinOp::from_i64(selector),
+                                Some(
+                                    crate::ir::CoreBuiltinOp::DebugBacktrace
+                                        | crate::ir::CoreBuiltinOp::DebugPrintBacktrace
+                                )
+                            )
+                    )
+            })
     }
 }
 
@@ -277,6 +362,8 @@ pub struct ExternDecl {
     pub params: Vec<ExternParamDecl>,
     pub return_type: IrType,
     pub return_php_type: PhpType,
+    /// Declared C shape of the return slot; drives register normalization after the call.
+    pub return_abi: ExternAbiType,
     pub link_libs: Vec<String>,
 }
 
@@ -286,6 +373,8 @@ pub struct ExternParamDecl {
     pub name: String,
     pub ir_type: IrType,
     pub php_type: PhpType,
+    /// Declared C shape of the parameter; narrow integers are extended by the caller.
+    pub abi: ExternAbiType,
 }
 
 /// Minimal class metadata table placeholder for Phase 02.

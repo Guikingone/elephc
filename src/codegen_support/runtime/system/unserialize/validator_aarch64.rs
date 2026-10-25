@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Every cursor, delimiter, length, and recursive child is bounded before allocation or hooks.
+//! - Each object's class name goes to `__rt_unser_refuse_class` once it is bounded, so a class
+//!   PHP refuses to unserialize throws before the decoder allocates anything or runs a hook.
 
 use crate::codegen_support::emit::Emitter;
 
@@ -94,6 +96,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_unser_validate_array");                      // dispatch the recursive array walk
     emitter.instruction("cmp w9, #79");                                         // O
     emitter.instruction("b.eq __rt_unser_validate_object");                     // dispatch the recursive object walk
+    emitter.instruction("cmp w9, #67");                                         // C uses the same class and counted envelope
+    emitter.instruction("b.eq __rt_unser_validate_object");                     // bound its opaque body before any callback
     emitter.instruction("cmp w9, #114");                                        // r
     emitter.instruction("b.eq __rt_unser_validate_ref");                        // r reuses the reference-index check
     emitter.instruction("cmp w9, #82");                                         // R
@@ -317,6 +321,15 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ldrb w13, [x12, x9]");                                 // bounded delimiter byte
     emitter.instruction("cmp w13, #58");                                        // colon before the property count
     emitter.instruction("b.ne __rt_unser_validate_at_fail");                    // property count needs its colon
+    // -- PHP refuses a not-serializable class as soon as it reads the name: throw before the
+    //    decoder allocates anything or runs a hook anywhere in this payload --
+    emitter.instruction("str x9, [sp, #40]");                                   // keep the colon position across the refusal check
+    emitter.instruction("add x1, x12, x9");                                     // address of the colon after the class name
+    emitter.instruction("sub x1, x1, #1");                                      // address of the closing quote
+    emitter.instruction("sub x1, x1, x11");                                     // first class-name byte
+    emitter.instruction("mov x2, x11");                                         // class-name byte length
+    emitter.instruction("bl __rt_unser_refuse_class");                          // throws for a class PHP never unserializes
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the colon position
     emitter.instruction("add x1, x9, #1");                                      // first property-count digit
     emitter.instruction("ldr x0, [sp]");                                        // saved source base
     emitter.instruction("ldr x2, [sp, #16]");                                   // saved source end
@@ -333,6 +346,19 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cmp w12, #123");                                       // opening brace
     emitter.instruction("b.ne __rt_unser_validate_at_fail");                    // object body must open with '{'
     emitter.instruction("add x9, x9, #1");                                      // step past the opening brace
+    emitter.instruction("ldr x11, [sp]");                                       // original source base for the wire marker
+    emitter.instruction("ldr x12, [sp, #8]");                                   // original object position before cursor reuse
+    emitter.instruction("ldrb w12, [x11, x12]");                                // distinguish raw C bytes from O properties
+    emitter.instruction("cmp w12, #67");                                        // C lengths count bytes rather than key/value pairs
+    emitter.instruction("b.ne __rt_unser_validate_object_properties");          // O continues the recursive property walk
+    emitter.instruction("ldr x12, [sp, #32]");                                  // validated opaque byte length
+    emitter.instruction("sub x10, x10, x9");                                    // remaining bytes after the opening brace
+    emitter.instruction("cmp x12, x10");                                        // reserve one byte for the closing brace
+    emitter.instruction("b.hs __rt_unser_validate_at_fail");                    // reject truncated and overflowing opaque payloads
+    emitter.instruction("add x9, x9, x12");                                     // skip exactly the declared opaque byte count
+    emitter.instruction("str x9, [sp, #40]");                                   // publish the closing delimiter position
+    emitter.instruction("b __rt_unser_validate_container_close");               // reuse the exact closing-brace check
+    emitter.label("__rt_unser_validate_object_properties");
     emitter.instruction("str x9, [sp, #40]");                                   // first property key
     emitter.instruction("str xzr, [sp, #48]");                                  // property index
     emitter.label("__rt_unser_validate_object_loop");

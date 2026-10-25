@@ -11,6 +11,7 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
+use crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE;
 
 /// Emits `__rt_json_encode_array_dynamic`: encodes a PHP indexed array to a JSON array literal.
 ///
@@ -30,6 +31,27 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_array_dynamic ---");
     emitter.label_global("__rt_json_encode_array_dynamic");
+
+    // -- hand a run-time promoted array to the object-form encoder --
+    // A statically `Array(...)` value can hold HASH storage at run time:
+    // `__rt_array_set_mixed_key` promotes the destination when a key does not fit the packed
+    // layout, and the static type does not move with it. Encoding that as a JSON array reads
+    // hash internals. The probe is the uniform heap-kind byte, the same one
+    // `__rt_array_edge_key` dispatches on; `__rt_json_encode_assoc` takes the container in x0
+    // and returns the slice in x1/x2 exactly as this entry does, so it is a tail jump — and it
+    // is the encoder that renders `[5 => 3]` the way PHP does, `{"5":3}` rather than `[3]`.
+    // The conditional branch skips OVER an unconditional one because AArch64 cannot name an
+    // external label in a conditional branch.
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
+    emitter.instruction("cmp x9, #3");                                          // kind 3 = associative hash storage
+    emitter.instruction("b.ne __rt_json_arr_dyn_packed");                       // packed storage encodes inline below
+    emitter.instruction("b __rt_json_encode_assoc");                            // hash storage is the object-form encoder's job
+    emitter.label("__rt_json_arr_dyn_packed");
+    super::json_integer_tree::emit_json_integer_tree_entry(
+        emitter,
+        "__rt_json_arr_dyn_integer_tree",
+    );
 
     emitter.instruction("sub sp, sp, #112");                                    // allocate stack space for array metadata and element scratch values
     emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
@@ -155,7 +177,18 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_json_arr_dyn_value_object");                 // objects encode through the object descriptor walker
     emitter.instruction("cmp x12, #7");                                         // does this array store boxed mixed payloads?
     emitter.instruction("b.eq __rt_json_arr_dyn_value_mixed");                  // boxed mixed payloads encode through the mixed helper
+    emitter.instruction(&format!("cmp x12, #{}", POINTER_ARRAY_VALUE_TYPE));    // does this array store raw ?ptr<T> words?
+    emitter.instruction("b.eq __rt_json_arr_dyn_value_pointer");                // pointer words encode as null or an integer address
     emitter.instruction("b __rt_json_arr_dyn_value_null");                      // null and unsupported payloads encode as JSON null
+
+    emitter.label("__rt_json_arr_dyn_value_pointer");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
+    emitter.instruction("ldr x4, [sp, #40]");                                   // reload the loop index
+    emitter.instruction("add x4, x4, #3");                                      // skip the 24-byte array header
+    emitter.instruction("ldr x0, [x0, x4, lsl #3]");                            // load the raw pointer word
+    emitter.instruction("cbz x0, __rt_json_arr_dyn_value_null");                // a null pointer word encodes as JSON null
+    emitter.instruction("bl __rt_itoa");                                        // encode a live address as decimal digits
+    emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded element into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_int");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
@@ -286,6 +319,21 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: json_encode_array_dynamic ---");
     emitter.label_global("__rt_json_encode_array_dynamic");
 
+    // -- hand a run-time promoted array to the object-form encoder --
+    // Same runtime-promotion probe as the AArch64 path; `__rt_json_encode_assoc` takes the
+    // container in RAX and returns rax/rdx exactly as this entry does. NOTE the register:
+    // every json encoder here carries the array in RAX, not rdi.
+    emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // load the uniform heap-kind header word
+    emitter.instruction("and r11, 0xff");                                       // isolate the low-byte heap kind
+    emitter.instruction("cmp r11, 3");                                          // kind 3 = associative hash storage
+    emitter.instruction("jne __rt_json_arr_dyn_packed");                        // packed storage encodes inline below
+    emitter.instruction("jmp __rt_json_encode_assoc");                          // hash storage is the object-form encoder's job
+    emitter.label("__rt_json_arr_dyn_packed");
+    super::json_integer_tree::emit_json_integer_tree_entry(
+        emitter,
+        "__rt_json_arr_dyn_integer_tree_x86",
+    );
+
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving JSON-array scratch space
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for array metadata and concat-buffer cursors
     emitter.instruction("sub rsp, 64");                                         // reserve local slots (extended for the force-object flag snapshot)
@@ -397,7 +445,19 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_arr_dyn_value_object");                   // encode objects through the object descriptor walker
     emitter.instruction("cmp r10, 7");                                          // does this indexed array store boxed mixed payloads?
     emitter.instruction("je __rt_json_arr_dyn_value_mixed");                    // encode boxed mixed payloads through the mixed JSON helper
+    emitter.instruction(&format!("cmp r10, {}", POINTER_ARRAY_VALUE_TYPE));     // does this indexed array store raw ?ptr<T> words?
+    emitter.instruction("je __rt_json_arr_dyn_value_pointer");                  // pointer words encode as null or an integer address
     emitter.instruction("jmp __rt_json_arr_dyn_value_null");                    // unsupported payloads currently degrade to JSON null
+
+    emitter.label("__rt_json_arr_dyn_value_pointer");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index
+    emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header
+    emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8]");                  // load the raw pointer word
+    emitter.instruction("test rax, rax");                                       // is this the null pointer word?
+    emitter.instruction("jz __rt_json_arr_dyn_value_null");                     // a null pointer word encodes as JSON null
+    emitter.instruction("call __rt_itoa");                                      // encode a live address as a decimal JSON slice
+    emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded JSON element into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_int");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before loading the integer element payload

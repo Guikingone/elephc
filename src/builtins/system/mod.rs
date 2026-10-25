@@ -26,14 +26,27 @@
 //! - Add `pub mod <name>;` here for every new system builtin home.
 
 pub mod __elephc_class_has_constructor;
+pub mod __elephc_class_is_abstract;
 pub mod __elephc_gmmktime_raw;
 pub mod __elephc_initialize_pdo_statement;
 pub mod __elephc_invoke_pdo_statement_constructor;
 pub mod __elephc_mktime_raw;
 pub mod __elephc_new_without_constructor;
+pub mod __elephc_opcache_rt_script_field;
+pub mod __elephc_opcache_rt_blacklist_entry;
+pub mod __elephc_opcache_rt_script_path;
+pub mod __elephc_opcache_rt_is_cached;
+pub mod __elephc_opcache_rt_discard;
+pub mod __elephc_opcache_rt_soft_invalidate;
+pub mod __elephc_opcache_rt_compile;
+pub mod __elephc_opcache_rt_in_file_cache;
+pub mod __elephc_opcache_rt_reset;
+pub mod __elephc_opcache_rt_stat;
+pub mod __elephc_opcache_rt_swap;
 pub mod __elephc_pdo_called_class_status;
 pub mod __elephc_pdo_statement_class_status;
 pub mod __elephc_strtotime_raw;
+pub mod __elephc_tokenizer_error_location;
 pub mod attr_support;
 pub mod checkdate;
 pub mod class_attribute_args;
@@ -70,6 +83,7 @@ pub mod get_required_files;
 pub mod get_resources;
 pub mod getdate;
 pub mod getenv;
+pub mod getmypid;
 pub mod gmdate;
 pub mod gmmktime;
 pub mod header;

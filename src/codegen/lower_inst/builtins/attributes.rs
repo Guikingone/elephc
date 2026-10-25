@@ -12,7 +12,7 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
-use crate::ir::{Immediate, Instruction, Module, Op, ValueDef, ValueId};
+use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::names::php_symbol_key;
 use crate::types::{AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, PhpType};
 
@@ -144,20 +144,26 @@ pub(in crate::codegen::lower_inst) fn emit_reflection_attribute_array(
         &PhpType::Object("ReflectionAttribute".to_string()),
     );
 
+    // Number the program's attribute factories once for this array, and only when it has
+    // attributes to number: most reflected members carry none.
+    let module = ctx.module;
+    let factory_ids = (!attr_names.is_empty()).then(|| {
+        let function_attrs =
+            crate::codegen::reflection::function_attribute_metadata(&module.functions);
+        crate::codegen::reflection::AttributeFactoryIds::new(
+            &module.class_infos,
+            &crate::codegen::reflection::borrow_attribute_metadata(&function_attrs),
+        )
+    });
+
     for (idx, attr_name) in attr_names.iter().enumerate() {
         let attr_arg_list = attr_args
             .get(idx)
             .and_then(|args| args.as_deref())
             .unwrap_or(&[]);
-        let factory_id = {
-            let function_attrs = function_attribute_sources(ctx.module);
-            crate::codegen::reflection::attribute_factory_id_with_extra(
-                &ctx.module.class_infos,
-                &function_attrs,
-                attr_name,
-                attr_arg_list,
-            )
-        };
+        let factory_id = factory_ids
+            .as_ref()
+            .map_or(0, |ids| ids.id(attr_name, attr_arg_list));
 
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_attribute_object(ctx, &layout);
@@ -175,23 +181,6 @@ pub(in crate::codegen::lower_inst) fn emit_reflection_attribute_array(
     }
 
     Ok(())
-}
-
-/// Returns reflection-visible top-level function attribute metadata sources.
-fn function_attribute_sources(
-    module: &Module,
-) -> Vec<crate::codegen::reflection::AttributeMetadataSource<'_>> {
-    module
-        .functions
-        .iter()
-        .filter(|function| !function.attribute_names.is_empty())
-        .map(|function| {
-            (
-                function.attribute_names.as_slice(),
-                function.attribute_args.as_slice(),
-            )
-        })
-        .collect()
 }
 
 /// Returns the synthetic `ReflectionAttribute` class layout from EIR metadata.
@@ -254,10 +243,8 @@ fn emit_reflection_attribute_object(
             ctx.emitter
                 .instruction(&format!("mov rax, {}", payload_size));            // request ReflectionAttribute object payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!(
-                "mov r10, 0x{:x}",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-            ));                                                                 // materialize the x86_64 object heap kind word
+            let heap_kind = crate::codegen_support::sentinels::x86_64_heap_kind_word(4);
+            ctx.emitter.instruction(&format!("mov r10, 0x{heap_kind:x}"));      // materialize the x86_64 object heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the object heap header before the payload
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter
