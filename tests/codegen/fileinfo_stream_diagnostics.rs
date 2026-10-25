@@ -119,10 +119,10 @@ foreach (["file://example.com/tmp", "data:text", "/elephc-fileinfo-missing/file"
 }
 echo finfo_file($f, "file://example.com/tmp") === false ? "silent\n" : "bad\n";
 restore_error_handler();
-echo $f->file("php://filter/resource=data:text/plain,HELLO"), "\n";
+echo $f->file("php://filter/read=string.toupper/resource=data:text/plain,HELLO"), "\n";
 $file = tempnam(sys_get_temp_dir(), "finfo-bytes");
 file_put_contents($file, "HELLO\0binary");
-echo $f->file("php://filter/resource=" . $file), "\n";
+echo $f->file("php://filter/read=string.toupper/resource=" . $file), "\n";
 unlink($file); unset($file, $resource, $f);
 "#);
     let mut expected = String::new();
@@ -132,6 +132,54 @@ unlink($file); unset($file, $resource, $f);
     expected.push_str("silent\ntext/plain\napplication/octet-stream\n");
     assert_eq!(out.stdout, expected);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nested filter directories retain descriptor identity across ordinary, file URL and eval queries.
+#[test]
+fn test_fileinfo_filtered_directories() {
+    if fileinfo_native::skip("test_fileinfo_filtered_directories") { return; }
+    let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+$f = new finfo(FILEINFO_MIME_TYPE);
+set_error_handler(function(int $n, string $message): bool { echo "unexpected:", $message, "\n"; return true; });
+foreach (["php://filter/read=string.rot13/resource=.",
+          "php://filter/read=string.toupper/resource=file://" . getcwd(),
+          "php://filter/read=zlib.inflate/resource=.",
+          "php://filter/read=string.toupper/resource=php://filter/read=string.rot13/resource=."] as $path) {
+    echo finfo_file($f, $path), "\n";
+}
+echo mime_content_type("php://filter/read=string.rot13/resource=."), "\n";
+$code = $argc > 0 ? 'echo $f->file("php://filter/read=string.rot13/resource=."), "\n";' : '';
+eval($code);
+restore_error_handler(); unset($f, $path, $code);
+"#);
+    assert_eq!(out.stdout, "directory\n".repeat(6));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// No-chain URLs tokenize resource segments as filters, with both public warning frames preserved.
+#[test]
+fn test_fileinfo_filter_resource_tokenization() {
+    if fileinfo_native::skip("test_fileinfo_filter_resource_tokenization") { return; }
+    let out = compile_and_run(r#"<?php
+$f = new finfo(FILEINFO_MIME_TYPE);
+set_error_handler(function(int $n, string $message): bool { echo $message, "\n"; return true; });
+echo finfo_file($f, "php://filter/resource=data:text/plain,HELLO"), "\n";
+echo $f->file("php://filter/read=missing/resource=data:,HELLO"), "\n";
+echo mime_content_type("php://filter/read=missing/resource=data:,HELLO"), "\n";
+echo $f->file("php://filter/resource=."), "\n";
+$database = tempnam(sys_get_temp_dir(), "finfo-chain");
+file_put_contents($database, "0 string HELLO transformed\n!:mime application/x-fileinfo-filter\n");
+$custom = new finfo(FILEINFO_MIME_TYPE, $database);
+echo $custom->file("php://filter/resource=data:,URYYB/string.rot13"), "\n";
+unlink($database); restore_error_handler();
+"#);
+    let warnings = |function: &str, name: &str| format!("{function}(): Unable to locate filter \"{name}\"\n{function}(): Unable to create filter ({name})\n");
+    let expected = warnings("finfo_file", "resource=data:text") + &warnings("finfo_file", "plain,HELLO") + "text/plain\n"
+        + &warnings("finfo::file", "missing") + "text/plain\n"
+        + &warnings("mime_content_type", "missing") + "text/plain\n"
+        + &warnings("finfo::file", "resource=.") + "directory\n"
+        + &warnings("finfo::file", "resource=data:,URYYB") + "application/x-fileinfo-filter\n";
+    assert_eq!(out, expected);
 }
 
 /// Wrapper diagnostics cap the displayed scheme at 31 bytes while retaining the original path.

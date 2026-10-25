@@ -261,14 +261,18 @@ pub unsafe extern "C" fn elephc_fileinfo_network_error(code: i64, detail: *const
 }
 
 /// Reads a nested plain-file resource into caller-owned bytes, bounded like PHP's magic stream window.
-/// The path must be a valid NUL-terminated string; the returned ID must be explicitly released.
+/// The path must be NUL-terminated; positive IDs must be released, -1 denotes a directory, and 0 fails.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_fileinfo_read(path: *const c_char) -> i64 {
     guard(|| {
         use std::io::Read;
         let path = std::path::Path::new(OsStr::from_bytes(CStr::from_ptr(path).to_bytes()));
         let mut bytes = Vec::new();
-        let read = std::fs::File::open(path).and_then(|file| file.take(7340032).read_to_end(&mut bytes));
+        let read = std::fs::File::open(path).and_then(|file| {
+            if file.metadata()?.is_dir() { return Ok(true); }
+            file.take(7340032).read_to_end(&mut bytes).map(|_| false)
+        });
+        if matches!(read, Ok(true)) { return -1; }
         if let Err(error) = read {
             outcome(None, CString::new(error.to_string()).unwrap_or_default());
             return 0;

@@ -38,12 +38,14 @@ fn filtered_url() -> Stmt {
         s_if(eq(e_var("_split"), e_bool(false)), vec![s_throw(e_new_fq("Error", vec![e_str("No URL resource specified")]))], vec![], None),
         s_assign("_resource", e_call("substr", vec![e_var("filename"), e_binop(e_var("_split"), BinOp::Add, e_int(10))])),
         s_if(eq(e_var("_resource"), e_str("")), super::streams::failure(e_str("operation failed")), vec![], None),
-        s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![e_var("_resource"), e_var("context"), e_var("_function"), e_bool(false)])),
+        s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![e_var("_resource"), e_var("context"), e_var("_function"), e_bool(false), e_var("_directory")])),
         s_if(eq(e_var("_data"), e_bool(false)), super::streams::failure(e_str("operation failed")), vec![], None),
         s_assign("_spec", e_str("")),
         s_if(e_binop(e_var("_split"), BinOp::Gt, e_int(13)), vec![
             s_assign("_spec", e_call("substr", vec![e_var("filename"), e_int(13), e_binop(e_var("_split"), BinOp::Sub, e_int(13))])),
         ], vec![], None),
+        // PHP tokenizes beyond the delimiter's NUL when /resource= directly follows filter.
+        s_if(eq(e_var("_split"), e_int(12)), vec![s_assign("_spec", e_call("substr", vec![e_var("filename"), e_int(13)]))], vec![], None),
         s_foreach(e_call("explode", vec![e_str("/"), e_var("_spec")]), None, "_part", vec![
             s_if(e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("_part")]), e_str("write=")]), vec![s_continue(1)], vec![], None),
             s_if(e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("_part")]), e_str("read=")]), vec![
@@ -54,7 +56,7 @@ fn filtered_url() -> Stmt {
                 s_assign("_filter", e_index(e_call("explode", vec![e_str("\0"), e_call("urldecode", vec![e_var("_filter")])]), e_int(0))),
                 // Keep the fallible result boxed while the loop's byte accumulator stays string-typed.
                 s_assign("_stage", e_array(vec![
-                    e_method_call(e_this(), "__elephc_filter_bytes", vec![e_var("_data"), e_var("_filter")]), e_bool(true),
+                    e_method_call(e_this(), "__elephc_filter_bytes", vec![e_var("_data"), e_var("_filter"), e_var("_function"), e_var("_directory")]), e_bool(true),
                 ])),
                 s_if(eq(e_index(e_var("_stage"), e_int(0)), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
                 s_assign("_data", e_cast(CastType::String, e_index(e_var("_stage"), e_int(0)))),
@@ -98,7 +100,8 @@ pub(super) fn read_method() -> MethodBuilder {
         read_owned(),
     ]);
     method("__elephc_read_stream").private().param("filename", TypeExpr::Str)
-        .param("context", t_mixed()).param("_function", TypeExpr::Str).param_default("_report_errors", TypeExpr::Bool, e_bool(true)).returns(t_union(vec![TypeExpr::Str, TypeExpr::False])).body(body)
+        .param("context", t_mixed()).param("_function", TypeExpr::Str).param("_report_errors", TypeExpr::Bool)
+        .param_by_ref("_directory", Some(TypeExpr::Bool)).returns(t_union(vec![TypeExpr::Str, TypeExpr::False])).body(body)
 }
 
 /// Routes registered wrappers while preserving PHP's warned plain-file fallback for unknown schemes.
@@ -137,6 +140,7 @@ fn local_bytes() -> Vec<Stmt> {
     vec![
         s_assign("_read_id", e_call("elephc_fileinfo_read", vec![e_var("filename")])),
         s_if(eq(e_var("_read_id"), e_int(0)), super::streams::failure(e_call("elephc_fileinfo_error", vec![])), vec![], None),
+        s_if(eq(e_var("_read_id"), e_int(-1)), vec![s_assign("_directory", e_bool(true)), s_return(e_str(""))], vec![], None),
         s_try(vec![s_return(e_call("__elephc_ptr_read_string", vec![
             e_call("elephc_fileinfo_read_data", vec![e_var("_read_id")]),
             e_call("elephc_fileinfo_read_length", vec![e_var("_read_id")]),
@@ -151,6 +155,7 @@ pub(super) fn filter_method() -> MethodBuilder {
         "convert.base64-encode", "convert.base64-decode", "convert.quoted-printable-encode",
         "convert.quoted-printable-decode", "bzip2.decompress"].into_iter().rev() {
         attach = vec![s_if(eq(e_var("name"), e_str(name)), vec![
+            s_if(e_var("_directory"), vec![s_return(e_var("data"))], vec![], None),
             s_assign("_attached", e_call("stream_filter_append", vec![e_var("_stream"), e_str(name), e_const("STREAM_FILTER_READ")])),
         ], vec![], Some(attach))];
     }
@@ -158,16 +163,21 @@ pub(super) fn filter_method() -> MethodBuilder {
         s_expr(e_call("rewind", vec![e_var("_stream")]))];
     work.extend(attach);
     work.push(s_if(eq(e_var("_attached"), e_bool(false)), vec![
-        s_expr(e_call("__elephc_builtin_warning", vec![e_binop(e_str("Unable to create filter: "), BinOp::Concat, e_var("name"))])),
+        s_expr(e_call("__elephc_builtin_warning", vec![e_binop(e_binop(e_var("_function"), BinOp::Concat,
+            e_str("(): Unable to locate filter \"")), BinOp::Concat, e_binop(e_var("name"), BinOp::Concat, e_str("\"")))])),
+        s_expr(e_call("__elephc_builtin_warning", vec![e_binop(e_binop(e_var("_function"), BinOp::Concat,
+            e_str("(): Unable to create filter (")), BinOp::Concat, e_binop(e_var("name"), BinOp::Concat, e_str(")")))])),
         // PHP warns about an unknown filter and leaves its input bytes unchanged.
         s_return(e_var("data")),
     ], vec![], None));
+    work.push(s_if(e_var("_directory"), vec![s_return(e_var("data"))], vec![], None));
     work.push(s_return(e_call("stream_get_contents", vec![e_var("_stream"), e_int(7340032)])));
     method("__elephc_filter_bytes").private().param("data", TypeExpr::Str).param("name", TypeExpr::Str)
+        .param("_function", TypeExpr::Str).param("_directory", TypeExpr::Bool)
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False])).body(vec![
             // PHP's filter default is raw DEFLATE, unlike the auto-detecting fopen helper.
-            s_if(eq(e_var("name"), e_str("zlib.inflate")), vec![s_return(e_call("gzinflate", vec![e_var("data")]))], vec![], None),
-            s_if(eq(e_var("name"), e_str("zlib.deflate")), vec![s_return(e_call("gzdeflate", vec![e_var("data")]))], vec![], None),
+            s_if(eq(e_var("name"), e_str("zlib.inflate")), vec![s_if(e_var("_directory"), vec![s_return(e_var("data"))], vec![], None), s_return(e_call("gzinflate", vec![e_var("data")]))], vec![], None),
+            s_if(eq(e_var("name"), e_str("zlib.deflate")), vec![s_if(e_var("_directory"), vec![s_return(e_var("data"))], vec![], None), s_return(e_call("gzdeflate", vec![e_var("data")]))], vec![], None),
             s_assign("_stream", e_call("fopen", vec![e_str("php://temp"), e_str("w+b")])),
             s_if(eq(e_var("_stream"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
             s_try(work, vec![], Some(vec![s_expr(e_call("fclose", vec![e_var("_stream")]))])),

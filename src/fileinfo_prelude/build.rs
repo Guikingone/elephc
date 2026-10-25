@@ -57,11 +57,11 @@ fn query_engine(file: bool) -> crate::synthetic_class::MethodBuilder {
             filename_check(true),
             s_assign("_source_filename", e_var(parameter)),
             super::streams::file_uri(),
-            s_if(e_method_call(e_this(), "__elephc_is_stream", vec![e_var(parameter), e_var("_function")]), vec![
-                s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![e_var(parameter), e_var("context"), e_var("_function")])),
-                s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
-                s_return(e_method_call(e_this(), "__elephc_buffer", vec![e_var("_function"), e_var("_data"), e_int(0)])),
-            ], vec![], None),
+            // Directory identity follows the opened descriptor through nested wrappers.
+            // The output flag belongs to this call, so callbacks can reenter safely.
+            // Native directories never enter libmagic's buffer identification path.
+            // Filter attachment still runs before this result is returned.
+            s_if(e_method_call(e_this(), "__elephc_is_stream", vec![e_var(parameter), e_var("_function")]), stream_query(), vec![], None),
             s_assign("_result", e_call("elephc_fileinfo_file", vec![e_var("_raw"), e_var(parameter), e_int(0)])),
         ]);
     } else {
@@ -182,6 +182,19 @@ fn functions() -> Program {
         s_return(e_method_call(e_var("_finfo"), "__elephc_file", vec![e_str("mime_content_type"), e_var("filename")])),
     ]).build());
     out
+}
+
+/// Keeps each query's descriptor classification local while recursive readers borrow its output flag.
+fn stream_query() -> Vec<Stmt> {
+    vec![
+        s_assign("_stream_directory", e_bool(false)),
+        s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![
+            e_var("filename"), e_var("context"), e_var("_function"), e_bool(true), e_var("_stream_directory"),
+        ])),
+        s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
+        s_if(e_var("_stream_directory"), vec![s_return(e_str("directory"))], vec![], None),
+        s_return(e_method_call(e_this(), "__elephc_buffer", vec![e_var("_function"), e_var("_data"), e_int(0)])),
+    ]
 }
 
 /// Builds externs first, followed by the class and six PHP functions.

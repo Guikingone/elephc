@@ -79,6 +79,8 @@ fn fileinfo_native_temporary_read_lifetime() {
     let first = CString::new(directory.0.join("first").as_os_str().as_bytes()).unwrap();
     let second = CString::new(directory.0.join("second").as_os_str().as_bytes()).unwrap();
     unsafe {
+        let directory_path = CString::new(directory.0.as_os_str().as_bytes()).unwrap();
+        assert_eq!(elephc_fileinfo_read(directory_path.as_ptr()), -1);
         let one = elephc_fileinfo_read(first.as_ptr());
         assert_ne!(one, 0);
         let pointer = elephc_fileinfo_read_data(one).cast::<u8>();

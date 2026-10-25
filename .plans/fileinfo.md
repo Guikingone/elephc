@@ -17,22 +17,48 @@ PHP 8 semantics include no-op finfo_close, per-call flag restoration, binary-saf
 
 ## Validation and acceptance
 
-Draft PR: https://github.com/illegalstudio/elephc/pull/2061.
-Its check summary is the live record for the published head. All required checks
-must pass before this task is complete; the PR remains a draft.
+PR: https://github.com/illegalstudio/elephc/pull/2061, ready for review.
+All required checks and both review verdicts must apply to the final head before
+the task is complete. The user authorized subsequent fixes and pushes while ready.
 
-CI run 40123074238 at 8cd6740c32 passed all fourteen fileinfo execution tests on
-Linux x86_64, including all six functions through opaque eval, HTTP context options,
-custom databases, PHP 8.4/8.5 deprecations, subclass restrictions and heap ownership.
-The separate FFI copied-string-return and throwing-handler heap regressions passed.
-Linux x86_64 and ARM64 both passed the three native libmagic bridge tests.
+Published head `40587ab6f69c7ccbf8480325cd634187947b9bce` passed the complete
+CI matrix in run 40189861691 and PDO live suites in run 40189861721. Nineteen
+fileinfo execution tests and four native bridge tests passed on Linux x86_64,
+Linux ARM64 and macOS. iOS device and Simulator final links passed. Greptile
+scored that exact head 5/5 with all eight review threads resolved.
 
-Both iOS device and Simulator final links passed in run 40121874821. Their fixture
-retains both buffer and file queries and links the complete native/stream graph.
-The macOS archive job runs the same focused executable cases before publishing its
-archive. The broader CI matrix checks integration with the remaining compiler.
+The user subsequently requested independent read-only Grok review through
+`me-delegate-review`. Five rounds returned changes-requested:
 
-The CI exporter, builtin architecture audit, documentation pipeline, static docs
-audit and site validation passed. Generated artifacts were downloaded without local
-compilation. The comparison reports 6/6 functions, 1/1 classes and 11/11 constants.
-No local heavy builds or test runs are authorized for this task.
+| Round | Delegation |
+| --- | --- |
+| 1 | `9b0b53f9-5658-4cae-9187-09764c4b5757` |
+| 2 | `d6945bcd-da22-4df9-8f4e-7dd3b014ea63` |
+| 3 | `be97a074-822b-4aad-900e-fbed0fca7ce3` |
+| 4 | `274f8b3a-5f70-4006-84d7-3f6e3eed0ee1` |
+| 5 | `30b23899-3231-461a-9afa-4ed155a81343` |
+
+Valid findings were fixed locally with regression coverage. These include PHP
+argument diagnostics, data URL grammar, filter parsing and warning frames,
+descriptor-checked directories, captured network causes and callback-safe flag
+restoration. The fifth-round fixes preserve directory classification through
+nested filters and PHP's resource-segment tokenization. Evidence-backed declines
+retain ValueError for database NULs, platform-dependent flag validity, warned
+unknown-scheme local fallback and the illegal-parameter data URL reason. Later
+review rounds accepted those decisions.
+
+There are now 39 fileinfo execution tests, seven native bridge tests and a TLS
+regression. New tests remain unexecuted until CI. PHP 8.5.12 reference oracles,
+static documentation audits and diff checks pass. The six generated builtin
+source anchors are unchanged; the compatibility table still reports 6/6
+functions, 1/1 classes and 11/11 constants.
+
+- [x] Keep the PR ready for review.
+- [ ] Obtain a clean Grok verdict on the final candidate.
+- [ ] Resolve integration conflicts with the moved main branch.
+- [ ] Push only after the external review is clean, then follow CI and Greptile.
+- [ ] Confirm CI, clean Grok review and Greptile 5/5 on one final head.
+
+The five-round limit requires a user decision before another external round.
+Local corrections have not been pushed during this external review phase.
+No local builds or compiled tests were run; task-owned oracle files were removed.
