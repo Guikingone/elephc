@@ -81,7 +81,6 @@ pub(super) fn emit_fileinfo_cast(emitter: &mut Emitter) {
     emitter.instruction(if arm { "mov x1, #0" } else { "xor esi, esi" });       // userspace casts receive PHP_STREAM_AS_STDIO
     emitter.instruction(if arm { "blr x11" } else { "call r11" });              // invoke the callback through its declared method ABI
     abi::emit_store_to_address(emitter, ret, frame, 16);
-    abi::emit_store_to_address(emitter, if arm { "x1" } else { "rdx" }, frame, 24);
     abi::emit_load_from_address(emitter, a, frame, 8);
     abi::emit_store_to_address(emitter, a, frame, 32);
     abi::emit_store_to_address(emitter, ret, frame, 40);
@@ -100,6 +99,11 @@ pub(super) fn emit_fileinfo_cast(emitter: &mut Emitter) {
     }
     emitter.instruction(if arm { "b __rt_finfo_cast_classify" } else { "jmp __rt_finfo_cast_classify" }); // classify the borrowed boxed payload
     emitter.label("__rt_finfo_cast_string");
+    let (string, length) = abi::string_result_regs(emitter);
+    abi::emit_store_to_address(emitter, string, frame, 16);
+    abi::emit_store_to_address(emitter, length, frame, 24);
+    abi::emit_load_from_address(emitter, a, frame, 16);
+    abi::emit_store_to_address(emitter, a, frame, 40);
     abi::emit_load_from_address(emitter, a, frame, 24);
     abi::emit_store_to_address(emitter, a, frame, 48);
     emitter.instruction(if arm { "b __rt_finfo_cast_classify" } else { "jmp __rt_finfo_cast_classify" }); // apply PHP string truthiness

@@ -111,3 +111,10 @@ before its typed value destructor, preserving reentry and exception chaining.
 The new regression matches PHP8.5.12 across handler masks, resource reads,
 filter failures, destructor changes to error_reporting and a throwing destructor
 whose previous exception remains TypeError. Compiled tests still await CI.
+
+The completed round-8 restart (e425ab41-b7b1-48b8-87e0-b82868b3f36f)
+accepted the exception and owner corrections, then found one ARM64 string-result
+ABI defect. Cast string capture now uses the shared string_result_regs helper,
+preserving x1/x2 on ARM64 and rax/rdx on x86 before truthiness and ownership
+processing. Existing zero-string, substring and fresh-string regression cases
+cover the fix. A new full read-only review remains required before publication.
