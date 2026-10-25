@@ -53,8 +53,8 @@ fn query_engine(file: bool) -> crate::synthetic_class::MethodBuilder {
         body.extend([
             reject(e_binop(e_binop(e_var("context"), BinOp::StrictNotEq, e_null()), BinOp::And,
                 e_binop(e_call("get_resource_type", vec![e_var("context")]), BinOp::StrictNotEq, e_str("stream-context"))), "TypeError", "finfo::file(): context must be a stream context resource"),
-            reject(eq(e_var(parameter), e_str("")), "ValueError", "finfo::file(): Argument #1 ($filename) must not be empty"),
-            reject(e_binop(e_call("strpos", vec![e_var(parameter), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)), "ValueError", "finfo::file(): Argument #1 ($filename) must not contain any null bytes"),
+            filename_check(false),
+            filename_check(true),
             super::streams::file_uri(),
             s_if(e_call("is_dir", vec![e_var(parameter)]), vec![s_return(e_str("directory"))], vec![], None),
             s_if(e_binop(e_call("strpos", vec![e_var(parameter), e_str("://")]), BinOp::StrictNotEq, e_bool(false)), vec![
@@ -174,10 +174,12 @@ fn functions() -> Program {
             s_assign("_data", e_call("stream_get_contents", vec![e_var("filename"), e_int(7340032)])),
             s_expr(e_call("fseek", vec![e_var("filename"), e_var("_position")])),
             s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
-            s_return(e_method_call(e_var("_finfo"), "buffer", vec![e_var("_data")])),
+            s_return(e_method_call(e_var("_finfo"), "__elephc_buffer", vec![e_str("mime_content_type"), e_var("_data")])),
         ], vec![], None),
         reject(e_not(e_call("is_string", vec![e_var("filename")])), "TypeError", "mime_content_type(): Argument #1 ($filename) must be of type resource|string"),
-        s_return(e_method_call(e_var("_finfo"), "file", vec![e_var("filename")])),
+        reject(eq(e_var("filename"), e_str("")), "ValueError", "mime_content_type(): Argument #1 ($filename) must not be empty"),
+        reject(e_binop(e_call("strpos", vec![e_var("filename"), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)), "TypeError", "mime_content_type(): Argument #1 ($filename) must not contain any null bytes"),
+        s_return(e_method_call(e_var("_finfo"), "__elephc_file", vec![e_str("mime_content_type"), e_var("filename")])),
     ]).build());
     out
 }
@@ -199,4 +201,23 @@ pub(super) fn declarations() -> Program {
         out.extend(functions());
         out
     })
+}
+
+/// Preserves the public call name, argument number and profile's filename exception class.
+fn filename_check(null_bytes: bool) -> Stmt {
+    let condition = if null_bytes {
+        e_binop(e_call("strpos", vec![e_var("filename"), e_str("\0")]), BinOp::StrictNotEq, e_bool(false))
+    } else {
+        eq(e_var("filename"), e_str(""))
+    };
+    let message = concat(concat(e_var("_function"), e_ternary(
+        eq(e_var("_function"), e_str("finfo_file")),
+        e_str("(): Argument #2 ($filename) "), e_str("(): Argument #1 ($filename) "),
+    )), e_str(if null_bytes { "must not contain any null bytes" } else { "must not be empty" }));
+    let error = s_throw(e_new_fq("ValueError", vec![message.clone()]));
+    let error = if null_bytes {
+        s_if(e_binop(e_const("PHP_VERSION_ID"), BinOp::Lt, e_int(80500)),
+            vec![s_throw(e_new_fq("TypeError", vec![message]))], vec![], Some(vec![error]))
+    } else { error };
+    s_if(condition, vec![error], vec![], None)
 }

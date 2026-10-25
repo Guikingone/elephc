@@ -123,3 +123,4 @@ mod stack_guard;
 mod zval;
 
 mod fileinfo;
+mod fileinfo_validation;

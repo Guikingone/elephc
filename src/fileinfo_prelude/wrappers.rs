@@ -35,7 +35,7 @@ fn read_owned() -> Stmt {
 fn filtered_url() -> Stmt {
     s_if(prefix("php://filter/"), vec![
         s_assign("_split", e_call("strpos", vec![e_var("filename"), e_str("/resource=")])),
-        s_if(eq(e_var("_split"), e_bool(false)), invalid("Invalid php://filter URL: missing resource"), vec![], None),
+        s_if(eq(e_var("_split"), e_bool(false)), vec![s_throw(e_new_fq("Error", vec![e_str("No URL resource specified")]))], vec![], None),
         s_assign("_resource", e_call("substr", vec![e_var("filename"), e_binop(e_var("_split"), BinOp::Add, e_int(10))])),
         s_if(eq(e_var("_resource"), e_str("")), invalid("Invalid php://filter URL: empty resource"), vec![], None),
         s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![e_var("_resource"), e_var("context")])),
@@ -45,8 +45,8 @@ fn filtered_url() -> Stmt {
             s_assign("_spec", e_call("substr", vec![e_var("filename"), e_int(13), e_binop(e_var("_split"), BinOp::Sub, e_int(13))])),
         ], vec![], None),
         s_foreach(e_call("explode", vec![e_str("/"), e_var("_spec")]), None, "_part", vec![
-            s_if(e_call("str_starts_with", vec![e_var("_part"), e_str("write=")]), vec![s_continue(1)], vec![], None),
-            s_if(e_call("str_starts_with", vec![e_var("_part"), e_str("read=")]), vec![
+            s_if(e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("_part")]), e_str("write=")]), vec![s_continue(1)], vec![], None),
+            s_if(e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("_part")]), e_str("read=")]), vec![
                 s_assign("_part", e_call("substr", vec![e_var("_part"), e_int(5)])),
             ], vec![], None),
             s_foreach(e_call("explode", vec![e_str("|"), e_var("_part")]), None, "_filter", vec![

@@ -22,12 +22,38 @@ pub(super) fn data_uri() -> Stmt {
         s_assign("_uri_comma", e_call("strpos", vec![e_var("filename"), e_str(",")])),
         s_if(e_binop(e_var("_uri_comma"), BinOp::StrictEq, e_bool(false)), invalid("Invalid data URL: missing comma"), vec![], None),
         s_assign("_uri_meta", e_call("substr", vec![e_var("filename"), e_int(7), e_binop(e_var("_uri_comma"), BinOp::Sub, e_int(7))])),
+        s_assign("_uri_base64", e_bool(false)),
+        metadata(),
         s_assign("_uri_payload", e_call("substr", vec![e_var("filename"), e_binop(e_var("_uri_comma"), BinOp::Add, e_int(1))])),
-        s_if(e_call("str_ends_with", vec![e_call("strtolower", vec![e_var("_uri_meta")]), e_str(";base64")]), vec![
+        s_if(e_var("_uri_base64"), vec![
             s_assign("_uri_data", e_call("base64_decode", vec![e_var("_uri_payload"), e_bool(true)])),
         ], vec![], Some(vec![s_assign("_uri_data", e_call("urldecode", vec![e_var("_uri_payload")]))])),
         s_if(e_binop(e_var("_uri_data"), BinOp::StrictEq, e_bool(false)), invalid("Invalid data URL: invalid base64 payload"), vec![], None),
         s_return(e_call("substr", vec![e_var("_uri_data"), e_int(0), e_int(7340032)])),
+    ], vec![], None)
+}
+
+/// Validates PHP's media type and parameter grammar, including the exact final base64 token.
+fn metadata() -> Stmt {
+    s_if(e_binop(e_var("_uri_meta"), BinOp::StrictNotEq, e_str("")), vec![
+        s_assign("_uri_semi", e_call("strpos", vec![e_var("_uri_meta"), e_str(";")])),
+        s_assign("_uri_slash", e_call("strpos", vec![e_var("_uri_meta"), e_str("/")])),
+        s_if(e_binop(e_var("_uri_semi"), BinOp::StrictEq, e_bool(false)), vec![
+            s_if(e_binop(e_var("_uri_slash"), BinOp::StrictEq, e_bool(false)), invalid("rfc2397: illegal media type"), vec![], None),
+        ], vec![], Some(vec![
+            s_if(e_binop(e_binop(
+                e_binop(e_var("_uri_slash"), BinOp::StrictEq, e_bool(false)), BinOp::Or,
+                e_binop(e_var("_uri_slash"), BinOp::Gt, e_var("_uri_semi")),
+            ), BinOp::And, e_binop(e_var("_uri_meta"), BinOp::StrictNotEq, e_str(";base64"))), invalid("rfc2397: illegal media type"), vec![], None),
+            s_assign("_uri_parameters", e_call("substr", vec![e_var("_uri_meta"), e_binop(e_var("_uri_semi"), BinOp::Add, e_int(1))])),
+            s_foreach(e_call("explode", vec![e_str(";"), e_var("_uri_parameters")]), None, "_uri_parameter", vec![
+                s_if(e_var("_uri_base64"), invalid("rfc2397: illegal parameter"), vec![], None),
+                s_if(e_binop(e_call("strpos", vec![e_var("_uri_parameter"), e_str("=")]), BinOp::StrictEq, e_bool(false)), vec![
+                    s_if(e_binop(e_var("_uri_parameter"), BinOp::StrictNotEq, e_str("base64")), invalid("rfc2397: illegal parameter"), vec![], None),
+                    s_assign("_uri_base64", e_bool(true)),
+                ], vec![], None),
+            ]),
+        ])),
     ], vec![], None)
 }
 
