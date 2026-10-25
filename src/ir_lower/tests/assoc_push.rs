@@ -18,6 +18,13 @@ $alias =& $values;
 array_push($alias, ...[3, 4]);
 $mixed = ["a" => 1, "b" => "s"];
 array_push($mixed, false, null, [1]);
+$tail = [$argc, 5];
+array_push($mixed, ...$tail);
+class TargetPushBox { public array $items = ["a" => 1]; }
+$box = new TargetPushBox();
+array_push($box->items, ...$tail);
+$rows = ["inner" => ["a" => 1]];
+array_push($rows["inner"], 2);
 echo json_encode($values), json_encode($copy), json_encode($mixed);
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {

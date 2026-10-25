@@ -36,12 +36,17 @@ pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     );
-    if boxed_receiver && inst.operands.len() > 1 {
-        super::boxed_mutation::prepare_boxed_array_receiver(ctx, array, "array_push")?;
+    if boxed_receiver {
+        ReceiverPlace::resolve(ctx, array)?.reload_local_value(ctx, array)?;
+        require_non_null_boxed_receiver(ctx, array)?;
     }
     for index in 1..inst.operands.len() {
         let value = expect_operand(inst, index)?;
         if boxed_receiver {
+            require_available_boxed_hash_key(ctx, array)?;
+            if index == 1 {
+                super::boxed_mutation::prepare_boxed_array_receiver(ctx, array, "array_push")?;
+            }
             super::super::super::arrays::lower_mixed_array_append_value(ctx, array, value)?;
         } else {
             super::super::super::arrays::lower_array_push_value(ctx, inst, array, value)?;
@@ -49,6 +54,49 @@ pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     load_array_push_length_to_result(ctx, array)?;
     store_if_result(ctx, inst)
+}
+
+/// Checks key exhaustion before transferring a receiver or boxing the next pushed value.
+fn require_available_boxed_hash_key(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+    let done = ctx.next_label("array_push_boxed_key_checked");
+    ctx.load_value_to_result(array)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #5");                              // only associative payloads can exhaust automatic integer keys
+            ctx.emitter.instruction(&format!("b.ne {done}"));                   // indexed arrays use their logical length
+            ctx.emitter.instruction("mov x0, x1");                              // pass the hash payload to the shared append-key guard
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 5");                              // only associative payloads can exhaust automatic integer keys
+            ctx.emitter.instruction(&format!("jne {done}"));                    // indexed arrays use their logical length
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_next_index");
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Diagnoses a boxed null receiver before mutation or the zero-value count read.
+fn require_non_null_boxed_receiver(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+    ctx.load_value_to_result(array)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let non_null = ctx.next_label("array_push_boxed_non_null");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #8");                              // compare the runtime cell tag with PHP null
+            ctx.emitter.instruction(&format!("b.ne {non_null}"));               // non-null cells continue to array validation
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 8");                              // compare the runtime cell tag with PHP null
+            ctx.emitter.instruction(&format!("jne {non_null}"));                // non-null cells continue to array validation
+        }
+    }
+    crate::codegen::lower_inst::exceptions::emit_type_error(
+        ctx, "array_push(): Argument #1 ($array) must be of type array, null given",
+    );
+    ctx.emitter.label(&non_null);
+    Ok(())
 }
 
 /// Lowers `array_push()` onto an ASSOCIATIVE receiver, appending at PHP's next automatic

@@ -16,6 +16,25 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::Checker;
 
 impl Checker {
+    /// Gives array_push a managed cell for each native property in its receiver's array path.
+    /// The EIR call keeps this selected cell live while later arguments may replace the place.
+    pub(crate) fn record_array_push_reference_place(
+        &mut self, receiver: &Expr, env: &TypeEnv,
+    ) -> Result<(), crate::errors::CompileError> {
+        match &receiver.kind {
+            ExprKind::PropertyAccess { object, property } => {
+                if let Some((class, true)) = self.ref_property_slot_addressability(object, property, env)? {
+                    self.reference_property_promotions.insert((class, property.clone()));
+                }
+            }
+            ExprKind::ArrayAccess { array, .. }
+            | ExprKind::NamedArg { value: array, .. }
+            | ExprKind::ErrorSuppress(array) => self.record_array_push_reference_place(array, env)?,
+            _ => {},
+        }
+        Ok(())
+    }
+
     /// Records a local whose reference binding requires canonical boxed storage after the call.
     ///
     /// A `null` local bound to a `?ptr<T>` parameter leaves the call as that `?ptr<T>`: the

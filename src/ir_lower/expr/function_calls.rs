@@ -88,6 +88,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_static_settype(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = array_push_spread::lower_array_push_spread(ctx, name, args, expr) {
+        return value;
+    }
     if let Some(value) = lower_static_array_push(ctx, canonical, args, expr) {
         return value;
     }

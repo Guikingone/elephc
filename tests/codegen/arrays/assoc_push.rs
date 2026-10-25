@@ -249,3 +249,163 @@ echo count($limit), ",", count($copy), ",", $limit[PHP_INT_MAX], "\n";
     ), "stderr: {}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Runtime unpacks append each captured value, rather than appending their collector array.
+#[test]
+fn test_associative_push_runtime_unpack_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function runtimePushTail(int $n): array { return [$n, $n + 1]; }
+for ($i = 0; $i < 16; $i++) {
+    $h = ["a" => 1, "b" => "x"];
+    $tail = [2, 3];
+    $copy = $h;
+    $n = array_push($h, ...$tail);
+    $m = array_push($h, 4, ...runtimePushTail(5), ...[]);
+    $sparse = [7 => 7, 9 => 8];
+    array_push($h, ...$sparse);
+}
+echo $n, ",", $m, "|", json_encode($h), "|", json_encode($copy), "\n";
+"#);
+    assert_eq!(out.stdout,
+        "4,7|{\"a\":1,\"b\":\"x\",\"0\":2,\"1\":3,\"2\":4,\"3\":5,\"4\":6,\"5\":7,\"6\":8}|{\"a\":1,\"b\":\"x\"}\n",
+        "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Later arguments update the selected live property, static property or element before pushing.
+#[test]
+fn test_associative_push_nonlocal_argument_effects_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class LivePushBox { public array $h = ["a" => 1]; }
+$o = new LivePushBox();
+$n = array_push($o->h, (function () use ($o) { array_push($o->h, 5); return 9; })(), 8);
+echo $n, "|", json_encode($o->h), "\n";
+class LivePushStatic { public static array $h = ["a" => 1]; }
+$n = array_push(LivePushStatic::$h, (function () { array_push(LivePushStatic::$h, 5); return 9; })(), 8);
+echo $n, "|", json_encode(LivePushStatic::$h), "\n";
+$rows = ["inner" => ["a" => 1]];
+$n = array_push($rows["inner"], (function () use (&$rows) { array_push($rows["inner"], 5); return 9; })(), 8);
+echo $n, "|", json_encode($rows["inner"]), "\n";
+"#);
+    assert_eq!(out.stdout, "4|{\"a\":1,\"0\":5,\"1\":9,\"2\":8}\n".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Unpack failures leave the receiver unchanged and release captured values and iterator owners.
+#[test]
+fn test_associative_push_runtime_unpack_errors_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$h = ["a" => 1, "b" => "x"];
+$named = ["bad" => 2];
+try { array_push($h, 9, ...$named); }
+catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+echo json_encode($h), "\n";
+$sources = ["ok" => [2]];
+try { array_push($h, ...$sources["missing"]); }
+catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+echo json_encode($h), "\n";
+"#);
+    assert_eq!(out.stdout, concat!(
+        "array_push() does not accept unknown named parameters\n",
+        "{\"a\":1,\"b\":\"x\"}\n",
+        "Only arrays and Traversables can be unpacked, null given\n",
+        "{\"a\":1,\"b\":\"x\"}\n",
+    ), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Scoped receiver aliases keep object identity and the originally selected key.
+#[test]
+fn test_associative_push_scoped_place_selection_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class SelectedPushBox { public array $h = ["a" => 1]; }
+$o = new SelectedPushBox();
+$held = $o;
+array_push($o->h, (function () use (&$o) { $o = new SelectedPushBox(); return 2; })());
+echo json_encode($held->h), "|", json_encode($o->h), "\n";
+$rows = ["inner" => ["a" => 1], "other" => ["b" => 9]];
+$key = "inner";
+array_push($rows[$key], (function () use (&$key) { $key = "other"; return 2; })());
+echo json_encode($rows), "\n";
+"#);
+    assert_eq!(out.stdout, concat!(
+        "{\"a\":1,\"0\":2}|{\"a\":1}\n",
+        "{\"inner\":{\"a\":1,\"0\":2},\"other\":{\"b\":9}}\n",
+    ), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Unpacking captures reference values before later argument effects and checks runtime names.
+#[test]
+fn test_associative_push_unpack_evaluation_order_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function laterPushTail(): array { echo "later|"; return [8]; }
+$h = ["a" => 1, "b" => "x"];
+$tail = [2];
+$v =& $tail[0];
+array_push($h, ...$tail, ...(function () use (&$v) { $v = 9; return [3]; })());
+echo json_encode($h), "|", $v, "\n";
+array_push($h, ...laterPushTail());
+echo json_encode($h), "\n";
+$unknown = ["bad" => 2];
+try { array_push($h, ...$unknown, ...laterPushTail()); }
+catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+$duplicate = ["array" => [2]];
+try { array_push($h, ...$duplicate, ...laterPushTail()); }
+catch (Error $e) { echo $e->getMessage(), "\n"; }
+$positional = ["bad" => 2, 0 => 3];
+try { array_push($h, ...$positional); }
+catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { array_push($h, ...$unknown, ...$unknown, ...laterPushTail()); }
+catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(out.stdout, concat!(
+        "{\"a\":1,\"b\":\"x\",\"0\":2,\"1\":3}|9\n",
+        "later|{\"a\":1,\"b\":\"x\",\"0\":2,\"1\":3,\"2\":8}\n",
+        "later|array_push() does not accept unknown named parameters\n",
+        "Named parameter $array overwrites previous argument\n",
+        "Cannot use positional argument after named argument during unpacking\n",
+        "Named parameter $bad overwrites previous argument\n",
+    ), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A caught append failure preserves earlier writes through a promoted native property.
+#[test]
+fn test_associative_push_property_partial_failure_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class LimitPushBox { public array $h = ["a" => 1]; }
+$o = new LimitPushBox();
+$o->h = ["a" => 1, PHP_INT_MAX - 1 => 2];
+try { array_push($o->h, 3, 4); }
+catch (Error $e) { echo $e->getMessage(), "|", count($o->h), ",", $o->h[PHP_INT_MAX], "\n"; }
+"#);
+    assert_eq!(out.stdout, "Cannot add element to the array as the next element is already occupied|3,3\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Replacing a parent preserves the leased element without adding to explicit-reference owners.
+/// The same parent-replacement program with a persistent PHP reference already retains a
+/// container graph, so compare that control instead of hiding the existing heap baseline.
+#[test]
+fn test_associative_push_parent_replacement_matches_reference_ownership_baseline() {
+    let baseline = compile_and_run_with_heap_debug(r#"<?php
+$rows = ["inner" => ["a" => 1]];
+$r =& $rows["inner"];
+$n = (function () use (&$rows) { $rows = ["inner" => ["z" => 9]]; return 2; })();
+$r[] = $n;
+unset($r);
+echo json_encode($rows), "\n";
+"#);
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$rows = ["inner" => ["a" => 1]];
+$n = array_push($rows["inner"], (function () use (&$rows) { $rows = ["inner" => ["z" => 9]]; return 2; })());
+echo $n, "|", json_encode($rows), "\n";
+"#);
+    assert_eq!(baseline.stdout, "{\"inner\":{\"z\":9}}\n", "{}", baseline.stderr);
+    assert_eq!(out.stdout, "2|{\"inner\":{\"z\":9}}\n", "{}", out.stderr);
+    let summary = |stderr: &str| stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .expect("heap debug must report its final ownership summary").to_owned();
+    assert_eq!(summary(&out.stderr), summary(&baseline.stderr), "{}\ncontrol: {}", out.stderr, baseline.stderr);
+}
