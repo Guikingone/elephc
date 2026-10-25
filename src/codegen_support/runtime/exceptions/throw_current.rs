@@ -91,7 +91,7 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "xzr", "_concat_off", 0);
     emitter.instruction(&format!("add x0, x19, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // x0 = jmp_buf base stored inside the active handler record
     emitter.instruction("mov x1, #1");                                          // longjmp return value = 1 to indicate exceptional control flow
-    emitter.bl_c("longjmp"); // transfer control directly back to the saved catch resume point
+    emitter.resume_exception_handler();                                         // transfer control directly back to the saved catch resume point
 
     // -- uncaught exceptions terminate the process with a fatal message --
     emitter.label("__rt_throw_current_uncaught");
@@ -124,7 +124,7 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
     emitter.instruction(&format!("lea rdi, [r12 + {}]", TRY_HANDLER_JMP_BUF_OFFSET)); // rdi = jmp_buf base stored inside the active handler record
     emitter.instruction("mov esi, 1");                                          // longjmp return value = 1 to indicate exceptional control flow
-    emitter.bl_c("longjmp"); // transfer control directly back to the saved catch resume point
+    emitter.resume_exception_handler();                                         // transfer control directly back to the saved catch resume point
 
     emitter.label("__rt_throw_current_uncaught");
     emitter.instruction("jmp __rt_dispatch_uncaught_exception");                // invoke a registered PHP handler or report the uncaught Throwable
@@ -135,8 +135,8 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
 fn emit_uncaught_exception_handler_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_dispatch_uncaught_exception");
     abi::emit_load_symbol_to_reg(emitter, "x19", "_php_exception_handler_callable", 0);
-    emitter.instruction("cbnz x19, 1f");                                       // dispatch through the PHP handler when one is active
-    emitter.instruction("b __rt_report_uncaught_exception");                   // preserve the ordinary fatal report through a linkable branch
+    emitter.instruction("cbnz x19, 1f");                                        // dispatch through the PHP handler when one is active
+    emitter.instruction("b __rt_report_uncaught_exception");                    // preserve the ordinary fatal report through a linkable branch
     emitter.label("1");
     abi::emit_store_zero_to_symbol(emitter, "_php_exception_handler_callable", 0);
     abi::emit_load_symbol_to_reg(emitter, "x22", "_php_exception_handler_value", 0);
@@ -165,8 +165,8 @@ fn emit_uncaught_exception_handler_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_decref_any");                                  // the boxed container now owns the array
 
     emitter.instruction(&format!("ldr x9, [x19, #{CALLABLE_DESC_INVOKER_OFFSET}]")); // load the handler's uniform invoker entry
-    emitter.instruction("cbnz x9, 2f");                                        // continue only with a valid uniform invoker
-    emitter.instruction("b __rt_report_uncaught_exception");                   // fall back to the safe fatal report through a linkable branch
+    emitter.instruction("cbnz x9, 2f");                                         // continue only with a valid uniform invoker
+    emitter.instruction("b __rt_report_uncaught_exception");                    // fall back to the safe fatal report through a linkable branch
     emitter.label("2");
     emitter.instruction("mov x0, x19");                                         // invoker argument 0 is the callable descriptor
     emitter.instruction("mov x1, x20");                                         // invoker argument 1 is the boxed argument array

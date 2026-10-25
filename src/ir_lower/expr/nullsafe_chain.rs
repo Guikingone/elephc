@@ -32,7 +32,7 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Option<Lo
 }
 
 /// Reports the boxed representation shared by successful and short-circuited postfix chains.
-pub(super) fn result_storage_type(expr: &Expr) -> Option<PhpType> {
+pub(in crate::ir_lower) fn result_storage_type(expr: &Expr) -> Option<PhpType> {
     flatten_nullsafe_postfix_chain(expr).map(|_| PhpType::Mixed)
 }
 
@@ -428,6 +428,7 @@ fn guard_initialized_chain_property(
     true
 }
 
+/// Branches null receivers to the chain exit and releases an owning temporary on that path.
 fn guard_nullsafe_chain_receiver(
     ctx: &mut LoweringContext<'_, '_>,
     current: LoweredValue,

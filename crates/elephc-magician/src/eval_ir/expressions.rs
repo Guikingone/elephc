@@ -10,14 +10,17 @@
 use super::*;
 
 /// Dynamic eval expressions evaluated by the interpreter against runtime cells.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalExpr {
+    /// Native default metadata raises an Error lazily, without crossing a compiled callback.
+    DeferredDefaultError(String),
     Array(Vec<EvalArrayElement>),
     ArrayGet {
         array: Box<EvalExpr>,
         index: Box<EvalExpr>,
     },
     Call {
+        /// Resolved source spelling, normalized only when looking up the function.
         name: String,
         args: Vec<EvalCallArg>,
     },
@@ -33,7 +36,9 @@ pub enum EvalExpr {
         is_static: bool,
     },
     FunctionCallable {
+        /// Resolved source spelling, retained for undefined-function diagnostics.
         name: String,
+        /// Unqualified source spelling for PHP's global namespace fallback.
         fallback_name: Option<String>,
     },
     InvokableCallable {
@@ -109,6 +114,7 @@ pub enum EvalExpr {
     },
     Clone(Box<EvalExpr>),
     NamespacedCall {
+        /// Qualified source spelling, retained if namespace and global lookup both fail.
         name: String,
         fallback_name: String,
         args: Vec<EvalCallArg>,
@@ -191,14 +197,14 @@ pub enum EvalExpr {
 }
 
 /// The right-hand side accepted by PHP's `instanceof` operator.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalInstanceOfTarget {
     ClassName(String),
     Expr(Box<EvalExpr>),
 }
 
 /// One source-order function or method call argument parsed from eval code.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalCallArg {
     name: Option<String>,
     spread: bool,
@@ -250,7 +256,7 @@ impl EvalCallArg {
 }
 
 /// One element in a PHP array literal parsed from an eval fragment.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalArrayElement {
     Value(EvalExpr),
     Reference(EvalExpr),
@@ -259,21 +265,21 @@ pub enum EvalArrayElement {
 }
 
 /// One ordered arm in a PHP `match` expression parsed from an eval fragment.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalMatchArm {
     pub patterns: Vec<EvalExpr>,
     pub value: EvalExpr,
 }
 
 /// One ordered case arm in a PHP switch parsed from an eval fragment.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalSwitchCase {
     pub condition: Option<EvalExpr>,
     pub body: Vec<EvalStmt>,
 }
 
 /// Literal syntax supported by the initial EvalIR parser.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalConst {
     Null,
     Bool(bool),
@@ -285,7 +291,7 @@ pub enum EvalConst {
 }
 
 /// PHP magic constants supported by runtime eval fragments.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalMagicConst {
     File,
     Dir,
@@ -298,7 +304,7 @@ pub enum EvalMagicConst {
 }
 
 /// Binary operations supported by the initial EvalIR parser.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalBinOp {
     Add,
     Sub,
@@ -327,7 +333,7 @@ pub enum EvalBinOp {
 }
 
 /// Scalar cast targets supported by runtime eval expressions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalCastType {
     Int,
     Float,
@@ -336,7 +342,7 @@ pub enum EvalCastType {
 }
 
 /// Unary operations supported by the initial EvalIR parser.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalUnaryOp {
     Plus,
     Negate,

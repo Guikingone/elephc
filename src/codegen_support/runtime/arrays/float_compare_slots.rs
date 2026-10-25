@@ -7,9 +7,9 @@
 //!   `crate::codegen_support::runtime::arrays`.
 //!
 //! Key details:
-//! - Written to `__rt_usort`'s callback ABI: `(a, b)` in the first two argument
+//! - Called by the float sort's stable comparator adapter: `(a, b)` in the first two argument
 //!   registers and ordering in the result register. A float array's slots are
-//!   pointer-sized, so the existing slot permuter moves them unchanged.
+//!   pointer-sized, so the float-sort runtime moves them unchanged.
 //! - The ordering is `__rt_php_compare` with both operands tagged as floats, which
 //!   is what `<` and `<=>` already use and what the boxed-`Mixed` comparator calls.
 //!   A local `fcmp` would be a second answer to a question the runtime already
@@ -17,8 +17,8 @@
 //! - Unlike the `Mixed` comparator there is no validation pass: every slot of an
 //!   `array<float>` is a float by construction, so there is no tag to reject.
 //! - The descending variant negates the result rather than swapping the operands.
-//!   Swapping would reverse the order of EQUAL elements too, and PHP's `rsort` is
-//!   not specified to do that.
+//!   NAN comparisons are not antisymmetric, so swapping operands would give a
+//!   different result from reversing the PHP comparison result.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -54,7 +54,7 @@ fn emit_one(emitter: &mut Emitter, label: &str, descending: bool) {
                 emitter.instruction("stp x29, x30, [sp]");                      // save it across the nested call
                 emitter.instruction("mov x29, sp");                             // establish a stable comparator frame
                 abi::emit_call_label(emitter, "__rt_php_compare");              // ordering as x0 = -1, 0, or 1
-                emitter.instruction("neg x0, x0");                              // reverse the order, not the equal elements
+                emitter.instruction("neg x0, x0");                              // reverse the PHP result, including its asymmetric NAN ordering
                 emitter.instruction("ldp x29, x30, [sp]");                      // restore the caller frame record
                 emitter.instruction("add sp, sp, #16");                         // release the comparator frame
                 emitter.instruction("ret");                                     // return the PHP ordering result
@@ -73,13 +73,10 @@ fn emit_one(emitter: &mut Emitter, label: &str, descending: bool) {
             emitter.instruction("xor r9d, r9d");                                // floats carry no high word
             if descending {
                 // -- descending needs a frame: the call is no longer in tail position --
-                // Reached through `__rt_usort`, whose x86_64 frame calls this comparator 8 bytes
-                // off the SysV boundary (allowlisted in `sysv_call_alignment`). That is safe only
-                // because a float/float comparison makes no nested call inside `__rt_php_compare`.
                 emitter.instruction("push rbp");                                // preserve the caller frame pointer
                 emitter.instruction("mov rbp, rsp");                            // establish a stable comparator frame
                 abi::emit_call_label(emitter, "__rt_php_compare");              // ordering as rax = -1, 0, or 1
-                emitter.instruction("neg rax");                                 // reverse the order, not the equal elements
+                emitter.instruction("neg rax");                                 // reverse the PHP result, including its asymmetric NAN ordering
                 emitter.instruction("pop rbp");                                 // restore the caller frame pointer
                 emitter.instruction("ret");                                     // return the PHP ordering result
             } else {
@@ -93,7 +90,7 @@ fn emit_one(emitter: &mut Emitter, label: &str, descending: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::platform::{Platform, Target};
+    use crate::codegen_support::platform::{AppleVariant, Platform, Target};
 
     /// Emits both comparators for one target and returns the assembly.
     fn assembly_for(target: Target) -> String {
@@ -111,6 +108,8 @@ mod tests {
         for target in [
             Target::new(Platform::MacOS, Arch::AArch64),
             Target::new(Platform::Linux, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
             Target::new(Platform::Linux, Arch::X86_64),
         ] {
             let asm = assembly_for(target);
@@ -131,8 +130,8 @@ mod tests {
 
     /// Descending negates the result; it does not swap the operands.
     ///
-    /// Swapping would reverse the order of EQUAL elements too, which `rsort` is not specified
-    /// to do — and the two are indistinguishable on any fixture whose elements are distinct.
+    /// NAN compares greater in both directions, so swapping operands would not reverse
+    /// its result. Equal finite values still compare equal in either direction.
     #[test]
     fn descending_negates_rather_than_swapping() {
         let arm = assembly_for(Target::new(Platform::MacOS, Arch::AArch64));

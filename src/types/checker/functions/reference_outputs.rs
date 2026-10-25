@@ -7,6 +7,7 @@
 //! Key details:
 //! - Arguments are already normalized by the shared call planner.
 //! - A referenced array element widens its local root to boxed Mixed element storage.
+//! - A `null` local bound to a `?ptr<T>` parameter becomes a `?ptr<T>` local.
 
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
@@ -16,6 +17,9 @@ use super::super::Checker;
 
 impl Checker {
     /// Records a local whose reference binding requires canonical boxed storage after the call.
+    ///
+    /// A `null` local bound to a `?ptr<T>` parameter leaves the call as that `?ptr<T>`: the
+    /// callee may store a live address through it, and lowering gives the slot that pointer word.
     pub(crate) fn record_boxed_reference_output(
         &mut self,
         arg: &Expr,
@@ -33,6 +37,10 @@ impl Checker {
             && actual.codegen_repr() != PhpType::Mixed
         {
             PhpType::Mixed
+        } else if crate::types::is_nullable_pointer_type(expected)
+            && matches!(actual.codegen_repr(), PhpType::Void | PhpType::Never)
+        {
+            expected.clone()
         } else {
             return;
         };

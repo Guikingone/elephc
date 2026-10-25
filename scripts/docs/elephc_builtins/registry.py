@@ -270,6 +270,7 @@ AREA_BY_NAME: Dict[str, Tuple[str, str]] = {
 REGISTRY_AREA_OVERRIDES: Dict[str, Tuple[str, str]] = {
     "buffer_free": ("Buffer", "Buffer"),
     "buffer_len": ("Buffer", "Buffer"),
+    "buffer_ptr": ("Buffer", "Buffer"),
     "call_user_func": ("Array", "Array"),
     "call_user_func_array": ("Array", "Array"),
     "class_attribute_args": ("Class", "Attributes"),
@@ -375,6 +376,7 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'buffer_free': ['buffer'],
     'buffer_len': ['buffer'],
     'buffer_new': ['int'],
+    'buffer_ptr': ['buffer'],
     'call_user_func': ['callable'],
     'call_user_func_array': ['callable', 'array'],
     'ceil': ['float'],

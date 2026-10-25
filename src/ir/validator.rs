@@ -9,6 +9,8 @@
 //! - The validator is conservative: uncertain or malformed IR fails early so
 //!   later passes can assume table IDs, branch args, and value types are sound.
 
+mod string_append;
+
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::block::{BlockId, SwitchCase, Terminator};
@@ -58,6 +60,7 @@ pub enum ValidationError {
         expected: &'static str,
     },
     UnexpectedImmediate(InstId),
+    InvalidStringAppendTransfer(InstId),
     UnknownRuntimeCallSignature(InstId),
     EffectMismatch {
         inst: InstId,
@@ -119,6 +122,7 @@ pub fn validate_function(function: &Function) -> Result<(), ValidationError> {
     let dominators = compute_dominators(function);
     validate_instructions(function, &dominators)?;
     validate_terminators(function, &dominators)?;
+    string_append::validate_transfers(function)?;
     Ok(())
 }
 
@@ -179,12 +183,48 @@ fn validate_value_table(function: &Function) -> Result<(), ValidationError> {
                 }
             }
         }
+        // A buffer element's storage width (`buffer<i32>`) is never a value type: element reads
+        // and writes carry the `int` or `float` the width reads as.
+        if matches!(value.php_type, PhpType::Narrow(_)) {
+            return Err(ValidationError::PhpTypeMismatch(value_id));
+        }
         if !php_type_compatible(value.ir_type, &value.php_type) {
             return Err(ValidationError::PhpTypeMismatch(value_id));
         }
         if !ownership_compatible(value.ir_type, &value.php_type, value.ownership) {
             return Err(ValidationError::OwnershipTypeMismatch(value_id));
         }
+    }
+    Ok(())
+}
+
+/// Verifies a resolved buffer access takes its descriptor straight from a `BufferResolve`
+/// result: codegen reads the element's storage width (`buffer<i32>`, `buffer<f32>`) from that
+/// instruction's handle operand, so a descriptor that reaches the access through a block
+/// parameter or another instruction would lose the width.
+fn check_descriptor_from_buffer_resolve(
+    function: &Function,
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
+    let descriptor = inst.operands[0];
+    let value = function
+        .value(descriptor)
+        .ok_or(ValidationError::UnknownValue(descriptor))?;
+    let mismatch = || ValidationError::OperandTypeMismatch {
+        inst: inst_id,
+        operand: descriptor,
+        expected: "buffer_resolve descriptor",
+        actual: value.ir_type,
+    };
+    let ValueDef::Instruction { inst: def, .. } = value.def else {
+        return Err(mismatch());
+    };
+    let def_inst = function
+        .instruction(def)
+        .ok_or(ValidationError::UnknownInstruction(def))?;
+    if def_inst.op != Op::BufferResolve {
+        return Err(mismatch());
     }
     Ok(())
 }
@@ -275,6 +315,7 @@ fn validate_instruction_result(
 /// `load_local` additionally admits exactly `PURE`, which is attached only after
 /// the immutable-local pass proves that the named scalar slot cannot change.
 /// Physical property initialization additionally allocates owned reference cells.
+/// A named `prop_set` additionally admits exactly the packed field store effects.
 fn validate_instruction_effects(
     inst_id: InstId,
     inst: &Instruction,
@@ -296,8 +337,12 @@ fn validate_instruction_effects(
         inst.op.default_effects()
     };
     let immutable_local_refinement = inst.op == Op::LoadLocal && inst.effects.is_pure();
+    let packed_field_store_refinement = inst.op == Op::PropSet
+        && matches!(inst.immediate, Some(Immediate::Data(_)))
+        && inst.effects == Op::PropSet.packed_field_access_effects();
     if !inst.op.allows_effect_refinement()
         && !immutable_local_refinement
+        && !packed_field_store_refinement
         && inst.effects != expected
     {
         return Err(ValidationError::EffectMismatch {
@@ -357,6 +402,35 @@ mod instruction_effect_tests {
                 instruction.effects = expected | Effects::OUTPUT;
                 assert!(validate_instruction_effects(id, &instruction).is_err());
             }
+        }
+    }
+
+    /// A named `prop_set` admits exactly one refinement, the packed field store effects, and
+    /// keeps rejecting every other deviation from its canonical contract.
+    #[test]
+    fn named_prop_set_admits_only_the_packed_field_store_refinement() {
+        let packed = Op::PropSet.packed_field_access_effects();
+        let mut instruction = Instruction::new(
+            Op::PropSet,
+            Vec::new(),
+            Some(Immediate::Data(crate::ir::DataId::from_raw(0))),
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            packed,
+            None,
+        );
+        let id = InstId::from_raw(0);
+        assert_eq!(validate_instruction_effects(id, &instruction), Ok(()));
+        instruction.effects = Op::PropSet.default_effects();
+        assert_eq!(validate_instruction_effects(id, &instruction), Ok(()));
+        for effects in [packed | Effects::OUTPUT, Effects::WRITES_HEAP] {
+            instruction.effects = effects;
+            assert!(matches!(
+                validate_instruction_effects(id, &instruction),
+                Err(ValidationError::EffectMismatch { .. })
+            ));
         }
     }
 
@@ -485,6 +559,8 @@ fn validate_instruction_immediate(
         | EnumBackingStringToInt
         | EnumBackingMixedToInt
         | PackedFieldMixedToInt
+        | PackedFieldMixedToFloat
+        | PackedFieldMixedToBool
         | ReturnBoundaryMixedToInt
         | PropInitialized
         | StaticPropInitialized
@@ -508,10 +584,11 @@ fn validate_instruction_immediate(
         PropUnset => require_immediate(inst_id, inst, "property name or initializer physical slot", |imm| {
             matches!(imm, Imm::Data(_) | Imm::PropertyRef { .. })
         }),
-        LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
+        StrAppend | LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
         | ReleaseLocalRefCell | AcquireRefCell
         | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner
-        | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
+        | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
+        | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
         BindRefCellPtr => require_immediate(inst_id, inst, "reference alias slot or alias/owner pair", |imm| {
@@ -540,7 +617,7 @@ fn validate_instruction_immediate(
             matches!(imm, Imm::I64(1) | Imm::I64(-1))
         }),
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
-            matches!(imm, Imm::CastTarget(_) | Imm::StringOffsetCast)
+            matches!(imm, Imm::CastTarget(_) | Imm::StringOffsetCast | Imm::ImplicitIntCast)
         }),
         TypePredicate => require_immediate(inst_id, inst, "type predicate", |imm| {
             matches!(imm, Imm::TypePredicate(_))
@@ -572,6 +649,13 @@ fn validate_instruction_immediate(
             }
         }
         HashGetForWrite | HashSet | ArraySetMixedKey => {
+            if matches!(inst.immediate, None | Some(Imm::Bool(true))) {
+                Ok(())
+            } else {
+                Err(ValidationError::UnexpectedImmediate(inst_id))
+            }
+        }
+        BufferGetResolved | BufferSetResolved => {
             if matches!(inst.immediate, None | Some(Imm::Bool(true))) {
                 Ok(())
             } else {
@@ -714,7 +798,7 @@ fn validate_opcode_rules(
         StrToI | StrToF | StrToNumber | StrLen | StrPersist => {
             check_unary(function, inst_id, inst, IrType::Str, "Str")
         }
-        StrConcat | StrEq | StrCmp | StrLooseEq => {
+        StrAppend | StrConcat | StrEq | StrCmp | StrLooseEq => {
             check_binary(function, inst_id, inst, IrType::Str, "Str")
         }
         StrCharAt => {
@@ -727,6 +811,7 @@ fn validate_opcode_rules(
         | LoadRefCell
         | LoadGlobal
         | LoadStaticLocal
+        | StaticLocalUninitialized
         | LoadStaticProperty
         | LoadStaticPropertyRefCell
         | LoadReflectionStaticProperty
@@ -781,19 +866,32 @@ fn validate_opcode_rules(
         HashArrayUnion => check_hash_array_union(function, inst_id, inst),
         HashSpread => check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)"),
         ArrayLen | ArrayGet | ArrayGetSilent | ArrayIsset | ArrayElemAddr | ArraySet | ArrayPush | ArrayEnsureUnique
+        | ArrayToPointerWords
         | ArrayCloneShallow | ArrayToHash | ArraySetMixedKey | ArrayGetMixedKey
         | ArrayGetMixedKeySilent => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
         }
-        // The fetch-for-write element read is emitted from exactly one site (a by-reference
-        // `foreach` source, issue #580) and writes the copy-on-write split back into the
-        // receiver's element slot, so its operand shape is pinned tighter than the shared read
-        // arm above: an indexed receiver and an already int-coerced key, never a runtime-tagged
-        // one.
+        // Typed fetch-for-write reads require an already integer-coerced key. Mixed-result
+        // nested parents instead use the storage-aware runtime reader, which accepts string
+        // and boxed keys on an indexed or runtime-promoted receiver.
         ArrayGetForWrite => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
-            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
+            if inst.result_php_type.codegen_repr() == crate::types::PhpType::Mixed {
+                let operand = inst.operands[1];
+                let actual = function.value(operand)
+                    .ok_or(ValidationError::UnknownValue(operand))?.ir_type;
+                if matches!(actual, IrType::I64 | IrType::Str
+                    | IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)) {
+                    Ok(())
+                } else {
+                    Err(ValidationError::OperandTypeMismatch {
+                        inst: inst_id, operand, expected: "I64, Str, or boxed key", actual,
+                    })
+                }
+            } else {
+                check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
+            }
         }
         // The hash counterpart of the fetch-for-write read. A nested write can also emit it
         // after ArrayFetchForWrite, with a true immediate to suppress a repeated float-key
@@ -866,6 +964,19 @@ fn validate_opcode_rules(
         BufferLen | BufferGet | BufferSet | BufferFree => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Buffer, "Heap(Buffer)")
         }
+        BufferResolve => check_heap_unary(function, inst_id, inst, IrHeapKind::Buffer, "Heap(Buffer)"),
+        BufferGetResolved => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::I64, "I64 buffer descriptor")?;
+            check_descriptor_from_buffer_resolve(function, inst_id, inst)?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64 buffer index")
+        }
+        BufferSetResolved => {
+            check_count(inst_id, inst, 3, "3")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::I64, "I64 buffer descriptor")?;
+            check_descriptor_from_buffer_resolve(function, inst_id, inst)?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64 buffer index")
+        }
         DynamicObjectNewWithoutConstructorMixed
         | PropGet
         | PropGetForWrite
@@ -892,6 +1003,7 @@ fn validate_opcode_rules(
         | NormalizeCallable
         | PdoAdapterAddr
         | DynamicClassHasConstructor
+        | DynamicClassIsAbstract
         | DynamicPdoStatementClassStatus
         | DynamicPdoCalledClassStatus => check_count(inst_id, inst, 1, "1"),
         DynamicPdoStatementConstructorCall => check_count(inst_id, inst, 3, "3"),
@@ -1576,9 +1688,9 @@ fn validate_use(
         return Err(ValidationError::VoidValueUsed(value));
     }
     // A structured lowering can leave a fully formed continuation unreachable after its only
-    // prospective predecessor terminates. Values from entry-reachable setup blocks remain valid
-    // there, but same-block ordering and values from unrelated dead blocks must still satisfy the
-    // ordinary SSA rules.
+    // prospective predecessor terminates. Cross-block dominance has no executable meaning there,
+    // including when the definition also belongs to a dead continuation. Keep checking IDs, types,
+    // and same-block ordering so malformed instructions still fail validation.
     let use_is_unreachable = use_block != function.entry
         && dominators
             .get(&use_block)
@@ -1586,11 +1698,7 @@ fn validate_use(
     let definition_block = match value_ref.def {
         ValueDef::BlockParam { block, .. } | ValueDef::Instruction { block, .. } => block,
     };
-    let definition_is_reachable = definition_block == function.entry
-        || dominators
-            .get(&definition_block)
-            .is_some_and(|set| set.contains(&function.entry));
-    if use_is_unreachable && definition_block != use_block && definition_is_reachable {
+    if use_is_unreachable && definition_block != use_block {
         return Ok(());
     }
     if definition_dominates_use(value_ref.def, use_block, use_inst_index, dominators) {
@@ -1638,8 +1746,8 @@ fn definition_dominates_use(
 /// would otherwise strip the entry block out of the header's dominators and
 /// produce spurious `UseNotDominated` errors for any value the entry defines and
 /// a later pass forwards into the loop. Unreachable blocks themselves resolve
-/// to `{self}`. Validation accepts values produced by entry-reachable setup,
-/// while still rejecting local use-before-definition and sibling dead-block uses.
+/// to `{self}`. Validation skips cross-block dominance for their uses while
+/// still rejecting same-block use-before-definition.
 fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>> {
     let predecessors = compute_predecessors(function);
     let reachable = reachable_from_entry(function, &predecessors);
