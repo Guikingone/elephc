@@ -10,8 +10,12 @@
 
 use super::super::*;
 use super::collection_builder::EvalArrayBuilder;
+mod arguments;
+mod location;
 mod token_get_all;
 mod token_name;
+pub(in crate::interpreter) use arguments::{normalize_tokenizer_native_arguments, tokenizer_native_binding_signature};
+use arguments::{tokenizer_int, tokenizer_source};
 
 /// Evaluates source arguments in order before dispatching one tokenizer builtin.
 pub(in crate::interpreter) fn eval_builtin_tokenizer(
@@ -35,26 +39,13 @@ pub(in crate::interpreter) fn eval_tokenizer_values(
         return values.string(elephc_tokenizer_engine::token_name(id).unwrap_or("UNKNOWN"));
     }
     let Some(code) = args.first().copied() else { return Err(EvalStatus::RuntimeFatal); };
-    let tag = values.type_tag(code)?;
-    if matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_RESOURCE | EVAL_TAG_CALLABLE)
-        || tag == EVAL_TAG_OBJECT && !eval_object_has_to_string(code, context, values)? {
-        let given = eval_given_type_name(code, context, values)?;
-        return eval_throw_type_error(&format!("token_get_all(): Argument #1 ($code) must be of type string, {given} given"), context, values);
-    }
-    let code = if tag == EVAL_TAG_OBJECT {
-        let text = eval_string_context_value(code, context, values)?;
-        let result = values.string_bytes(text);
-        let released = values.release(text);
-        let bytes = result?;
-        released?;
-        bytes
-    } else { values.string_bytes(code)? };
+    let code = tokenizer_source(code, name, context, values)?;
     let flags = match args.get(1) {
         Some(value) => tokenizer_int(*value, name, 2, "flags", context, values)?, None => 0,
     };
     let tokens = match elephc_tokenizer_engine::tokenize(&code, flags) {
         Ok(tokens) => tokens,
-        Err(error) => return eval_throw_builtin_exception("ParseError", &error.message, context, values),
+        Err(error) => return location::throw_parse_error(&error, context, values),
     };
     let mut out = EvalArrayBuilder::indexed(values, tokens.len())?;
     for (index, token) in tokens.iter().enumerate() {
@@ -69,24 +60,6 @@ pub(in crate::interpreter) fn eval_tokenizer_values(
         })?;
     }
     Ok(out.finish())
-}
-
-/// Converts an internal integer parameter, rejecting containers and nonnumeric strings.
-fn tokenizer_int(
-    value: RuntimeCellHandle, name: &str, number: usize, parameter: &str,
-    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
-) -> Result<i64, EvalStatus> {
-    let tag = values.type_tag(value)?;
-    let invalid = matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_RESOURCE | EVAL_TAG_CALLABLE)
-        || tag == EVAL_TAG_STRING && {
-            let bytes = values.string_bytes(value)?;
-            std::str::from_utf8(&bytes).ok().and_then(|s| s.trim().parse::<f64>().ok()).is_none_or(|n| !n.is_finite())
-        };
-    if invalid {
-        let given = eval_given_type_name(value, context, values)?;
-        return eval_throw_type_error(&format!("{name}(): Argument #{number} (${parameter}) must be of type int, {given} given"), context, values);
-    }
-    eval_int_value(value, values)
 }
 
 /// Materializes eval-declared PhpToken subclasses through the dynamic object registry.
@@ -108,7 +81,7 @@ pub(in crate::interpreter) fn eval_tokenizer_static_method(
         };
         let tokens = match elephc_tokenizer_engine::tokenize(&code, flags) {
             Ok(tokens) => tokens,
-            Err(error) => return eval_throw_builtin_exception("ParseError", &error.message, context, values),
+            Err(error) => return location::throw_parse_error(&error, context, values),
         };
         let mut out = EvalArrayBuilder::indexed(values, tokens.len())?;
         for (index, token) in tokens.iter().enumerate() {

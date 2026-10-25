@@ -157,3 +157,5 @@ pub mod trigger_error;
 pub mod unserialize;
 pub mod user_error;
 pub mod usleep;
+
+pub mod __elephc_tokenizer_error_location;

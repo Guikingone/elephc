@@ -19,6 +19,7 @@ pub struct Scan {
     tokens: Vec<Token>,
     error: CString,
     failed: bool,
+    error_line: i64,
 }
 
 /// Creates a snapshot from a readable byte buffer. The caller must release it once.
@@ -30,11 +31,11 @@ pub unsafe extern "C" fn elephc_tokenizer_scan(source: *const u8, len: usize, fl
     catch_unwind(AssertUnwindSafe(|| {
         if source.is_null() && len != 0 { return std::ptr::null_mut(); }
         let bytes = if len == 0 { &[] } else { std::slice::from_raw_parts(source, len) };
-        let (tokens, error, failed) = match crate::tokenize(bytes, flags) {
-            Ok(tokens) => (tokens, String::new(), false),
-            Err(error) => (Vec::new(), error.message.replace('\0', "\\0"), true),
+        let (tokens, error, failed, error_line) = match crate::tokenize(bytes, flags) {
+            Ok(tokens) => (tokens, String::new(), false, 0),
+            Err(error) => (Vec::new(), error.message.replace('\0', "\\0"), true, error.line as i64),
         };
-        Box::into_raw(Box::new(Scan { tokens, error: CString::new(error).unwrap_or_default(), failed }))
+        Box::into_raw(Box::new(Scan { tokens, error: CString::new(error).unwrap_or_default(), failed, error_line }))
     })).unwrap_or(std::ptr::null_mut())
 }
 
@@ -70,6 +71,15 @@ pub unsafe extern "C" fn elephc_tokenizer_field(scan: *const Scan, index: usize,
 pub unsafe extern "C" fn elephc_tokenizer_error(scan: *const Scan) -> *const c_char {
     catch_unwind(AssertUnwindSafe(|| scan.as_ref().map_or(c"Tokenizer could not allocate a result".as_ptr(), |s| s.error.as_ptr())))
         .unwrap_or(c"Tokenizer failed".as_ptr())
+}
+
+/// Returns the failing source-buffer line, or zero when no parser location is available.
+///
+/// # Safety
+/// `scan` must be null or a live snapshot returned by `elephc_tokenizer_scan`.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tokenizer_error_line(scan: *const Scan) -> i64 {
+    catch_unwind(AssertUnwindSafe(|| scan.as_ref().map_or(0, |s| s.error_line))).unwrap_or(0)
 }
 
 /// Releases exactly one snapshot and its complete owned metadata.

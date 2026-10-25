@@ -21,6 +21,10 @@ fn lowers_tokenizer_example_on_every_target() {
         let module = super::lower_source_at_for_target(&source, &path, parent, target);
         assert!(module.functions.iter().any(|function| function.name == "token_get_all"),
             "tokenizer prelude on {}", target.as_str());
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .expect("tokenizer target assembly");
+        assert!(asm.contains("__rt_tokenizer_error_location"),
+            "tokenizer ParseError location on {}", target.as_str());
     }
 }
 

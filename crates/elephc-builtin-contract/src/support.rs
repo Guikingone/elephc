@@ -142,7 +142,7 @@ pub fn aot_support(contract: &BuiltinContract) -> BackendSupport {
 
 /// Returns the expected Magician route for one shared contract.
 pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
-    if runtime_builtin_id(contract.id) == Some(RuntimeBuiltinId::SharedIni) {
+    if matches!(runtime_builtin_id(contract.id), Some(RuntimeBuiltinId::SharedIni | RuntimeBuiltinId::TokenizerErrorLocation)) {
         return BackendSupport::Implemented(BackendImplementation::Registry);
     }
     if contract.internal {

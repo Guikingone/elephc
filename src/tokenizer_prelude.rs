@@ -40,6 +40,7 @@ extern "elephc_tokenizer" {
     function elephc_tokenizer_count(ptr $scan): int;
     function elephc_tokenizer_field(ptr $scan, int $index, int $field): int;
     function elephc_tokenizer_error(ptr $scan): string;
+    function elephc_tokenizer_error_line(ptr $scan): int;
     function elephc_tokenizer_release(ptr $scan): void;
     function elephc_tokenizer_name(int $id): string;
 }
@@ -50,7 +51,9 @@ function token_get_all(string $code, int $flags = 0): array {
         $count = elephc_tokenizer_count($scan);
         if ($count < 0) {
             $message = elephc_tokenizer_error($scan);
-            throw new \ParseError($message);
+            $error = new \ParseError($message);
+            __elephc_tokenizer_error_location($error, elephc_tokenizer_error_line($scan));
+            throw $error;
         }
         $result = [];
         for ($i = 0; $i < $count; $i++) {

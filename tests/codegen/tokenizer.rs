@@ -192,3 +192,49 @@ echo ':', $tokens[1]->id, ':', $tokens[1]->text;
 "#);
     assert_eq!(out, "abstract:34:b\"");
 }
+
+/// Native tokenization errors retain the scanned buffer's line and explicitly empty filename.
+#[test]
+fn test_tokenizer_parse_error_source_locations() {
+    let out = compile_and_run(r#"<?php
+$source = "<?php\n\nfunction broken(";
+try { token_get_all($source, TOKEN_PARSE); echo 'wrong'; }
+catch (ParseError $error) {
+    echo $error->getLine(), ':', strlen($error->getFile()), "\n";
+}
+try { PhpToken::tokenize($source, TOKEN_PARSE); echo 'wrong'; }
+catch (ParseError $error) { echo $error->getLine(), ':', strlen($error->getFile()); }
+"#);
+    assert_eq!(out, "3:0\n3:0");
+}
+
+/// Opaque eval enforces internal integer ranges before casts and preserves numeric diagnostics.
+#[test]
+fn test_tokenizer_runtime_eval_scalar_validation_bundle() {
+    let out = compile_and_run_capture(r#"<?php
+class NativeCheckedToken extends PhpToken {}
+$code = $argc > 0 ? '
+class EvalCheckedToken extends PhpToken {}
+foreach ([1e100, -1e100, NAN, INF, -INF, "1e100", "-1e100", "9223372036854775808"] as $bad) {
+    try { token_name($bad); echo "wrong"; } catch (TypeError $error) { echo "T"; }
+    try { token_get_all("html", $bad); echo "wrong"; } catch (TypeError $error) { echo "T"; }
+    try { PhpToken::tokenize("html", $bad); echo "wrong"; } catch (TypeError $error) { echo "T"; }
+    try { NativeCheckedToken::tokenize("html", flags: $bad); echo "wrong"; } catch (TypeError $error) { echo "T"; }
+    try { EvalCheckedToken::tokenize("html", $bad); echo "wrong"; } catch (TypeError $error) { echo "T"; }
+    echo "\n";
+}
+echo token_name("9223372036854775807"), ":", token_name("-9223372036854775808"), ":", token_name("1e2"), "\n";
+echo token_name("1.5"), ":", count(token_get_all("html", "1.5")), ":", count(PhpToken::tokenize("html", "1.5")), "\n";
+echo count(token_get_all(null)), ":", token_name(null), ":", count(token_get_all("html", null)), ":", count(PhpToken::tokenize(null)), "\n";
+foreach (["token_get_all", "PhpToken::tokenize", "NativeCheckedToken::tokenize", "EvalCheckedToken::tokenize"] as $factory) {
+    try { $factory("<?php\r\n\r\nfunction broken(", TOKEN_PARSE); echo "wrong"; }
+    catch (ParseError $error) { echo $error->getLine(), ":", strlen($error->getFile()), "\n"; }
+}
+' : '';
+eval($code);
+"#);
+    assert!(out.success, "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, format!("{}UNKNOWN:UNKNOWN:UNKNOWN\nUNKNOWN:1:1\n0:UNKNOWN:1:0\n3:0\n3:0\n3:0\n3:0\n", "TTTTT\n".repeat(8)));
+    assert_eq!(out.stderr.matches("Implicit conversion from float-string \"1.5\" to int loses precision").count(), 3, "{}", out.stderr);
+    assert_eq!(out.stderr.matches("Passing null to parameter").count(), 4, "{}", out.stderr);
+}
