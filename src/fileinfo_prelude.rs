@@ -13,6 +13,7 @@ mod detect;
 mod streams;
 mod wrappers;
 mod pending;
+mod stream_magic;
 use crate::parser::ast::Program;
 
 /// Builds the class, PHP functions and bridge extern declarations.

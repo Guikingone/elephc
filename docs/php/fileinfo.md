@@ -49,7 +49,12 @@ Direct network URLs still perform their request with the stream context, then
 return `false` because their wrapper stat fails. A `php://filter` layer can expose
 the underlying socket stat, which PHP 8.5 classifies as `directory`. Compressed
 wrappers without stream stat return `false`. User wrappers returning directory metadata
-produce `directory`; a failed `stream_stat()` returns `false` without reading.
+produce `directory`; a failed initial `stream_stat()` returns `false` without reading.
+Byte identification performs its own `stream_stat()` and, after reading, invokes
+`stream_cast(0)` on unfiltered user streams. A missing cast method warns while
+identification continues. Successfully attached read or write filters suppress
+that cast callback. Write filters retain their creation and close callbacks
+without transforming the bytes read for identification.
 Plain data URL payloads use PHP URL decoding: `+` becomes a space and `%2B`
 preserves a literal plus byte. Base64 payloads retain their decoded binary bytes.
 

@@ -47,7 +47,7 @@ retain ValueError for database NULs, platform-dependent flag validity, warned
 unknown-scheme local fallback and the illegal-parameter data URL reason. Later
 review rounds accepted those decisions.
 
-There are now 42 fileinfo execution tests, eight native bridge tests and a TLS
+There are now 45 fileinfo execution tests, eight native bridge tests and a TLS
 regression. New tests remain unexecuted until CI. PHP 8.5.12 reference oracles,
 static documentation audits and diff checks pass. The six generated builtin
 source anchors are unchanged; the compatibility table still reports 6/6
@@ -85,3 +85,16 @@ Native descriptor classification uses the same PHP directory-bit rule as user
 wrapper metadata. An anonymous socket-pair metadata regression covers the
 non-directory POSIX mode whose directory bit PHP nevertheless recognizes; no
 physical device is opened or read.
+
+Grok round 7 (a6d36c36-3c59-40b0-8c33-58be6dd486a7) accepted the prior fixes
+and identified missing magic-stream stat and cast callbacks. URL identification
+now performs the second stat after its initial gate; resource identification
+performs one stat without that gate. Active bit 512 returns false on stat failure.
+Unfiltered wrapper reads call stream_cast(0) after obtaining bytes, preserving
+missing-method warnings, falsy results, resource identity and invalid-return
+errors. Per-class ABI metadata distinguishes raw and boxed callback results.
+Read and write filters suppress casts only when attachment succeeds; write-only
+filter owners retain creation/close ordering without modifying read bytes.
+Exception-time diagnostics match PHP's registered-handler suppression, and
+normal reporting applies when no handler is installed. Three new execution
+fixtures have matching PHP 8.5.12 oracle output; compiled coverage awaits CI.

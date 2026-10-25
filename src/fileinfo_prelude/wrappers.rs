@@ -43,15 +43,16 @@ fn filtered_url() -> Stmt {
         // PHP tokenizes beyond the delimiter's NUL when /resource= directly follows filter.
         s_if(eq(e_var("_split"), e_int(12)), vec![s_assign("_spec", e_call("substr", vec![e_var("filename"), e_int(13)]))], vec![], None),
         s_foreach(e_call("explode", vec![e_str("/"), e_var("_spec")]), None, "_part", vec![
-            s_if(e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("_part")]), e_str("write=")]), vec![s_continue(1)], vec![], None),
-            s_if(e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("_part")]), e_str("read=")]), vec![
+            s_assign("_write", e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("_part")]), e_str("write=")])),
+            s_if(e_var("_write"), vec![s_assign("_part", e_call("substr", vec![e_var("_part"), e_int(6)]))], vec![], None),
+            s_if(e_binop(e_not(e_var("_write")), BinOp::And, e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("_part")]), e_str("read=")])), vec![
                 s_assign("_part", e_call("substr", vec![e_var("_part"), e_int(5)])),
             ], vec![], None),
             s_foreach(e_call("explode", vec![e_str("|"), e_var("_part")]), None, "_filter", vec![
                 s_if(eq(e_var("_filter"), e_str("")), vec![s_continue(1)], vec![], None),
                 s_assign("_filter", e_index(e_call("explode", vec![e_str("\0"), e_call("urldecode", vec![e_var("_filter")])]), e_int(0))),
-                s_if(e_binop(e_var("_pending"), BinOp::StrictNotEq, e_null()), vec![
-                    s_assign("_prepared", e_method_call(e_this(), "__elephc_prepare_filter", vec![e_var("_filter"), e_var("_function")])),
+                s_if(e_binop(e_var("_write"), BinOp::Or, e_binop(e_var("_pending"), BinOp::StrictNotEq, e_null())), vec![
+                    s_assign("_prepared", e_method_call(e_this(), "__elephc_prepare_filter", vec![e_var("_filter"), e_var("_function"), e_var("_write")])),
                     s_if(eq(e_var("_prepared"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
                     s_expr(e_call("array_push", vec![e_var("_stages"), e_var("_prepared")])),
                     s_continue(1),

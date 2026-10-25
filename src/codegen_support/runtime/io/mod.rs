@@ -34,6 +34,7 @@ mod file_get_contents_url;
 mod file_put_contents;
 mod fileinfo_streams;
 mod fileinfo_stat;
+mod fileinfo_cast;
 mod fd_write;
 mod fnmatch;
 mod fopen;

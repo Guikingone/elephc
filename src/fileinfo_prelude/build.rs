@@ -111,7 +111,7 @@ fn finfo_class() -> Stmt {
             .param_default("magic_database", t_nullable(TypeExpr::Str), e_null()).body(constructor))
         .method(query_method(false)).method(query_method(true))
         .method(query_engine(false)).method(query_engine(true))
-        .method(super::wrappers::read_method()).method(super::wrappers::filter_method()).method(super::wrappers::routing_method()).method(super::pending::prepare_method()).method(super::pending::cleanup_method())
+        .method(super::wrappers::read_method()).method(super::wrappers::filter_method()).method(super::wrappers::routing_method()).method(super::pending::prepare_method()).method(super::pending::cleanup_method()).method(super::stream_magic::stat_method()).method(super::stream_magic::cast_method())
         .method(method("set_flags").param("flags", TypeExpr::Int).returns(TypeExpr::Bool)
             .returning(e_method_call(e_this(), "__elephc_set_flags", vec![e_var("flags")])))
         .method(method("__elephc_set_flags").final_().param("flags", TypeExpr::Int).returns(TypeExpr::Bool).body(set_flags))
@@ -167,15 +167,7 @@ fn functions() -> Program {
         .returns(result_type()).returning(e_method_call(e_var("finfo"), "__elephc_file", vec![e_str("finfo_file"), e_var("filename"), e_var("flags"), e_var("context")])).build());
     out.push(function("mime_content_type").param("filename", t_mixed()).returns(result_type()).body(vec![
         s_assign("_finfo", e_new_fq("finfo", vec![e_const("FILEINFO_MIME_TYPE")])),
-        s_if(e_call("is_resource", vec![e_var("filename")]), vec![
-            reject(e_binop(e_call("get_resource_type", vec![e_var("filename")]), BinOp::StrictNotEq, e_str("stream")), "TypeError", "mime_content_type(): supplied resource is not a valid stream resource"),
-            s_assign("_position", e_call("ftell", vec![e_var("filename")])),
-            s_expr(e_call("fseek", vec![e_var("filename"), e_int(0)])),
-            s_assign("_data", e_call("stream_get_contents", vec![e_var("filename"), e_int(7340032)])),
-            s_expr(e_call("fseek", vec![e_var("filename"), e_var("_position")])),
-            s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
-            s_return(e_method_call(e_var("_finfo"), "__elephc_buffer", vec![e_str("mime_content_type"), e_var("_data")])),
-        ], vec![], None),
+        s_if(e_call("is_resource", vec![e_var("filename")]), super::stream_magic::resource_query(), vec![], None),
         mime_type_check(),
         reject(eq(e_var("filename"), e_str("")), "ValueError", "mime_content_type(): Argument #1 ($filename) must not be empty"),
         reject(e_binop(e_call("strpos", vec![e_var("filename"), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)), "TypeError", "mime_content_type(): Argument #1 ($filename) must not contain any null bytes"),
@@ -215,6 +207,9 @@ pub(super) fn declarations() -> Program {
             extern_fn("elephc_runtime_stream_stat_name", "System").param("row", CType::Ptr).returns(CType::Ptr).build(),
             extern_fn("elephc_runtime_stream_stat_name_length", "System").param("row", CType::Ptr).returns(CType::Int).build(),
             extern_fn("elephc_runtime_stream_close_mode", "System").param("mode", CType::Int).returns(CType::Int).build(),
+            extern_fn("elephc_runtime_stream_class", "System").param("id", CType::Int).returns(CType::Ptr).build(),
+            extern_fn("elephc_runtime_fileinfo_cast", "System").param("id", CType::Int).returns(CType::Int).build(),
+            extern_fn("elephc_runtime_stream_exception_warning", "System").param("message", CType::Str).build(),
             handle_owner(),
             finfo_class(),
         ];

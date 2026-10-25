@@ -35,6 +35,7 @@ class FileinfoReadWrapper {
     public function stream_read(int $count): string { $value = substr("HELLO", $this->position, $count); $this->position += strlen($value); return $value; }
     public function stream_eof(): bool { return $this->position >= 5; }
     public function stream_stat(): array { return ["mode" => 0100400, "size" => 5]; }
+    public function stream_cast(int $kind): mixed { return false; }
 }
 stream_wrapper_register("finfowrap", "FileinfoReadWrapper");
 echo $f->file("finfowrap://payload"), "\n";

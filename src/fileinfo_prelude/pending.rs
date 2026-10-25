@@ -44,9 +44,12 @@ fn read_pending() -> Vec<Stmt> {
         s_expr(e_call("unset", vec![e_var("_stat")])),
         s_if(e_binop(e_binop(e_var("_mode"), BinOp::BitAnd, e_int(0o040000)), BinOp::NotEq, e_int(0)),
             vec![s_return(e_str("directory"))], vec![], None),
+        s_if(e_not(e_method_call(e_this(), "__elephc_magic_stat", vec![e_var("_pending"), e_var("_function")])), vec![s_return(e_bool(false))], vec![], None),
         s_assign("_data", e_call("stream_get_contents", vec![e_var("_pending"), e_int(7340032)])),
         s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
+        s_assign("_cast_filtered", e_bool(false)),
         s_foreach(e_var("_stages"), None, "_prepared", vec![
+            s_if(e_binop(e_var("_prepared"), BinOp::StrictNotEq, e_null()), vec![s_assign("_cast_filtered", e_bool(true))], vec![], None),
             s_if(e_call("is_resource", vec![e_var("_prepared")]), vec![
                 s_expr(e_call("fwrite", vec![e_var("_prepared"), e_cast(CastType::String, e_var("_data"))])),
                 s_expr(e_call("rewind", vec![e_var("_prepared")])),
@@ -58,6 +61,7 @@ fn read_pending() -> Vec<Stmt> {
             ], vec![], None)])),
             s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
         ]),
+        s_if(e_not(e_var("_cast_filtered")), vec![s_expr(e_method_call(e_this(), "__elephc_magic_cast", vec![e_var("_pending"), e_var("_function")]))], vec![], None),
     ]);
     body
 }
@@ -87,14 +91,14 @@ pub(super) fn prepare_method() -> MethodBuilder {
     for name in ["string.toupper", "string.tolower", "string.rot13", "string.strip_tags", "dechunk",
         "convert.base64-encode", "convert.base64-decode", "convert.quoted-printable-encode",
         "convert.quoted-printable-decode", "bzip2.decompress", "zlib.inflate", "zlib.deflate"] {
-        body.push(s_if(eq(e_var("name"), e_str(name)), vec![s_return(e_var("name"))], vec![], None));
+        body.push(s_if(eq(e_var("name"), e_str(name)), vec![s_return(e_ternary(e_var("write"), e_array(vec![e_var("name")]), e_var("name")))], vec![], None));
     }
     body.extend([
         s_assign("_stage_stream", e_call("fopen", vec![e_str("php://temp"), e_str("w+b")])),
         s_if(eq(e_var("_stage_stream"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
         s_assign("_transferred", e_bool(false)), s_assign("_prepare_unwind", e_bool(false)),
         s_try(vec![
-            s_assign("_attached", e_call("stream_filter_append", vec![e_var("_stage_stream"), e_var("name"), e_const("STREAM_FILTER_READ")])),
+            s_assign("_attached", e_call("stream_filter_append", vec![e_var("_stage_stream"), e_var("name"), e_ternary(e_var("write"), e_const("STREAM_FILTER_WRITE"), e_const("STREAM_FILTER_READ"))])),
             s_if(eq(e_var("_attached"), e_bool(false)), vec![
                 s_expr(e_call("__elephc_builtin_warning", vec![e_binop(e_binop(e_var("_function"), BinOp::Concat, e_str("(): Unable to locate filter \"")),
                     BinOp::Concat, e_binop(e_var("name"), BinOp::Concat, e_str("\"")))])),
@@ -102,11 +106,11 @@ pub(super) fn prepare_method() -> MethodBuilder {
                     BinOp::Concat, e_binop(e_var("name"), BinOp::Concat, e_str(")")))])),
                 s_return(e_null()),
             ], vec![], None),
-            s_assign("_transferred", e_bool(true)), s_return(e_var("_stage_stream")),
+            s_assign("_transferred", e_bool(true)), s_return(e_ternary(e_var("write"), e_array(vec![e_var("_stage_stream")]), e_var("_stage_stream"))),
         ], vec![(vec!["Throwable"], Some("_prepare_error"), vec![s_assign("_prepare_unwind", e_bool(true)), s_throw(e_var("_prepare_error"))])],
             Some(vec![s_if(e_not(e_var("_transferred")), vec![s_expr(e_method_call(e_this(), "__elephc_close_streams", vec![e_var("_stage_stream"), e_array(vec![]), e_var("_prepare_unwind")]))], vec![], None)])),
     ]);
-    method("__elephc_prepare_filter").private().param("name", TypeExpr::Str).param("_function", TypeExpr::Str).returns(t_mixed()).body(body)
+    method("__elephc_prepare_filter").private().param("name", TypeExpr::Str).param("_function", TypeExpr::Str).param_default("write", TypeExpr::Bool, e_bool(false)).returns(t_mixed()).body(body)
 }
 
 /// Closes every owned stream even if one user close callback throws, then rethrows its first error.
@@ -119,7 +123,9 @@ pub(super) fn cleanup_method() -> MethodBuilder {
     ], vec![], None)];
     let mut body = vec![s_assign("_close_failure", e_null()), s_assign("_owned", e_var("pending"))];
     body.extend(close.clone());
-    body.push(s_foreach(e_var("stages"), None, "_owned", close));
+    let mut stage_close = vec![s_if(e_call("is_array", vec![e_var("_owned")]), vec![s_assign("_owned", e_index(e_var("_owned"), e_int(0)))], vec![], None)];
+    stage_close.extend(close);
+    body.push(s_foreach(e_var("stages"), None, "_owned", stage_close));
     body.push(s_if(e_binop(e_var("_close_failure"), BinOp::StrictNotEq, e_null()), vec![s_throw(e_var("_close_failure"))], vec![], None));
     let scoped = vec![
         s_assign("_previous_mode", e_call("elephc_runtime_stream_close_mode", vec![e_int(-1)])),
