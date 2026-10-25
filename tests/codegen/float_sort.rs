@@ -63,8 +63,7 @@ show($f);
 
 /// Verifies a float sort reaches the storage it was handed, whatever names it.
 ///
-/// The sort permutes the receiver in place, so the receiver has to be the caller's array and
-/// not a copy of it ; and a copy taken beforehand must be left alone.
+/// Sorting reaches the caller's storage, while a copy taken beforehand keeps its original order.
 #[test]
 fn sort_orders_float_elements_through_every_receiver() {
     let out = compile_and_run(
@@ -108,10 +107,10 @@ show($copy);
     );
 }
 
-/// Verifies a float sort permutes slots without allocating per element.
+/// Verifies repeated float sorts preserve their payloads and leave no PHP heap blocks behind.
 ///
-/// The slots hold the values, so a correct sort moves 8 bytes at a time and touches the heap
-/// only for the array itself. A comparator that boxed its operands would show up here.
+/// Raw float slots stay unboxed. The sorter owns a separate original-position sidecar;
+/// the PHP heap retains only the array and releases it normally after each iteration.
 #[test]
 fn sort_over_float_elements_stays_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -137,8 +136,8 @@ echo $n;
 
 /// Guard for the sorts that still refuse a float, so the refusal stays deliberate.
 ///
-/// `asort` and the natural-order sorts keep their keys, and have no comparator to hand a slot
-/// to ; the same reason they already refuse strings and boxed `Mixed`. Admitting floats to
+/// `asort` and the natural-order sorts keep their keys and have no comparator to hand a slot
+/// to, which is also why they already refuse strings and boxed `Mixed`. Admitting floats to
 /// `sort`/`rsort` must not quietly admit them here.
 #[test]
 fn key_preserving_sorts_still_refuse_float_elements() {

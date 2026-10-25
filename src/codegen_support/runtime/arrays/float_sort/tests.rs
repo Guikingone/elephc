@@ -23,6 +23,10 @@ fn float_sort_emits_complete_helpers_on_every_supported_target() {
                       "__rt_float_sort_small", "__rt_float_sort_range", "__rt_float_sort_insert"] {
             assert!(output.contains(&format!("{label}:")), "{name}: {label}");
         }
+        for comparator in ["__rt_float_compare_slots", "__rt_float_compare_slots_desc",
+                           "__rt_php_compare_slots", "__rt_php_compare_slots_desc"] {
+            assert!(output.contains(comparator), "{name}: {comparator}");
+        }
         assert!(output.contains(&target.extern_symbol("malloc")), "{name}");
         assert!(output.contains(&target.extern_symbol("free")), "{name}");
         assert!(output.contains("__rt_heap_allocation_failed"), "{name}");
