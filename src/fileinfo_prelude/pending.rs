@@ -71,9 +71,9 @@ fn read_pending() -> Vec<Stmt> {
 /// Owns the query's deferred streams and enforces PHP's stat-before-identification rule.
 pub(super) fn query() -> Vec<Stmt> {
     vec![
-        s_assign("_stream_directory", e_bool(false)), s_assign("_pending", e_null()), s_assign("_stages", e_array(vec![])), s_assign("_query_unwind", e_bool(false)),
+        s_assign("_stream_directory", e_bool(false)), s_typed_assign(t_mixed(), "_pending", e_null()), s_typed_assign(t_array(), "_stages", e_array(vec![])), s_assign("_query_unwind", e_bool(false)),
         s_try(vec![
-            s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![
+            s_typed_assign(t_union(vec![TypeExpr::Str, TypeExpr::False]), "_data", e_method_call(e_this(), "__elephc_read_stream", vec![
                 e_var("filename"), e_var("context"), e_var("_function"), e_bool(true), e_var("_stream_directory"), e_var("_pending"), e_var("_stages"),
             ])),
             s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
@@ -123,7 +123,7 @@ pub(super) fn cleanup_method() -> MethodBuilder {
             s_expr(e_call("elephc_runtime_stream_close_mode", vec![e_int(1)])),
         ])], None),
     ], vec![], None)];
-    let mut body = vec![s_assign("_close_failure", e_null()), s_assign("_owned", e_var("pending"))];
+    let mut body = vec![s_typed_assign(t_nullable(t_class("Throwable")), "_close_failure", e_null()), s_assign("_owned", e_var("pending"))];
     body.extend(close.clone());
     let mut stage_close = vec![s_if(e_call("is_array", vec![e_var("_owned")]), vec![s_assign("_owned", e_index(e_var("_owned"), e_int(0)))], vec![], None)];
     stage_close.extend(close);
