@@ -28,6 +28,7 @@ mod driver_test;
 mod fresh_mixed_transfer_test;
 mod identity_arith_test;
 mod inline_test;
+mod method_inline_test;
 mod numeric_closure_calls_test;
 mod integer_range_test;
 mod integer_range_checked_bound_test;

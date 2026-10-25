@@ -19,7 +19,7 @@
 use crate::codegen::platform::{Arch, Platform, Target};
 use crate::ir::{
     validate_function, BlockId, Builder, DataId, Effects, Function, FunctionParam, Immediate,
-    IrHeapKind, IrType, LocalKind, LocalSlotId, Module, Op, Ownership, RuntimeCallTarget,
+    InstId, IrHeapKind, IrType, LocalKind, LocalSlotId, Module, Op, Ownership, RuntimeCallTarget,
     RuntimeFnId, Terminator, ValueDef, ValueId,
 };
 use crate::ir_passes::buffer_access::hoist_buffer_resolution;
@@ -71,6 +71,7 @@ struct Method {
     function: Function,
     entry: BlockId,
     first_property: ValueId,
+    second_property: ValueId,
     first_record: ValueId,
     second_record: ValueId,
     second_field: ValueId,
@@ -147,7 +148,7 @@ fn method(second: Second, interpose: impl FnOnce(&mut Builder<'_>, Locals, Value
         by_ref: false,
         variadic: false,
     });
-    let (entry, first_property, first_record, second_record, second_field);
+    let (entry, first_property, second_property, first_record, second_record, second_field);
     {
         let mut b = Builder::new(&mut function);
         entry = b.create_named_block("entry", vec![]);
@@ -184,6 +185,7 @@ fn method(second: Second, interpose: impl FnOnce(&mut Builder<'_>, Locals, Value
         let receiver_slot = if second == Second::OtherReceiver { locals.other } else { locals.this };
         let receiver = b.emit_load_local(receiver_slot, object, table_type());
         let property = emit_slots_read(&mut b, receiver);
+        second_property = property;
         let index_slot = if second == Second::OtherIndex { locals.other_index } else { locals.index };
         let index = b.emit_load_local(index_slot, IrType::I64, PhpType::Int);
         second_record = emit_record_read(&mut b, property, index);
@@ -193,7 +195,7 @@ fn method(second: Second, interpose: impl FnOnce(&mut Builder<'_>, Locals, Value
         b.position_at_end(exit);
         b.terminate(Terminator::Return { value: None });
     }
-    Method { function, entry, first_property, first_record, second_record, second_field }
+    Method { function, entry, first_property, second_property, first_record, second_record, second_field }
 }
 
 /// Runs the module pass over one method and returns the rewritten function.
@@ -241,6 +243,70 @@ fn defining_instruction(function: &Function, value: ValueId) -> &crate::ir::Inst
     match function.value(value).expect("value exists").def {
         ValueDef::Instruction { inst, .. } => function.instruction(inst).expect("instruction"),
         ValueDef::BlockParam { .. } => panic!("value is a block parameter"),
+    }
+}
+
+/// Returns a value's original defining instruction ID without rebuilding its scope metadata.
+fn defining_id(function: &Function, value: ValueId) -> InstId {
+    match function.value(value).expect("value exists").def {
+        ValueDef::Instruction { inst, .. } => inst,
+        ValueDef::BlockParam { .. } => panic!("value is a block parameter"),
+    }
+}
+
+/// Distinct lexical scopes can resolve identically named private properties to different slots.
+#[test]
+fn keeps_property_record_and_descriptor_reuse_apart_across_inlined_scopes() {
+    for second in [Second::SameRecord, Second::OtherIndex] {
+        for scopes in [
+            (Some("Parent"), Some("Table")),
+            (Some("Parent"), None),
+            (None, Some("Parent")),
+        ] {
+            let mut built = method(second, |_, _, _| {});
+            let first = defining_id(&built.function, built.first_property);
+            let later = defining_id(&built.function, built.second_property);
+            for (id, scope) in [(first, scopes.0), (later, scopes.1)] {
+                if let Some(scope) = scope {
+                    built.function.inlined_scopes.insert(id, scope.to_string());
+                }
+            }
+            let original_scopes = built.function.inlined_scopes.clone();
+            let (changed, function) = run(built.function);
+            assert!(!changed, "different scope entries must keep both access chains");
+            assert_eq!(count_property_reads(&function), 2);
+            assert_eq!(count_ops(&function, Op::BufferGet), 2);
+            assert_eq!(count_ops(&function, Op::BufferResolve), 0);
+            assert_eq!(function.instruction(first).expect("first read").op, Op::PropGet);
+            assert_eq!(function.instruction(later).expect("second read").op, Op::PropGet);
+            assert_eq!(function.inlined_scopes, original_scopes);
+        }
+    }
+}
+
+/// Equal explicit scopes retain the optimization, along with the surviving read's original ID.
+#[test]
+fn shares_property_reads_from_the_same_inlined_scope() {
+    for second in [Second::SameRecord, Second::OtherIndex] {
+        let mut built = method(second, |_, _, _| {});
+        let first = defining_id(&built.function, built.first_property);
+        let later = defining_id(&built.function, built.second_property);
+        built.function.inlined_scopes.insert(first, "Parent".to_string());
+        built.function.inlined_scopes.insert(later, "Parent".to_string());
+        let (changed, function) = run(built.function);
+        assert!(changed);
+        assert_eq!(count_property_reads(&function), 1);
+        assert_eq!(function.instruction(first).expect("original read").op, Op::PropGet);
+        assert_eq!(function.inlined_scopes.get(&first).map(String::as_str), Some("Parent"));
+        assert_eq!(function.instruction(later).expect("redundant read").op, Op::Nop);
+        if second == Second::SameRecord {
+            assert_eq!(count_ops(&function, Op::BufferGet), 1);
+            assert_eq!(count_ops(&function, Op::BufferResolve), 0);
+            assert_eq!(defining_op(&function, built.second_record), Op::Nop);
+        } else {
+            assert_eq!(count_ops(&function, Op::BufferResolve), 1);
+            assert_eq!(count_ops(&function, Op::BufferGetResolved), 2);
+        }
     }
 }
 
@@ -486,7 +552,7 @@ fn loop_method(after_second: impl FnOnce(&mut Builder<'_>, Locals, ValueId)) -> 
         by_ref: false,
         variadic: false,
     });
-    let (entry, first_property, first_record, second_record, second_field);
+    let (entry, first_property, second_property, first_record, second_record, second_field);
     {
         let mut b = Builder::new(&mut function);
         entry = b.create_named_block("entry", vec![]);
@@ -527,6 +593,7 @@ fn loop_method(after_second: impl FnOnce(&mut Builder<'_>, Locals, ValueId)) -> 
         b.position_at_end(body);
         let receiver = b.emit_load_local(locals.this, object, table_type());
         let property = emit_slots_read(&mut b, receiver);
+        second_property = property;
         let index = b.emit_load_local(locals.index, IrType::I64, PhpType::Int);
         second_record = emit_record_read(&mut b, property, index);
         second_field = emit_field_read(&mut b, second_record);
@@ -538,7 +605,7 @@ fn loop_method(after_second: impl FnOnce(&mut Builder<'_>, Locals, ValueId)) -> 
         b.position_at_end(exit);
         b.terminate(Terminator::Return { value: None });
     }
-    Method { function, entry, first_property, first_record, second_record, second_field }
+    Method { function, entry, first_property, second_property, first_record, second_record, second_field }
 }
 
 /// A read before a loop serves the same read at the top of a body that leaves the property and
