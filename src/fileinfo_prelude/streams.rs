@@ -21,14 +21,13 @@ pub(super) fn failure(reason: Expr) -> Vec<Stmt> {
     let mut message = e_binop(e_var("_function"), BinOp::Concat, e_str("("));
     message = e_binop(message, BinOp::Concat, e_var("filename"));
     message = e_binop(message, BinOp::Concat, e_str("): Failed to open stream: "));
-    vec![s_expr(e_call("__elephc_builtin_warning", vec![e_binop(message, BinOp::Concat, reason)])), s_return(e_bool(false))]
+    vec![s_if(e_var("_report_errors"), vec![s_expr(e_call("__elephc_builtin_warning", vec![e_binop(message, BinOp::Concat, reason)]))], vec![], None), s_return(e_bool(false))]
 }
 
 /// Decodes a data URL into bytes for the runtime stream reader.
 pub(super) fn data_uri() -> Stmt {
-    s_if(e_binop(e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("filename")]), e_str("data://")]), BinOp::Or,
-        e_call("str_starts_with", vec![e_var("filename"), e_str("data:")])), vec![
-        s_assign("_uri_start", e_ternary(e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("filename")]), e_str("data://")]), e_int(7), e_int(5))),
+    s_if(e_call("str_starts_with", vec![e_var("filename"), e_str("data:")]), vec![
+        s_assign("_uri_start", e_ternary(e_call("str_starts_with", vec![e_var("filename"), e_str("data://")]), e_int(7), e_int(5))),
         s_assign("_uri_comma", e_call("strpos", vec![e_var("filename"), e_str(",")])),
         s_if(e_binop(e_var("_uri_comma"), BinOp::StrictEq, e_bool(false)), invalid("rfc2397: no comma in URL"), vec![], None),
         s_assign("_uri_meta", e_call("substr", vec![e_var("filename"), e_var("_uri_start"), e_binop(e_var("_uri_comma"), BinOp::Sub, e_var("_uri_start"))])),
@@ -40,7 +39,8 @@ pub(super) fn data_uri() -> Stmt {
         ], vec![], Some(vec![s_assign("_uri_data", e_call("urldecode", vec![e_var("_uri_payload")]))])),
         s_if(e_binop(e_var("_uri_data"), BinOp::StrictEq, e_bool(false)), invalid("rfc2397: unable to decode"), vec![], None),
         s_return(e_call("substr", vec![e_var("_uri_data"), e_int(0), e_int(7340032)])),
-    ], vec![], None)
+    ], vec![], Some(vec![s_if(e_call("str_starts_with", vec![e_call("strtolower", vec![e_var("filename")]), e_str("data://")]),
+        invalid("operation failed"), vec![], None)]))
 }
 
 /// Validates PHP's media type and parameter grammar, including the exact final base64 token.

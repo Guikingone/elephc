@@ -49,6 +49,9 @@ impl Drop for Magic {
 #[derive(Default)]
 struct Registry { next: i64, instances: HashMap<i64, Arc<Mutex<Magic>>> }
 
+#[derive(Default)]
+struct Reads { next: i64, buffers: HashMap<i64, Vec<u8>> }
+
 /// Returns the process registry without exposing any interior pointer.
 fn registry() -> &'static Mutex<Registry> {
     static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
@@ -65,6 +68,7 @@ thread_local! {
     static ERROR: RefCell<CString> = RefCell::new(CString::default());
     static SUCCESS: RefCell<bool> = const { RefCell::new(false) };
     static OPEN_FAILURE: RefCell<bool> = const { RefCell::new(false) };
+    static READS: RefCell<Reads> = RefCell::new(Reads::default());
 }
 
 /// Copies a native string before libmagic can invalidate its backing storage.
@@ -254,6 +258,48 @@ pub unsafe extern "C" fn elephc_fileinfo_network_error(code: i64, detail: *const
             slot.borrow().as_ptr()
         })
     })
+}
+
+/// Reads a nested plain-file resource into caller-owned bytes, bounded like PHP's magic stream window.
+/// The path must be a valid NUL-terminated string; the returned ID must be explicitly released.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_fileinfo_read(path: *const c_char) -> i64 {
+    guard(|| {
+        use std::io::Read;
+        let path = std::path::Path::new(OsStr::from_bytes(CStr::from_ptr(path).to_bytes()));
+        let mut bytes = Vec::new();
+        let read = std::fs::File::open(path).and_then(|file| file.take(7340032).read_to_end(&mut bytes));
+        if let Err(error) = read {
+            outcome(None, CString::new(error.to_string()).unwrap_or_default());
+            return 0;
+        }
+        READS.with(|reads| {
+            let mut reads = reads.borrow_mut();
+            let Some(id) = reads.next.checked_add(1) else { return 0; };
+            reads.next = id;
+            reads.buffers.insert(id, bytes);
+            id
+        })
+    })
+}
+
+/// Borrows a read's bytes until that ID is released, independently of other or nested reads.
+#[no_mangle]
+pub extern "C" fn elephc_fileinfo_read_data(id: i64) -> *const c_void {
+    guard(|| READS.with(|reads| reads.borrow().buffers.get(&id).filter(|bytes| !bytes.is_empty())
+        .map_or(c"".as_ptr().cast(), |bytes| bytes.as_ptr().cast())))
+}
+
+/// Returns the exact binary length of a caller-owned temporary read.
+#[no_mangle]
+pub extern "C" fn elephc_fileinfo_read_length(id: i64) -> i64 {
+    guard(|| READS.with(|reads| reads.borrow().buffers.get(&id).map_or(0, |bytes| bytes.len() as i64)))
+}
+
+/// Retires exactly one temporary read; releasing an already retired ID is harmless.
+#[no_mangle]
+pub extern "C" fn elephc_fileinfo_read_release(id: i64) {
+    guard(|| { READS.with(|reads| { reads.borrow_mut().buffers.remove(&id); }); });
 }
 
 #[cfg(all(test, elephc_fileinfo_native))]

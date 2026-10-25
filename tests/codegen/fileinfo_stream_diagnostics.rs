@@ -28,20 +28,26 @@ restore_error_handler();
 class FileinfoReadWrapper {
     public $context;
     private int $position = 0;
-    public function stream_open($path, $mode, $options, &$opened): bool { return true; }
+    public function stream_open($path, $mode, $options, &$opened): bool {
+        if ($path === "finfowrap://warning") { trigger_error("fileinfo wrapper warning", E_USER_WARNING); return false; }
+        return true;
+    }
     public function stream_read(int $count): string { $value = substr("HELLO", $this->position, $count); $this->position += strlen($value); return $value; }
     public function stream_eof(): bool { return $this->position >= 5; }
     public function stream_stat(): array { return ["mode" => 0100400, "size" => 5]; }
 }
 stream_wrapper_register("finfowrap", "FileinfoReadWrapper");
 echo $f->file("finfowrap://payload"), "\n";
+set_error_handler(function(int $n, string $message): bool { echo $message, "\n"; return true; });
+echo $f->file("php://filter/resource=finfowrap://warning") === false ? "wrapper-failed\n" : "bad\n";
+restore_error_handler();
 stream_wrapper_unregister("finfowrap");
 unlink("unknown:/payload"); rmdir("unknown:");
 unlink("php:/not-a-real-stream"); rmdir("php:");
 chdir($before); rmdir($dir);
 "#);
     let warning = "finfo_file(): Unable to find the wrapper \"unknown\" - did you forget to enable it when you configured PHP?\n";
-    assert_eq!(out, warning.repeat(2) + "text/plain\nfinfo::file(): Invalid php:// URL specified\nfinfo::file(php://not-a-real-stream): Failed to open stream: operation failed\nphp-failed\ntext/plain\n");
+    assert_eq!(out, warning.repeat(2) + "text/plain\nfinfo::file(): Invalid php:// URL specified\nfinfo::file(php://not-a-real-stream): Failed to open stream: operation failed\nphp-failed\ntext/plain\nfileinfo wrapper warning\nfinfo::file(php://filter/resource=finfowrap://warning): Failed to open stream: operation failed\nwrapper-failed\n");
 }
 
 /// Root file URLs identify a directory and remote hosts fail silently during wrapper location.
@@ -72,6 +78,74 @@ mime_content_type("data:;base64,****");
 restore_error_handler();
 "#);
     assert_eq!(out, "finfo_file(data:text): Failed to open stream: rfc2397: no comma in URL\nfinfo::file(data:text/plain;base64;x=y,SEVMTE8=): Failed to open stream: rfc2397: illegal parameter\nmime_content_type(data:;base64,****): Failed to open stream: rfc2397: unable to decode\n");
+}
+
+/// The case-sensitive data opener rejects mixed-case URLs even if a literal local path exists.
+#[test]
+fn test_fileinfo_data_scheme_case_sensitivity() {
+    if fileinfo_native::skip("test_fileinfo_data_scheme_case_sensitivity") { return; }
+    let out = compile_and_run(r#"<?php
+$before = getcwd();
+$dir = tempnam(sys_get_temp_dir(), "finfo-data");
+unlink($dir); mkdir($dir); chdir($dir);
+mkdir("DATA:"); mkdir("DATA:/text"); file_put_contents("DATA:/text/plain,HELLO", "HELLO");
+mkdir("DATA:text"); file_put_contents("DATA:text/plain,HELLO", "HELLO");
+$f = new finfo(FILEINFO_MIME_TYPE);
+set_error_handler(function(int $n, string $message): bool { echo $message, "\n"; return true; });
+foreach (["DATA", "Data", "dAta"] as $scheme) {
+    echo finfo_file($f, $scheme . "://text/plain,HELLO") === false ? "failed\n" : "bad\n";
+}
+restore_error_handler();
+echo $f->file("data://text/plain,HELLO"), "\n";
+echo $f->file("DATA:text/plain,HELLO"), "\n";
+unlink("DATA:/text/plain,HELLO"); rmdir("DATA:/text"); rmdir("DATA:");
+unlink("DATA:text/plain,HELLO"); rmdir("DATA:text");
+chdir($before); rmdir($dir);
+"#);
+    let expected = ["DATA", "Data", "dAta"].iter().map(|scheme|
+        format!("finfo_file({scheme}://text/plain,HELLO): Failed to open stream: operation failed\nfailed\n")).collect::<String>();
+    assert_eq!(out, expected + "text/plain\ntext/plain\n");
+}
+
+/// Failed filter resources report one outer warning, while direct remote file URLs stay silent.
+#[test]
+fn test_fileinfo_filter_resource_failure_frames() {
+    if fileinfo_native::skip("test_fileinfo_filter_resource_failure_frames") { return; }
+    let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+$f = new finfo(FILEINFO_MIME_TYPE);
+set_error_handler(function(int $n, string $message): bool { echo $message, "\n"; return true; });
+foreach (["file://example.com/tmp", "data:text", "/elephc-fileinfo-missing/file", "php://filter/resource=data:text"] as $resource) {
+    echo finfo_file($f, "php://filter/resource=" . $resource) === false ? "failed\n" : "bad\n";
+}
+echo finfo_file($f, "file://example.com/tmp") === false ? "silent\n" : "bad\n";
+restore_error_handler();
+echo $f->file("php://filter/resource=data:text/plain,HELLO"), "\n";
+$file = tempnam(sys_get_temp_dir(), "finfo-bytes");
+file_put_contents($file, "HELLO\0binary");
+echo $f->file("php://filter/resource=" . $file), "\n";
+unlink($file); unset($file, $resource, $f);
+"#);
+    let mut expected = String::new();
+    for resource in ["file://example.com/tmp", "data:text", "/elephc-fileinfo-missing/file", "php://filter/resource=data:text"] {
+        expected.push_str(&format!("finfo_file(php://filter/resource={resource}): Failed to open stream: operation failed\nfailed\n"));
+    }
+    expected.push_str("silent\ntext/plain\napplication/octet-stream\n");
+    assert_eq!(out.stdout, expected);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Wrapper diagnostics cap the displayed scheme at 31 bytes while retaining the original path.
+#[test]
+fn test_fileinfo_unknown_wrapper_name_truncation() {
+    if fileinfo_native::skip("test_fileinfo_unknown_wrapper_name_truncation") { return; }
+    let out = compile_and_run(r#"<?php
+$f = new finfo(FILEINFO_MIME_TYPE);
+set_error_handler(function(int $n, string $message): bool { echo $message, "\n"; return true; });
+echo finfo_file($f, str_repeat("a", 40) . "://missing") === false ? "failed\n" : "bad\n";
+restore_error_handler();
+"#);
+    let warning = format!("finfo_file(): Unable to find the wrapper \"{}\" - did you forget to enable it when you configured PHP?\n", "a".repeat(31));
+    assert_eq!(out, warning.repeat(2) + &format!("finfo_file({}://missing): Failed to open stream: No such file or directory\nfailed\n", "a".repeat(40)));
 }
 
 /// Error callbacks observe temporary options, which are restored after normal and throwing handlers.

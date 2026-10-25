@@ -202,6 +202,10 @@ pub(super) fn declarations() -> Program {
             extern_fn("elephc_runtime_stream_error_code", "System").returns(CType::Int).build(),
             extern_fn("elephc_runtime_stream_tls_error", "System").returns(CType::Str).build(),
             extern_fn("elephc_fileinfo_network_error", "elephc_fileinfo").param("code", CType::Int).param("detail", CType::Str).returns(CType::Str).build(),
+            extern_fn("elephc_fileinfo_read", "elephc_fileinfo").param("path", CType::Str).returns(CType::Int).build(),
+            extern_fn("elephc_fileinfo_read_data", "elephc_fileinfo").param("id", CType::Int).returns(CType::Ptr).build(),
+            extern_fn("elephc_fileinfo_read_length", "elephc_fileinfo").param("id", CType::Int).returns(CType::Int).build(),
+            extern_fn("elephc_fileinfo_read_release", "elephc_fileinfo").param("id", CType::Int).build(),
             handle_owner(),
             finfo_class(),
         ];

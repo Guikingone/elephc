@@ -57,6 +57,43 @@ fn fileinfo_native_network_error_detail() {
     }
 }
 
+/// Independent owned reads preserve binary bytes and remain valid across a reentrant read.
+#[test]
+fn fileinfo_native_temporary_read_lifetime() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    struct Directory(std::path::PathBuf);
+    impl Drop for Directory {
+        /// Removes only the two fixture files and the directory this test successfully created.
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(self.0.join("first"));
+            let _ = std::fs::remove_file(self.0.join("second"));
+            let _ = std::fs::remove_dir(&self.0);
+        }
+    }
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let path = std::env::temp_dir().join(format!("elephc-fileinfo-read-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&path).unwrap();
+    let directory = Directory(path);
+    std::fs::write(directory.0.join("first"), b"HELLO\0binary").unwrap();
+    std::fs::write(directory.0.join("second"), b"other").unwrap();
+    let first = CString::new(directory.0.join("first").as_os_str().as_bytes()).unwrap();
+    let second = CString::new(directory.0.join("second").as_os_str().as_bytes()).unwrap();
+    unsafe {
+        let one = elephc_fileinfo_read(first.as_ptr());
+        assert_ne!(one, 0);
+        let pointer = elephc_fileinfo_read_data(one).cast::<u8>();
+        let two = elephc_fileinfo_read(second.as_ptr());
+        assert_ne!(two, 0);
+        assert_eq!(elephc_fileinfo_read_length(one), 12);
+        assert_eq!(std::slice::from_raw_parts(pointer, 12), b"HELLO\0binary");
+        elephc_fileinfo_read_release(two);
+        assert_eq!(std::slice::from_raw_parts(pointer, 12), b"HELLO\0binary");
+        elephc_fileinfo_read_release(one);
+        assert_eq!(elephc_fileinfo_read_length(one), 0);
+        elephc_fileinfo_read_release(one);
+    }
+}
+
 /// Directory results require a successful open and ignore MIME flags after descriptor stat.
 #[test]
 fn fileinfo_native_directory_open_permissions() {

@@ -37,9 +37,9 @@ fn filtered_url() -> Stmt {
         s_assign("_split", e_call("strpos", vec![e_var("filename"), e_str("/resource=")])),
         s_if(eq(e_var("_split"), e_bool(false)), vec![s_throw(e_new_fq("Error", vec![e_str("No URL resource specified")]))], vec![], None),
         s_assign("_resource", e_call("substr", vec![e_var("filename"), e_binop(e_var("_split"), BinOp::Add, e_int(10))])),
-        s_if(eq(e_var("_resource"), e_str("")), invalid("Invalid php://filter URL: empty resource"), vec![], None),
-        s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![e_var("_resource"), e_var("context"), e_var("_function")])),
-        s_if(eq(e_var("_data"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
+        s_if(eq(e_var("_resource"), e_str("")), super::streams::failure(e_str("operation failed")), vec![], None),
+        s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![e_var("_resource"), e_var("context"), e_var("_function"), e_bool(false)])),
+        s_if(eq(e_var("_data"), e_bool(false)), super::streams::failure(e_str("operation failed")), vec![], None),
         s_assign("_spec", e_str("")),
         s_if(e_binop(e_var("_split"), BinOp::Gt, e_int(13)), vec![
             s_assign("_spec", e_call("substr", vec![e_var("filename"), e_int(13), e_binop(e_var("_split"), BinOp::Sub, e_int(13))])),
@@ -91,13 +91,14 @@ pub(super) fn read_method() -> MethodBuilder {
         s_expr(e_call("__elephc_builtin_warning", vec![e_binop(e_var("_function"), BinOp::Concat, e_str("(): Invalid php:// URL specified"))])),
     ].into_iter().chain(super::streams::failure(e_str("operation failed"))).collect(), vec![], None));
     body.push(s_if(prefix("glob://"), super::streams::failure(e_str("wrapper does not support stream open")), vec![], None));
+    body.push(s_if(e_not(e_method_call(e_this(), "__elephc_is_stream", vec![e_var("filename"), e_var("_function"), e_int(1)])), local_bytes(), vec![], None));
     body.extend([
         s_assign("_stream", e_call("fopen", vec![e_var("filename"), e_str("rb"), e_bool(false), e_var("context")])),
         s_if(eq(e_var("_stream"), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
         read_owned(),
     ]);
     method("__elephc_read_stream").private().param("filename", TypeExpr::Str)
-        .param("context", t_mixed()).param("_function", TypeExpr::Str).returns(t_union(vec![TypeExpr::Str, TypeExpr::False])).body(body)
+        .param("context", t_mixed()).param("_function", TypeExpr::Str).param_default("_report_errors", TypeExpr::Bool, e_bool(true)).returns(t_union(vec![TypeExpr::Str, TypeExpr::False])).body(body)
 }
 
 /// Routes registered wrappers while preserving PHP's warned plain-file fallback for unknown schemes.
@@ -120,10 +121,27 @@ pub(super) fn routing_method() -> MethodBuilder {
     }
     body.push(s_if(eq(e_call("elephc_runtime_stream_has_wrapper", vec![e_var("_scheme")]), e_int(1)), vec![s_return(e_bool(true))], vec![], None));
     let message = e_binop(e_binop(e_binop(e_var("_function"), BinOp::Concat, e_str("(): Unable to find the wrapper \"")),
-        BinOp::Concat, e_var("_scheme")), BinOp::Concat, e_str("\" - did you forget to enable it when you configured PHP?"));
-    for _ in 0..2 { body.push(s_expr(e_call("__elephc_builtin_warning", vec![message.clone()]))); }
+        BinOp::Concat, e_call("substr", vec![e_var("_scheme"), e_int(0), e_int(31)])), BinOp::Concat, e_str("\" - did you forget to enable it when you configured PHP?"));
+    body.push(s_assign("_lookup", e_int(0)));
+    body.push(s_while(e_binop(e_var("_lookup"), BinOp::Lt, e_var("_lookups")), vec![
+        s_expr(e_call("__elephc_builtin_warning", vec![message])),
+        s_assign("_lookup", e_binop(e_var("_lookup"), BinOp::Add, e_int(1))),
+    ]));
     body.push(s_return(e_bool(false)));
-    method("__elephc_is_stream").private().param("filename", TypeExpr::Str).param("_function", TypeExpr::Str).returns(TypeExpr::Bool).body(body)
+    method("__elephc_is_stream").private().param("filename", TypeExpr::Str).param("_function", TypeExpr::Str)
+        .param_default("_lookups", TypeExpr::Int, e_int(2)).returns(TypeExpr::Bool).body(body)
+}
+
+/// Reads nested plain-file resources without reporting an inner fopen warning, then retires the owned bytes.
+fn local_bytes() -> Vec<Stmt> {
+    vec![
+        s_assign("_read_id", e_call("elephc_fileinfo_read", vec![e_var("filename")])),
+        s_if(eq(e_var("_read_id"), e_int(0)), super::streams::failure(e_call("elephc_fileinfo_error", vec![])), vec![], None),
+        s_try(vec![s_return(e_call("__elephc_ptr_read_string", vec![
+            e_call("elephc_fileinfo_read_data", vec![e_var("_read_id")]),
+            e_call("elephc_fileinfo_read_length", vec![e_var("_read_id")]),
+        ]))], vec![], Some(vec![s_expr(e_call("elephc_fileinfo_read_release", vec![e_var("_read_id")]))])),
+    ]
 }
 
 /// Applies one filter through the existing stream implementation and its PHP callbacks.
