@@ -886,7 +886,9 @@ pub(crate) fn pin_in_flight_owners(
             continue;
         }
         let temp_name = ctx.declare_owned_hidden_temp(ty.clone());
-        ctx.store_local(&temp_name, value, ty, Some(span));
+        // Publishing an unwind owner is bookkeeping, not a PHP assignment that may
+        // reclaim concat scratch still borrowed by a sibling call argument.
+        ctx.store_local(&temp_name, value, ty, None);
         let slot = ctx.local_slots[&temp_name];
         register_owned_call_operand(ctx, slot, span);
         pinned.push(*operand);
