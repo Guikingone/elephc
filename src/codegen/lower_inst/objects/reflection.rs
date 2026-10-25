@@ -16,7 +16,7 @@ use crate::codegen::literal_defaults::{
     emit_boxed_bool_literal_to_result, emit_boxed_float_literal_to_result,
     emit_boxed_int_literal_to_result, emit_boxed_null_literal_to_result,
     emit_boxed_string_literal_default_to_result, emit_empty_assoc_array_literal_to_result,
-    emit_string_literal_default_to_result,
+    emit_string_bytes_default_to_result,
 };
 use crate::codegen::{
     abi, emit_array_value_type_stamp, emit_box_current_owned_value_as_mixed,

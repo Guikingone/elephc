@@ -278,7 +278,7 @@ pub(super) fn reflection_constant_value(
         ExprKind::ClassConstant { receiver } => {
             let class_name =
                 reflection_static_receiver_name(current_class, current_info, receiver)?;
-            Ok(ReflectionConstantValue::Str(class_name))
+            Ok(ReflectionConstantValue::Str(crate::names::class_name_literal(&class_name)))
         }
         ExprKind::ScopedConstantAccess { receiver, name } => reflection_scoped_constant_value(
             ctx,

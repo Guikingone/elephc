@@ -784,6 +784,14 @@ to `""`). Float keys use PHP's modulo integer conversion, including non-finite a
 out-of-range values. Unsupported class-constant metadata reports the unsupported form;
 parameter defaults retain the existing lazy-helper and unavailable-value fallbacks.
 
+Literal string keys and values decode to PHP bytes at the storage or wire boundary;
+metadata names keep their ordinary UTF-8 encoding. Native array-default records retain
+binary string payloads and keys without requiring valid UTF-8, while class and parameter
+names still use the checked UTF-8 codec. AOT AST literals retain lexer markers until
+this boundary; Magician `EvalConst::String` and `EvalConst::Bytes` already hold decoded
+PHP data and must not be encoded again. Synthesized `::class` literals protect genuine
+private-use Unicode characters from the byte-escape marker representation.
+
 The folded values emit through `emit_reflection_constant_value_as_mixed`
 (`default_emit.rs`), which materializes a fresh boxed `Mixed` array (recursive,
 mixed payload slots) for array forms. Consumers: `ReflectionParameter`

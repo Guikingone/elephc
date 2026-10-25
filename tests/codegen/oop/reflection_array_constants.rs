@@ -9,6 +9,76 @@
 
 use super::*;
 
+/// Scalar default and constant ABI slots carry PHP bytes rather than literal marker text.
+#[test]
+fn test_reflection_constant_bytes_keep_eval_scalar_boundaries() {
+    let out = compile_and_run(r#"<?php
+class ScalarName {}
+const SCALAR_CLASS_NAME = ScalarName::class;
+const BINARY_TEXT = "\xff\0A";
+function nameDefault($value = ScalarName::class) { return $value; }
+function binaryDefault($value = "\xff\0A") { return $value; }
+eval(substr('xecho bin2hex(nameDefault()), "|", bin2hex(SCALAR_CLASS_NAME), "|", bin2hex((new ReflectionParameter("nameDefault", 0))->getDefaultValue()), "|", bin2hex(binaryDefault()), "|", bin2hex(BINARY_TEXT), "|", bin2hex((new ReflectionParameter("binaryDefault", 0))->getDefaultValue());', $argc));
+"#);
+    assert_eq!(out, "5363616c61724e616d65ee8080|5363616c61724e616d65ee8080|5363616c61724e616d65ee8080|ff0041|ff0041|ff0041");
+}
+
+/// Property storage uses the same float keys as mixed-literal numbering and Reflection.
+#[test]
+fn test_mixed_literal_property_defaults_wrap_float_keys() {
+    let out = compile_and_run(r#"<?php
+class FloatDefaults {
+    public array $positive = [-5 => 'a', 1e20 => 'b', 'c'];
+    public static array $negative = [-5 => 'a', -1e20 => 'b', 'c'];
+    public array $infinite = [-5 => 'a', 1e999 => 'b', 'c'];
+}
+$object = new FloatDefaults();
+echo json_encode(array_keys($object->positive)), '|';
+echo json_encode(array_keys(FloatDefaults::$negative)), '|';
+echo json_encode(array_keys($object->infinite)), '|';
+echo json_encode(array_keys((new ReflectionProperty('FloatDefaults', 'positive'))->getDefaultValue()));
+"#);
+    assert_eq!(out, "[-5,7766279631452241920,7766279631452241921]|[-5,-7766279631452241920,-4]|[-5,0,1]|[-5,7766279631452241920,7766279631452241921]");
+}
+
+/// Escaped byte strings keep their PHP identity in Reflection, defaults and both inventories.
+#[test]
+fn test_reflection_constant_arrays_preserve_php_string_bytes() {
+    let out = compile_and_run(r#"<?php
+const BYTE_VALUES = ["\xc3\xa9" => "old", "é" => "\xff\0A", "\xff" => "raw"];
+class ByteConstants { const VALUE = BYTE_VALUES; }
+function withBytes($value = ByteConstants::VALUE) { return $value; }
+$class = new ReflectionClass(ByteConstants::class);
+$value = $class->getConstant('VALUE');
+echo count($value), ':', bin2hex($value['é']), ':', bin2hex(array_keys($value)[1]), '|';
+$value = (new ReflectionParameter('withBytes', 0))->getDefaultValue();
+echo count($value), ':', bin2hex($value['é']), ':', bin2hex(array_keys($value)[1]), '|';
+$value = get_defined_constants(true)['user']['BYTE_VALUES'];
+echo count($value), ':', bin2hex($value['é']), ':', bin2hex(array_keys($value)[1]), '|';
+eval(substr('x$value = BYTE_VALUES; echo count($value), ":", bin2hex($value["é"]), ":", bin2hex(array_keys($value)[1]), "|"; $value = withBytes(); echo count($value), ":", bin2hex($value["é"]), ":", bin2hex(array_keys($value)[1]);', $argc));
+"#);
+    assert_eq!(out, "2:ff0041:ff|2:ff0041:ff|2:ff0041:ff|2:ff0041:ff|2:ff0041:ff");
+}
+
+/// PHP literal decoding must preserve real private-use characters in synthesized class names.
+#[test]
+fn test_reflection_constant_arrays_preserve_private_use_symbol_names() {
+    let out = compile_and_run(r#"<?php
+class Name {}
+class NamedValues { const VALUE = [Name::class]; }
+function withName($value = Name::class) {}
+trait Trait { public function run() {} }
+class AliasValues { use Trait { run as alias; } }
+$class = new ReflectionClass(NamedValues::class);
+echo bin2hex($class->getConstant('VALUE')[0]), '|';
+echo bin2hex((new ReflectionParameter('withName', 0))->getDefaultValue()), '|';
+echo bin2hex((new ReflectionClass(AliasValues::class))->getTraitAliases()['alias']);
+echo '|', class_exists(Name::class) ? 'y' : 'n', '|';
+echo bin2hex((new ReflectionClass(Name::class))->getName());
+"#);
+    assert_eq!(out, "4e616d65ee8080|4e616d65ee8080|5472616974ee80803a3a72756e|y|4e616d65ee8080");
+}
+
 /// Native and opaque eval inventories retain the parser's negative-key constant arrays.
 #[test]
 fn test_mixed_literal_constant_inventory_and_eval_keep_negative_keys() {

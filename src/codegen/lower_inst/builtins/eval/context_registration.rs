@@ -242,7 +242,8 @@ fn register_eval_native_scalar_constant(
         kind,
     );
     if let Some(string_value) = string_value {
-        let (value_label, value_len) = ctx.data.add_string(string_value.as_bytes());
+        let bytes = elephc_builtin_contract::string_literal::literal_bytes(string_value);
+        let (value_label, value_len) = ctx.data.add_string(&bytes);
         abi::emit_symbol_address(
             ctx.emitter,
             abi::int_arg_reg_name(ctx.emitter.target, 4),

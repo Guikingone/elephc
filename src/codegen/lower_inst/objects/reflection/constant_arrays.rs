@@ -199,7 +199,8 @@ fn reflection_constant_insert_entry(
             (
                 ReflectionDefaultArrayKey::Str(existing),
                 ReflectionDefaultArrayKey::Str(candidate),
-            ) => existing == candidate,
+            ) => elephc_builtin_contract::string_literal::literal_bytes(existing)
+                == elephc_builtin_contract::string_literal::literal_bytes(candidate),
             _ => false,
         }
     });

@@ -216,14 +216,13 @@ pub(super) fn reflection_default_array_key(key: &Expr) -> Option<ReflectionDefau
 
 /// Normalizes a string array key according to PHP integer-string key rules.
 pub(super) fn reflection_default_string_array_key(value: &str) -> Option<ReflectionDefaultArrayKey> {
-    if is_php_integer_array_key(value) {
-        value
-            .parse::<i64>()
-            .ok()
-            .map(ReflectionDefaultArrayKey::Int)
-    } else {
-        Some(ReflectionDefaultArrayKey::Str(value.to_string()))
+    let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+    if let Ok(decoded) = std::str::from_utf8(&bytes) {
+        if is_php_integer_array_key(decoded) {
+            return decoded.parse::<i64>().ok().map(ReflectionDefaultArrayKey::Int);
+        }
     }
+    Some(ReflectionDefaultArrayKey::Str(value.to_string()))
 }
 
 /// Converts scalar/null constant metadata into a parameter default value.

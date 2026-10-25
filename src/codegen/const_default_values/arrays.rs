@@ -112,7 +112,12 @@ fn insert_array_element(
     if let ConstDefaultArrayKey::Int(key) = &key {
         *highest = Some(highest.map_or(*key, |current| current.max(*key)));
     }
-    if let Some(element) = elements.iter_mut().find(|element| element.key.as_ref() == Some(&key)) {
+    if let Some(element) = elements.iter_mut().find(|element| match (element.key.as_ref(), &key) {
+        (Some(ConstDefaultArrayKey::String(existing)), ConstDefaultArrayKey::String(candidate)) =>
+            elephc_builtin_contract::string_literal::literal_bytes(existing)
+                == elephc_builtin_contract::string_literal::literal_bytes(candidate),
+        (existing, candidate) => existing == Some(candidate),
+    }) {
         element.default = value;
     } else {
         elements.push(ConstDefaultArrayElement { key: Some(key), default: value });

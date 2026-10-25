@@ -345,7 +345,15 @@ pub(crate) fn emit_string_literal_default_to_result(
     ctx: &mut FunctionContext<'_>,
     value: &str,
 ) {
-    let (label, len) = ctx.data.add_string(value.as_bytes());
+    let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+    emit_string_bytes_default_to_result(ctx, &bytes);
+}
+
+/// Emits raw PHP bytes, including symbol-name metadata that has no literal escape markers.
+pub(crate) fn emit_string_bytes_default_to_result(
+    ctx: &mut FunctionContext<'_>, value: &[u8],
+) {
+    let (label, len) = ctx.data.add_string(value);
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
@@ -694,13 +702,13 @@ fn literal_array_key(context: &str, expr: &ExprKind, op_name: &str) -> Result<Li
         ExprKind::IntLiteral(value) => Ok(LiteralArrayKey::Int(*value)),
         ExprKind::BoolLiteral(value) => Ok(LiteralArrayKey::Int(i64::from(*value))),
         ExprKind::Null => Ok(LiteralArrayKey::Str(String::new())),
-        ExprKind::FloatLiteral(value) => Ok(LiteralArrayKey::Int(*value as i64)),
+        ExprKind::FloatLiteral(value) => Ok(LiteralArrayKey::Int(crate::types::php_float_array_key(*value))),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => value
                 .checked_neg()
                 .map(LiteralArrayKey::Int)
                 .ok_or_else(|| unsupported_literal_default(context, &PhpType::Int, op_name)),
-            ExprKind::FloatLiteral(value) => Ok(LiteralArrayKey::Int((-value) as i64)),
+            ExprKind::FloatLiteral(value) => Ok(LiteralArrayKey::Int(crate::types::php_float_array_key(-*value))),
             _ => Err(unsupported_literal_default(context, &PhpType::Int, op_name)),
         },
         _ => Err(unsupported_literal_default(context, &PhpType::Int, op_name)),
@@ -1150,7 +1158,7 @@ pub(crate) fn fold_named_class_constant(expr: &ExprKind) -> Option<ExprKind> {
         ExprKind::ClassConstant {
             receiver: crate::parser::ast::StaticReceiver::Named(name),
         } => Some(ExprKind::StringLiteral(
-            name.as_str().trim_start_matches('\\').to_string(),
+            crate::names::class_name_literal(name.as_str()),
         )),
         _ => None,
     }

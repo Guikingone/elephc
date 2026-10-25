@@ -210,7 +210,8 @@ fn emit_boxed_constant_value(
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Float);
         }
         ExprKind::StringLiteral(value) => {
-            let (label, len) = ctx.data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (label, len) = ctx.data.add_string(&bytes);
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
             abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
@@ -283,11 +284,11 @@ fn emit_constant_array_key(ctx: &mut FunctionContext<'_>, key: &ExprKind) -> Res
         return Ok(());
     }
     let bytes = match key {
-        ExprKind::StringLiteral(value) => value.as_bytes(),
-        ExprKind::Null => b"",
+        ExprKind::StringLiteral(value) => elephc_builtin_contract::string_literal::literal_bytes(value),
+        ExprKind::Null => Vec::new(),
         _ => return Err(unsupported_constant_value(key)),
     };
-    let (label, len) = ctx.data.add_string(bytes);
+    let (label, len) = ctx.data.add_string(&bytes);
     let (ptr, length) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr, &label);
     abi::emit_load_int_immediate(ctx.emitter, length, len as i64);

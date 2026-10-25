@@ -263,7 +263,8 @@ pub(super) fn emit_reflection_default_array_key_aarch64(
             abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
         }
         ReflectionDefaultArrayKey::Str(value) => {
-            let (key_label, key_len) = ctx.data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (key_label, key_len) = ctx.data.add_string(&bytes);
             abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
         }
@@ -281,7 +282,8 @@ pub(super) fn emit_reflection_default_array_key_x86_64(
             abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
         }
         ReflectionDefaultArrayKey::Str(value) => {
-            let (key_label, key_len) = ctx.data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (key_label, key_len) = ctx.data.add_string(&bytes);
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
         }

@@ -174,7 +174,8 @@ fn resolve_constant_expression_const_default(
     match &expr.kind {
         ExprKind::ConstRef(name) => resolve_global_constant_default(context, name, depth + 1),
         ExprKind::ClassConstant { receiver } => {
-            resolve_static_receiver_name(context, receiver).map(ConstDefaultValue::String)
+            resolve_static_receiver_name(context, receiver)
+                .map(|name| ConstDefaultValue::String(crate::names::class_name_literal(&name)))
         }
         ExprKind::ScopedConstantAccess { receiver, name } => {
             resolve_scoped_constant_default(context, receiver, name, depth + 1)
@@ -478,11 +479,13 @@ fn resolve_object_const_default_arg(
 pub(in crate::codegen) fn const_default_string_array_key(
     value: &str,
 ) -> Option<ConstDefaultArrayKey> {
-    if is_php_integer_array_key(value) {
-        value.parse::<i64>().ok().map(ConstDefaultArrayKey::Int)
-    } else {
-        Some(ConstDefaultArrayKey::String(value.to_string()))
+    let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+    if let Ok(decoded) = std::str::from_utf8(&bytes) {
+        if is_php_integer_array_key(decoded) {
+            return decoded.parse::<i64>().ok().map(ConstDefaultArrayKey::Int);
+        }
     }
+    Some(ConstDefaultArrayKey::String(value.to_string()))
 }
 
 /// Resolves one global constant default expression.
