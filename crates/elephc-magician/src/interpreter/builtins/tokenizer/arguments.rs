@@ -88,7 +88,8 @@ pub(super) fn tokenizer_int(
     if tag == EVAL_TAG_STRING {
         let bytes = values.string_bytes(value)?;
         if let Ok(source) = std::str::from_utf8(&bytes) {
-            let numeric = source.trim_ascii();
+            // PHP numeric strings also accept vertical tab, unlike Rust's ASCII whitespace set.
+            let numeric = source.trim_matches(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}'));
             if let Ok(integer) = numeric.parse::<i64>() { return Ok(integer); }
             if let Ok(float) = numeric.parse::<f64>() {
                 if fits_php_int(float) {

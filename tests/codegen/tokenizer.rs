@@ -225,6 +225,8 @@ foreach ([1e100, -1e100, NAN, INF, -INF, "1e100", "-1e100", "9223372036854775808
 }
 echo token_name("9223372036854775807"), ":", token_name("-9223372036854775808"), ":", token_name("1e2"), "\n";
 echo token_name("1.5"), ":", count(token_get_all("html", "1.5")), ":", count(PhpToken::tokenize("html", "1.5")), "\n";
+echo token_name("\v1"), ":", token_name("1\v"), ":", token_name("\v1\v"), ":", count(token_get_all("html", "\v0\v")), ":", count(PhpToken::tokenize("html", "\v0\v")), "\n";
+echo token_name("\v1.5\v"), ":", count(token_get_all("html", "\v1.5\v")), ":", count(PhpToken::tokenize("html", "\v1.5\v")), "\n";
 echo count(token_get_all(null)), ":", token_name(null), ":", count(token_get_all("html", null)), ":", count(PhpToken::tokenize(null)), "\n";
 foreach (["token_get_all", "PhpToken::tokenize", "NativeCheckedToken::tokenize", "EvalCheckedToken::tokenize"] as $factory) {
     try { $factory("<?php\r\n\r\nfunction broken(", TOKEN_PARSE); echo "wrong"; }
@@ -234,7 +236,8 @@ foreach (["token_get_all", "PhpToken::tokenize", "NativeCheckedToken::tokenize",
 eval($code);
 "#);
     assert!(out.success, "{}\n{}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, format!("{}UNKNOWN:UNKNOWN:UNKNOWN\nUNKNOWN:1:1\n0:UNKNOWN:1:0\n3:0\n3:0\n3:0\n3:0\n", "TTTTT\n".repeat(8)));
+    assert_eq!(out.stdout, format!("{}UNKNOWN:UNKNOWN:UNKNOWN\nUNKNOWN:1:1\nUNKNOWN:UNKNOWN:UNKNOWN:1:1\nUNKNOWN:1:1\n0:UNKNOWN:1:0\n3:0\n3:0\n3:0\n3:0\n", "TTTTT\n".repeat(8)));
     assert_eq!(out.stderr.matches("Implicit conversion from float-string \"1.5\" to int loses precision").count(), 3, "{}", out.stderr);
+    assert_eq!(out.stderr.matches("Implicit conversion from float-string \"\u{b}1.5\u{b}\" to int loses precision").count(), 3, "{}", out.stderr);
     assert_eq!(out.stderr.matches("Passing null to parameter").count(), 4, "{}", out.stderr);
 }
