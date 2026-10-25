@@ -8,6 +8,7 @@
 //! - Known filter names use literal builtin calls, sharing existing EIR filter semantics.
 //! - Each filter stage owns a temporary stream and closes it even when a handler throws.
 //! - Standard descriptors are borrowed and never closed by a fileinfo query.
+//! - Prepared filter references keep an explicit mixed element contract across recursive calls.
 
 use crate::parser::ast::{BinOp, CastType, Expr, Stmt, TypeExpr};
 use crate::synthetic_class::*;
@@ -102,7 +103,7 @@ pub(super) fn read_method() -> MethodBuilder {
     ]);
     method("__elephc_read_stream").private().param("filename", TypeExpr::Str)
         .param("context", t_mixed()).param("_function", TypeExpr::Str).param("_report_errors", TypeExpr::Bool)
-        .param_by_ref("_directory", Some(TypeExpr::Bool)).param_by_ref("_pending", None).param_by_ref("_stages", Some(t_array()))
+        .param_by_ref("_directory", Some(TypeExpr::Bool)).param_by_ref("_pending", None).param_by_ref("_stages", Some(TypeExpr::Array(Box::new(t_mixed()))))
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False])).body(body)
 }
 

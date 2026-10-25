@@ -145,6 +145,7 @@ for ($i = 0; $i < 3; $i++) {
 unset($f);
 echo "ok\n";
 "#);
+    assert!(out.success, "fileinfo program failed: {}", out.stderr);
     assert_eq!(out.stdout, "text/plain\ntext/plain\ntext/plain\nok\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
@@ -173,6 +174,7 @@ unlink($db);
 unlink($raw);
 unset($db, $raw);
 "#);
+    assert!(out.success, "fileinfo program failed: {}", out.stderr);
     assert_eq!(out.stdout, "complete\nexpanded-document\ninvalid\n");
     let mut failures = Vec::new();
     if !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
@@ -295,6 +297,7 @@ for ($i = 0; $i < 10; $i++) {{
 echo "ok\n";
 "#);
         let (out, asm) = compile_and_run_with_heap_debug_and_asm(&source);
+        assert!(out.success, "fileinfo program failed: {}", out.stderr);
         assert_eq!(out.stdout, "ok\n", "{label}");
         if !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
             eprintln!("Fileinfo {label} assembly:\n{asm}");
@@ -390,6 +393,7 @@ try { $f->file("/elephc-fileinfo-missing/file"); } catch (RuntimeException $e) {
 restore_error_handler();
 echo $f->buffer("hello"), "\n";
 "#);
+    assert!(out.success, "fileinfo program failed: {}", out.stderr);
     assert_eq!(out.stdout, "2\nfile\n2\ndatabase\nwarning\ntext/plain\n", "{}", out.stderr);
     let mut failures = Vec::new();
     if !out.stderr.contains("HEAP DEBUG: leak summary: clean") {

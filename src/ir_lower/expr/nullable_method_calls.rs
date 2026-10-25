@@ -485,6 +485,13 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                                 | Op::CallableDescriptorInvoke
                         )
                     );
+                    // A boxed user return owns its persisted string independently of the raw
+                    // argument, including temporary calls and string casts from Mixed storage.
+                    // Provisional local releases remain subject to backend ownership filtering.
+                    if arg_repr == PhpType::Str && result_repr == PhpType::Mixed && user_call_result {
+                        crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
+                        continue;
+                    }
                     if owned_string_arg && user_call_result {
                         if result_repr == PhpType::Str {
                             ctx.emit_void(

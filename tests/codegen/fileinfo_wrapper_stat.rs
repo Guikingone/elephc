@@ -18,7 +18,7 @@ fn test_fileinfo_user_wrapper_stat_results() {
 class FileinfoNoStat {
     public $context;
     protected int $position = 0;
-    public function stream_open($path, $mode, $options, &$opened): bool { return true; }
+    public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool { return true; }
     public function stream_read(int $count): string { $v = substr("HELLO", $this->position, $count); $this->position += strlen($v); return $v; }
     public function stream_eof(): bool { return $this->position >= 5; }
     public function stream_tell(): int { return $this->position; }
@@ -87,6 +87,7 @@ unset($f, $stream, $scheme, $url, $code);
         expected.push_str(&format!("finfo_file(): Unable to locate filter \"{name}\"\nfinfo_file(): Unable to create filter ({name})\n"));
     }
     expected.push_str("finfo_file(): FileinfoNoStat::stream_stat is not implemented!\nfalse\ndirectory\ntext/plain\nfalse\ndirectory\n");
+    assert!(out.success, "fileinfo program failed: {}", out.stderr);
     assert_eq!(out.stdout, expected);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
@@ -99,7 +100,7 @@ fn test_fileinfo_user_wrapper_stat_callback_order() {
 class FileinfoStatOrder {
     public $context;
     private bool $fail = false;
-    public function stream_open($path, $mode, $options, &$opened): bool { $this->fail = str_contains($path, "throw"); echo "open\n"; return true; }
+    public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool { $this->fail = str_contains($path, "throw"); echo "open\n"; return true; }
     public function stream_stat(): array|false { echo "stat\n"; if ($this->fail) { throw new Error("stat failed"); } return false; }
     public function stream_read(int $count): string { echo "unexpected read\n"; return "HELLO"; }
     public function stream_eof(): bool { return false; }
@@ -128,6 +129,7 @@ try { $f->file("php://filter/read=fileinfo.stat.close|fileinfo.stat/resource=sta
 echo var_export($f->file("php://filter/read=fileinfo.stat/resource=statorder://false"), true), "\n";
 stream_wrapper_unregister("statorder"); unset($f, $error);
 "#);
+    assert!(out.success, "fileinfo program failed: {}", out.stderr);
     assert_eq!(out.stdout, "open\ncreate\nstat\nclose\nfilter-close\nfalse\nopen\ncreate\nstat\nstat failed\nopen\ncreate\ncreate failed\nopen\ncreate\ncreate\nstat\nclose\nfilter-close\nclose failed\nopen\ncreate\nstat\nclose\nfilter-close\nfalse\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

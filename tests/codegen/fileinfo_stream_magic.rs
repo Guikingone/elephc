@@ -19,7 +19,7 @@ fn test_fileinfo_stream_cast_callbacks() {
 class FileinfoCastMissing {
     public $context;
     protected int $position = 0;
-    public function stream_open($path, $mode, $options, &$opened): bool { return true; }
+    public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool { return true; }
     public function stream_stat(): array { return ["mode" => 0100644, "size" => 5]; }
     public function stream_read(int $count): string { $s = substr("HELLO", $this->position, $count); $this->position += strlen($s); return $s; }
     public function stream_eof(): bool { return $this->position >= 5; }
@@ -107,6 +107,7 @@ unset($f, $stream, $self, $scheme, $code, $e);
         } else { expected.push_str("close\ntext/plain\n"); }
     }
     expected.push_str("cast 0\nclose\ntext/plain\ncast 0\nmime_content_type(): FileinfoCastSelf::stream_cast must not return itself\ntext/plain\nclose\ncast 0\nfinfo::file(): supplied argument is not a valid stream resource\nhandler\ncast warning\n");
+    assert!(out.success, "fileinfo program failed: {}", out.stderr);
     assert_eq!(out.stdout, expected);
     assert!(out.stderr.contains("finfo::file(): FileinfoCastInt::stream_cast must return a stream resource"), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
@@ -120,7 +121,7 @@ fn test_fileinfo_stream_cast_filter_directions() {
 class FileinfoFilterCast {
     public $context;
     private int $position = 0;
-    public function stream_open($path, $mode, $options, &$opened): bool { return true; }
+    public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool { return true; }
     public function stream_stat(): array { echo "stat\n"; return ["mode" => 0100644, "size" => 5]; }
     public function stream_read(int $count): string { echo "read\n"; $s = substr("HELLO", $this->position, $count); $this->position += strlen($s); return $s; }
     public function stream_eof(): bool { return $this->position >= 5; }
@@ -148,6 +149,7 @@ restore_error_handler(); stream_wrapper_unregister("filtercast"); unset($f, $spe
     let normal = "stat\nstat\nread\nwrapper-close\ntext/plain\n";
     let unknown = "finfo::file(): Unable to locate filter \"missing.cast\"\nfinfo::file(): Unable to create filter (missing.cast)\nstat\nstat\nread\nfinfo::file(): FileinfoFilterCast::stream_cast is not implemented!\nwrapper-close\ntext/plain\n";
     let expected = format!("{normal}{normal}create\nstat\nstat\nread\nwrapper-close\nfilter-close\ntext/plain\n{unknown}{unknown}");
+    assert!(out.success, "fileinfo program failed: {}", out.stderr);
     assert_eq!(out.stdout, expected);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
@@ -162,7 +164,7 @@ class FileinfoMagicStat {
     private int $position = 0;
     private int $stats = 0;
     private string $kind = "";
-    public function stream_open($path, $mode, $options, &$opened): bool { $this->kind = substr($path, strrpos($path, "/") + 1); return true; }
+    public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool { $this->kind = substr($path, strrpos($path, "/") + 1); return true; }
     public function stream_stat(): array|false {
         echo "stat ", ++$this->stats, "\n";
         if ($this->stats == 2) {
@@ -182,7 +184,7 @@ class FileinfoMagicStat {
 class FileinfoMagicMissing {
     public $context;
     private int $position = 0;
-    public function stream_open($path, $mode, $options, &$opened): bool { return true; }
+    public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool { return true; }
     public function stream_read(int $count): string { $s = substr("HELLO", $this->position, $count); $this->position += strlen($s); return $s; }
     public function stream_eof(): bool { return $this->position >= 5; }
     public function stream_tell(): int { return $this->position; }
@@ -212,6 +214,7 @@ unset($f, $other, $stream, $e);
     let failure = "stat 1\nstat 2\nfinfo::file(): Failed identify data 0:cannot stat `(null)'\nclose\nfalse\n";
     let procedural = "stat 1\nstat 2\nfinfo_file(): Failed identify data 0:cannot stat `(null)'\nclose\nfalse\n";
     let missing = "mime_content_type(): FileinfoMagicMissing::stream_stat is not implemented!\nmime_content_type(): FileinfoMagicMissing::stream_cast is not implemented!\ntext/plain\nclose\n";
+    assert!(out.success, "fileinfo program failed: {}", out.stderr);
     assert_eq!(out.stdout, format!("{normal}{normal}{failure}{normal}{procedural}{failure}stat 1\nstat 2\nsecond stat\n{missing}stat 1\nstat 2\nsecond stat\n"));
     assert!(out.stderr.contains("finfo::file(): Failed identify data 0:cannot read `(null)'"), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
@@ -231,7 +234,7 @@ class FileinfoExceptionWrapper {
     public $context;
     private string $kind = "";
     private int $position = 0;
-    public function stream_open($path, $mode, $options, &$opened): bool { $this->kind = substr($path, strrpos($path, "/") + 1); return true; }
+    public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool { $this->kind = substr($path, strrpos($path, "/") + 1); return true; }
     public function stream_stat(): array { return ["mode" => 0100644, "size" => 5]; }
     public function stream_read(int $count): string {
         echo "read\n";
@@ -285,6 +288,7 @@ stream_wrapper_unregister("exceptionfileinfo"); unset($f, $stream, $mask, $e);
     let read_error = "read\nError: read error\n";
     let invalid = "read\ncast 0\nTypeError: finfo::file(): supplied argument is not a valid stream resource\n";
     let expected = format!("{read_error}{read_error}{invalid}{read_error}{invalid}read\ncast 0\nvalue-dtor\nTypeError: finfo::file(): supplied argument is not a valid stream resource\nread\ncast 0\nvalue-dtor\nError: dtor error\nTypeError: finfo::file(): supplied argument is not a valid stream resource\n{read_error}close\ncreate\nread\nfilter\nError: filter error\n");
+    assert!(out.success, "fileinfo program failed: {}", out.stderr);
     assert_eq!(out.stdout, expected);
     assert_eq!(out.stderr.matches("finfo::file(): Failed identify data 0:cannot read `(null)'").count(), 3, "{}", out.stderr);
     assert_eq!(out.stderr.matches("mime_content_type(): Failed identify data 0:cannot read `(null)'").count(), 1, "{}", out.stderr);

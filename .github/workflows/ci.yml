@@ -255,6 +255,7 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --list
+          cargo test -p elephc --test codegen_tests test_fileinfo_boxed_string_returns_release_raw_argument_temporaries
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2
           cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments
           cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array
@@ -443,6 +444,7 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --list
+          cargo test -p elephc --test codegen_tests test_fileinfo_boxed_string_returns_release_raw_argument_temporaries
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2
           cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments
           cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array
@@ -623,6 +625,7 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --list
+          cargo test -p elephc --test codegen_tests test_fileinfo_boxed_string_returns_release_raw_argument_temporaries
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2
           cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments
           cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array

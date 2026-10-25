@@ -28,7 +28,7 @@ restore_error_handler();
 class FileinfoReadWrapper {
     public $context;
     private int $position = 0;
-    public function stream_open($path, $mode, $options, &$opened): bool {
+    public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool {
         if ($path === "finfowrap://warning") { trigger_error("fileinfo wrapper warning", E_USER_WARNING); return false; }
         return true;
     }
@@ -131,6 +131,7 @@ unlink($file); unset($file, $resource, $f);
         expected.push_str(&format!("finfo_file(php://filter/resource={resource}): Failed to open stream: operation failed\nfailed\n"));
     }
     expected.push_str("silent\ntext/plain\napplication/octet-stream\n");
+    assert!(out.success, "fileinfo program failed: {}", out.stderr);
     assert_eq!(out.stdout, expected);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
@@ -153,6 +154,7 @@ $code = $argc > 0 ? 'echo $f->file("php://filter/read=string.rot13/resource=."),
 eval($code);
 restore_error_handler(); unset($f, $path, $code);
 "#);
+    assert!(out.success, "fileinfo program failed: {}", out.stderr);
     assert_eq!(out.stdout, "directory\n".repeat(6));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
@@ -261,13 +263,13 @@ fn test_fileinfo_network_failure_diagnostics() {
 $f = new finfo(FILEINFO_MIME_TYPE);
 set_error_handler(function(int $n, string $message): bool {{ echo $message, "\n"; return true; }});
 foreach (["http", "https", "ftp", "ftps", "HTTP"] as $scheme) {{
-    echo finfo_file($f, $scheme . "://127.0.0.1:{port}/") === false ? "failed\n" : "bad\n";
+    echo finfo_file($f, $scheme . "://127.0.0.1:{port}/payload") === false ? "failed\n" : "bad\n";
 }}
 restore_error_handler();
 "#);
     let out = compile_and_run(&source);
     let expected = ["http", "https", "ftp", "ftps", "HTTP"].iter().map(|scheme|
-        format!("finfo_file({scheme}://127.0.0.1:{port}/): Failed to open stream: Connection refused\nfailed\n")).collect::<String>();
+        format!("finfo_file({scheme}://127.0.0.1:{port}/payload): Failed to open stream: Connection refused\nfailed\n")).collect::<String>();
     assert_eq!(out, expected);
 }
 

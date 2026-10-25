@@ -71,7 +71,7 @@ fn read_pending() -> Vec<Stmt> {
 /// Owns the query's deferred streams and enforces PHP's stat-before-identification rule.
 pub(super) fn query() -> Vec<Stmt> {
     vec![
-        s_assign("_stream_directory", e_bool(false)), s_typed_assign(t_mixed(), "_pending", e_null()), s_typed_assign(t_array(), "_stages", e_array(vec![])), s_assign("_query_unwind", e_bool(false)),
+        s_assign("_stream_directory", e_bool(false)), s_typed_assign(t_mixed(), "_pending", e_null()), s_typed_assign(TypeExpr::Array(Box::new(t_mixed())), "_stages", e_array(vec![])), s_assign("_query_unwind", e_bool(false)),
         s_try(vec![
             s_typed_assign(t_union(vec![TypeExpr::Str, TypeExpr::False]), "_data", e_method_call(e_this(), "__elephc_read_stream", vec![
                 e_var("filename"), e_var("context"), e_var("_function"), e_bool(true), e_var("_stream_directory"), e_var("_pending"), e_var("_stages"),
