@@ -255,14 +255,16 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --list
-          cargo test -p elephc --test codegen_tests test_fileinfo_boxed_string_returns_release_raw_argument_temporaries
-          cargo test -p elephc --test codegen_tests test_fileinfo_static_property_returns_keep_independent_owners
-          cargo test -p elephc --test codegen_tests test_fileinfo_stream_registration_owners
-          cargo test -p elephc --test codegen_tests test_fileinfo_pointer_read_string_alias_owners
-          cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_lifecycle_owners
-          cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2
-          cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments
-          cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array
+          fileinfo_test_status=0
+          cargo test -p elephc --test codegen_tests test_fileinfo_boxed_string_returns_release_raw_argument_temporaries || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_static_property_returns_keep_independent_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_stream_registration_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_pointer_read_string_alias_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_lifecycle_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2 || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array || fileinfo_test_status=1
+          exit "$fileinfo_test_status"
 
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
@@ -448,14 +450,16 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --list
-          cargo test -p elephc --test codegen_tests test_fileinfo_boxed_string_returns_release_raw_argument_temporaries
-          cargo test -p elephc --test codegen_tests test_fileinfo_static_property_returns_keep_independent_owners
-          cargo test -p elephc --test codegen_tests test_fileinfo_stream_registration_owners
-          cargo test -p elephc --test codegen_tests test_fileinfo_pointer_read_string_alias_owners
-          cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_lifecycle_owners
-          cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2
-          cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments
-          cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array
+          fileinfo_test_status=0
+          cargo test -p elephc --test codegen_tests test_fileinfo_boxed_string_returns_release_raw_argument_temporaries || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_static_property_returns_keep_independent_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_stream_registration_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_pointer_read_string_alias_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_lifecycle_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2 || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array || fileinfo_test_status=1
+          exit "$fileinfo_test_status"
 
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
@@ -633,14 +637,16 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --list
-          cargo test -p elephc --test codegen_tests test_fileinfo_boxed_string_returns_release_raw_argument_temporaries
-          cargo test -p elephc --test codegen_tests test_fileinfo_static_property_returns_keep_independent_owners
-          cargo test -p elephc --test codegen_tests test_fileinfo_stream_registration_owners
-          cargo test -p elephc --test codegen_tests test_fileinfo_pointer_read_string_alias_owners
-          cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_lifecycle_owners
-          cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2
-          cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments
-          cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array
+          fileinfo_test_status=0
+          cargo test -p elephc --test codegen_tests test_fileinfo_boxed_string_returns_release_raw_argument_temporaries || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_static_property_returns_keep_independent_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_stream_registration_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_pointer_read_string_alias_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_lifecycle_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2 || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array || fileinfo_test_status=1
+          exit "$fileinfo_test_status"
 
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's

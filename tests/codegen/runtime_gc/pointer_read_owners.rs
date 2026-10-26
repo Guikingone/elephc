@@ -10,7 +10,7 @@
 
 use crate::support::*;
 
-/// Both pointer-read aliases transfer independent strings through direct and local returns.
+/// Pointer reads transfer independent copies while pointer-write counts retire borrowed inputs.
 #[test]
 fn test_fileinfo_pointer_read_string_alias_owners() {
     let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
@@ -24,16 +24,18 @@ class FileinfoPointerCopy {
 $p = malloc(3); ptr_write_string($p, "A\0B");
 $reader = new FileinfoPointerCopy();
 for ($i = 0; $i < 40; $i++) {
+    $written = ptr_write_string($p, "A\0B");
+    $internalWritten = __elephc_ptr_write_string($p, "A\0B");
     $a = fileinfoPublicCopy($p);
     $b = $reader->direct($p);
     $c = $reader->local($p);
     __elephc_ptr_read_string($p, 3);
 }
 free($p);
-echo strlen($a), ":", strlen($b), ":", strlen($c), ":", ord($b[1]), ":", ord($c[2]), "\n";
+echo strlen($a), ":", strlen($b), ":", strlen($c), ":", ord($b[1]), ":", ord($c[2]), ":", $written + $internalWritten, "\n";
 unset($a, $b, $c, $reader);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "3:3:3:0:66\n", "{}", out.stderr);
+    assert_eq!(out.stdout, "3:3:3:0:66:6\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

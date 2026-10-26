@@ -2306,6 +2306,9 @@ impl RuntimeFnId {
         if matches!(
             self,
             RuntimeFnId::IntvalBase
+                // Raw-memory writes return only the byte count, never the borrowed input string.
+                | RuntimeFnId::PtrWriteString
+                | RuntimeFnId::ElephcPtrWriteString
                 | RuntimeFnId::TokenizerErrorLocation
                 // Both array mutators answer the resulting element count. The returned
                 // machine integer cannot keep any variadic value operand alive.
