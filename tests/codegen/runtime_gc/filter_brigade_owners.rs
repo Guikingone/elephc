@@ -158,3 +158,63 @@ unset($name);
     assert_eq!(out.stdout, "210000:x\n210003:y\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Direct reads retire raw and boxed filter output after storage, output, discard, and EOF.
+#[test]
+fn test_fileinfo_direct_read_filter_brigade_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class FileinfoReadRawBrigade extends php_user_filter {
+    public function filter($in, $out, &$consumed, bool $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $consumed += $bucket->datalen;
+            $bucket->data = strtoupper($bucket->data);
+            if ($this->params === "double") { $bucket->data .= $bucket->data; }
+            $bucket->datalen = strlen($bucket->data);
+            stream_bucket_append($out, $bucket);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+class FileinfoReadBoxedBrigade extends php_user_filter {
+    public function filter(mixed $in, mixed $out, mixed &$consumed, mixed $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $consumed += $bucket->datalen;
+            $bucket->data = strtoupper($bucket->data);
+            if ($this->params === "double") { $bucket->data .= $bucket->data; }
+            $bucket->datalen = strlen($bucket->data);
+            stream_bucket_append($out, $bucket);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("fileinfo.read.raw", "FileinfoReadRawBrigade");
+stream_filter_register("fileinfo.read.boxed", "FileinfoReadBoxedBrigade");
+for ($i = 0; $i < 3; $i++) {
+    foreach (["raw", "boxed"] as $name) {
+        foreach (["stored", "echo", "discarded", "characters"] as $mode) {
+            $stream = fopen("php://temp", "w+b"); fwrite($stream, "seed"); rewind($stream);
+            $filter = stream_filter_append($stream, "fileinfo.read." . $name, STREAM_FILTER_READ, $mode === "characters" ? "pass" : "double");
+            if ($mode === "stored") { $data = fread($stream, 8); echo $data, "\n"; unset($data); }
+            if ($mode === "echo") { echo fread($stream, 8), "\n"; }
+            if ($mode === "discarded") { fread($stream, 8); echo "discarded\n"; }
+            if ($mode === "characters") {
+                $data = "";
+                while (($character = fgetc($stream)) !== false) { $data .= $character; }
+                echo $data, "\n"; unset($data, $character);
+            }
+            fclose($stream); unset($stream, $filter);
+        }
+    }
+}
+unset($name, $mode);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "SEEDSEED\nSEEDSEED\ndiscarded\nSEED\n".repeat(6), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Unoptimized EIR also consumes independently owned direct read results exactly once.
+#[test]
+fn test_fileinfo_direct_read_filter_brigade_owners_without_ir_opt() {
+    crate::support::without_ir_opt(test_fileinfo_direct_read_filter_brigade_owners);
+}

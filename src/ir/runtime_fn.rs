@@ -2690,6 +2690,10 @@ impl RuntimeFnId {
                 // literals, not the inspected object's storage or its boxed read cell.
                 | RuntimeFnId::GetClass
                 | RuntimeFnId::GetParentClass
+                // Reads return stream-owned bytes, never an argument view. Scratch is
+                // ignored by validated release; detached filter output must be retired.
+                | RuntimeFnId::Fread
+                | RuntimeFnId::Fgetc
                 // `__rt_chunk_split` always writes into a reservation taken from
                 // `__rt_concat_reserve`, so the split result can never alias the subject or
                 // the separator. The default `MayAliasArguments` bucket kept an owned subject
