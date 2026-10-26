@@ -106,16 +106,26 @@ pub(super) fn lower_stream_bucket_insert_aarch64(
     abi::emit_symbol_address(ctx.emitter, "x1", buckets_sym);
     ctx.emitter.instruction(&format!("mov x2, #{}", buckets_len));              // pass the `_buckets` property-name length
     abi::emit_call_label(ctx.emitter, "__rt_stdclass_get");
+    abi::emit_push_reg(ctx.emitter, "x0");
     ctx.emitter.instruction(&format!("cbz x0, {}", init));                      // missing `_buckets` property allocates a fresh array
     ctx.emitter.instruction("ldr x9, [x0]");                                    // load the property Mixed tag
     ctx.emitter.instruction("cmp x9, #4");                                      // tag 4 identifies indexed arrays
     ctx.emitter.instruction(&format!("b.ne {}", init));                         // non-array `_buckets` allocates a fresh array
     ctx.emitter.instruction("ldr x9, [x0, #8]");                                // unbox the indexed-array pointer
     ctx.emitter.instruction(&format!("cbz x9, {}", init));                      // null array payload allocates a fresh array
-    ctx.emitter.instruction("mov x0, x9");                                      // use the existing `_buckets` array
+    ctx.emitter.instruction("mov x0, x9");                                      // retain the existing indexed array independently
+    // -- acquire an array lease before retiring the owned property getter --
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::emit_push_reg(ctx.emitter, "x0");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, "x0");
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     ctx.emitter.instruction(&format!("b {}", existing));                        // skip fresh-array allocation
 
     ctx.emitter.label(init);
+    abi::emit_pop_reg(ctx.emitter, "x0");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     ctx.emitter.instruction("mov x0, #4");                                      // initial bucket-array capacity
     ctx.emitter.instruction("mov x1, #8");                                      // bucket-array elements are Mixed-cell pointers
     abi::emit_call_label(ctx.emitter, "__rt_array_new");
@@ -128,12 +138,19 @@ pub(super) fn lower_stream_bucket_insert_aarch64(
     ctx.emitter.instruction("str x10, [x0, #-8]");                              // store the updated array metadata word
 
     ctx.emitter.label(existing);
+    // -- protect the independent array lease while COW, growth and boxing can allocate --
     abi::emit_push_reg(ctx.emitter, "x0");
-    ctx.emitter.instruction("ldr x0, [sp, #16]");                               // reload the bucket Mixed cell for retention
+    abi::emit_temporary_stack_address(ctx.emitter, "x11", 0);
+    abi::emit_push_call_operand_owner(ctx.emitter, "x11", false);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 48);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 64);
+    abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+    abi::emit_store_to_sp(ctx.emitter, "x0", 48);
+    // The caller owns the bucket during append; retain the inserted child immediately after it.
+    abi::emit_push_reg(ctx.emitter, "x0");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 80);
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     abi::emit_pop_reg(ctx.emitter, "x0");
-    ctx.emitter.instruction("ldr x1, [sp, #0]");                                // pass the bucket Mixed cell to array_push
-    abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
     if prepend {
         let shift = ctx.next_label("sbp_shift");
         let insert = ctx.next_label("sbp_insert");
@@ -156,6 +173,14 @@ pub(super) fn lower_stream_bucket_insert_aarch64(
     ctx.emitter.instruction("mov x2, #0");                                      // indexed-array Mixed payloads do not use the high word
     ctx.emitter.instruction("mov x0, #4");                                      // runtime tag 4 = indexed array
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+    // -- keep the box while consuming the now-shared array lease and its unwind record --
+    abi::emit_push_reg(ctx.emitter, "x0");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 64);
+    abi::emit_store_zero_to_address(ctx.emitter, "sp", 64);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_pop_reg(ctx.emitter, "x0");
+    abi::emit_pop_call_operand_owner(ctx.emitter);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     ctx.emitter.instruction("mov x3, x0");                                      // pass the boxed array as the stdClass property value
     ctx.emitter.instruction("ldr x0, [sp, #16]");                               // reload the brigade object
     abi::emit_symbol_address(ctx.emitter, "x1", buckets_sym);
@@ -195,6 +220,7 @@ pub(super) fn lower_stream_bucket_insert_x86_64(
     abi::emit_symbol_address(ctx.emitter, "rsi", buckets_sym);
     ctx.emitter.instruction(&format!("mov rdx, {}", buckets_len));              // pass the `_buckets` property-name length
     abi::emit_call_label(ctx.emitter, "__rt_stdclass_get");
+    abi::emit_push_reg(ctx.emitter, "rax");
     ctx.emitter.instruction("test rax, rax");                                   // missing `_buckets` property allocates a fresh array
     ctx.emitter.instruction(&format!("jz {}", init));                           // branch to fresh-array allocation
     ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // load the property Mixed tag
@@ -203,10 +229,19 @@ pub(super) fn lower_stream_bucket_insert_x86_64(
     ctx.emitter.instruction("mov r10, QWORD PTR [rax + 8]");                    // unbox the indexed-array pointer
     ctx.emitter.instruction("test r10, r10");                                   // null array payload allocates a fresh array
     ctx.emitter.instruction(&format!("jz {}", init));                           // branch to fresh-array allocation
-    ctx.emitter.instruction("mov rax, r10");                                    // use the existing `_buckets` array
+    ctx.emitter.instruction("mov rax, r10");                                    // retain the existing indexed array independently
+    // -- acquire an array lease before retiring the owned property getter --
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::emit_push_reg(ctx.emitter, "rax");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, "rax");
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     ctx.emitter.instruction(&format!("jmp {}", existing));                      // skip fresh-array allocation
 
     ctx.emitter.label(init);
+    abi::emit_pop_reg(ctx.emitter, "rax");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     ctx.emitter.instruction("mov rdi, 4");                                      // initial bucket-array capacity
     ctx.emitter.instruction("mov rsi, 8");                                      // bucket-array elements are Mixed-cell pointers
     abi::emit_call_label(ctx.emitter, "__rt_array_new");
@@ -219,13 +254,19 @@ pub(super) fn lower_stream_bucket_insert_x86_64(
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // store the updated array metadata word
 
     ctx.emitter.label(existing);
+    // -- protect the independent array lease while COW, growth and boxing can allocate --
     abi::emit_push_reg(ctx.emitter, "rax");
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                   // reload the bucket Mixed cell for retention
+    abi::emit_temporary_stack_address(ctx.emitter, "r11", 0);
+    abi::emit_push_call_operand_owner(ctx.emitter, "r11", false);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 48);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 64);
+    abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+    abi::emit_store_to_sp(ctx.emitter, "rax", 48);
+    // The caller owns the bucket during append; retain the inserted child immediately after it.
+    abi::emit_push_reg(ctx.emitter, "rax");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 80);
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     abi::emit_pop_reg(ctx.emitter, "rax");
-    ctx.emitter.instruction("mov rdi, rax");                                    // pass the `_buckets` array to array_push
-    ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                        // pass the bucket Mixed cell to array_push
-    abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
     if prepend {
         let shift = ctx.next_label("sbp_shift");
         let insert = ctx.next_label("sbp_insert");
@@ -248,6 +289,14 @@ pub(super) fn lower_stream_bucket_insert_x86_64(
     ctx.emitter.instruction("xor esi, esi");                                    // indexed-array Mixed payloads do not use the high word
     ctx.emitter.instruction("mov rax, 4");                                      // runtime tag 4 = indexed array
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+    // -- keep the box while consuming the now-shared array lease and its unwind record --
+    abi::emit_push_reg(ctx.emitter, "rax");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 64);
+    abi::emit_store_zero_to_address(ctx.emitter, "rsp", 64);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_pop_reg(ctx.emitter, "rax");
+    abi::emit_pop_call_operand_owner(ctx.emitter);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     ctx.emitter.instruction("mov rcx, rax");                                    // pass the boxed array as the stdClass property value
     ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");                   // reload the brigade object
     abi::emit_symbol_address(ctx.emitter, "rsi", buckets_sym);

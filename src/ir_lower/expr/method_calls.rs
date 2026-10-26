@@ -174,21 +174,9 @@ pub(super) fn lower_method_call(
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
-    // A deferred default can throw before the invocation publishes its receiver.
-    // Place this root above result staging so normal cleanup preserves LIFO order.
-    let (object, default_receiver_owner) = if sig.as_ref().is_some_and(|signature| {
-        signature.defaults.iter().flatten()
-            .any(crate::types::deferred_defaults::contains_deferred_error)
-    }) {
-        root_owned_call_operand(ctx, object, expr.span)
-    } else {
-        (object, None)
-    };
-    // Any method or argument evaluation can throw while an independently owned receiver
-    // is still an SSA temporary. A pre-default root already protects its own receiver.
-    let receiver_pins = if default_receiver_owner.is_none() {
-        pin_in_flight_owners(ctx, &[object.value], object_expr.span)
-    } else { Vec::new() };
+    // A concrete local load may later unbox physical Mixed storage after eval widens
+    // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
+    let (object, receiver_owner) = root_owned_call_operand(ctx, object, expr.span);
     let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
@@ -227,8 +215,7 @@ pub(super) fn lower_method_call(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    unpin_in_flight_owners(ctx, receiver_pins, object_expr.span);
-    if let Some(owner) = default_receiver_owner {
+    if let Some(owner) = receiver_owner {
         retire_owned_call_operand(ctx, owner, expr.span);
     } else {
         release_owning_receiver_temporary(ctx, object, expr.span);

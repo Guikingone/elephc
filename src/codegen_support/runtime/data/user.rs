@@ -3143,7 +3143,7 @@ fn emit_user_filter_vtable(
         .copied()
         .unwrap_or(0);
     out.push_str(&format!("    .quad {}\n", params_offset));
-    // Slot 5 distinguishes boxed parameters from their native object/scalar ABI.
+    // Slot 5 describes referent representations; consumed remains an address in both ABIs.
     let boxed_params = class_info.methods.get("filter")
         .map(source_method_adapters::source_visible_signature).transpose()?
         .map(|sig| sig.params.iter().take(4).enumerate().fold(0u32, |mask, (index, (_, ty))| {

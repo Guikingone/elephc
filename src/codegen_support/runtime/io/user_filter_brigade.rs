@@ -195,8 +195,12 @@ pub fn emit_user_filter_brigade_invoke(emitter: &mut Emitter) {
         emitter.label(&format!("__rt_ufbi_arg_{cell}"));
     }
     load(emitter, owner(CONSUMED), arg3);
-    emitter.instruction(&if arm { format!("cbnz {arg3}, __rt_ufbi_consumed_ready") } else { format!("test {arg3}, {arg3}") });// boxed consumed parameters already expose their mutable cell
-    if !arm { emitter.instruction("jnz __rt_ufbi_consumed_ready"); }            // keep the boxed by-reference argument
+    emitter.instruction(if arm { "cbz x3, __rt_ufbi_consumed_scalar" } else { "test rcx, rcx" });// Mixed references point to the owner's pointer word
+    if !arm { emitter.instruction("jz __rt_ufbi_consumed_scalar"); }            // native integer references use their scalar word instead
+    emitter.instruction(&if arm { format!("add x3, sp, #{}", owner(CONSUMED)) }
+        else { format!("lea rcx, [rsp + {}]", owner(CONSUMED)) });              // writes replace the cell tracked by the existing exception guard
+    abi::emit_jump(emitter, "__rt_ufbi_consumed_ready");
+    emitter.label("__rt_ufbi_consumed_scalar");
     emitter.instruction(if arm { "add x3, sp, #112" } else { "lea rcx, [rsp + 112]" });// native integer references borrow a scalar word
     emitter.label("__rt_ufbi_consumed_ready");
     load(emitter, owner(CLOSING), if arm { "x4" } else { "r8" });

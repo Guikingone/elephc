@@ -19,6 +19,7 @@ class FileinfoRawBrigade extends php_user_filter {
         while ($bucket = stream_bucket_make_writeable($in)) {
             if (!is_bool($closing)) { echo "wrong closing flag\n"; }
             $consumed += $bucket->datalen;
+            if ($consumed !== 4) { echo "bad consumed value\n"; }
             $bucket->data = str_repeat("x", 70000);
             $bucket->datalen = strlen($bucket->data);
             stream_bucket_append($out, $bucket);
@@ -31,6 +32,7 @@ class FileinfoBoxedBrigade extends php_user_filter {
         while ($bucket = stream_bucket_make_writeable($in)) {
             if (!is_bool($closing)) { echo "wrong boxed closing flag\n"; }
             $consumed += $bucket->datalen;
+            if ($consumed !== 4) { echo "bad consumed value\n"; }
             $bucket->data = str_repeat("y", 70001);
             $bucket->datalen = strlen($bucket->data);
             stream_bucket_append($out, $bucket);
@@ -44,6 +46,7 @@ class FileinfoThrowingBrigade extends php_user_filter {
         while ($bucket = stream_bucket_make_writeable($in)) {
             $hadData = true;
             $consumed += $bucket->datalen;
+            if ($consumed !== 4) { echo "bad consumed value\n"; }
             stream_bucket_append($out, $bucket);
         }
         if ($hadData) { throw new Error("filter error"); }

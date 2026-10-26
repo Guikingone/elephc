@@ -169,20 +169,9 @@ fn lower_method_call_with_binding(
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
-    // Nullable and nullsafe dispatch need the same pre-default receiver root as direct calls.
-    let (object, default_receiver_owner) = if sig.as_ref().is_some_and(|signature| {
-        signature.defaults.iter().flatten()
-            .any(crate::types::deferred_defaults::contains_deferred_error)
-    }) {
-        root_owned_call_operand(ctx, object, expr.span)
-    } else {
-        (object, None)
-    };
-    // Nullable dispatch also borrows an independent receiver until invocation and cleanup
-    // finish. Publish that owner across throws without acquiring a borrowed local.
-    let receiver_pins = if default_receiver_owner.is_none() {
-        pin_in_flight_owners(ctx, &[object.value], expr.span)
-    } else { Vec::new() };
+    // A concrete local load may later unbox physical Mixed storage after eval widens
+    // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
+    let (object, receiver_owner) = root_owned_call_operand(ctx, object, expr.span);
     let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
     let enum_args = singular_object_class(&ctx.builder.value_php_type(object.value))
@@ -233,8 +222,7 @@ fn lower_method_call_with_binding(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    unpin_in_flight_owners(ctx, receiver_pins, expr.span);
-    if let Some(owner) = default_receiver_owner {
+    if let Some(owner) = receiver_owner {
         retire_owned_call_operand(ctx, owner, expr.span);
     } else {
         release_owning_receiver_temporary(ctx, object, expr.span);
