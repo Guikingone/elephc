@@ -492,6 +492,15 @@ string result can be an interior slice of its argument. ABI-created boxed-Mixed
 arguments use explicit post-call cleanup slots, including for constructors, and
 an exact pointer check transfers the box when a passthrough result reuses it.
 
+Method receivers are stabilized before arguments are evaluated. A borrowed
+reference-cell payload or boxed local needs a marked lifetime `Acquire` and a
+published operand-owner slot: an argument can replace that payload before the
+method instruction consumes the earlier load. The source borrow is preserved;
+only the acquired lease is retired after the call or during exceptional cleanup.
+Persistent values and proven concrete `$this` borrows keep their existing
+lifetime. Parameter receiver roots are removed before inlining only under the
+unchanged-storage proof described below.
+
 Before lowering releases an owning call-argument temporary, the checker provides
 a conservative return-to-parameter alias summary for each source function and
 method. A proven-fresh result permits cleanup of unrelated arguments; a direct

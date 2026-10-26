@@ -726,7 +726,7 @@ pub(super) fn take_published_container(
     owned
 }
 
-/// Uses the caller-held this borrow only when the complete method keeps its slot concrete.
+/// Stabilizes a receiver before arguments can replace the storage that lent its value.
 pub(super) fn root_method_receiver(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -744,7 +744,22 @@ pub(super) fn root_method_receiver(
             }
         }
     }
-    root_owned_call_operand(ctx, value, span)
+    let (value, owner) = root_owned_call_operand(ctx, value, span);
+    let ty = ctx.builder.value_php_type(value.value);
+    if owner.is_some() || !Ownership::php_type_needs_lifetime_tracking(&ty)
+        || matches!(ty.codegen_repr(), PhpType::Buffer(_))
+        || ctx.builder.value_ownership(value.value) == Ownership::Persistent
+    {
+        return (value, owner);
+    }
+    // Ref-cell and boxed local loads can borrow a payload that an argument's store
+    // replaces. Keep that exact value alive without consuming its source reference.
+    let pinned = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, value, Some(span));
+    let name = ctx.declare_hidden_temp(ty.clone());
+    ctx.store_local(&name, pinned, ty, Some(span));
+    let slot = ctx.local_slots[&name];
+    register_owned_call_operand(ctx, slot, span);
+    (pinned, Some(slot))
 }
 
 /// Publishes a temporary owner in a frame slot and returns its stable invocation operand.

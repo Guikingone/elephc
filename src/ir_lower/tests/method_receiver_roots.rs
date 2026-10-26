@@ -7,7 +7,7 @@
 //! Key details:
 //! - A later eval barrier changes ownership of even an earlier typed receiver load.
 
-use crate::ir::{Op, ValueDef};
+use crate::ir::{Immediate, Op, ValueDef};
 
 /// Stable this loads stay borrowed, while a later eval keeps their independent owner rooted.
 #[test]
@@ -20,6 +20,45 @@ class ReceiverRoot {
         $result = $this->target($value);
         eval($source);
         return $result;
+    }
+}
+
+/// Borrowed reference-cell receivers retain a marked lease without releasing the source borrow.
+#[test]
+fn method_receiver_roots_pin_borrowed_ref_cells_on_all_targets() {
+    let source = r#"<?php
+class BorrowedReceiverRoot {
+    public function target(int $value): int { return $value; }
+}
+function aliasRoot(BorrowedReceiverRoot $receiver): int {
+    $alias = &$receiver;
+    return $receiver->target(($alias = new BorrowedReceiverRoot())->target(1));
+}
+function refRoot(BorrowedReceiverRoot &$receiver): int {
+    return $receiver->target(($receiver = new BorrowedReceiverRoot())->target(1));
+}
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for name in ["aliasRoot", "refRoot"] {
+            let function = module.functions.iter().find(|function| function.name == name).unwrap();
+            let call = function.instructions.iter().filter(|inst| inst.op == Op::MethodCall).last().unwrap();
+            let ValueDef::Instruction { inst, .. } = function.value(call.operands[0]).unwrap().def
+                else { panic!("{target}: receiver has no defining instruction"); };
+            let pin = function.instruction(inst).unwrap();
+            assert_eq!(pin.op, Op::Acquire, "{target}: {name}");
+            assert_eq!(pin.immediate, Some(Immediate::Bool(true)), "{target}: {name}");
+            let source = pin.operands[0];
+            let ValueDef::Instruction { inst, .. } = function.value(source).unwrap().def
+                else { panic!("{target}: source has no defining instruction"); };
+            assert_eq!(function.instruction(inst).unwrap().op, Op::LoadRefCell, "{target}: {name}");
+            assert!(!function.instructions.iter().any(|inst| inst.op == Op::Release && inst.operands == vec![source]), "{target}: {name}");
+            assert!(function.instructions.iter().any(|inst| inst.op == Op::PushCallOperandOwner), "{target}: {name}");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
 "#;
