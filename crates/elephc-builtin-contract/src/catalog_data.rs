@@ -22363,7 +22363,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.lcg-value.php"),
-        deprecation: Some("use \\Random\\Randomizer::getFloat() instead"),
+        deprecation: Some(crate::BuiltinDeprecation::always("use \\Random\\Randomizer::getFloat() instead")),
         extension: false,
         internal: false,
         requirements: &[],

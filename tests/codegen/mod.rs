@@ -131,6 +131,7 @@ mod zval;
 
 mod fileinfo;
 mod fileinfo_autoload;
+mod fileinfo_reflection;
 mod fileinfo_validation;
 mod fileinfo_stream_diagnostics;
 mod fileinfo_wrapper_stat;
