@@ -9,6 +9,7 @@
 //! - A body read needs a duplicated scalar entry condition, preserving zero-trip behavior.
 //! - Foreign reads keep a first checked access before the header can be re-evaluated.
 //! - Inlined receiver bindings and null guards retain their original lexical and error contracts.
+//! - Effectful loops retain receiver guards and their per-iteration statement resets.
 //! - Conditional reads, faulting prefixes and header values used after the loop fail closed.
 //! - Property instructions are relocated with their original ids, spans and lexical metadata.
 
@@ -31,9 +32,11 @@ pub(super) fn hoist_property_reads(function: &mut Function) -> bool {
     loop {
         let dominance = compute_dominance(function);
         let loops = compute_loops(function, &dominance);
+        if loops.is_empty() { return changed; }
+        let predecessors = super::cfg::predecessors(function);
         let mut order: Vec<_> = loops.loops().iter().collect();
         order.sort_by_key(|loop_ref| loop_ref.depth);
-        let moved = order.into_iter().any(|loop_ref| hoist_one(function, loop_ref));
+        let moved = order.into_iter().any(|loop_ref| hoist_one(function, loop_ref, &predecessors));
         if !moved { return changed; }
         changed = true;
         // Merge before resolving descriptors, so later body accesses still reach loop hoisting.
@@ -42,14 +45,16 @@ pub(super) fn hoist_property_reads(function: &mut Function) -> bool {
 }
 
 /// Relocates the first buffer read of a clean loop header or its unconditional body entry.
-fn hoist_one(function: &mut Function, loop_ref: &NaturalLoop) -> bool {
+fn hoist_one(function: &mut Function, loop_ref: &NaturalLoop, predecessors: &[Vec<BlockId>]) -> bool {
     let Some(preheader) = loop_ref.preheader else { return false; };
-    if hoist_receiver_guard(function, loop_ref, preheader) { return true; }
     if !loop_ref.blocks.iter().all(|&block| {
         function.blocks[block.as_raw() as usize].instructions.iter().all(|&id| {
             keeps_reads_stable(function, &function.instructions[id.as_raw() as usize])
         })
     }) { return false; }
+    // Guard relocation also moves statement resets, so it needs the same buffer-preserving
+    // region as property relocation; effectful loops must keep their per-iteration boundaries.
+    if hoist_receiver_guard(function, loop_ref, preheader, predecessors) { return true; }
     let header = loop_ref.header;
     let header_insts = function.blocks[header.as_raw() as usize].instructions.clone();
     if let Some((position, &read)) = header_insts.iter().enumerate().find(|(_, id)| {
@@ -269,11 +274,11 @@ fn repair_definitions(function: &mut Function) {
 
 /// Moves an inlined accessor's invariant null check ahead of the loop, behind its zero-trip
 /// condition. The original throwing edge stays before the property read, with its own message.
-fn hoist_receiver_guard(function: &mut Function, loop_ref: &NaturalLoop, preheader: BlockId) -> bool {
+fn hoist_receiver_guard(function: &mut Function, loop_ref: &NaturalLoop, preheader: BlockId, predecessors: &[Vec<BlockId>]) -> bool {
     let Some(body) = body_entry(function, loop_ref) else { return false; };
     // An inner loop header can also be the outer loop's body entry. Reusing that block would
     // redirect its back edges to the outer header with the original entry arguments.
-    if super::cfg::predecessors(function)[body.as_raw() as usize] != [loop_ref.header] { return false; }
+    if predecessors[body.as_raw() as usize] != [loop_ref.header] { return false; }
     let block = function.blocks[body.as_raw() as usize].clone();
     let Some(Terminator::CondBr { cond, then_target, ref then_args, else_target, ref else_args }) = block.terminator
         else { return false; };

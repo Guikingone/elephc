@@ -317,3 +317,17 @@ buffer_free($slots);
         assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"));
     }
 }
+
+/// Formatting after an inlined accessor must reset scratch storage before each iteration.
+#[test]
+fn test_buffer_object_loop_formatted_output_resets_each_iteration() {
+    let row = format!("{}0", " ".repeat(39999));
+    let expected = format!("{row}{row}\ndone\n");
+    for optimized in [false, true] {
+        let output = run_property_loop(include_str!("../../fixtures/optimizer/buffer_object_concat_reset.php"), optimized);
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(output.stdout.len(), expected.len());
+        assert!(output.stdout == expected.as_bytes(), "formatted loop output differs");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"));
+    }
+}

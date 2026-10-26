@@ -128,3 +128,24 @@ final class Grid {
     }
     assert!(function.instructions.iter().any(|inst| inst.op == Op::BufferSetResolved));
 }
+
+/// Effectful loops retain their receiver guard and the statement reset used on every iteration.
+#[test]
+fn buffer_object_loop_formatted_body_keeps_reset_and_guard() {
+    let mut module = crate::ir_lower::tests::lower_source_at_for_target(
+        include_str!("../../../tests/fixtures/optimizer/buffer_object_concat_reset.php"),
+        Path::new("main.php"), Path::new("."), Target::parse("linux-x86_64").unwrap(),
+    );
+    crate::ir_passes::optimize_module(&mut module);
+    let function = module.functions.iter().find(|function| function.name == "showRows").unwrap();
+    let dominance = compute_dominance(function);
+    let loops = compute_loops(function, &dominance);
+    assert_eq!(loops.loops().len(), 1);
+    let instructions: Vec<_> = loops.loops()[0].blocks.iter().flat_map(|&block| {
+        function.blocks[block.as_raw() as usize].instructions.iter()
+            .map(|id| &function.instructions[id.as_raw() as usize])
+    }).collect();
+    assert!(instructions.iter().any(|inst| inst.op == Op::IsNull));
+    assert!(instructions.iter().any(|inst| inst.op == Op::ConcatReset));
+    assert!(!instructions.iter().any(|inst| inst.op == Op::MethodCall));
+}
