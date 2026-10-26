@@ -526,3 +526,40 @@ catch (Error $e) { echo $e->getMessage(), "\n"; }
     ), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Reference getters lend their returned cell without invoking a setter or losing COW isolation.
+#[test]
+fn test_associative_push_reference_getters_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function referenceHookValue(): int { echo "value|"; return 3; }
+class SelfReferencePushBox {
+    public array $h = [1] { &get { echo "self-get|"; return $this->h; } }
+}
+$self = new SelfReferencePushBox();
+$copy = $self->h;
+echo array_push($self->h, referenceHookValue()), "|", json_encode($self->h), "|", json_encode($copy), "\n";
+class OtherReferencePushBox {
+    public array $last = ["a" => 1];
+    public array $h { &get { echo "other-get|"; return $this->last; } }
+}
+$other = new OtherReferencePushBox();
+echo array_push($other->h, referenceHookValue()), "|", json_encode($other->last), "\n";
+class BothReferencePushBox {
+    public array $last = ["a" => 1];
+    public private(set) array $h {
+        &get { echo "both-get|"; return $this->last; }
+        set { echo "set|"; $this->last = $value; }
+    }
+}
+$both = new BothReferencePushBox();
+echo array_push($both->h), "|", json_encode($both->last), "\n";
+echo array_push($both->h, referenceHookValue()), "|", json_encode($both->last), "\n";
+"#);
+    assert_eq!(out.stdout, concat!(
+        "self-get|self-get|value|2|self-get|[1,3]|[1]\n",
+        "other-get|value|2|{\"a\":1,\"0\":3}\n",
+        "both-get|1|{\"a\":1}\n",
+        "both-get|value|2|{\"a\":1,\"0\":3}\n",
+    ), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

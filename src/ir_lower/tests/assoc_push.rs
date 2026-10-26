@@ -33,6 +33,15 @@ class TargetReadonlyPushBox {
 }
 $readonly = new TargetReadonlyPushBox();
 try { array_push($readonly->items, 2); } catch (Error $e) { echo $e->getMessage(); }
+class TargetReferencePushBox {
+    public array $backing = ["a" => 1];
+    public private(set) array $items {
+        &get { return $this->backing; }
+        set { $this->backing = $value; }
+    }
+}
+$reference = new TargetReferencePushBox();
+array_push($reference->items, 2);
 $rows = ["inner" => ["a" => 1]];
 array_push($rows["inner"], 2);
 echo json_encode($values), json_encode($copy), json_encode($mixed);

@@ -33,8 +33,11 @@ impl Checker {
                 let set = crate::names::php_symbol_key(&crate::names::property_hook_set_method(property));
                 let in_accessor = self.current_class.as_deref() == Some(owner.as_str())
                     && self.current_method.as_ref().is_some_and(|method| method == &get || method == &set);
-                let denied_hook = !in_accessor && (info.methods.contains_key(&set)
-                    || info.methods.get(&get).is_some_and(|sig| !sig.by_ref_return));
+                let reference_getter = !in_accessor
+                    && info.methods.get(&get).is_some_and(|sig| sig.by_ref_return);
+                let denied_hook = !in_accessor && !reference_getter
+                    && (info.methods.contains_key(&set)
+                        || info.methods.get(&get).is_some_and(|sig| !sig.by_ref_return));
                 let setter = info.property_set_visibilities.get(property)
                     .or_else(|| info.property_visibilities.get(property))
                     .cloned().unwrap_or(crate::parser::ast::Visibility::Public);
@@ -42,7 +45,7 @@ impl Checker {
                     Some(format!("Indirect modification of {owner}::${property} is not allowed"))
                 } else if info.readonly_properties.contains(property) {
                     Some(format!("Cannot indirectly modify readonly property {owner}::${property}"))
-                } else if !self.can_access_member(&owner, &setter) {
+                } else if !reference_getter && !self.can_access_member(&owner, &setter) {
                     let scope = self.current_class.as_ref().map_or_else(
                         || "global scope".to_string(), |class| format!("scope {class}"));
                     Some(format!("Cannot indirectly modify {}(set) property {owner}::${property} from {scope}",
