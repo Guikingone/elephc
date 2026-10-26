@@ -10,6 +10,7 @@
 //! - Each direction has an exception guard, including while another direction closes.
 //! - A refused onCreate rolls back only the provisional object's roots, without onClose.
 //! - The descriptor is returned unchanged for the caller's remaining native teardown.
+//! - During fclose, a separate descriptor guard completes native close when PHP cleanup throws.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::exceptions::guards;
@@ -93,5 +94,63 @@ pub(crate) fn emit_user_filter_release_fd(emitter: &mut Emitter) {
     emitter.label("__rt_user_filter_retire_done");
     abi::emit_load_from_address(emitter, result, frame, 0);
     abi::emit_frame_restore(emitter, 112);
+    abi::emit_return(emitter);
+    emit_close_fd_guard(emitter);
+}
+
+/// Closes the native descriptor on an escaping filter hook or destructor exception during fclose.
+/// The guard's payload is a raw descriptor, including zero, and its callback invokes no PHP.
+fn emit_close_fd_guard(emitter: &mut Emitter) {
+    let arm = emitter.target.arch == Arch::AArch64;
+    let (arg, result, frame) = if arm { ("x0", "x0", "sp") } else { ("rdi", "rax", "rsp") };
+    emitter.label_global("__rt_user_filter_close_fd");
+    // -- ordinary descriptors need no exception guard when no filter object can run PHP --
+    emitter.instruction(if arm { "add x10, x0, x0" } else { "lea r10, [rdi + rdi]" }); // select both user-filter direction entries
+    abi::emit_symbol_address(emitter, if arm { "x9" } else { "r9" }, "_user_filter_instances");
+    if arm {
+        emitter.instruction("add x9, x9, x10, lsl #3");                         // derive the adjacent read/write instance pair
+        emitter.instruction("ldp x11, x12, [x9]");                              // inspect both owners without consuming them
+        emitter.instruction("orr x11, x11, x12");                               // either live instance can run a PHP lifecycle hook
+        emitter.instruction("cbnz x11, __rt_user_filter_close_guard");          // guard descriptor ownership before running PHP
+    } else {
+        emitter.instruction("mov r11, QWORD PTR [r9 + r10 * 8]");               // inspect the read-direction instance
+        emitter.instruction("or r11, QWORD PTR [r9 + r10 * 8 + 8]");            // include the write-direction instance
+        emitter.instruction("jnz __rt_user_filter_close_guard");                // publish cleanup when either instance is live
+    }
+    abi::emit_jump(emitter, "__rt_user_filter_release_fd");
+    emitter.label("__rt_user_filter_close_guard");
+    // -- publish descriptor ownership before a close hook can escape --
+    abi::emit_frame_prologue(emitter, 64);
+    abi::emit_store_to_address(emitter, arg, frame, 0);
+    abi::emit_store_to_address(emitter, arg, frame, 40);
+    abi::emit_symbol_address(emitter, if arm { "x9" } else { "r9" }, "__rt_user_filter_close_unwind");
+    abi::emit_store_to_address(emitter, if arm { "x9" } else { "r9" }, frame, 24);
+    emitter.instruction(if arm { "add x0, sp, #16" } else { "lea rdi, [rsp + 16]" }); // identify the stack-local descriptor cleanup guard
+    emitter.instruction(if arm { "mov x1, #0" } else { "xor esi, esi" });       // publish this guard as a new activation group
+    abi::emit_call_label(emitter, "__rt_exception_guard_owned");
+    abi::emit_load_from_address(emitter, arg, frame, 0);
+    abi::emit_call_label(emitter, "__rt_user_filter_release_fd");
+    // -- normal completion leaves the final native close to the existing fclose lowerer --
+    guards::unguard(emitter, 16, 32);
+    abi::emit_load_from_address(emitter, result, frame, 0);
+    abi::emit_frame_restore(emitter, 64);
+    abi::emit_return(emitter);
+
+    // -- exceptional completion retires filter state and closes the descriptor without PHP --
+    emitter.label_global("__rt_user_filter_close_unwind");
+    abi::emit_load_from_address(emitter, if arm { "x1" } else { "rax" }, arg, 24);
+    abi::emit_load_int_immediate(emitter, if arm { "x9" } else { "r9" }, -1);
+    abi::emit_store_to_address(emitter, if arm { "x9" } else { "r9" }, arg, 24);
+    emitter.instruction(if arm { "mov x0, x1" } else { "mov rdi, rax" });       // transfer the descriptor into the native close ABI
+    for symbol in ["_stream_read_filters", "_stream_write_filters"] {
+        abi::emit_symbol_address(emitter, if arm { "x9" } else { "r9" }, symbol);
+        emitter.instruction(if arm { "strb wzr, [x9, x0]" } else { "mov BYTE PTR [r9 + rdi], 0" }); // prevent filter IDs surviving descriptor reuse
+    }
+    if arm {
+        emitter.syscall(6);
+    } else {
+        emitter.instruction("mov eax, 3");                                      // Linux x86_64 close consumes the descriptor in rdi
+        emitter.instruction("syscall");                                         // release the descriptor without invoking PHP during unwind
+    }
     abi::emit_return(emitter);
 }

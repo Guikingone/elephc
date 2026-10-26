@@ -66,6 +66,15 @@ echo "done\n";
 #[test]
 fn test_fileinfo_user_filter_lifecycle_owners() {
     let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+extern function fcntl(int $descriptor, int $command): int;
+function fileinfoOpenDescriptors(): int {
+    $count = 0;
+    for ($fd = 0; $fd < 128; $fd++) {
+        if ((fcntl($fd, 1) & 2147483648) === 0) { $count++; }
+    }
+    return $count;
+}
+$initialDescriptorCount = fileinfoOpenDescriptors();
 class FileinfoFilterOwner extends php_user_filter {
     public static int $dropped = 0;
     public static int $closed = 0;
@@ -115,9 +124,10 @@ $stream = fopen("php://temp", "w+b");
 $filter = stream_filter_append($stream, "fileinfo.owner", STREAM_FILTER_ALL, ["payload" => str_repeat("a", 43)]);
 fclose($stream); unset($filter);
 echo "all\n";
+echo "descriptors:", fileinfoOpenDescriptors() - $initialDescriptorCount, "\n";
 unset($stream, $e);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "40:32\nall\n", "{}", out.stderr);
+    assert_eq!(out.stdout, "40:32\nall\ndescriptors:0\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
