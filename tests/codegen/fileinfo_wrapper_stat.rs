@@ -132,37 +132,6 @@ stream_wrapper_unregister("statorder"); unset($f, $error);
     let (out, _) = compile_and_run_with_heap_debug_and_asm(source);
     assert!(out.success, "fileinfo program failed: {}", out.stderr);
     assert_eq!(out.stdout, "open\ncreate\nstat\nclose\nfilter-close\nfalse\nopen\ncreate\nstat\nstat failed\nopen\ncreate\ncreate failed\nopen\ncreate\ncreate\nstat\nclose\nfilter-close\nclose failed\nopen\ncreate\nstat\nclose\nfilter-close\nfalse\n");
-    if !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
-        let declarations = source.split("\nstream_wrapper_register(").next().unwrap();
-        for (label, filter, target) in [("normal", "fileinfo.stat", "false"), ("stat", "fileinfo.stat", "throw"),
-            ("create", "fileinfo.stat.create", "false"), ("close", "fileinfo.stat.close|fileinfo.stat", "false")] {
-            let tail = format!(r#"stream_wrapper_register("statorder", "FileinfoStatOrder"); stream_filter_register("fileinfo.stat", "FileinfoStatFilter"); stream_filter_register("fileinfo.stat.create", "FileinfoStatCreateFilter"); stream_filter_register("fileinfo.stat.close", "FileinfoStatCloseFilter"); $f = new finfo(FILEINFO_MIME_TYPE); try {{ $f->file("php://filter/read={filter}/resource=statorder://{target}"); }} catch (Error $error) {{ echo $error->getMessage(); }} stream_wrapper_unregister("statorder"); unset($f, $error);"#);
-            let (control, asm) = compile_and_run_with_heap_debug_and_asm(&format!("{declarations}\n{tail}"));
-            eprintln!("stat order ownership control {label}: {}\n{}", control.stdout, control.stderr);
-            if !control.stderr.contains("HEAP DEBUG: leak summary: clean") {
-                let mut selected = false;
-                let mut reader_end: Option<String> = None;
-                for line in asm.lines().filter(|line| {
-                    if line.contains("@fn ") && line.contains("__elephc_close_streams") { selected = true; }
-                    let include = selected;
-                    if line.contains("@endfn ") { selected = false; }
-                    if !include { return false; }
-                    let instruction = line.trim();
-                    if let Some(end) = &reader_end {
-                        if instruction != end { return false; }
-                        reader_end = None;
-                    }
-                    if (instruction.starts_with("jmp ") || instruction.starts_with("b "))
-                        && instruction.contains("_backtrace_call_site_")
-                    {
-                        reader_end = instruction.split_whitespace().last().map(|label| format!("{label}:"));
-                        return false;
-                    }
-                    true
-                }).take(3200) { eprintln!("{line}"); }
-            }
-        }
-    }
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

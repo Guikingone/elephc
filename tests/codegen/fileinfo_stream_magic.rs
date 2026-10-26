@@ -295,15 +295,5 @@ stream_wrapper_unregister("exceptionfileinfo"); unset($f, $stream, $mask, $e);
     assert_eq!(out.stderr.matches("finfo::file(): Failed identify data 0:cannot read `(null)'").count(), 3, "{}", out.stderr);
     assert_eq!(out.stderr.matches("mime_content_type(): Failed identify data 0:cannot read `(null)'").count(), 1, "{}", out.stderr);
     assert_eq!(out.stderr.matches("FileinfoExceptionWrapper::stream_cast must return a stream resource").count(), 3, "{}", out.stderr);
-    if !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
-        let declarations = source.split("\nstream_wrapper_register(").next().unwrap();
-        for kind in ["read", "int", "value", "throwing", "filter"] {
-            let path = if kind == "filter" { "php://filter/read=fileinfo.exception/resource=exceptionfileinfo://normal".to_string() }
-                else { format!("exceptionfileinfo://{kind}") };
-            let tail = format!(r#"stream_wrapper_register("exceptionfileinfo", "FileinfoExceptionWrapper"); stream_filter_register("fileinfo.exception", "FileinfoExceptionFilter"); $f = new finfo(FILEINFO_MIME_TYPE); fileinfoExceptionQuery($f, "{path}"); stream_wrapper_unregister("exceptionfileinfo"); unset($f);"#);
-            let (control, _) = compile_and_run_with_heap_debug_and_asm(&format!("{declarations}\n{tail}"));
-            eprintln!("exception ownership control {kind}: {}\n{}", control.stdout, control.stderr);
-        }
-    }
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

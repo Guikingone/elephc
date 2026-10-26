@@ -108,23 +108,6 @@ for ($i = 0; $i < 4; $i++) {
 unset($stream, $e, $name);
 "#;
     let (out, _) = compile_and_run_with_heap_debug_and_asm(source);
-    if !out.success || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
-        let declarations = source.split("\nstream_filter_register(").next().unwrap();
-        for class in ["FileinfoPassBrigade", "FileinfoRawBrigade", "FileinfoBoxedBrigade", "FileinfoThrowingBrigade"] {
-            let tail = format!(r#"stream_filter_register("fileinfo.brigade.control", "{class}"); $stream = fopen("php://temp", "w+b"); fwrite($stream, "seed"); rewind($stream); $filter = stream_filter_append($stream, "fileinfo.brigade.control", STREAM_FILTER_READ); try {{ $data = stream_get_contents($stream, 100000); echo strlen($data); }} catch (Error $error) {{ echo $error->getMessage(); }} fclose($stream); unset($stream, $filter, $data, $error);"#);
-            let (control, asm) = compile_and_run_with_heap_debug_and_asm(&format!("{declarations}\n{tail}"));
-            eprintln!("brigade ownership control {class}: {}\n{}", control.stdout, control.stderr);
-            if !control.stderr.contains("HEAP DEBUG: leak summary: clean") {
-                let mut selected = false;
-                for line in asm.lines().filter(|line| {
-                    if line.contains("@fn ") && line.contains(class) && line.contains("filter") { selected = true; }
-                    let include = selected;
-                    if line.contains("@endfn ") { selected = false; }
-                    include
-                }).take(1800) { eprintln!("{class}: {line}"); }
-            }
-        }
-    }
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, format!("4\n{}:21\n{}", "new".repeat(7), "70000:x\n70001:y\nfilter error\n".repeat(4)), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
