@@ -2,7 +2,7 @@
 title: "__elephc_opcache_rt_is_cached() - internals"
 description: "Compiler internals for __elephc_opcache_rt_is_cached(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1161
+  order: 1168
 ---
 
 ## `__elephc_opcache_rt_is_cached()` - internals

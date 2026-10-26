@@ -2,7 +2,7 @@
 title: "xmlwriter_start_dtd_attlist()"
 description: "Starts a DTD attribute list declaration."
 sidebar:
-  order: 1063
+  order: 1069
 ---
 
 ## xmlwriter_start_dtd_attlist()
