@@ -179,13 +179,13 @@ fn functions(php_version: PhpVersion) -> Program {
     ]).build());
     if php_version >= PhpVersion::Php85 {
         for statement in &mut out {
-            if let StmtKind::FunctionDecl { name, attributes, .. } = &mut statement.kind {
+            if let StmtKind::FunctionDecl { name, .. } = &statement.kind {
                 if name.as_str() == "finfo_close" {
                     let args = [("since", "8.5"), ("message", "as finfo objects are freed automatically")]
                         .into_iter().map(|(name, value)| Expr::new(ExprKind::NamedArg {
                             name: name.to_string(), value: Box::new(e_str(value)),
                         }, Span::dummy())).collect();
-                    attributes.push(attr("\\Deprecated", args));
+                    statement.attributes.push(attr("\\Deprecated", args));
                 }
             }
         }
