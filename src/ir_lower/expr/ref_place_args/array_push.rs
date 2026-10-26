@@ -42,7 +42,8 @@ pub(super) fn lower_live_array_push_place(
             if let ExprKind::PropertyAccess { property, .. } = &root.kind {
                 let getter = crate::names::php_symbol_key(&crate::names::property_hook_get_method(property));
                 let reads_hook = !ctx.in_own_property_accessor(property)
-                    && plan.as_ref().and_then(|plan| ctx.classes.get(&plan.class_name))
+                    && plan.as_ref().and_then(|plan| plan.class_name.as_ref())
+                        .and_then(|class| ctx.classes.get(class))
                         .and_then(|info| info.methods.get(&getter)).is_some_and(|sig| !sig.by_ref_return);
                 if reads_hook {
                     let value = lower_expr(ctx, root);
@@ -170,7 +171,7 @@ fn reference_getter_method(ctx: &LoweringContext<'_, '_>, place: &Expr) -> Optio
             let plan = property_plan(ctx, place)?;
             let method = crate::names::property_hook_get_method(property);
             let key = crate::names::php_symbol_key(&method);
-            ctx.classes.get(&plan.class_name)?.methods.get(&key)
+            ctx.classes.get(plan.class_name.as_ref()?)?.methods.get(&key)
                 .is_some_and(|sig| sig.by_ref_return).then_some(method)
         }
         ExprKind::ArrayAccess { array, .. } | ExprKind::ErrorSuppress(array) =>
@@ -184,9 +185,18 @@ fn freeze_place(ctx: &mut LoweringContext<'_, '_>, place: &Expr, snapshots: &mut
     match &place.kind {
         ExprKind::PropertyAccess { object, property } => {
             let temp = array_push_spread::stage_value(ctx, object);
-            if let Some(plan) = property_plan(ctx, place) {
-                let class = plan.class_name.clone();
-                // The checker proved this non-null class at this exact source point.
+            if let Some(class) = property_plan(ctx, place)
+                .and_then(|plan| plan.class_name.clone()) {
+                let object = ctx.load_local(&temp, Some(place.span));
+                let class_data = ctx.intern_class_name(&class);
+                let matches = ctx.emit_value(Op::InstanceOf, vec![object.value],
+                    Some(Immediate::Data(class_data)), PhpType::Bool,
+                    Op::InstanceOf.default_effects(), Some(place.span));
+                crate::ir_lower::ownership::release_if_owned(ctx, object, Some(place.span));
+                array_push_spread::require(ctx, matches, "TypeError",
+                    "array_push() property receiver class is not stable at this source position",
+                    true, place.span);
+                // The source plan and runtime guard agree on this non-null class.
                 // Frame storage may stay Mixed while the load recovers its native object view.
                 ctx.set_local_type(&temp, PhpType::Object(class));
             }
@@ -215,7 +225,8 @@ fn property_plan<'a>(
 ) -> Option<&'a crate::types::ArrayPushPropertyPlan> {
     match &place.kind {
         ExprKind::PropertyAccess { .. } => ctx.array_push_property_plans
-            .get(&(ctx.loop_storage_scope.clone(), place.span)),
+            .get(&(ctx.loop_storage_scope.clone(), place.span))
+            .filter(|plan| plan.class_name.is_some()),
         ExprKind::ArrayAccess { array, .. } | ExprKind::ErrorSuppress(array) => property_plan(ctx, array),
         _ => None,
     }

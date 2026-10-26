@@ -1387,6 +1387,76 @@ array_push($rows[0], ...$tail);
     }
 }
 
+/// Incompatible object specializations cannot leave a concrete property layout behind.
+#[test]
+fn test_error_array_push_rejects_ambiguous_property_layouts() {
+    for calls in ["pushPlan($a); pushPlan($b);", "pushPlan($b); pushPlan($a);"] {
+        let source = format!(r#"<?php
+class PushPlanA {{ public array $items = []; }}
+class PushPlanB {{ public int $pad = 7; public string $text = "s"; public array $items = []; }}
+function pushPlan($box) {{ return array_push($box->items, 1); }}
+$a = new PushPlanA(); $b = new PushPlanB();
+{calls}
+"#);
+        expect_error(&source, "array_push() property reference has ambiguous receiver classes");
+    }
+}
+
+/// Unsupported static and global-nested storage is diagnosed before backend emission.
+#[test]
+fn test_error_array_push_rejects_unsupported_static_and_global_places() {
+    expect_error(r#"<?php
+function staticHashPush() { static $items = ["a" => 1, "b" => "s"]; return array_push($items, 5); }
+staticHashPush();
+"#, "array_push() does not support associative static-local receivers");
+    for source in [
+        r#"<?php
+function staticSpreadValues(): Generator { yield 3; }
+function staticListPush() { static $items = [1, 2]; return array_push($items, ...staticSpreadValues()); }
+staticListPush();
+"#,
+        r#"<?php
+$rows = [[1]];
+function globalSpreadValues(): Generator { yield 3; }
+function globalNestedPush() { global $rows; return array_push($rows[0], ...globalSpreadValues()); }
+globalNestedPush();
+"#,
+    ] {
+        expect_error(source, "array_push() runtime spreads require stable non-aliased receiver storage");
+    }
+}
+
+/// Boxed untyped parameters produce a source diagnostic when typed hash storage cannot accept them.
+#[test]
+fn test_error_array_push_boxed_parameters_have_source_diagnostics() {
+    for source in [
+        r#"<?php
+function pushUntypedInt($value) { $items = ["a" => 1]; return array_push($items, $value); }
+pushUntypedInt(5);
+"#,
+        r#"<?php
+function pushUntypedString($value) { $items = ["a" => "x"]; return array_push($items, $value); }
+pushUntypedString("y");
+"#,
+        r#"<?php
+class UntypedPushMethod {
+    public function push($value) { $items = ["a" => 1]; return array_push($items, $value); }
+}
+$pusher = new UntypedPushMethod(); $pusher->push(5);
+"#,
+        r#"<?php
+$push = function ($value) { $items = ["a" => 1]; return array_push($items, $value); };
+$push(5);
+"#,
+        r#"<?php
+function pushCopiedUntyped($value) { $copy = $value; $items = ["a" => 1]; return array_push($items, $copy); }
+pushCopiedUntyped(5);
+"#,
+    ] {
+        expect_error(source, "array_push() values must match the associative receiver entry type");
+    }
+}
+
 /// Reference-aliased indexed receivers reject a plain value that would retype one alias slot.
 #[test]
 fn test_error_array_push_reference_alias_rejects_incompatible_plain_value() {
@@ -1395,6 +1465,12 @@ fn test_error_array_push_reference_alias_rejects_incompatible_plain_value() {
 $values = [1];
 $alias =& $values;
 array_push($alias, "wrong");
+"#,
+        r#"<?php
+$values = [1];
+$show = function () use (&$values) { return json_encode($values); };
+array_push($values, "wrong");
+echo $show();
 "#,
         r#"<?php
 $values = [1];

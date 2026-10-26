@@ -38,12 +38,20 @@ builtin! {
 /// associative or a declared PHP array with boxed storage. Returns the new element count as `Int`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    if matches!(&cx.args[0].kind, ExprKind::Variable(name)
+        if cx.checker.active_statics.contains(name))
+        && matches!(arr_ty.codegen_repr(), PhpType::AssocArray { .. })
+    {
+        return Err(CompileError::new(cx.args[0].span,
+            "array_push() does not support associative static-local receivers"));
+    }
     let denied_place = cx
         .checker
         .record_array_push_reference_place(&cx.args[0], cx.env)?;
     let aliased_indexed_receiver = cx
         .checker
-        .local_has_ref_assign_alias(&cx.args[0]);
+        .local_has_ref_assign_alias(&cx.args[0])
+        || cx.checker.local_has_prior_array_capture(&cx.args[0]);
     let runtime_spread_supported = cx
         .checker
         .array_push_runtime_spread_supported(&cx.args[0], &arr_ty, cx.env)?;
@@ -69,14 +77,14 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             let (_, element) = cx
                 .checker
                 .infer_runtime_iterated_call_arg_types(&cx.args[index], cx.env)?;
-            if is_active_global_argument(cx, &cx.args[index]) {
+            if is_boxed_argument_source(cx, &cx.args[index]) {
                 PhpType::Mixed
             } else {
                 element
             }
         } else {
             let inferred = cx.checker.infer_type(&cx.args[index], cx.env)?;
-            if is_active_global_argument(cx, &cx.args[index]) {
+            if is_boxed_argument_source(cx, &cx.args[index]) {
                 PhpType::Mixed
             } else {
                 inferred
@@ -110,8 +118,8 @@ fn is_runtime_spread_argument(argument: &Expr) -> bool {
         if !matches!(source.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)))
 }
 
-/// Returns whether one pushed value or spread source is backed by boxed global storage.
-fn is_active_global_argument(cx: &BuiltinCheckCtx<'_>, argument: &Expr) -> bool {
+/// Returns whether a pushed value or spread source is backed by boxed global or parameter storage.
+fn is_boxed_argument_source(cx: &BuiltinCheckCtx<'_>, argument: &Expr) -> bool {
     let mut value = argument;
     while let ExprKind::Spread(inner)
     | ExprKind::NamedArg { value: inner, .. }
@@ -119,5 +127,7 @@ fn is_active_global_argument(cx: &BuiltinCheckCtx<'_>, argument: &Expr) -> bool 
     {
         value = inner;
     }
-    matches!(&value.kind, ExprKind::Variable(name) if cx.checker.active_globals.contains(name))
+    matches!(&value.kind, ExprKind::Variable(name)
+        if cx.checker.active_globals.contains(name)
+            || cx.checker.boxed_parameter_locals.contains(name))
 }

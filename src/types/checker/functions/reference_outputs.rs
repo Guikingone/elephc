@@ -23,10 +23,35 @@ impl Checker {
     ) -> Result<bool, crate::errors::CompileError> {
         match &receiver.kind {
             ExprKind::PropertyAccess { object, property } => {
+                if matches!(&object.kind, ExprKind::Variable(name)
+                    if self.boxed_parameter_locals.contains(name))
+                {
+                    return Err(crate::errors::CompileError::new(receiver.span,
+                        "array_push() property reference has ambiguous receiver classes; declare the receiver parameter class"));
+                }
                 let ty = self.infer_type(object, env)?;
-                if !matches!(ty.codegen_repr(), PhpType::Object(_)) { return Ok(false); }
-                let Some(class) = super::super::single_object_class_name(&ty) else { return Ok(false); };
-                let Some(info) = self.classes.get(class.as_str()) else { return Ok(false); };
+                let key = (self.current_loop_storage_scope.clone(), receiver.span);
+                let class = super::super::single_object_class_name(&ty);
+                let concrete = matches!(ty.codegen_repr(), PhpType::Object(_))
+                    && class.as_ref().is_some_and(|class| self.classes.contains_key(class));
+                if !concrete && self.array_push_property_plans.get(&key)
+                    .is_some_and(|plan| plan.class_name.is_some())
+                {
+                    return Err(crate::errors::CompileError::new(receiver.span,
+                        "array_push() property reference has ambiguous receiver classes at this source position"));
+                }
+                if !concrete
+                    || self.array_push_property_plans.get(&key)
+                        .is_some_and(|plan| plan.class_name.is_none())
+                {
+                    self.array_push_property_plans.insert(key,
+                        crate::types::ArrayPushPropertyPlan {
+                            class_name: None, rejection: None, live_addressable: false,
+                        });
+                    return Ok(false);
+                }
+                let class = class.expect("single receiver class checked above");
+                let info = &self.classes[class.as_str()];
                 let owner = info.property_declaring_classes.get(property)
                     .cloned().unwrap_or_else(|| class.clone());
                 let get = crate::names::php_symbol_key(&crate::names::property_hook_get_method(property));
@@ -64,9 +89,8 @@ impl Checker {
                             && property_ty.as_ref()
                                 .is_some_and(PhpType::supports_live_array_push_place)));
                 let plan = crate::types::ArrayPushPropertyPlan {
-                    class_name: class.clone(), rejection, live_addressable,
+                    class_name: Some(class.clone()), rejection, live_addressable,
                 };
-                let key = (self.current_loop_storage_scope.clone(), receiver.span);
                 if self.array_push_property_plans.get(&key).is_some_and(|existing| existing != &plan) {
                     return Err(crate::errors::CompileError::new(receiver.span,
                         "array_push() property reference has ambiguous receiver classes at this source position"));
@@ -107,7 +131,9 @@ impl Checker {
             root = array;
         }
         Ok(match &root.kind {
-            ExprKind::Variable(_) => true,
+            ExprKind::Variable(name) => !self.active_statics.contains(name)
+                && (!self.active_globals.contains(name)
+                    || matches!(receiver.kind, ExprKind::Variable(_))),
             ExprKind::PropertyAccess { .. } => self
                 .array_push_property_plans
                 .get(&(self.current_loop_storage_scope.clone(), root.span))

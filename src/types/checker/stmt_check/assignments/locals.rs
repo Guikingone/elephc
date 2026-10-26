@@ -218,6 +218,15 @@ pub(super) fn check_assign(
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
     let merged = merge_local_assignment_type(checker, name, &ty, value, span, env, stmt_form);
     if merged.is_ok() {
+        if checker.local_conditional_depth == 0 {
+            let boxed_source = matches!(&value.kind, ExprKind::Variable(source)
+                if checker.boxed_parameter_locals.contains(source));
+            if boxed_source {
+                checker.boxed_parameter_locals.insert(name.to_string());
+            } else {
+                checker.boxed_parameter_locals.remove(name);
+            }
+        }
         // Whatever the environment holds for `name` from here on was put there by this store,
         // so a guard that narrowed the name no longer speaks for it. `merge_local_assignment_type`
         // has already consulted the guard view, which is why this runs after it and not before.

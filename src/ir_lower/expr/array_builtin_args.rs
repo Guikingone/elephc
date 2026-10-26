@@ -9,6 +9,27 @@
 
 use super::*;
 
+/// Reports source-located storage incompatibility when boxed parameters reach a typed hash push.
+pub(super) fn validate_typed_array_push_operands(
+    ctx: &LoweringContext<'_, '_>, def: &crate::builtins::registry::BuiltinDef,
+    operands: &[crate::ir::ValueId], span: Span,
+) {
+    if !matches!(def.spec.semantics.lowering,
+        crate::builtins::semantics::BuiltinLowering::Runtime(
+            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayPush)))
+    { return; }
+    let Some(receiver) = operands.first() else { return; };
+    let PhpType::AssocArray { value, .. } = ctx.builder.value_php_type(*receiver).codegen_repr()
+        else { return; };
+    if matches!(value.codegen_repr(), PhpType::Mixed | PhpType::Iterable) { return; }
+    if operands.iter().skip(1).any(|value|
+        ctx.builder.value_php_type(*value).codegen_repr() == PhpType::Mixed)
+    {
+        crate::ir_lower::diagnostics::refuse(span,
+            "array_push() values must match the associative receiver entry type; use mixed entries for boxed values");
+    }
+}
+
 /// Lowers `array_push($local, $value…)` as direct indexed-array mutations.
 ///
 /// The fast path for the common receiver: a plain local already typed as an indexed array, where

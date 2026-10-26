@@ -60,8 +60,8 @@ pub enum ThrowAccessKind {
 /// Checker-selected native property storage and any indirect-write refusal at one call site.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArrayPushPropertyPlan {
-    /// The receiver class before argument effects or lowering invalidate local flow facts.
-    pub class_name: String,
+    /// The proven receiver class, or `None` when specialization requires dynamic property access.
+    pub class_name: Option<String>,
     /// PHP's catchable Error at reference binding, before evaluating later arguments.
     pub rejection: Option<String>,
     /// Whether lowering may bind a managed live reference to this exact property slot.

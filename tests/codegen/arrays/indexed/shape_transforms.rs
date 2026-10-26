@@ -442,15 +442,11 @@ echo $hashCount, "|", json_encode($hashRows), "|", json_encode($hashAlias), "\n"
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// By-reference closure captures use boxed storage and may widen with plain pushed values.
+/// Closure-body mutations keep their boxed capture path while native alias readers stay typed.
 #[test]
 fn test_array_push_reference_captures_allow_plain_value_widening() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
-$list = [1];
-$show = function () use (&$list) { return json_encode($list); };
-$first = array_push($list, "x");
-echo $first, "|", json_encode($list), "|", $show(), "\n";
 $captured = [1];
 $add = function () use (&$captured) { return array_push($captured, "y"); };
 echo $add(), "|", json_encode($captured), "\n";
@@ -461,8 +457,44 @@ array_push($alias, 2);
 echo json_encode($alias), "|", $readShared(), "\n";
 "#,
     );
-    assert_eq!(out.stdout, "2|[1,\"x\"]|[1,\"x\"]\n2|[1,\"y\"]\n[1,2]|[1,2]\n", "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "2|[1,\"y\"]\n[1,2]|[1,2]\n", "stderr: {}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Unrelated read-only array captures retain native storage for typed consumers in both frames.
+/// The pre-bound native reference control has the same retained graph, so require no added owner.
+#[test]
+fn test_array_push_capture_plans_preserve_read_only_array_builtins() {
+    let source = r#"<?php
+$values = [3, 1, 2];
+$read = function () use (&$values) {
+    echo min($values), "/", max($values), "|", array_search(1, $values, true), "\n";
+    echo implode(",", array_merge($values, [4])), "|";
+    echo implode(",", array_diff($values, [1])), "|";
+    echo implode(",", $values + [5 => 5]), "\n";
+};
+$read();
+echo min($values), "/", max($values), "|", array_search(1, $values, true), "\n";
+echo implode(",", array_merge($values, [4])), "|", implode(",", array_diff($values, [1])), "\n";
+$floats = [2.5, 1.5];
+$floatRead = function () use (&$floats) { return min($floats) + max($floats) + array_sum($floats); };
+echo $floatRead(), "\n";
+array_push($values, 10);
+echo min($values), "/", max($values), "\n";
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    let control = compile_and_run_with_heap_debug(&source
+        .replacen("$read =", "$controlAlias =& $values;\n$read =", 1)
+        .replacen("$floatRead =", "$floatAlias =& $floats;\n$floatRead =", 1));
+    assert_eq!(out.stdout,
+        "1/3|1\n3,1,2,4|3,2|3,1,2,5\n1/3|1\n3,1,2,4|3,2\n8\n1/10\n",
+        "stderr: {}", out.stderr);
+    assert_eq!(control.stdout, out.stdout, "native control: {}", control.stderr);
+    let summary = |stderr: &str| stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .expect("heap debug must report final ownership").to_owned();
+    assert_eq!(summary(&out.stderr), summary(&control.stderr),
+        "candidate: {}\npre-bound native control: {}", out.stderr, control.stderr);
 }
 
 /// Indexed spread appends share the ordinary widening path for every source and value shape.

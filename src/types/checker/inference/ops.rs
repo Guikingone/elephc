@@ -513,6 +513,10 @@ impl Checker {
         for capture in capture_refs {
             self.ref_aliased_locals.insert(capture.clone());
             self.non_builtin_ref_aliased_locals.insert(capture.clone());
+            if expr.span.identifies_a_node() {
+                self.array_push_capture_sites.entry(capture.clone())
+                    .or_default().insert(expr.span);
+            }
         }
         // Every closure parameter is bound unconditionally on entry, so all of them are
         // recorded at binding depth 0. A `use ($x)` CAPTURE is deliberately absent: it is
@@ -556,6 +560,9 @@ impl Checker {
             pre_bound_own_storage,
             body,
             |checker| {
+                checker.boxed_parameter_locals.extend(params.iter()
+                    .filter(|(_, annotation, _, _)| annotation.is_none())
+                    .map(|(name, _, _, _)| name.clone()));
                 checker.ref_assign_aliased_locals.extend(ref_assign_captures);
                 for stmt in body {
                     checker.check_stmt(stmt, &mut closure_sig.env)?;

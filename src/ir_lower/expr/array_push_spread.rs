@@ -306,7 +306,7 @@ fn require_iterable(
 }
 
 /// Emits a catchable PHP argument error while preserving all outer argument owner records.
-fn require(ctx: &mut LoweringContext<'_, '_>, condition: LoweredValue, class: &str, message: &str, expected: bool, span: Span) {
+pub(super) fn require(ctx: &mut LoweringContext<'_, '_>, condition: LoweredValue, class: &str, message: &str, expected: bool, span: Span) {
     let valid = ctx.builder.create_named_block("push.unpack.valid", Vec::new());
     let invalid = ctx.builder.create_named_block("push.unpack.invalid", Vec::new());
     ctx.builder.terminate(Terminator::CondBr { cond: condition.value,

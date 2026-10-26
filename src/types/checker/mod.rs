@@ -530,6 +530,8 @@ pub(crate) struct Checker {
     /// Unlike captures and by-reference parameters, these can retain native packed-array
     /// storage through multiple local names, so a write must not widen only one view.
     pub ref_assign_aliased_locals: HashSet<String>,
+    /// Earlier by-reference captures whose native element layout a later push must preserve.
+    pub array_push_capture_sites: HashMap<String, HashSet<Span>>,
     /// Current local bindings that alias a managed container entry whose physical cell payload
     /// is canonical boxed `Mixed`, even when the checker's logical value type is narrower.
     pub boxed_ref_aliased_locals: HashSet<String>,
@@ -542,6 +544,8 @@ pub(crate) struct Checker {
     /// re-bind skips these: backtrace frames read a parameter's argument value from the FIRST
     /// slot of that name, so splitting a parameter's binding would report a stale argument.
     pub local_parameter_names: HashSet<String>,
+    /// Untyped formal bindings that still load through the callee's boxed incoming storage.
+    pub boxed_parameter_locals: HashSet<String>,
     /// Names whose type was DECLARED in the current body by a `TypedAssign` local
     /// (`int $x = …`), and what each was declared AS. A declaration is a programmer contract
     /// and stays strict in both permissive and `--strict-locals` mode.
@@ -683,10 +687,12 @@ pub(crate) struct SavedLocalBindingScope {
     ref_aliased: HashSet<String>,
     non_builtin_ref_aliased: HashSet<String>,
     ref_assign_aliased: HashSet<String>,
+    array_push_capture_sites: HashMap<String, HashSet<Span>>,
     boxed_ref_aliased: HashSet<String>,
     boxed_ref_invalidations: Vec<HashSet<String>>,
     statics: HashSet<String>,
     parameters: HashSet<String>,
+    boxed_parameters: HashSet<String>,
     typed: HashMap<String, PhpType>,
     mixed_storage: HashSet<String>,
     guarded_unions: HashMap<String, PhpType>,
@@ -882,12 +888,14 @@ impl Checker {
                 &mut self.non_builtin_ref_aliased_locals,
             ),
             ref_assign_aliased: std::mem::take(&mut self.ref_assign_aliased_locals),
+            array_push_capture_sites: std::mem::take(&mut self.array_push_capture_sites),
             boxed_ref_aliased: std::mem::take(&mut self.boxed_ref_aliased_locals),
             boxed_ref_invalidations: std::mem::take(
                 &mut self.conditional_boxed_ref_invalidations,
             ),
             statics: std::mem::take(&mut self.static_local_names),
             parameters: std::mem::take(&mut self.local_parameter_names),
+            boxed_parameters: std::mem::take(&mut self.boxed_parameter_locals),
             typed: std::mem::take(&mut self.typed_local_names),
             // The mixed-storage marking describes ONE frame: a name boxed in the caller says
             // nothing about a same-named local in the callee, and leaking the set inward would
@@ -917,10 +925,12 @@ impl Checker {
         self.ref_aliased_locals = saved.ref_aliased;
         self.non_builtin_ref_aliased_locals = saved.non_builtin_ref_aliased;
         self.ref_assign_aliased_locals = saved.ref_assign_aliased;
+        self.array_push_capture_sites = saved.array_push_capture_sites;
         self.boxed_ref_aliased_locals = saved.boxed_ref_aliased;
         self.conditional_boxed_ref_invalidations = saved.boxed_ref_invalidations;
         self.static_local_names = saved.statics;
         self.local_parameter_names = saved.parameters;
+        self.boxed_parameter_locals = saved.boxed_parameters;
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
         self.guarded_union_types = saved.guarded_unions;
@@ -1037,6 +1047,8 @@ impl Checker {
     /// captures, or reflected class of the binding that is gone — that is how a stale
     /// `$f()` signature would survive an `unset($f)`.
     pub(crate) fn clear_local_binding_metadata(&mut self, name: &str) {
+        self.boxed_parameter_locals.remove(name);
+        self.array_push_capture_sites.remove(name);
         self.invalidate_boxed_ref_alias_binding(name);
         self.closure_return_types.remove(name);
         self.callable_sigs.remove(name);
@@ -1095,6 +1107,15 @@ impl Checker {
     /// Returns whether a local at an indexed receiver's root belongs to an explicit `=&` group.
     pub(crate) fn local_has_ref_assign_alias(&self, expr: &Expr) -> bool {
         self.local_root_is_in_set(expr, &self.ref_assign_aliased_locals)
+    }
+
+    /// Returns whether an earlier closure in this body can still read the receiver's native layout.
+    pub(crate) fn local_has_prior_array_capture(&self, expr: &Expr) -> bool {
+        let mut current = expr;
+        while let ExprKind::ArrayAccess { array, .. }
+        | ExprKind::NamedArg { value: array, .. }
+        | ExprKind::ErrorSuppress(array) = &current.kind { current = array; }
+        matches!(&current.kind, ExprKind::Variable(name) if self.array_push_capture_sites.contains_key(name))
     }
 
     /// Returns whether the local at an expression's root belongs to `names`.

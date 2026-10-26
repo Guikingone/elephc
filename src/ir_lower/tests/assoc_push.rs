@@ -57,7 +57,7 @@ $rowsAlias =& $referenceRows;
 array_push($referenceRows[0], 2);
 $captured = [1];
 $readCaptured = function () use (&$captured) { return json_encode($captured); };
-array_push($captured, "x");
+array_push($captured, 2);
 echo $readCaptured();
 echo json_encode($values), json_encode($copy), json_encode($mixed);
 "#;
