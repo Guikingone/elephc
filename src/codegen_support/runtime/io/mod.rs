@@ -95,6 +95,7 @@ mod https;
 mod notification;
 mod stream_wrapper_register;
 mod stream_wrapper_unregister;
+mod stream_registry;
 mod http_build_request;
 mod stream_context_get_ssl_peer_name;
 mod apply_socket_opts;
@@ -217,6 +218,7 @@ pub(crate) use http::emit_http;
 pub(crate) use https::emit_https;
 pub(crate) use stream_wrapper_register::emit_stream_wrapper_register;
 pub(crate) use stream_wrapper_unregister::emit_stream_wrapper_unregister;
+pub(crate) use stream_registry::emit_stream_registry;
 pub(crate) use http_build_request::emit_http_build_request;
 pub(crate) use stream_context_get_ssl_peer_name::emit_get_ssl_peer_name;
 pub(crate) use apply_socket_opts::{

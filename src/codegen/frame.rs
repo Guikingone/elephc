@@ -703,6 +703,7 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     if ctx.module.required_runtime_features.mbstring || ctx.module.required_runtime_features.eval_bridge {
         abi::emit_call_label(ctx.emitter, "__rt_mbstring_release_catalog");
     }
+    abi::emit_call_label(ctx.emitter, "__rt_stream_registry_cleanup");
     // The exact root brackets every PHP callback that shutdown can invoke:
     // output handlers above and object destructors from the cleanup paths. If
     // it exits earlier, those functions become disconnected graph roots and

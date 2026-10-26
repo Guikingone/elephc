@@ -56,7 +56,7 @@ through the existing activation chain. Frame-sensitive optimization gates retain
 the needed frames. A new regression covers direct, nested and callable
 finfo_close, buffer deprecation, stream warnings and default diagnostic output.
 
-There are 47 fileinfo surface tests, 8 native tests, two focused ownership
+There are 47 fileinfo surface tests, 8 native tests, three focused ownership
 regressions and a TLS regression. PHP 8.5.12 reference oracles and safe static
 documentation/site, assembly-comment and diff checks pass. The latest candidate
 still needs compiled CI validation and a full current-head Grok verdict.
@@ -65,3 +65,13 @@ Round 10 attempts bcf47f53-67d3-48af-b5af-72b7076ccfa1 and
 22e203aa-0aa3-4536-a5c2-645755dbbedf were cancelled before source corrections
 and have no verdict. All guest processes stopped before edits. No local compiled
 tests were run. Task-owned oracle files and servers were removed.
+
+The latest execution on abfd283de ran47 surface cases on each Linux host,
+with38 passing and9 failing. Filter callback traces now match. Remaining failures
+primarily identify string owners retained by wrapper/filter registrations and a
+filtered byte accumulator. Registry rows now release both persisted strings on
+unregister and at normal executable shutdown, after resource close callbacks.
+The filter reader retires its fallible boxed input before maintaining a separate
+string byte accumulator. Diagnostic line tests use a static expected value to
+avoid an unrelated global-reference capture backend limitation. New cases and
+these corrections await fresh CI; no local compiled tests ran.
