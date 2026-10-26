@@ -70,7 +70,10 @@ pub(super) fn prepare_call_site(
         .exception_activation_offset
         .expect("backtrace activation requires an activation frame slot");
     abi::store_at_offset(ctx.emitter, scratch, activation_offset - 32);
-    let callback = ctx.next_label("backtrace_frame_reader");
+    // Address-taken entries need real symbols: Mach-O folds temporary L labels into
+    // their enclosing symbol's signed 24-bit addend, which large PHP frames exceed.
+    // label() keeps this entry file-local; it is not exported with .globl.
+    let callback = ctx.next_global_label("backtrace_frame_reader");
     abi::emit_symbol_address(ctx.emitter, scratch, &callback);
     abi::store_at_offset(ctx.emitter, scratch, activation_offset - 24);
 
@@ -234,13 +237,13 @@ fn emit_trace_limit_guard(ctx: &mut FunctionContext<'_>, done: &str) {
 fn emit_skip_owned_guard(ctx: &mut FunctionContext<'_>, cursor: &str, next: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr x11, [{cursor}, #16]"));
-            ctx.emitter.instruction(&format!("cmp x11, {cursor}"));
-            ctx.emitter.instruction(&format!("b.eq {next}"));
+            ctx.emitter.instruction(&format!("ldr x11, [{cursor}, #16]"));      // load the activation self-pointer or an owned-value payload
+            ctx.emitter.instruction(&format!("cmp x11, {cursor}"));             // distinguish activation records from ownership guards
+            ctx.emitter.instruction(&format!("b.eq {next}"));                   // continue only when this record exposes a frame reader
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp QWORD PTR [{cursor} + 16], {cursor}"));
-            ctx.emitter.instruction(&format!("je {next}"));
+            ctx.emitter.instruction(&format!("cmp QWORD PTR [{cursor} + 16], {cursor}")); // distinguish activation records from ownership guards
+            ctx.emitter.instruction(&format!("je {next}"));                     // continue only when this record exposes a frame reader
         }
     }
 }
@@ -517,10 +520,15 @@ fn emit_argument_array_from_live_locals(ctx: &mut FunctionContext<'_>) -> Result
         };
         let ty = ctx.load_local_to_result(slot)?;
         let borrowed_box = matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
-        if !borrowed_box {
-            emit_box_current_value_as_mixed(ctx.emitter, &ty.codegen_repr());
+        // A `?ptr<T>` parameter keeps its union, so address 0 is PHP null.
+        let box_ty = ctx.local_mixed_box_type(slot)?;
+        let sensitive = super::backtrace_sensitive::is_sensitive(ctx, &name);
+        if sensitive {
+            super::backtrace_sensitive::wrap_value(ctx, &box_ty)?;
+        } else if !borrowed_box {
+            emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
         }
-        append_box_to_saved_array(ctx, !borrowed_box);
+        append_box_to_saved_array(ctx, sensitive || !borrowed_box);
     }
     if let Some(hidden_args) = ctx.local_slot_by_name(crate::func_args::HIDDEN_ARGS_PARAM) {
         let hidden_ty = ctx.local_php_type(hidden_args)?;
@@ -539,7 +547,8 @@ fn emit_argument_array_from_live_locals(ctx: &mut FunctionContext<'_>) -> Result
             || signature
                 .as_ref()
                 .is_some_and(crate::func_args::sig_collects_optional_arg_count);
-        append_argument_array_range(ctx, usize::from(starts_with_count), &element_ty);
+        let sensitive = source_variadic.as_ref().is_some_and(|name| super::backtrace_sensitive::is_sensitive(ctx, name));
+        append_argument_array_range(ctx, usize::from(starts_with_count), &element_ty, sensitive)?;
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     trim_argument_array_to_actual_count(ctx);
@@ -551,7 +560,8 @@ fn append_argument_array_range(
     ctx: &mut FunctionContext<'_>,
     start: usize,
     element_ty: &PhpType,
-) {
+    sensitive: bool,
+) -> Result<()> {
     let result_reg = abi::int_result_reg(ctx.emitter).to_string();
     abi::emit_push_reg(ctx.emitter, &result_reg);
     abi::emit_reserve_temporary_stack(ctx.emitter, 32);
@@ -566,13 +576,20 @@ fn append_argument_array_range(
     let done = ctx.next_label("debug_backtrace_arg_tail_done");
     ctx.emitter.label(&loop_label);
     emit_argument_tail_done_guard(ctx, &done);
-    emit_append_argument_tail_value(ctx, element_ty);
+    if sensitive {
+        emit_load_argument_tail_value(ctx, &element_ty.codegen_repr());
+        super::backtrace_sensitive::wrap_value(ctx, element_ty)?;
+        append_argument_tail_box(ctx, true);
+    } else {
+        emit_append_argument_tail_value(ctx, element_ty);
+    }
     increment_argument_tail_index(ctx);
     abi::emit_jump(ctx.emitter, &loop_label);
     ctx.emitter.label(&done);
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     let discard = abi::secondary_scratch_reg(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, discard);
+    Ok(())
 }
 
 /// Branches after every requested hidden argument has been appended.
@@ -912,8 +929,18 @@ fn emit_printed_live_arguments(ctx: &mut FunctionContext<'_>) -> Result<()> {
         let Some(slot) = ctx.local_slot_by_name(&name) else {
             continue;
         };
-        let ty = ctx.load_local_to_result(slot)?;
-        print_current_argument_value(ctx, &ty);
+        ctx.load_local_to_result(slot)?;
+        // A `?ptr<T>` parameter keeps its union, so address 0 prints as PHP null.
+        let ty = ctx.local_mixed_box_type(slot)?;
+        if super::backtrace_sensitive::is_sensitive(ctx, &name) {
+            super::backtrace_sensitive::wrap_value(ctx, &ty)?;
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            abi::emit_call_label(ctx.emitter, "__rt_backtrace_print_arg");
+            abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        } else {
+            print_current_argument_value(ctx, &ty);
+        }
         increment_printed_argument_count(ctx, 0);
     }
     if let Some(hidden_args) = ctx.local_slot_by_name(crate::func_args::HIDDEN_ARGS_PARAM) {
@@ -938,7 +965,8 @@ fn emit_printed_live_arguments(ctx: &mut FunctionContext<'_>) -> Result<()> {
             usize::from(starts_with_count),
             &element_ty,
             &done,
-        );
+            source_variadic.as_ref().is_some_and(|name| super::backtrace_sensitive::is_sensitive(ctx, name)),
+        )?;
     }
     ctx.emitter.label(&done);
     ctx.emitter.label(&skip);
@@ -1004,7 +1032,7 @@ fn print_current_argument_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
     let repr = ty.codegen_repr();
     let borrowed_box = matches!(repr, PhpType::Mixed | PhpType::Union(_));
     if !borrowed_box {
-        emit_box_current_value_as_mixed(ctx.emitter, &repr);
+        emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(ty));
     }
     let box_reg = abi::int_result_reg(ctx.emitter).to_string();
     if !borrowed_box {
@@ -1043,7 +1071,8 @@ fn emit_printed_argument_array_range(
     start: usize,
     element_ty: &PhpType,
     all_done: &str,
-) {
+    sensitive: bool,
+) -> Result<()> {
     let source_reg = abi::int_result_reg(ctx.emitter).to_string();
     abi::emit_push_reg(ctx.emitter, &source_reg);
     abi::emit_reserve_temporary_stack(ctx.emitter, 32);
@@ -1061,7 +1090,14 @@ fn emit_printed_argument_array_range(
     emit_printed_actual_count_guard(ctx, 48, &range_done);
     emit_printed_argument_separator(ctx, 48);
     let repr = element_ty.codegen_repr();
-    if matches!(repr, PhpType::Mixed | PhpType::Union(_)) {
+    if sensitive {
+        emit_load_argument_tail_value(ctx, &repr);
+        super::backtrace_sensitive::wrap_value(ctx, &repr)?;
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_call_label(ctx.emitter, "__rt_backtrace_print_arg");
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    } else if matches!(repr, PhpType::Mixed | PhpType::Union(_)) {
         load_borrowed_argument_tail_box(ctx);
         abi::emit_call_label(ctx.emitter, "__rt_backtrace_print_arg");
     } else {
@@ -1076,6 +1112,7 @@ fn emit_printed_argument_array_range(
     let discard = abi::secondary_scratch_reg(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, discard);
     emit_printed_actual_count_guard(ctx, 0, all_done);
+    Ok(())
 }
 
 /// Loads one borrowed boxed-Mixed value from the current hidden-argument array slot.
@@ -1097,7 +1134,7 @@ fn load_borrowed_argument_tail_box(ctx: &mut FunctionContext<'_>) {
 
 /// Returns class, function, and call-type strings for the current frame.
 fn frame_function_parts(ctx: &FunctionContext<'_>) -> (Option<String>, String, &'static str) {
-    match ctx.function.name.rsplit_once("::") {
+    match ctx.function.display_name().rsplit_once("::") {
         Some((class, function)) => (
             Some(class.trim_start_matches('\\').to_string()),
             function.to_string(),
@@ -1105,7 +1142,7 @@ fn frame_function_parts(ctx: &FunctionContext<'_>) -> (Option<String>, String, &
         ),
         None => (
             None,
-            ctx.function.name.trim_start_matches('\\').to_string(),
+            ctx.function.display_name().trim_start_matches('\\').to_string(),
             "",
         ),
     }

@@ -136,14 +136,21 @@ fn lower_builtin_reflection_property_init_thunk(
     );
 }
 
-/// Collects Reflection class owners reachable from lowered values and calls.
+/// Collects Reflection class owners reachable from lowered values and calls, plus whatever
+/// the module's bridge-run eval fragments can name: every class for a fragment whose source
+/// is only known at runtime, exactly the named ones for literal fragments.
 fn referenced_builtin_reflection_classes(module: &Module) -> BTreeSet<String> {
     let mut classes = BTreeSet::new();
     if module.required_runtime_features.eval_bridge {
+        let demand = super::program::eval_demand(module);
         for class_name in BUILTIN_REFLECTION_CLASS_NAMES {
-            insert_builtin_reflection_class(module, class_name, &mut classes);
+            if demand.names_class(class_name) {
+                insert_builtin_reflection_class(module, class_name, &mut classes);
+            }
         }
-        return classes;
+        if demand.is_everything() {
+            return classes;
+        }
     }
 
     for function in all_lowered_functions(module) {
@@ -266,6 +273,7 @@ fn collect_builtin_reflection_class_from_type(
         | PhpType::Packed(_)
         | PhpType::Pointer(None)
         | PhpType::Resource(_)
+        | PhpType::Narrow(_)
         | PhpType::TaggedScalar => {}
     }
 }
@@ -400,7 +408,8 @@ fn lower_builtin_reflection_class_methods(
             continue;
         }
         let body = if class_name == "ReflectionAttribute" && method_key == "newinstance" {
-            let function_attrs = function_attribute_sources(module);
+            let owned = crate::codegen::reflection::function_attribute_metadata(&module.functions);
+            let function_attrs = crate::codegen::reflection::borrow_attribute_metadata(&owned);
             generated_body =
                 crate::codegen::reflection::build_attribute_new_instance_body_with_extra(
                     &check_result.classes,
@@ -411,7 +420,8 @@ fn lower_builtin_reflection_class_methods(
             // Materialize captured attribute arguments through the normal array
             // lowering (named arguments and associative arrays included) rather
             // than a bespoke codegen path.
-            let function_attrs = function_attribute_sources(module);
+            let owned = crate::codegen::reflection::function_attribute_metadata(&module.functions);
+            let function_attrs = crate::codegen::reflection::borrow_attribute_metadata(&owned);
             generated_body = crate::codegen::reflection::build_attribute_get_arguments_body_with_extra(
                 &check_result.classes,
                 &function_attrs,
@@ -436,23 +446,6 @@ fn lower_builtin_reflection_class_methods(
     for method in module.class_methods.iter_mut().skip(before) {
         method.flags.is_synthetic = true;
     }
-}
-
-/// Returns reflection-visible top-level function attribute metadata sources.
-fn function_attribute_sources(
-    module: &Module,
-) -> Vec<crate::codegen::reflection::AttributeMetadataSource<'_>> {
-    module
-        .functions
-        .iter()
-        .filter(|function| !function.attribute_names.is_empty())
-        .map(|function| {
-            (
-                function.attribute_names.as_slice(),
-                function.attribute_args.as_slice(),
-            )
-        })
-        .collect()
 }
 
 #[cfg(test)]

@@ -8,6 +8,16 @@
 //! Key details:
 //! - Only a validated descriptor may supply payload, length, or stride metadata.
 //! - Buffer get/set preserve PHP source evaluation order while spilling call-clobbered values.
+//! - The resolved get/set forms take a descriptor from a hoisted `buffer_resolve`. They test it
+//!   for zero at the access, so a stale handle still reports the use-after-free there, and they
+//!   touch only the result register plus x9-x11 (AArch64) or r10/r11 (x86_64), which keeps them
+//!   volatile-safe for the register allocator.
+//! - A true immediate on a resolved access proves its exact loop index is in range. Codegen still
+//!   tests the descriptor for zero but omits the descriptor-length load and comparison.
+//! - A width-declared element type (`buffer<i32>`, `buffer<u8>`, `buffer<f32>`) sets the stride
+//!   to the width and loads and stores through the shared `scalar_widths` emitter; the resolved
+//!   forms recover that element type from the `buffer_resolve` their descriptor came from, since
+//!   their own result type is the element's value type.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -16,6 +26,7 @@ use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
+use super::scalar_widths::{emit_width_load, emit_width_store};
 use super::{expect_operand, store_if_result};
 
 /// Lowers `BufferNew` by passing length and element stride to `__rt_buffer_new`.
@@ -43,6 +54,22 @@ pub(super) fn lower_buffer_len(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let buffer = expect_operand(inst, 0)?;
     require_buffer(ctx.load_value_to_result(buffer)?, "buffer_len")?;
     abi::emit_call_label(ctx.emitter, "__rt_buffer_len");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `buffer_ptr(buffer)` by resolving the handle and loading the descriptor's payload pointer.
+///
+/// `__rt_buffer_resolve` reports a null or stale handle through the use-after-free diagnostic,
+/// so the address answered belongs to a live payload; it stays valid until `buffer_free()`
+/// releases the buffer. A buffer of packed records answers the address of element 0, the
+/// `ptr<T>` that `$buf[0]` reads.
+pub(super) fn lower_buffer_ptr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "buffer_ptr", 1)?;
+    let buffer = expect_operand(inst, 0)?;
+    require_buffer(ctx.load_value_to_result(buffer)?, "buffer_ptr")?;
+    abi::emit_call_label(ctx.emitter, "__rt_buffer_resolve");
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, result, result, 0);
     store_if_result(ctx, inst)
 }
 
@@ -110,6 +137,133 @@ pub(super) fn lower_buffer_set(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_if_result(ctx, inst)
 }
 
+/// Lowers `BufferResolve` by asking the runtime for the handle's descriptor, or 0 when stale.
+pub(super) fn lower_buffer_resolve(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "buffer_resolve", 1)?;
+    let buffer = expect_operand(inst, 0)?;
+    require_buffer(ctx.load_value_to_result(buffer)?, "buffer_resolve")?;
+    abi::emit_call_label(ctx.emitter, "__rt_buffer_try_resolve");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `BufferGetResolved` through a hoisted descriptor, omitting the bounds check when its
+/// true immediate records a same-buffer loop proof.
+pub(super) fn lower_buffer_get_resolved(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count(inst, "buffer_get_resolved", 2)?;
+    let descriptor = expect_operand(inst, 0)?;
+    let index = expect_operand(inst, 1)?;
+    let index_in_bounds = matches!(inst.immediate, Some(Immediate::Bool(true)));
+    let elem_ty = resolved_buffer_element_type(ctx, descriptor)?;
+    let address_reg = emit_resolved_element_address(ctx, descriptor, index, index_in_bounds)?;
+    load_element_value(ctx, &elem_ty, address_reg)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `BufferSetResolved` through a hoisted descriptor, retaining the zero-descriptor test
+/// even when its true immediate proves the loop index is in range.
+pub(super) fn lower_buffer_set_resolved(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count(inst, "buffer_set_resolved", 3)?;
+    let descriptor = expect_operand(inst, 0)?;
+    let index = expect_operand(inst, 1)?;
+    let value = expect_operand(inst, 2)?;
+    let index_in_bounds = matches!(inst.immediate, Some(Immediate::Bool(true)));
+    let elem_ty = resolved_buffer_element_type(ctx, descriptor)?;
+    let address_reg = emit_resolved_element_address(ctx, descriptor, index, index_in_bounds)?;
+    let value_ty = ctx.load_value_to_result(value)?;
+    ensure_set_value_matches(&elem_ty, &value_ty)?;
+    store_element_value(ctx, &elem_ty, address_reg)?;
+    store_if_result(ctx, inst)
+}
+
+/// Returns the element type of the buffer a hoisted descriptor was resolved from.
+///
+/// `BufferResolve` is the only producer of a descriptor and its operand is the handle, whose
+/// static type names the element. The resolved access forms carry the element's VALUE type as
+/// their result (`int` for `buffer<i32>`), so a width-declared element's storage format is only
+/// reachable through the handle.
+fn resolved_buffer_element_type(ctx: &FunctionContext<'_>, descriptor: ValueId) -> Result<PhpType> {
+    let Some(value_ref) = ctx.function.value(descriptor) else {
+        return Err(CodegenIrError::missing_entry("value", descriptor.as_raw()));
+    };
+    if let ValueDef::Instruction { inst, .. } = value_ref.def {
+        let Some(inst_ref) = ctx.function.instruction(inst) else {
+            return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+        };
+        if inst_ref.op == Op::BufferResolve {
+            if let Some(&handle) = inst_ref.operands.first() {
+                return require_buffer(ctx.value_php_type(handle)?, "buffer_resolve handle");
+            }
+        }
+    }
+    Err(CodegenIrError::unsupported(
+        "resolved buffer access whose descriptor is not a buffer_resolve result".to_string(),
+    ))
+}
+
+/// Checks a hoisted descriptor and any unproven index, then returns the element address register.
+///
+/// AArch64 uses x10 (index), x11 (descriptor, then address) and x9; x86_64 uses r10 (index,
+/// then scaled offset) and r11 (descriptor, then address). Operands are loaded before any of
+/// those registers is reused, and the fault paths never return.
+fn emit_resolved_element_address(
+    ctx: &mut FunctionContext<'_>,
+    descriptor: ValueId,
+    index: ValueId,
+    index_in_bounds: bool,
+) -> Result<&'static str> {
+    let live = ctx.next_label("buffer_descriptor_live");
+    let bounds_ok = (!index_in_bounds).then(|| ctx.next_label("buffer_index_in_bounds"));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // -- load operands and validate the hoisted descriptor --
+            require_int(ctx.load_value_to_reg(index, "x10")?, "buffer_get_resolved index")?;
+            ctx.load_value_to_reg(descriptor, "x11")?;
+            ctx.emitter.instruction(&format!("cbnz x11, {}", live));            // a hoisted descriptor of zero means the handle was stale
+            ctx.emitter.instruction("b __rt_buffer_use_after_free");            // report the use-after-free at the access, like the unresolved form
+            ctx.emitter.label(&live);
+            // -- validate an unproven index --
+            if let Some(bounds_ok) = bounds_ok.as_deref() {
+                ctx.emitter.instruction("ldr x9, [x11, #8]");                   // validated descriptor logical length
+                ctx.emitter.instruction("cmp x10, x9");                         // unsigned compare also rejects every negative index
+                ctx.emitter.instruction(&format!("b.lo {}", bounds_ok));        // continue once the requested index is within bounds
+                ctx.emitter.instruction("b __rt_buffer_bounds_fail");           // abort immediately on an out-of-range buffer index
+                ctx.emitter.label(bounds_ok);
+            }
+            // -- compute the resolved element address --
+            ctx.emitter.instruction("ldr x9, [x11, #16]");                      // element stride in bytes
+            ctx.emitter.instruction("ldr x11, [x11]");                          // payload base address
+            ctx.emitter.instruction("madd x11, x10, x9, x11");                  // payload base plus index multiplied by stride
+            Ok("x11")
+        }
+        Arch::X86_64 => {
+            // -- load operands and validate the hoisted descriptor --
+            require_int(ctx.load_value_to_reg(index, "r10")?, "buffer_get_resolved index")?;
+            ctx.load_value_to_reg(descriptor, "r11")?;
+            ctx.emitter.instruction("test r11, r11");                           // a hoisted descriptor of zero means the handle was stale
+            ctx.emitter.instruction(&format!("jnz {}", live));                  // continue with a live descriptor
+            ctx.emitter.instruction("jmp __rt_buffer_use_after_free");          // report the use-after-free at the access, like the unresolved form
+            ctx.emitter.label(&live);
+            // -- validate an unproven index --
+            if let Some(bounds_ok) = bounds_ok.as_deref() {
+                ctx.emitter.instruction("cmp r10, QWORD PTR [r11 + 8]");        // unsigned compare also rejects every negative index
+                ctx.emitter.instruction(&format!("jb {}", bounds_ok));          // continue once the requested unsigned index is within bounds
+                ctx.emitter.instruction("jmp __rt_buffer_bounds_fail");         // abort immediately on an out-of-range buffer index
+                ctx.emitter.label(bounds_ok);
+            }
+            // -- compute the resolved element address --
+            ctx.emitter.instruction("imul r10, QWORD PTR [r11 + 16]");          // scale the requested index by the element stride in bytes
+            ctx.emitter.instruction("add r10, QWORD PTR [r11]");                // add the payload base address
+            Ok("r10")
+        }
+    }
+}
+
 /// Returns the declared buffer type for a `BufferNew` result.
 fn result_buffer_type(inst: &Instruction) -> Result<PhpType> {
     match inst.result {
@@ -135,6 +289,7 @@ fn buffer_stride(ctx: &FunctionContext<'_>, buffer_ty: &PhpType) -> Result<usize
             | PhpType::Bool
             | PhpType::Pointer(_)
             | PhpType::Resource(_) => Ok(8),
+            PhpType::Narrow(width) => Ok(width.size()),
             PhpType::Packed(name) => ctx
                 .module
                 .packed_class_infos
@@ -236,17 +391,14 @@ fn materialize_resolved_element_address_for_set(ctx: &mut FunctionContext<'_>) -
 
 /// Emits ARM64 descriptor bounds checks and computes its payload element address.
 fn emit_checked_address_arm64(ctx: &mut FunctionContext<'_>, descriptor_reg: &str, index_reg: &str) {
-    let non_negative = ctx.next_label("buffer_index_non_negative");
     let bounds_ok = ctx.next_label("buffer_index_in_bounds");
-    ctx.emitter.instruction(&format!("cmp {}, #0", index_reg));                 // reject negative buffer indexes before touching the payload
-    ctx.emitter.instruction(&format!("b.ge {}", non_negative));                 // continue once the requested index is non-negative
-    ctx.emitter.instruction("b __rt_buffer_bounds_fail");                       // abort immediately on a negative buffer index
-    ctx.emitter.label(&non_negative);
+    // -- validate the buffer index --
     abi::emit_load_from_address(ctx.emitter, "x12", descriptor_reg, 8);
-    ctx.emitter.instruction(&format!("cmp {}, x12", index_reg));                // compare requested index against validated descriptor logical length
+    ctx.emitter.instruction(&format!("cmp {}, x12", index_reg));                // unsigned compare also rejects every negative buffer index
     ctx.emitter.instruction(&format!("b.lo {}", bounds_ok));                    // continue once the requested index is within bounds
     ctx.emitter.instruction("b __rt_buffer_bounds_fail");                       // abort immediately on an out-of-range buffer index
     ctx.emitter.label(&bounds_ok);
+    // -- compute the resolved element address --
     abi::emit_load_from_address(ctx.emitter, "x11", descriptor_reg, 0);
     abi::emit_load_from_address(ctx.emitter, "x12", descriptor_reg, 16);
     ctx.emitter.instruction(&format!("madd x11, {}, x12, x11", index_reg));     // compute payload base plus index multiplied by descriptor stride
@@ -254,17 +406,14 @@ fn emit_checked_address_arm64(ctx: &mut FunctionContext<'_>, descriptor_reg: &st
 
 /// Emits x86_64 descriptor bounds checks and computes its payload element address.
 fn emit_checked_address_x86_64(ctx: &mut FunctionContext<'_>, descriptor_reg: &str, index_reg: &str) {
-    let non_negative = ctx.next_label("buffer_index_non_negative");
     let bounds_ok = ctx.next_label("buffer_index_in_bounds");
-    ctx.emitter.instruction(&format!("cmp {}, 0", index_reg));                  // reject negative buffer indexes before touching the payload
-    ctx.emitter.instruction(&format!("jge {}", non_negative));                  // continue once the requested index is non-negative
-    ctx.emitter.instruction("jmp __rt_buffer_bounds_fail");                     // abort immediately on a negative buffer index
-    ctx.emitter.label(&non_negative);
+    // -- validate the buffer index --
     abi::emit_load_from_address(ctx.emitter, "rcx", descriptor_reg, 8);
-    ctx.emitter.instruction(&format!("cmp {}, rcx", index_reg));                // compare requested index against validated descriptor logical length
+    ctx.emitter.instruction(&format!("cmp {}, rcx", index_reg));                // unsigned compare also rejects every negative buffer index
     ctx.emitter.instruction(&format!("jb {}", bounds_ok));                      // continue once the requested unsigned index is within bounds
     ctx.emitter.instruction("jmp __rt_buffer_bounds_fail");                     // abort immediately on an out-of-range buffer index
     ctx.emitter.label(&bounds_ok);
+    // -- compute the resolved element address --
     abi::emit_load_from_address(ctx.emitter, "r11", descriptor_reg, 0);
     abi::emit_load_from_address(ctx.emitter, "rcx", descriptor_reg, 16);
     ctx.emitter.instruction(&format!("imul {}, rcx", index_reg));               // scale the requested index by the element stride in bytes
@@ -273,7 +422,7 @@ fn emit_checked_address_x86_64(ctx: &mut FunctionContext<'_>, descriptor_reg: &s
 
 /// Pushes the materialized BufferSet RHS so resolver and bounds code cannot clobber it.
 fn push_buffer_set_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Result<()> {
-    match elem_ty.codegen_repr() {
+    match elem_ty.storage_value_type().codegen_repr() {
         PhpType::Float => {
             abi::emit_push_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
             Ok(())
@@ -291,7 +440,7 @@ fn push_buffer_set_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Re
 
 /// Restores the BufferSet RHS after resolver and bounds code have produced the payload address.
 fn pop_buffer_set_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Result<()> {
-    match elem_ty.codegen_repr() {
+    match elem_ty.storage_value_type().codegen_repr() {
         PhpType::Float => {
             abi::emit_pop_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
             Ok(())
@@ -308,8 +457,12 @@ fn pop_buffer_set_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Res
 }
 
 /// Loads a scalar element from the checked payload address.
+///
+/// A width-declared element extends or widens into the PHP value through the shared width
+/// emitter; a packed element yields its address as the packed receiver pointer.
 fn load_element_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType, address_reg: &str) -> Result<()> {
     match elem_ty.codegen_repr() {
+        PhpType::Narrow(width) => emit_width_load(ctx, width.abi(), address_reg, 0),
         PhpType::Float => {
             abi::emit_load_from_address(ctx.emitter, abi::float_result_reg(ctx.emitter), address_reg, 0);
             Ok(())
@@ -350,7 +503,15 @@ fn materialize_set_value(
     elem_ty: &PhpType,
 ) -> Result<()> {
     let value_ty = ctx.load_value_to_result(value)?;
-    match (elem_ty.codegen_repr(), value_ty.codegen_repr()) {
+    ensure_set_value_matches(elem_ty, &value_ty)
+}
+
+/// Verifies a materialized value has the representation a buffer element stores.
+///
+/// A width-declared element takes what its value type takes: an `int` or `bool` for the
+/// integer widths, a `float` for `f32`; the store then narrows it to the element width.
+fn ensure_set_value_matches(elem_ty: &PhpType, value_ty: &PhpType) -> Result<()> {
+    match (elem_ty.storage_value_type().codegen_repr(), value_ty.codegen_repr()) {
         (PhpType::Float, PhpType::Float) => Ok(()),
         (PhpType::Int, PhpType::Int | PhpType::Bool)
         | (PhpType::Bool, PhpType::Int | PhpType::Bool)
@@ -365,8 +526,15 @@ fn materialize_set_value(
 }
 
 /// Stores the current scalar result into the checked payload address.
+///
+/// A width-declared element keeps only its width: the low bytes of an integer, or the PHP
+/// double rounded to an IEEE 754 single for `f32`.
 fn store_element_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType, address_reg: &str) -> Result<()> {
     match elem_ty.codegen_repr() {
+        PhpType::Narrow(width) => {
+            let payload_reg = abi::int_result_reg(ctx.emitter);
+            emit_width_store(ctx, width.abi(), address_reg, 0, payload_reg)
+        }
         PhpType::Float => {
             abi::emit_store_to_address(ctx.emitter, abi::float_result_reg(ctx.emitter), address_reg, 0);
             Ok(())

@@ -6,8 +6,10 @@
 //! initializers re-run), releases the previous value of refcounted static class
 //! properties (their initializers re-run in the handler body and restore the
 //! defaults), releases and zeroes ordinary globals plus request superglobals
-//! ($_SERVER/$_GET/$_POST) that survive between requests, and resets the
-//! concat-buffer write offset and request-local collector controls.
+//! ($_SERVER/$_GET/$_POST) that survive between requests, resets the
+//! concat-buffer write offset and request-local collector controls, and clears
+//! output/print_r capture plus request-scoped stream, wrapper, filter, parser,
+//! and exception state before the heap arena is reclaimed.
 //!
 //! Called from:
 //! - `crate::codegen::block_emit::emit_module()`, after every function and the
@@ -82,6 +84,12 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // stack can be reused and before any reset destructor performs another property write.
     abi::emit_store_zero_to_symbol(emitter, "_magic_set_guard_head", 0);
     abi::emit_store_zero_to_symbol(emitter, "_fiber_main_saved_magic_set_guard", 0);
+    // The remaining transient owners point into the request heap. Clear them before the static
+    // and global cleanup below can run user destructors: a destructor that echoes, throws, or
+    // performs an HTTP call must never observe a previous request's buffer or callback state.
+    emit_output_buffer_reset(emitter);
+    emit_print_r_capture_reset(emitter);
+    emit_transient_pointer_reset(emitter);
     let mut labels = LabelGen::new();
     if super::context::module_uses_pcntl_signal_handlers(module) {
         abi::emit_call_label(emitter, "__rt_pcntl_release_handlers");
@@ -128,11 +136,157 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     if module.required_runtime_features.mbstring || module.required_runtime_features.eval_bridge {
         abi::emit_call_label(emitter, "__rt_mbstring_release_catalog");
     }
+    // Every cleanup above can run PHP: destructors may call `ob_start()`,
+    // `stream_context_create()`, `json_decode()`, or reopen a stream. The early clears
+    // kept those destructors from observing the previous request's state; these final
+    // clears keep the state they create from surviving into the arena reset. Ordering
+    // matters: the fd-keyed tables are cleared only after `__rt_resource_inventory_reset`
+    // and all later cleanup has finished consuming them.
+    emit_output_buffer_reset(emitter);
+    emit_print_r_capture_reset(emitter);
+    emit_transient_pointer_reset(emitter);
+    emit_extension_request_state_reset(emitter);
     emit_heap_arena_reset(emitter);
     abi::emit_call_label(emitter, "__rt_gc_request_start");
 
     abi::emit_frame_restore(emitter, RESET_FRAME_SIZE);
     abi::emit_return(emitter);
+}
+
+/// Discards output buffers abandoned by the previous request.
+///
+/// `_ob_level` gates every `ob_*` access and every terminal write's capture branch, so clearing
+/// it removes the only route to the retired heap buffers. `_ob_in_handler` and `_ob_flushing` are
+/// guards that an exception escaping a user output handler can leave set; a stale guard would
+/// discard or skip the next request's output. PHP force-flushes buffers at request shutdown; the
+/// web epilogue does not, so a request that ends with an open buffer must not leave the stack
+/// armed for its successor.
+fn emit_output_buffer_reset(emitter: &mut Emitter) {
+    emitter.comment("discard output buffers left open by the previous request");
+    for symbol in [
+        "_ob_level",
+        "_ob_in_handler",
+        "_ob_flushing",
+        "_ob_implicit_flush",
+    ] {
+        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
+    }
+}
+
+/// Restores the `print_r($value, true)` capture state to its process-start defaults.
+///
+/// Return-mode rendering sets `_print_r_mode` and accumulates bytes into the static
+/// `_print_r_buf` through `_print_r_off`. A render interrupted before `__rt_pr_finish` would
+/// otherwise leave the mode set, so the next request's ordinary output would be captured into
+/// that stale buffer instead of reaching its response.
+fn emit_print_r_capture_reset(emitter: &mut Emitter) {
+    emitter.comment("reset any print_r return-mode capture abandoned by the previous request");
+    abi::emit_store_zero_to_symbol(emitter, "_print_r_mode", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_print_r_off", 0);
+}
+
+/// Clears transient request-owned pointers and counters that are not owned by static locals,
+/// globals, superglobals, or the resource inventory.
+///
+/// These slots are written by a builtin during a request and are normally cleared by the same
+/// builtin on its success path. A fatal error or an exception thrown from a callback can abandon
+/// that operation, leaving a pointer into the request heap, a parser nesting counter, or an error
+/// source pointer behind. Every entry is scalar state; heap owners are reclaimed by the arena
+/// reset that follows.
+fn emit_transient_pointer_reset(emitter: &mut Emitter) {
+    emitter.comment("clear transient request-owned pointers abandoned by the previous request");
+    for symbol in [
+        "_stream_context_options",
+        "_stream_notification_callback",
+        "_exc_value",
+        "_exc_handler_top",
+        "_exc_call_frame_top",
+        "_hash_write_guard_top",
+        "_php_backtrace_next_line",
+        "_json_active_flags",
+        "_json_active_depth",
+        "_json_indent_depth",
+        "_json_validate_idx",
+        "_json_validate_ptr",
+        "_json_validate_len",
+        "_json_decode_assoc",
+        "_json_error_source_ptr",
+        "_json_error_source_len",
+        "_json_error_candidate_ptr",
+        "_json_error_location_active",
+        "_json_error_line",
+        "_json_error_column",
+        "_json_error_scan_count",
+        "_json_error_scan_bytes",
+        "_json_last_error",
+        "_ser_value_counter",
+        "_ser_legacy_active",
+        "_unser_legacy_active",
+        "_ser_obj_count",
+        "_unser_count",
+        "_unser_active",
+        "_http_active_host_ptr",
+        "_http_active_proxy_ptr",
+    ] {
+        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
+    }
+}
+
+/// Clears the request-scoped stream, wrapper, and filter tables after the resource inventory has
+/// closed the previous request's handles.
+///
+/// Unlike the scalar slots above, these tables are fd-keyed or registration-keyed and are not
+/// reset by any single builtin's success path. They hold heap pointers (context option hashes,
+/// callback descriptors, wrapper and filter class strings, wrapper instances, glob:// state) and
+/// native per-fd handles. Clearing them prevents a reused descriptor or a leaked registration
+/// from resolving to storage the arena reset is about to reclaim. Native handles owned by the
+/// inventory are closed by `__rt_resource_inventory_reset` before this runs; tables the reset did
+/// not consume are cleared here rather than left dangling.
+fn emit_extension_request_state_reset(emitter: &mut Emitter) {
+    emitter.comment("clear request-scoped stream tables before the heap arena is reclaimed");
+    for (symbol, byte_len) in [
+        ("_user_wrappers", 2_048),
+        ("_user_wrapper_handles", 2_048),
+        ("_user_filter_registry", 4_096),
+        ("_user_filter_instances", 4_096),
+        ("_dir_handles", 2_048),
+        ("_glob_handles", 2_048),
+        ("_popen_files", 2_048),
+        ("_iconv_handles", 2_048),
+        ("_bzstream_handles", 2_048),
+        ("_zstream_handles", 2_048),
+        ("_stream_read_filters", 256),
+        ("_stream_write_filters", 256),
+        ("_eof_flags", 256),
+        ("_stream_chunk_size", 2_048),
+        ("_stream_connect_host", 4_096),
+    ] {
+        emit_zero_symbol_bytes(emitter, symbol, byte_len);
+    }
+}
+
+/// Zero-fills one request-state symbol through libc `memset`.
+///
+/// The tables above are up to 4 KiB each and run on every web request. A byte-at-a-time loop
+/// would add thousands of generated instructions and stores per request; one optimized libc call
+/// keeps the reset proportional to its actual size. `__rt_web_reset` already owns a 16-byte frame,
+/// so the call site keeps the C ABI's stack alignment on every supported target.
+fn emit_zero_symbol_bytes(emitter: &mut Emitter, symbol: &str, byte_len: usize) {
+    debug_assert!(byte_len > 0);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x0", symbol);
+            abi::emit_load_int_immediate(emitter, "x1", 0);
+            abi::emit_load_int_immediate(emitter, "x2", byte_len as i64);
+            emitter.bl_c("memset");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "rdi", symbol);
+            emitter.instruction("xor esi, esi");                                // zero-fill byte for the memset call
+            abi::emit_load_int_immediate(emitter, "rdx", byte_len as i64);
+            emitter.bl_c("memset");
+        }
+    }
 }
 
 /// Drains both handler stacks and their eval owners while the request heap is still valid.
@@ -199,6 +353,7 @@ fn emit_gc_state_reset(emitter: &mut Emitter) {
 /// lives outside `_heap_buf` and is unaffected.
 fn emit_heap_arena_reset(emitter: &mut Emitter) {
     emitter.comment("reset the PHP heap arena to pure-bump allocation for the next request");
+    crate::codegen_support::runtime::emit_heap_live_bases_reset(emitter);
     abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 0);
@@ -226,10 +381,13 @@ mod handler_reset_tests {
             emit_heap_arena_reset(&mut emitter);
             let asm = emitter.output();
             let heap_reset = asm.rfind("_heap_small_bins").unwrap();
+            let bases = asm.find("_heap_live_bases").unwrap();
+            let extent_reset = asm.rfind("_heap_off").unwrap();
             let allocs = asm.find("_gc_allocs").unwrap();
             let frees = asm.find("_gc_frees").unwrap();
             let live = asm.find("_gc_live").unwrap();
             assert!(heap_reset < allocs && allocs < frees && frees < live, "{name}");
+            assert!(bases < extent_reset, "{name}: live bases must retire before the extent resets");
             assert!(!asm.contains("__rt_heap_alloc") && !asm.contains("_gc_peak"), "{name}");
         }
     }
@@ -250,7 +408,14 @@ mod handler_reset_tests {
             let borrowed_refs = asm.find("_rt_unmanaged_ref_borrow_top").unwrap();
             let magic_set_guards = asm.find("_magic_set_guard_head").unwrap();
             let saved_magic_set_guards = asm.find("_fiber_main_saved_magic_set_guard").unwrap();
+            let output_level = asm.find("_ob_level").unwrap();
+            let print_r_mode = asm.find("_print_r_mode").unwrap();
+            let stream_context = asm.find("_stream_context_options").unwrap();
+            let final_output_level = asm.rfind("_ob_level").unwrap();
+            let final_print_r_mode = asm.rfind("_print_r_mode").unwrap();
+            let final_stream_context = asm.rfind("_stream_context_options").unwrap();
             let inventory = asm.find("__rt_resource_inventory_reset").unwrap();
+            let wrapper_table = asm.find("_user_wrappers").unwrap();
             let heap = asm.find("_heap_off").unwrap();
             for symbol in ["__rt_core_error_handler_pop", "__rt_core_exception_handler_pop", "_php_error_reporting"] {
                 assert!(asm.find(symbol).unwrap() < inventory, "{target:?}: {symbol}");
@@ -263,6 +428,34 @@ mod handler_reset_tests {
             assert!(
                 saved_magic_set_guards < inventory,
                 "{target:?}: saved main magic-set guard state must clear first"
+            );
+            for (label, position) in [
+                ("_ob_level", output_level),
+                ("_print_r_mode", print_r_mode),
+                ("_stream_context_options", stream_context),
+            ] {
+                assert!(
+                    position < inventory,
+                    "{target:?}: {label} must clear before cleanup can run destructors"
+                );
+            }
+            assert!(
+                inventory < wrapper_table && wrapper_table < heap,
+                "{target:?}: fd-keyed tables must clear after inventory cleanup and before the heap reset"
+            );
+            for (label, position) in [
+                ("_ob_level", final_output_level),
+                ("_print_r_mode", final_print_r_mode),
+                ("_stream_context_options", final_stream_context),
+            ] {
+                assert!(
+                    inventory < position && position < heap,
+                    "{target:?}: {label} must clear again after cleanup and before the heap reset"
+                );
+            }
+            assert!(
+                asm.matches("memset").count() >= 15,
+                "{target:?}: request-scoped tables must be cleared with memset"
             );
             assert!(inventory < heap, "{target:?}: handlers need the live request heap");
         }

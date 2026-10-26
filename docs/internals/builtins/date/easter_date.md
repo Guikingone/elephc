@@ -2,7 +2,7 @@
 title: "easter_date() - internals"
 description: "Compiler internals for easter_date(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 217
+  order: 218
 ---
 
 ## `easter_date()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:739](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L739) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:799](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L799) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

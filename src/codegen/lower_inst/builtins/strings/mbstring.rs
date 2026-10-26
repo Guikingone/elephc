@@ -42,8 +42,8 @@ pub(crate) fn lower_mbstring(ctx: &mut FunctionContext<'_>, inst: &Instruction, 
         if variables && index == 3 {
             ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
             match ctx.emitter.target.arch {
-                Arch::AArch64 => ctx.emitter.instruction(&format!("str x0, [sp, #{}]", index * 8)),
-                Arch::X86_64 => ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", index * 8)),
+                Arch::AArch64 => ctx.emitter.instruction(&format!("str x0, [sp, #{}]", index * 8)), // preserve the live reference address in the bridge pointer table
+                Arch::X86_64 => ctx.emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", index * 8)), // preserve the live reference address in the bridge pointer table
             }
             continue;
         }

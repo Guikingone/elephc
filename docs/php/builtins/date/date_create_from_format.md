@@ -2,7 +2,7 @@
 title: "date_create_from_format()"
 description: "Creates a DateTime by parsing a string against an explicit format."
 sidebar:
-  order: 192
+  order: 193
 ---
 
 ## date_create_from_format()
