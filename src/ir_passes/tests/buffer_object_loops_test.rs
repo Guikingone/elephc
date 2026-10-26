@@ -98,3 +98,33 @@ fn buffer_object_loop_runtime_count_parameter_hoists_resolution() {
         }
     }
 }
+
+/// Using `$this` after the loop cannot rebind it or disable its existing property hoisting.
+#[test]
+fn buffer_object_loop_this_escape_preserves_existing_hoist() {
+    let source = r#"<?php
+final class Grid {
+    public buffer<int> $cells;
+    public function __construct() { $this->cells = buffer_new<int>(8); }
+    public function fill(int $count): array {
+        for ($index = 0; $index < $count; $index++) { $this->cells[$index] = 7; }
+        return [$this];
+    }
+}
+"#;
+    let mut module = crate::ir_lower::tests::lower_source_at_for_target(
+        source, Path::new("main.php"), Path::new("."), Target::parse("linux-x86_64").unwrap(),
+    );
+    crate::ir_passes::optimize_module(&mut module);
+    let function = module.class_methods.iter().find(|function| function.name == "Grid::fill").unwrap();
+    let dominance = compute_dominance(function);
+    let loops = compute_loops(function, &dominance);
+    assert_eq!(loops.loops().len(), 1);
+    assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::BufferResolve).count(), 1);
+    for &block in &loops.loops()[0].blocks {
+        assert!(!function.blocks[block.as_raw() as usize].instructions.iter().any(|id| {
+            matches!(function.instructions[id.as_raw() as usize].op, Op::BufferSet | Op::BufferResolve)
+        }));
+    }
+    assert!(function.instructions.iter().any(|inst| inst.op == Op::BufferSetResolved));
+}

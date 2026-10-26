@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use crate::ir::{Effects, Function, Immediate, InstId, LocalKind, Op, ValueDef, ValueId};
+use crate::ir::{BlockId, Effects, Function, Immediate, InstId, LocalKind, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::buffer_access::{buffer_handle_value, slots_named_as_storage};
@@ -85,36 +85,22 @@ pub(super) fn can_load_receiver(function: &Function, id: InstId) -> bool {
 pub(super) fn forward_borrowed_bindings(function: &mut Function) -> bool {
     let dominance = compute_dominance(function);
     let escaping = address_escaping_slots(function);
+    let mut bindings: HashMap<_, BorrowedBinding> = function.locals.iter().filter(|local| {
+        local.kind == LocalKind::BorrowedTemp && !escaping.contains(&local.id)
+            && matches!(local.php_type, PhpType::Object(_) | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Buffer(_))
+    }).map(|local| (local.id, BorrowedBinding::default())).collect();
+    if bindings.is_empty() { return false; }
+    collect_borrowed_bindings(function, &mut bindings);
     let mut replacements = HashMap::new();
     let mut removed = Vec::new();
     for local in &function.locals {
-        if local.kind != LocalKind::BorrowedTemp || escaping.contains(&local.id) { continue; }
-        if !matches!(local.php_type, PhpType::Object(_) | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Buffer(_)) {
-            continue;
-        }
-        let mut stores = Vec::new();
-        let mut loads = Vec::new();
-        let mut invalid = false;
-        for block in &function.blocks {
-            for (index, &id) in block.instructions.iter().enumerate() {
-                let inst = &function.instructions[id.as_raw() as usize];
-                if inst.immediate == Some(Immediate::LocalSlot(local.id)) {
-                    match inst.op {
-                        Op::LoadLocal => loads.push((block.id, index, id)),
-                        Op::StoreLocal => stores.push((block.id, index, id)),
-                        _ => invalid = true,
-                    }
-                } else if slots_named_as_storage(std::iter::once(inst)).contains(&local.id) {
-                    invalid = true;
-                }
-            }
-        }
-        if invalid || stores.len() != 1 || loads.is_empty() { continue; }
-        let (block, index, store) = stores[0];
+        let Some(binding) = bindings.get(&local.id) else { continue; };
+        if binding.invalid || binding.stores.len() != 1 || binding.loads.is_empty() { continue; }
+        let (block, index, store) = binding.stores[0];
         let Some(&source) = function.instructions[store.as_raw() as usize].operands.first() else { continue; };
         let value = &function.values[source.as_raw() as usize];
         if value.ir_type != local.ir_type || value.php_type != local.php_type { continue; }
-        if !loads.iter().all(|&(load_block, load_index, id)| {
+        if !binding.loads.iter().all(|&(load_block, load_index, id)| {
             let load = &function.instructions[id.as_raw() as usize];
             load.result_type == value.ir_type && load.result_php_type == value.php_type
                 && load.result_ownership == value.ownership
@@ -122,7 +108,7 @@ pub(super) fn forward_borrowed_bindings(function: &mut Function) -> bool {
                 && if block == load_block { index < load_index } else { dominance.dominates(block, load_block) }
         }) { continue; }
         removed.push(store);
-        for (_, _, id) in loads {
+        for &(_, _, id) in &binding.loads {
             replacements.insert(function.instructions[id.as_raw() as usize].result.unwrap(), source);
             removed.push(id);
         }
@@ -131,4 +117,37 @@ pub(super) fn forward_borrowed_bindings(function: &mut Function) -> bool {
     replace_all_uses(function, &resolve_chains(&replacements));
     for id in removed { neutralize_to_nop(&mut function.instructions[id.as_raw() as usize]); }
     true
+}
+
+/// One borrowed slot's complete load/store traffic, indexed once for the whole function.
+#[derive(Default)]
+struct BorrowedBinding {
+    /// Exact loads and stores retain their block positions for the dominance proof.
+    loads: Vec<(BlockId, usize, InstId)>,
+    /// Candidate stores, of which exactly one must dominate all loads.
+    stores: Vec<(BlockId, usize, InstId)>,
+    /// Any storage use other than a plain load/store prevents forwarding.
+    invalid: bool,
+}
+
+/// Batches borrowed-slot facts in one instruction walk, including metadata storage references.
+fn collect_borrowed_bindings(function: &Function, bindings: &mut HashMap<LocalSlotId, BorrowedBinding>) {
+    for block in &function.blocks {
+        for (index, &id) in block.instructions.iter().enumerate() {
+            let inst = &function.instructions[id.as_raw() as usize];
+            if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
+                if let Some(binding) = bindings.get_mut(&slot) {
+                    match inst.op {
+                        Op::LoadLocal => binding.loads.push((block.id, index, id)),
+                        Op::StoreLocal => binding.stores.push((block.id, index, id)),
+                        _ => binding.invalid = true,
+                    }
+                }
+                if matches!(inst.op, Op::LoadLocal | Op::StoreLocal) { continue; }
+            }
+            for slot in slots_named_as_storage(std::iter::once(inst)) {
+                if let Some(binding) = bindings.get_mut(&slot) { binding.invalid = true; }
+            }
+        }
+    }
 }

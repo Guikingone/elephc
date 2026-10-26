@@ -154,12 +154,12 @@ scan($table, $argc);
     }
 }
 
-/// A null receiver's warning handler cannot turn the moved access into a silent zero-trip exit.
+/// A relocated foreign read still runs its warning handler and fails on the first access.
 #[test]
 fn test_buffer_object_loop_null_warning_keeps_first_access_fatal() {
     let source = r#"<?php
 final class NullObjectSlots { public buffer<int> $slots; }
-function scan(NullObjectSlots $table, int &$count): void {
+function scan(NullObjectSlots $table, int $count): void {
     for ($index = 0; $index < $count; $index++) {
         if ($table->slots[$index] === 7) { continue; }
     }
@@ -180,6 +180,16 @@ $scan(null, $count);
         assert_eq!(String::from_utf8_lossy(&output.stdout), "warning|");
         assert!(String::from_utf8_lossy(&output.stderr).contains("use of buffer after buffer_free()"));
     }
+    let dir = make_cli_test_dir("elephc_null_property_loop_ir");
+    let path = dir.join("main.php");
+    fs::write(&path, source).unwrap();
+    let emitted = elephc_cli_command(&dir).arg("--emit-ir").arg(&path).output().unwrap();
+    fs::remove_dir_all(dir).unwrap();
+    assert!(emitted.status.success(), "{}", String::from_utf8_lossy(&emitted.stderr));
+    let ir = String::from_utf8(emitted.stdout).unwrap();
+    let scan = ir.split_once("  function scan(").unwrap().1.split("\n  function ").next().unwrap();
+    assert!(scan.contains("buffer_property_entry_"), "{scan}");
+    assert_eq!(scan.matches("= buffer_resolve ").count(), 1, "{scan}");
 }
 
 /// Rebinding a receiver and replacing a property through an alias retain their per-iteration reads.
@@ -259,6 +269,7 @@ final class NullAccessorSlots {
     private buffer<int> $slots;
     public function at(int $index): int { return $this->slots[$index]; }
 }
+
 function scan(NullAccessorSlots $table, int $count): void {
     for ($index = 0; $index < $count; $index++) {
         if ($table->at($index) === 7) { continue; }
@@ -274,5 +285,35 @@ $scan(null, $argc);
         assert!(!output.status.success());
         assert_eq!(String::from_utf8_lossy(&output.stdout),
             "zero|\nFatal error: Uncaught Error: Call to a member function at() on null\n");
+    }
+}
+
+/// An inner accessor guard must not redirect its latch through the outer loop's initial index.
+#[test]
+fn test_buffer_object_loop_nested_accessor_condition_keeps_outer_counter() {
+    let source = r#"<?php
+final class NestedSlots {
+    public buffer<int> $slots;
+    public function __construct() { $this->slots = buffer_new<int>(3); }
+    public function at(int $index): int { return $this->slots[$index]; }
+}
+function scan(NestedSlots $table, int $count): void {
+    for ($index = 0; $index < $count; $index++) {
+        while ($table->at($index) === 7) { $table->slots[$index] = 0; }
+        echo $index;
+    }
+}
+$table = new NestedSlots();
+$table->slots[1] = 7;
+scan($table, 3);
+echo "\n";
+$slots = $table->slots;
+buffer_free($slots);
+"#;
+    for optimized in [false, true] {
+        let output = run_property_loop(source, optimized);
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "012\n");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"));
     }
 }

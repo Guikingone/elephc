@@ -685,8 +685,8 @@ Such a buffer read qualifies only when a checked access consumes its handle
 before any observable operation or branch. Null reads return handle zero, so
 the access must fail before execution could continue with a descriptor an error
 handler invalidated. When relocating this read, its first checked access and
-scalar prefix are copied to the taken-only entry too. This keeps the fatal
-before header re-evaluation even if the handler changes the loop condition.
+scalar prefix are copied to the taken-only entry too. This retains the original
+warning/fatal order before the header is re-evaluated.
 Subsequent iterations use the cached property handle and resolved descriptors.
 See `examples/buffer-object-loop/main.php` for direct and inlined entity filters.
 

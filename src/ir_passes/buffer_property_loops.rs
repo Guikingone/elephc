@@ -57,7 +57,8 @@ fn hoist_one(function: &mut Function, loop_ref: &NaturalLoop) -> bool {
     }) {
         if header_insts[..position].iter().all(|&id| can_duplicate(function, id))
             && feeds_access(function, loop_ref, read)
-            && invariant_receiver(function, loop_ref, function.instructions[read.as_raw() as usize].operands[0])
+            && (reads_the_method_receiver(function, &function.instructions[read.as_raw() as usize])
+                || invariant_receiver(function, loop_ref, function.instructions[read.as_raw() as usize].operands[0]))
         {
             // Foreign header reads need their checked access on this same entry as well.
             // Body reads below already have the complete initial header substitution map.
@@ -75,7 +76,8 @@ fn hoist_one(function: &mut Function, loop_ref: &NaturalLoop) -> bool {
     if !header_insts.iter().all(|&id| can_duplicate(function, id))
         || !body_insts[..position].iter().all(|&id| can_duplicate(function, id))
         || !feeds_access(function, loop_ref, read)
-        || !invariant_receiver(function, loop_ref, function.instructions[read.as_raw() as usize].operands[0])
+        || !(reads_the_method_receiver(function, &function.instructions[read.as_raw() as usize])
+            || invariant_receiver(function, loop_ref, function.instructions[read.as_raw() as usize].operands[0]))
         || header_values_escape(function, loop_ref)
     { return false; }
     let Some((guarded, replacements)) = guard_entry(function, loop_ref, preheader, body) else { return false; };
@@ -231,9 +233,8 @@ fn move_read(function: &mut Function, source: BlockId, read: InstId, target: Blo
     function.blocks[source.as_raw() as usize].instructions.retain(|id| *id != read);
     function.blocks[target.as_raw() as usize].instructions.push(read);
     if let Some(checked) = checked {
-        // Retain the first access's fatal before returning to the header. In particular, a
-        // warning handler on a null receiver may change the condition to false; rechecking
-        // it before consuming handle zero would incorrectly suppress the original fatal.
+        // Consume the first handle before returning to the duplicated header, retaining the
+        // original warning/fatal order even when a null receiver runs an error handler.
         for &id in &original[read_position + 1..] {
             clone_with_replacements(function, target, id, &mut replacements);
             if id == checked { break; }
@@ -270,6 +271,9 @@ fn repair_definitions(function: &mut Function) {
 /// condition. The original throwing edge stays before the property read, with its own message.
 fn hoist_receiver_guard(function: &mut Function, loop_ref: &NaturalLoop, preheader: BlockId) -> bool {
     let Some(body) = body_entry(function, loop_ref) else { return false; };
+    // An inner loop header can also be the outer loop's body entry. Reusing that block would
+    // redirect its back edges to the outer header with the original entry arguments.
+    if super::cfg::predecessors(function)[body.as_raw() as usize] != [loop_ref.header] { return false; }
     let block = function.blocks[body.as_raw() as usize].clone();
     let Some(Terminator::CondBr { cond, then_target, ref then_args, else_target, ref else_args }) = block.terminator
         else { return false; };
