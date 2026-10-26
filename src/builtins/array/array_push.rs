@@ -133,9 +133,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         if !denied_place && !runtime_spread_supported
             && !matches!(cx.args[0].kind, ExprKind::Variable(_))
             && !literal_or_local_value(&cx.args[index])
+            && !cx.checker.array_push_value_is_local(&cx.args[index], cx.env)
         {
             return Err(CompileError::new(cx.args[index].span,
-                "array_push() native receiver places require literal or local values; use a declared array property for effectful values"));
+                "array_push() native receiver places require literal or local values, numeric computation without PHP callbacks, or buffer operations that cannot change the receiver"));
         }
         if let Some((expected, message)) = &value_constraint {
             if value_ty.codegen_repr() != expected.codegen_repr() {

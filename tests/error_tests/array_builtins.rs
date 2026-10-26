@@ -1367,6 +1367,68 @@ array_push(temporaryBoxedPushRows()[0], 2);
     }
 }
 
+/// Buffer factories that can reach caller state cannot bypass native place selection safeguards.
+#[test]
+fn test_error_array_push_buffer_factories_cannot_access_caller_storage() {
+    for source in [
+        r#"<?php
+class InputBufferPushPool { public array<buffer<int> > $pages = []; }
+function inputPushPage(InputBufferPushPool $pool): buffer<int> {
+    $pool->pages = []; return buffer_new<int>(1);
+}
+$pool = new InputBufferPushPool(); array_push($pool->pages, inputPushPage($pool));
+"#,
+        r#"<?php
+class GlobalBufferPushPool { public array<buffer<int> > $pages = []; }
+function globalPushPage(): buffer<int> {
+    global $pool; $pool->pages = []; return buffer_new<int>(1);
+}
+$pool = new GlobalBufferPushPool(); array_push($pool->pages, globalPushPage());
+"#,
+        r#"<?php
+class CalledBufferPushPool { public array<buffer<int> > $pages = []; }
+function resetPushPages(): void { global $pool; $pool->pages = []; }
+function calledPushPage(): buffer<int> { resetPushPages(); return buffer_new<int>(1); }
+$pool = new CalledBufferPushPool(); array_push($pool->pages, calledPushPage());
+"#,
+        r#"<?php
+class ReferenceBufferPushPool { public array<buffer<int> > $pages = []; }
+function referencePushPage(int &$value): buffer<int> { $value = 3; return buffer_new<int>(1); }
+$pool = new ReferenceBufferPushPool(); $value = 1;
+array_push($pool->pages, referencePushPage($value));
+"#,
+    ] {
+        expect_error(source, "array_push() native receiver places require literal or local values");
+    }
+}
+
+/// A scalar-looking cast must not hide an object method that can alter receiver storage.
+#[test]
+fn test_error_array_push_computed_values_cannot_invoke_php_methods() {
+    expect_error(r#"<?php
+class NumericPushBox { public $items = ["a" => 1, "s" => "s"]; }
+class StringPushValue { public function __toString(): string { echo "callback"; return "s"; } }
+$box = new NumericPushBox(); $value = new StringPushValue();
+array_push($box->items, (string) $value);
+"#, "array_push() native receiver places require literal or local values");
+}
+
+/// Float coercions and overflowing arithmetic must not hide entry into PHP warning handlers.
+#[test]
+fn test_error_array_push_numeric_values_cannot_invoke_warning_handlers() {
+    for value in ["(int) $value", "(bool) $value", "!$value", "(int) ($integer * $integer)"] {
+        let source = format!(r#"<?php
+class WarningPushBox {{ public $items = ["a" => 1, "s" => "s"]; }}
+function appendWarningPushValue(float $value, int $integer): void {{
+    $box = new WarningPushBox();
+    array_push($box->items, {value});
+}}
+appendWarningPushValue(1e309, 9000000000000000000);
+"#);
+        expect_error(&source, "array_push() native receiver places require literal or local values");
+    }
+}
+
 /// Native copy/write-back cannot keep a selected root or property across arbitrary PHP effects.
 #[test]
 fn test_error_array_push_native_place_rejects_effectful_values() {

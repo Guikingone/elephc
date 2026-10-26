@@ -273,6 +273,28 @@ echo array_push(temporaryPushRows()[0], 2);
     assert_eq!(out, "2");
 }
 
+/// Local buffer allocation and factories preserve native property storage and release its owners.
+#[test]
+fn test_array_push_native_property_accepts_local_buffer_factories() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function localPushPage(int $n, int $start): buffer<int> {
+    $page = buffer_new<int>($n);
+    for ($i = 0; $i < $n; $i++) { $page[$i] = $start + $i; }
+    return $page;
+}
+function blankPushPage(int $n): buffer<int> { return buffer_new<int>($n); }
+class LocalBufferPushPool { public array<buffer<int> > $pages = []; }
+$pool = new LocalBufferPushPool();
+$length = $argc > 0 ? 2 : 1;
+echo array_push($pool->pages, buffer_new<int>(1), localPushPage(2, 30), blankPushPage($length)), "|";
+echo buffer_len($pool->pages[0]), "|", $pool->pages[1][1], "|", buffer_len($pool->pages[2]), "\n";
+foreach ($pool->pages as $page) { buffer_free($page); }
+unset($pool);
+"#);
+    assert_eq!(out.stdout, "3|1|31|2\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Mixed-entry tables preserve the actual tags of scalar, null and nested-array values.
 #[test]
 fn test_associative_push_mixed_values_is_heap_clean() {

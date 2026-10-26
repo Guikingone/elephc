@@ -69,6 +69,15 @@ function targetReturnedPushRows() {
     return $rows;
 }
 echo targetReturnedPushRows()[0][0];
+function targetLocalPushPage(int $n, int $start): buffer<int> {
+    $page = buffer_new<int>($n);
+    for ($i = 0; $i < $n; $i++) { $page[$i] = $start + $i; }
+    return $page;
+}
+class TargetBufferPushPool { public array<buffer<int> > $pages = []; }
+$bufferPool = new TargetBufferPushPool();
+array_push($bufferPool->pages, targetLocalPushPage(2, 4));
+foreach ($bufferPool->pages as $page) { buffer_free($page); }
 echo json_encode($values), json_encode($copy), json_encode($mixed);
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
