@@ -18,6 +18,7 @@ use crate::codegen_support::RuntimeFeatures;
 pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // Array runtime functions
     arrays::emit_heap_alloc(emitter);
+    arrays::emit_heap_grow_tail(emitter);
     super::super::reference_cells::emit_reference_cells(emitter);
     arrays::emit_heap_debug_fail(emitter);
     arrays::emit_heap_debug_check_live(emitter);
@@ -173,9 +174,12 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_walk_recursive(emitter);
     arrays::emit_array_udiff_uintersect(emitter);
     arrays::emit_php_compare_slots(emitter);
+    arrays::emit_float_compare_slots(emitter);
+    arrays::emit_float_sort(emitter);
     arrays::emit_usort(emitter);
     arrays::emit_usort_str(emitter);
     arrays::emit_array_to_mixed(emitter);
+    arrays::emit_array_to_pointer_words(emitter);
     arrays::emit_array_merge_into(emitter);
     arrays::emit_array_merge_into_refcounted(emitter);
     arrays::emit_decref_any(emitter);
@@ -234,6 +238,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     // SPL runtime-managed containers
     spl::emit_doubly_linked_list_runtime(emitter);
     spl::emit_fixed_array_runtime(emitter);
+    spl::emit_spl_offset_runtime(emitter);
 
     // PHP resource-id registry (its own numbering space, unrelated to object handles)
     resource_ids::emit_resource_ids(emitter);
@@ -253,6 +258,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_mixed_array_get(emitter);
     objects::emit_throw_object_not_array(emitter);
     objects::emit_throw_serialization_denied(emitter);
+    objects::emit_throw_unserialization_denied(emitter);
     objects::emit_mixed_array_set(emitter);
     objects::emit_mixed_array_append(emitter);
     objects::emit_mixed_array_fetch_for_write(emitter);
@@ -282,6 +288,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
 
     // Buffer runtime functions
     buffers::emit_buffer_resolve(emitter);
+    buffers::emit_buffer_try_resolve(emitter);
     buffers::emit_buffer_new(emitter);
     buffers::emit_buffer_free(emitter);
     buffers::emit_buffer_len(emitter);

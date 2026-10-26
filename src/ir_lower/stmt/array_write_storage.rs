@@ -18,7 +18,9 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
 ) -> LoweredValue {
     let ty = ctx.local_type(name);
     let value = ctx.load_local(name, Some(span));
-    if ty.codegen_repr() != PhpType::Mixed {
+    if ty.codegen_repr() != PhpType::Mixed
+        || ctx.append_update_cell_aliases.contains(name)
+    {
         return value;
     }
     let detached = ctx.emit_owned_value(
@@ -35,8 +37,35 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
 
 /// Lowers `$array[] = value`.
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
-    let array_value = load_array_local_for_write(ctx, array, span);
+    let receiver = Expr::new(ExprKind::Variable(array.into()), span);
+    if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &receiver, value, span) { return; }
     let value = lower_expr(ctx, value);
+    // PHP selects the current append target after RHS effects, including reference writes.
+    // Loading here also gives the ordinary parent guards the RHS-updated storage type.
+    // Append's final-storage normalization mutates a bound box directly. Other indexed
+    // writers still require the detached cell published by load_array_local_for_write.
+    let array_value = if ctx.is_ref_bound_local(array) {
+        ctx.load_local(array, Some(span))
+    } else {
+        load_array_local_for_write(ctx, array, span)
+    };
+    let array_ty = ctx.builder.value_php_type(array_value.value);
+    let value = ctx.retype_value_for_container_element(&array_ty, value, Some(span));
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(
+        ctx,
+        &[array_value.value, value.value],
+        span,
+    );
+    if !super::nested_write_guards::guard_array_push_parent(
+        ctx,
+        array_value,
+        value,
+        &pins,
+        span,
+    ) {
+        return;
+    }
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     let op = if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Array) {
         Op::ArrayPush
     } else if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Hash) {
@@ -213,6 +242,12 @@ pub(super) fn indexed_array_write_updated_type(current_ty: PhpType, value_ty: Ph
             if elem_ty == value_ty.codegen_repr() {
                 return None;
             }
+            // Every pointer is one raw word: a pointer with another target keeps pointer
+            // storage, refined to an untyped `ptr` element instead of boxed `mixed` slots.
+            if let (PhpType::Pointer(_), PhpType::Pointer(_)) = (&elem_ty, &value_ty.codegen_repr()) {
+                return crate::types::merge_pointer_elements(&elem_ty, &value_ty.codegen_repr())
+                    .map(|merged| PhpType::Array(Box::new(merged.codegen_repr())));
+            }
             let value_ty = normalize_array_write_element_type(value_ty.codegen_repr());
             if elem_ty == value_ty {
                 None
@@ -242,5 +277,8 @@ pub(super) fn is_empty_indexed_array_element(elem_ty: &PhpType) -> bool {
 
 /// Preserves the first concrete value type written into an empty indexed array.
 pub(super) fn normalize_empty_array_write_element_type(item_type: PhpType) -> PhpType {
-    normalize_materialized_element_type(item_type)
+    match normalize_materialized_element_type(item_type) {
+        PhpType::Void => PhpType::Mixed,
+        other => other,
+    }
 }

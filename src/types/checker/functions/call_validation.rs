@@ -60,6 +60,13 @@ fn call_arg_plan_error(
                 callee_desc
             ),
         ),
+        CallArgPlanError::PositionalAfterNamedUnpack { span } => CompileError::new(
+            span,
+            &format!(
+                "{} cannot use positional argument after named argument during unpacking",
+                callee_desc
+            ),
+        ),
         CallArgPlanError::SpreadAfterNamed { span } => {
             spread_after_named_error(span, callee_desc)
         }
@@ -152,6 +159,7 @@ impl Checker {
             | CallArgPlanError::Duplicate { span, .. }
             | CallArgPlanError::PositionalAfterNamed { span }
             | CallArgPlanError::PositionalAfterSpread { span }
+            | CallArgPlanError::PositionalAfterNamedUnpack { span }
             | CallArgPlanError::MissingRequired { span, .. } => {
                 CompileError::new(span, &format!("{} has invalid arguments", callee_desc))
             }
@@ -246,6 +254,9 @@ impl Checker {
     ) -> Result<bool, CompileError> {
         let inferred_ty = self.infer_type(receiver, env)?;
         let receiver_ty = inferred_ty.codegen_repr();
+        if matches!(&receiver_ty, PhpType::Object(class) if class.eq_ignore_ascii_case("WeakMap")) {
+            return Ok(true);
+        }
         let array_like = matches!(
             &receiver_ty,
             PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
@@ -506,6 +517,14 @@ impl Checker {
             (PhpType::Int, PhpType::Bool | PhpType::False | PhpType::Void) => true,
             (PhpType::Bool, PhpType::Int | PhpType::Void) => true,
             (PhpType::Pointer(_), PhpType::Pointer(_) | PhpType::Void) => true,
+            // `buffer<mixed>` is the internal any-buffer parameter of the `buffer_len(...)` and
+            // `buffer_ptr(...)` callable wrappers, which take the raw handle of every buffer; a
+            // program cannot declare it, so it never widens a user signature.
+            (PhpType::Buffer(expected_elem), PhpType::Buffer(_))
+                if **expected_elem == PhpType::Mixed =>
+            {
+                true
+            }
             (PhpType::Resource(_), PhpType::Resource(_)) => {
                 PhpType::resource_types_compatible(expected, actual)
             }
@@ -526,10 +545,12 @@ impl Checker {
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             Ok(())
         } else {
-            Err(CompileError::new(
-                span,
-                &format!("{} expects {:?}, got {:?}", context, expected, actual),
-            ))
+            let mut message = format!("{} expects {}, got {}", context, expected, actual);
+            if let Some(hint) = self.variance_refusal_hint(expected, actual) {
+                message.push_str(" — ");
+                message.push_str(&hint);
+            }
+            Err(CompileError::new(span, &message))
         }
     }
 
@@ -583,6 +604,8 @@ impl Checker {
         owner_class: &str,
     ) -> Result<PhpType, CompileError> {
         let coercive = self.class_is_user_declared(owner_class);
+        let internal_sig = self.internal_operand_binding_signature(owner_class, sig);
+        let sig = internal_sig.as_ref().unwrap_or(sig);
         self.check_known_callable_call_with_options(
             sig,
             args,
@@ -607,6 +630,8 @@ impl Checker {
         owner_class: &str,
     ) -> Result<PhpType, CompileError> {
         let coercive = self.class_is_user_declared(owner_class);
+        let internal_sig = self.internal_operand_binding_signature(owner_class, sig);
+        let sig = internal_sig.as_ref().unwrap_or(sig);
         self.check_known_callable_call_with_options(
             sig,
             args,
@@ -617,6 +642,23 @@ impl Checker {
             coercive,
             true,
         )
+    }
+
+    /// Accepts weak float inputs whose internal Number parameter adapter performs the binding.
+    /// The declaration and its boxed union ABI remain authoritative outside this call check.
+    fn internal_operand_binding_signature(&self, owner: &str, sig: &FunctionSig) -> Option<FunctionSig> {
+        if self.strict_types || !owner.trim_start_matches('\\').eq_ignore_ascii_case("BcMath\\Number") {
+            return None;
+        }
+        let mut accepted = sig.clone();
+        for (_, ty) in &mut accepted.params {
+            if let PhpType::Union(members) = ty {
+                if members.contains(&PhpType::Str) && members.contains(&PhpType::Int) {
+                    members.push(PhpType::Float);
+                }
+            }
+        }
+        Some(accepted)
     }
 
     /// Returns true when `class_name` is a class-like symbol declared in user source.
@@ -695,12 +737,7 @@ impl Checker {
             });
         // The variadic collector is represented as the signature's final param
         // with no default expression, but it never contributes to minimum arity.
-        let required = sig
-            .defaults
-            .iter()
-            .take(regular_param_count)
-            .filter(|default| default.is_none())
-            .count();
+        let required = call_args::required_param_count(sig);
 
         if sig.ref_params.iter().any(|is_ref| *is_ref) && has_spread && !allow_by_ref_spread {
             return Err(CompileError::new(

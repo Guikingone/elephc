@@ -12,8 +12,8 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{ArrayEntry, CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver};
 
 use super::names::{
-    resolve_constant_name, resolve_function_name, resolve_function_reference, resolve_special_or_class_name,
-    resolve_type_expr, resolved_class_constant_name,
+    resolve_constant_name, resolve_function_name, resolve_function_reference, resolve_pointer_target,
+    resolve_special_or_class_name, resolve_type_expr, resolved_class_constant_name,
 };
 use super::statements::{resolve_params, resolve_stmt_list};
 use super::{
@@ -34,6 +34,17 @@ pub(super) fn resolve_expr(
     symbols: &Symbols,
 ) -> Expr {
     let kind = match &expr.kind {
+        ExprKind::Assignment { target, value, result_target, prelude, conditional_value_temp } => {
+            ExprKind::Assignment {
+                target: Box::new(resolve_expr(target, current_namespace, imports, symbols)),
+                value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
+                result_target: result_target.as_ref().map(|target|
+                    Box::new(resolve_expr(target, current_namespace, imports, symbols))),
+                prelude: resolve_stmt_list(prelude, current_namespace, imports, symbols)
+                    .expect("name resolver bug: assignment prelude resolution failed"),
+                conditional_value_temp: conditional_value_temp.clone(),
+            }
+        }
         ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
             left: Box::new(resolve_expr(left, current_namespace, imports, symbols)),
             op: op.clone(),
@@ -248,6 +259,17 @@ pub(super) fn resolve_expr(
             imports,
             symbols,
         ))),
+        // `new Box<int>(...)`. Both halves need resolving and the CATCH-ALL below would resolve
+        // neither: the class type has to canonicalize to the same name the declaration does or
+        // no template matches it, and the constructor arguments are ordinary expressions that
+        // may name imported classes of their own.
+        ExprKind::NewGeneric { class_type, args } => ExprKind::NewGeneric {
+            class_type: resolve_type_expr(class_type, current_namespace, imports, symbols),
+            args: args
+                .iter()
+                .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
+                .collect(),
+        },
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
             class_name: resolved_name(resolve_special_or_class_name(
                 class_name,
@@ -287,6 +309,11 @@ pub(super) fn resolve_expr(
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
                     resolve_special_or_class_name(name, current_namespace, imports, symbols),
                 )),
+                // A generic receiver's type arguments name classes and must canonicalize
+                // the same way the declaration does, or no template matches it.
+                StaticReceiver::Generic(class_type) => StaticReceiver::Generic(
+                    resolve_type_expr(class_type, current_namespace, imports, symbols),
+                ),
                 _ => receiver.clone(),
             },
             property: property.clone(),
@@ -296,6 +323,11 @@ pub(super) fn resolve_expr(
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
                     resolved_class_constant_name(name, current_namespace, imports),
                 )),
+                // A generic receiver's type arguments name classes and must canonicalize
+                // the same way the declaration does, or no template matches it.
+                StaticReceiver::Generic(class_type) => StaticReceiver::Generic(
+                    resolve_type_expr(class_type, current_namespace, imports, symbols),
+                ),
                 _ => receiver.clone(),
             },
         },
@@ -307,6 +339,11 @@ pub(super) fn resolve_expr(
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
                     resolve_special_or_class_name(name, current_namespace, imports, symbols),
                 )),
+                // A generic receiver's type arguments name classes and must canonicalize
+                // the same way the declaration does, or no template matches it.
+                StaticReceiver::Generic(class_type) => StaticReceiver::Generic(
+                    resolve_type_expr(class_type, current_namespace, imports, symbols),
+                ),
                 _ => receiver.clone(),
             },
             name: name.clone(),
@@ -316,6 +353,11 @@ pub(super) fn resolve_expr(
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
                     resolve_special_or_class_name(name, current_namespace, imports, symbols),
                 )),
+                // A generic receiver's type arguments name classes and must canonicalize
+                // the same way the declaration does, or no template matches it.
+                StaticReceiver::Generic(class_type) => StaticReceiver::Generic(
+                    resolve_type_expr(class_type, current_namespace, imports, symbols),
+                ),
                 _ => receiver.clone(),
             },
             args: args
@@ -360,6 +402,11 @@ pub(super) fn resolve_expr(
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
                     resolve_special_or_class_name(name, current_namespace, imports, symbols),
                 )),
+                // A generic receiver's type arguments name classes and must canonicalize
+                // the same way the declaration does, or no template matches it.
+                StaticReceiver::Generic(class_type) => StaticReceiver::Generic(
+                    resolve_type_expr(class_type, current_namespace, imports, symbols),
+                ),
                 _ => receiver.clone(),
             };
             // Keep the source spelling: dispatch lookups fold case at lookup
@@ -426,7 +473,12 @@ pub(super) fn resolve_expr(
                     StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
                         resolve_special_or_class_name(name, current_namespace, imports, symbols),
                     )),
-                    _ => receiver.clone(),
+                    // A generic receiver's type arguments name classes and must canonicalize
+                // the same way the declaration does, or no template matches it.
+                StaticReceiver::Generic(class_type) => StaticReceiver::Generic(
+                    resolve_type_expr(class_type, current_namespace, imports, symbols),
+                ),
+                _ => receiver.clone(),
                 },
                 method: php_symbol_key(method),
             },
@@ -436,7 +488,7 @@ pub(super) fn resolve_expr(
             },
         }),
         ExprKind::PtrCast { target_type, expr } => ExprKind::PtrCast {
-            target_type: target_type.clone(),
+            target_type: resolve_pointer_target(target_type, current_namespace, imports, symbols),
             expr: Box::new(resolve_expr(expr, current_namespace, imports, symbols)),
         },
         ExprKind::BufferNew { element_type, len } => ExprKind::BufferNew {
@@ -468,6 +520,14 @@ fn resolve_instanceof_target(
     match target {
         InstanceOfTarget::Name(name) => InstanceOfTarget::Name(resolved_name(
             resolve_special_or_class_name(name, current_namespace, imports, symbols),
+        )),
+        // The type arguments name classes and must canonicalize the same way the declaration
+        // does, or no template matches the mention.
+        InstanceOfTarget::Generic(class_type) => InstanceOfTarget::Generic(resolve_type_expr(
+            class_type,
+            current_namespace,
+            imports,
+            symbols,
         )),
         InstanceOfTarget::Expr(expr) => InstanceOfTarget::Expr(Box::new(resolve_expr(
             expr,

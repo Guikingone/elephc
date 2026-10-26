@@ -37,9 +37,6 @@ unset($source);
 fn test_eval_reflection_parameter_public_name_releases_string_owner() {
     let baseline = compile_and_run_with_heap_debug(r#"<?php
 eval('function eval_parameter_owner_target(string $argument) {}');
-$parameter = new ReflectionParameter('strlen', 'string');
-if ($parameter->name !== 'string') { echo 'bad'; }
-unset($parameter);
 echo 'baseline';
 "#);
     assert!(baseline.success, "stdout={:?}\nstderr={}", baseline.stdout, baseline.stderr);
@@ -54,11 +51,15 @@ echo 'done';
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "done");
-    // Eval retains four metadata blocks and three boxed array owners beyond the AOT object;
-    // the public-name slot must not retain another string allocation after the object is unset.
+    // The baseline declares the same eval function and builds no ReflectionParameter, so it
+    // measures eval's own metadata only. An AOT ReflectionParameter would put its leaked metadata
+    // subtree (#1352) in the baseline, and that subtree's size changes whenever Reflection gains a
+    // property. The retained metadata now also owns two nonempty dump strings, for the parameter
+    // and its declaring function: 23 blocks in total. With dump storage disabled the same program
+    // retains 21 blocks. An extra public-name temporary owner must still fail this exact count.
     assert_eq!(
         eval_operand_owner_live_blocks(&out.stderr),
-        baseline_live_blocks + 7,
+        baseline_live_blocks + 23,
         "discarded ReflectionParameter objects must release their public-name string: {}",
         out.stderr,
     );
@@ -115,7 +116,7 @@ for ($i = 0; $i < 3; $i++) {
     );
 }
 
-/// Invalid Mixed throws release scalar and non-Throwable object boxes before TypeError.
+/// Invalid Mixed throws release scalar and non-Throwable object boxes before distinct PHP Errors.
 #[test]
 fn test_eval_mixed_throw_failure_releases_scalar_and_plain_object_boxes() {
     let baseline = compile_and_run_with_heap_debug(r#"<?php
@@ -132,15 +133,15 @@ echo 'baseline';
     let out = compile_and_run_with_heap_debug(r#"<?php
 for ($i = 0; $i < 3; $i++) {
     eval('$scalar = 42; $plain_object = new stdClass();');
-    try { throw $scalar; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
-    try { throw $plain_object; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
-    try { $unused = true ? throw $scalar : null; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
-    try { $unused = true ? throw $plain_object : null; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+    try { throw $scalar; } catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+    try { throw $plain_object; } catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+    try { $unused = true ? throw $scalar : null; } catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+    try { $unused = true ? throw $plain_object : null; } catch (Error $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
     unset($scalar, $plain_object, $error, $unused);
 }
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "Can only throw objects|".repeat(12));
+    assert_eq!(out.stdout, "Error:Can only throw objects|Error:Cannot throw objects that do not implement Throwable|".repeat(6));
     assert_eq!(
         eval_operand_owner_live_blocks(&out.stderr),
         baseline_live_blocks,
@@ -477,6 +478,61 @@ unset($source);
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "9:replaced|9:replaced|9:replaced|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A typed by-reference variadic element write reaches the CONCRETE ref-cell marker arm, which
+/// must release the heap occupant it replaces (issue #1289): a heap string here, so a blanket
+/// free would also have to skip `.rodata`. The write-back publishes through the marker each loop.
+#[test]
+fn test_core_eval_native_typed_variadic_reference_writeback_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nativeBinderTypedVariadic(string &...$items): void { $items[0] = $items[0] . "!"; }
+$source = '
+for ($i = 0; $i < 3; $i++) {
+    $text = str_repeat("x", 8);
+    $fn = "nativeBinderTypedVariadic";
+    $fn($text);
+    echo strlen($text), ":", $text, "|";
+    unset($text);
+} // ' . $argc;
+eval($source);
+unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout, "9:xxxxxxxx!|9:xxxxxxxx!|9:xxxxxxxx!|",
+        "{}", out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An `iterable` by-reference variadic element write reaches the same concrete ref-cell marker arm
+/// for arrays (tag 4), hashes (tag 5) and Iterator objects (tag 6), each of which must release the
+/// heap occupant it replaces (issue #1289 review).
+#[test]
+fn test_core_eval_native_iterable_variadic_reference_writeback_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nativeBinderIterableVariadic(iterable &...$items): void { $items[0] = [1, 2, 3]; }
+$source = '
+for ($i = 0; $i < 3; $i++) {
+    $arr = [9, 9];
+    $hash = ["a" => 1, "b" => 2];
+    $it = new ArrayIterator([7, 8]);
+    $fn = "nativeBinderIterableVariadic";
+    $fn($arr); echo count($arr), "|";
+    $fn($hash); echo count($hash), "|";
+    $fn($it); echo count($it), "|";
+    unset($arr, $hash, $it);
+} // ' . $argc;
+eval($source);
+unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout, "3|3|3|3|3|3|3|3|3|",
+        "{}", out.stderr
+    );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

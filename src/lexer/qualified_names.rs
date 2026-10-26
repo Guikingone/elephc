@@ -19,6 +19,7 @@
 //! - A predefined constant the lexer tokenizes (`PHP_EOL`, `E_ALL`-style tokens, `true`) is a
 //!   segment only inside a name (`Vendor\PHP_EOL`) or at its head (`PHP_EOL\Foo`). After a
 //!   lone leading `\` it stays the constant: `\PHP_EOL` is the fully qualified global constant.
+//!   Bare relative constants (`namespace\true`) also retain their tokens for the parser.
 //! - A leading `namespace\` stays the `namespace` keyword: it is PHP's relative-name prefix
 //!   (`namespace\Foo` is `Foo` in the current namespace), never a segment spelled `namespace`.
 //!   After a separator (`\Demo\Namespace\Subject`) it is an ordinary segment.
@@ -44,7 +45,16 @@ pub(super) fn identify_reserved_name_segments(tokens: &mut [SpannedToken]) {
         // A constant token is a segment only inside a name (`Vendor\PHP_EOL`, `PHP_EOL\Foo`):
         // after a lone leading `\` it is the fully qualified global constant (`\PHP_EOL`).
         let segment = if is_constant_token(&tokens[index].0) {
-            leads_name || (after_separator && follows_word(tokens, index - 1))
+            // The relative-name parser preserves literal values in the global namespace.
+            // Class and call continuations still require an ordinary name segment.
+            let bare_relative_constant = index >= 2
+                && matches!(tokens[index - 2].0, Token::Namespace)
+                && !matches!(
+                    tokens.get(index + 1),
+                    Some((Token::Backslash | Token::DoubleColon | Token::LParen, _))
+                );
+            leads_name
+                || (after_separator && follows_word(tokens, index - 1) && !bare_relative_constant)
         } else {
             after_separator || leads_name
         };

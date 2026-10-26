@@ -65,6 +65,23 @@ foreach ($squares as $s) {
 echo "\n";
 
 $range = range(3, 7);
+// An append update starts a fresh counter, not the last element of the list.
+$batchCounts = [];
+$batchCounts[] += 3;
+echo "New batch counter: ", ++$batchCounts[], "\n";
+echo "Batch counts: ", implode(", ", $batchCounts), "\n";
+
+// An alias of variadic reference arguments still updates the caller's original labels.
+function mark_reviewed(&...$labels): void
+{
+    $reviewLabels =& $labels;
+    $reviewLabels[1] .= " (reviewed)";
+}
+$firstLabel = "first";
+$secondLabel = "second";
+mark_reviewed($firstLabel, $secondLabel);
+echo "Labels: ", $firstLabel, ", ", $secondLabel, "\n";
+
 echo "Range 3..7: ";
 foreach ($range as $value) {
     echo $value . " ";
@@ -240,3 +257,22 @@ echo "Matched language keys: " . implode(", ", array_keys($matched)) . "\n";
 // String array
 $langs = ["PHP", "Rust", "ARM64"];
 echo "Compiled " . $langs[0] . " to " . $langs[2] . " with " . $langs[1] . "\n";
+
+// An unkeyed value after a spread uses the next integer key at runtime.
+$spread_keys = ["label" => "values", ...[3, 4], 5];
+echo "Spread keys: ";
+foreach ($spread_keys as $key => $value) {
+    echo $key . "=" . $value . " ";
+}
+echo "\n";
+
+// sort() and rsort() order float elements as numbers, not as the bit patterns behind
+// them -- which is what puts the negatives in the right place.
+$temps = [3.5, -7.75, 0.0, 1.25, -0.5];
+sort($temps);
+echo "\nColdest first: ";
+foreach ($temps as $t) { echo $t, " "; }
+rsort($temps);
+echo "\nWarmest first: ";
+foreach ($temps as $t) { echo $t, " "; }
+echo "\n";

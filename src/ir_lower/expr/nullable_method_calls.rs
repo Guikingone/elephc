@@ -108,6 +108,33 @@ pub(super) fn lower_method_call_with_receiver(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
+        return call;
+    }
+    lower_method_call_with_receiver_direct(ctx, object, method, args, op, expr)
+}
+
+/// Lowers an already selected concrete or fallback receiver without redispatching its interface.
+pub(super) fn lower_method_call_with_receiver_direct(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
+    args: &[Expr], op: Op, expr: &Expr,
+) -> LoweredValue {
+    lower_method_call_with_binding(ctx, object, method, args, op, expr, false)
+}
+
+/// Checks the selected enum signature without changing direct reference-return adoption.
+pub(super) fn lower_selected_enum_method_call(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
+    args: &[Expr], op: Op, expr: &Expr,
+) -> LoweredValue {
+    lower_method_call_with_binding(ctx, object, method, args, op, expr, true)
+}
+
+/// Keeps selected parameter validation inside the published argument and result-owner scope.
+fn lower_method_call_with_binding(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
+    args: &[Expr], op: Op, expr: &Expr, selected_enum: bool,
+) -> LoweredValue {
     if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
         return lower_reflection_class_new_instance(ctx, None, object, args, expr);
     }
@@ -129,7 +156,6 @@ pub(super) fn lower_method_call_with_receiver(
             (method, args)
         };
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
-    let mut operands = vec![object.value];
     let sig = method_signature(ctx, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     // A by-reference-returning method transfers a lease that must outlive this caller's
@@ -143,8 +169,25 @@ pub(super) fn lower_method_call_with_receiver(
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
+    // Nullable and nullsafe dispatch need the same pre-default receiver root as direct calls.
+    let (object, default_receiver_owner) = if sig.as_ref().is_some_and(|signature| {
+        signature.defaults.iter().flatten()
+            .any(crate::types::deferred_defaults::contains_deferred_error)
+    }) {
+        root_owned_call_operand(ctx, object, expr.span)
+    } else {
+        (object, None)
+    };
+    let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let enum_args = singular_object_class(&ctx.builder.value_php_type(object.value))
+        .and_then(|(class, _)| ctx.enums.contains_key(class).then(|| class.to_string()))
+        .and_then(|class| sig.as_ref().and_then(|signature|
+            enum_method_args::lower_arguments(ctx, signature, args, &class, dispatch_method, expr.span)
+                .or_else(|| selected_enum.then(|| enum_static_args::lower_arguments(
+                    ctx, signature, args, &class, dispatch_method, expr.span,
+                )).flatten())));
+    let arg_values = enum_args.unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), args));
     let mut arg_values = arg_values;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(
@@ -155,7 +198,13 @@ pub(super) fn lower_method_call_with_receiver(
         &result_type,
         expr.span,
     );
-    operands.extend(arg_values.iter().copied());
+    // Selected enum implementations may have fewer parameters than another implementor.
+    // PHP ignores surplus positionals, but their values still belong to ordinary cleanup.
+    let operand_limit = sig.as_ref().filter(|sig| sig.variadic.is_none())
+        .filter(|_| singular_object_class(&ctx.builder.value_php_type(object.value))
+            .is_some_and(|(class, _)| ctx.enums.contains_key(class)))
+        .map_or(arg_values.len(), |sig| sig.params.len());
+    operands.extend(arg_values.iter().take(operand_limit).copied());
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(
         op,
@@ -179,7 +228,11 @@ pub(super) fn lower_method_call_with_receiver(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    release_owning_receiver_temporary(ctx, object, expr.span);
+    if let Some(owner) = default_receiver_owner {
+        retire_owned_call_operand(ctx, owner, expr.span);
+    } else {
+        release_owning_receiver_temporary(ctx, object, expr.span);
+    }
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
     finish_reference_return_value(ctx, call, reference_staging, expr.span)
 }
@@ -290,8 +343,23 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
     for (parameter_index, value) in args.iter().enumerate() {
         ctx.unguard_call_argument(*value, span);
         if let Some((_, slot)) = roots.iter().find(|(index, _)| *index == parameter_index) {
-            retire_owned_call_operand(ctx, *slot, span);
-            continue;
+            let pin_only = ctx.builder.value_defining_op(*value) == Some(Op::EnsureOwned)
+                || (ctx.builder.value_defining_op(*value) == Some(Op::Acquire)
+                    && ctx.builder.local_kind(*slot) == LocalKind::OwnedTemp);
+            if !pin_only {
+                retire_owned_call_operand(ctx, *slot, span);
+                continue;
+            }
+            // Claimed strings and persisted byte views are only PINNED for the call: retire the
+            // pin without releasing, then decide the release against the result below.
+            unregister_owned_call_operand(ctx, *slot, span);
+            ctx.emit_void(
+                Op::UnsetLocal,
+                Vec::new(),
+                Some(Immediate::LocalSlot(*slot)),
+                Op::UnsetLocal.default_effects(),
+                Some(span),
+            );
         }
         let reference_place_view_already_released = signature.is_some_and(|signature| {
             signature
@@ -385,9 +453,52 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                 // pointer than the container itself, so comparing them would read "not aliased"
                 // for a value the result does own, and release it twice. Same restriction the
                 // ABI-side cleanup slots already apply via `call_result_can_alias_mixed_temp`.
+                // A string argument the caller owns outright (claimed with `EnsureOwned`, or an
+                // acquired copy) is decided the same way when a USER function produced the
+                // result. A `Str` result compares by payload pointer, the string's whole
+                // identity: a PHP function persists every builtin result it returns, so an equal
+                // pointer means the callee handed the block back and a different one means the
+                // caller still owns it. Any other result that can alias it is a boxed `Mixed`
+                // (`: mixed`, `?string`, `string|int`), whose return coercion persists the string
+                // into a cell of its own, so the argument is never the result's storage and is
+                // released outright. A builtin result is excluded: `ltrim`, `substr` and friends
+                // answer with a view INTO the argument, a different pointer that still borrows
+                // the argument's bytes.
                 if let Some(result) = result {
                     let arg_repr = ctx.builder.value_php_type(lowered.value).codegen_repr();
                     let result_repr = ctx.builder.value_php_type(result).codegen_repr();
+                    let owned_string_arg = arg_repr == PhpType::Str
+                        && matches!(
+                            ctx.builder.value_defining_op(lowered.value),
+                            Some(Op::EnsureOwned | Op::Acquire)
+                        );
+                    let user_call_result = matches!(
+                        ctx.builder.value_defining_op(result),
+                        Some(
+                            Op::Call
+                                | Op::FunctionVariantCall
+                                | Op::MethodCall
+                                | Op::NullsafeMethodCall
+                                | Op::StaticMethodCall
+                                | Op::ClosureCall
+                                | Op::ExprCall
+                                | Op::CallableDescriptorInvoke
+                        )
+                    );
+                    if owned_string_arg && user_call_result {
+                        if result_repr == PhpType::Str {
+                            ctx.emit_void(
+                                Op::ReleaseUnlessAliases,
+                                vec![lowered.value, result],
+                                None,
+                                Op::ReleaseUnlessAliases.default_effects(),
+                                Some(span),
+                            );
+                        } else {
+                            crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
+                        }
+                        continue;
+                    }
                     let comparable = matches!(arg_repr, PhpType::Mixed | PhpType::Union(_))
                         && matches!(result_repr, PhpType::Mixed | PhpType::Union(_));
                     if comparable {

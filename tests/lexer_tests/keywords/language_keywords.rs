@@ -183,6 +183,31 @@ fn test_namespace_and_backslash_tokens() {
     );
 }
 
+/// Verifies a relative name `namespace\helper()` (#825) keeps the `namespace` keyword token
+/// followed by `\`, in any letter case, so the parser can tell the relative-name prefix from a
+/// namespace declaration by the token after it.
+#[test]
+fn test_relative_namespace_name_tokens() {
+    let t = tokens("<?php namespace\\helper(); NameSpace\\LIMIT;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Namespace,
+            Token::Backslash,
+            Token::Identifier("helper".into()),
+            Token::LParen,
+            Token::RParen,
+            Token::Semicolon,
+            Token::Namespace,
+            Token::Backslash,
+            Token::Identifier("LIMIT".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
 /// Verifies `enum Color: int { case Red; }` token sequence.
 #[test]
 fn test_enum_tokens() {
@@ -598,7 +623,7 @@ fn test_nullable_and_union_type_tokens() {
 fn test_constant_tokens_glued_into_a_name_lex_as_identifiers() {
     let ident = |name: &str| Token::Identifier(name.into());
     assert_eq!(
-        tokens("<?php \\Vendor\\PHP_EOL; PHP_EOL\\Sub; \\PHP_EOL; \\true;"),
+        tokens("<?php \\Vendor\\PHP_EOL; PHP_EOL\\Sub; \\PHP_EOL; \\true; namespace\\true;"),
         vec![
             Token::OpenTag,
             Token::Backslash,
@@ -613,6 +638,10 @@ fn test_constant_tokens_glued_into_a_name_lex_as_identifiers() {
             Token::Backslash,
             Token::PhpEol,
             Token::Semicolon,
+            Token::Backslash,
+            Token::True,
+            Token::Semicolon,
+            Token::Namespace,
             Token::Backslash,
             Token::True,
             Token::Semicolon,
