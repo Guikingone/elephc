@@ -44,6 +44,9 @@ pub fn emit_debug_info_diagnostics(emitter: &mut Emitter) {
     abi::emit_return(emitter);
 
     emitter.label_global("__rt_debug_info_invalid_result");
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("push rbp");                                        // realign the never-returning fatal path for the writer and libc exit
+    }
     abi::emit_load_symbol_to_reg(emitter, result, "_php_error_reporting", 0);
     match emitter.target.arch {
         Arch::AArch64 => {

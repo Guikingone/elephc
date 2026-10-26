@@ -37,9 +37,6 @@ unset($source);
 fn test_eval_reflection_parameter_public_name_releases_string_owner() {
     let baseline = compile_and_run_with_heap_debug(r#"<?php
 eval('function eval_parameter_owner_target(string $argument) {}');
-$parameter = new ReflectionParameter('strlen', 'string');
-if ($parameter->name !== 'string') { echo 'bad'; }
-unset($parameter);
 echo 'baseline';
 "#);
     assert!(baseline.success, "stdout={:?}\nstderr={}", baseline.stdout, baseline.stderr);

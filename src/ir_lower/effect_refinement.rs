@@ -136,13 +136,18 @@ fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> E
 
 /// Rewrites refinable instructions in one function to their final fixed-point effects.
 fn refine_function(function: &mut Function, context: &RefinementContext<'_>) {
+    // A packed field store is refined although `prop_set` is otherwise default-only.
     let refined = function
         .instructions
         .iter()
-        .map(|instruction| refined_instruction_effects(function, instruction, context))
+        .map(|instruction| {
+            let refinable = instruction.op.allows_effect_refinement()
+                || function.is_packed_field_access(instruction);
+            refinable.then(|| refined_instruction_effects(function, instruction, context))
+        })
         .collect::<Vec<_>>();
     for (instruction, effects) in function.instructions.iter_mut().zip(refined) {
-        if instruction.op.allows_effect_refinement() {
+        if let Some(effects) = effects {
             instruction.effects = effects;
         }
     }
@@ -161,6 +166,18 @@ fn refined_instruction_effects(
         }
         Op::MethodCall | Op::NullsafeMethodCall => {
             instance_call_effects(function, instruction, context).unwrap_or(instruction.effects)
+        }
+        Op::PropGet | Op::PropSet if function.is_packed_field_access(instruction) => {
+            if instruction.op == Op::PropSet && instruction.operands.get(1)
+                .and_then(|&value| function.value(value))
+                .is_some_and(|value| matches!(value.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)))
+            {
+                // A boxed source still needs the declared field's typed-value guard.
+                // Keep exceptions and ownership effects until materialization is explicit.
+                instruction.op.default_effects()
+            } else {
+                instruction.op.packed_field_access_effects()
+            }
         }
         Op::PropGet | Op::NullsafePropGet => {
             named_property_effects(function, instruction, context).unwrap_or(instruction.effects)
@@ -629,4 +646,43 @@ mod tests {
             assert!(effects.contains(Effects::READS_HEAP), "{mode:?}");
         }
     }
+
+    /// A packed write cannot lose the typed-value guard's effects while its source stays boxed.
+    #[test]
+    fn numeric_continuation_boxed_packed_store_keeps_throw_effects() {
+        use crate::ir::{Builder, FunctionParam, IrType, LocalKind, Ownership};
+        for php_type in [PhpType::Mixed, PhpType::Float] {
+            let receiver_type = PhpType::Packed("Cell".into());
+            let mut function = Function::new("store".into(), IrType::Void, PhpType::Void);
+            for (name, php) in [("receiver", receiver_type.clone()), ("value", php_type.clone())] {
+                function.params.push(FunctionParam { name: name.into(), ir_type: IrType::from_php(&php),
+                    php_type: php.clone(), by_ref: false, variadic: false });
+                function.add_local(Some(name.into()), IrType::from_php(&php), php, LocalKind::PhpLocal);
+            }
+            let mut data = crate::ir::DataPool::default();
+            data.property_names.push("value".into());
+            let property = crate::ir::DataId::from_raw(0);
+            {
+                let mut builder = Builder::new(&mut function);
+                let entry = builder.create_named_block("entry", vec![]);
+                builder.set_entry(entry); builder.position_at_end(entry);
+                let receiver = builder.emit_load_local(crate::ir::LocalSlotId::from_raw(0),
+                    IrType::from_php(&receiver_type), receiver_type);
+                let value = builder.emit_load_local(crate::ir::LocalSlotId::from_raw(1),
+                    IrType::from_php(&php_type), php_type.clone());
+                builder.emit(Op::PropSet, vec![receiver, value], Some(Immediate::Data(property)),
+                    IrType::Void, PhpType::Void, Ownership::NonHeap);
+                builder.terminate(Terminator::Return { value: None });
+            }
+            crate::ir::validate_function(&function).unwrap();
+            let classes = HashMap::new(); let summaries = HashMap::new();
+            let context = RefinementContext { data: &data, classes: &classes, summaries: &summaries,
+                has_dynamic_class_barrier: false };
+            let store = function.instructions.iter().find(|inst| inst.op == Op::PropSet).unwrap();
+            let effects = refined_instruction_effects(&function, store, &context);
+            assert_eq!(effects, if php_type == PhpType::Mixed { Op::PropSet.default_effects() }
+                else { Op::PropSet.packed_field_access_effects() });
+        }
+    }
+
 }

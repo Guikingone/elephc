@@ -33,6 +33,7 @@ pub(super) struct ClassBuildState {
     pub(super) property_offsets: HashMap<String, usize>,
     pub(super) property_declaring_classes: HashMap<String, String>,
     pub(super) defaults: Vec<Option<Expr>>,
+    pub(super) deferred_property_default_error: Option<String>,
     pub(super) property_visibilities: HashMap<String, Visibility>,
     pub(super) property_set_visibilities: HashMap<String, Visibility>,
     pub(super) declared_properties: HashSet<String>,
@@ -97,6 +98,7 @@ impl ClassBuildState {
             // same deprecation php reports for the parent.
             state.dynamic_property_creation_deprecated = parent.dynamic_property_creation_deprecated;
             state.property_hooks = parent.property_hooks.clone();
+            state.deferred_property_default_error = parent.deferred_property_default_error.clone();
         }
         state
     }
@@ -207,6 +209,7 @@ impl ClassBuildState {
             property_offsets: self.property_offsets,
             property_declaring_classes: self.property_declaring_classes,
             defaults: self.defaults,
+            deferred_property_default_error: self.deferred_property_default_error,
             property_visibilities: self.property_visibilities,
             property_set_visibilities: self.property_set_visibilities,
             declared_properties: self.declared_properties,
@@ -248,6 +251,7 @@ impl ClassBuildState {
             abstract_static_methods: self.abstract_static_methods,
             static_vtable_methods: self.static_vtable_methods,
             static_vtable_slots: self.static_vtable_slots,
+            declared_interfaces: class.implements.clone(),
             interfaces: self.interfaces,
             constructor_param_to_prop,
         })

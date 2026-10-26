@@ -11,6 +11,7 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
+use crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE;
 
 /// Emits the `__rt_json_encode_assoc` runtime helper for encoding PHP associative arrays as JSON objects.
 /// Input:  x0 = hash table pointer.
@@ -227,7 +228,11 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_json_assoc_value_mixed");                    // encode boxed mixed payloads recursively
     emitter.instruction("cmp x12, #8");                                         // is this value null?
     emitter.instruction("b.eq __rt_json_assoc_value_null");                     // encode null via json_encode_null
-    emitter.instruction("b __rt_json_assoc_value_null");                        // unsupported tags currently encode as null
+    emitter.instruction(&format!("cmp x12, #{}", POINTER_ARRAY_VALUE_TYPE));    // is this value a raw ?ptr<T> word?
+    emitter.instruction("b.ne __rt_json_assoc_value_null");                     // unsupported tags currently encode as null
+    emitter.instruction("ldr x9, [sp, #64]");                                   // load the raw pointer word from value_lo
+    emitter.instruction("cbz x9, __rt_json_assoc_value_null");                  // a null pointer word encodes as JSON null
+    emitter.instruction("b __rt_json_assoc_value_int");                         // a live address encodes as an integer
 
     emitter.label("__rt_json_assoc_value_int");
     emitter.instruction("ldr x0, [sp, #64]");                                   // load integer payload from value_lo
@@ -596,7 +601,11 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_assoc_value_mixed");                      // encode boxed mixed payloads through the mixed JSON helper
     emitter.instruction("cmp r10, 8");                                          // is the associative-array value explicit null?
     emitter.instruction("je __rt_json_assoc_value_null");                       // encode explicit null payloads through the shared helper
-    emitter.instruction("jmp __rt_json_assoc_value_null");                      // unsupported payload families currently degrade to JSON null
+    emitter.instruction(&format!("cmp r10, {}", POINTER_ARRAY_VALUE_TYPE));     // is the value a raw ?ptr<T> word?
+    emitter.instruction("jne __rt_json_assoc_value_null");                      // unsupported payload families currently degrade to JSON null
+    emitter.instruction("cmp QWORD PTR [rbp - 64], 0");                         // is the raw pointer word null?
+    emitter.instruction("je __rt_json_assoc_value_null");                       // a null pointer word encodes as JSON null
+    emitter.instruction("jmp __rt_json_assoc_value_int");                       // a live address encodes as an integer
 
     emitter.label("__rt_json_assoc_value_int");
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the integer payload from the saved hash-entry low payload word

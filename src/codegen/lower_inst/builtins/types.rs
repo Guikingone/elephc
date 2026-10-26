@@ -646,7 +646,7 @@ pub(crate) fn emit_mangled_object_vars(
 
 /// Resolves the EIR function's lexical class id, using `-1` for global scopes.
 fn lexical_object_vars_scope_class_id(ctx: &FunctionContext<'_>) -> i64 {
-    let Some(class_name) = ctx.function.lexical_class.as_deref() else {
+    let Some(class_name) = ctx.lexical_class() else {
         return -1;
     };
     ctx.module
@@ -1682,6 +1682,9 @@ fn optional_const_string_operand(
     Ok(Some(values
         .get(data.as_raw() as usize)
         .cloned()
+        .map(|value| if inst_ref.op == Op::ConstStr {
+            crate::names::literal_symbol_name(&value).unwrap_or(value)
+        } else { value })
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?))
 }
 

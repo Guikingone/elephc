@@ -254,6 +254,7 @@ pub fn type_expr_for_php_type(ty: &PhpType) -> Option<TypeExpr> {
         | PhpType::Packed(_)
         | PhpType::Pointer(_)
         | PhpType::Resource(_)
+        | PhpType::Narrow(_)
         | PhpType::TaggedScalar => return None,
     })
 }

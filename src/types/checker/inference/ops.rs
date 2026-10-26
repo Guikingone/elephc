@@ -158,10 +158,17 @@ impl Checker {
                     is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
                 let datetime_ok =
                     is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !numeric_ok && !datetime_ok {
+                // Two strings order by PHP's own rule — numeric comparison when BOTH sides
+                // are numeric strings, byte comparison otherwise — which
+                // `__rt_php_compare`'s two-string leg already implements. Rejecting them
+                // made the ordinary character-range idiom (`$c >= '0' && $c <= '9'`) a
+                // compile error and pushed callers onto `ord()` (issue #507).
+                let strings_ok = lt == PhpType::Str && rt == PhpType::Str;
+                let arrays_ok = is_array_ordering_pair(self, &lt, &rt);
+                if !numeric_ok && !datetime_ok && !strings_ok && !arrays_ok {
                     return Err(CompileError::new(
                         expr.span,
-                        "Comparison operators require numeric operands",
+                        "Comparison operators require numeric or string operands",
                     ));
                 }
                 Ok(PhpType::Bool)
@@ -188,10 +195,15 @@ impl Checker {
                     is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
                 let datetime_ok =
                     is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !numeric_ok && !datetime_ok {
+                // `<=>` is the same ordering as `<` and `>`, only reported as -1/0/1, so it
+                // accepts the same two-string pair rather than leaving `"a" <=> "b"` a
+                // compile error while `"a" < "b"` works (issue #507).
+                let strings_ok = lt == PhpType::Str && rt == PhpType::Str;
+                let arrays_ok = is_array_ordering_pair(self, &lt, &rt);
+                if !numeric_ok && !datetime_ok && !strings_ok && !arrays_ok {
                     return Err(CompileError::new(
                         expr.span,
-                        "Spaceship operator requires numeric operands",
+                        "Spaceship operator requires numeric or string operands",
                     ));
                 }
                 Ok(PhpType::Int)
@@ -522,8 +534,7 @@ impl Checker {
             &previous_loop_storage_scope,
             expr.span,
         );
-        self.loop_storage_types
-            .retain(|(scope, _), _| scope != &loop_storage_scope);
+        self.clear_loop_storage_scope(&loop_storage_scope);
         self.current_loop_storage_scope = loop_storage_scope;
         // The storage this closure's frame ALREADY holds on entry: its by-VALUE captures, each
         // with the type it arrives with, read from the ENCLOSING environment. Deliberately not
@@ -1607,12 +1618,26 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     ) || checker.is_union_with_mixed_numeric_dispatch(ty)
 }
 
+/// Returns `true` when an ordering comparison involves an array that PHP orders at run time.
+///
+/// PHP's `zend_compare` orders two arrays by count and then key by key, and ranks an array
+/// above every other non-bool, non-null operand; `__rt_php_compare` implements both rules, so
+/// an array may face another array, a string, or any numeric/Mixed operand.
+fn is_array_ordering_pair(checker: &Checker, lt: &PhpType, rt: &PhpType) -> bool {
+    let is_array = |ty: &PhpType| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. });
+    let comparable = |ty: &PhpType| {
+        is_array(ty) || matches!(ty, PhpType::Str) || is_numeric_operand_type(checker, ty)
+    };
+    (is_array(lt) || is_array(rt)) && comparable(lt) && comparable(rt)
+}
+
 /// Returns `true` if `ty` is a valid operand type for arithmetic operators (`+ - * / % **`).
 ///
 /// This is the numeric-operand set plus `PhpType::Str`: PHP 8 coerces numeric and
 /// leading-numeric strings in arithmetic. Relational comparison and the spaceship operator
-/// deliberately keep the stricter `is_numeric_operand_type`, so `"a" < 1` and `"a" <=> "b"`
-/// remain type errors. A fully non-numeric string *literal* is still rejected in
+/// also accept two strings with PHP's numeric-string or byte ordering, but mixed
+/// string-versus-number pairs such as `"a" < 1` remain type errors.
+/// A fully non-numeric string *literal* is still rejected in
 /// `Checker::check_arithmetic_string_operands`.
 fn is_arithmetic_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     is_numeric_operand_type(checker, ty) || matches!(ty, PhpType::Str)

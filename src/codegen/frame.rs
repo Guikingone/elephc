@@ -12,6 +12,9 @@
 //!   `_concat_buf` slices that were passed in by the caller.
 //! - Executable and library PHP frames publish cleanup activations so escaping exceptions
 //!   release owned locals before control reaches the surviving catch or native host.
+//! - Every frame saves the reserved nested-call register (x19/r12) unless it is a scalar leaf
+//!   of register-neutral instructions, so the unwinder, frame cleanup callbacks, generator
+//!   wrappers and native hosts that keep state in it across PHP calls get it back intact.
 
 use std::collections::{HashMap, HashSet};
 
@@ -25,8 +28,8 @@ use crate::codegen::{
 use crate::codegen_support::data_section::DataWord;
 use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_SLOT_SIZE};
 use crate::ir::{
-    Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op,
-    RuntimeCallTarget, ValueDef, ValueId,
+    Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op, RuntimeCallTarget,
+    ValueDef, ValueId,
 };
 use crate::ir_passes::{allocate_registers, Allocation};
 use crate::names::ir_global_symbol;
@@ -63,6 +66,9 @@ pub(super) const WEB_HANDLER_SYMBOL: &str = "_elephc_web_handler";
 pub(super) struct FrameLayout {
     pub(super) value_placement: ValuePlacement,
     pub(super) local_offsets: HashMap<LocalSlotId, usize>,
+    pub(super) numeric_cell_offsets: HashMap<ValueId, usize>,
+    pub(super) numeric_local_slots: HashSet<LocalSlotId>,
+    pub(super) numeric_values: HashSet<ValueId>,
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
     pub(super) exception_guard_offsets: HashMap<ValueId, usize>,
@@ -124,6 +130,14 @@ pub(super) fn layout_for_function(
         offset += bytes;
         local_offsets.insert(local.id, offset);
     }
+    let mut numeric_cell_offsets = HashMap::new();
+    let numeric = super::stack_numeric::plan(function);
+    for group in numeric.cell_groups {
+        offset += 24;
+        for value in group {
+            numeric_cell_offsets.insert(value, offset);
+        }
+    }
     let mut ref_cell_state_offsets = HashMap::new();
     let mut ref_cell_slots = local_analysis.ref_cell_slots().collect::<Vec<_>>();
     ref_cell_slots.sort_by_key(|slot| slot.as_raw());
@@ -152,8 +166,8 @@ pub(super) fn layout_for_function(
     // Method/callable dispatch hand-uses the reserved nested-call register
     // (x19/r12) to hold a receiver across argument-lowering calls; it is
     // callee-saved but outside the allocator's tracking, so reserve a save slot
-    // when the function needs it (issue #511).
-    if function_uses_nested_call_reg(function) {
+    // unless the function provably never touches it (issue #511).
+    if function_may_use_nested_call_reg(function) {
         let reg = nested_call_reg_name(target.arch);
         if !callee_saved_offsets.iter().any(|(saved, _)| *saved == reg) {
             offset += 8;
@@ -172,6 +186,9 @@ pub(super) fn layout_for_function(
     FrameLayout {
         value_placement,
         local_offsets,
+        numeric_cell_offsets,
+        numeric_local_slots: numeric.locals,
+        numeric_values: numeric.proven_values,
         ref_cell_state_offsets,
         try_handler_offsets,
         exception_guard_offsets,
@@ -303,44 +320,56 @@ fn nested_call_reg_name(arch: Arch) -> &'static str {
     }
 }
 
-/// Detects dispatch paths that preserve a receiver in the reserved nested-call register.
-/// Mixed/union method calls, dynamic construction and Mixed string coercion use this
-/// callee-saved register outside the allocator's tracking. Each function must therefore
-/// save and restore it explicitly, including when all SSA values are stack allocated.
-fn function_uses_nested_call_reg(function: &Function) -> bool {
-    function.instructions.iter().any(|inst| {
-        // Dynamic constructors preserve their receiver across managed reference-cell staging.
-        if matches!(inst.op, Op::DynamicObjectNew | Op::DynamicObjectNewMixed) {
-            return true;
-        }
-        // A runtime-name property write can dispatch a missing name to `__set`, preserving the
-        // selected receiver in the same callee-saved register while its arguments are staged.
-        if inst.op == Op::DynamicPropSet {
-            return true;
-        }
-        // A boxed-Mixed STRING context holds its `__toString` receiver in the same register
-        // and is neither of the method-call opcodes below, so it used to slip through: a
-        // function whose only use was `echo $mixed` wrote `mov x19, x1` under a prologue that
-        // saved nothing. No caller shape was found that turns that into a wrong answer — the
-        // receiver is established AFTER argument lowering, which closes the obvious window —
-        // so this restores the callee-saved discipline rather than fixing a reproduced
-        // failure; per the note above, over-detection costs one store and one load.
-        if crate::codegen::shared_mixed_string::instruction_uses_mixed_string_ladder(function, inst)
-        {
-            return true;
-        }
-        if !matches!(inst.op, Op::MethodCall | Op::NullsafeMethodCall) {
-            return false;
-        }
-        let Some(receiver) = inst.operands.first() else {
-            return false;
-        };
-        let Some(value) = function.value(*receiver) else {
-            return false;
-        };
-        matches!(value.php_type, PhpType::Union(_))
-            || matches!(value.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-    })
+/// Decides whether a frame must save the reserved nested-call register.
+///
+/// The register is callee-saved but hand-used outside the allocator's tracking by many
+/// lowerings: direct, virtual, interface and nullsafe method dispatch, closure and callable
+/// descriptor invocation, dynamic construction, `__set` dispatch, the `__toString` ladder,
+/// builtin callback dispatch, and x86_64 scratch sequences. A predicate that listed those users
+/// missed a concrete-receiver method call, so a destructor calling `$this->close()` overwrote
+/// the register the exception unwinder and its frame cleanup callbacks keep their state in,
+/// and a generator body returned through a wrapper that had lost its Generator pointer.
+///
+/// The rule is therefore inverted: every frame saves the register unless all of its
+/// instructions are register-neutral (see `op_is_nested_call_reg_neutral`) and every local is
+/// a one-word scalar, so neither the body nor the prologue's parameter retains nor the
+/// epilogue's local releases call anything that returns to this frame. Some x86_64 runtime
+/// helpers treat r12 as scratch, so even a frame that only calls runtime code must save it.
+/// Leaving an opcode out of the neutral set costs one store and one load per activation; only
+/// adding one wrongly can lose the caller's register, which is why the set stays small.
+fn function_may_use_nested_call_reg(function: &Function) -> bool {
+    let scalar_locals = function
+        .locals
+        .iter()
+        .all(|local| matches!(local.ir_type, crate::ir::IrType::I64 | crate::ir::IrType::F64));
+    !(scalar_locals
+        && function
+            .instructions
+            .iter()
+            .all(|inst| op_is_nested_call_reg_neutral(inst.op)))
+}
+
+/// Returns true for opcodes whose lowering never writes the reserved nested-call register.
+///
+/// Each member lowers inline to the result and fixed scratch registers and makes no call that
+/// returns to this frame: the only calls are on error paths (a zero divisor, a negative shift
+/// count), which throw through the unwinder. The default is `false`,
+/// so a new opcode saves the register until its lowering is audited.
+fn op_is_nested_call_reg_neutral(op: Op) -> bool {
+    matches!(
+        op,
+        // Scalar constants materialized into the result register.
+        Op::ConstI64 | Op::ConstBool | Op::ConstNull | Op::ConstF64
+        // Integer arithmetic, bitwise and shifts (`lower_inst::arithmetic`).
+        | Op::IAdd | Op::ISub | Op::IMul | Op::INeg | Op::IDiv | Op::ISMod
+        | Op::IBitAnd | Op::IBitOr | Op::IBitXor | Op::IBitNot | Op::IShl | Op::IShrA
+        // Floating-point arithmetic (`lower_inst::floats` and `arithmetic::lower_float_div`).
+        | Op::FAdd | Op::FSub | Op::FMul | Op::FDiv | Op::FNeg
+        // Scalar comparisons and int-to-float promotion.
+        | Op::ICmp | Op::FCmp | Op::IToF
+        // Value forwarding and statement markers.
+        | Op::Move | Op::Borrow | Op::Nop | Op::ConcatReset
+    )
 }
 
 /// Emits the process-entry prologue for the EIR main function.
@@ -429,9 +458,27 @@ pub(super) fn emit_function_prologue_with_label(
         let converted_to_owned_mixed = !param.by_ref
             && local_ty.codegen_repr() == PhpType::Mixed
             && param.php_type.codegen_repr() != PhpType::Mixed;
+        // Before any widening box: a `?ptr<T>` slot later widened to `mixed` boxes the
+        // normalized word, so a null bound by the caller becomes a PHP null cell.
+        if !param.by_ref && crate::types::is_nullable_pointer_type(&param.php_type) {
+            normalize_nullable_pointer_param(ctx, offset);
+        }
+        if param.by_ref && crate::types::is_nullable_pointer_type(&param.php_type) {
+            normalize_nullable_pointer_ref_param(ctx, offset);
+        }
+        // A `null` parameter (such as a by-value capture of a `null` local) carries no ABI
+        // value, so nothing above wrote its slot. When the body also stores pointers or packed
+        // record addresses into it, the slot is a pointer word and must start as address 0.
+        if !param.by_ref
+            && matches!(param.php_type.codegen_repr(), PhpType::Void | PhpType::Never)
+            && matches!(local_ty.codegen_repr(), PhpType::Pointer(_))
+        {
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        }
         if converted_to_owned_mixed {
             abi::emit_load(ctx.emitter, &param.php_type.codegen_repr(), offset);
-            emit_box_current_value_as_mixed(ctx.emitter, &param.php_type.codegen_repr());
+            // The declared type, so a `?ptr<T>` parameter boxes address 0 as PHP null.
+            emit_box_current_value_as_mixed(ctx.emitter, &param.php_type);
             abi::emit_store(ctx.emitter, &PhpType::Mixed, offset);
         }
         if !param.by_ref && ctx.owns_parameter_slot(slot) && !converted_to_owned_mixed {
@@ -449,6 +496,61 @@ pub(super) fn emit_function_prologue_with_label(
     // registers is safe. Callee-saved registers are already preserved above.
     emit_instr_enter(ctx);
     Ok(())
+}
+
+/// Rewrites a PHP null bound to a `?ptr<T>` parameter into the null pointer word.
+///
+/// Every call surface (methods, constructors, closures, callables, omitted `= null` defaults)
+/// binds a literal `null` as the shared null sentinel, which would read as a live address. The
+/// callee is the one place they all meet, so the slot is normalized here: the sentinel becomes
+/// address 0, the null of a `?ptr<T>`, and every real address is left alone.
+fn normalize_nullable_pointer_param(ctx: &mut FunctionContext<'_>, offset: usize) {
+    // -- rewrite a null sentinel bound to a ?ptr<T> parameter into the null pointer word --
+    abi::emit_load(ctx.emitter, &PhpType::Int, offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::sentinels::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp x0, x9");                              // did the caller bind PHP null to this pointer parameter?
+            ctx.emitter.instruction("csel x0, xzr, x0, eq");                    // turn the null sentinel into the null pointer word
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "r11", crate::codegen::sentinels::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp rax, r11");                            // did the caller bind PHP null to this pointer parameter?
+            abi::emit_load_int_immediate(ctx.emitter, "r11", 0);
+            ctx.emitter.instruction("cmove rax, r11");                          // turn the null sentinel into the null pointer word
+        }
+    }
+    abi::emit_store(ctx.emitter, &PhpType::Int, offset);
+}
+
+/// Rewrites a null sentinel in the caller's storage bound to a `?ptr<T>` by-reference parameter.
+///
+/// The slot holds the address of the caller's variable. A caller variable that holds PHP null
+/// (`$x = null`, or a value only known to be null after a guard) carries the shared null
+/// sentinel, which the callee would read as a live address; it becomes address 0 in place, so
+/// both sides agree that the pointer is null. Mixed or hash-backed caller variables never reach
+/// here: the checker refuses them for a typed by-reference parameter.
+fn normalize_nullable_pointer_ref_param(ctx: &mut FunctionContext<'_>, offset: usize) {
+    // -- rewrite a null sentinel in the caller's ?ptr<T> storage into the null pointer word --
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset(ctx.emitter, "x10", offset);
+            abi::emit_load_from_address(ctx.emitter, "x0", "x10", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::sentinels::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp x0, x9");                              // does the caller's variable hold PHP null?
+            ctx.emitter.instruction("csel x0, xzr, x0, eq");                    // turn the null sentinel into the null pointer word
+            abi::emit_store_to_address(ctx.emitter, "x0", "x10", 0);
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(ctx.emitter, "r10", offset);
+            abi::emit_load_from_address(ctx.emitter, "rax", "r10", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "r11", crate::codegen::sentinels::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp rax, r11");                            // does the caller's variable hold PHP null?
+            abi::emit_load_int_immediate(ctx.emitter, "r11", 0);
+            ctx.emitter.instruction("cmove rax, r11");                          // turn the null sentinel into the null pointer word
+            abi::emit_store_to_address(ctx.emitter, "rax", "r10", 0);
+        }
+    }
 }
 
 /// Publishes one cleanup and/or backtrace activation for a PHP frame.
@@ -1534,6 +1636,13 @@ pub(super) fn emit_owned_local_cleanup(
     offset: usize,
     ty: &PhpType,
 ) {
+    if ctx.numeric_local_slots.contains(&slot) {
+        // -- numeric cells have no child that can run a PHP destructor --
+        abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        return;
+    }
     let done = ctx
         .ref_cell_state_offset(slot)
         .map(|_| ctx.next_label("raw_local_cleanup_done"));
@@ -2074,16 +2183,17 @@ fn emit_registered_instr_enter(ctx: &mut FunctionContext<'_>) {
 
 /// Emits the `--instrument` entry hook at the end of a user function's prologue:
 /// registers the function (assigning its id), records the id on the context for
-/// the epilogue, and calls `elephc_instr_enter(id)`. Synthetic bodies are not
-/// user code and stay uninstrumented; `{main}` is registered by its dedicated
+/// the epilogue, and calls `elephc_instr_enter(id)`. Private PHP implementation
+/// variants reuse their source identity; synthetic scaffolding stays uninstrumented.
+/// `{main}` is registered by its dedicated
 /// process/web prologue before the name table is initialized.
 fn emit_instr_enter(ctx: &mut FunctionContext<'_>) {
-    // Synthetic bodies are not user code. Beyond that, a selective set hooks
-    // only the functions it names — the rest run at full speed.
-    if ctx.function.flags.is_synthetic || !ctx.shared.instrument.covers(&ctx.function.name) {
+    // Source implementation variants share the PHP identity. A selective set hooks
+    // only the source functions it names — the rest run at full speed.
+    if !ctx.function.has_source_identity() || !ctx.shared.instrument.covers(ctx.function.display_name()) {
         return;
     }
-    let id = ctx.shared.register_instr(ctx.function.name.clone());
+    let id = ctx.shared.register_instr(ctx.function.display_name().to_owned());
     ctx.instr_id = Some(id);
     emit_registered_instr_enter(ctx);
 }
@@ -2263,17 +2373,22 @@ fn emit_instr_dump(ctx: &mut FunctionContext<'_>) {
 ///
 /// Placed with the stack guard, before the parameter spill: only scratch
 /// registers are touched (AArch64 x9/x10, x86_64 r10), so the incoming ABI
-/// arguments are undisturbed. The count is a plain load/add/store — a lost
-/// update under threads costs a tick of precision, never correctness. Synthetic
-/// bodies are not user code and stay uncounted; `main` never reaches this
-/// prologue (it has its own), which keeps the dump to functions the user wrote.
+/// arguments are undisturbed. The count is a plain load/add/store; a lost
+/// update under threads costs a tick of precision, never correctness. Private
+/// PHP variants share their source counter, while synthetic scaffolding stays
+/// uncounted. Main has its own prologue and does not register an extra entry.
 fn emit_call_counter_increment(ctx: &mut FunctionContext<'_>, entry_label: &str) {
-    if !ctx.shared.counters || ctx.function.flags.is_synthetic {
+    if !ctx.shared.counters || !ctx.function.has_source_identity() {
         return;
     }
-    let slot = ctx.data.add_comm(format!("_elephc_cnt{}", entry_label), 8);
-    ctx.shared
-        .register_counter(ctx.function.name.clone(), slot.clone());
+    let name = ctx.function.display_name().to_owned();
+    let slot = if let Some((_, slot)) = ctx.shared.counter_registry().iter().find(|(registered, _)| *registered == name) {
+        slot.clone()
+    } else {
+        let slot = ctx.data.add_comm(format!("_elephc_cnt{}", entry_label), 8);
+        ctx.shared.register_counter(name, slot.clone());
+        slot
+    };
     ctx.emitter.comment("call counter (--counters)");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

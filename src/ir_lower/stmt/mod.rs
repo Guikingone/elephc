@@ -45,9 +45,11 @@ mod string_append;
 mod conditionals;
 mod loops;
 mod array_write_core;
+mod buffer_element_updates;
 mod nested_array_writes;
 mod nested_write_guards;
 mod nested_scalar_writes;
+mod static_false_parent;
 mod array_write_storage;
 mod typed_foreach;
 mod switches;
@@ -66,12 +68,17 @@ pub(in crate::ir_lower) use spl_storage_writes::{
 };
 mod metadata_control;
 mod nested_append;
+mod nested_write_sources;
+mod nested_plain_writes;
+mod nested_false_errors;
 mod return_coercions;
 mod repr_fixpoint;
 mod static_property_helpers;
 
 use statement_basics::*;
 use local_assignments::*;
+pub(super) use local_assignments::lower_ref_assign;
+pub(super) use local_assignments::retype_value_for_pointer_local;
 use conditionals::*;
 use loops::*;
 use array_write_core::*;
@@ -91,7 +98,10 @@ use metadata_control::*;
 use return_coercions::*;
 use static_property_helpers::*;
 
-pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error_expr, lower_throw_access_error_of_class};
+pub(crate) use control_exit::{
+    lower_throw_access_error, lower_throw_access_error_expr, lower_throw_access_error_expr_as,
+    lower_throw_access_error_of_class,
+};
 pub(crate) use control_exit::terminate_return;
 // Shared with `crate::ir_lower::expr::unset`, which needs the same runtime-subclass accessor peel
 // for `__unset` that the write path needs for `__set`.
@@ -106,9 +116,10 @@ pub(super) use array_write_core::{
     indexed_array_write_element_type, release_indexed_array_write_operand,
 };
 pub(crate) use array_write_core::{
-    desugared_element_update, lower_array_assign_with_diagnosed_key,
+    desugared_element_update, lower_array_assign_with_diagnosed_key, ElementUpdate,
 };
 pub(crate) use property_array_writes::lower_property_array_assign_with_diagnosed_key;
+pub(crate) use buffer_element_updates::{lower_buffer_expression_update, BufferExpressionUpdate};
 pub(crate) use static_property_writes::lower_static_property_array_assign_with_diagnosed_key;
 pub(crate) use nested_array_writes::lower_nested_array_assign_after_read;
 pub(super) use array_write_storage::{
@@ -240,14 +251,18 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         // Nested appends are parser-generated read/push/write-back groups. Fuse the recognized
         // shape so a missing inner bucket is auto-vivified and a local bucket can be detached
         // before mutation; every other synthetic group keeps ordinary block lowering.
-        StmtKind::Synthetic(body) => match nested_append::recognize(ctx, body) {
-            Some(group) => nested_append::lower(ctx, &group, stmt.span),
-            None => {
-                if !lower_synthetic_readonly_coalesce(ctx, body) {
-                    lower_block(ctx, body);
+        StmtKind::Synthetic(body) => {
+            if !nested_append::try_lower_array_root(ctx, body, stmt.span) {
+                match nested_append::recognize(ctx, body) {
+                    Some(group) => nested_append::lower(ctx, &group, stmt.span),
+                    None => {
+                        if !lower_synthetic_readonly_coalesce(ctx, body) {
+                            lower_block(ctx, body);
+                        }
+                    }
                 }
             }
-        },
+        }
         StmtKind::Try {
             try_body,
             catches,

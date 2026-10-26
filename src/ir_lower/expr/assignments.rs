@@ -26,11 +26,25 @@ pub(super) fn lower_assignment_expr(
         return result;
     }
     let key_already_diagnosed = compound_array_key_diagnosed_in_prelude(target, value, prelude, expr.span);
+    // A `++`/`--` of a scalar buffer element takes over after the prelude has stabilized its
+    // receiver and key, at the element read; any other container continues below as written.
+    let buffer_update = crate::ir_lower::stmt::BufferExpressionUpdate::recognize(
+        target, value, result_target, prelude, conditional_value_temp, expr.span,
+    );
     let mut compound_receiver = None;
-    for stmt in prelude {
+    for (position, stmt) in prelude.iter().enumerate() {
         if let Some(receiver) = guard_static_compound_property_read(ctx, target, value, stmt, expr.span) {
             compound_receiver = Some(receiver);
             continue;
+        }
+        if let Some(update) = buffer_update.as_ref() {
+            if compound_receiver.is_none() && update.read_position() == position {
+                if let Some(result) = crate::ir_lower::stmt::lower_buffer_expression_update(
+                    ctx, update, expr.span,
+                ) {
+                    return result;
+                }
+            }
         }
         crate::ir_lower::stmt::lower_stmt(ctx, stmt);
     }
@@ -120,6 +134,10 @@ pub(super) fn lower_assignment_expr(
         } else {
             value_php_type
         };
+        // `($p = null)` into a pointer-word local stores address 0, as the statement form does.
+        let (lowered, php_type) =
+            crate::ir_lower::stmt::retype_value_for_pointer_local(ctx, name, lowered, expr.span)
+                .unwrap_or((lowered, php_type));
         ctx.store_local(name, lowered, php_type, Some(expr.span));
         result = ctx.load_local(name, Some(expr.span));
         let static_callable = callable_array
@@ -207,15 +225,19 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
     // defects hid each other.
     crate::ir_lower::ownership::release_if_owned(ctx, current, Some(expr.span));
     store_expr_into_temp(ctx, temp_name, result_type.clone(), default, expr.span);
-    let temp_value = Expr::new(ExprKind::Variable(temp_name.to_string()), expr.span);
-    // The write BORROWS the temporary: `array_set` takes its own reference by retaining, and
-    // the slot keeps hers for the merge below to hand to the consumer. One store, one owned
-    // load — the merge's — per execution.
-    // The insert converts a float key again: PHP's probe and its insert are separate accesses,
-    // and each reports the deprecation.
-    ctx.with_borrowed_write_operand(|ctx| {
-        lower_non_local_assignment_write(ctx, target, &temp_value, expr.span);
-    });
+    // A `throw` default of a buffer target (`$o->buf ??= throw ...`) ends the branch inside
+    // `store_expr_into_temp`: nothing is left to write, and nothing may be emitted after it.
+    if !ctx.builder.insertion_block_is_terminated() {
+        let temp_value = Expr::new(ExprKind::Variable(temp_name.to_string()), expr.span);
+        // The write BORROWS the temporary: `array_set` takes its own reference by retaining, and
+        // the slot keeps hers for the merge below to hand to the consumer. One store, one owned
+        // load (the merge's) per execution.
+        // The insert converts a float key again: PHP's probe and its insert are separate
+        // accesses, and each reports the deprecation.
+        ctx.with_borrowed_write_operand(|ctx| {
+            lower_non_local_assignment_write(ctx, target, &temp_value, expr.span);
+        });
+    }
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(keep_block);
@@ -237,6 +259,14 @@ pub(crate) fn lower_null_coalesce_update_stmt(
     target: &Expr,
     default: &Expr,
     span: Span,
+) {
+    lower_null_coalesce_update_stmt_to(ctx, target, target, default, span);
+}
+
+/// Reuses dimensions captured during a coalescing probe for its lazy insertion.
+pub(crate) fn lower_null_coalesce_update_stmt_to(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, write_target: &Expr,
+    default: &Expr, span: Span,
 ) {
     let current = lower_null_coalesce_value(ctx, target);
     let is_null = ctx.emit_value(
@@ -260,7 +290,7 @@ pub(crate) fn lower_null_coalesce_update_stmt(
     });
 
     ctx.builder.position_at_end(insert_block);
-    lower_non_local_assignment_write(ctx, target, default, span);
+    lower_non_local_assignment_write(ctx, write_target, default, span);
     let insert_reachable = !ctx.builder.insertion_block_is_terminated();
     let insert_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
@@ -392,6 +422,15 @@ fn compound_array_key_diagnosed_in_prelude(
         if read_value != target {
             return false;
         }
+        if old_name == value_name && prelude.iter().any(|next| {
+            matches!(&next.kind, StmtKind::Assign { value, .. }
+                if matches!(&value.kind,
+                    ExprKind::PreIncrement(name) | ExprKind::PostIncrement(name)
+                        | ExprKind::PreDecrement(name) | ExprKind::PostDecrement(name)
+                        if name == old_name))
+        }) {
+            return true;
+        }
         prelude.iter().any(|next| {
             matches!(
                 &next.kind,
@@ -475,6 +514,7 @@ fn lower_dynamic_property_assignment_value(
     let (mut receiver, property, value) = if is_static_property_write_chain(object) {
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
+        let property = crate::ir_lower::ownership::persist_string_byte_view(ctx, property, Some(span));
         let property_pins = pin_in_flight_owners(ctx, &[property.value], span);
         // The traversal must not pin this same lease again at a nullable hop. Its
         // borrowed guard view remains protected by the earlier name record below it.
@@ -492,6 +532,7 @@ fn lower_dynamic_property_assignment_value(
         let receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
+        let property = crate::ir_lower::ownership::persist_string_byte_view(ctx, property, Some(span));
         let property_pins = pin_in_flight_owners(ctx, &[property.value], span);
         let value = lower_expr(ctx, value);
         unpin_in_flight_owners(ctx, property_pins, span);

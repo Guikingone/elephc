@@ -52,6 +52,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [BCMath](php/bcmath.md) — exact arbitrary-precision decimal arithmetic, scale, rounding, and errors
 - [iconv](php/iconv.md) — character-set conversion, `//TRANSLIT`/`//IGNORE`, character-oriented string functions, RFC 2047 MIME headers, and the encoding trio
 - [PCNTL](php/pcntl.md) — forking, child waits, signals, process replacement, process groups, sessions, daemonization, and target-specific controls
+- [Tokenizer](php/tokenizer.md): PHP source inspection, lossless tokens, `PhpToken` and `TOKEN_PARSE`.
 - [XML](php/xml.md) — the `ext/xml` SAX parser (`XMLParser`, handlers, `xml_parse_into_struct()`, error codes) and `ext/xmlwriter` (`XMLWriter`, memory and URI output, DTDs, namespaces) on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`)
 - [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties, static property redeclarations, constructor promotion, methods, traits, enums, magic methods
 - [SPL](php/spl.md) — SPL interfaces, exceptions, autoload/introspection helpers, and runtime-backed containers
@@ -85,6 +86,7 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [Conditional Compilation](beyond-php/ifdef.md) — ifdef blocks, compile-time feature flags, CLI flags
 - [Shared Libraries (cdylib)](beyond-php/cdylib.md) — --emit cdylib, #[Export] C-ABI functions, dlopen lifecycle
 - [Web Server (--web)](beyond-php/web.md) — compile a PHP file into a standalone HTTP server with worker, pool, or per-request process isolation
+- [Testing](beyond-php/testing.md) — the native test runtime: `Elephc\Testing\TestCase`, the PHPUnit-compatible assertion subset, the `Runner` report and exit code, and the `PHPUnit\Framework\TestCase` alias
 - [zval Bridge](beyond-php/zval-bridge.md) — zval_pack/unpack/type/free convert elephc values to/from PHP zval structs
 - [Profiling](beyond-php/profiling.md) - PHP-level profiling with one command in every environment: a launched program reports exact wall time, allocations, retained objects, database and outgoing-network wait, SQL queries, network operations and calls; a running service is sampled by default and exact only for a requested completed request. Includes per-`--web`-route tags, `.elephc` performance budgets, automatic curl trace propagation, W3C distributed traces, and a self-contained interactive call-graph page
 

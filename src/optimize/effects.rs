@@ -396,7 +396,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 .iter()
                 .flat_map(|entry| entry.exprs())
                 .map(expr_effect),
-        ),
+        ).with_may_throw(),
         ExprKind::Match {
             subject,
             arms,

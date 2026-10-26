@@ -731,7 +731,8 @@ impl Checker {
             ));
         }
         match &arg.kind {
-            ExprKind::StringLiteral(name) => Ok(ReflectionParameterSelector::Name(name.clone())),
+            ExprKind::StringLiteral(name) => Ok(ReflectionParameterSelector::Name(
+                crate::names::literal_symbol_name(name).unwrap_or_else(|| name.clone()))),
             ExprKind::IntLiteral(position) => Ok(ReflectionParameterSelector::Position(*position)),
             _ => Err(CompileError::new(
                 arg.span,
@@ -804,7 +805,8 @@ impl Checker {
             ));
         }
         let raw_class_name = match &arg.kind {
-            ExprKind::StringLiteral(class_name) => class_name.clone(),
+            ExprKind::StringLiteral(class_name) => crate::names::literal_symbol_name(class_name)
+                .unwrap_or_else(|| class_name.clone()),
             ExprKind::ClassConstant { receiver } => {
                 self.resolve_reflection_class_constant(receiver, arg.span)?
             }
@@ -855,7 +857,8 @@ impl Checker {
             ));
         }
         match &arg.kind {
-            ExprKind::StringLiteral(value) => Ok(value.clone()),
+            ExprKind::StringLiteral(value) => Ok(crate::names::literal_symbol_name(value)
+                .unwrap_or_else(|| value.clone())),
             _ => Err(CompileError::new(
                 arg.span,
                 &format!(

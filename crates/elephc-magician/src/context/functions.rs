@@ -17,6 +17,8 @@ pub enum EvalNativeGlobalConstant {
     Int(i64),
     Float(f64),
     String(String),
+    /// Binary PHP string constant with a payload that is not valid UTF-8.
+    Bytes(Vec<u8>),
     Resource(i64),
 }
 
@@ -311,6 +313,14 @@ impl ElephcEvalContext {
         self.native_functions
             .get_mut(function_name)
             .is_some_and(|function| function.set_param_default(index, default))
+    }
+
+    /// Retains source default names separately from native executable values and Error data.
+    pub fn define_native_function_param_default_constant_name(
+        &mut self, function_name: &str, index: usize, name: String,
+    ) -> bool {
+        self.native_functions.get_mut(function_name)
+            .is_some_and(|function| function.set_param_default_constant_name(index, name))
     }
 
     /// Records whether one native AOT callback parameter is by-reference.

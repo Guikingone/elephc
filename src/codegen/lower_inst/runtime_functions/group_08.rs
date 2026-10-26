@@ -19,6 +19,9 @@ pub(super) fn lower(
     target: RuntimeFnId,
 ) -> Option<Result<()>> {
     match target {
+        RuntimeFnId::TokenizerErrorLocation => Some(
+            crate::codegen::lower_inst::builtins::tokenizer::lower_error_location(ctx, inst)
+        ),
         RuntimeFnId::Sqrt => Some({
             crate::codegen::lower_inst::builtins::math::lower_sqrt(ctx, inst)
         }),
@@ -110,6 +113,9 @@ pub(super) fn lower(
         RuntimeFnId::BufferLen => Some({
             crate::codegen::lower_inst::builtins::buffers::lower_buffer_len(ctx, inst)
         }),
+        RuntimeFnId::BufferPtr => Some({
+            crate::codegen::lower_inst::builtins::buffers::lower_buffer_ptr(ctx, inst)
+        }),
         RuntimeFnId::Ptr => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr(ctx, inst)
         }),
@@ -134,6 +140,12 @@ pub(super) fn lower(
         RuntimeFnId::PtrRead8 => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_read8(ctx, inst)
         }),
+        RuntimeFnId::PtrReadF32 => Some({
+            crate::codegen::lower_inst::builtins::pointers::lower_ptr_read_f32(ctx, inst)
+        }),
+        RuntimeFnId::PtrReadF64 => Some({
+            crate::codegen::lower_inst::builtins::pointers::lower_ptr_read_f64(ctx, inst)
+        }),
         RuntimeFnId::PtrReadString => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_read_string(ctx, inst)
         }),
@@ -151,6 +163,12 @@ pub(super) fn lower(
         }),
         RuntimeFnId::PtrWrite8 => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_write8(ctx, inst)
+        }),
+        RuntimeFnId::PtrWriteF32 => Some({
+            crate::codegen::lower_inst::builtins::pointers::lower_ptr_write_f32(ctx, inst)
+        }),
+        RuntimeFnId::PtrWriteF64 => Some({
+            crate::codegen::lower_inst::builtins::pointers::lower_ptr_write_f64(ctx, inst)
         }),
         RuntimeFnId::PtrWriteString => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_write_string(ctx, inst)

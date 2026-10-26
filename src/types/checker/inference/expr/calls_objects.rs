@@ -7,12 +7,14 @@
 //! Key details:
 //! - Retains constructor, visibility, eval-barrier, callable, and late-static-binding checks.
 
-use super::null_coalesce::{null_coalesce_result_type, operand_is_never_null};
+use super::null_coalesce::{
+    null_coalesce_buffer_merge_type, null_coalesce_result_type, operand_is_never_null,
+};
 use super::{body_must_not_use_this, Checker};
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::pcntl_constants::pcntl_int_constants;
-use crate::types::{packed_type_size, PhpType, TypeEnv};
+use crate::types::{PhpType, TypeEnv};
 
 impl Checker {
     /// Infers types for calls, closures, objects, property access, assignments, and generators.
@@ -61,19 +63,23 @@ impl Checker {
             }
             ExprKind::BufferNew { element_type, len } => {
                 let len_ty = self.infer_type(len, env)?;
-                if len_ty != PhpType::Int {
+                // A length takes what a buffer index takes. Checked int arithmetic such as
+                // `$n + 1` infers `mixed` (PHP promotes an overflowing result to float), so a
+                // `mixed` or `int|float` length is converted at runtime, where a value that is
+                // not a whole number in range fails the allocation's length validation.
+                if !matches!(len_ty, PhpType::Int | PhpType::Mixed)
+                    && !len_ty.is_int_float_union()
+                {
                     return Err(CompileError::new(
                         expr.span,
                         "buffer_new<T>() length must be integer",
                     ));
                 }
-                let elem_ty = self.resolve_type_expr(element_type, expr.span)?;
-                if packed_type_size(&elem_ty, &self.packed_classes).is_none() {
-                    return Err(CompileError::new(
-                        expr.span,
-                        "buffer_new<T>() requires a POD scalar, pointer, or packed class element type",
-                    ));
-                }
+                let elem_ty = self.resolve_buffer_element_type(
+                    element_type,
+                    expr.span,
+                    "buffer_new<T>() requires a POD scalar, pointer, or packed class element type",
+                )?;
                 Ok(PhpType::Buffer(Box::new(elem_ty)))
             }
             ExprKind::BitNot(inner) => {
@@ -97,6 +103,17 @@ impl Checker {
                 let vt = self.infer_null_probe_operand(value, operand_env)?;
                 let value_is_never_null = operand_is_never_null(self, value, &vt, operand_env);
                 let dt = self.infer_type(default, env)?;
+                if let Some(buffer) = null_coalesce_buffer_merge_type(
+                    self,
+                    value,
+                    &vt,
+                    value_is_never_null,
+                    default,
+                    &dt,
+                    expr.span,
+                )? {
+                    return Ok(buffer);
+                }
                 Ok(null_coalesce_result_type(self, value_is_never_null, vt, dt))
             }
             ExprKind::Pipe { value, callable } => {
@@ -456,6 +473,20 @@ impl Checker {
         allow_traversable: bool,
     ) -> Result<PhpType, CompileError> {
         let ty = self.infer_type(inner, env)?;
+        self.spread_source_element_type(ty, span, allow_traversable)
+    }
+
+    /// Returns the element type a spread source of the already inferred type `ty` supplies, or
+    /// the "requires an array" diagnostic at `span`, the span of the `...` node itself.
+    ///
+    /// Split from [`Checker::infer_spread_element_type`] so the indexed-literal typing, which
+    /// types its spread sources once in its hash-spread scan, does not type them a second time.
+    pub(super) fn spread_source_element_type(
+        &self,
+        ty: PhpType,
+        span: crate::span::Span,
+        allow_traversable: bool,
+    ) -> Result<PhpType, CompileError> {
         match ty {
             PhpType::Array(elem_ty) => Ok(*elem_ty),
             PhpType::AssocArray { value, .. } => Ok(*value),

@@ -63,7 +63,10 @@ use crate::types::{
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
 pub(crate) use loop_storage::loop_carried_storage_types;
 pub(crate) use inference::closure_body_uses_this;
-pub(crate) use builtin_types::{InterfaceDeclInfo, REFLECTION_CLASS_NAMES};
+pub(crate) use builtin_types::InterfaceDeclInfo;
+pub(crate) use schema::normalize_signature_default_receivers;
+pub(crate) use schema::normalize_lexical_callable_default;
+pub(crate) use builtin_types::REFLECTION_CLASS_NAMES;
 use builtin_types::validate_magic_method_contracts;
 use schema::propagate_abstract_return_types;
 
@@ -130,6 +133,25 @@ pub(crate) struct Checker {
     /// widen the parameter to `Mixed` (so e.g. a parameter called with both an int
     /// and a string is `Mixed`, not collapsed to one type).
     pub param_specialization_seen: HashSet<(String, usize)>,
+    /// Direct subclasses of every class, keyed by parent name, plus the `classes.len()` it was
+    /// built for. Rebuilt whenever a class is registered, so it never answers for a stale table.
+    ///
+    /// `class_and_descendants` answers subclass queries from it (the late-bound `new static`
+    /// target validation), which used to walk the parent chain from every registered class.
+    pub class_children_index: Option<(usize, HashMap<String, Vec<String>>)>,
+    /// The classes whose method table dispatches each `(implementing class, method key,
+    /// is_static)` to that implementation, plus the `classes.len()` it was built for.
+    ///
+    /// Every method body's inferred return is copied to those classes after the body is
+    /// checked. That used to scan the whole class table once per method body (methods ×
+    /// classes per pass). Implementation maps are only written while classes are registered,
+    /// which also changes the table's size, so the length is a sound staleness check.
+    pub method_impl_users_index: Option<(usize, HashMap<(String, String, bool), Vec<String>>)>,
+    /// The classes sharing each `(property, declaring class)` slot, plus the `classes.len()` it
+    /// was built for; the same staleness rule as `method_impl_users_index`. A constructor
+    /// argument retypes that slot in every class sharing it, which used to scan the whole class
+    /// table per argument of every `new`.
+    pub property_sharers_index: Option<(usize, HashMap<(String, String), Vec<String>>)>,
     /// Untyped interface positions whose implementation uses a stable boxed ABI.
     pub interface_method_boxed_params: HashSet<(String, usize)>,
     /// Every generic instantiation a call site asked for, as (template name, type arguments).
@@ -247,6 +269,10 @@ pub(crate) struct Checker {
     pub declared_trait_methods: HashMap<String, HashMap<String, FunctionSig>>,
     /// Reflection-visible class constant names declared directly on each trait.
     pub declared_trait_constants: HashMap<String, HashSet<String>>,
+    /// Properties imported from traits, distinguished from directly declared class defaults.
+    pub trait_imported_properties: HashMap<String, HashSet<String>>,
+    /// Classes whose own flattened constructor was imported from a trait.
+    pub trait_imported_constructors: HashSet<String>,
     /// Name of the class currently being type-checked (used for `$this` resolution).
     pub current_class: Option<String>,
     /// Name of the current method being type-checked, when inside a class body.
@@ -273,6 +299,12 @@ pub(crate) struct Checker {
     pub extern_classes: HashMap<String, ExternClassInfo>,
     /// Packed layout-only records (`packed class`), keyed by canonical name.
     pub packed_classes: HashMap<String, PackedClassInfo>,
+    /// Canonical names of every packed or extern record declared in the program.
+    ///
+    /// This predeclaration set lets `ptr<T>` fields name their own record or a record whose
+    /// layout has not been built yet, without making duplicate detection treat each record as
+    /// colliding with itself.
+    pub declared_native_records: HashSet<String>,
     /// Extern global variable declarations, keyed by variable name.
     pub extern_globals: HashMap<String, PhpType>,
     /// Libraries required by `#[link]` attributes on extern blocks, in link order.
@@ -434,6 +466,10 @@ pub(crate) struct Checker {
     pub first_class_builtin_call_types: HashMap<Span, PhpType>,
     /// Fixed-point storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: crate::types::LoopStorageTypes,
+    /// The loop spans `loop_storage_types` holds for each scope, so a re-walk clears its scope
+    /// in time proportional to that scope's loops. Clearing used to `retain` over the whole map
+    /// once per method, function and closure body, which on Laravel was quadratic.
+    pub loop_storage_scope_spans: HashMap<String, Vec<crate::span::Span>>,
     /// `(scope, local)` pairs for `string` locals used as a `++`/`--` target.
     ///
     /// PHP's string increment can change the value's type (`"9"++` is `int(10)`), so EIR
@@ -492,6 +528,10 @@ pub(crate) struct Checker {
     /// Names declared `static` in the current body. Their storage outlives the call, so the
     /// binding is never killable.
     pub static_local_names: HashSet<String>,
+    /// Every parameter name of the current body (empty at top level). The storage-only numeric
+    /// re-bind skips these: backtrace frames read a parameter's argument value from the FIRST
+    /// slot of that name, so splitting a parameter's binding would report a stale argument.
+    pub local_parameter_names: HashSet<String>,
     /// Names whose type was DECLARED in the current body by a `TypedAssign` local
     /// (`int $x = …`), and what each was declared AS. A declaration is a programmer contract
     /// and stays strict in both permissive and `--strict-locals` mode.
@@ -634,6 +674,7 @@ pub(crate) struct SavedLocalBindingScope {
     boxed_ref_aliased: HashSet<String>,
     boxed_ref_invalidations: Vec<HashSet<String>>,
     statics: HashSet<String>,
+    parameters: HashSet<String>,
     typed: HashMap<String, PhpType>,
     mixed_storage: HashSet<String>,
     guarded_unions: HashMap<String, PhpType>,
@@ -682,7 +723,7 @@ pub(crate) struct SavedNarrowingOrigin {
 impl Checker {
     /// True when `name`'s current binding may be killed (by `unset`) or re-bound to an
     /// incompatible type (by assignment) at the current program point. See
-    /// `.plans/local-retype-and-strict-locals.md` — depth-0 + non-aliased rule.
+    /// `docs/php/types.md`, Local retyping: the depth-0 and non-aliased rule.
     ///
     /// A body that calls `eval()` anywhere answers `false` for EVERY name, so both the kill and
     /// the straight-line retype step aside there and the body keeps its pre-feature behaviour
@@ -830,6 +871,7 @@ impl Checker {
                 &mut self.conditional_boxed_ref_invalidations,
             ),
             statics: std::mem::take(&mut self.static_local_names),
+            parameters: std::mem::take(&mut self.local_parameter_names),
             typed: std::mem::take(&mut self.typed_local_names),
             // The mixed-storage marking describes ONE frame: a name boxed in the caller says
             // nothing about a same-named local in the callee, and leaking the set inward would
@@ -839,6 +881,7 @@ impl Checker {
             contains_eval: self.body_contains_eval,
         };
         self.local_conditional_depth = 0;
+        self.local_parameter_names = param_names.iter().cloned().collect();
         self.local_binding_depth = param_names.into_iter().map(|name| (name, 0)).collect();
         self.typed_local_names = HashMap::new();
         // Cleared rather than inherited: a caller that runs `eval` says nothing about the body
@@ -859,6 +902,7 @@ impl Checker {
         self.boxed_ref_aliased_locals = saved.boxed_ref_aliased;
         self.conditional_boxed_ref_invalidations = saved.boxed_ref_invalidations;
         self.static_local_names = saved.statics;
+        self.local_parameter_names = saved.parameters;
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
         self.guarded_union_types = saved.guarded_unions;

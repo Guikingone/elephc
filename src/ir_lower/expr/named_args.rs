@@ -50,7 +50,7 @@ pub(super) fn lower_named_args_with_signature_options(
             return operands;
         }
         let normalized = plan.normalized_args();
-        return lower_args(ctx, &normalized);
+        return lower_normalized_args(ctx, sig, &plan, &normalized);
     }
     let mut source_values = Vec::with_capacity(plan.source_args.len());
     for source_index in 0..plan.source_args.len() {
@@ -89,6 +89,36 @@ pub(super) fn lower_named_args_with_signature_options(
     operands
 }
 
+/// Lowers a plan's normalized arguments, giving each regular parameter's literal its declared type.
+///
+/// Like `lower_args`, every argument but the last is rooted across the later evaluation; the
+/// regular entries additionally go through `lower_expr_for_destination`, so a null-only literal
+/// bound to `array<ptr<T>|null>` keeps pointer storage as a positional argument does. Variadic tail
+/// entries lower as plain values.
+fn lower_normalized_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    plan: &crate::types::call_args::CallArgPlan,
+    normalized: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let regular_count = plan.normalized_regular_arg_count();
+    normalized
+        .iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            let value = match sig.params.get(index).filter(|_| index < regular_count) {
+                Some((_, param_ty)) => lower_expr_for_destination(ctx, arg, param_ty),
+                None => lower_expr(ctx, arg),
+            };
+            if index + 1 < normalized.len() {
+                root_evaluated_call_argument(ctx, value, arg.span).value
+            } else {
+                value.value
+            }
+        })
+        .collect()
+}
+
 /// Preserves a regular reference argument's place while consuming the shared source-order plan.
 fn lower_planned_source_arg(
     ctx: &mut LoweringContext<'_, '_>,
@@ -97,6 +127,10 @@ fn lower_planned_source_arg(
     source_index: usize,
     capture_values: bool,
 ) -> crate::ir::ValueId {
+    let root_before_defaults = plan.possible_default_argument_mask(sig).into_iter()
+        .zip(&sig.defaults).any(|(possible, default)| possible && default.as_ref()
+            .is_some_and(crate::types::deferred_defaults::contains_deferred_error));
+    let root_before_later_evaluation = source_index + 1 < plan.source_args.len() || root_before_defaults;
     if let Some(source) = plan.source_values.iter()
         .find(|source| source.source_index() == source_index)
     {
@@ -107,7 +141,7 @@ fn lower_planned_source_arg(
             if let Some(lowered) =
                 lower_tracked_callable_array_param(ctx, sig, param_index, source.expr())
             {
-                return if source_index + 1 < plan.source_args.len() {
+                return if root_before_later_evaluation {
                     root_evaluated_call_argument(ctx, lowered, source.expr().span).value
                 } else {
                     lowered.value
@@ -134,7 +168,21 @@ fn lower_planned_source_arg(
         )
         .value
     } else {
-        lower_call_source_arg(ctx, &plan.source_args[source_index])
+        // A regular parameter shapes its literal argument as a positional one does: a null-only
+        // literal bound to `array<ptr<T>|null>` keeps pointer storage.
+        let param_ty = plan
+            .source_values
+            .iter()
+            .find(|source| source.source_index() == source_index)
+            .and_then(|source| source.param_idx())
+            .and_then(|param_index| sig.params.get(param_index))
+            .map(|(_, param_ty)| param_ty.clone());
+        match param_ty {
+            Some(param_ty) => {
+                lower_expr_for_destination(ctx, &plan.source_args[source_index], &param_ty).value
+            }
+            None => lower_call_source_arg(ctx, &plan.source_args[source_index]),
+        }
     };
     if capture_values {
         let parameter = plan.source_values.iter()
@@ -143,7 +191,7 @@ fn lower_planned_source_arg(
             .unwrap_or(sig.params.len() + source_index);
         let lowered = lowered_value_from_id(ctx, value);
         capture_call_argument_value(ctx, lowered, parameter, plan.source_args[source_index].span).value
-    } else if source_index + 1 < plan.source_args.len() {
+    } else if root_before_later_evaluation {
         let lowered = lowered_value_from_id(ctx, value);
         root_evaluated_call_argument(ctx, lowered, plan.source_args[source_index].span).value
     } else {
@@ -394,7 +442,10 @@ fn lower_named_args_with_spread_plan_impl(
         let value = match planned {
             Some((param_idx, expr)) => hinted(ctx, param_idx, expr)
                 .map(|value| {
-                    if source_index + 1 < plan.source_args.len()
+                    let omitted_can_throw = plan.possible_default_argument_mask(sig).into_iter()
+                        .zip(&sig.defaults).any(|(possible, default)| possible && default.as_ref()
+                            .is_some_and(crate::types::deferred_defaults::contains_deferred_error));
+                    if (source_index + 1 < plan.source_args.len() || omitted_can_throw)
                         && !sig.ref_params.get(param_idx).copied().unwrap_or(false)
                     {
                         let lowered = lowered_value_from_id(ctx, value);

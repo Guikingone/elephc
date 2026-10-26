@@ -36,7 +36,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 ///   (not a bare `write`), so a synthetic userspace-wrapper fd transparently routes
 ///   into the wrapper's `stream_write` while a normal fd takes the raw `write` path.
 /// - ARM64: `bl __rt_fd_write` per segment; 144-byte stack frame
-/// - x86_64: `call __rt_fd_write` per segment; 144-byte frame with callee-saved `rbp`
+/// - x86_64: `call __rt_fd_write` per segment; 160-byte frame with callee-saved `rbp`
 pub fn emit_fputcsv(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_fputcsv_linux_x86_64(emitter);
@@ -310,7 +310,7 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while fputcsv() keeps stream and field state in stack slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the file descriptor, array pointer, and CSV writer bookkeeping
-    emitter.instruction("sub rsp, 152");                                        // reserve aligned stack space for the CSV writer state across repeated __rt_fd_write() calls
+    emitter.instruction("sub rsp, 160");                                        // reserve aligned stack space for the CSV writer state across repeated __rt_fd_write() calls
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the destination file descriptor across all field-scan and write helper steps
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the source string-array pointer across repeated field loads
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // total written bytes start at zero before any CSV separator or field bytes are emitted
@@ -475,7 +475,7 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_fd_write");                                  // emit the trailing newline through __rt_fd_write()
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the trailing newline byte count into the running CSV write total
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the total number of bytes that fputcsv() emitted through __rt_fd_write()
-    emitter.instruction("add rsp, 152");                                        // release the CSV writer spill slots before returning to the caller
+    emitter.instruction("add rsp, 160");                                        // release the CSV writer spill slots before returning to the caller
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the x86_64 CSV writer completes
     emitter.instruction("ret");                                                 // return the total written byte count in the x86_64 integer result register
 

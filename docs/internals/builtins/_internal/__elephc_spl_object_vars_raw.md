@@ -2,7 +2,7 @@
 title: "__elephc_spl_object_vars_raw() - internals"
 description: "Compiler internals for __elephc_spl_object_vars_raw(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1182
+  order: 1191
 ---
 
 ## `__elephc_spl_object_vars_raw()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/__elephc_spl_object_vars_raw.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/__elephc_spl_object_vars_raw.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

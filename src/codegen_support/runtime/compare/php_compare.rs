@@ -17,22 +17,27 @@
 //!   `__rt_mixed_unbox` first.
 //! - PHP 8 rule order, which is observable: a `bool` on either side coerces BOTH
 //!   sides to bool; then `null` (against a string it becomes `""` and a *string*
-//!   comparison happens, so `null < "0"` but `null == ""`); then two strings use
-//!   numeric-string promotion; then a number against a string parses the string and,
-//!   when that fails, compares the number's *string form* byte-wise (`0 < "a"`).
+//!   comparison happens, so `null < "0"` but `null == ""`); then two strings go to
+//!   `__rt_str_smart_cmp`, PHP's `zendi_smart_strcmp`; then a number against a string
+//!   parses the string and, when that fails, compares the number's *string form*
+//!   byte-wise (`0 < "a"`).
 //! - Number-to-string conversion goes through `__rt_itoa` / `__rt_ftoa`, which append
 //!   to the shared `_concat_buf` scratch. The cursor is saved before and restored
 //!   after the comparison, so a reduction loop cannot exhaust the buffer.
 //! - The primary result remains the spaceship ordering value. A secondary flag reports
 //!   unordered IEEE comparisons so relational consumers can return `false` for every NaN
 //!   predicate without changing spaceship's PHP result of `1`.
-//! - Known deviations: comparisons that involve a numeric *string* are resolved as
-//!   `double`s, so two integer strings beyond 2^53 can compare equal where PHP
-//!   compares them exactly (the same simplification `__rt_mixed_loose_eq` already
-//!   makes); arrays, objects, resources and callables only rank above the scalar
-//!   tags and compare equal to each other.
+//! - A number against a numeric *string* is still resolved as `double`s, so two values
+//!   beyond 2^53 can compare equal there where PHP compares them exactly. Two STRINGS
+//!   no longer share that deviation: `__rt_str_smart_cmp` classifies each side and
+//!   compares two integer strings as `zend_long`.
+//! - Two arrays (tags 4/5) are ordered by `__rt_mixed_array_compare`, PHP's
+//!   `zend_compare_arrays`, through two borrowed stack cells built from the saved triples.
+//! - Known deviations: objects, resources and callables only rank above the scalar tags
+//!   and compare equal to each other.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// Emits `__rt_php_compare` and `__rt_php_truthy` for the active target.
 ///
@@ -71,7 +76,17 @@ fn emit_php_truthy_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_pt_word");                                   // ints are falsy only at zero
     emitter.instruction("cmp x0, #3");                                          // is the operand a bool?
     emitter.instruction("b.eq __rt_pt_word");                                   // bools carry their truth value in the low word
-    emitter.instruction("b __rt_pt_true");                                      // arrays, objects, resources and callables report true here
+    emitter.instruction("sub x9, x0, #4");                                      // tags 4 and 5 are the two array representations
+    emitter.instruction("cmp x9, #1");                                          // is the operand an array?
+    emitter.instruction("b.ls __rt_pt_array");                                  // arrays are falsy only when empty
+    emitter.instruction("b __rt_pt_true");                                      // objects, resources and callables report true here
+
+    emitter.label("__rt_pt_array");
+    emit_branch_if_null_container(emitter, "x1", "x10", "__rt_pt_false");
+    emitter.instruction("ldr x9, [x1]");                                        // count lives at offset 0 of both array and hash headers
+    emitter.instruction("cmp x9, #0");                                          // does the array hold any element?
+    emitter.instruction("cset x0, ne");                                         // only an empty array is falsy
+    emitter.instruction("ret");                                                 // return the truthiness flag
 
     emitter.label("__rt_pt_word");
     emitter.instruction("cmp x1, #0");                                          // compare the integer-like payload against zero
@@ -204,6 +219,7 @@ fn emit_php_compare_aarch64(emitter: &mut Emitter) {
 
     // -- containers, objects, resources and callables --
     emitter.label("__rt_pcmp_nonscalar");
+    emit_array_pair_dispatch(emitter);
     emitter.instruction("orr x11, x9, x10");                                    // is exactly one operand a comparable scalar?
     emitter.instruction("cbz x11, __rt_pcmp_zero");                             // two non-scalars are reported equal (documented limitation)
     emitter.instruction("cbz x9, __rt_pcmp_pos");                               // a non-scalar left operand ranks above a scalar
@@ -238,27 +254,20 @@ fn emit_php_compare_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_pcmp_pos");                                     // PHP spaceship orders unordered NaN as greater
 
     // -- string versus string --
+    // Delegated whole to `__rt_str_smart_cmp`, PHP's `zendi_smart_strcmp`. Parsing both
+    // operands into doubles here is not enough: two integer strings compare as
+    // `zend_long`, which is the only way `"9007199254740993" > "9007199254740992"` can be
+    // true, and the same helper owns the overflow and infinity fallbacks to bytes.
     emitter.label("__rt_pcmp_strings");
-    emitter.instruction("bl __rt_str_to_number");                               // parse the left string under PHP's numeric-string grammar
-    emitter.instruction("cbz x0, __rt_pcmp_str_bytes");                         // a non-numeric operand forces the byte comparison
-    emitter.instruction("str d0, [sp, #48]");                                   // save the parsed left value across the second parse
-    emitter.instruction("ldr x1, [sp, #32]");                                   // reload the right string pointer
-    emitter.instruction("ldr x2, [sp, #40]");                                   // reload the right string length
-    emitter.instruction("bl __rt_str_to_number");                               // parse the right string under PHP's numeric-string grammar
-    emitter.instruction("cbz x0, __rt_pcmp_str_bytes");                         // a non-numeric operand forces the byte comparison
-    emitter.instruction("fmov d1, d0");                                         // move the parsed right value into the comparison register
-    emitter.instruction("ldr d0, [sp, #48]");                                   // reload the parsed left value
-    emitter.instruction("b __rt_pcmp_fcmp");                                    // two numeric strings compare numerically
-    emitter.label("__rt_pcmp_str_bytes");
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the left string pointer
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the left string length
     emitter.instruction("ldr x3, [sp, #32]");                                   // reload the right string pointer
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the right string length
-    emitter.instruction("bl __rt_strcmp");                                      // compare both strings byte-wise, then by length
-    emitter.instruction("cmp x0, #0");                                          // normalize the byte difference into a three-way result
+    emitter.instruction("bl __rt_str_smart_cmp");                               // apply PHP's full string-versus-string ordering
+    emitter.instruction("cmp x0, #0");                                          // normalize the three-way result onto the shared exits
     emitter.instruction("b.lt __rt_pcmp_neg");                                  // the left string sorts first
     emitter.instruction("b.gt __rt_pcmp_pos");                                  // the right string sorts first
-    emitter.instruction("b __rt_pcmp_zero");                                    // both strings are byte-identical
+    emitter.instruction("b __rt_pcmp_zero");                                    // both strings compare equal
 
     // -- number versus string, normalized so the number is always the left operand --
     emitter.label("__rt_pcmp_num_vs_str");
@@ -376,7 +385,17 @@ fn emit_php_truthy_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_pt_word");                                     // ints are falsy only at zero
     emitter.instruction("cmp rdi, 3");                                          // is the operand a bool?
     emitter.instruction("je __rt_pt_word");                                     // bools carry their truth value in the low word
-    emitter.instruction("jmp __rt_pt_true");                                    // arrays, objects, resources and callables report true here
+    emitter.instruction("lea rax, [rdi - 4]");                                  // tags 4 and 5 are the two array representations
+    emitter.instruction("cmp rax, 1");                                          // is the operand an array?
+    emitter.instruction("jbe __rt_pt_array");                                   // arrays are falsy only when empty
+    emitter.instruction("jmp __rt_pt_true");                                    // objects, resources and callables report true here
+
+    emitter.label("__rt_pt_array");
+    emit_branch_if_null_container(emitter, "rsi", "r11", "__rt_pt_false");
+    emitter.instruction("cmp QWORD PTR [rsi], 0");                              // count lives at offset 0 of both array and hash headers
+    emitter.instruction("setne al");                                            // only an empty array is falsy
+    emitter.instruction("movzx rax, al");                                       // widen the predicate byte into the result register
+    emitter.instruction("ret");                                                 // return the truthiness flag
 
     emitter.label("__rt_pt_word");
     emitter.instruction("test rsi, rsi");                                       // compare the integer-like payload against zero
@@ -525,6 +544,7 @@ fn emit_php_compare_x86_64(emitter: &mut Emitter) {
 
     // -- containers, objects, resources and callables --
     emitter.label("__rt_pcmp_nonscalar");
+    emit_array_pair_dispatch(emitter);
     emitter.instruction("mov rax, r10");                                        // copy the left predicate for the combined tests
     emitter.instruction("or rax, r11");                                         // is exactly one operand a comparable scalar?
     emitter.instruction("jz __rt_pcmp_zero");                                   // two non-scalars are reported equal (documented limitation)
@@ -560,31 +580,20 @@ fn emit_php_compare_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_pcmp_pos");                                   // PHP spaceship orders unordered NaN as greater
 
     // -- string versus string --
+    // Delegated whole to `__rt_str_smart_cmp`, PHP's `zendi_smart_strcmp`. Parsing both
+    // operands into doubles here is not enough: two integer strings compare as
+    // `zend_long`, which is the only way `"9007199254740993" > "9007199254740992"` can be
+    // true, and the same helper owns the overflow and infinity fallbacks to bytes.
     emitter.label("__rt_pcmp_strings");
-    emitter.instruction("mov rax, rsi");                                        // pass the left string pointer to the numeric parser
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // pass the left string length to the numeric parser
-    emitter.instruction("call __rt_str_to_number");                             // parse the left string under PHP's numeric-string grammar
-    emitter.instruction("test rax, rax");                                       // was the left string fully numeric?
-    emitter.instruction("jz __rt_pcmp_str_bytes");                              // a non-numeric operand forces the byte comparison
-    emitter.instruction("movsd QWORD PTR [rbp - 56], xmm0");                    // save the parsed left value across the second parse
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // pass the right string pointer to the numeric parser
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // pass the right string length to the numeric parser
-    emitter.instruction("call __rt_str_to_number");                             // parse the right string under PHP's numeric-string grammar
-    emitter.instruction("test rax, rax");                                       // was the right string fully numeric?
-    emitter.instruction("jz __rt_pcmp_str_bytes");                              // a non-numeric operand forces the byte comparison
-    emitter.instruction("movapd xmm1, xmm0");                                   // move the parsed right value into the comparison register
-    emitter.instruction("movsd xmm0, QWORD PTR [rbp - 56]");                    // reload the parsed left value
-    emitter.instruction("jmp __rt_pcmp_fcmp");                                  // two numeric strings compare numerically
-    emitter.label("__rt_pcmp_str_bytes");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the left string pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the left string length
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // reload the right string pointer
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the right string length
-    emitter.instruction("call __rt_strcmp");                                    // compare both strings byte-wise, then by length
-    emitter.instruction("cmp rax, 0");                                          // normalize the byte difference into a three-way result
+    emitter.instruction("call __rt_str_smart_cmp");                             // apply PHP's full string-versus-string ordering
+    emitter.instruction("cmp rax, 0");                                          // normalize the three-way result onto the shared exits
     emitter.instruction("jl __rt_pcmp_neg");                                    // the left string sorts first
     emitter.instruction("jg __rt_pcmp_pos");                                    // the right string sorts first
-    emitter.instruction("jmp __rt_pcmp_zero");                                  // both strings are byte-identical
+    emitter.instruction("jmp __rt_pcmp_zero");                                  // both strings compare equal
 
     // -- number versus string, normalized so the number is always the left operand --
     emitter.label("__rt_pcmp_num_vs_str");
@@ -746,4 +755,57 @@ mod tests {
             "{x86_64}"
         );
     }
+}
+
+/// Routes two array operands to the recursive array ordering walk.
+///
+/// Both saved value triples are rebuilt as borrowed stack cells (`[tag][low][high]`) inside the
+/// comparison frame's free slots, because the walk reads its operands as Mixed cells. Any other
+/// operand pair falls through to the coarse non-scalar ranking.
+fn emit_array_pair_dispatch(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x12, [sp, #0]");                           // reload the left runtime tag
+            emitter.instruction("sub x12, x12, #4");                            // tags 4 and 5 are the two array representations
+            emitter.instruction("cmp x12, #1");                                 // is the left operand an array?
+            emitter.instruction("b.hi __rt_pcmp_not_arrays");                   // anything else keeps the coarse ranking
+            emitter.instruction("ldr x12, [sp, #24]");                          // reload the right runtime tag
+            emitter.instruction("sub x12, x12, #4");                            // tags 4 and 5 are the two array representations
+            emitter.instruction("cmp x12, #1");                                 // is the right operand an array?
+            emitter.instruction("b.hi __rt_pcmp_not_arrays");                   // anything else keeps the coarse ranking
+            emitter.instruction("ldp x12, x13, [sp, #0]");                      // reload the left tag and low payload word
+            emitter.instruction("ldr x14, [sp, #16]");                          // reload the left high payload word
+            emitter.instruction("stp x12, x13, [sp, #56]");                     // build the left borrowed cell's tag and low word
+            emitter.instruction("str x14, [sp, #72]");                          // build the left borrowed cell's high word
+            emitter.instruction("ldp x12, x13, [sp, #24]");                     // reload the right tag and low payload word
+            emitter.instruction("ldr x14, [sp, #40]");                          // reload the right high payload word
+            emitter.instruction("stp x12, x13, [sp, #80]");                     // build the right borrowed cell's tag and low word
+            emitter.instruction("str x14, [sp, #96]");                          // build the right borrowed cell's high word
+            emitter.instruction("add x0, sp, #56");                             // pass the left borrowed array cell
+            emitter.instruction("add x1, sp, #80");                             // pass the right borrowed array cell
+            emitter.instruction("mov x2, #0");                                  // the walk starts at recursion depth zero
+            emitter.instruction("bl __rt_mixed_array_compare");                 // order the two arrays the way zend_compare_arrays does
+            emitter.instruction("b __rt_pcmp_done");                            // return the array ordering result
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                // reload the left runtime tag
+            emitter.instruction("sub rax, 4");                                  // tags 4 and 5 are the two array representations
+            emitter.instruction("cmp rax, 1");                                  // is the left operand an array?
+            emitter.instruction("ja __rt_pcmp_not_arrays");                     // anything else keeps the coarse ranking
+            emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the right runtime tag
+            emitter.instruction("sub rax, 4");                                  // tags 4 and 5 are the two array representations
+            emitter.instruction("cmp rax, 1");                                  // is the right operand an array?
+            emitter.instruction("ja __rt_pcmp_not_arrays");                     // anything else keeps the coarse ranking
+            for (source, cell) in [(8, 104), (16, 96), (24, 88), (32, 80), (40, 72), (48, 64)] {
+                emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {source}]")); // reload one saved operand word
+                emitter.instruction(&format!("mov QWORD PTR [rbp - {cell}], rax")); // copy it into the borrowed cell pair
+            }
+            emitter.instruction("lea rdi, [rbp - 104]");                        // pass the left borrowed array cell
+            emitter.instruction("lea rsi, [rbp - 80]");                         // pass the right borrowed array cell
+            emitter.instruction("xor edx, edx");                                // the walk starts at recursion depth zero
+            emitter.instruction("call __rt_mixed_array_compare");               // order the two arrays the way zend_compare_arrays does
+            emitter.instruction("jmp __rt_pcmp_done");                          // return the array ordering result
+        }
+    }
+    emitter.label("__rt_pcmp_not_arrays");
 }

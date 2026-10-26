@@ -30,8 +30,11 @@ var_dump(C::set(new C()));
                 == crate::ir::Ownership::Owned).expect("owned Mixed return boundary");
         assert_eq!(setter.value(unbox.result.unwrap()).unwrap().ownership, crate::ir::Ownership::Owned,
             "{target}: the object payload must outlive its source cell");
+        // The cell retires either directly or through the unwind-visible root it was published
+        // in while the unbox could throw.
         assert!(setter.instructions[unbox_index + 1..].iter().any(|inst|
-            inst.op == Op::Release && inst.operands == unbox.operands),
+            (inst.op == Op::Release && inst.operands == unbox.operands)
+                || inst.op == Op::ReleaseLocalSlot),
             "{target}: the independent assignment result must retire after extracting its payload");
         let unbox = setter.instructions.iter().find(|inst| inst.op == Op::MixedUnbox
             && setter.value(inst.operands[0]).unwrap().ownership != crate::ir::Ownership::Owned)

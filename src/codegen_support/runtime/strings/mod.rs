@@ -17,6 +17,7 @@ mod ftoa;
 mod php_num_scan;
 mod str_eq;
 mod str_loose_eq;
+mod str_smart_cmp;
 mod str_to_number;
 mod numeric_value;
 mod str_to_int;
@@ -81,6 +82,7 @@ mod ip2long;
 mod long2ip;
 mod htmlspecialchars;
 mod html_entity_decode;
+mod strip_tags;
 mod urlencode;
 mod urldecode;
 mod rawurlencode;
@@ -125,6 +127,8 @@ pub use php_num_scan::emit_php_num_scan;
 pub use str_eq::emit_str_eq;
 /// Emit case-sensitive string equality check.
 pub use str_loose_eq::emit_str_loose_eq;
+/// Emit PHP's `zendi_smart_strcmp` and the numeric-string classification it needs.
+pub use str_smart_cmp::{emit_num_run_class, emit_str_numeric_ex, emit_str_smart_cmp};
 /// Emit case-insensitive string equality check.
 pub use str_to_number::emit_str_to_number;
 pub use numeric_value::emit_str_numeric_value;
@@ -252,6 +256,8 @@ pub use long2ip::emit_long2ip;
 pub use htmlspecialchars::emit_htmlspecialchars;
 /// Emit HTML special characters escaping.
 pub use html_entity_decode::emit_html_entity_decode;
+/// Emit PHP `strip_tags()` helper.
+pub use strip_tags::emit_strip_tags;
 /// Emit HTML entity decode helper.
 pub use urlencode::emit_urlencode;
 /// Emit URL encoding helper.

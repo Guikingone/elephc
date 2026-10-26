@@ -210,6 +210,62 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
 }
 
 #[cfg(test)]
+mod packed_integer_tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+    use std::{fs, path::PathBuf, process::Command, time::{SystemTime, UNIX_EPOCH}};
+
+    /// Removes only this test's assembly and objects on success or assertion failure.
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        /// Cleans the isolated cross-assembly directory.
+        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    }
+
+    /// Integer leaves retain normal ownership even while graph nodes suppress back-edge releases.
+    #[test]
+    fn packed_integer_leaf_sweep_release_all_targets() {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir = Scratch(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target")
+            .join(format!("integer-leaf-release-{}-{nonce}", std::process::id())));
+        fs::create_dir_all(&dir.0).unwrap();
+        let clang = Command::new("clang").arg("--version").output().is_ok();
+        for (name, triple) in [
+            ("macos-aarch64", "arm64-apple-macos11"), ("ios-arm64", "arm64-apple-ios13.0"),
+            ("ios-sim-arm64", "arm64-apple-ios13.0-simulator"),
+            ("linux-aarch64", "aarch64-linux-gnu"), ("linux-x86_64", "x86_64-linux-gnu"),
+        ] {
+            for pic in [false, true] {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                emitter.pic_data_refs = pic;
+                emit_decref_any(&mut emitter);
+                let assembly = emitter.output();
+                let x86 = name == "linux-x86_64";
+                // Element kinds below 4 (integers included) are not swept graph nodes.
+                let mask = if x86 { "and edx, 0x7f" } else { "and x14, x14, #0x7f" };
+                let (_, gate) = assembly.split_once(mask).expect("integer storage gate");
+                let dispatch = if x86 { "jb __rt_decref_any_dispatch" }
+                    else { "b.lo __rt_decref_any_dispatch" };
+                assert!(gate.find(dispatch).unwrap() < gate.find("__rt_decref_any_check_graph_kind:\n").unwrap(),
+                    "{name}, PIC={pic}: integer leaf must bypass graph suppression");
+                assert!(assembly.contains(if x86 { "test r10, 0x10000" } else { "tst x11, x14" }),
+                    "{name}: ordinary graph-child reachability remains required");
+                if clang {
+                    let path = dir.0.join(format!("{name}-{pic}.s"));
+                    let prefix = if x86 { ".intel_syntax noprefix\n" } else { "" };
+                    fs::write(&path, format!(".text\n{prefix}{assembly}")).unwrap();
+                    let result = Command::new("clang").args(["-target", triple, "-c"]).arg(&path)
+                        .arg("-o").arg(path.with_extension("o")).output().unwrap();
+                    assert!(result.status.success(), "{name}, PIC={pic}: {}",
+                        String::from_utf8_lossy(&result.stderr));
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::codegen_support::platform::{Platform, Target};

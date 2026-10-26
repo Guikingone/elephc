@@ -178,6 +178,7 @@ fn emit_restore_slot(
             abi::emit_call_label(emitter, "__rt_mixed_instanceof");
             abi::emit_branch_if_int_result_zero(emitter, fail);
         }
+        emit_mixed_overwrite_in_place(module, emitter, slot);
         match module.target.arch {
             Arch::AArch64 if slot.ty.codegen_repr() == PhpType::Mixed => {
                 emit_aarch64_store_property_slot(module, emitter, data, slot, fail);
@@ -189,11 +190,72 @@ fn emit_restore_slot(
             Arch::X86_64 => emit_x86_64_store_heap_property_slot(emitter, slot, 6, fail),
         }
     } else {
+        emit_mixed_overwrite_in_place(module, emitter, slot);
         match module.target.arch {
             Arch::AArch64 => emit_aarch64_store_property_slot(module, emitter, data, slot, fail),
             Arch::X86_64 => emit_x86_64_store_property_slot(module, emitter, data, slot, fail),
         }
     }
+}
+
+/// Overwrites an initialized Mixed property's box in place, as php overwrites the zval.
+///
+/// The hydrated property shares its box with the parser's value slot table, so a later `R:`
+/// back-reference to the first value must observe the replacement. An uninitialized, empty or
+/// null-sentinel slot has no box to reuse and takes the ordinary retaining store, as does a
+/// resource replacement the runtime helper declines.
+fn emit_mixed_overwrite_in_place(module: &Module, emitter: &mut Emitter, slot: &EvalPropertySlot) {
+    if slot.ty.codegen_repr() != PhpType::Mixed {
+        return;
+    }
+    let skip = format!("{}_fresh_box", slot_body_label(module, slot, "hydrate"));
+    let uninitialized = crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL as i64;
+    let null = crate::codegen_support::NULL_SENTINEL as i64;
+    match module.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x9, [sp, #16]");                           // reload the receiver whose slot may already hold a box
+            emitter.instruction(&format!("ldr x10, [x9, #{}]", slot.offset + 8)); // read the slot's initialization word
+            abi::emit_load_int_immediate(emitter, "x11", uninitialized);
+            emitter.instruction("cmp x10, x11");                                // is the property still uninitialized?
+            emitter.instruction(&format!("b.eq {skip}"));                       // a fresh slot takes the ordinary store
+            emitter.instruction(&format!("ldr x0, [x9, #{}]", slot.offset));    // the current Mixed box or null word
+            emitter.instruction(&format!("cbz x0, {skip}"));                    // an empty slot has no box to reuse
+            abi::emit_load_int_immediate(emitter, "x11", null);
+            emitter.instruction("cmp x0, x11");                                 // is the slot holding the null sentinel?
+            emitter.instruction(&format!("b.eq {skip}"));                       // sentinels have no box to reuse
+            emitter.instruction("ldr w10, [x0, #-12]");                         // read the box refcount from the uniform heap header
+            emitter.instruction("cmp w10, #1");                                 // is the box shared with the parser's value slots?
+            emitter.instruction(&format!("b.ls {skip}"));                       // a private default box takes the ordinary store
+            emitter.instruction("ldr x1, [sp, #24]");                           // borrow the parsed replacement box
+            abi::emit_call_label(emitter, "__rt_unser_overwrite_box");
+            emitter.instruction(&format!("cbz x0, {skip}"));                    // a shared resource cell takes the ordinary store
+            emitter.instruction("mov x0, #1");                                  // report a successful declared-property replacement
+            emitter.instruction("b __rt_obj_store_prop_done");                  // join the common writer epilogue
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the receiver whose slot may already hold a box
+            emitter.instruction(&format!("mov r10, QWORD PTR [r11 + {}]", slot.offset + 8)); // read the slot's initialization word
+            abi::emit_load_int_immediate(emitter, "rax", uninitialized);
+            emitter.instruction("cmp r10, rax");                                // is the property still uninitialized?
+            emitter.instruction(&format!("je {skip}"));                         // a fresh slot takes the ordinary store
+            emitter.instruction(&format!("mov rdi, QWORD PTR [r11 + {}]", slot.offset)); // the current Mixed box or null word
+            emitter.instruction("test rdi, rdi");                               // is the slot empty?
+            emitter.instruction(&format!("jz {skip}"));                         // an empty slot has no box to reuse
+            abi::emit_load_int_immediate(emitter, "rax", null);
+            emitter.instruction("cmp rdi, rax");                                // is the slot holding the null sentinel?
+            emitter.instruction(&format!("je {skip}"));                         // sentinels have no box to reuse
+            emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");              // read the box refcount from the uniform heap header
+            emitter.instruction("cmp r10d, 1");                                 // is the box shared with the parser's value slots?
+            emitter.instruction(&format!("jbe {skip}"));                        // a private default box takes the ordinary store
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");               // borrow the parsed replacement box
+            abi::emit_call_label(emitter, "__rt_unser_overwrite_box");
+            emitter.instruction("test rax, rax");                               // did the helper overwrite the box?
+            emitter.instruction(&format!("jz {skip}"));                         // a shared resource cell takes the ordinary store
+            emitter.instruction("mov eax, 1");                                  // report a successful declared-property replacement
+            emitter.instruction("jmp __rt_obj_store_prop_done");                // join the common writer epilogue
+        }
+    }
+    emitter.label(&skip);
 }
 
 /// Preserves PHP's decoder-owned int-to-float widening before the retaining slot writer.

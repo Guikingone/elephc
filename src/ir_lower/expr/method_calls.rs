@@ -53,6 +53,28 @@ pub(super) fn lower_method_call(
     }
     let object_expr = object;
     let object = lower_expr(ctx, object_expr);
+    if op == Op::MethodCall && args.is_empty()
+        && ctx.classes.values().any(|class| class.deferred_property_default_error.is_some())
+        && matches!(php_symbol_key(method).as_str(),
+            "getdefaultproperties" | "getstaticproperties" | "newinstancewithoutconstructor")
+    {
+        if is_reflection_class_construction_receiver(ctx, object.value) {
+            let owns_receiver = ctx.value_is_owning_temporary(object)
+                && !ctx.value_is_owned_unboxed_local_load(object.value);
+            if owns_receiver {
+                ctx.begin_argument_guard_scope();
+                ctx.guard_call_argument(object, 0, expr.span);
+                ctx.end_argument_guard_scope();
+            }
+            // Inspect metadata without consuming an inline reflector needed by the real call.
+            let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None,
+                ctx.builder.value_php_type(object.value).clone(), Op::Borrow.default_effects(),
+                Some(expr.span));
+            let name = lower_property_get_from_value(ctx, borrowed, "__name", Op::PropGet, expr);
+            crate::ir_lower::property_default_errors::for_dynamic_class(ctx, name, expr.span);
+            if owns_receiver { ctx.unguard_call_argument(object.value, expr.span); }
+        }
+    }
     if let Some(message) = throw_access_message {
         if throw_access_class == Some("ArgumentCountError") {
             // Keep the receiver and every argument alive until evaluation finishes. Existing
@@ -150,6 +172,9 @@ pub(super) fn lower_method_call(
             return result;
         }
     }
+    if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
+        return call;
+    }
     let magic_args;
     let (dispatch_method, args) = if let Some(args) =
         magic_call_dispatch_args(ctx, object.value, method, args, object_expr.span)
@@ -160,7 +185,6 @@ pub(super) fn lower_method_call(
         (method, args)
     };
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
-    let mut operands = vec![object.value];
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     // A by-reference-returning method transfers a lease that must outlive this caller's
@@ -175,11 +199,28 @@ pub(super) fn lower_method_call(
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
+    // A deferred default can throw before the invocation publishes its receiver.
+    // Place this root above result staging so normal cleanup preserves LIFO order.
+    let (object, default_receiver_owner) = if sig.as_ref().is_some_and(|signature| {
+        signature.defaults.iter().flatten()
+            .any(crate::types::deferred_defaults::contains_deferred_error)
+    }) {
+        root_owned_call_operand(ctx, object, expr.span)
+    } else {
+        (object, None)
+    };
     // Receiver temporaries are independent owners too. A method or a later argument can
     // throw before the normal receiver release, so publish this owner after result staging
-    // and keep it visible through argument/intermediate cleanup.
-    let borrowed_receiver = root_borrowed_method_receiver(ctx, object, expr.span);
-    let receiver_pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
+    // and keep it visible through argument/intermediate cleanup. A receiver already rooted
+    // for a deferred default is owned by that slot and must not be pinned twice.
+    let receiver_is_stable = receiver_needs_no_root(ctx, Some(object_expr), args);
+    let borrowed_receiver = if default_receiver_owner.is_none() && !receiver_is_stable {
+        root_borrowed_method_receiver(ctx, object, expr.span)
+    } else { None };
+    let receiver_pins = if default_receiver_owner.is_none() && !receiver_is_stable {
+        pin_in_flight_owners(ctx, &[object.value], expr.span)
+    } else { Vec::new() };
+    let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
     let mut arg_values = arg_values;
@@ -218,7 +259,11 @@ pub(super) fn lower_method_call(
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     unpin_in_flight_owners(ctx, receiver_pins, expr.span);
-    release_owning_receiver_temporary(ctx, object, expr.span);
+    if let Some(owner) = default_receiver_owner {
+        retire_owned_call_operand(ctx, owner, expr.span);
+    } else {
+        release_owning_receiver_temporary(ctx, object, expr.span);
+    }
     if let Some(slot) = borrowed_receiver { retire_owned_call_operand(ctx, slot, expr.span); }
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
     finish_reference_return_value(ctx, call, reference_staging, expr.span)

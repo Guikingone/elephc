@@ -34,7 +34,8 @@ $storage->__unserialize([]);
         let (_, table) = assembly.split_once("_class_unserialize_data_boxed:\n").unwrap();
         let flags = table.lines().map_while(|line| line.trim().strip_prefix(".quad "))
             .map(|value| value.parse::<u8>().unwrap()).collect::<Vec<_>>();
-        for (class, expected) in [("H", 1), ("ChildH", 1), ("U", 1), ("SplObjectStorage", 0)] {
+        // SplObjectStorage declares php's `array $data` contract, whose storage is boxed too.
+        for (class, expected) in [("H", 1), ("ChildH", 1), ("U", 1), ("SplObjectStorage", 1)] {
             let class_info = module.class_infos.get(class).unwrap();
             assert_eq!(flags[class_info.class_id as usize], expected, "{name}: {class}");
         }

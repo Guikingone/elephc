@@ -2,7 +2,7 @@
 title: "mysqli_num_fields()"
 description: "Returns how many columns a result has."
 sidebar:
-  order: 142
+  order: 143
 ---
 
 ## mysqli_num_fields()

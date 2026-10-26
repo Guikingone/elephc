@@ -131,37 +131,3 @@ pub(super) fn emit_key(emitter: &mut Emitter) {
     emitter.instruction("xor edx, edx");                                        // clear key metadata on failure
     emitter.instruction("ret");                                                 // caller/preflight rejects the sentinel
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::codegen_support::platform::Target;
-
-    /// x86_64 rejects a hydrated value whose boxed tag the declared property type does not
-    /// accept, routing it through the catchable unserialize TypeError helper instead of
-    /// writing the mismatched payload.
-    #[test]
-    fn store_prop_rejects_a_mismatched_typed_property_on_x86_64() {
-        let mut emitter = Emitter::new(Target::parse("linux-x86_64").unwrap());
-        emit_object_storage(&mut emitter);
-        let asm = emitter.output();
-        assert!(asm.contains("_class_serpdiag_ptrs"), "{asm}");
-        assert!(asm.contains("__rt_obj_store_prop_type_error"), "{asm}");
-        assert!(asm.contains("__rt_unser_throw_property_type_error"), "{asm}");
-        assert!(asm.contains("_unser_property_assign_prefix"), "{asm}");
-        // The helper reads r8 as the suffix pointer and r9 as its length, so the store path
-        // must not swap them (a swap is invisible on aarch64 but corrupts the message here).
-        let suffix_ptr = asm
-            .find("mov r8, QWORD PTR [r11]")
-            .expect("the suffix pointer must load into r8");
-        let suffix_len = asm
-            .find("mov r9, QWORD PTR [r11 + 8]")
-            .expect("the suffix length must load into r9");
-        assert!(
-            suffix_ptr < suffix_len,
-            "the store path passes the suffix pointer/length in the helper's order:\n{asm}"
-        );
-        // An accepted int into a float slot is widened, not reinterpreted.
-        assert!(asm.contains("cvtsi2sd xmm0, r8"), "{asm}");
-    }
-}

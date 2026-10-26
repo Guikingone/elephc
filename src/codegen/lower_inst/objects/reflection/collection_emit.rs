@@ -225,7 +225,7 @@ pub(super) fn emit_reflection_string_assoc_array(
     emit_reflection_assoc_array_allocation(ctx, &PhpType::Str, entries.len());
     for (key, value) in entries {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        emit_string_literal_default_to_result(ctx, value);
+        emit_string_bytes_default_to_result(ctx, value.as_bytes());
         emit_reflection_string_hash_insert(ctx, key);
     }
 }
@@ -282,7 +282,13 @@ pub(super) fn emit_reflection_static_property_array(
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         let symbol = static_property_symbol(&member.declaring_class_name, &member.name);
         abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &member.php_type);
-        emit_box_current_value_as_mixed(ctx.emitter, &member.php_type.codegen_repr());
+        if matches!(member.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            // A Mixed static already holds a box the static storage owns; the hash consumes its
+            // payload, so it receives a detached copy rather than that shared owner.
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+        } else {
+            emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(&member.php_type));
+        }
         emit_reflection_static_property_hash_insert(ctx, &member.name);
         if let Some(skip_label) = skip_label {
             ctx.emitter.label(&skip_label);

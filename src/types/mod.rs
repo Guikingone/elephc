@@ -14,6 +14,8 @@ pub mod checker;
 pub mod traits;
 /// Array key type inference, normalization, and PHP integer/string coercion rules.
 mod array_keys;
+/// Profile-aware normalization of statically keyed mixed array literals.
+mod array_literals;
 /// Whether an un-hinted declaration returns one of its untyped parameters; shared so the
 /// checker and EIR lowering cannot disagree about the recorded return type (issue #576).
 pub mod dynamic_params;
@@ -23,12 +25,16 @@ mod array_storage;
 mod array_cast;
 /// Call argument planning: named, positional, and spread semantics.
 pub(crate) mod call_args;
+/// Shared detection of lazy lexical errors in normalized default expression trees.
+pub(crate) mod deferred_defaults;
 /// Fiber/stack introspection for async and coroutine analysis.
 pub(crate) mod fibers;
 /// C FFI type mapping utilities.
 mod ffi;
 /// PHP parameter-binding rules: coercive scalar binding and callable-name strings.
 pub(crate) mod param_binding;
+/// PHP type spelling shared by parameter and property diagnostics.
+pub(crate) mod diagnostic_names;
 /// Target-aware `ext/pcntl` integer constants shared by checker and codegen.
 pub(crate) mod pcntl_constants;
 /// PHP type model and type environment for tracking variable types.
@@ -60,6 +66,7 @@ mod defined;
 /// Type checker diagnostics and warnings.
 mod warnings;
 
+pub(crate) use array_literals::{fold_spreadless_mixed_array_literal, php_float_array_key};
 pub(crate) use array_keys::{
     array_key_contiguity_is_unproven, array_key_type_from_value_type,
     empty_array_key_requires_hash_storage, is_php_integer_array_key,
@@ -68,8 +75,17 @@ pub(crate) use array_keys::{
 };
 pub(crate) use array_cast::{array_cast_result_type, php_cast_result_type, ArrayCast};
 pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
-pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
+pub use ffi::{
+    align_up, ctype_field_layout, ctype_to_abi_type, ctype_to_php_type, packed_type_layout,
+    packed_type_size, width_spelling_hint, width_type_from_type_expr,
+    ExternAbiType, ScalarWidth,
+};
 pub use model::{PhpType, TypeEnv};
+pub(crate) use model::{
+    eir_value_php_type, is_nullable_pointer_type, is_pointer_element_indexed_array,
+    merge_local_pointer_targets, merge_pointer_elements, mixed_box_php_type,
+    nullable_pointer_union_member, pointer_element_read_type, pointer_param_display,
+};
 pub(crate) use return_alias::{
     collect_return_alias_summaries, summarize_callable_return_alias, ReturnAliasSummaries,
     ReturnArgAlias,

@@ -138,6 +138,11 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
         "__rt_gc_mark_reachable",
         "shares a tail between the framed body and a frameless early-out",
     ),
+    (
+        "__rt_var_dump_object",
+        "tail-calls a per-class intrinsic count/body adapter through `jmp rax` before framing, \
+         so the adapter runs on the caller's entry stack",
+    ),
 ];
 
 /// The release chain a curl handle travels into the C bridge. These may NEVER appear in

@@ -43,7 +43,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
     if let Some(class_id) = throwable_payload_class_id(ctx, &class_name) {
         return lower_builtin_throwable_new(ctx, inst, &class_name, class_id);
     }
-    let layout = resolve_fixed_object_layout(ctx, &class_name, Some(inst.operands.len()))?;
+    let layout = resolve_fixed_object_layout(ctx, inst, &class_name, Some(inst.operands.len()))?;
     reject_unmanaged_promoted_reference_args(ctx, inst, &layout.borrowed_reference_params, 0)?;
     emit_generic_object_new(ctx, inst, &class_name, &layout, None)?;
     Ok(())
@@ -62,7 +62,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new_reserved(
     let reserved_handle = *inst.operands.first().ok_or_else(|| {
         CodegenIrError::invalid_module("object_new_reserved missing its reserved handle operand")
     })?;
-    let layout = resolve_fixed_object_layout(ctx, &class_name, Some(inst.operands.len() - 1))?;
+    let layout = resolve_fixed_object_layout(ctx, inst, &class_name, Some(inst.operands.len() - 1))?;
     reject_unmanaged_promoted_reference_args(ctx, inst, &layout.borrowed_reference_params, 1)?;
     emit_generic_object_new(ctx, inst, &class_name, &layout, Some(reserved_handle))?;
     Ok(())
@@ -103,14 +103,17 @@ fn emit_generic_object_new(
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("object_new missing result value"))?;
     ctx.store_result_value(result)?;
-    let construction_guard_bytes = if layout.constructor.is_some() {
+    // An initializer thunk runs user-visible EIR, so it needs the same unconstructed-object guard.
+    let needs_construction_guard =
+        layout.constructor.is_some() || layout.property_initialization.uses_thunk();
+    let construction_guard_bytes = if needs_construction_guard {
         ctx.load_value_to_result(result)?;
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         super::super::callable_guards::begin_unconstructed_object(ctx.emitter)
     } else {
         0
     };
-    emit_property_defaults(ctx, result, &layout.property_defaults)?;
+    emit_property_initialization(ctx, result, &layout.property_initialization)?;
     if super::super::is_throwable_like_class(ctx, class_name) {
         ctx.load_value_to_result(result)?;
         emit_regular_throwable_creation_line(ctx, result, abi::int_result_reg(ctx.emitter), layout.class_id);
@@ -127,6 +130,8 @@ fn emit_generic_object_new(
             &constructor.ref_params,
             None,
         )?;
+    }
+    if needs_construction_guard {
         super::super::callable_guards::end_unconstructed_object(ctx.emitter, construction_guard_bytes);
         abi::emit_release_temporary_stack(ctx.emitter, 16);
     }
@@ -140,7 +145,7 @@ struct FixedObjectLayout {
     allow_dynamic_properties: bool,
     uninitialized_marker_offsets: Vec<usize>,
     owned_reference_property_offsets: Vec<(usize, PhpType, bool)>,
-    property_defaults: Vec<PropertyDefault>,
+    property_initialization: PropertyInitialization,
     constructor: Option<ConstructorCallTarget>,
     /// Constructor-parameter indices backed by a caller's by-reference slot.
     borrowed_reference_params: Vec<usize>,
@@ -152,6 +157,7 @@ struct FixedObjectLayout {
 /// arguments in the same op, validating the resolved constructor's parameter count against it.
 fn resolve_fixed_object_layout(
     ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
     class_name: &str,
     constructor_operand_count: Option<usize>,
 ) -> Result<FixedObjectLayout> {
@@ -167,7 +173,7 @@ fn resolve_fixed_object_layout(
             class_name
         )));
     }
-    let property_defaults = collect_property_defaults(class_info, "object construction")?;
+    let property_initialization = collect_property_initialization(class_info, inst);
     // A private constructor is not inherited, so a descendant of a class that declares one
     // carries no `__construct` entry of its own. PHP still instantiates it through that
     // ancestor, so resolve the owner; it is the class itself for every other constructor.
@@ -231,7 +237,7 @@ fn resolve_fixed_object_layout(
         allow_dynamic_properties: class_info.has_property_hash_storage(),
         uninitialized_marker_offsets: marker_offsets,
         owned_reference_property_offsets: owned_ref_offsets,
-        property_defaults,
+        property_initialization,
         constructor,
         borrowed_reference_params,
     })

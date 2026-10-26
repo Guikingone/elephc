@@ -811,6 +811,18 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Invalid trait defaults use the EIR initializer as a preallocation error thunk.
+    out.push_str(".globl _class_initcheck_ptrs\n_class_initcheck_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let invalid = class_info_by_id.get(&class_id)
+                .is_some_and(|class| class.deferred_property_default_error.is_some())
+                && property_initializer_ids.contains(&class_id);
+            if invalid { out.push_str(&format!("    .quad _class_propinit_{}\n", class_id)); }
+            else { out.push_str("    .quad 0\n"); }
+        }
+    }
+
     // _class_serprop_ptrs: dense class_id-indexed table of serialize property-info
     // tables. Entry = _class_serprop_<id> for an existing class, else
     // _class_serprop_missing. __rt_serialize_object / __rt_unserialize_object index
@@ -1266,6 +1278,9 @@ pub(crate) fn emit_runtime_data_user(
                 0
             } else if prop_ty.codegen_repr() == PhpType::TaggedScalar {
                 TAGGED_SCALAR_PROPERTY_TAG
+            } else if crate::types::is_nullable_pointer_type(prop_ty) {
+                // A `?ptr<T>` slot holds the bare pointer word (null is 0), like a `ptr` slot.
+                0
             } else {
                 match prop_ty {
                     PhpType::Int => 0,
@@ -1287,6 +1302,7 @@ pub(crate) fn emit_runtime_data_user(
                     | PhpType::Buffer(_)
                     | PhpType::Packed(_)
                     | PhpType::Never
+                    | PhpType::Narrow(_)
                     | PhpType::Void => 0,
                 }
             };
@@ -1316,6 +1332,10 @@ pub(crate) fn emit_runtime_data_user(
                     // An inline `{payload, tag}` slot owns no heap reference: reading it as
                     // Mixed (7) handed the integer payload to decref/mark as a cell pointer.
                     0
+                } else if crate::types::is_nullable_pointer_type(prop_ty) {
+                    // A `?ptr<T>` slot is a bare pointer word that owns nothing; as Mixed (7)
+                    // the object's teardown decref'd whatever the address points into.
+                    0
                 } else {
                     match prop_ty {
                         PhpType::Int => 0,
@@ -1339,6 +1359,7 @@ pub(crate) fn emit_runtime_data_user(
                         | PhpType::Buffer(_)
                         | PhpType::Packed(_)
                         | PhpType::Never
+                        | PhpType::Narrow(_)
                         | PhpType::Void => 0,
                     }
                 };
@@ -3347,6 +3368,11 @@ fn interface_method_table_symbol(
             interface_sig.params, interface_sig.return_type,
             actual_sig.params, actual_sig.return_type,
         ))?;
+    if abi_plan == MethodAbiPlan::OptionalDefaults {
+        return Ok(crate::names::function_symbol(&interface_method_wrapper_symbol(
+            class_info.class_id, interface_info.interface_id, method_name,
+        )));
+    }
     if interface_method_needs_return_wrapper(interface_info, method_name, impl_class, classes)
         || abi_plan != MethodAbiPlan::Direct
     {
@@ -4147,6 +4173,10 @@ fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) ->
     if prop_ty.codegen_repr() == PhpType::TaggedScalar {
         return TAGGED_SCALAR_PROPERTY_TAG;
     }
+    // A `?ptr<T>` slot holds the bare pointer word, serialized like a `ptr` slot.
+    if crate::types::is_nullable_pointer_type(prop_ty) {
+        return 0;
+    }
     match prop_ty {
         PhpType::Int => 0,
         PhpType::Str => 1,
@@ -4526,6 +4556,7 @@ mod tests {
             property_offsets: HashMap::new(),
             property_declaring_classes: HashMap::new(),
             defaults: Vec::new(),
+            deferred_property_default_error: None,
             property_visibilities: HashMap::new(),
             property_set_visibilities: HashMap::new(),
             declared_properties: HashSet::new(),
@@ -4567,6 +4598,7 @@ mod tests {
             abstract_static_methods: HashSet::new(),
             static_vtable_methods: Vec::new(),
             static_vtable_slots: HashMap::new(),
+            declared_interfaces: Vec::new(),
             interfaces: Vec::new(),
             constructor_param_to_prop: Vec::new(),
         }

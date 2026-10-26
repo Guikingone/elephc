@@ -272,8 +272,8 @@ fn emit_user_function(
     regalloc_linear: bool,
 ) -> Result<()> {
     let entry_label = user_function_entry_symbol(function);
-    let synthetic = function.flags.is_synthetic || is_property_init_thunk(function);
-    emit_fn_marker(emitter, &function.name, &entry_label, synthetic || function.flags.is_generator);
+    let synthetic = !function.has_source_identity() || is_property_init_thunk(function);
+    emit_fn_marker(emitter, function.display_name(), &entry_label, synthetic || function.flags.is_generator);
     if function.flags.is_generator {
         emit_generator_function(
             module,
@@ -309,7 +309,7 @@ fn emit_user_function(
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
-    emit_endfn_marker(ctx.emitter, &function.name);
+    emit_endfn_marker(ctx.emitter, function.display_name());
     frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
     crate::codegen::lower_inst::core_builtins::backtrace::emit_function_backtrace_reader(&mut ctx)?;
     Ok(())
@@ -359,9 +359,10 @@ pub(super) fn emit_synthetic_function_with_label(
 const PROBE_TEXT_END_LABEL: &str = "_elephc_probe_text_end";
 
 /// Builds the `--probe` symbol table in the data section: one
-/// `[entry address, name pointer, name length]` triple per non-synthetic PHP
-/// function (main included, named `{main}`), address-sorted at dump time by the
-/// probe, then a final sentinel triple at `PROBE_TEXT_END_LABEL`. Returns the
+/// `[entry address, name pointer, name length]` triple per PHP source entry,
+/// including private variants under their original source identity. Main is named `{main}`.
+/// The probe sorts entries by address at dump time; a final sentinel triple uses
+/// `PROBE_TEXT_END_LABEL`. Returns the
 /// table's data label and its entry count for `elephc_probe_init`.
 fn emit_probe_symbol_table(
     module: &Module,
@@ -377,13 +378,13 @@ fn emit_probe_symbol_table(
         words.push(DataWord::U64(name_len as u64));
     };
     for function in &module.functions {
-        if function.flags.is_synthetic {
+        if !function.has_source_identity() {
             continue;
         }
         if is_main(function) {
             push(data, &mut words, main_symbol.to_string(), "{main}");
         } else {
-            push(data, &mut words, user_function_entry_symbol(function), &function.name);
+            push(data, &mut words, user_function_entry_symbol(function), function.display_name());
         }
         count += 1;
     }
@@ -397,10 +398,10 @@ fn emit_probe_symbol_table(
         }
     }
     for closure in &module.closures {
-        if closure.flags.is_synthetic {
+        if !closure.has_source_identity() {
             continue;
         }
-        push(data, &mut words, user_function_entry_symbol(closure), &closure.name);
+        push(data, &mut words, user_function_entry_symbol(closure), closure.display_name());
         count += 1;
     }
     // Terminating sentinel: bounds the last real function's address range.
@@ -441,7 +442,7 @@ fn emit_class_method(
     regalloc_linear: bool,
 ) -> Result<()> {
     let entry_label = class_method_entry_symbol(function)?;
-    emit_fn_marker(emitter, &function.name, &entry_label, function.flags.is_synthetic || function.flags.is_generator);
+    emit_fn_marker(emitter, function.display_name(), &entry_label, !function.has_source_identity() || function.flags.is_generator);
     if function.flags.is_generator {
         emit_generator_function(
             module,
@@ -477,7 +478,7 @@ fn emit_class_method(
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
-    emit_endfn_marker(ctx.emitter, &function.name);
+    emit_endfn_marker(ctx.emitter, function.display_name());
     frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
     crate::codegen::lower_inst::core_builtins::backtrace::emit_function_backtrace_reader(&mut ctx)?;
     Ok(())
@@ -766,7 +767,7 @@ fn emit_generator_body(
     regalloc_linear: bool,
 ) -> Result<()> {
     // PHP source locations belong to the body, not to the synthetic coroutine constructor.
-    emit_fn_marker(emitter, &function.name, body_label, function.flags.is_synthetic);
+    emit_fn_marker(emitter, function.display_name(), body_label, !function.has_source_identity());
     let layout = frame::layout_for_function(
         function,
         emitter.target,
@@ -790,7 +791,7 @@ fn emit_generator_body(
     frame::emit_function_prologue_with_label(&mut ctx, body_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
-    emit_endfn_marker(ctx.emitter, &function.name);
+    emit_endfn_marker(ctx.emitter, function.display_name());
     frame::emit_exception_cleanup_callback(&mut ctx, body_label);
     crate::codegen::lower_inst::core_builtins::backtrace::emit_function_backtrace_reader(&mut ctx)?;
     Ok(())
@@ -1047,7 +1048,7 @@ fn emit_main_function(
             frame::emit_main_epilogue(&mut ctx);
         }
     }
-    emit_endfn_marker(ctx.emitter, &function.name);
+    emit_endfn_marker(ctx.emitter, function.display_name());
     if web {
         frame::emit_web_entry_stub(&mut ctx, web_isolation)?;
     }
@@ -1063,14 +1064,24 @@ fn is_main(function: &Function) -> bool {
 pub(super) fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let mut default_initializers = Vec::new();
     let mut uninitialized_static_properties = Vec::new();
-    let mut class_names = super::runtime_referenced_class_names(ctx.module)
-        .into_iter()
-        .collect::<Vec<_>>();
+    let mut null_word_static_properties = Vec::new();
+    let mut referenced = super::runtime_referenced_class_names(ctx.module);
+    // The eval bridge's static-property helpers (`eval_static_property_helpers`) cover every
+    // compiled class, so a fragment can read a static property of a class no native code
+    // references; its default and uninitialized sentinel must then exist as well.
+    if ctx.module.required_runtime_features.eval_bridge {
+        referenced.extend(ctx.module.class_infos.keys().cloned());
+    }
+    let mut class_names = referenced.into_iter().collect::<Vec<_>>();
     class_names.sort();
     for class_name in class_names {
         let Some(class_info) = ctx.module.class_infos.get(&class_name) else {
             continue;
         };
+        if class_info.deferred_property_default_error.is_some() {
+            // Initialization raises through EIR before any of this class's storage is observed.
+            continue;
+        }
         for (index, (property, php_type)) in class_info.static_properties.iter().enumerate() {
             let declaring_class = class_info
                 .static_property_declaring_classes
@@ -1080,17 +1091,14 @@ pub(super) fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -
             if declaring_class != class_name {
                 continue;
             }
-            let default = class_info
-                .static_defaults
-                .get(index)
-                .and_then(Option::as_ref)
-                // A null default whose slot cannot represent null (a scalar slot
-                // rebound by later type refinement) is skipped; the slot is always
-                // written before an observable read on those paths.
-                .filter(|default_expr| {
-                    !matches!(default_expr.kind, crate::parser::ast::ExprKind::Null)
-                        || php_type.null_property_default_required()
-                });
+            let written_default = class_info.static_defaults.get(index).and_then(Option::as_ref);
+            // A null default whose slot cannot represent null (a scalar slot
+            // rebound by later type refinement) is skipped; the slot is always
+            // written before an observable read on those paths.
+            let default = written_default.filter(|default_expr| {
+                !matches!(default_expr.kind, crate::parser::ast::ExprKind::Null)
+                    || php_type.null_property_default_required()
+            });
             if let Some(default_expr) = default {
                 default_initializers.push((
                     class_name.clone(),
@@ -1099,12 +1107,24 @@ pub(super) fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -
                     default_expr.kind.clone(),
                 ));
             } else if class_info.declared_static_properties.contains(property) {
-                uninitialized_static_properties.push((class_name.clone(), property.clone()));
+                if written_default.is_some()
+                    && matches!(php_type.codegen_repr(), PhpType::Pointer(_))
+                {
+                    // A pointer slot whose null default was skipped above, such as
+                    // `public static ptr $p = null;`, holds null as the zero word: it is
+                    // initialized, not waiting for its first write.
+                    null_word_static_properties.push((class_name.clone(), property.clone()));
+                } else {
+                    uninitialized_static_properties.push((class_name.clone(), property.clone()));
+                }
             }
         }
     }
     for (class_name, property) in uninitialized_static_properties {
         emit_static_property_sentinel(ctx, &class_name, &property);
+    }
+    for (class_name, property) in null_word_static_properties {
+        emit_static_property_null_word(ctx, &class_name, &property);
     }
     for (class_name, property, php_type, expr) in default_initializers {
         emit_static_property_default(ctx, &class_name, &property, &php_type, &expr)?;
@@ -1128,6 +1148,22 @@ fn emit_static_property_sentinel(ctx: &mut FunctionContext<'_>, class_name: &str
     abi::emit_store_reg_to_symbol(ctx.emitter, marker_reg, &symbol, 8);
 }
 
+/// Initializes one typed static property whose null default is the zero word.
+///
+/// A `ptr` slot reads address 0 as its null pointer, so `public static ptr $p = null;` needs
+/// no literal: both storage words are zeroed, the value word to the null address and the
+/// high word to the initialized marker. The store is explicit rather than relying on the
+/// zero-filled symbol so a web request starts from the default again.
+fn emit_static_property_null_word(ctx: &mut FunctionContext<'_>, class_name: &str, property: &str) {
+    ctx.emitter.comment(&format!(
+        "initialize static property {}::${} to the null word",
+        class_name, property
+    ));
+    let symbol = static_property_symbol(class_name, property);
+    abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 8);
+}
+
 /// Writes a supported literal static-property default into its symbol storage.
 fn emit_static_property_default(
     ctx: &mut FunctionContext<'_>,
@@ -1137,6 +1173,11 @@ fn emit_static_property_default(
     expr: &ExprKind,
 ) -> Result<()> {
     ensure_static_property_default_type_supported(class_name, property, php_type)?;
+    let resolved = super::const_default_values::resolve_const_default(
+        &crate::parser::ast::Expr::new(expr.clone(), crate::span::Span::synthetic()),
+        &super::const_default_values::ConstDefaultContext::for_class(ctx.module, class_name),
+    ).and_then(super::const_default_values::resolved_literal_default);
+    let expr = resolved.as_ref().unwrap_or(expr);
     let value = literal_default_value(
         &format!("static property {}::${}", class_name, property),
         php_type,

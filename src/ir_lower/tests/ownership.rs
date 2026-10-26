@@ -227,7 +227,8 @@ walk_contextual([1, 2]);
     }
 }
 
-/// Runtime-name stores box for typed slots but preserve compatible refined untyped slots.
+/// Runtime-name stores box their value for typed slots and for untyped slots a dynamic property
+/// can stand in for.
 #[test]
 fn runtime_name_property_store_boxing_follows_reachable_slot_shapes_on_all_targets() {
     let source = r#"<?php
@@ -265,8 +266,10 @@ function store_runtime_typed(
             std::path::Path::new("."),
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
+        // A runtime name may also create a dynamic property, whose hash entry stores a box, so
+        // the untyped store is boxed as well.
         for (name, expected) in [
-            ("store_runtime_untyped", crate::types::PhpType::Str),
+            ("store_runtime_untyped", crate::types::PhpType::Mixed),
             ("store_runtime_typed", crate::types::PhpType::Mixed),
         ] {
             let function = module

@@ -495,6 +495,14 @@ pub(super) fn lower_empty_of_probed_value(
     name: &str,
     expr: &Expr,
 ) -> LoweredValue {
+    if ctx.builder.value_php_type(probed.value).codegen_repr() == PhpType::Str {
+        // A string offset can be the byte "0", which PHP considers empty despite its length.
+        let truthy = ctx.truthy_consuming(probed, Some(expr.span));
+        let zero = lower_int_literal(ctx, 0, expr);
+        return ctx.emit_value(Op::ICmp, vec![truthy.value, zero.value],
+            Some(Immediate::CmpPredicate(CmpPredicate::Eq)), PhpType::Bool,
+            Op::ICmp.default_effects(), Some(expr.span));
+    }
     if let Some(truthy) = object_operators::lower_object_truthy(ctx, probed, Some(expr.span)) {
         let zero = lower_int_literal(ctx, 0, expr);
         let result = ctx.emit_value(Op::ICmp, vec![truthy.value, zero.value],

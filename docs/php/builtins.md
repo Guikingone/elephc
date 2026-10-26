@@ -56,8 +56,8 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`array_unique()`](./builtins/array/array_unique.md) | `(array $array): array` | `array` | ✓ | ✓ |
 | [`array_unshift()`](./builtins/array/array_unshift.md) | `(array $array, ...$values): int` | `int` | ✓ | ✓ |
 | [`array_values()`](./builtins/array/array_values.md) | `(array $array): array` | `array` | ✓ | ✓ |
-| [`array_walk()`](./builtins/array/array_walk.md) | `(array $array, callable $callback): void` | `void` | ✓ | ✓ |
-| [`array_walk_recursive()`](./builtins/array/array_walk_recursive.md) | `(array $array, callable $callback): void` | `void` | ✓ | - |
+| [`array_walk()`](./builtins/array/array_walk.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | ✓ |
+| [`array_walk_recursive()`](./builtins/array/array_walk_recursive.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | - |
 | [`arsort()`](./builtins/array/arsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`asort()`](./builtins/array/asort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`call_user_func()`](./builtins/array/call_user_func.md) | `(callable $callback, ...$args): mixed` | `mixed` | ✓ | ✓ |
@@ -84,6 +84,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`usort()`](./builtins/array/usort.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | ✓ |
 | [`buffer_free()`](./builtins/buffer/buffer_free.md) | `(buffer $buffer): void` | `void` | ✓ | ✓ |
 | [`buffer_len()`](./builtins/buffer/buffer_len.md) | `(buffer $buffer): int` | `int` | ✓ | ✓ |
+| [`buffer_ptr()`](./builtins/buffer/buffer_ptr.md) | `(buffer $buffer): pointer` | `pointer` | ✓ | ✓ |
 | [`class_alias()`](./builtins/class/class_alias.md) | `(string $class, string $alias, bool $autoload = true): bool` | `bool` | ✓ | ✓ |
 | [`class_attribute_args()`](./builtins/class/class_attribute_args.md) | `(string $class_name, string $attribute_name): array` | `array` | ✓ | ✓ |
 | [`class_attribute_names()`](./builtins/class/class_attribute_names.md) | `(string $class_name): array` | `array` | ✓ | ✓ |
@@ -748,12 +749,16 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`ptr_read16()`](./builtins/pointer/ptr_read16.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |
 | [`ptr_read32()`](./builtins/pointer/ptr_read32.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |
 | [`ptr_read8()`](./builtins/pointer/ptr_read8.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |
+| [`ptr_read_f32()`](./builtins/pointer/ptr_read_f32.md) | `(pointer $pointer): float` | `float` | ✓ | ✓ |
+| [`ptr_read_f64()`](./builtins/pointer/ptr_read_f64.md) | `(pointer $pointer): float` | `float` | ✓ | ✓ |
 | [`ptr_read_string()`](./builtins/pointer/ptr_read_string.md) | `(pointer $pointer, int $length): string` | `string` | ✓ | ✓ |
 | [`ptr_set()`](./builtins/pointer/ptr_set.md) | `(pointer $pointer, mixed $value): void` | `void` | ✓ | ✓ |
 | [`ptr_sizeof()`](./builtins/pointer/ptr_sizeof.md) | `(string $type): int` | `int` | ✓ | ✓ |
 | [`ptr_write16()`](./builtins/pointer/ptr_write16.md) | `(pointer $pointer, int $value): void` | `void` | ✓ | ✓ |
 | [`ptr_write32()`](./builtins/pointer/ptr_write32.md) | `(pointer $pointer, int $value): void` | `void` | ✓ | ✓ |
 | [`ptr_write8()`](./builtins/pointer/ptr_write8.md) | `(pointer $pointer, int $value): void` | `void` | ✓ | ✓ |
+| [`ptr_write_f32()`](./builtins/pointer/ptr_write_f32.md) | `(pointer $pointer, mixed $value): void` | `void` | ✓ | ✓ |
+| [`ptr_write_f64()`](./builtins/pointer/ptr_write_f64.md) | `(pointer $pointer, mixed $value): void` | `void` | ✓ | ✓ |
 | [`ptr_write_string()`](./builtins/pointer/ptr_write_string.md) | `(pointer $pointer, string $string): int` | `int` | ✓ | ✓ |
 | [`zval_free()`](./builtins/pointer/zval_free.md) | `(pointer $zval): void` | `void` | ✓ | - |
 | [`zval_pack()`](./builtins/pointer/zval_pack.md) | `(mixed $value): pointer` | `pointer` | ✓ | - |
@@ -932,6 +937,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`str_word_count()`](./builtins/string/str_word_count.md) | `(string $string, int $format = 0, ?string $characters = null): array|int` | `array|int` | ✓ | ✓ |
 | [`strcasecmp()`](./builtins/string/strcasecmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
 | [`strcmp()`](./builtins/string/strcmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
+| [`strip_tags()`](./builtins/string/strip_tags.md) | `(string $string, array|string|null $allowed_tags = null): string` | `string` | ✓ | ✓ |
 | [`stripos()`](./builtins/string/stripos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`stripslashes()`](./builtins/string/stripslashes.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strlen()`](./builtins/string/strlen.md) | `(string $string): int` | `int` | ✓ | ✓ |
@@ -948,6 +954,8 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`substr()`](./builtins/string/substr.md) | `(string $string, int $offset, ?int $length = null): string` | `string` | ✓ | ✓ |
 | [`substr_count()`](./builtins/string/substr_count.md) | `(string $haystack, string $needle, int $offset = 0, mixed $length = null): int` | `int` | ✓ | - |
 | [`substr_replace()`](./builtins/string/substr_replace.md) | `(string $string, string $replace, int $offset, int $length = null): string` | `string` | ✓ | ✓ |
+| [`token_get_all()`](./builtins/string/token_get_all.md) | `(string $code, int $flags = 0): array` | `array` | ✓ | ✓ |
+| [`token_name()`](./builtins/string/token_name.md) | `(int $id): string` | `string` | ✓ | ✓ |
 | [`trim()`](./builtins/string/trim.md) | `(string $string, string $characters = " \n\r\t\x0B\x0C\x00"): string` | `string` | ✓ | ✓ |
 | [`ucfirst()`](./builtins/string/ucfirst.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`ucwords()`](./builtins/string/ucwords.md) | `(string $string, string $separators = " \t\r\n\x0C\x0B"): string` | `string` | ✓ | ✓ |

@@ -119,6 +119,7 @@ pub(crate) fn lower_is_iterable(ctx: &mut FunctionContext<'_>, inst: &Instructio
         | PhpType::Buffer(_)
         | PhpType::Packed(_)
         | PhpType::Resource(_)
+        | PhpType::Narrow(_)
         | PhpType::TaggedScalar => false,
         PhpType::Mixed | PhpType::Union(_) => {
             emit_mixed_is_iterable(ctx, value)?;
@@ -455,6 +456,23 @@ pub(crate) fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         PhpType::Object(_) | PhpType::Callable => emit_static_bool(ctx, true),
         PhpType::Mixed | PhpType::Union(_) => {
             predicates::emit_mixed_tag_membership(ctx, value, &[6, 10])?;
+        }
+        // An `iterable` holds an array or a Traversable object; only the payload's heap kind
+        // tells them apart.
+        PhpType::Iterable => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #4");                      // heap kind 4 identifies object payloads
+                    ctx.emitter.instruction("cset x0, eq");                     // only an object payload answers true
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 4");                      // heap kind 4 identifies object payloads
+                    ctx.emitter.instruction("sete al");                         // only an object payload answers true
+                    ctx.emitter.instruction("movzx eax, al");                   // widen the predicate byte into the result register
+                }
+            }
         }
         _ => emit_static_bool(ctx, false),
     }

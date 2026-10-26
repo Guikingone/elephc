@@ -10,27 +10,51 @@
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
-use crate::parser::ast::{CType, ExternField, ExternParam, Stmt, StmtKind};
+use crate::parser::ast::{CIntWidth, CType, ExternField, ExternParam, Stmt, StmtKind};
 use crate::span::Span;
 
 use super::{expect_semicolon, expect_token, recover_to_statement_boundary};
 
 /// Parses a C type token and returns the corresponding CType variant.
-/// Handles primitive types (int, float, string, bool, void, callable) and pointer types
-/// including ptr and ptr<TypeName>. Advances `pos` on success.
+/// Handles primitive types (int, float, string, bool, void, callable), explicit C integer
+/// widths (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `u64`), the C `float` width (`f32`,
+/// with `f64` an alias of `float`), pointer types including ptr and ptr<TypeName>, and the
+/// nullable `?string` (a `char*` that may be NULL). `?` before any other type is rejected: a
+/// `ptr` already carries NULL as the address 0. Advances `pos` on success.
 fn parse_c_type(tokens: &[SpannedToken], pos: &mut usize) -> Result<CType, CompileError> {
     let span = if *pos < tokens.len() {
         tokens[*pos].1.span
     } else {
         Span::dummy()
     };
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Question)) {
+        *pos += 1; // consume ?
+        return match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Identifier(name)) if name == "string" => {
+                *pos += 1;
+                Ok(CType::NullableStr)
+            }
+            _ => Err(CompileError::new(
+                span,
+                "Only ?string can be nullable in an extern declaration (a ptr already accepts null)",
+            )),
+        };
+    }
     match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Identifier(name)) => {
             let name = name.clone();
             *pos += 1;
             match name.as_str() {
-                "int" | "integer" => Ok(CType::Int),
-                "float" | "double" => Ok(CType::Float),
+                "int" | "integer" | "i64" => Ok(CType::Int),
+                "i8" => Ok(CType::IntWidth(CIntWidth::I8)),
+                "u8" => Ok(CType::IntWidth(CIntWidth::U8)),
+                "i16" => Ok(CType::IntWidth(CIntWidth::I16)),
+                "u16" => Ok(CType::IntWidth(CIntWidth::U16)),
+                "i32" => Ok(CType::IntWidth(CIntWidth::I32)),
+                "u32" => Ok(CType::IntWidth(CIntWidth::U32)),
+                "u64" => Ok(CType::IntWidth(CIntWidth::U64)),
+                "float" | "double" | "f64" => Ok(CType::Float),
+                "f32" => Ok(CType::F32),
                 "string" => Ok(CType::Str),
                 "bool" | "boolean" => Ok(CType::Bool),
                 "void" => Ok(CType::Void),

@@ -179,9 +179,12 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_walk_recursive(emitter);
     arrays::emit_array_udiff_uintersect(emitter);
     arrays::emit_php_compare_slots(emitter);
+    arrays::emit_float_compare_slots(emitter);
+    arrays::emit_float_sort(emitter);
     arrays::emit_usort(emitter);
     arrays::emit_usort_str(emitter);
     arrays::emit_array_to_mixed(emitter);
+    arrays::emit_array_to_pointer_words(emitter);
     arrays::emit_array_merge_into(emitter);
     arrays::emit_array_merge_into_refcounted(emitter);
     arrays::emit_decref_any(emitter);
@@ -275,6 +278,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     // recursion it delegates to. Emitted after the object property accessors it calls.
     compare::emit_mixed_loose_eq(emitter);
     compare::emit_mixed_array_loose_eq(emitter);
+    compare::emit_mixed_array_compare(emitter);
     compare::emit_obj_loose_eq(emitter);
     compare::emit_php_compare(emitter);
     arrays::emit_min_max_mixed(emitter);
@@ -295,6 +299,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
 
     // Buffer runtime functions
     buffers::emit_buffer_resolve(emitter);
+    buffers::emit_buffer_try_resolve(emitter);
     buffers::emit_buffer_new(emitter);
     buffers::emit_buffer_free(emitter);
     buffers::emit_buffer_len(emitter);

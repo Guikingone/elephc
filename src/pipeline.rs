@@ -44,16 +44,83 @@ use output::{dynamic_eval_capability_warning, output_paths, OutputPaths};
 /// Reads PHP source, tokenizes, parses, resolves names, type-checks, optimizes,
 /// generates assembly, and links into a native binary. Exits on any error.
 pub(crate) fn compile(config: CliConfig) {
-    compile_inner(config, None);
+    compile_inner(config, EntryKind::Source);
 }
 
 /// Compiles the embedded REPL host with a logical project source and cache-local outputs.
 pub(crate) fn compile_repl(config: CliConfig, output: &str) {
-    compile_inner(config, Some(output));
+    compile_inner(config, EntryKind::ReplHost { output });
+}
+
+/// Compiles an `elephc test` suite: `source` is the synthesized entry (the `require_once`
+/// of every test file) whose logical path is `config.filename`, the binary goes to
+/// `output`, and compile-time discovery appends the driver for the tests `filter` keeps.
+pub(crate) fn compile_test(
+    config: CliConfig,
+    source: &str,
+    output: &str,
+    options: &crate::testing_prelude::discover::DriverOptions,
+) {
+    compile_inner(config, EntryKind::TestSuite { source, output, options });
+}
+
+/// How the entry program reaches the pipeline and where its outputs go.
+///
+/// The REPL host and a test suite are both VIRTUAL entries: generated source with a logical
+/// path in the project, outputs under the cache. They differ in what the project contributes:
+/// the host compiles no project code, so it skips the autoload registry; a suite is project
+/// code, so it keeps it and additionally runs test discovery after autoloading.
+#[derive(Clone, Copy)]
+pub(crate) enum EntryKind<'a> {
+    /// The ordinary command: the entry file on disk, outputs beside it.
+    Source,
+    /// The embedded REPL host: generated bootstrap, no autoload, outputs at `output`.
+    ReplHost { output: &'a str },
+    /// An `elephc test` suite: generated entry, ordinary autoload, outputs at `output`,
+    /// and the driver synthesized with `options` (filter, isolation, timeout, report).
+    TestSuite {
+        source: &'a str,
+        output: &'a str,
+        options: &'a crate::testing_prelude::discover::DriverOptions,
+    },
+}
+
+impl<'a> EntryKind<'a> {
+    /// The generated source for a virtual entry, `None` when the file on disk is read.
+    fn generated_source(self) -> Option<&'a str> {
+        match self {
+            Self::Source => None,
+            Self::ReplHost { .. } => Some(crate::repl::HOST_SOURCE),
+            Self::TestSuite { source, .. } => Some(source),
+        }
+    }
+
+    /// The output path override, `None` when outputs go beside the entry file.
+    fn output(self) -> Option<&'a str> {
+        match self {
+            Self::Source => None,
+            Self::ReplHost { output } | Self::TestSuite { output, .. } => Some(output),
+        }
+    }
+
+    /// Whether the entry is virtual: only its project directory exists on disk.
+    fn is_virtual(self) -> bool {
+        !matches!(self, Self::Source)
+    }
+
+    /// Whether this is the embedded REPL host build.
+    fn is_repl_host(self) -> bool {
+        matches!(self, Self::ReplHost { .. })
+    }
+
+    /// Whether this is an `elephc test` build.
+    fn is_test_suite(self) -> bool {
+        matches!(self, Self::TestSuite { .. })
+    }
 }
 
 /// Shares every compiler pass while separating generated host storage from project discovery.
-fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
+fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     let CliConfig {
         filename,
         heap_size,
@@ -102,7 +169,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let source_mode = SourceMode::from_path(Path::new(filename));
-    let output_paths = output_paths(repl_output.unwrap_or(filename), target, emit);
+    let output_paths = output_paths(entry.output().unwrap_or(filename), target, emit);
     // BEFORE ANY WORK RUNS. Every generated path is derived from the source filename, so a
     // tree someone else controls chooses them; refusing a symlink destination up front is
     // the only way to cover the ones an external assembler or linker writes, which this
@@ -120,9 +187,13 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     }
     let mut timings = CompileTimings::new(emit_timings);
 
+    // The entry file uses source ID 0. Register it before any frontend or autoload diagnostic,
+    // including warnings from rejected autoload closures. The resolver only resets IDs from 1
+    // upwards and leaves the path registry intact.
+    Span::register_source_path(0, filename.to_string());
     let parsed = frontend::read_and_parse(
         filename, source_mode, &defines, &mut timings,
-        repl_output.map(|_| crate::repl::HOST_SOURCE),
+        entry.generated_source(),
     );
 
     // `opcache.preload` becomes an implicit `require_once` at the very top of the entry program,
@@ -142,8 +213,12 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
 
     crate::progress::phase("autoload-build");
     let phase_started = Instant::now();
-    let (autoload_registry, parsed) = if repl_output.is_some() {
+    let (autoload_registry, parsed) = if entry.is_repl_host() {
         (autoload::Registry::empty(), parsed)
+    } else if entry.is_test_suite() {
+        // The compiler stands in for PHPUnit: an installed `phpunit/phpunit` (and what only
+        // it requires) must not be autoloaded into the suite. See `autoload::dev_packages`.
+        autoload::Registry::build_excluding(parent, parsed, &autoload::phpunit_closure(parent))
     } else {
         autoload::Registry::build(parent, parsed)
     };
@@ -166,7 +241,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
             process::exit(1);
         }
     };
-    let ast = match autoload::collect_aliases(ast) {
+    let ast =match autoload::collect_aliases(ast) {
         Ok(ast) => ast,
         Err(error) => {
             crate::progress::clear();
@@ -193,6 +268,24 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         errors::report(&error);
         process::exit(1);
     }
+
+    // The preludes below are decided on the entry program, but the autoload pass that loads the
+    // Composer class files runs after name resolution, much later. Probe that closure now, so a
+    // vendor file that uses PDO or curl gets its prelude as if the entry file used it.
+    crate::progress::phase("autoload-prelude-probe");
+    let phase_started = Instant::now();
+    let autoloaded_preludes = if entry.is_repl_host() {
+        HashSet::new()
+    } else {
+        autoload::prelude_probe::autoloaded_prelude_groups(
+            &ast,
+            parent,
+            &autoload_registry,
+            &defines,
+        )
+    };
+    timings.record_since("autoload-prelude-probe", phase_started);
+    let autoloaded = |group: &str| autoloaded_preludes.contains(group);
 
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
     // `curl` belongs here for the same reason `pdo` does, and NOT listing it is a silent
@@ -237,7 +330,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     // injects when `force || detect(...)`, so `force = pdo_used` reproduces the
     // exact decision without a second AST walk (the injected PDO prelude would
     // otherwise be re-scanned by the mysqli detection below too).
-    let pdo_used = pdo_force || pdo_prelude::program_uses_pdo(&ast);
+    let pdo_used = pdo_force || autoloaded("pdo") || pdo_prelude::program_uses_pdo(&ast);
     let ast = if php_version == crate::web_prelude::PhpVersion::default() {
         pdo_prelude::inject_if_used(ast, pdo_used, &mut prelude_inventory)
     } else {
@@ -262,7 +355,8 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     crate::progress::phase("mysqli-prelude");
     let phase_started = Instant::now();
     let mysqli_force = with_crates.contains("mysqli");
-    let mysqli_used = mysqli_force || mysqli_prelude::program_uses_mysqli(&ast);
+    let mysqli_used =
+        mysqli_force || autoloaded("mysqli") || mysqli_prelude::program_uses_mysqli(&ast);
     let ast =
         mysqli_prelude::inject_if_used(ast, mysqli_used, php_version, &mut prelude_inventory);
     if mysqli_used {
@@ -279,7 +373,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     let phase_started = Instant::now();
     let ast = tz_prelude::inject_if_used(
         ast,
-        with_crates.contains("tz"),
+        with_crates.contains("tz") || autoloaded("tz"),
         &mut prelude_inventory,
     );
     timings.record_since("tz-prelude", phase_started);
@@ -300,7 +394,11 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     // before name resolution so the call resolves to the injected function.
     crate::progress::phase("var-export-prelude");
     let phase_started = Instant::now();
-    let ast = var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = var_export_prelude::inject_if_used_or_referenced_elsewhere(
+        ast,
+        autoloaded("var_export"),
+        &mut prelude_inventory,
+    );
     timings.record_since("var-export-prelude", phase_started);
 
     // Inject the OPcache preludes (pure elephc-PHP functions): `opcache_get_configuration()`
@@ -333,7 +431,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     // manifest deliberately drops entries it cannot stat, so its first element is not a
     // dependable stand-in. See `opcache_prelude::restrict_api_denies`.
     // The embedded REPL entry is virtual, so only its project directory exists on disk.
-    let opcache_entry_path = if repl_output.is_some() {
+    let opcache_entry_path = if entry.is_virtual() {
         crate::repl::canonical_entry_path(filename)
     } else {
         opcache_prelude::canonical_entry_path(filename)
@@ -392,7 +490,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     let phase_started = Instant::now();
     let ast = crate::image_prelude::inject_if_used(
         ast,
-        with_crates.contains("image"),
+        with_crates.contains("image") || autoloaded("image"),
         &mut prelude_inventory,
     );
     timings.record_since("image-prelude", phase_started);
@@ -405,10 +503,23 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     // detected, and before name resolution so a namespaced caller resolves to it.
     crate::progress::phase("hash-prelude");
     let phase_started = Instant::now();
-    let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::hash_prelude::inject_if_used(ast, autoloaded("hash"), &mut prelude_inventory);
+    let ast = crate::tokenizer_prelude::inject_if_used(
+        ast,
+        with_crates.contains("tokenizer") || autoloaded("tokenizer"),
+        &mut prelude_inventory,
+    );
     let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
+
+    // Inject the testing runtime (`Elephc\Testing\TestCase`, `Runner`, the PHPUnit alias)
+    // only when the program references it, so ordinary binaries never carry the runner.
+    // Declaration-only and order-independent like the hash prelude; `elephc test` forces it.
+    crate::progress::phase("testing-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::testing_prelude::inject_if_used(ast, entry.is_test_suite(), &mut prelude_inventory);
+    timings.record_since("testing-prelude", phase_started);
 
     // Inject the `ext/curl` prelude (the `CurlHandle` class and the `curl_*` wrappers over
     // the internal `__elephc_curl_*` builtins) only when the program references that
@@ -423,13 +534,13 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     let ast = if php_version == crate::php_version::PhpVersion::default() {
         crate::curl_prelude::inject_if_used(
             ast,
-            with_crates.contains("curl"),
+            with_crates.contains("curl") || autoloaded("curl"),
             &mut prelude_inventory,
         )
     } else {
         crate::curl_prelude::inject_if_used_for_version(
             ast,
-            with_crates.contains("curl"),
+            with_crates.contains("curl") || autoloaded("curl"),
             php_version,
             &mut prelude_inventory,
         )
@@ -445,7 +556,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     let phase_started = Instant::now();
     let ast = crate::xml_prelude::inject_if_used(
         ast,
-        with_crates.contains("xml"),
+        with_crates.contains("xml") || autoloaded("xml"),
         &mut prelude_inventory,
     );
     timings.record_since("xml-prelude", phase_started);
@@ -534,6 +645,27 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         };
     timings.record_since("autoload-run", phase_started);
 
+    // `elephc test`: discover the test classes now that every class they extend, including
+    // the ones autoloading just brought in, is in the AST with resolved names, and append
+    // the synthesized driver. An empty run is a compile error here, not a binary that
+    // reports it.
+    let ast = if let EntryKind::TestSuite { options, .. } = entry {
+        crate::progress::phase("test-discovery");
+        let phase_started = Instant::now();
+        let ast = match crate::testing_prelude::discover::append_driver(ast, options) {
+            Ok(ast) => ast,
+            Err(e) => {
+                crate::progress::clear();
+                errors::report(&e);
+                process::exit(1);
+            }
+        };
+        timings.record_since("test-discovery", phase_started);
+        ast
+    } else {
+        ast
+    };
+
     // Discover DOM use inside newly loaded classes, resolving only injected declarations.
     crate::progress::phase("dom-html-autoload-prelude");
     let phase_started = Instant::now();
@@ -557,6 +689,20 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     // `unsupported EIR backend feature: language construct __elephc_cast_object`. The
     // declarations are name-resolved on the way in, exactly as `autoload::run` resolves the
     // files it splices, because the position is past the pipeline's own name-resolution pass.
+    // The testing runtime, when only an autoloaded file references it: the pass before name
+    // resolution saw the entry and its includes, not the classes autoloading just spliced in.
+    crate::progress::phase("testing-autoload-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::testing_prelude::inject_after_autoload(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("testing-autoload-prelude", phase_started);
+
     crate::progress::phase("object-cast-prelude");
     let phase_started = Instant::now();
     let ast = match crate::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory) {
@@ -872,7 +1018,8 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     }
 
     backend::emit_and_link(backend::BackendInputs {
-        repl_build: repl_output.is_some(),
+        repl_build: entry.is_repl_host(),
+        announce_success: !entry.is_test_suite(),
         filename,
         with_crates: &with_crates,
         ini_overrides: &ini_overrides,

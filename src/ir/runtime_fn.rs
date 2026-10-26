@@ -444,6 +444,7 @@ pub enum RuntimeFnId {
     ElephcPtrWriteString,
     BufferFree,
     BufferLen,
+    BufferPtr,
     Ptr,
     PtrGet,
     PtrIsNull,
@@ -452,12 +453,16 @@ pub enum RuntimeFnId {
     PtrRead16,
     PtrRead32,
     PtrRead8,
+    PtrReadF32,
+    PtrReadF64,
     PtrReadString,
     PtrSet,
     PtrSizeof,
     PtrWrite16,
     PtrWrite32,
     PtrWrite8,
+    PtrWriteF32,
+    PtrWriteF64,
     PtrWriteString,
     ZvalFree,
     ZvalPack,
@@ -734,6 +739,7 @@ pub enum RuntimeFnId {
     Strcmp,
     Strncasecmp,
     Strncmp,
+    StripTags,
     Stripos,
     Strpos,
     Strripos,
@@ -805,6 +811,8 @@ pub enum RuntimeFnId {
     IsNan,
     IsNumeric,
     Settype,
+    /// Stamps the source-buffer location on a tokenizer ParseError.
+    TokenizerErrorLocation,
 }
 
 impl RuntimeFnId {
@@ -1093,11 +1101,22 @@ impl RuntimeFnId {
                 }
                 sig.return_type = PhpType::Void;
             }
+            // The wrapper takes the raw buffer handle, whatever the element type: `buffer<mixed>`
+            // is the internal any-buffer shape (no program can declare it) that
+            // `types_compatible` accepts for every `buffer<T>` argument. `buffer_ptr(...)`
+            // answers the untyped `ptr` for every buffer, since the callable has no call-site
+            // element type to refine it to `ptr<T>`.
             RuntimeFnId::BufferLen => {
                 if let Some((_, buffer_ty)) = sig.params.get_mut(0) {
-                    *buffer_ty = PhpType::Buffer(Box::new(PhpType::Int));
+                    *buffer_ty = PhpType::Buffer(Box::new(PhpType::Mixed));
                 }
                 sig.return_type = PhpType::Int;
+            }
+            RuntimeFnId::BufferPtr => {
+                if let Some((_, buffer_ty)) = sig.params.get_mut(0) {
+                    *buffer_ty = PhpType::Buffer(Box::new(PhpType::Mixed));
+                }
+                sig.return_type = PhpType::Pointer(None);
             }
             _ => {}
         }
@@ -1168,6 +1187,9 @@ impl RuntimeFnId {
             );
         }
         match self {
+            RuntimeFnId::TokenizerErrorLocation => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::WRITES_HEAP.bits(),
+            ),
             // Clone hooks and property hooks can execute arbitrary user code. I/O effects are
             // attributed to the nested operation that performs them.
             RuntimeFnId::CloneWith => crate::ir::Effects::from_bits_retain(
@@ -1262,7 +1284,7 @@ impl RuntimeFnId {
             // arbitrary PHP. Discarded calls must retain these observable effects.
             // I/O inside those callbacks is monitored at its own runtime boundary;
             // the join itself does not perform a network or blocking operation.
-            RuntimeFnId::Implode | RuntimeFnId::ArrayFlip => crate::ir::Effects::from_bits_retain(
+            RuntimeFnId::Implode | RuntimeFnId::ArrayFlip | RuntimeFnId::StripTags => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::BLOCKING_IO.bits()
                     & !crate::ir::Effects::NETWORK_IO.bits(),
@@ -1504,7 +1526,11 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcObjectPropValue => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
             ),
-            RuntimeFnId::ElephcSplObjectAppend | RuntimeFnId::ElephcObjectRestoreProperty => crate::ir::Effects::all(),
+            // Destructors these may run do their own I/O; the helpers themselves perform none.
+            RuntimeFnId::ElephcSplObjectAppend | RuntimeFnId::ElephcObjectRestoreProperty => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !(crate::ir::Effects::BLOCKING_IO.bits() | crate::ir::Effects::NETWORK_IO.bits()),
+            ),
             RuntimeFnId::GetObjectVars | RuntimeFnId::ElephcSplObjectVarsRaw | RuntimeFnId::ElephcSplObjectVarsNamed | RuntimeFnId::ElephcSplObjectVarsIter => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits()
                     | crate::ir::Effects::ALLOC_HEAP.bits()
@@ -1515,7 +1541,8 @@ impl RuntimeFnId {
                 crate::ir::Effects::READS_HEAP.bits()
                     | crate::ir::Effects::ALLOC_CONCAT.bits(),
             ),
-            RuntimeFnId::BufferLen => crate::ir::Effects::from_bits_retain(
+            // Both resolve the handle (a stale one is fatal) and read the descriptor.
+            RuntimeFnId::BufferLen | RuntimeFnId::BufferPtr => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::MAY_FATAL.bits(),
             ),
             // `getmypid()` is not a constant: a `pcntl_fork()` child reads its own id.
@@ -2314,6 +2341,7 @@ impl RuntimeFnId {
         if matches!(
             self,
             RuntimeFnId::IntvalBase
+                | RuntimeFnId::TokenizerErrorLocation
                 // Both array mutators answer the resulting element count. The returned
                 // machine integer cannot keep any variadic value operand alive.
                 | RuntimeFnId::ArrayPush
@@ -2324,6 +2352,8 @@ impl RuntimeFnId {
                 | RuntimeFnId::BcScale
                 // `iconv_set_encoding()` answers with a bare boolean.
                 | RuntimeFnId::IconvSetEncoding
+                // `buffer_ptr()` answers the raw payload address of a scalar buffer handle.
+                | RuntimeFnId::BufferPtr
                 // The clone override reference guard answers nothing at all: it returns or
                 // throws, so a result temporary would only keep the override array alive.
                 | RuntimeFnId::ElephcCloneOverrideReferenceGuard
@@ -2633,6 +2663,10 @@ impl RuntimeFnId {
                 | RuntimeFnId::Strpos
                 | RuntimeFnId::Strripos
                 | RuntimeFnId::Strrpos
+                // `strip_tags()` publishes its concat reservation and then persists it before
+                // returning. Scratch results are copied, while a sole oversized reservation is
+                // adopted in place; either path hands the caller one fresh owned string.
+                | RuntimeFnId::StripTags
                 // `strtr()` writes into a reservation taken from `__rt_concat_reserve` and then
                 // copies the finished bytes into owned heap storage through `__rt_str_persist`,
                 // releasing the reservation afterwards, so the result is caller-owned and can
@@ -3058,6 +3092,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPtrWriteString => "__elephc_ptr_write_string",
             RuntimeFnId::BufferFree => "buffer_free",
             RuntimeFnId::BufferLen => "buffer_len",
+            RuntimeFnId::BufferPtr => "buffer_ptr",
             RuntimeFnId::Ptr => "ptr",
             RuntimeFnId::PtrGet => "ptr_get",
             RuntimeFnId::PtrIsNull => "ptr_is_null",
@@ -3066,12 +3101,16 @@ impl RuntimeFnId {
             RuntimeFnId::PtrRead16 => "ptr_read16",
             RuntimeFnId::PtrRead32 => "ptr_read32",
             RuntimeFnId::PtrRead8 => "ptr_read8",
+            RuntimeFnId::PtrReadF32 => "ptr_read_f32",
+            RuntimeFnId::PtrReadF64 => "ptr_read_f64",
             RuntimeFnId::PtrReadString => "ptr_read_string",
             RuntimeFnId::PtrSet => "ptr_set",
             RuntimeFnId::PtrSizeof => "ptr_sizeof",
             RuntimeFnId::PtrWrite16 => "ptr_write16",
             RuntimeFnId::PtrWrite32 => "ptr_write32",
             RuntimeFnId::PtrWrite8 => "ptr_write8",
+            RuntimeFnId::PtrWriteF32 => "ptr_write_f32",
+            RuntimeFnId::PtrWriteF64 => "ptr_write_f64",
             RuntimeFnId::PtrWriteString => "ptr_write_string",
             RuntimeFnId::ZvalFree => "zval_free",
             RuntimeFnId::ZvalPack => "zval_pack",
@@ -3244,6 +3283,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbOutputHandler => "mb_output_handler",
             RuntimeFnId::MbGetInfo => "mb_get_info",
             RuntimeFnId::SharedIni => "__elephc_shared_ini",
+            RuntimeFnId::TokenizerErrorLocation => "__elephc_tokenizer_error_location",
             RuntimeFnId::MbParseStr => "mb_parse_str",
             RuntimeFnId::MbSendMail => "mb_send_mail",
             RuntimeFnId::MbHttpInput => "mb_http_input",
@@ -3272,6 +3312,7 @@ impl RuntimeFnId {
             RuntimeFnId::Strcmp => "strcmp",
             RuntimeFnId::Strncasecmp => "strncasecmp",
             RuntimeFnId::Strncmp => "strncmp",
+            RuntimeFnId::StripTags => "strip_tags",
             RuntimeFnId::Stripos => "stripos",
             RuntimeFnId::Strpos => "strpos",
             RuntimeFnId::Strripos => "strripos",
@@ -3402,6 +3443,7 @@ mod tests {
             RuntimeFnId::Strtotime,
             RuntimeFnId::Hrtime,
             RuntimeFnId::GraphemeStrrev,
+            RuntimeFnId::StripTags,
         ] {
             assert_eq!(target.result_ownership(), BuiltinResultOwnership::Fresh);
         }

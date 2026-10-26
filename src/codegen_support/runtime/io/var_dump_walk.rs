@@ -1086,6 +1086,7 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_value ---");
     emitter.label_global("__rt_var_dump_value_impl");
+    crate::codegen_support::sentinels::emit_normalize_pointer_word_tag(emitter, "x0", "x1", "x9", "__rt_var_dump_value_tag_ready");
 
     // Frame (48 bytes): [0]lo [8]hi [32]x29 [40]x30.
     emitter.instruction("sub sp, sp, #48");                                     // allocate the value frame
@@ -1211,6 +1212,7 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_value ---");
     emitter.label_global("__rt_var_dump_value_impl");
+    crate::codegen_support::sentinels::emit_normalize_pointer_word_tag(emitter, "rdi", "rsi", "r11", "__rt_var_dump_value_tag_ready");
 
     // rbp-relative frame: [-8]lo [-16]hi.
     emitter.instruction("push rbp");                                            // save caller frame pointer

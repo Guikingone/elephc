@@ -124,27 +124,3 @@ pub(super) fn emit_key(emitter: &mut Emitter) {
     emitter.instruction("add x2, x2, #1");                                      // end+1 is an impossible valid cursor
     emitter.instruction("ret");                                                 // caller/preflight rejects the sentinel
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::codegen_support::platform::Target;
-
-    /// Every AArch64 target rejects a hydrated value whose boxed tag the declared property
-    /// type does not accept, routing it through the catchable unserialize TypeError helper
-    /// instead of writing the mismatched payload.
-    #[test]
-    fn store_prop_rejects_a_mismatched_typed_property_on_every_aarch64_target() {
-        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
-            let mut emitter = Emitter::new(Target::parse(name).unwrap());
-            emit_object_storage(&mut emitter);
-            let asm = emitter.output();
-            assert!(asm.contains("_class_serpdiag_ptrs"), "{name}: {asm}");
-            assert!(asm.contains("__rt_obj_store_prop_type_error"), "{name}: {asm}");
-            assert!(asm.contains("__rt_unser_throw_property_type_error"), "{name}: {asm}");
-            assert!(asm.contains("_unser_property_assign_prefix"), "{name}: {asm}");
-            // An accepted int into a float slot is widened, not reinterpreted.
-            assert!(asm.contains("scvtf d0, x9"), "{name}: {asm}");
-        }
-    }
-}

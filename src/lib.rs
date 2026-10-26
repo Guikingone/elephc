@@ -114,11 +114,13 @@ pub mod superglobals;
 pub mod synthetic_class;
 /// Termination and exit handling.
 pub mod termination;
+pub mod testing_prelude;
 /// Type system and checking.
 pub mod types;
 /// Conditionally-injected timezone-introspection prelude (extern + marshalling).
 pub mod tz_prelude;
 pub mod xml_prelude;
+pub mod tokenizer_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;
 /// Conditionally-injected PHP version-surface prelude (`zend_version`, `php_sapi_name`,

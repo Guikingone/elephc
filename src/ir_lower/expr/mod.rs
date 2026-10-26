@@ -33,6 +33,8 @@ use crate::types::{
 use std::collections::HashSet;
 
 mod constants;
+mod array_merge_values;
+use array_merge_values::lower_array_value_for_merge;
 mod nullsafe_chain;
 mod ref_place_args;
 mod boxed_user_sort;
@@ -58,6 +60,7 @@ mod callable_probes;
 mod descriptor_invoke;
 mod call_operand_owners;
 mod array_write_owners;
+mod pending_owners;
 mod descriptor_args;
 mod descriptor_unpack;
 mod static_array_callbacks;
@@ -65,6 +68,8 @@ mod callable_tracking;
 mod callable_resolution;
 mod unset;
 mod array_builtin_args;
+mod borrowed_string_args;
+mod weak_string_unions;
 mod builtin_special_args;
 mod call_arg_coercion;
 mod positional_spreads;
@@ -97,6 +102,11 @@ use reference_returns::{
 };
 mod property_fetch_for_write;
 mod method_calls;
+mod enum_interface_calls;
+mod enum_argument_guards;
+mod enum_method_args;
+mod enum_static_args;
+mod enum_ref_args;
 mod reflection_class_calls;
 mod reflection_method_calls;
 mod reflection_property_calls;
@@ -112,6 +122,7 @@ mod packed_builtin_args;
 mod method_metadata;
 mod static_method_calls;
 mod scoped_values;
+mod buffer_length;
 mod generators;
 mod instanceof_coercions;
 mod merge_temps;
@@ -149,6 +160,7 @@ pub(in crate::ir_lower) fn instance_object_class_for_ir(
 }
 use unset::*;
 use array_builtin_args::*;
+use weak_string_unions::*;
 use builtin_special_args::*;
 use call_arg_coercion::*;
 use positional_spreads::*;
@@ -180,6 +192,7 @@ use core_introspection::*;
 use reflection_new_instance::*;
 use nullable_method_calls::*;
 use method_metadata::*;
+pub(in crate::ir_lower) use method_metadata::method_signature;
 use static_method_calls::*;
 use scoped_values::*;
 use generators::*;
@@ -190,12 +203,15 @@ pub(crate) use callable_resolution::{
     is_bound_closure_assignment_shape, lower_bound_closure_for_assignment,
 };
 pub(crate) use array_write_owners::{capture_array_write_key, root_borrowed_write_operand};
+pub(crate) use pending_owners::lower_with_pending_owners;
 pub(crate) use call_operand_owners::{
     pin_in_flight_owners, register_owned_call_operand, retire_owned_call_operand,
     root_owned_call_operand, unpin_in_flight_owners, unregister_owned_call_operand,
     PinnedInFlightOwner,
 };
 pub(crate) use property_access::singular_object_class;
+pub(crate) use property_access::packed_receiver_class;
+pub(crate) use property_access::extern_receiver_class;
 pub(crate) use callable_tracking::{
     lower_callable_array_for_assignment, reflection_arg_array_binding_for_expr,
     reflection_class_binding_for_expr, reflection_function_binding_for_expr,
@@ -206,7 +222,8 @@ pub(crate) use callable_tracking::{
 pub(crate) use callable_tracking::LoweredCallableArrayAssignment;
 pub(crate) use closures::{body_contains_eval_call, lower_closure_for_assignment};
 pub(crate) use indexed_array_literals::{
-    array_literal_type_for_ir, lower_array_literal_with_expected_type,
+    array_literal_type_for_ir, is_pointer_array_destination, lower_array_literal_with_expected_type,
+    lower_expr_for_destination,
 };
 pub(crate) use array_access::{
     array_access_element_result_type, index_expr_key_type,
@@ -215,6 +232,7 @@ pub(crate) use array_access::{
 };
 pub(crate) use array_access_types::type_satisfies_array_access_for_ir;
 pub(crate) use assignments::lower_null_coalesce_update_stmt;
+pub(crate) use assignments::lower_null_coalesce_update_stmt_to;
 pub(crate) use weak_map_places::lower_weak_map_incdec_stmt;
 pub(crate) use weak_map_places::lower_weak_map_append;
 pub(crate) use weak_map_places::lower_weak_map_denied_append;
@@ -629,6 +647,9 @@ fn lower_initialized_static_property_isset(
     property: &str,
     arg: &Expr,
 ) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, arg.span) {
+        return error;
+    }
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let uninitialized_block = ctx
         .builder
@@ -753,6 +774,9 @@ fn lower_initialized_static_property_empty(
     construct: &str,
     arg: &Expr,
 ) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, arg.span) {
+        return error;
+    }
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let uninitialized_block = ctx
         .builder

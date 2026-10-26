@@ -2,7 +2,7 @@
 title: "__elephc_object_restore_property() - internals"
 description: "Compiler internals for __elephc_object_restore_property(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1144
+  order: 1153
 ---
 
 ## `__elephc_object_restore_property()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/__elephc_object_restore_property.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/__elephc_object_restore_property.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -26,7 +26,7 @@ sidebar:
 - **Validation**: `signature`
 - **Result type source**: `declared`
 - **Result ownership**: `non_heap`
-- **Effects**: `static (20 declared effects)`
+- **Effects**: `static (18 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`

@@ -525,11 +525,13 @@ pub(super) fn stdclass_class_id(ctx: &FunctionContext<'_>) -> Option<u64> {
 
 /// Boxes or retains a declared-property load so Mixed receiver paths produce owned Mixed cells.
 pub(super) fn box_mixed_property_candidate_result(ctx: &mut FunctionContext<'_>, source_ty: &PhpType) {
+    // A `?ptr<T>` slot keeps its union, so address 0 is PHP null.
+    let box_ty = crate::types::mixed_box_php_type(source_ty);
     let source_ty = source_ty.codegen_repr();
     if source_ty == PhpType::Mixed {
         abi::emit_incref_if_refcounted(ctx.emitter, &source_ty);
     } else {
-        emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+        emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
     }
 }
 

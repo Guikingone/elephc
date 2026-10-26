@@ -23,6 +23,7 @@ mod eval_argument_helpers;
 mod eval_constructor_helpers;
 mod eval_error_handler_helpers;
 mod eval_handler_helpers;
+mod eval_inventory_helper;
 mod eval_method_helpers;
 mod eval_value_helpers;
 mod eval_property_helpers;
@@ -30,6 +31,7 @@ mod eval_ref_arg_helpers;
 mod eval_reflection_helpers;
 mod eval_reflection_owner_helpers;
 mod eval_static_property_helpers;
+mod eval_status_helper;
 mod fibers;
 mod frame;
 mod function_variants;
@@ -53,6 +55,7 @@ mod shared_mixed_string;
 mod shared_mbstring_callable;
 mod shared_state;
 pub(crate) mod stack_guard;
+mod stack_numeric;
 pub mod value_placement;
 mod web;
 use runtime_metadata::*;
@@ -77,7 +80,7 @@ pub(crate) use crate::codegen_support::{
     emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed, emit_callback_wrapper,
     emit_extern_callback_trampoline, emit_fiber_wrapper,
     emit_release_pushed_refcounted_temp_after_array_push, emit_write_current_string_stderr,
-    emit_write_literal_stderr, runtime_value_tag,
+    emit_write_literal_stderr, runtime_value_tag, container_value_tag,
 };
 #[allow(unused_imports)]
 pub use crate::codegen_support::{
@@ -380,6 +383,7 @@ pub fn generate_user_asm_from_ir_with_options_and_features(
         exported_functions,
         heap_debug,
         shared,
+        regalloc_linear,
     )
 }
 
@@ -392,6 +396,7 @@ fn finalize_user_asm(
     exported_functions: &HashMap<String, ExportedFunction>,
     heap_debug: bool,
     mut shared: shared_state::SharedCodegenState,
+    regalloc_linear: bool,
 ) -> Result<GeneratedUserAsm> {
     let eval_bridge = module.required_runtime_features.eval_bridge;
     mbstring_configuration::emit(module, &mut emitter, &mut data);
@@ -411,6 +416,20 @@ fn finalize_user_asm(
             &mut emitter,
             &mut data,
         );
+        // The catalog is registered by ONE module-level helper, and it is emitted
+        // BEFORE the callable-argument-normalizer gate below, not after it:
+        // registering a native free function can REQUIRE that normalizer
+        // (`emit_eval_native_function_invoker_inline` raises
+        // `shared.callable_argument_normalizer`), and that gate is the flag's
+        // only reader. Emitting it afterwards would leave the flag unread and
+        // the program would call a normalizer that was never emitted.
+        eval_inventory_helper::emit_eval_inventory_helper(
+            module,
+            &mut emitter,
+            &mut data,
+            &mut shared,
+            regalloc_linear,
+        )?;
     }
     let eval_callable_support_needed =
         eval_bridge && eval_callable_helpers::module_needs_eval_callable_descriptor_support(module);
@@ -449,6 +468,17 @@ fn finalize_user_asm(
     if shared.callable_argument_normalizer || eval_callable_support.argument_normalizer_needed {
         lower_inst::emit_callable_argument_normalizer(module, &mut emitter, &mut data, &mut shared)?;
     }
+    // The eval status dispatch is the same at every call site, so it is one
+    // module-level helper too. Emitted OUTSIDE the bridge gate: a literal-eval
+    // program uses the eval SCOPE accessors without linking the bridge, and
+    // those report statuses through the same helper.
+    eval_status_helper::emit_eval_status_helper(
+        module,
+        &mut emitter,
+        &mut data,
+        &mut shared,
+        regalloc_linear,
+    )?;
     let empty_globals = HashSet::<String>::new();
     let empty_static_vars = HashMap::<(String, String), PhpType>::new();
     let user_functions = runtime_user_function_sigs(module);

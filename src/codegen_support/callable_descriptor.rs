@@ -583,7 +583,7 @@ fn encoded_default(kind: u64, lo: DataWord, hi: u64) -> EncodedDefault {
 /// Returns the callable descriptor type tag for a PHP codegen type.
 fn type_tag(ty: &PhpType) -> u64 {
     match ty.codegen_repr() {
-        PhpType::Int => 0,
+        PhpType::Int | PhpType::Narrow(_) => 0,
         PhpType::Str => 1,
         PhpType::Float => 2,
         PhpType::Bool | PhpType::False => 3,

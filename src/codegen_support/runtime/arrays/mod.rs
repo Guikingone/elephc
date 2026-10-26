@@ -109,6 +109,7 @@ mod array_to_hash_reverse;
 mod array_to_hash_unique;
 mod hash_to_hash_unique;
 mod array_to_mixed;
+mod array_to_pointer_words;
 mod array_udiff_uintersect;
 mod array_union;
 mod array_unshift;
@@ -168,6 +169,7 @@ mod hash_to_mixed;
 mod hash_union;
 mod hash_unset;
 mod heap_alloc;
+pub(crate) mod heap_live_bases;
 mod heap_grow_tail;
 mod heap_debug_check_live;
 mod heap_debug_fail;
@@ -218,6 +220,8 @@ mod slice_bounds;
 mod sort_int;
 mod sort_str;
 mod undefined_array_key_warning;
+mod float_compare_slots;
+mod float_sort;
 mod php_compare_slots;
 mod usort;
 mod usort_str;
@@ -408,6 +412,7 @@ pub use array_to_hash_unique::emit_array_to_hash_unique;
 pub use hash_to_hash_unique::emit_hash_to_hash_unique;
 /// Emit key-preserving deduplicating indexed-array-to-hash converter helper (array_unique).
 pub use array_to_mixed::emit_array_to_mixed;
+pub use array_to_pointer_words::emit_array_to_pointer_words;
 /// Emit array-to-Mixed conversion helper.
 pub use array_udiff_uintersect::emit_array_udiff_uintersect;
 /// Emit array udiff/uintersect comparator helper.
@@ -583,6 +588,10 @@ pub use sort_str::emit_sort_str;
 /// Emit undefined integer array key warning helper.
 pub use undefined_array_key_warning::emit_undefined_array_key_warning;
 pub use float_key_to_int::emit_float_key_to_int;
+/// Emit the raw-float comparators used by the stable float sorter.
+pub use float_compare_slots::emit_float_compare_slots;
+/// Emit PHP-compatible sorting for raw float arrays.
+pub use float_sort::emit_float_sort;
 /// Emit user-defined sort helper.
 pub use php_compare_slots::emit_php_compare_slots;
 pub use usort::emit_usort;

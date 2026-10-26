@@ -21,7 +21,15 @@ use super::{parse_block, DocBlock};
 pub(super) fn collect(source: &str) -> HashMap<(u32, u32), DocBlock> {
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let mut blocks = HashMap::new();
-    let Ok(tokens) = tokenize(source).or_else(|_| tokenize_with_mode(source, SourceMode::Lfc)) else {
+    // A PHP source without an open tag now lexes as one inline-HTML echo, so it would never
+    // fall back to `.lfc` code; a tagless source is tried as `.lfc` first instead.
+    let has_open_tag = source.contains("<?");
+    let tokens = if has_open_tag {
+        tokenize(source).or_else(|_| tokenize_with_mode(source, SourceMode::Lfc))
+    } else {
+        tokenize_with_mode(source, SourceMode::Lfc).or_else(|_| tokenize(source))
+    };
+    let Ok(tokens) = tokens else {
         return blocks;
     };
     let mut lines = Vec::new();

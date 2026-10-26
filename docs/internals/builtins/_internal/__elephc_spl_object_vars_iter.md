@@ -2,7 +2,7 @@
 title: "__elephc_spl_object_vars_iter() - internals"
 description: "Compiler internals for __elephc_spl_object_vars_iter(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1180
+  order: 1189
 ---
 
 ## `__elephc_spl_object_vars_iter()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/__elephc_spl_object_vars_iter.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/__elephc_spl_object_vars_iter.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

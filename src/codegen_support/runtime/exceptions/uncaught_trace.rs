@@ -219,7 +219,8 @@ fn emit_uncaught_print_stack_trace_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_uncaught_print_main");
     emitter.instruction("push rbp");
     emitter.instruction("mov rbp, rsp");
-    emitter.instruction("push rdi"); // the frame index across the itoa call
+    emitter.instruction("sub rsp, 16"); // an aligned slot for the frame index across the itoa call
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_hash");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_HASH_LEN));
     emitter.instruction("mov edi, 1");
@@ -235,7 +236,7 @@ fn emit_uncaught_print_stack_trace_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, 1");
     emitter.instruction("mov eax, 1"); // syscall 1 = write
     emitter.instruction("syscall");
-    emitter.instruction("add rsp, 8");
+    emitter.instruction("add rsp, 16");
     emitter.instruction("pop rbp");
     emitter.instruction("ret");
 
