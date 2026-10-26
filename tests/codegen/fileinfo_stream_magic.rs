@@ -131,7 +131,7 @@ unset($f, $stream, $self, $scheme, $code, $e);
                 return false;
             }
             true
-        }).take(5000) { eprintln!("cast original: {line}"); }
+        }).take(12000) { eprintln!("cast original: {line}"); }
         let declarations = source.split("\nstream_wrapper_register(").next().unwrap();
         for (label, tail) in [
             ("normal", r#"stream_wrapper_register("castfalse", "FileinfoCastFalse"); $f = new finfo(FILEINFO_MIME_TYPE); $f->file("castfalse://x"); stream_wrapper_unregister("castfalse"); unset($f);"#),
