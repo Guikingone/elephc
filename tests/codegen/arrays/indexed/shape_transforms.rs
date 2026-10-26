@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
+//! - Runtime array_push spreads cover indexed receiver staging, iteration and heap ownership.
 
 use super::*;
 use crate::support::compile_and_run_with_heap_debug;
@@ -348,6 +349,40 @@ $r = [1]; array_push($r, 2, 3, 4); echo $r[0], $r[1], $r[2], $r[3], "\n";
             "1234\n",
         )
     );
+}
+
+/// A Generator spread into an indexed local appends each yielded value and releases every owner.
+#[test]
+fn test_array_push_indexed_generator_spread_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function indexedPushGenerator(): Generator { yield 3; yield 4; }
+for ($i = 0; $i < 32; $i++) {
+    $values = [1, 2];
+    $count = array_push($values, ...indexedPushGenerator());
+}
+echo $count, "|", json_encode($values), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "4|[1,2,3,4]\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A runtime indexed-list spread appends its elements separately and leaves the heap balanced.
+#[test]
+fn test_array_push_indexed_runtime_list_spread_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 32; $i++) {
+    $values = [1, 2];
+    $tail = [$argc > 0 ? 3 : 30, 4];
+    $count = array_push($values, ...$tail);
+}
+echo $count, "|", json_encode($values), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "4|[1,2,3,4]\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Verifies a multi-value `array_push()` neither leaks the appended values nor double releases

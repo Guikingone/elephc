@@ -23,6 +23,8 @@ $tail = [$argc, 5];
 array_push($mixed, ...$tail);
 function targetNumericStringKeys(): Generator { yield "10" => 6; }
 array_push($mixed, ...targetNumericStringKeys());
+$indexed = [1, 2];
+array_push($indexed, ...targetNumericStringKeys());
 class TargetPushBox { public array $items = ["a" => 1]; }
 $box = new TargetPushBox();
 array_push($box->items, ...$tail);

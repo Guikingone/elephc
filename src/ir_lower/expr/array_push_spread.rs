@@ -24,7 +24,7 @@ pub(super) fn lower_array_push_spread(
     { return None; }
     let ExprKind::Variable(receiver) = &args.first()?.kind else { return None; };
     if !matches!(ctx.local_type(receiver).codegen_repr(),
-        PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_))
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_))
     { return None; }
     let sig = crate::types::builtin_call_sig(canonical)?;
     let plan = crate::types::call_args::plan_call_args(&sig, args, expr.span, false, false).ok()?;
