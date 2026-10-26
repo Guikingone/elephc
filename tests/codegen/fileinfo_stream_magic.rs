@@ -111,39 +111,6 @@ unset($f, $stream, $self, $scheme, $code, $e);
     assert!(out.success, "fileinfo program failed: {}", out.stderr);
     assert_eq!(out.stdout, expected);
     assert!(out.stderr.contains("finfo::file(): FileinfoCastInt::stream_cast must return a stream resource"), "{}", out.stderr);
-    if !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
-        let declarations = source.split("\nstream_wrapper_register(").next().unwrap();
-        for (label, tail) in [
-            ("eval-callback-handler", r#"stream_wrapper_register("castfalse", "FileinfoCastFalse"); $f = new finfo(FILEINFO_MIME_TYPE); set_error_handler(function(int $level, string $message): bool { echo $message, "\n"; return true; }); $code = $argc > 0 ? 'echo $f->file("castfalse://x"), "\n";' : ''; eval($code); restore_error_handler(); stream_wrapper_unregister("castfalse"); unset($f, $code);"#),
-            ("eval-after-aot", r#"stream_wrapper_register("castfalse", "FileinfoCastFalse"); $f = new finfo(FILEINFO_MIME_TYPE); set_error_handler(function(int $level, string $message): bool { echo $message, "\n"; return true; }); echo $f->file("castfalse://x"), "\n"; $code = $argc > 0 ? 'echo $f->file("castfalse://x"), "\n";' : ''; eval($code); restore_error_handler(); stream_wrapper_unregister("castfalse"); unset($f, $code);"#),
-        ] {
-            let (control, _) = compile_and_run_with_heap_debug_and_asm(&format!("{declarations}\n{tail}"));
-            eprintln!("cast ownership control {label}: {}\n{}", control.stdout, control.stderr);
-        }
-        let phases = [
-            ("missing", "echo $f->file(\"castmissing://x\")", "foreach ([\"castfalse\""),
-            ("cast-loop", "foreach ([\"castfalse\"", "$code = $argc"),
-            ("eval", "$code = $argc", "$self = fopen"),
-            ("self", "$self = fopen", "restore_error_handler();"),
-            ("default-handler", "try { $f->file(\"castint://x\")", "set_error_handler(function(int $level, string $message): bool { echo \"handler"),
-            ("throw-handler", "set_error_handler(function(int $level, string $message): bool { echo \"handler", "foreach ([\"castmissing\""),
-        ].map(|(label, start, end)| {
-            let begin = source.find(start).unwrap();
-            let finish = begin + source[begin..].find(end).unwrap();
-            (label, begin, finish)
-        });
-        // Keep every phase in the AST so eval capture and final slot types stay active.
-        for disabled in std::iter::once("none").chain(phases.iter().map(|phase| phase.0)) {
-            let mut control_source = source.to_string();
-            for (label, begin, finish) in phases.iter().rev() {
-                let condition = if *label == disabled { "$argc < 0" } else { "$argc > 0" };
-                control_source.insert_str(*finish, "}\n");
-                control_source.insert_str(*begin, &format!("if ({condition}) {{\n"));
-            }
-            let (control, _) = compile_and_run_with_heap_debug_and_asm(&control_source);
-            eprintln!("cast phase disabled {disabled}: {}\n{}", control.stdout, control.stderr);
-        }
-    }
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
