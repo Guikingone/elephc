@@ -50,6 +50,31 @@ function pendingForeachReturn(): string|false {
     }
     return "empty";
 }
+function pendingLocalArrayReturn(): array {
+    $local = [1];
+    try { return $local; } finally { pendingReturnCleanup(); }
+}
+function pendingNullableArrayReturn(): ?array {
+    $local = [1];
+    try { return $local; } finally { pendingReturnCleanup(); }
+}
+function pendingAssocArrayReturn(): ?array {
+    $local = ["value" => 1];
+    try { return $local; } finally { pendingReturnCleanup(); }
+}
+function pendingArrayOverride(): array {
+    $local = [1];
+    try { return $local; } finally { return [2]; }
+}
+function pendingArraySameFrame(): array {
+    $local = [1];
+    for ($i = 0; $i < 3; $i++) {
+        try {
+            try { return $local; } finally { pendingReturnCleanup(); }
+        } catch (Error $error) { echo "array same ", $local[0], "\n"; }
+    }
+    return $local;
+}
 for ($i = 0; $i < 2; $i++) {
     try { pendingScalarReturn(); } catch (Error $error) { echo $error->getMessage(), "\n"; }
 }
@@ -59,10 +84,16 @@ echo pendingOverriddenReturn(), "\n";
 echo var_export(pendingCaughtReturn(), true), "\n";
 echo pendingSameFrameReturn(), "\n";
 try { pendingForeachReturn(); } catch (Error $error) { echo "foreach ", $error->getMessage(), "\n"; }
+try { pendingLocalArrayReturn(); } catch (Error $error) { echo "array ", $error->getMessage(), "\n"; }
+try { pendingNullableArrayReturn(); } catch (Error $error) { echo "nullable ", $error->getMessage(), "\n"; }
+try { pendingAssocArrayReturn(); } catch (Error $error) { echo "assoc ", $error->getMessage(), "\n"; }
+$replacement = pendingArrayOverride(); echo "array replacement ", $replacement[0], "\n";
+$continued = pendingArraySameFrame(); echo "array final ", $continued[0], "\n";
+unset($replacement, $continued);
 unset($error);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "cleanup\ncleanup\nobject cleanup\nouter\nnested cleanup\noverride outer\nreplacement\ninner caught\nfalse\nsame frame\nsame frame\nsame frame\ncontinued\nforeach cleanup\n", "{}", out.stderr);
+    assert_eq!(out.stdout, "cleanup\ncleanup\nobject cleanup\nouter\nnested cleanup\noverride outer\nreplacement\ninner caught\nfalse\nsame frame\nsame frame\nsame frame\ncontinued\nforeach cleanup\narray cleanup\nnullable cleanup\nassoc cleanup\narray replacement 2\narray same 1\narray same 1\narray same 1\narray final 1\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

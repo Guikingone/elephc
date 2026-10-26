@@ -520,6 +520,24 @@ pub(super) fn acquire_borrowed_return_value(
     crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
 }
 
+/// Identifies local-backed values whose return transfers the frame's existing reference.
+fn pending_return_uses_local_owner(ctx: &LoweringContext<'_, '_>, mut value: crate::ir::ValueId) -> bool {
+    while let Some(inst) = ctx.builder.value_defining_instruction(value) {
+        match inst.op {
+            Op::Move | Op::Borrow | Op::ArrayToMixed | Op::HashToMixed => {
+                let Some(source) = inst.operands.first() else { return false; };
+                value = *source;
+            }
+            Op::LoadLocal | Op::LoadStaticLocal => {
+                let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return false; };
+                return matches!(ctx.builder.local_kind(slot), LocalKind::PhpLocal | LocalKind::StaticLocal);
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Terminates with a return after running active finally bodies from inner to outer.
 pub(crate) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<crate::ir::ValueId>) {
     let pending = value.filter(|value| {
@@ -529,6 +547,10 @@ pub(crate) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
                 value: *value,
                 ir_type: ctx.builder.value_type(*value),
             })
+            // Concrete local container reads are only provisional owners. Their
+            // final return transfers the local reference; parking it a second
+            // time would let unwind cleanup release that reference twice.
+            && !pending_return_uses_local_owner(ctx, *value)
     }).map(|value| {
         let ty = ctx.builder.value_php_type(value);
         let name = ctx.declare_owned_hidden_temp(ty.clone());

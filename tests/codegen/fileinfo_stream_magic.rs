@@ -137,6 +137,7 @@ unset($f, $stream, $self, $scheme, $code, $e);
             ("normal", r#"stream_wrapper_register("castfalse", "FileinfoCastFalse"); $f = new finfo(FILEINFO_MIME_TYPE); $f->file("castfalse://x"); stream_wrapper_unregister("castfalse"); unset($f);"#),
             ("invalid", r#"stream_wrapper_register("casttruestring", "FileinfoCastTrueString"); $f = new finfo(FILEINFO_MIME_TYPE); try { $f->file("casttruestring://x"); } catch (Throwable $e) { echo $e->getMessage(); } stream_wrapper_unregister("casttruestring"); unset($f, $e);"#),
             ("handler", r#"stream_wrapper_register("castmissing", "FileinfoCastMissing"); $f = new finfo(FILEINFO_MIME_TYPE); set_error_handler(function(int $level, string $message): bool { throw new Error("cast warning"); }); try { $f->file("castmissing://x"); } catch (Throwable $e) { echo $e->getMessage(); } restore_error_handler(); stream_wrapper_unregister("castmissing"); unset($f, $e);"#),
+            ("eval-callback", r#"stream_wrapper_register("castfalse", "FileinfoCastFalse"); $f = new finfo(FILEINFO_MIME_TYPE); $code = $argc > 0 ? 'echo $f->file("castfalse://x");' : ''; eval($code); stream_wrapper_unregister("castfalse"); unset($f, $code);"#),
             ("eval-invalid", r#"stream_wrapper_register("casttruestring", "FileinfoCastTrueString"); $f = new finfo(FILEINFO_MIME_TYPE); try { $f->file("casttruestring://x"); } catch (Throwable $e) { echo $e->getMessage(); } $code = $argc > 0 ? 'echo "";' : ''; eval($code); stream_wrapper_unregister("casttruestring"); unset($f, $e, $code);"#),
             ("resource", r#"stream_wrapper_register("castresource", "FileinfoCastResource"); $f = new finfo(FILEINFO_MIME_TYPE); echo $f->file("castresource://x"); stream_wrapper_unregister("castresource"); unset($f);"#),
             ("empty-array", r#"stream_wrapper_register("castemptyarray", "FileinfoCastEmptyArray"); $f = new finfo(FILEINFO_MIME_TYPE); echo $f->file("castemptyarray://x"); stream_wrapper_unregister("castemptyarray"); unset($f);"#),
@@ -147,8 +148,18 @@ unset($f, $stream, $self, $scheme, $code, $e);
             ("loop-eval-invalid", r#"stream_wrapper_register("castint", "FileinfoCastInt"); stream_wrapper_register("casttruestring", "FileinfoCastTrueString"); stream_wrapper_register("casttruefloat", "FileinfoCastTrueFloat"); stream_wrapper_register("casttruearray", "FileinfoCastTrueArray"); $f = new finfo(FILEINFO_MIME_TYPE); foreach (["castint", "casttruestring", "casttruefloat", "casttruearray"] as $scheme) { try { $f->file($scheme . "://x"); } catch (Throwable $e) { echo $e->getMessage(); } } $code = $argc > 0 ? 'echo "";' : ''; eval($code); foreach (["castint", "casttruestring", "casttruefloat", "casttruearray"] as $scheme) { stream_wrapper_unregister($scheme); } unset($f, $scheme, $e, $code);"#),
             ("self", r#"stream_wrapper_register("castself", "FileinfoCastSelf"); set_error_handler(function(int $level, string $message): bool { return true; }); $self = fopen("castself://x", "rb"); FileinfoCastSelf::$stream = $self; mime_content_type($self); FileinfoCastSelf::$stream = null; fclose($self); restore_error_handler(); stream_wrapper_unregister("castself"); unset($self);"#),
         ] {
-            let (control, _) = compile_and_run_with_heap_debug_and_asm(&format!("{declarations}\n{tail}"));
+            let (control, control_asm) = compile_and_run_with_heap_debug_and_asm(&format!("{declarations}\n{tail}"));
             eprintln!("cast ownership control {label}: {}\n{}", control.stdout, control.stderr);
+            if label == "eval-callback" && !control.stderr.contains("HEAP DEBUG: leak summary: clean") {
+                let mut selected = false;
+                for line in control_asm.lines().filter(|line| {
+                    let instruction = line.trim();
+                    if instruction.starts_with("__elephc_eval_method_") && instruction.ends_with(':') {
+                        selected = instruction.starts_with("__elephc_eval_method_finfo_finfo_file");
+                    }
+                    selected
+                }).take(2000) { eprintln!("eval file bridge: {line}"); }
+            }
         }
     }
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
