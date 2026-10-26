@@ -238,7 +238,7 @@ fn test_fileinfo_relative_database_expansion() {
     let out = compile_and_run(r#"<?php
 $cwd = getcwd();
 $f = new finfo(FILEINFO_MIME_TYPE);
-try { new finfo(0, "./absent-part/../missing.mgc"); } catch (ErrorException $e) {
+try { new finfo(0, "./absent-part/../missing.mgc"); } catch (Exception $e) {
     echo $e->getMessage() === 'finfo::__construct(): Failed to load magic database at "' . $cwd . '/missing.mgc"' ? "constructor\n" : $e->getMessage();
 }
 set_error_handler(function(int $n, string $message) use ($cwd): bool {
