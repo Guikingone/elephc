@@ -93,7 +93,7 @@ restore_error_handler();
 foreach (["castmissing", "castfalse", "castint", "castresource", "castemptyarray", "castzerostring", "castzerofloat", "casttruestring", "casttruefloat", "casttruearray", "castself"] as $scheme) { stream_wrapper_unregister($scheme); }
 unset($f, $stream, $self, $scheme, $code, $e);
 "#;
-    let (out, _) = compile_and_run_with_heap_debug_and_asm(source);
+    let (out, original_asm) = compile_and_run_with_heap_debug_and_asm(source);
     let mut expected = String::new();
     for function in ["finfo::file", "finfo_file", "mime_content_type"] {
         expected.push_str(&format!("{function}(): FileinfoCastMissing::stream_cast is not implemented!\nclose\ntext/plain\n"));
@@ -112,6 +112,26 @@ unset($f, $stream, $self, $scheme, $code, $e);
     assert_eq!(out.stdout, expected);
     assert!(out.stderr.contains("finfo::file(): FileinfoCastInt::stream_cast must return a stream resource"), "{}", out.stderr);
     if !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+        let mut selected = false;
+        let mut reader_end: Option<String> = None;
+        for line in original_asm.lines().filter(|line| {
+            if line.contains("@fn ") && (line.contains("symbol=main ") || line.ends_with("symbol=main") || line.contains("symbol=_main ") || line.ends_with("symbol=_main")) { selected = true; }
+            let include = selected;
+            if line.contains("@endfn ") { selected = false; }
+            if !include { return false; }
+            let instruction = line.trim();
+            if let Some(end) = &reader_end {
+                if instruction != end { return false; }
+                reader_end = None;
+            }
+            if (instruction.starts_with("jmp ") || instruction.starts_with("b "))
+                && instruction.contains("_backtrace_call_site_")
+            {
+                reader_end = instruction.split_whitespace().last().map(|label| format!("{label}:"));
+                return false;
+            }
+            true
+        }).take(5000) { eprintln!("cast original: {line}"); }
         let declarations = source.split("\nstream_wrapper_register(").next().unwrap();
         for (label, tail) in [
             ("normal", r#"stream_wrapper_register("castfalse", "FileinfoCastFalse"); $f = new finfo(FILEINFO_MIME_TYPE); $f->file("castfalse://x"); stream_wrapper_unregister("castfalse"); unset($f);"#),

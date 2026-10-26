@@ -2626,6 +2626,8 @@ impl RuntimeFnId {
                 // `value_is_scratch_string` classify the return-mode string as concat scratch and
                 // skip its release, leaking one block per `print_r($v, true)` call.
                 | RuntimeFnId::PrintR
+                // Stream writes box a fresh byte count or false and never return input storage.
+                | RuntimeFnId::Fwrite
                 | RuntimeFnId::PtrReadString
                 | RuntimeFnId::ElephcPtrReadString
                 // Filter attachment boxes a new resource or false. The helper retains

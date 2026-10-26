@@ -86,6 +86,7 @@ mod match_expr;
 mod append_updates;
 pub(crate) use append_updates::store_alias as store_append_update_cell;
 mod array_access;
+mod string_offset_owners;
 mod array_access_types;
 mod ternary_cast;
 mod closures;

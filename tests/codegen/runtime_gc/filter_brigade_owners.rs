@@ -88,6 +88,7 @@ stream_filter_register("fileinfo.brigade.raw", "FileinfoRawBrigade");
 stream_filter_register("fileinfo.brigade.boxed", "FileinfoBoxedBrigade");
 stream_filter_register("fileinfo.brigade.throw", "FileinfoThrowingBrigade");
 $stream = fopen("php://temp", "w+b");
+echo fwrite($stream, str_repeat("s", $argc + 3)), "\n";
 $bucket = stream_bucket_new($stream, str_repeat("new", 7));
 echo $bucket->data, ":", $bucket->datalen, "\n";
 unset($bucket); fclose($stream);
@@ -125,6 +126,6 @@ unset($stream, $e, $name);
         }
     }
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, format!("{}:21\n{}", "new".repeat(7), "70000:x\n70001:y\nfilter error\n".repeat(4)), "{}", out.stderr);
+    assert_eq!(out.stdout, format!("4\n{}:21\n{}", "new".repeat(7), "70000:x\n70001:y\nfilter error\n".repeat(4)), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
