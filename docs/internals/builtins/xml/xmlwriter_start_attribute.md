@@ -2,7 +2,7 @@
 title: "xmlwriter_start_attribute() - internals"
 description: "Compiler internals for xmlwriter_start_attribute(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1057
+  order: 1063
 ---
 
 ## `xmlwriter_start_attribute()` - internals

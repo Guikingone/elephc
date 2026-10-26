@@ -2,7 +2,7 @@
 title: "xmlwriter_write_dtd_entity()"
 description: "Writes a complete DTD entity declaration."
 sidebar:
-  order: 1077
+  order: 1083
 ---
 
 ## xmlwriter_write_dtd_entity()
