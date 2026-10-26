@@ -452,6 +452,18 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.infer_runtime_iterated_call_arg_type(expr, env)
+    }
+
+    /// Infers one argument for a call surface that owns runtime array or Traversable iteration.
+    ///
+    /// Besides descriptor invokers, `array_push` uses this for its associative receiver
+    /// coordinator, which stages every unpacked value before mutating the receiver.
+    pub(crate) fn infer_runtime_iterated_call_arg_type(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
         match &expr.kind {
             ExprKind::Spread(inner) => {
                 self.infer_spread_element_type(inner, expr.span, env, true)

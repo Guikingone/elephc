@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Expression inference shares environments with statement checking, so variable and effect updates must stay synchronized.
+//! - Call surfaces that own runtime iteration visit spread-source effects without imposing the
+//!   ordinary direct-call array-only constraint before their authoritative checker runs.
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -356,10 +358,13 @@ impl Checker {
                             effects?;
                             continue;
                         }
-                        if php_symbol_key(builtin_name) == "call_user_func"
-                            && idx > 0
+                        let runtime_iterated_spread = idx > 0
                             && matches!(arg.kind, ExprKind::Spread(_))
-                        {
+                            && matches!(
+                                php_symbol_key(builtin_name).as_str(),
+                                "array_push" | "call_user_func"
+                            );
+                        if runtime_iterated_spread {
                             self.infer_spread_source_assignment_effects(arg, env)?;
                         } else {
                             self.infer_type_with_assignment_effects(arg, env)?;

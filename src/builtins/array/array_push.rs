@@ -11,6 +11,8 @@
 //!   ordinary PHP (`array_push($a, 3, 4)`) with an arity error (issue #677).
 //! - The `ref` marker on `array` is mandatory — it is what makes by-reference mutation
 //!   lower correctly (ir_lower reads `ref_params` from the registry sig).
+//! - `lazy_check: true` lets this builtin admit generator and `Traversable` spreads through
+//!   its runtime iterator coordinator before generic call inference rejects non-array unpacking.
 //! - Returns `Int` — the new number of elements, as PHP does and as the `array_unshift`
 //!   sibling already did. It used to return `Void`, so `$n = array_push($a, 1)` read `NULL`.
 
@@ -21,6 +23,7 @@ use crate::types::PhpType;
 builtin! {
     contract: "array_push",
     check: check,
+    lazy_check: true,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayPush,
     ),
@@ -29,12 +32,17 @@ builtin! {
 /// Validates indexed, associative and boxed PHP array receivers for an `array_push` call.
 ///
 /// Arity (at least 1 arg) is pre-validated by `check_arity`. Every argument is inferred so the
-/// appended values still produce their side effects. The receiver must be indexed, associative
-/// or a declared PHP array with boxed storage. Returns the new element count as `Int`.
+/// appended values still produce their side effects; spreads may be arrays or Traversables because
+/// the associative coordinator owns their runtime iterator walk. The receiver must be indexed,
+/// associative or a declared PHP array with boxed storage. Returns the new element count as `Int`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     for index in 1..cx.args.len() {
-        cx.checker.infer_type(&cx.args[index], cx.env)?;
+        if matches!(cx.args[index].kind, crate::parser::ast::ExprKind::Spread(_)) {
+            cx.checker.infer_runtime_iterated_call_arg_type(&cx.args[index], cx.env)?;
+        } else {
+            cx.checker.infer_type(&cx.args[index], cx.env)?;
+        }
     }
     let denied_place = cx.checker.record_array_push_reference_place(&cx.args[0], cx.env)?;
     if denied_place || matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || arr_ty.is_php_array() {

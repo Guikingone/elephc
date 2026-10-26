@@ -272,6 +272,53 @@ echo $n, ",", $m, "|", json_encode($h), "|", json_encode($copy), "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Runtime unpack classifies canonical integer strings as positional for generators and iterators.
+#[test]
+fn test_associative_push_runtime_unpack_numeric_string_keys_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function numericStringKeyGenerator(): Generator {
+    yield "10" => 7;
+    yield "-2" => 8;
+    yield "0" => 9;
+    yield "-9223372036854775808" => 10;
+}
+$generated = ["a" => 1, "b" => "x"];
+echo array_push($generated, ...numericStringKeyGenerator()), "|", json_encode($generated), "\n";
+class NumericStringKeyBox { public array $values = ["a" => 1, "b" => "x"]; }
+$box = new NumericStringKeyBox();
+echo array_push($box->values, ...numericStringKeyGenerator()), "|", json_encode($box->values), "\n";
+class NumericStringKeyIterator implements Iterator {
+    private int $position = 0;
+    public function rewind(): void { $this->position = 0; }
+    public function valid(): bool { return $this->position < 3; }
+    public function current(): mixed { return 20 + $this->position; }
+    public function key(): mixed { return ["10", "-2", "0"][$this->position]; }
+    public function next(): void { $this->position = $this->position + 1; }
+}
+function opaqueNumericStringKeyIterator(): mixed { return new NumericStringKeyIterator(); }
+$iterated = ["a" => 1, "b" => "x"];
+echo array_push($iterated, ...opaqueNumericStringKeyIterator()), "|", json_encode($iterated), "\n";
+function invalidStringKeyGenerator(string $key): Generator { yield $key => 99; }
+foreach (["01", "+10", "9223372036854775808", "-9223372036854775809"] as $key) {
+    $unchanged = ["a" => 1, "b" => "x"];
+    try { array_push($unchanged, ...invalidStringKeyGenerator($key)); }
+    catch (ArgumentCountError $error) {
+        echo $key, "|", $error->getMessage(), "|", json_encode($unchanged), "\n";
+    }
+}
+"#);
+    assert_eq!(out.stdout, concat!(
+        "6|{\"a\":1,\"b\":\"x\",\"0\":7,\"1\":8,\"2\":9,\"3\":10}\n",
+        "6|{\"a\":1,\"b\":\"x\",\"0\":7,\"1\":8,\"2\":9,\"3\":10}\n",
+        "5|{\"a\":1,\"b\":\"x\",\"0\":20,\"1\":21,\"2\":22}\n",
+        "01|array_push() does not accept unknown named parameters|{\"a\":1,\"b\":\"x\"}\n",
+        "+10|array_push() does not accept unknown named parameters|{\"a\":1,\"b\":\"x\"}\n",
+        "9223372036854775808|array_push() does not accept unknown named parameters|{\"a\":1,\"b\":\"x\"}\n",
+        "-9223372036854775809|array_push() does not accept unknown named parameters|{\"a\":1,\"b\":\"x\"}\n",
+    ), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Later arguments update the selected live property, static property or element before pushing.
 #[test]
 fn test_associative_push_nonlocal_argument_effects_is_heap_clean() {

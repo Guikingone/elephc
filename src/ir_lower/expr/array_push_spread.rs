@@ -176,12 +176,18 @@ fn check_key(
     let named = ctx.emit_value(Op::TypePredicate, vec![key.value],
         Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::String)), PhpType::Bool,
         Op::TypePredicate.default_effects(), Some(span));
-    let string = ctx.builder.create_named_block("push.unpack.named", Vec::new());
-    let integer = ctx.builder.create_named_block("push.unpack.positional", Vec::new());
+    let string = ctx.builder.create_named_block("push.unpack.string", Vec::new());
+    let named_string = ctx.builder.create_named_block("push.unpack.named", Vec::new());
+    let non_string = ctx.builder.create_named_block("push.unpack.non_string", Vec::new());
+    let positional = ctx.builder.create_named_block("push.unpack.positional", Vec::new());
     let done = ctx.builder.create_named_block("push.unpack.key.done", Vec::new());
     ctx.builder.terminate(Terminator::CondBr { cond: named.value,
-        then_target: string, then_args: Vec::new(), else_target: integer, else_args: Vec::new() });
+        then_target: string, then_args: Vec::new(), else_target: non_string, else_args: Vec::new() });
     ctx.builder.position_at_end(string);
+    let positional_string = runtime_string_key_is_positional(ctx, key, span);
+    ctx.builder.terminate(Terminator::CondBr { cond: positional_string.value,
+        then_target: positional, then_args: Vec::new(), else_target: named_string, else_args: Vec::new() });
+    ctx.builder.position_at_end(named_string);
     let names = ctx.load_local(names_slot, Some(span));
     let duplicate = ctx.emit_value(Op::DescriptorArgKeyExists, vec![names.value, key.value], None,
         PhpType::Bool, Op::DescriptorArgKeyExists.default_effects(), Some(span));
@@ -200,11 +206,13 @@ fn check_key(
     ctx.store_local(named_slot, yes, PhpType::Bool, Some(span));
     ctx.store_local(source_named, yes, PhpType::Bool, Some(span));
     ctx.builder.terminate(Terminator::Br { target: done, args: Vec::new() });
-    ctx.builder.position_at_end(integer);
+    ctx.builder.position_at_end(non_string);
     let integer_key = ctx.emit_value(Op::TypePredicate, vec![key.value],
         Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Int)), PhpType::Bool,
         Op::TypePredicate.default_effects(), Some(span));
     require(ctx, integer_key, "Error", "Keys must be of type int|string during argument unpacking", true, span);
+    ctx.builder.terminate(Terminator::Br { target: positional, args: Vec::new() });
+    ctx.builder.position_at_end(positional);
     let named_before = ctx.load_local(source_named, Some(span));
     require(ctx, named_before, "Error", "Cannot use positional argument after named argument during unpacking", false, span);
     ctx.builder.terminate(Terminator::Br { target: done, args: Vec::new() });
@@ -213,6 +221,23 @@ fn check_key(
     if ctx.value_is_owning_temporary(key) {
         crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
     }
+}
+
+/// Applies PHP array-key canonicalization to a runtime string without changing the key itself.
+fn runtime_string_key_is_positional(
+    ctx: &mut LoweringContext<'_, '_>, key: LoweredValue, span: Span,
+) -> LoweredValue {
+    let integer = ctx.emit_value(Op::Cast, vec![key.value],
+        Some(Immediate::CastTarget(IrType::I64)), PhpType::Int,
+        Op::Cast.default_effects(), Some(span));
+    let round_trip = ctx.emit_value(Op::IToStr, vec![integer.value], None, PhpType::Str,
+        Op::IToStr.default_effects(), Some(span));
+    let canonical = ctx.emit_value(Op::StrictEq, vec![key.value, round_trip.value], None,
+        PhpType::Bool, Op::StrictEq.default_effects(), Some(span));
+    if ctx.value_is_owning_temporary(round_trip) {
+        crate::ir_lower::ownership::release_if_owned(ctx, round_trip, Some(span));
+    }
+    canonical
 }
 
 /// Walks an argument snapshot using the ordinary target-neutral iterator contract.

@@ -6,8 +6,9 @@
 //!
 //! Key details:
 //! - Every supported target must emit the shared hash append and count paths.
+//! - Runtime string-key canonicalization must lower through target-neutral cast and comparison ops.
 
-/// Typed hashes, aliases and Mixed entries reach target-aware assembly on every supported target.
+/// Typed hashes, aliases, runtime unpacks and Mixed entries emit on every supported target.
 #[test]
 fn associative_array_push_emits_on_every_supported_target() {
     let source = r#"<?php
@@ -20,6 +21,8 @@ $mixed = ["a" => 1, "b" => "s"];
 array_push($mixed, false, null, [1]);
 $tail = [$argc, 5];
 array_push($mixed, ...$tail);
+function targetNumericStringKeys(): Generator { yield "10" => 6; }
+array_push($mixed, ...targetNumericStringKeys());
 class TargetPushBox { public array $items = ["a" => 1]; }
 $box = new TargetPushBox();
 array_push($box->items, ...$tail);
