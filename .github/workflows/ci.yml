@@ -262,6 +262,7 @@ jobs:
           cargo test -p elephc --test codegen_tests test_fileinfo_pointer_read_string_alias_owners || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_lifecycle_owners || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_brigade_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_loop_condition_assignment_owners || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2 || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array || fileinfo_test_status=1
@@ -458,6 +459,7 @@ jobs:
           cargo test -p elephc --test codegen_tests test_fileinfo_pointer_read_string_alias_owners || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_lifecycle_owners || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_brigade_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_loop_condition_assignment_owners || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2 || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array || fileinfo_test_status=1
@@ -646,6 +648,7 @@ jobs:
           cargo test -p elephc --test codegen_tests test_fileinfo_pointer_read_string_alias_owners || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_lifecycle_owners || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_brigade_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_loop_condition_assignment_owners || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2 || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array || fileinfo_test_status=1

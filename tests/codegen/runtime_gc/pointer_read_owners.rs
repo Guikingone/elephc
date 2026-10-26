@@ -56,6 +56,7 @@ unset($a, $b, $c, $reader);
             ("loop-local", r#"$p = malloc(3); ptr_write_string($p, "A\0B"); $reader = new FileinfoPointerCopy(); for ($i = 0; $i < 40; $i++) { $c = $reader->local($p); } free($p); echo strlen($c); unset($c, $reader);"#),
             ("loop-direct", r#"$p = malloc(3); ptr_write_string($p, "A\0B"); for ($i = 0; $i < 40; $i++) { $c = __elephc_ptr_read_string($p, 3); } free($p); echo strlen($c); unset($c);"#),
             ("loop-boxed", r#"$p = malloc(3); ptr_write_string($p, "A\0B"); $reader = new FileinfoPointerCopy(); for ($i = 0; $i < 40; $i++) { $b = $reader->direct($p); } free($p); echo strlen($b); unset($b, $reader);"#),
+            ("loop-local-index", r#"$p = malloc(3); ptr_write_string($p, "A\0B"); $reader = new FileinfoPointerCopy(); for ($i = 0; $i < 40; $i++) { $c = $reader->local($p); } free($p); echo ord($c[2]); unset($c, $reader);"#),
             ("raw-index", r#"$p = malloc(3); ptr_write_string($p, "A\0B"); $reader = new FileinfoPointerCopy(); $c = $reader->local($p); free($p); echo ord($c[2]); unset($c, $reader);"#),
             ("boxed-index", r#"$p = malloc(3); ptr_write_string($p, "A\0B"); $a = fileinfoPublicCopy($p); free($p); echo ord($a[1]); unset($a);"#),
             ("boxed-length", r#"$p = malloc(3); ptr_write_string($p, "A\0B"); $a = fileinfoPublicCopy($p); free($p); echo strlen($a); unset($a);"#),

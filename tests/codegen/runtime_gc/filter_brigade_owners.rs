@@ -10,6 +10,28 @@
 
 use crate::support::*;
 
+/// Repeated conditions and updates retire first-assigned boxed and raw string owners.
+#[test]
+fn test_fileinfo_loop_condition_assignment_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nextFileinfoLoopOwner(int &$remaining): mixed {
+    if ($remaining-- <= 0) { return null; }
+    return str_repeat("x", 32);
+}
+$seen = 0; $remaining = 5;
+while ($whileOwner = nextFileinfoLoopOwner($remaining)) { $seen++; }
+$remaining = 5;
+do { $seen++; } while ($doOwner = nextFileinfoLoopOwner($remaining));
+for ($remaining = 5; $forOwner = nextFileinfoLoopOwner($remaining);) { $seen++; }
+for ($i = 0; $i < 5; $updateOwner = str_repeat("u", 32)) { $i++; $seen++; }
+echo $seen, "\n";
+unset($whileOwner, $doOwner, $forOwner, $updateOwner);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "21\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Native brigade graphs retire on return and throw, including retained property getters.
 #[test]
 fn test_fileinfo_user_filter_brigade_owners() {

@@ -141,12 +141,25 @@ stream_wrapper_unregister("statorder"); unset($f, $error);
             eprintln!("stat order ownership control {label}: {}\n{}", control.stdout, control.stderr);
             if !control.stderr.contains("HEAP DEBUG: leak summary: clean") {
                 let mut selected = false;
+                let mut reader_end: Option<String> = None;
                 for line in asm.lines().filter(|line| {
                     if line.contains("@fn ") && line.contains("__elephc_close_streams") { selected = true; }
                     let include = selected;
                     if line.contains("@endfn ") { selected = false; }
-                    include
-                }).take(2200) { eprintln!("{line}"); }
+                    if !include { return false; }
+                    let instruction = line.trim();
+                    if let Some(end) = &reader_end {
+                        if instruction != end { return false; }
+                        reader_end = None;
+                    }
+                    if (instruction.starts_with("jmp ") || instruction.starts_with("b "))
+                        && instruction.contains("_backtrace_call_site_")
+                    {
+                        reader_end = instruction.split_whitespace().last().map(|label| format!("{label}:"));
+                        return false;
+                    }
+                    true
+                }).take(3200) { eprintln!("{line}"); }
             }
         }
     }
