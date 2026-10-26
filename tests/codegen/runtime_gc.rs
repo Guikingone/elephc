@@ -26,8 +26,6 @@ mod string_append;
 mod bcmath_number;
 #[path = "runtime_gc/basics.rs"]
 mod basics;
-#[path = "runtime_gc/memory_metrics.rs"]
-mod memory_metrics;
 #[path = "runtime_gc/large_unary_string_results.rs"]
 mod large_unary_string_results;
 #[path = "runtime_gc/static_local_initializers.rs"]
@@ -191,6 +189,8 @@ mod split_remainders;
 mod implode_boxed_operand;
 #[path = "runtime_gc/heap_codegen.rs"]
 mod heap_codegen;
+#[path = "runtime_gc/memory_metrics.rs"]
+mod memory_metrics;
 #[path = "runtime_gc/resource_scope_cleanup.rs"]
 mod resource_scope_cleanup;
 #[path = "runtime_gc/resource_inventory.rs"]
