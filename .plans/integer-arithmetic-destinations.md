@@ -16,11 +16,15 @@ without heap allocation and preserve each subtree's exact integer-to-float promo
 Explicit integer local declarations keep this destination contract across subsequent
 statement and expression assignments. Inferred PHP locals keep their dynamic tags.
 
-Validation passed: six new codegen tests, three new EIR unit tests, six existing
+Validation passed: seven new codegen tests, four new EIR unit tests, six existing
 numeric-chain tests and three existing overflow regressions. Runtime fixtures cover
 both EIR modes with heap validation; PHP-compatible cases match PHP. Assembly emission
 passes for all five supported targets. The new scalar-local regression fails on the
 base compiler at `777b1024e2`.
+
+Redeclaring a local as `mixed` or `int|float` replaces its prior integer contract.
+The redeclaration regressions fail before that contract is cleared and pass in both
+EIR modes after the correction, preserving subsequent overflow-to-float promotion.
 
 A local one-million-iteration `intdiv(($i * $stride) + 7, 5)` loop produced the same
 checksum with the base and candidate compilers. Across three executions per binary,

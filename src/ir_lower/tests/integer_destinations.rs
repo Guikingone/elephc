@@ -56,3 +56,25 @@ echo unknown($argc), observe($argc), wide($argc), returned($argc), reference($ar
     let f = function(&module, "returned");
     assert!(f.instructions.iter().any(|inst| inst.op == Op::ReturnBoundaryMixedToInt));
 }
+
+/// A new declaration replaces the prior integer contract instead of narrowing later writes.
+#[test]
+fn integer_destinations_redeclaration_replaces_int_contract() {
+    for declaration in ["mixed", "int|float"] {
+        let source = format!(r#"<?php
+function redeclared(int $value): mixed {{
+    int $result = 0;
+    {declaration} $result = 0;
+    $result = PHP_INT_MAX + $value;
+    return $result;
+}}
+echo gettype(redeclared($argc));
+"#);
+        let module = super::lower_source(&source);
+        let f = function(&module, "redeclared");
+        assert!(f.instructions.iter().any(|inst| inst.op == Op::ICheckedAdd));
+        assert!(!f.instructions.iter().any(|inst| inst.op == Op::Cast
+            && inst.result_php_type == PhpType::Int
+            && inst.immediate == Some(Immediate::CastTarget(IrType::I64))), "{declaration}");
+    }
+}

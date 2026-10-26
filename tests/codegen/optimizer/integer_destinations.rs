@@ -78,6 +78,29 @@ echo $value, '|', $total;
     }
 }
 
+/// Redeclaring an int local with a wider type preserves subsequent float promotion.
+#[test]
+fn test_integer_destinations_redeclaration_keeps_float_promotion() {
+    let source = r#"<?php
+function redeclaredMixed(int $one): mixed {
+    int $value = 0;
+    mixed $value = 0;
+    $value = PHP_INT_MAX + $one;
+    return $value;
+}
+function redeclaredUnion(int $one): mixed {
+    int $value = 0;
+    int|float $value = 0;
+    $value = PHP_INT_MAX + $one;
+    return $value;
+}
+echo gettype(redeclaredMixed($argc)), '|', gettype(redeclaredUnion($argc));
+"#;
+    for optimized in [false, true] {
+        assert_eq!(run(source, optimized).0, "double|double");
+    }
+}
+
 /// Coerces direct, method, static, closure, named and statically unpacked integer operands.
 #[test]
 fn test_integer_destinations_call_surfaces_allocate_no_arithmetic_cells() {

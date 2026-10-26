@@ -36,6 +36,8 @@ pub(super) fn lower_typed_assign(
     let lowered = coerce_declared_array_storage(ctx, lowered, &php_type, span);
     if php_type == PhpType::Int {
         ctx.integer_local_declarations.insert(name.to_owned());
+    } else {
+        ctx.integer_local_declarations.remove(name);
     }
     ctx.declare_local(name, php_type.clone());
     ctx.store_local(name, lowered, php_type, Some(span));
