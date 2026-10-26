@@ -265,3 +265,67 @@ fn test_buffer_numeric_accumulator_rejects_boxed_truthiness_warning_handler() {
     assert!(!ir.contains("buffer_resolve"), "{ir}");
     assert_both_modes_fail_after(BOXED_NAN_TRUTHINESS, "before\n", "use of buffer after buffer_free()");
 }
+
+/// A non-inlined predicate's summary must expose its warning to the numeric caller loop.
+#[test]
+fn test_buffer_numeric_accumulator_rejects_callee_truthiness_warning_handler() {
+    let source = NAN_TRUTHINESS.replace(
+        "function scan_truthy(",
+        "function warning_predicate(float $value, int $depth): bool {\n    if ($depth === 0) { return $value ? true : false; }\n    return warning_predicate($value, $depth >> 1);\n}\nfunction scan_truthy(",
+    ).replace("if ($input[$i])", "if (warning_predicate($input[$i], 1))");
+    let ir = function_ir(&source, true, "scan_truthy");
+    let call = ir.lines().find(|line| line.contains("= call ")).expect("non-inlined predicate call");
+    assert!(call.contains("may_warn"), "{ir}");
+    assert!(!ir.contains("buffer_resolve"), "{ir}");
+    assert_both_modes_fail_after(&source, "before\n", "use of buffer after buffer_free()");
+}
+
+/// A preheader warning must finish before the loop's descriptor is resolved.
+#[test]
+fn test_buffer_numeric_accumulator_positions_resolver_after_truthiness_warning() {
+    let source = NAN_TRUTHINESS.replace(
+        "    $hits = 0;\n    for ($i = 0; $i < $n; $i++) { if ($input[$i]) { $hits++; } }\n    return $hits;",
+        "    $flag = !$value;\n    for ($i = 0; $i < $n; $i++) { $input[$i] = 1.0; }\n    return $flag;",
+    ).replace("buffer<float> $input, int $n): mixed", "buffer<float> $input, int $n, float $value): bool")
+        .replace("scan_truthy($input, 3);", "scan_truthy($input, 3, NAN);");
+    let ir = function_ir(&source, true, "scan_truthy");
+    let preheader = ir.split("for.cond(").next().expect("loop preheader");
+    let truthiness = preheader.find("= is_truthy ").expect("preheader warning");
+    let resolver = preheader.find("= buffer_resolve ").expect("hoisted resolver");
+    assert!(truthiness < resolver, "{ir}");
+    assert_both_modes_fail_after(&source, "before\n", "use of buffer after buffer_free()");
+}
+
+/// Straight-line property accesses cannot share a descriptor across a truthiness warning.
+#[test]
+fn test_buffer_numeric_accumulator_blocks_property_reuse_across_truthiness_warning() {
+    let source = r#"<?php
+packed class TruthyCell { public int $value; }
+class TruthyPropertyReader {
+    public buffer<TruthyCell> $cells;
+    public float $ratio;
+    public function __construct(buffer<TruthyCell> $cells) { $this->cells = $cells; $this->ratio = NAN; }
+    public function read(): int {
+        $first = $this->cells[0]->value;
+        $flag = !$this->ratio;
+        $second = $this->cells[1]->value;
+        return $flag ? $first : $second;
+    }
+}
+$cells = buffer_new<TruthyCell>(2);
+$reader = new TruthyPropertyReader($cells);
+set_error_handler(function (int $errno, string $message) use ($reader): bool {
+    $buffer = $reader->cells;
+    buffer_free($buffer);
+    return $errno > 0 || $message !== '';
+});
+echo "before\n";
+$reader->read();
+echo "after\n";
+"#;
+    let ir = function_ir(source, true, "TruthyPropertyReader::read");
+    assert!(ir.contains("= is_truthy "), "{ir}");
+    assert_eq!(ir.matches("= buffer_get ").count(), 2, "{ir}");
+    assert!(!ir.contains("buffer_resolve"), "{ir}");
+    assert_both_modes_fail_after(source, "before\n", "use of buffer after buffer_free()");
+}

@@ -678,6 +678,8 @@ Float-to-int range checks and NaN-to-bool coercions can run a PHP error handler,
 so raw floats and boxed numeric operands keep these casts as barriers.
 Implicit truthiness checks of floats, Mixed values and unions are barriers too,
 because a NaN-to-bool warning handler can invalidate the buffer between accesses.
+Callable effect summaries retain this warning so a non-inlined predicate cannot
+hide the same invalidation from its caller's loop.
 The numeric-domain analysis caches slot access tables, escape and
 dominance information, and definitive failures for each immutable function.
 Positive cycle facts become reusable only after the entire query succeeds.

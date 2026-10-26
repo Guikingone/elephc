@@ -160,6 +160,11 @@ fn refined_instruction_effects(
     context: &RefinementContext<'_>,
 ) -> Effects {
     match instruction.op {
+        // Float and boxed truthiness may dispatch a PHP 8.5 NaN warning handler.
+        Op::IsTruthy if instruction.operands.first().and_then(|&value| function.value(value))
+            .is_none_or(|value| matches!(value.php_type, PhpType::Float | PhpType::Mixed | PhpType::Union(_))) => {
+            instruction.effects | Effects::MAY_WARN
+        }
         Op::Call => direct_call_effects(instruction, context).unwrap_or(instruction.effects),
         Op::StaticMethodCall => {
             static_call_effects(instruction, context).unwrap_or(instruction.effects)
