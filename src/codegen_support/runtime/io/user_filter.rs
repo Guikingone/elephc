@@ -279,9 +279,13 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x7, #32]");                                   // slot 4 = params property byte offset
     emitter.instruction("cbz x9, __rt_sfau_params_no_slot");                    // no params slot → release the unused boxed value
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload boxed params for transfer into the object
+    emitter.instruction("ldr x12, [x0, x9]");                                   // preserve the initialized property's previous owner
     emitter.instruction("str x10, [x0, x9]");                                   // store params in the inherited public property slot
     emitter.instruction("add x11, x0, x9");                                     // compute the params property slot address
     emitter.instruction("str xzr, [x11, #8]");                                  // clear the high word for the Mixed pointer slot
+    emitter.instruction("mov x0, x12");                                         // release the displaced default after publishing its replacement
+    emitter.instruction("bl __rt_decref_any");                                  // the object guard owns the replacement if cleanup throws
+    emitter.instruction("ldr x0, [sp, #32]");                                   // restore the guarded receiver after property cleanup
     emitter.instruction("b __rt_sfau_params_done");                             // skip unused-params release
     emitter.label("__rt_sfau_params_no_slot");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload boxed params that no object slot will own
@@ -417,8 +421,12 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r9, r9");                                         // does the filter class expose params?
     emitter.instruction("jz __rt_sfau_params_no_slot_x86");                     // no params slot → release the unused boxed value
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload boxed params for transfer into the object
+    emitter.instruction("mov r11, QWORD PTR [rax + r9]");                       // preserve the initialized property's previous owner
     emitter.instruction("mov QWORD PTR [rax + r9], r10");                       // store params in the inherited public property slot
     emitter.instruction("mov QWORD PTR [rax + r9 + 8], 0");                     // clear the high word for the Mixed pointer slot
+    emitter.instruction("mov rax, r11");                                        // release the displaced default after publishing its replacement
+    emitter.instruction("call __rt_decref_any");                                // the object guard owns the replacement if cleanup throws
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // restore the guarded receiver after property cleanup
     emitter.instruction("jmp __rt_sfau_params_done_x86");                       // skip unused-params release
     emitter.label("__rt_sfau_params_no_slot_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload boxed params that no object slot will own

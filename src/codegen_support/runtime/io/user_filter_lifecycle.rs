@@ -23,9 +23,9 @@ pub(crate) fn emit_user_filter_release_fd(emitter: &mut Emitter) {
     emitter.comment("--- runtime: user_filter_release_fd ---");
     emitter.label_global("__rt_user_filter_release_fd");
     emitter.instruction(if arm { "mov x1, #0" } else { "xor esi, esi" });       // ordinary close retires every attached direction
-    abi::emit_jump(emitter, "__rt_user_filter_retire_fd");
+    // Cross-entry jumps must name the global body so Mach-O keeps its separate atom.
+    abi::emit_jump(emitter, "__rt_user_filter_reject_fd");
     emitter.label_global("__rt_user_filter_reject_fd");
-    emitter.label("__rt_user_filter_retire_fd");
     // -- detach both direction owners before publishing their exceptional cleanup --
     // Frame112: fd0, objects8/16, rejected object24, guards32/64, caller linkage96.
     abi::emit_frame_prologue(emitter, 112);

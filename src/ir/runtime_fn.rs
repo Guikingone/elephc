@@ -2306,6 +2306,8 @@ impl RuntimeFnId {
         if matches!(
             self,
             RuntimeFnId::IntvalBase
+                // The first byte is a scalar integer, independent of its source string.
+                | RuntimeFnId::Ord
                 // Raw-memory writes return only the byte count, never the borrowed input string.
                 | RuntimeFnId::PtrWriteString
                 | RuntimeFnId::ElephcPtrWriteString

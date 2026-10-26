@@ -15,7 +15,7 @@ use crate::support::*;
 #[test]
 fn test_fileinfo_stream_cast_callbacks() {
     if fileinfo_native::skip("test_fileinfo_stream_cast_callbacks") { return; }
-    let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+    let source = r#"<?php
 class FileinfoCastMissing {
     public $context;
     protected int $position = 0;
@@ -92,7 +92,8 @@ try { $f->file("castmissing://x"); } catch (Throwable $e) { echo $e->getMessage(
 restore_error_handler();
 foreach (["castmissing", "castfalse", "castint", "castresource", "castemptyarray", "castzerostring", "castzerofloat", "casttruestring", "casttruefloat", "casttruearray", "castself"] as $scheme) { stream_wrapper_unregister($scheme); }
 unset($f, $stream, $self, $scheme, $code, $e);
-"#);
+"#;
+    let (out, _) = compile_and_run_with_heap_debug_and_asm(source);
     let mut expected = String::new();
     for function in ["finfo::file", "finfo_file", "mime_content_type"] {
         expected.push_str(&format!("{function}(): FileinfoCastMissing::stream_cast is not implemented!\nclose\ntext/plain\n"));
@@ -110,6 +111,18 @@ unset($f, $stream, $self, $scheme, $code, $e);
     assert!(out.success, "fileinfo program failed: {}", out.stderr);
     assert_eq!(out.stdout, expected);
     assert!(out.stderr.contains("finfo::file(): FileinfoCastInt::stream_cast must return a stream resource"), "{}", out.stderr);
+    if !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+        let declarations = source.split("\nstream_wrapper_register(").next().unwrap();
+        for (label, tail) in [
+            ("normal", r#"stream_wrapper_register("castfalse", "FileinfoCastFalse"); $f = new finfo(FILEINFO_MIME_TYPE); $f->file("castfalse://x"); stream_wrapper_unregister("castfalse"); unset($f);"#),
+            ("invalid", r#"stream_wrapper_register("casttruestring", "FileinfoCastTrueString"); $f = new finfo(FILEINFO_MIME_TYPE); try { $f->file("casttruestring://x"); } catch (Throwable $e) { echo $e->getMessage(); } stream_wrapper_unregister("casttruestring"); unset($f, $e);"#),
+            ("handler", r#"stream_wrapper_register("castmissing", "FileinfoCastMissing"); $f = new finfo(FILEINFO_MIME_TYPE); set_error_handler(function(int $level, string $message): bool { throw new Error("cast warning"); }); try { $f->file("castmissing://x"); } catch (Throwable $e) { echo $e->getMessage(); } restore_error_handler(); stream_wrapper_unregister("castmissing"); unset($f, $e);"#),
+            ("self", r#"stream_wrapper_register("castself", "FileinfoCastSelf"); set_error_handler(function(int $level, string $message): bool { return true; }); $self = fopen("castself://x", "rb"); FileinfoCastSelf::$stream = $self; mime_content_type($self); FileinfoCastSelf::$stream = null; fclose($self); restore_error_handler(); stream_wrapper_unregister("castself"); unset($self);"#),
+        ] {
+            let (control, _) = compile_and_run_with_heap_debug_and_asm(&format!("{declarations}\n{tail}"));
+            eprintln!("cast ownership control {label}: {}\n{}", control.stdout, control.stderr);
+        }
+    }
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
@@ -224,7 +237,7 @@ unset($f, $other, $stream, $e);
 #[test]
 fn test_fileinfo_magic_stream_exception_diagnostics() {
     if fileinfo_native::skip("test_fileinfo_magic_stream_exception_diagnostics") { return; }
-    let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+    let source = r#"<?php
 class FileinfoExceptionValue {
     private bool $fail = false;
     public function __construct(bool $fail) { $this->fail = $fail; }
@@ -284,7 +297,8 @@ try { mime_content_type($stream); } catch (Throwable $e) { echo get_class($e), "
 fclose($stream);
 fileinfoExceptionQuery($f, "php://filter/read=fileinfo.exception/resource=exceptionfileinfo://normal");
 stream_wrapper_unregister("exceptionfileinfo"); unset($f, $stream, $mask, $e);
-"#);
+"#;
+    let (out, _) = compile_and_run_with_heap_debug_and_asm(source);
     let read_error = "read\nError: read error\n";
     let invalid = "read\ncast 0\nTypeError: finfo::file(): supplied argument is not a valid stream resource\n";
     let expected = format!("{read_error}{read_error}{invalid}{read_error}{invalid}read\ncast 0\nvalue-dtor\nTypeError: finfo::file(): supplied argument is not a valid stream resource\nread\ncast 0\nvalue-dtor\nError: dtor error\nTypeError: finfo::file(): supplied argument is not a valid stream resource\n{read_error}close\ncreate\nread\nfilter\nError: filter error\n");
@@ -293,5 +307,15 @@ stream_wrapper_unregister("exceptionfileinfo"); unset($f, $stream, $mask, $e);
     assert_eq!(out.stderr.matches("finfo::file(): Failed identify data 0:cannot read `(null)'").count(), 3, "{}", out.stderr);
     assert_eq!(out.stderr.matches("mime_content_type(): Failed identify data 0:cannot read `(null)'").count(), 1, "{}", out.stderr);
     assert_eq!(out.stderr.matches("FileinfoExceptionWrapper::stream_cast must return a stream resource").count(), 3, "{}", out.stderr);
+    if !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+        let declarations = source.split("\nstream_wrapper_register(").next().unwrap();
+        for kind in ["read", "int", "value", "throwing", "filter"] {
+            let path = if kind == "filter" { "php://filter/read=fileinfo.exception/resource=exceptionfileinfo://normal".to_string() }
+                else { format!("exceptionfileinfo://{kind}") };
+            let tail = format!(r#"stream_wrapper_register("exceptionfileinfo", "FileinfoExceptionWrapper"); stream_filter_register("fileinfo.exception", "FileinfoExceptionFilter"); $f = new finfo(FILEINFO_MIME_TYPE); fileinfoExceptionQuery($f, "{path}"); stream_wrapper_unregister("exceptionfileinfo"); unset($f);"#);
+            let (control, _) = compile_and_run_with_heap_debug_and_asm(&format!("{declarations}\n{tail}"));
+            eprintln!("exception ownership control {kind}: {}\n{}", control.stdout, control.stderr);
+        }
+    }
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
