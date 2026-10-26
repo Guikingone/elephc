@@ -265,6 +265,7 @@ jobs:
           cargo test -p elephc --test codegen_tests test_fileinfo_loop_condition_assignment_owners || fileinfo_test_status=1
           cargo test -p elephc --lib borrowed_string_offsets_follow_final_storage_on_all_targets || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_string_offset_lifetime_widened_local_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_pending_return_finally_owners || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2 || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array || fileinfo_test_status=1
@@ -464,6 +465,7 @@ jobs:
           cargo test -p elephc --test codegen_tests test_fileinfo_loop_condition_assignment_owners || fileinfo_test_status=1
           cargo test -p elephc --lib borrowed_string_offsets_follow_final_storage_on_all_targets || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_string_offset_lifetime_widened_local_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_pending_return_finally_owners || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2 || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array || fileinfo_test_status=1
@@ -655,6 +657,7 @@ jobs:
           cargo test -p elephc --test codegen_tests test_fileinfo_loop_condition_assignment_owners || fileinfo_test_status=1
           cargo test -p elephc --lib borrowed_string_offsets_follow_final_storage_on_all_targets || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_string_offset_lifetime_widened_local_owners || fileinfo_test_status=1
+          cargo test -p elephc --test codegen_tests test_fileinfo_pending_return_finally_owners || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2 || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments || fileinfo_test_status=1
           cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array || fileinfo_test_status=1
