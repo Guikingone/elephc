@@ -26,6 +26,41 @@ class FileinfoRegistryWrapper {
     public function stream_eof(): bool { return $this->position >= 5; }
     public function __destruct() { FileinfoRegistryWrapper::$dropped++; }
 }
+class FileinfoRegistryClosing extends FileinfoRegistryWrapper {
+    public function stream_close(): void { FileinfoRegistryWrapper::$closed++; }
+}
+class FileinfoRegistryThrowing extends FileinfoRegistryWrapper {
+    public function stream_close(): void { FileinfoRegistryWrapper::$closed++; throw new Exception("close"); }
+}
+class FileinfoRegistryFilter extends php_user_filter {}
+for ($i = 0; $i < 40; $i++) {
+    $name = "fileinfolease" . $i;
+    if (!stream_wrapper_register($name, "FileinfoRegistryWrapper")) { echo "register failed\n"; }
+    if (!stream_wrapper_unregister($name)) { echo "unregister failed\n"; }
+    if (@stream_wrapper_unregister($name)) { echo "duplicate unregister\n"; }
+}
+stream_wrapper_register("fileinfoheld", "FileinfoRegistryWrapper");
+$stream = fopen("fileinfoheld://x", "rb");
+stream_wrapper_unregister("fileinfoheld");
+echo stream_get_contents($stream), "\n";
+fclose($stream);
+stream_wrapper_register("fileinfoclosing", "FileinfoRegistryClosing");
+stream_wrapper_register("fileinfothrowing", "FileinfoRegistryThrowing");
+for ($i = 0; $i < 8; $i++) {
+    $stream = fopen("fileinfoclosing://x", "rb"); fclose($stream);
+    $stream = fopen("fileinfothrowing://x", "rb");
+    try { fclose($stream); } catch (Exception $e) { if ($e->getMessage() !== "close") { echo "wrong exception\n"; } }
+}
+echo FileinfoRegistryWrapper::$dropped, ":", FileinfoRegistryWrapper::$closed, "\n";
+stream_wrapper_register("fileinfofinal", "FileinfoRegistryWrapper");
+stream_filter_register("fileinfo.persist", "FileinfoRegistryFilter");
+unset($name, $stream, $e);
+echo "done\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "alive\n17:16\ndone\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
 
 /// Filter objects release params and properties when creation or close succeeds, refuses or throws.
 #[test]
@@ -81,40 +116,5 @@ unset($stream, $e);
 "#);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "40:32\nall\n", "{}", out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
-}
-class FileinfoRegistryClosing extends FileinfoRegistryWrapper {
-    public function stream_close(): void { FileinfoRegistryWrapper::$closed++; }
-}
-class FileinfoRegistryThrowing extends FileinfoRegistryWrapper {
-    public function stream_close(): void { FileinfoRegistryWrapper::$closed++; throw new Exception("close"); }
-}
-class FileinfoRegistryFilter extends php_user_filter {}
-for ($i = 0; $i < 40; $i++) {
-    $name = "fileinfolease" . $i;
-    if (!stream_wrapper_register($name, "FileinfoRegistryWrapper")) { echo "register failed\n"; }
-    if (!stream_wrapper_unregister($name)) { echo "unregister failed\n"; }
-    if (@stream_wrapper_unregister($name)) { echo "duplicate unregister\n"; }
-}
-stream_wrapper_register("fileinfoheld", "FileinfoRegistryWrapper");
-$stream = fopen("fileinfoheld://x", "rb");
-stream_wrapper_unregister("fileinfoheld");
-echo stream_get_contents($stream), "\n";
-fclose($stream);
-stream_wrapper_register("fileinfoclosing", "FileinfoRegistryClosing");
-stream_wrapper_register("fileinfothrowing", "FileinfoRegistryThrowing");
-for ($i = 0; $i < 8; $i++) {
-    $stream = fopen("fileinfoclosing://x", "rb"); fclose($stream);
-    $stream = fopen("fileinfothrowing://x", "rb");
-    try { fclose($stream); } catch (Exception $e) { if ($e->getMessage() !== "close") { echo "wrong exception\n"; } }
-}
-echo FileinfoRegistryWrapper::$dropped, ":", FileinfoRegistryWrapper::$closed, "\n";
-stream_wrapper_register("fileinfofinal", "FileinfoRegistryWrapper");
-stream_filter_register("fileinfo.persist", "FileinfoRegistryFilter");
-unset($name, $stream, $e);
-echo "done\n";
-"#);
-    assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "alive\n17:16\ndone\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
