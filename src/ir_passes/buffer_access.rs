@@ -24,9 +24,9 @@
 //!   disqualify it. Reviewed numeric box operations also qualify when the shared numeric-domain
 //!   proof excludes every nonnumeric writer and reference alias: their allocation never runs
 //!   PHP or cycle collection, and their cleanup cannot execute a destructor.
-//!   In property-reuse modules, no-op buffer acquire/release and plain `$this` property reads
-//!   that may throw without running PHP are also buffer-preserving. Blocks that leave the
-//!   loop for good are outside the natural body, and coming
+//!   In property-reuse modules, no-op buffer acquire/release, plain `$this` reads and foreign
+//!   buffer reads whose null-warning path immediately fatals are also buffer-preserving.
+//!   Blocks that leave the loop for good are outside the natural body, and coming
 //!   back always passes the preheader, which resolves again.
 //! - The buffer operand must be loop-invariant: an SSA value defined outside the loop, or a
 //!   `load_local` of a slot nothing in the loop writes and no by-reference alias can reach.
@@ -46,7 +46,7 @@
 //! - Skipped entirely for generators (a `yield` lets the caller run), functions with exception
 //!   handlers or dynamic `eval`, and modules that enable `pcntl_async_signals()`, whose backend
 //!   dispatches signal handlers after every instruction.
-//! - Before resolving loops, `super::buffer_property_loops` relocates stable `$this` buffer
+//! - Before resolving loops, `super::buffer_property_loops` relocates stable object buffer
 //!   reads, adding a scalar entry guard when a zero-trip loop must not read the property.
 //!   Raw record addresses are shared before converting loop accesses to resolved forms.
 //! - After the loops, `super::buffer_property_reuse` shares the property read, the resolution and
