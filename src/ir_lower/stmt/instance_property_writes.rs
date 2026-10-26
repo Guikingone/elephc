@@ -74,6 +74,11 @@ pub(super) fn lower_property_assign(
     {
         ctx.box_value_as_mixed(lowered_value, PhpType::Mixed, Some(span))
     } else { lowered_value };
+    // Trait copies retain their source spans. A recorded handler belongs only to a
+    // Reflection receiver, even when an ordinary class uses the same trait method.
+    let reflection_write = reflection_write.filter(|property| {
+        reflection_receiver_has_public_mirror_handler(ctx, receiver.value, property)
+    });
     if let Some(property) = reflection_write {
         super::readonly_receiver_guard::guard_readonly_write_receiver(
             ctx, &receiver, lowered_value, &property, span,
@@ -123,6 +128,32 @@ pub(super) fn lower_property_assign(
         lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span);
     }
     receiver.finish(ctx, span);
+}
+
+/// Confirms the lowered receiver's single object class owns the recorded Reflection handler.
+fn reflection_receiver_has_public_mirror_handler(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    property: &str,
+) -> bool {
+    let ty = ctx.builder.value_php_type(receiver.value);
+    let class = match &ty {
+        PhpType::Object(class) => Some(class.as_str()),
+        PhpType::Union(members) => {
+            let mut classes = members.iter().filter_map(|member| match member {
+                PhpType::Object(class) => Some(class.as_str()),
+                _ => None,
+            });
+            let first = classes.next();
+            first.filter(|first| classes.all(|class| class == *first))
+        }
+        _ => None,
+    };
+    class.is_some_and(|class| {
+        crate::types::reflection_properties::class_has_public_mirror_write_handler(
+            ctx.classes, class, property,
+        )
+    })
 }
 
 /// Releases independent evaluated operands before a readonly write throws its catchable Error.

@@ -499,30 +499,9 @@ fn reflection_public_mirror_property(
     class_name: &str,
     property: &str,
 ) -> bool {
-    if !matches!(property, "name" | "class") {
-        return false;
-    }
-    const OWNERS: &[&str] = &[
-        "ReflectionAttribute",
-        "ReflectionClass",
-        "ReflectionObject",
-        "ReflectionEnum",
-        "ReflectionFunction",
-        "ReflectionMethod",
-        "ReflectionProperty",
-        "ReflectionParameter",
-        "ReflectionClassConstant",
-        "ReflectionEnumUnitCase",
-        "ReflectionEnumBackedCase",
-    ];
-    let class_name = class_name.trim_start_matches('\\');
-    OWNERS.iter().any(|owner| {
-        checker
-            .classes
-            .get(*owner)
-            .is_some_and(|class_info| class_info.is_internal)
-            && (class_name == *owner || checker.is_subclass_of(class_name, owner))
-    })
+    crate::types::reflection_properties::class_has_public_mirror_write_handler(
+        &checker.classes, class_name, property,
+    )
 }
 
 /// Validates that the current context can access a named property, checking visibility and class scope.

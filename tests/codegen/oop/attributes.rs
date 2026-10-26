@@ -4882,12 +4882,54 @@ function writeUnionReflectionMirror(ReflectionClass|false $reflection): void {
     try { $reflection->name = reflectionInvalidReceiverRhs(); }
     catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(); }
 }
+class ReflectionNullableMirrorTarget {}
 writeNullableReflectionMirror(null);
+writeNullableReflectionMirror(new ReflectionClass(ReflectionNullableMirrorTarget::class));
 writeUnionReflectionMirror(false);
+echo '|';
+writeUnionReflectionMirror(new ReflectionClass(ReflectionNullableMirrorTarget::class));
 "#,
     );
     assert_eq!(out,
-        "rhs|Error:Attempt to assign property \"name\" on null|rhs|Error:Attempt to assign property \"name\" on false");
+        "rhs|Error:Attempt to assign property \"name\" on null|rhs|ReflectionException:Cannot set read-only property ReflectionClass::$name|rhs|Error:Attempt to assign property \"name\" on false|rhs|ReflectionException:Cannot set read-only property ReflectionClass::$name");
+}
+
+/// Shared trait spans must not apply a Reflection write handler to ordinary class copies.
+#[test]
+fn test_reflection_public_mirror_shared_trait_write_handlers() {
+    let out = compile_and_run(
+        r#"<?php
+trait ReflectionTraitMirrorWrites {
+    public function rename(string $value): void { $this->name = $value; }
+    public function initializeName(): void { $this->name ??= 'fallback'; }
+}
+class ReflectionTraitMirrorPlain {
+    use ReflectionTraitMirrorWrites;
+    public string $name = 'before';
+}
+class ReflectionTraitMirrorMissing {
+    use ReflectionTraitMirrorWrites;
+    public ?string $name = null;
+}
+class ReflectionTraitMirrorFirst extends ReflectionClass { use ReflectionTraitMirrorWrites; }
+class ReflectionTraitMirrorSecond extends ReflectionClass { use ReflectionTraitMirrorWrites; }
+class ReflectionTraitMirrorTarget {}
+$plain = new ReflectionTraitMirrorPlain();
+$plain->rename('after');
+echo $plain->name, '|';
+$missing = new ReflectionTraitMirrorMissing();
+$missing->initializeName();
+echo $missing->name, '|';
+$first = new ReflectionTraitMirrorFirst(ReflectionTraitMirrorTarget::class);
+try { $first->rename('changed'); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+$second = new ReflectionTraitMirrorSecond(ReflectionTraitMirrorTarget::class);
+try { $second->rename('changed'); }
+catch (ReflectionException $error) { echo $error->getMessage(); }
+"#,
+    );
+    assert_eq!(out,
+        "after|fallback|Cannot set read-only property ReflectionTraitMirrorFirst::$name|Cannot set read-only property ReflectionTraitMirrorSecond::$name");
 }
 
 /// Compound writes mutate Reflection's public mirrors without changing private metadata.
