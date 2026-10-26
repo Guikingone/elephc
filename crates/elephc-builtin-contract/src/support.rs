@@ -187,6 +187,7 @@ pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
         return Some(if matches!(
             runtime_builtin,
             RuntimeBuiltinId::Intval | RuntimeBuiltinId::Round
+                | RuntimeBuiltinId::MemoryGetUsage | RuntimeBuiltinId::MemoryGetPeakUsage
         ) {
             EvalExecution::Adapter {
                 runtime_builtin: Some(runtime_builtin),
@@ -375,7 +376,8 @@ mod tests {
         // Plus the four `ptr_read_f32`/`ptr_write_f32`/`ptr_read_f64`/`ptr_write_f64`
         // raw-memory builtins and `buffer_ptr`, bound in eval through their own registry homes.
         // The tokenizer location helper also uses the shared runtime registry.
-        assert_eq!(eval_registry, 691 + curl_surface);
+        // Five native heap metric bindings share the boxed runtime dispatcher.
+        assert_eq!(eval_registry, 696 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -403,7 +405,8 @@ mod tests {
         // The four float pointer builtins (`ptr_read_f32`, `ptr_write_f32`, `ptr_read_f64`,
         // `ptr_write_f64`) and `buffer_ptr` are ordinary registry builtins on both backends.
         // The tokenizer location helper is a typed ordinary registry operation.
-        assert_eq!(aot_registry, 759);
+        // Five native heap metric operations use the ordinary AOT registry.
+        assert_eq!(aot_registry, 764);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 411 + curl_surface);
@@ -452,8 +455,10 @@ mod tests {
 
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         // Includes the internal tokenizer ParseError location operation.
-        assert_eq!(shared_runtime, 86);
-        assert_eq!(hybrid_adapter, 2);
+        // Includes the five native heap metric operations.
+        assert_eq!(shared_runtime, 89);
+        // Heap usage queries keep a TypeError adapter for non-scalar flags.
+        assert_eq!(hybrid_adapter, 4);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
         // interpreter adapters.
         assert_eq!(interpreter_adapter, 603 + curl_surface);

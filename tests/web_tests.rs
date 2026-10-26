@@ -3023,3 +3023,6 @@ fn web_array_push_onto_a_request_superglobal_keeps_the_worker_alive() {
         assert!(response.ends_with("82/2"), "response {index}: {response:?}");
     }
 }
+
+#[path = "web/memory_metrics.rs"]
+mod memory_metrics;

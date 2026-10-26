@@ -2,7 +2,7 @@
 title: "xmlwriter_flush() - internals"
 description: "Compiler internals for xmlwriter_flush(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1045
+  order: 1050
 ---
 
 ## `xmlwriter_flush()` - internals
