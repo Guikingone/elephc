@@ -2,7 +2,7 @@
 //! Proves when temporary call roots cannot retire the last owner of a parameter payload.
 //!
 //! Called from:
-//! - The caller-visible effect summarizer in the parent module.
+//! - Caller-visible effect summaries and receiver-root canonicalization before inlining.
 //!
 //! Key details:
 //! - Instruction effects remain conservative for intra-function ordering and validation.
@@ -14,7 +14,7 @@ use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, ValueDef, Value
 use crate::types::PhpType;
 
 /// Finds single-store hidden roots backed by a parameter that stays live through every call.
-pub(super) fn borrowed_parameter_roots(function: &Function) -> HashSet<LocalSlotId> {
+pub(crate) fn borrowed_parameter_roots(function: &Function) -> HashSet<LocalSlotId> {
     let mut unchanged = function.params.iter().enumerate().filter_map(|(index, parameter)| {
         let local = function.locals.get(index)?;
         (!parameter.by_ref && local.kind == LocalKind::PhpLocal

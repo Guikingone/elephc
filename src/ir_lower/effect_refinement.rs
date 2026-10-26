@@ -18,8 +18,6 @@ use crate::ir::{
 use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, PhpType};
 
-mod operand_releases;
-
 const MAX_EFFECT_ITERATIONS: usize = 64;
 
 /// Read-only module facts used while summarizing and rewriting instructions.
@@ -115,7 +113,7 @@ fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> E
         // Dynamic scope operations may write a parameter by name instead of a visible slot op.
         std::collections::HashSet::new()
     } else {
-        operand_releases::borrowed_parameter_roots(function)
+        crate::ir::parameter_roots::borrowed_parameter_roots(function)
     };
     // A literal false signature has a throwing call-boundary guard even if its body is empty.
     if function.params.iter().any(|parameter| parameter.php_type == PhpType::False) {

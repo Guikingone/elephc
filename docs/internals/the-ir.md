@@ -1419,11 +1419,21 @@ over each function-like body (functions, methods, closures, trampolines,
 invokers) repeatedly until a full sweep reports no change, capped at a fixed
 iteration budget. Candidate-driven passes can cheaply declare themselves
 inapplicable to a function; skipped passes perform neither analysis nor the
-debug-build post-pass validation. A pass that opts into `run_after_fixed_point`
-is removed from this sweep.
+debug-build post-pass validation. Passes that opt into `run_before_inlining` or
+`run_after_fixed_point` run in separate preparation or finalization sweeps.
+
+Preparation removes redundant method receiver roots before their lowering shape
+is changed by inlining. `borrowed_receiver_roots` accepts only direct concrete
+object parameter loads whose by-value frame binding is never written, aliased or
+used as iterator storage. The acquired value must feed only its hidden root and
+ordinary method receiver operands. The pass removes that extra retain together
+with its root store, publication and retirement, and forwards the method call to
+the parameter load. Eval-capable modules keep the original roots. The proof in
+`src/ir/parameter_roots.rs` is shared with caller-visible effect summaries;
+remaining cleanup instructions keep their full effects.
 
 The representation-changing pipeline runs to a **module-level fixed point**:
-`optimize_module` partitions those post-fixed-point passes out, then
+`optimize_module` runs preparation and partitions post-fixed-point passes out, then
 `optimize_module_to_fixed_point` interleaves the cross-function
 [small-function inliner](#small-function-inlining) with the remaining
 per-function passes and repeats the round until neither layer changes anything
