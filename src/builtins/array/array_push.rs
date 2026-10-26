@@ -51,7 +51,9 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let aliased_indexed_receiver = cx
         .checker
         .local_has_ref_assign_alias(&cx.args[0])
-        || cx.checker.local_has_prior_array_capture(&cx.args[0]);
+        || cx.checker.local_has_prior_array_capture(&cx.args[0])
+        || (is_indexed_receiver(&cx.args[0])
+            && cx.checker.local_has_non_builtin_reference_alias(&cx.args[0]));
     let runtime_spread_supported = cx
         .checker
         .array_push_runtime_spread_supported(&cx.args[0], &arr_ty, cx.env)?;
@@ -130,4 +132,13 @@ fn is_boxed_argument_source(cx: &BuiltinCheckCtx<'_>, argument: &Expr) -> bool {
     matches!(&value.kind, ExprKind::Variable(name)
         if cx.checker.active_globals.contains(name)
             || cx.checker.boxed_parameter_locals.contains(name))
+}
+
+/// Identifies nested receivers whose native parent layout must stay valid through a reference.
+fn is_indexed_receiver(receiver: &Expr) -> bool {
+    let mut current = receiver;
+    while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &current.kind {
+        current = value;
+    }
+    matches!(current.kind, ExprKind::ArrayAccess { .. })
 }

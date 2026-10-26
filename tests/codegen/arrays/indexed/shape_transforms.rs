@@ -497,6 +497,22 @@ echo min($values), "/", max($values), "\n";
         "candidate: {}\npre-bound native control: {}", out.stderr, control.stderr);
 }
 
+/// Nested capture mutations preserve compatible native layouts and outer indexed reads.
+#[test]
+fn test_array_push_nested_captures_preserve_compatible_storage() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$rows = [[1]];
+$push = function () use (&$rows) { array_push($rows[0], 2); };
+$push();
+echo $rows[0][0], "|", $rows[0][1], "|", json_encode($rows), "\n";
+$named = [[[2, 3]]];
+$popNamed = function () use (&$named) { return array_pop(array: $named[0][0]); };
+echo $popNamed(), "|", $named[0][0][0], "|", json_encode($named), "\n";
+"#);
+    assert_eq!(out.stdout, "1|2|[[1,2]]\n3|2|[[[2]]]\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Indexed spread appends share the ordinary widening path for every source and value shape.
 #[test]
 fn test_array_push_indexed_heterogeneous_spreads_are_heap_clean() {

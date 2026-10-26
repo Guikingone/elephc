@@ -1462,6 +1462,16 @@ pushCopiedUntyped(5);
 fn test_error_array_push_reference_alias_rejects_incompatible_plain_value() {
     for source in [
         r#"<?php
+$rows = [[1]];
+$push = function () use (&$rows) { array_push($rows[0], "x"); };
+$push(); echo $rows[0][1];
+"#,
+        r#"<?php
+$rows = [[[1]]];
+$push = function () use (&$rows) { array_push($rows[0][0], "x"); };
+$push(); echo $rows[0][0][1];
+"#,
+        r#"<?php
 $values = [1];
 $alias =& $values;
 array_push($alias, "wrong");
