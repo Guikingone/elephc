@@ -4,6 +4,7 @@
 //! Called from:
 //! - `codegen::stack_numeric` before frame selection and scalar retirement.
 //! - `ir_passes::concat_reset` before treating numeric updates as scratch-inert.
+//! - `ir_passes::buffer_access::numeric` before treating numeric boxes as buffer-preserving.
 //!
 //! Key details:
 //! - Every local writer participates in the proof, including seeds and loop backedges.
