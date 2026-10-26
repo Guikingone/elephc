@@ -15,27 +15,26 @@ use crate::support::*;
 fn test_fileinfo_diagnostic_call_site_lines() {
     if fileinfo_native::skip("test_fileinfo_diagnostic_call_site_lines") { return; }
     let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
-$expected = 0;
+class FileinfoExpectedLine { public static int $line = 0; }
 function fileinfoLineCaller(finfo $f): bool {
-    global $expected;
-    $expected = __LINE__ + 1;
+    FileinfoExpectedLine::$line = __LINE__ + 1;
     return finfo_close($f);
 }
 $f = new finfo(FILEINFO_MIME_TYPE);
 $context = fopen("php://memory", "w+b");
-set_error_handler(function(int $level, string $message, string $file, int $line) use (&$expected): bool {
-    echo $file === __FILE__ && $line === $expected ? "ok\n" : "bad:" . $line . ":" . $expected . "\n";
+set_error_handler(function(int $level, string $message, string $file, int $line): bool {
+    echo $file === __FILE__ && $line === FileinfoExpectedLine::$line ? "ok\n" : "bad:" . $line . ":" . FileinfoExpectedLine::$line . "\n";
     return true;
 });
-$expected = __LINE__ + 1;
+FileinfoExpectedLine::$line = __LINE__ + 1;
 finfo_close($f);
 fileinfoLineCaller($f);
 $close = finfo_close(...);
-$expected = __LINE__ + 1;
+FileinfoExpectedLine::$line = __LINE__ + 1;
 $close($f);
-$expected = __LINE__ + 1;
+FileinfoExpectedLine::$line = __LINE__ + 1;
 $f->buffer("HELLO", 0, $context);
-$expected = __LINE__ + 1;
+FileinfoExpectedLine::$line = __LINE__ + 1;
 finfo_file($f, "data:text");
 restore_error_handler();
 echo "default:", __LINE__ + 1, "\n";

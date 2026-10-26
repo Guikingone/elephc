@@ -30,6 +30,8 @@ fn filtered_url() -> Stmt {
         s_if(eq(e_var("_resource"), e_str("")), super::streams::failure(e_str("operation failed")), vec![], None),
         s_assign("_data", e_method_call(e_this(), "__elephc_read_stream", vec![e_var("_resource"), e_var("context"), e_var("_function"), e_bool(false), e_var("_directory"), e_var("_pending"), e_var("_stages")])),
         s_if(eq(e_var("_data"), e_bool(false)), super::streams::failure(e_str("operation failed")), vec![], None),
+        s_assign("_bytes", e_cast(CastType::String, e_var("_data"))),
+        s_expr(e_call("unset", vec![e_var("_data")])),
         // PHP's filter wrapper replaces the network wrapper's failing stat with socket stat.
         s_if(eq(e_var("_pending"), e_int(-2)), vec![s_assign("_directory", e_bool(true))], vec![], None),
         s_assign("_spec", e_str("")),
@@ -55,13 +57,13 @@ fn filtered_url() -> Stmt {
                 ], vec![], None),
                 // Keep the fallible result boxed while the loop's byte accumulator stays string-typed.
                 s_assign("_stage", e_array(vec![
-                    e_method_call(e_this(), "__elephc_filter_bytes", vec![e_var("_data"), e_var("_filter"), e_var("_function"), e_var("_directory")]), e_bool(true),
+                    e_method_call(e_this(), "__elephc_filter_bytes", vec![e_var("_bytes"), e_var("_filter"), e_var("_function"), e_var("_directory")]), e_bool(true),
                 ])),
                 s_if(eq(e_index(e_var("_stage"), e_int(0)), e_bool(false)), vec![s_return(e_bool(false))], vec![], None),
-                s_assign("_data", e_cast(CastType::String, e_index(e_var("_stage"), e_int(0)))),
+                s_assign("_bytes", e_cast(CastType::String, e_index(e_var("_stage"), e_int(0)))),
             ]),
         ]),
-        s_return(e_var("_data")),
+        s_return(e_var("_bytes")),
     ], vec![], None)
 }
 
