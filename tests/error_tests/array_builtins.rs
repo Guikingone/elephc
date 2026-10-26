@@ -1363,9 +1363,21 @@ $box = new RuntimePushBox();
 array_push($box->items, ...runtimePropertyTail(2));
 "#,
         r#"<?php
+class RuntimeAssocPushBox { public $items = ["a" => 1]; }
+function runtimeAssocPropertyTail(int $value) { return [$value]; }
+$box = new RuntimeAssocPushBox();
+array_push($box->items, ...runtimeAssocPropertyTail(2));
+"#,
+        r#"<?php
 class RuntimeStaticPushBox { public static $items = [1]; }
 function runtimeStaticTail(int $value) { return [$value]; }
 array_push(RuntimeStaticPushBox::$items, ...runtimeStaticTail(2));
+"#,
+        r#"<?php
+$rows = [["a" => 1]];
+$alias =& $rows;
+$tail = [2];
+array_push($rows[0], ...$tail);
 "#,
     ] {
         expect_error(
@@ -1378,12 +1390,19 @@ array_push(RuntimeStaticPushBox::$items, ...runtimeStaticTail(2));
 /// Reference-aliased indexed receivers reject a plain value that would retype one alias slot.
 #[test]
 fn test_error_array_push_reference_alias_rejects_incompatible_plain_value() {
-    expect_error(
+    for source in [
         r#"<?php
 $values = [1];
 $alias =& $values;
 array_push($alias, "wrong");
 "#,
-        "array_push() cannot widen a reference-aliased indexed receiver",
-    );
+        r#"<?php
+$values = [1];
+$alias =& $values;
+$push = function () use (&$values) { array_push($values, "wrong"); };
+$push();
+"#,
+    ] {
+        expect_error(source, "array_push() cannot widen a reference-aliased indexed receiver");
+    }
 }

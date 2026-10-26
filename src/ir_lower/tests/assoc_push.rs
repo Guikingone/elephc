@@ -49,6 +49,16 @@ $reference = new TargetReferencePushBox();
 array_push($reference->items, 2);
 $rows = ["inner" => ["a" => 1]];
 array_push($rows["inner"], 2);
+class TargetNativePushBox { public $items = ["a" => 1]; }
+$native = new TargetNativePushBox();
+array_push($native->items, 2);
+$referenceRows = [["a" => 1]];
+$rowsAlias =& $referenceRows;
+array_push($referenceRows[0], 2);
+$captured = [1];
+$readCaptured = function () use (&$captured) { return json_encode($captured); };
+array_push($captured, "x");
+echo $readCaptured();
 echo json_encode($values), json_encode($copy), json_encode($mixed);
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {

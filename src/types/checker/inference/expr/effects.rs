@@ -445,6 +445,7 @@ impl Checker {
                                     self.active_external_ref_bindings.remove(var);
                                     self.ref_aliased_locals.remove(var);
                                     self.non_builtin_ref_aliased_locals.remove(var);
+                                    self.ref_assign_aliased_locals.remove(var);
                                 } else if let Some(names) = self.local_ref_detach_sites.get_mut(&arg.span) {
                                     if names.remove(var.as_str()) {
                                         self.retired_ref_detach_sites.insert((arg.span, var.clone()));

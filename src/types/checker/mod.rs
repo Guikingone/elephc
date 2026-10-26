@@ -525,6 +525,11 @@ pub(crate) struct Checker {
     /// keep another path to the storage, so representation-changing writes must distinguish this
     /// subset from the broader kill/retype conservatism in `ref_aliased_locals`.
     pub non_builtin_ref_aliased_locals: HashSet<String>,
+    /// Locals joined by an explicit `=&` assignment in the current body.
+    ///
+    /// Unlike captures and by-reference parameters, these can retain native packed-array
+    /// storage through multiple local names, so a write must not widen only one view.
+    pub ref_assign_aliased_locals: HashSet<String>,
     /// Current local bindings that alias a managed container entry whose physical cell payload
     /// is canonical boxed `Mixed`, even when the checker's logical value type is narrower.
     pub boxed_ref_aliased_locals: HashSet<String>,
@@ -677,6 +682,7 @@ pub(crate) struct SavedLocalBindingScope {
     narrowed_origins: HashMap<String, NarrowedLocalOrigin>,
     ref_aliased: HashSet<String>,
     non_builtin_ref_aliased: HashSet<String>,
+    ref_assign_aliased: HashSet<String>,
     boxed_ref_aliased: HashSet<String>,
     boxed_ref_invalidations: Vec<HashSet<String>>,
     statics: HashSet<String>,
@@ -875,6 +881,7 @@ impl Checker {
             non_builtin_ref_aliased: std::mem::take(
                 &mut self.non_builtin_ref_aliased_locals,
             ),
+            ref_assign_aliased: std::mem::take(&mut self.ref_assign_aliased_locals),
             boxed_ref_aliased: std::mem::take(&mut self.boxed_ref_aliased_locals),
             boxed_ref_invalidations: std::mem::take(
                 &mut self.conditional_boxed_ref_invalidations,
@@ -909,6 +916,7 @@ impl Checker {
         self.narrowed_local_origins = saved.narrowed_origins;
         self.ref_aliased_locals = saved.ref_aliased;
         self.non_builtin_ref_aliased_locals = saved.non_builtin_ref_aliased;
+        self.ref_assign_aliased_locals = saved.ref_assign_aliased;
         self.boxed_ref_aliased_locals = saved.boxed_ref_aliased;
         self.conditional_boxed_ref_invalidations = saved.boxed_ref_invalidations;
         self.static_local_names = saved.statics;
@@ -1081,6 +1089,16 @@ impl Checker {
 
     /// Returns whether a local at an indexed receiver's root has a non-builtin reference alias.
     pub(crate) fn local_has_non_builtin_reference_alias(&self, expr: &Expr) -> bool {
+        self.local_root_is_in_set(expr, &self.non_builtin_ref_aliased_locals)
+    }
+
+    /// Returns whether a local at an indexed receiver's root belongs to an explicit `=&` group.
+    pub(crate) fn local_has_ref_assign_alias(&self, expr: &Expr) -> bool {
+        self.local_root_is_in_set(expr, &self.ref_assign_aliased_locals)
+    }
+
+    /// Returns whether the local at an expression's root belongs to `names`.
+    fn local_root_is_in_set(&self, expr: &Expr, names: &HashSet<String>) -> bool {
         let mut current = expr;
         while let ExprKind::ArrayAccess { array: value, .. }
         | ExprKind::NamedArg { value, .. }
@@ -1089,7 +1107,25 @@ impl Checker {
             current = value;
         }
         matches!(&current.kind, ExprKind::Variable(name)
-            if self.non_builtin_ref_aliased_locals.contains(name))
+            if names.contains(name))
+    }
+
+    /// Records the local root of an explicit `=&` source.
+    pub(crate) fn record_ref_assign_alias_root(&mut self, expr: &Expr) {
+        let mut current = expr;
+        while let ExprKind::ArrayAccess { array: value, .. }
+        | ExprKind::PropertyAccess { object: value, .. }
+        | ExprKind::NullsafePropertyAccess { object: value, .. }
+        | ExprKind::DynamicPropertyAccess { object: value, .. }
+        | ExprKind::NullsafeDynamicPropertyAccess { object: value, .. }
+        | ExprKind::ErrorSuppress(value)
+        | ExprKind::NamedArg { value, .. } = &current.kind
+        {
+            current = value;
+        }
+        if let ExprKind::Variable(name) = &current.kind {
+            self.ref_assign_aliased_locals.insert(name.clone());
+        }
     }
 
     /// Records the local root of a reference-producing expression and its origin category.

@@ -89,14 +89,15 @@ impl Checker {
 
     /// Returns whether a runtime spread can safely mutate this `array_push` receiver in place.
     pub(crate) fn array_push_runtime_spread_supported(
-        &self,
+        &mut self,
         receiver: &Expr,
         receiver_ty: &PhpType,
-    ) -> bool {
-        if matches!(receiver_ty.codegen_repr(), PhpType::Array(_))
-            && self.local_has_non_builtin_reference_alias(receiver)
+        env: &TypeEnv,
+    ) -> Result<bool, crate::errors::CompileError> {
+        if self.local_has_non_builtin_reference_alias(receiver)
+            && self.array_push_place_has_native_array_container(receiver, receiver_ty, env)?
         {
-            return false;
+            return Ok(false);
         }
         let mut root = receiver;
         while let ExprKind::ArrayAccess { array, .. }
@@ -105,7 +106,7 @@ impl Checker {
         {
             root = array;
         }
-        match &root.kind {
+        Ok(match &root.kind {
             ExprKind::Variable(_) => true,
             ExprKind::PropertyAccess { .. } => self
                 .array_push_property_plans
@@ -116,6 +117,33 @@ impl Checker {
                     && receiver_ty.supports_live_array_push_place()
             }
             _ => false,
+        })
+    }
+
+    /// Returns whether the receiver or an indexed parent uses native packed-array storage.
+    fn array_push_place_has_native_array_container(
+        &mut self,
+        receiver: &Expr,
+        receiver_ty: &PhpType,
+        env: &TypeEnv,
+    ) -> Result<bool, crate::errors::CompileError> {
+        if matches!(receiver_ty.codegen_repr(), PhpType::Array(_)) {
+            return Ok(true);
+        }
+        let mut current = receiver;
+        loop {
+            match &current.kind {
+                ExprKind::ArrayAccess { array, .. } => {
+                    if matches!(self.infer_type(array, env)?.codegen_repr(), PhpType::Array(_)) {
+                        return Ok(true);
+                    }
+                    current = array;
+                }
+                ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) => {
+                    current = value;
+                }
+                _ => return Ok(false),
+            }
         }
     }
 

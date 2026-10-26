@@ -95,12 +95,30 @@ fn addressable(ctx: &LoweringContext<'_, '_>, place: &Expr) -> bool {
         ExprKind::StaticPropertyAccess { .. } => static_place_type(ctx, place)
             .is_some_and(|ty| ty.supports_live_array_push_place()),
         ExprKind::ArrayAccess { array, .. } => {
-            let unsafe_indexed_alias = matches!(static_place_type(ctx, place)
-                .map(|ty| ty.codegen_repr()), Some(PhpType::Array(_)))
-                && indexed_place_root_is_ref_bound(ctx, place);
+            let unsafe_indexed_alias = indexed_place_root_is_ref_bound(ctx, place)
+                && indexed_place_has_native_array_container(ctx, place);
             !unsafe_indexed_alias && addressable(ctx, array)
         }
         _ => false,
+    }
+}
+
+/// Returns whether this indexed place or one of its parents uses native packed-array storage.
+fn indexed_place_has_native_array_container(ctx: &LoweringContext<'_, '_>, place: &Expr) -> bool {
+    let mut current = place;
+    loop {
+        if matches!(
+            static_place_type(ctx, current).map(|ty| ty.codegen_repr()),
+            Some(PhpType::Array(_))
+        ) {
+            return true;
+        }
+        match &current.kind {
+            ExprKind::ArrayAccess { array, .. } | ExprKind::ErrorSuppress(array) => {
+                current = array;
+            }
+            _ => return false,
+        }
     }
 }
 

@@ -425,16 +425,43 @@ $loopAlias =& $loopRows;
 for ($i = 0; $i < 2; $i++) {
     array_push($loopRows[$i], (int) ($i + 10));
 }
+$hashRows = [["a" => 1]];
+$hashAlias =& $hashRows;
+$hashCount = array_push($hashRows[0], 2);
 echo $first, "|", $second, "|", json_encode($rows), "|", json_encode($alias), "\n";
 echo json_encode($loopRows), "|", json_encode($loopAlias), "\n";
+echo $hashCount, "|", json_encode($hashRows), "|", json_encode($hashAlias), "\n";
 "#,
     );
     assert_eq!(
         out.stdout,
-        "2|1|[[1,2],[2]]|[[1,2],[2]]\n[[1,10],[2,11]]|[[1,10],[2,11]]\n",
+        "2|1|[[1,2],[2]]|[[1,2],[2]]\n[[1,10],[2,11]]|[[1,10],[2,11]]\n2|[{\"a\":1,\"0\":2}]|[{\"a\":1,\"0\":2}]\n",
         "stderr: {}",
         out.stderr
     );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// By-reference closure captures use boxed storage and may widen with plain pushed values.
+#[test]
+fn test_array_push_reference_captures_allow_plain_value_widening() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$list = [1];
+$show = function () use (&$list) { return json_encode($list); };
+$first = array_push($list, "x");
+echo $first, "|", json_encode($list), "|", $show(), "\n";
+$captured = [1];
+$add = function () use (&$captured) { return array_push($captured, "y"); };
+echo $add(), "|", json_encode($captured), "\n";
+$shared = [1];
+$alias =& $shared;
+$readShared = function () use (&$shared) { return json_encode($shared); };
+array_push($alias, 2);
+echo json_encode($alias), "|", $readShared(), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "2|[1,\"x\"]|[1,\"x\"]\n2|[1,\"y\"]\n[1,2]|[1,2]\n", "stderr: {}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

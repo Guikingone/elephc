@@ -43,10 +43,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         .record_array_push_reference_place(&cx.args[0], cx.env)?;
     let aliased_indexed_receiver = cx
         .checker
-        .local_has_non_builtin_reference_alias(&cx.args[0]);
+        .local_has_ref_assign_alias(&cx.args[0]);
     let runtime_spread_supported = cx
         .checker
-        .array_push_runtime_spread_supported(&cx.args[0], &arr_ty);
+        .array_push_runtime_spread_supported(&cx.args[0], &arr_ty, cx.env)?;
     let value_constraint = match arr_ty.codegen_repr() {
         PhpType::AssocArray { value, .. }
             if !matches!(value.codegen_repr(), PhpType::Mixed | PhpType::Iterable) => Some((

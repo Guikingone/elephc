@@ -73,11 +73,7 @@ impl PhpType {
 
     /// Returns whether an array slot can safely hold a managed live reference for `array_push`.
     pub(crate) fn supports_live_array_push_place(&self) -> bool {
-        self.is_php_array()
-            || matches!(
-                self.codegen_repr(),
-                Self::Mixed | Self::AssocArray { .. }
-            )
+        self.is_php_array() || self.codegen_repr() == Self::Mixed
     }
 
     /// Returns the type a packed field or buffer element of this storage type reads as.

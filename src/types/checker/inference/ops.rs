@@ -503,6 +503,9 @@ impl Checker {
             }
         }
         closure_ref_params.extend(capture_refs.iter().cloned());
+        let ref_assign_captures: Vec<String> = capture_refs.iter()
+            .filter(|capture| self.ref_assign_aliased_locals.contains(*capture))
+            .cloned().collect();
         // A `use (&$x)` capture aliases the ENCLOSING body's local: the closure can outlive
         // this statement and write through the reference, so `$x` is aliased there from here
         // on. Recorded before entering the closure scope, which saves and restores the
@@ -553,6 +556,7 @@ impl Checker {
             pre_bound_own_storage,
             body,
             |checker| {
+                checker.ref_assign_aliased_locals.extend(ref_assign_captures);
                 for stmt in body {
                     checker.check_stmt(stmt, &mut closure_sig.env)?;
                 }

@@ -212,7 +212,10 @@ pub(super) fn lower_closure_with_context(
         } else {
             let widens_by_ref_capture = by_ref
                 && self_ref_callable_capture != Some(capture.as_str())
-                && (body_contains_eval || body_writes_local(body, capture));
+                && (body_contains_eval
+                    || body_writes_local(body, capture)
+                    || (!ctx.is_ref_bound_local(capture)
+                        && matches!(ctx.local_type(capture).codegen_repr(), PhpType::Array(_))));
             let php_type_override = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
                 Some(PhpType::Callable)
             } else if widens_by_ref_capture {
@@ -223,6 +226,9 @@ pub(super) fn lower_closure_with_context(
                 // as 9223372036854775806, the raw null sentinel read as an int, and a string
                 // capture came back as garbage bytes. `eval` follows the same rule because the
                 // written type cannot be seen at all.
+                // An indexed array can also widen through an enclosing-frame append after
+                // capture. A fresh capture must follow its runtime element layout too;
+                // an existing native alias group keeps its shared storage contract.
                 Some(PhpType::Mixed)
             } else {
                 None

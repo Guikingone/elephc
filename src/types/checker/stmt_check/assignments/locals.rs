@@ -272,7 +272,9 @@ pub(super) fn check_ref_assign(
     checker
         .non_builtin_ref_aliased_locals
         .insert(target.to_string());
+    checker.ref_assign_aliased_locals.insert(target.to_string());
     checker.record_reference_alias_root(source);
+    checker.record_ref_assign_alias_root(source);
     let result = match &source.kind {
         ExprKind::Variable(source_name) => {
             check_ref_assign_variable(checker, target, source_name, span, env)
