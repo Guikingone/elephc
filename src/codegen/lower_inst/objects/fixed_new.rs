@@ -18,8 +18,8 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
     if reflection::is_reflection_owner_class(&class_name) {
         return reflection::lower_reflection_owner_new(ctx, inst, &class_name);
     }
-    let is_reflection_subclass =
-        reflection::reflection_owner_base_class(ctx, &class_name).is_some();
+    let reflection_owner_class = reflection::reflection_owner_base_class(ctx, &class_name);
+    let is_reflection_subclass = reflection_owner_class.is_some();
     if class_name == "CallbackFilterIterator" || class_name == "RecursiveCallbackFilterIterator" {
         return lower_callback_filter_iterator_new(ctx, inst, &class_name);
     }
@@ -136,6 +136,14 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             &inst.operands,
             &constructor.sig.params,
             &format!("{}::__construct", constructor.impl_class),
+        )?;
+    }
+    if let Some(owner_class) = reflection_owner_class.as_deref() {
+        reflection_constructor::validate_reflection_subclass_constructor_forwarding(
+            ctx,
+            &class_name,
+            owner_class,
+            constructor_impl.as_ref(),
         )?;
     }
     emit_object_allocation(

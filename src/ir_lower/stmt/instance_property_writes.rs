@@ -26,7 +26,17 @@ pub(super) fn lower_property_assign(
             None
         }
     });
-    if readonly_write.is_some() {
+    let reflection_write = ctx.throw_access_sites.get(&span).and_then(|info| {
+        if let ThrowAccessKind::ReflectionReadOnlyProperty { class_name, property } = &info.kind {
+            Some(format!(
+                "Cannot set read-only property {}::${}",
+                class_name, property
+            ))
+        } else {
+            None
+        }
+    });
+    if readonly_write.is_some() || reflection_write.is_some() {
         if let ExprKind::NullCoalesce { value: read, default } = &value.kind {
             if let ExprKind::PropertyAccess { object: read_object, property: read_property } = &read.kind {
                 if read_object.as_ref() == object && read_property == property {
@@ -65,6 +75,17 @@ pub(super) fn lower_property_assign(
     {
         ctx.box_value_as_mixed(lowered_value, PhpType::Mixed, Some(span))
     } else { lowered_value };
+    if let Some(message) = reflection_write {
+        lower_property_write_exception(
+            ctx,
+            receiver,
+            lowered_value,
+            "ReflectionException",
+            &message,
+            span,
+        );
+        return;
+    }
     if let Some((overwrite_message, initialization_error)) = readonly_write {
         super::readonly_receiver_guard::guard_readonly_write_receiver(
             ctx, &receiver, lowered_value, property, span,
@@ -115,11 +136,23 @@ pub(super) fn lower_readonly_write_error(
     value: LoweredValue,
     message: &str, span: Span,
 ) {
+    lower_property_write_exception(ctx, receiver, value, "Error", message, span);
+}
+
+/// Releases independently evaluated operands before a property write raises an exception.
+fn lower_property_write_exception(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: property_write_receiver::PropertyWriteReceiver,
+    value: LoweredValue,
+    exception_class: &str,
+    message: &str,
+    span: Span,
+) {
     receiver.finish(ctx, span);
     if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
-    lower_throw_access_error(ctx, message, span);
+    lower_throw_access_exception(ctx, exception_class, message, span);
 }
 
 /// Fuses the parser's readonly coalesce receiver temporary into a scoped EIR owner.

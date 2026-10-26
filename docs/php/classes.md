@@ -1339,6 +1339,10 @@ foreach (class_get_attributes('Greeter') as $attr) {
 // Version: [1.0][1]
 ```
 
+User subclasses of the supported Reflection owner classes use ordinary object allocation, so their property defaults, reference cells, dynamic properties, and constructors remain active. A custom constructor must call `parent::__construct()` as its first action and pass the built-in constructor's leading parameters unchanged and in order. Elephc rejects other constructor shapes because it cannot prove that the metadata populated before the user constructor matches the arguments eventually forwarded to PHP's Reflection owner.
+
+The public `name` and `class` metadata properties are populated in both AOT and eval-created Reflection objects. As in PHP, assigning directly to one raises `ReflectionException`; `unset()` and reference binding retain PHP's distinct behavior and are not treated as language-level `readonly` operations.
+
 Reflection is also available for class members:
 
 ```php

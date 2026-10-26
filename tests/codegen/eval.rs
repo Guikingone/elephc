@@ -26040,6 +26040,43 @@ echo $declaring->getName();');
     );
 }
 
+/// Eval-created Reflection owners populate the same public metadata mirrors as AOT owners.
+#[test]
+fn test_eval_reflection_public_name_and_class_mirrors_are_populated() {
+    let out = compile_and_run_capture(
+        r#"<?php
+#[Attribute]
+class EvalReflectionMirrorAttribute {}
+#[EvalReflectionMirrorAttribute]
+class EvalReflectionMirrorTarget {
+    public const FLAG = 7;
+    public int $field = 1;
+    public function action(): void {}
+}
+$code = $argc > 1 ? $argv[1] : '$class = new ReflectionClass("EvalReflectionMirrorTarget");
+$method = new ReflectionMethod("EvalReflectionMirrorTarget", "action");
+$property = new ReflectionProperty("EvalReflectionMirrorTarget", "field");
+$constant = new ReflectionClassConstant("EvalReflectionMirrorTarget", "FLAG");
+$attribute = $class->getAttributes()[0];
+echo $class->name . "|";
+echo $method->name . ":" . $method->class . "|";
+echo $property->name . ":" . $property->class . "|";
+echo $constant->name . ":" . $constant->class . "|";
+echo $attribute->name . ":" . $attribute->getName();';
+eval($code);
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalReflectionMirrorTarget|action:EvalReflectionMirrorTarget|field:EvalReflectionMirrorTarget|FLAG:EvalReflectionMirrorTarget|EvalReflectionMirrorAttribute:EvalReflectionMirrorAttribute"
+    );
+}
+
 /// Verifies eval ReflectionFunction preserves rich eval-declared function signatures.
 #[test]
 fn test_eval_reflection_function_reports_signature_metadata() {

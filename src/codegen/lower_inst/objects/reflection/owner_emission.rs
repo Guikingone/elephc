@@ -10,6 +10,52 @@
 
 use super::*;
 
+/// Releases generic defaults in the builtin Reflection prefix before metadata replaces them.
+///
+/// A user subclass is allocated through the ordinary object path, which initializes inherited
+/// strings, arrays, objects, and boxed values. Reflection metadata writers expect the zeroed
+/// builtin allocation shape, so every inherited owner slot is retired by its declared storage
+/// type and reset before those writers run. User-declared suffix slots remain untouched.
+pub(super) fn clear_reflection_owner_prefix(
+    ctx: &mut FunctionContext<'_>,
+    owner_class_name: &str,
+    object: ValueId,
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(owner_class_name)
+        .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", owner_class_name)))?;
+    let slots = class_info
+        .properties
+        .iter()
+        .enumerate()
+        .map(|(index, (name, ty))| {
+            let owned_reference = class_info.owned_reference_properties.contains(name);
+            (8 + index * 16, ty.codegen_repr(), owned_reference)
+        })
+        .collect::<Vec<_>>();
+    for (offset, ty, owned_reference) in slots {
+        ctx.load_value_to_result(object)?;
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        let object_reg = abi::secondary_scratch_reg(ctx.emitter);
+        abi::emit_push_reg(ctx.emitter, result_reg);
+        abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, offset);
+        if owned_reference {
+            abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
+        } else if ty == PhpType::Str {
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        } else {
+            abi::emit_decref_if_refcounted(ctx.emitter, &ty);
+        }
+        abi::emit_pop_reg(ctx.emitter, object_reg);
+        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset);
+        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset + 8);
+        abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    }
+    Ok(())
+}
+
 /// Allocates and populates one builtin Reflection owner object from metadata.
 pub(super) fn emit_reflection_owner_object(
     ctx: &mut FunctionContext<'_>,

@@ -4631,7 +4631,10 @@ fn test_reflection_subclass_preserves_normal_construction() {
 class ExpandedReflectionTarget {}
 
 #[AllowDynamicProperties]
-class ExpandedReflectionClass extends ReflectionClass {
+class ExpandedReflectionBase extends ReflectionClass {
+    public function __construct(string $name) { parent::__construct($name); }
+}
+class ExpandedReflectionClass extends ExpandedReflectionBase {
     private string $mine = 'default';
     public string $label = 'before';
     public string $ownedValue = 'seed';
@@ -4659,5 +4662,167 @@ echo "done\n";
         out,
         "ExpandedReflectionTarget|ExpandedReflectionTarget|default|constructed|tail|changed\n\
 done\n"
+    );
+}
+
+/// Reflection subclass metadata replaces generic defaults without leaking their old owners.
+#[test]
+fn test_reflection_subclass_metadata_releases_initialized_prefix_defaults() {
+    /// Returns the final live-block count from one heap-debug run.
+    fn live_blocks(out: &crate::support::ProgramOutput) -> u64 {
+        let marker = "live_blocks=";
+        let start = out
+            .stderr
+            .rfind(marker)
+            .unwrap_or_else(|| panic!("no heap debug summary in stderr: {}", out.stderr))
+            + marker.len();
+        let rest = &out.stderr[start..];
+        let end = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        rest[..end].parse().expect("live_blocks is a number")
+    }
+
+    /// Measures per-construction leak growth while cancelling fixed Reflection caches.
+    fn live_block_growth(class_declaration: &str, allocation: &str) -> u64 {
+        let source = r#"<?php
+class ReflectionPrefixTarget {
+    public function action(): void {}
+}
+__CLASS_DECLARATION__
+$iterations = $argc > 2 ? 20 : 1;
+for ($i = 0; $i < $iterations; $i++) {
+    $class = __ALLOCATION__;
+    echo $class->name, "\n";
+    unset($class);
+}
+"#
+        .replace("__CLASS_DECLARATION__", class_declaration)
+        .replace("__ALLOCATION__", allocation);
+        let outputs = compile_and_run_with_heap_debug_per_argv(
+            &source,
+            &[&[], &["many", "iterations"]],
+        );
+        let [few, many] = outputs.as_slice() else {
+            panic!("expected two heap-debug runs")
+        };
+        assert!(few.success, "{}", few.stderr);
+        assert!(many.success, "{}", many.stderr);
+        assert_eq!(few.stdout, "ReflectionPrefixTarget\n");
+        assert_eq!(
+            many.stdout,
+            "ReflectionPrefixTarget\n".repeat(20),
+            "{}",
+            many.stderr
+        );
+        live_blocks(many)
+            .checked_sub(live_blocks(few))
+            .expect("more Reflection constructions cannot reduce live blocks")
+    }
+
+    let builtin_growth = live_block_growth(
+        "",
+        "new ReflectionClass(ReflectionPrefixTarget::class)",
+    );
+    let subclass_growth = live_block_growth(
+        r#"class ReflectionPrefixClass extends ReflectionClass {
+    public function __construct(string $name) { parent::__construct($name); }
+}"#,
+        "new ReflectionPrefixClass(ReflectionPrefixTarget::class)",
+    );
+    assert_eq!(
+        subclass_growth, builtin_growth,
+        "Reflection subclass construction leaked defaults beyond the builtin owner's growth \
+         ({subclass_growth} versus {builtin_growth} live blocks across nineteen extra instances)"
+    );
+}
+
+/// Reflection subclass constructors must expose the metadata arguments they forward unchanged.
+#[test]
+fn test_reflection_subclass_rejects_unprovable_constructor_forwarding() {
+    let sources = [
+        r#"<?php
+class ReflectionForwardTarget {}
+class ReflectionMissingForward extends ReflectionClass {
+    public function __construct(string $name) {}
+}
+new ReflectionMissingForward(ReflectionForwardTarget::class);
+"#,
+        r#"<?php
+class ReflectionForwardTarget {}
+class ReflectionReorderedForward extends ReflectionClass {
+    public function __construct(string $ignored, string $name) {
+        parent::__construct($name);
+    }
+}
+new ReflectionReorderedForward('ignored', ReflectionForwardTarget::class);
+"#,
+        r#"<?php
+class ReflectionForwardTarget {}
+class ReflectionHardcodedForward extends ReflectionClass {
+    public function __construct(string $name) {
+        parent::__construct(ReflectionForwardTarget::class);
+    }
+}
+new ReflectionHardcodedForward('stdClass');
+"#,
+        r#"<?php
+class ReflectionForwardTarget {}
+class ReflectionTransformingParent extends ReflectionClass {
+    public function __construct(string $name) {
+        parent::__construct('stdClass');
+    }
+}
+class ReflectionNestedForward extends ReflectionTransformingParent {
+    public function __construct(string $name) {
+        parent::__construct($name);
+    }
+}
+new ReflectionNestedForward(ReflectionForwardTarget::class);
+"#,
+    ];
+    for source in sources {
+        let error = compile_source_expect_backend_error(source);
+        assert!(
+            error.contains(
+                "must directly forward the leading ReflectionClass constructor parameters unchanged to parent::__construct() as its first action"
+            ),
+            "unexpected backend diagnostic: {error}"
+        );
+    }
+}
+
+/// Direct writes to Reflection public metadata mirrors throw without changing their values.
+#[test]
+fn test_reflection_public_mirror_direct_writes_throw_reflection_exception() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionMirrorTarget {
+    public int $field = 1;
+    public function action(): void {}
+}
+class ReflectionMirrorSubclass extends ReflectionClass {}
+function reflectionReplacement(): string { echo 'rhs|'; return 'changed'; }
+$class = new ReflectionClass(ReflectionMirrorTarget::class);
+try { $class->name = reflectionReplacement(); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+echo $class->name, "\n";
+$subclass = new ReflectionMirrorSubclass(ReflectionMirrorTarget::class);
+try { $subclass->name = reflectionReplacement(); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+echo $subclass->name, "\n";
+$method = new ReflectionMethod(ReflectionMirrorTarget::class, 'action');
+try { $method->class = reflectionReplacement(); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+try { $method->name = reflectionReplacement(); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+echo $method->class, '|', $method->name;
+"#,
+    );
+    assert_eq!(
+        out,
+        "rhs|Cannot set read-only property ReflectionClass::$name|ReflectionMirrorTarget\n\
+rhs|Cannot set read-only property ReflectionMirrorSubclass::$name|ReflectionMirrorTarget\n\
+rhs|Cannot set read-only property ReflectionMethod::$class|rhs|Cannot set read-only property ReflectionMethod::$name|ReflectionMirrorTarget|action"
     );
 }

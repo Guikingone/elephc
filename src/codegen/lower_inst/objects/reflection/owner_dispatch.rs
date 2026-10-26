@@ -79,6 +79,7 @@ pub(in crate::codegen::lower_inst::objects) fn populate_reflection_owner_new(
             class_name
         ))
     })?;
+    clear_reflection_owner_prefix(ctx, &owner_class_name, result)?;
     if let Some(object_operand) = reflection_object_operand(ctx, &owner_class_name, inst)? {
         emit_reflection_owner_from_runtime_object_into(
             ctx,

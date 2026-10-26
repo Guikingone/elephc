@@ -391,6 +391,20 @@ fn check_object_property_write(
         validate_object_property_access(
             checker, class_name, property, !(readonly_null_coalesce || readonly_write_guard), span,
         )?;
+        if reflection_public_mirror_property(&declaring_class, property) {
+            crate::types::checker::record_throw_access_site(
+                &mut checker.throw_access_sites,
+                span,
+                crate::types::ThrowAccessInfo {
+                    span,
+                    kind: crate::types::ThrowAccessKind::ReflectionReadOnlyProperty {
+                        class_name: class_name.trim_start_matches('\\').to_string(),
+                        property: property.to_string(),
+                    },
+                },
+            );
+            return Ok(());
+        }
         if readonly_write_guard {
             let setter = class_info.property_set_visibilities.get(property)
                 .or_else(|| class_info.property_visibilities.get(property))
@@ -468,6 +482,41 @@ fn check_object_property_write(
         }
     }
     Ok(())
+}
+
+/// Returns whether a declared property is one of PHP Reflection's direct-write-only mirrors.
+///
+/// These properties are not ordinary language-level `readonly` properties: PHP permits
+/// `unset()` and reference binding, but a direct assignment raises `ReflectionException`.
+/// Matching the declaring synthetic class keeps a user property that merely reuses the same
+/// name writable.
+fn reflection_public_mirror_property(declaring_class: &str, property: &str) -> bool {
+    let declaring_class = declaring_class.trim_start_matches('\\');
+    match property {
+        "name" => matches!(
+            declaring_class,
+            "ReflectionAttribute"
+                | "ReflectionClass"
+                | "ReflectionObject"
+                | "ReflectionEnum"
+                | "ReflectionFunction"
+                | "ReflectionMethod"
+                | "ReflectionProperty"
+                | "ReflectionParameter"
+                | "ReflectionClassConstant"
+                | "ReflectionEnumUnitCase"
+                | "ReflectionEnumBackedCase"
+        ),
+        "class" => matches!(
+            declaring_class,
+            "ReflectionMethod"
+                | "ReflectionProperty"
+                | "ReflectionClassConstant"
+                | "ReflectionEnumUnitCase"
+                | "ReflectionEnumBackedCase"
+        ),
+        _ => false,
+    }
 }
 
 /// Validates that the current context can access a named property, checking visibility and class scope.

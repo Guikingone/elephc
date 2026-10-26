@@ -10,6 +10,7 @@
 //! Key details:
 //! - Reflection owner objects store private metadata slots such as `__attrs`,
 //!   `__name`, `__parameters`, and the ReflectionClass metadata-name arrays.
+//! - PHP-visible `name` and `class` mirrors retain their own string references.
 //! - The helper retains supplied array payloads for object ownership.
 
 use crate::codegen::abi;
@@ -17,7 +18,6 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::ir::Module;
 use crate::types::ClassInfo;
-
 
 /// Fixed object layout for one synthetic Reflection owner class.
 struct ReflectionOwnerLayout {
@@ -27,6 +27,10 @@ struct ReflectionOwnerLayout {
     name_hi: Option<usize>,
     public_name_lo: Option<usize>,
     public_name_hi: Option<usize>,
+    public_class_lo: Option<usize>,
+    public_class_hi: Option<usize>,
+    related_class_name_lo: usize,
+    related_class_name_hi: usize,
     short_name_lo: Option<usize>,
     short_name_hi: Option<usize>,
     namespace_name_lo: Option<usize>,
@@ -195,45 +199,71 @@ fn module_uses_eval(module: &Module) -> bool {
 
 /// Returns the Reflection owner object layouts from class metadata.
 fn reflection_owner_layouts(module: &Module) -> Option<ReflectionOwnerLayouts> {
-    let parameter_info = module.class_infos.get("ReflectionParameter")?;
-    let mut parameter = reflection_owner_layout(parameter_info, true)?;
-    parameter.public_name_lo = reflection_property_offset(parameter_info, "name");
-    parameter.public_name_hi = parameter.public_name_lo.map(|offset| offset + 8);
+    let class_info = module.class_infos.get("ReflectionClass")?;
+    let related_class_name_lo = reflection_property_offset(class_info, "__name")?;
     Some(ReflectionOwnerLayouts {
-        class: reflection_owner_layout(module.class_infos.get("ReflectionClass")?, true)?,
-        object_class: reflection_owner_layout(module.class_infos.get("ReflectionObject")?, true)?,
-        enum_class: reflection_owner_layout(module.class_infos.get("ReflectionEnum")?, true)?,
-        function: reflection_owner_layout(module.class_infos.get("ReflectionFunction")?, true)?,
-        method: reflection_owner_layout(module.class_infos.get("ReflectionMethod")?, true)?,
-        property: reflection_owner_layout(module.class_infos.get("ReflectionProperty")?, true)?,
+        class: reflection_owner_layout(class_info, true, related_class_name_lo)?,
+        object_class: reflection_owner_layout(
+            module.class_infos.get("ReflectionObject")?, true, related_class_name_lo,
+        )?,
+        enum_class: reflection_owner_layout(
+            module.class_infos.get("ReflectionEnum")?, true, related_class_name_lo,
+        )?,
+        function: reflection_owner_layout(
+            module.class_infos.get("ReflectionFunction")?, true, related_class_name_lo,
+        )?,
+        method: reflection_owner_layout(
+            module.class_infos.get("ReflectionMethod")?, true, related_class_name_lo,
+        )?,
+        property: reflection_owner_layout(
+            module.class_infos.get("ReflectionProperty")?, true, related_class_name_lo,
+        )?,
         class_constant: reflection_owner_layout(
             module.class_infos.get("ReflectionClassConstant")?,
             true,
+            related_class_name_lo,
         )?,
         enum_unit_case: reflection_owner_layout(
             module.class_infos.get("ReflectionEnumUnitCase")?,
             true,
+            related_class_name_lo,
         )?,
         enum_backed_case: reflection_owner_layout(
             module.class_infos.get("ReflectionEnumBackedCase")?,
             true,
+            related_class_name_lo,
         )?,
-        parameter,
-        named_type: reflection_owner_layout(module.class_infos.get("ReflectionNamedType")?, true)?,
-        union_type: reflection_owner_layout(module.class_infos.get("ReflectionUnionType")?, false)?,
+        parameter: reflection_owner_layout(
+            module.class_infos.get("ReflectionParameter")?, true, related_class_name_lo,
+        )?,
+        named_type: reflection_owner_layout(
+            module.class_infos.get("ReflectionNamedType")?, true, related_class_name_lo,
+        )?,
+        union_type: reflection_owner_layout(
+            module.class_infos.get("ReflectionUnionType")?, false, related_class_name_lo,
+        )?,
         intersection_type: reflection_owner_layout(
             module.class_infos.get("ReflectionIntersectionType")?,
             false,
+            related_class_name_lo,
         )?,
     })
 }
 
 /// Returns one Reflection owner layout from class metadata.
-fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<ReflectionOwnerLayout> {
+fn reflection_owner_layout(
+    info: &ClassInfo,
+    has_name: bool,
+    related_class_name_lo: usize,
+) -> Option<ReflectionOwnerLayout> {
     let attrs_lo = reflection_property_offset(info, "__attrs")?;
     let name_lo = has_name
         .then(|| reflection_property_offset(info, "__name"))
         .flatten();
+    let public_name_lo = has_name
+        .then(|| reflection_property_offset(info, "name"))
+        .flatten();
+    let public_class_lo = reflection_property_offset(info, "class");
     let short_name_lo = reflection_property_offset(info, "__short_name");
     let namespace_name_lo = reflection_property_offset(info, "__namespace_name");
     let interface_names_lo = reflection_property_offset(info, "__interface_names");
@@ -301,8 +331,12 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         property_count: info.properties.len(),
         name_lo,
         name_hi: name_lo.map(|offset| offset + 8),
-        public_name_lo: None,
-        public_name_hi: None,
+        public_name_lo,
+        public_name_hi: public_name_lo.map(|offset| offset + 8),
+        public_class_lo,
+        public_class_hi: public_class_lo.map(|offset| offset + 8),
+        related_class_name_lo,
+        related_class_name_hi: related_class_name_lo + 8,
         short_name_lo,
         short_name_hi: short_name_lo.map(|offset| offset + 8),
         namespace_name_lo,
@@ -976,7 +1010,7 @@ fn emit_set_owner_name_property_aarch64(emitter: &mut Emitter, layout: &Reflecti
         emitter.instruction("bl __rt_incref");                                  // both public and private slots own the shared string
         emitter.instruction("ldr x1, [sp, #40]");                               // reload the persisted name
         emitter.instruction("ldr x2, [sp, #16]");                               // restore its byte length
-        emitter.instruction("ldr x9, [sp, #32]");                               // reload the ReflectionParameter object pointer
+        emitter.instruction("ldr x9, [sp, #32]");                               // reload the Reflection owner object pointer
         abi::emit_store_to_address(emitter, "x1", "x9", public_name_lo);
         abi::emit_store_to_address(emitter, "x2", "x9", public_name_hi);
     }
@@ -1078,7 +1112,7 @@ fn emit_set_owner_name_property_x86_64(emitter: &mut Emitter, layout: &Reflectio
         emitter.instruction("call __rt_incref");                                // both public and private slots own the shared string
         emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                   // reload the persisted name
         emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                   // restore its byte length
-        emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                   // reload the ReflectionParameter object pointer
+        emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                   // reload the Reflection owner object pointer
         abi::emit_store_to_address(emitter, "rax", "r10", public_name_lo);
         abi::emit_store_to_address(emitter, "rdx", "r10", public_name_hi);
     }
@@ -2357,6 +2391,26 @@ fn emit_set_owner_parent_class_property_aarch64(
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", low);
     abi::emit_store_zero_to_address(emitter, "x9", high);
+    let (Some(public_low), Some(public_high)) =
+        (layout.public_class_lo, layout.public_class_hi)
+    else {
+        return;
+    };
+    emitter.instruction("ldr x0, [sp, #136]");                                  // reload the boxed declaring ReflectionClass value
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose its object payload and runtime tag
+    emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means object
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject malformed declaring-class metadata
+    abi::emit_load_from_address(emitter, "x10", "x1", layout.related_class_name_lo);
+    abi::emit_load_from_address(emitter, "x11", "x1", layout.related_class_name_hi);
+    emitter.instruction("sub sp, sp, #16");                                     // preserve the declaring-class name across its retain
+    emitter.instruction("stp x10, x11, [sp]");                                  // save both words of the public class string
+    emitter.instruction("mov x0, x10");                                         // pass the shared string payload to incref
+    emitter.instruction("bl __rt_incref");                                      // give the public class mirror its own owner
+    emitter.instruction("ldp x10, x11, [sp]");                                  // restore the retained class-name pair
+    emitter.instruction("add sp, sp, #16");                                     // restore the helper frame base
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection member object pointer
+    abi::emit_store_to_address(emitter, "x10", "x9", public_low);
+    abi::emit_store_to_address(emitter, "x11", "x9", public_high);
 }
 
 /// Stores a retained x86_64 boxed parent ReflectionClass-or-false cell.
@@ -2377,6 +2431,28 @@ fn emit_set_owner_parent_class_property_x86_64(
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", low);
     abi::emit_store_zero_to_address(emitter, "r10", high);
+    let (Some(public_low), Some(public_high)) =
+        (layout.public_class_lo, layout.public_class_hi)
+    else {
+        return;
+    };
+    emitter.instruction("mov rax, QWORD PTR [rbp - 144]");                      // reload the boxed declaring ReflectionClass value
+    emitter.instruction("call __rt_mixed_unbox");                               // expose its object payload and runtime tag
+    emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means object
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject malformed declaring-class metadata
+    abi::emit_load_from_address(emitter, "r8", "rdi", layout.related_class_name_lo);
+    abi::emit_load_from_address(emitter, "r9", "rdi", layout.related_class_name_hi);
+    emitter.instruction("sub rsp, 16");                                         // preserve the declaring-class name across its retain
+    emitter.instruction("mov QWORD PTR [rsp], r8");                             // save the public class string pointer
+    emitter.instruction("mov QWORD PTR [rsp + 8], r9");                         // save the public class string length
+    emitter.instruction("mov rax, r8");                                         // pass the shared string payload to incref
+    emitter.instruction("call __rt_incref");                                    // give the public class mirror its own owner
+    emitter.instruction("mov r8, QWORD PTR [rsp]");                             // restore the retained class-name pointer
+    emitter.instruction("mov r9, QWORD PTR [rsp + 8]");                         // restore the retained class-name length
+    emitter.instruction("add rsp, 16");                                         // restore the helper frame base
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection member object pointer
+    abi::emit_store_to_address(emitter, "r8", "r10", public_low);
+    abi::emit_store_to_address(emitter, "r9", "r10", public_high);
 }
 
 /// Stores a retained ARM64 boxed declaring ReflectionFunction/Method cell.
