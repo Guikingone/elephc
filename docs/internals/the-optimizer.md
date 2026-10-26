@@ -673,6 +673,11 @@ a numeric box cannot run a destructor. General EIR effects stay conservative;
 unknown tags, object-bearing slots, reference aliases and arbitrary allocations
 still fail the buffer-preservation proof. This specialization does not extend
 the separate property-read motion or straight-line property-reuse allowlists.
+Explicit casts from a raw float to int remain excluded because out-of-range
+values can warn and run a PHP error handler; boxed numeric casts use a silent
+runtime path. The numeric-domain analysis caches slot access tables, escape and
+dominance information, and definitive failures for each immutable function.
+Positive cycle facts become reusable only after the entire query succeeds.
 
 In modules that allow property reuse, buffer acquire/release are no-op word
 operations, and plain named reads on `$this` can throw without changing buffers

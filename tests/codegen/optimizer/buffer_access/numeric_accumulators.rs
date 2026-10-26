@@ -132,3 +132,38 @@ walk($b, 2);
     assert!(!ir.contains("buffer_resolve"), "{ir}");
     assert_both_modes_fail_after(source, "before\n", "use of buffer after buffer_free()");
 }
+
+/// A raw float cast's range warning may free a buffer before the pending element store.
+#[test]
+fn test_buffer_numeric_accumulator_rejects_float_cast_warning_handler() {
+    let source = r#"<?php
+class CastBufferOwner {
+    public buffer<int> $value;
+    public function __construct(buffer<int> $value) { $this->value = $value; }
+}
+function cast_into_buffer(buffer<float> $input, buffer<int> $out, int $n): void {
+    for ($i = 0; $i < $n; $i++) { $out[$i] = (int)$input[$i]; }
+}
+$input = buffer_new<float>(1);
+$out = buffer_new<int>(1);
+$input[0] = 1e20;
+$owner = new CastBufferOwner($out);
+set_error_handler(function (int $errno, string $message) use ($owner): bool {
+    $buffer = $owner->value;
+    buffer_free($buffer);
+    return $errno > 0 || $message !== '';
+});
+echo "before\n";
+cast_into_buffer($input, $out, 1);
+echo "after\n";
+"#;
+    let cached_bound = source.replace(
+        "    for ($i = 0; $i < $n; $i++)",
+        "    $n = buffer_len($out);\n    for ($i = 0; $i < $n; $i++)",
+    );
+    for fixture in [source, cached_bound.as_str()] {
+        let ir = function_ir(fixture, true, "cast_into_buffer");
+        assert!(!ir.contains("buffer_resolve"), "{ir}");
+        assert_both_modes_fail_after(fixture, "before\n", "use of buffer after buffer_free()");
+    }
+}

@@ -11,7 +11,7 @@
 
 use std::collections::HashSet;
 
-use crate::ir::{Function, Immediate, InstId, IrHeapKind, IrType, LocalSlotId, Op};
+use crate::ir::{Function, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalSlotId, Op};
 use crate::types::PhpType;
 
 use crate::ir_passes::numeric_domain::{self, NumericInputs};
@@ -41,13 +41,25 @@ pub(super) fn preserving_instructions(function: &Function) -> HashSet<InstId> {
             Op::MixedNumericBinop if numeric_domain::mixed(inst) => numeric.prove(&inst.operands),
             Op::StrIncDec if numeric_domain::increment(inst) => numeric.prove(&inst.operands),
             Op::PhpRelCmp if numeric_domain::comparison(inst) => numeric.prove(&inst.operands),
-            Op::Cast if matches!(inst.immediate, Some(Immediate::CastTarget(IrType::I64 | IrType::F64)))
-                && matches!(inst.result_php_type.codegen_repr(),
-                    PhpType::Int | PhpType::Float | PhpType::Bool) => numeric.prove(&inst.operands),
+            Op::Cast if warning_free_numeric_cast(function, inst) => numeric.prove(&inst.operands),
             _ => false,
         };
         preserves.then_some(InstId::from_raw(index as u32))
     }).collect()
+}
+
+/// Excludes diagnostic conversions, including explicit raw float-to-int range warnings.
+fn warning_free_numeric_cast(function: &Function, inst: &Instruction) -> bool {
+    let Some(Immediate::CastTarget(target @ (IrType::I64 | IrType::F64))) = inst.immediate
+    else { return false; };
+    if !matches!(inst.result_php_type.codegen_repr(), PhpType::Int | PhpType::Float | PhpType::Bool) {
+        return false;
+    }
+    // Raw floats use emit_explicit_float_result_to_int, whose range warning runs PHP handlers.
+    // A boxed numeric input instead uses the silent __rt_mixed_cast_int helper.
+    !(target == IrType::I64 && inst.result_php_type != PhpType::Bool
+        && inst.operands.first().and_then(|&value| function.value(value))
+            .is_some_and(|value| value.php_type.codegen_repr() == PhpType::Float))
 }
 
 #[cfg(test)]
@@ -130,6 +142,27 @@ mod tests {
             b.terminate(end);
             let inst = InstId::from_raw(function.instructions.len() as u32 - 1);
             assert_eq!(preserving_instructions(&function).contains(&inst), expected);
+        }
+    }
+
+    /// Raw float-to-int casts may warn even when the input is proven numeric.
+    #[test]
+    fn buffer_numeric_preservation_rejects_raw_float_int_casts() {
+        for (target, php_type, expected) in [
+            (IrType::I64, PhpType::Int, false),
+            (IrType::I64, PhpType::Bool, true),
+            (IrType::F64, PhpType::Float, true),
+        ] {
+            let mut function = Function::new("float_cast_preservation".into(), IrType::Void, PhpType::Void);
+            let mut b = Builder::new(&mut function);
+            let entry = b.create_named_block("entry", vec![]);
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let value = b.emit_const_f64(1e20);
+            b.emit(Op::Cast, vec![value], Some(Immediate::CastTarget(target)), target, php_type, Ownership::NonHeap);
+            b.terminate(Terminator::Return { value: None });
+            let cast = InstId::from_raw(function.instructions.len() as u32 - 1);
+            assert_eq!(preserving_instructions(&function).contains(&cast), expected);
         }
     }
 }
