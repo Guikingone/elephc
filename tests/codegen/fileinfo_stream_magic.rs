@@ -93,7 +93,7 @@ restore_error_handler();
 foreach (["castmissing", "castfalse", "castint", "castresource", "castemptyarray", "castzerostring", "castzerofloat", "casttruestring", "casttruefloat", "casttruearray", "castself"] as $scheme) { stream_wrapper_unregister($scheme); }
 unset($f, $stream, $self, $scheme, $code, $e);
 "#;
-    let (out, original_asm) = compile_and_run_with_heap_debug_and_asm(source);
+    let (out, _) = compile_and_run_with_heap_debug_and_asm(source);
     let mut expected = String::new();
     for function in ["finfo::file", "finfo_file", "mime_content_type"] {
         expected.push_str(&format!("{function}(): FileinfoCastMissing::stream_cast is not implemented!\nclose\ntext/plain\n"));
@@ -112,54 +112,36 @@ unset($f, $stream, $self, $scheme, $code, $e);
     assert_eq!(out.stdout, expected);
     assert!(out.stderr.contains("finfo::file(): FileinfoCastInt::stream_cast must return a stream resource"), "{}", out.stderr);
     if !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
-        let mut selected = false;
-        let mut reader_end: Option<String> = None;
-        for line in original_asm.lines().filter(|line| {
-            if line.contains("@fn ") && (line.contains("symbol=main ") || line.ends_with("symbol=main") || line.contains("symbol=_main ") || line.ends_with("symbol=_main")) { selected = true; }
-            let include = selected;
-            if line.contains("@endfn ") { selected = false; }
-            if !include { return false; }
-            let instruction = line.trim();
-            if let Some(end) = &reader_end {
-                if instruction != end { return false; }
-                reader_end = None;
-            }
-            if (instruction.starts_with("jmp ") || instruction.starts_with("b "))
-                && instruction.contains("_backtrace_call_site_")
-            {
-                reader_end = instruction.split_whitespace().last().map(|label| format!("{label}:"));
-                return false;
-            }
-            true
-        }).take(12000) { eprintln!("cast original: {line}"); }
         let declarations = source.split("\nstream_wrapper_register(").next().unwrap();
         for (label, tail) in [
-            ("normal", r#"stream_wrapper_register("castfalse", "FileinfoCastFalse"); $f = new finfo(FILEINFO_MIME_TYPE); $f->file("castfalse://x"); stream_wrapper_unregister("castfalse"); unset($f);"#),
-            ("invalid", r#"stream_wrapper_register("casttruestring", "FileinfoCastTrueString"); $f = new finfo(FILEINFO_MIME_TYPE); try { $f->file("casttruestring://x"); } catch (Throwable $e) { echo $e->getMessage(); } stream_wrapper_unregister("casttruestring"); unset($f, $e);"#),
-            ("handler", r#"stream_wrapper_register("castmissing", "FileinfoCastMissing"); $f = new finfo(FILEINFO_MIME_TYPE); set_error_handler(function(int $level, string $message): bool { throw new Error("cast warning"); }); try { $f->file("castmissing://x"); } catch (Throwable $e) { echo $e->getMessage(); } restore_error_handler(); stream_wrapper_unregister("castmissing"); unset($f, $e);"#),
-            ("eval-callback", r#"stream_wrapper_register("castfalse", "FileinfoCastFalse"); $f = new finfo(FILEINFO_MIME_TYPE); $code = $argc > 0 ? 'echo $f->file("castfalse://x");' : ''; eval($code); stream_wrapper_unregister("castfalse"); unset($f, $code);"#),
-            ("eval-invalid", r#"stream_wrapper_register("casttruestring", "FileinfoCastTrueString"); $f = new finfo(FILEINFO_MIME_TYPE); try { $f->file("casttruestring://x"); } catch (Throwable $e) { echo $e->getMessage(); } $code = $argc > 0 ? 'echo "";' : ''; eval($code); stream_wrapper_unregister("casttruestring"); unset($f, $e, $code);"#),
-            ("resource", r#"stream_wrapper_register("castresource", "FileinfoCastResource"); $f = new finfo(FILEINFO_MIME_TYPE); echo $f->file("castresource://x"); stream_wrapper_unregister("castresource"); unset($f);"#),
-            ("empty-array", r#"stream_wrapper_register("castemptyarray", "FileinfoCastEmptyArray"); $f = new finfo(FILEINFO_MIME_TYPE); echo $f->file("castemptyarray://x"); stream_wrapper_unregister("castemptyarray"); unset($f);"#),
-            ("zero-string", r#"stream_wrapper_register("castzerostring", "FileinfoCastZeroString"); $f = new finfo(FILEINFO_MIME_TYPE); echo $f->file("castzerostring://x"); stream_wrapper_unregister("castzerostring"); unset($f);"#),
-            ("zero-float", r#"stream_wrapper_register("castzerofloat", "FileinfoCastZeroFloat"); $f = new finfo(FILEINFO_MIME_TYPE); echo $f->file("castzerofloat://x"); stream_wrapper_unregister("castzerofloat"); unset($f);"#),
-            ("missing-public", r#"stream_wrapper_register("castmissing", "FileinfoCastMissing"); set_error_handler(function(int $level, string $message): bool { return true; }); $f = new finfo(FILEINFO_MIME_TYPE); echo $f->file("castmissing://x"), finfo_file($f, "castmissing://x"), mime_content_type("castmissing://x"); $stream = fopen("castmissing://x", "rb"); echo mime_content_type($stream); fclose($stream); restore_error_handler(); stream_wrapper_unregister("castmissing"); unset($f, $stream);"#),
-            ("loop-invalid", r#"stream_wrapper_register("castint", "FileinfoCastInt"); stream_wrapper_register("casttruestring", "FileinfoCastTrueString"); stream_wrapper_register("casttruefloat", "FileinfoCastTrueFloat"); stream_wrapper_register("casttruearray", "FileinfoCastTrueArray"); $f = new finfo(FILEINFO_MIME_TYPE); foreach (["castint", "casttruestring", "casttruefloat", "casttruearray"] as $scheme) { try { $f->file($scheme . "://x"); } catch (Throwable $e) { echo $e->getMessage(); } } foreach (["castint", "casttruestring", "casttruefloat", "casttruearray"] as $scheme) { stream_wrapper_unregister($scheme); } unset($f, $scheme, $e);"#),
-            ("loop-eval-invalid", r#"stream_wrapper_register("castint", "FileinfoCastInt"); stream_wrapper_register("casttruestring", "FileinfoCastTrueString"); stream_wrapper_register("casttruefloat", "FileinfoCastTrueFloat"); stream_wrapper_register("casttruearray", "FileinfoCastTrueArray"); $f = new finfo(FILEINFO_MIME_TYPE); foreach (["castint", "casttruestring", "casttruefloat", "casttruearray"] as $scheme) { try { $f->file($scheme . "://x"); } catch (Throwable $e) { echo $e->getMessage(); } } $code = $argc > 0 ? 'echo "";' : ''; eval($code); foreach (["castint", "casttruestring", "casttruefloat", "casttruearray"] as $scheme) { stream_wrapper_unregister($scheme); } unset($f, $scheme, $e, $code);"#),
-            ("self", r#"stream_wrapper_register("castself", "FileinfoCastSelf"); set_error_handler(function(int $level, string $message): bool { return true; }); $self = fopen("castself://x", "rb"); FileinfoCastSelf::$stream = $self; mime_content_type($self); FileinfoCastSelf::$stream = null; fclose($self); restore_error_handler(); stream_wrapper_unregister("castself"); unset($self);"#),
+            ("eval-callback-handler", r#"stream_wrapper_register("castfalse", "FileinfoCastFalse"); $f = new finfo(FILEINFO_MIME_TYPE); set_error_handler(function(int $level, string $message): bool { echo $message, "\n"; return true; }); $code = $argc > 0 ? 'echo $f->file("castfalse://x"), "\n";' : ''; eval($code); restore_error_handler(); stream_wrapper_unregister("castfalse"); unset($f, $code);"#),
+            ("eval-after-aot", r#"stream_wrapper_register("castfalse", "FileinfoCastFalse"); $f = new finfo(FILEINFO_MIME_TYPE); set_error_handler(function(int $level, string $message): bool { echo $message, "\n"; return true; }); echo $f->file("castfalse://x"), "\n"; $code = $argc > 0 ? 'echo $f->file("castfalse://x"), "\n";' : ''; eval($code); restore_error_handler(); stream_wrapper_unregister("castfalse"); unset($f, $code);"#),
         ] {
-            let (control, control_asm) = compile_and_run_with_heap_debug_and_asm(&format!("{declarations}\n{tail}"));
+            let (control, _) = compile_and_run_with_heap_debug_and_asm(&format!("{declarations}\n{tail}"));
             eprintln!("cast ownership control {label}: {}\n{}", control.stdout, control.stderr);
-            if label == "eval-callback" && !control.stderr.contains("HEAP DEBUG: leak summary: clean") {
-                let mut selected = false;
-                for line in control_asm.lines().filter(|line| {
-                    let instruction = line.trim();
-                    if instruction.starts_with("__elephc_eval_method_") && instruction.ends_with(':') {
-                        selected = instruction.starts_with("__elephc_eval_method_finfo_finfo_file");
-                    }
-                    selected
-                }).take(2000) { eprintln!("eval file bridge: {line}"); }
+        }
+        let phases = [
+            ("missing", "echo $f->file(\"castmissing://x\")", "foreach ([\"castfalse\""),
+            ("cast-loop", "foreach ([\"castfalse\"", "$code = $argc"),
+            ("eval", "$code = $argc", "$self = fopen"),
+            ("self", "$self = fopen", "restore_error_handler();"),
+            ("default-handler", "try { $f->file(\"castint://x\")", "set_error_handler(function(int $level, string $message): bool { echo \"handler"),
+            ("throw-handler", "set_error_handler(function(int $level, string $message): bool { echo \"handler", "foreach ([\"castmissing\""),
+        ].map(|(label, start, end)| {
+            let begin = source.find(start).unwrap();
+            let finish = begin + source[begin..].find(end).unwrap();
+            (label, begin, finish)
+        });
+        // Keep every phase in the AST so eval capture and final slot types stay active.
+        for disabled in std::iter::once("none").chain(phases.iter().map(|phase| phase.0)) {
+            let mut control_source = source.to_string();
+            for (label, begin, finish) in phases.iter().rev() {
+                let condition = if *label == disabled { "$argc < 0" } else { "$argc > 0" };
+                control_source.insert_str(*finish, "}\n");
+                control_source.insert_str(*begin, &format!("if ({condition}) {{\n"));
             }
+            let (control, _) = compile_and_run_with_heap_debug_and_asm(&control_source);
+            eprintln!("cast phase disabled {disabled}: {}\n{}", control.stdout, control.stderr);
         }
     }
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
