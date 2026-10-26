@@ -10,7 +10,7 @@
 
 use super::*;
 use super::super::{array_push_spread, begin_call_argument_evaluation,
-    container_property_slot_is_addressable, lower_ref_assign_array_elem, lower_ref_assign_call,
+    lower_ref_assign_array_elem, lower_ref_assign_call,
     prepare_scoped_addressable_ref_array_receiver};
 use super::super::call_operand_owners::publish_scoped_ref_receiver_alias;
 
@@ -90,18 +90,27 @@ pub(super) fn lower_live_array_push_place(
 fn addressable(ctx: &LoweringContext<'_, '_>, place: &Expr) -> bool {
     match &place.kind {
         ExprKind::Variable(_) => true,
-        ExprKind::PropertyAccess { object, property } =>
-            container_property_slot_is_addressable(ctx, object, property)
-                || reference_getter_method(ctx, place).is_some()
-                || property_plan(ctx, place).is_some_and(|plan| plan.rejection.is_none()
-                    && ctx.classes.get(&plan.class_name).is_some_and(|info|
-                        !info.methods.contains_key(&crate::names::php_symbol_key(
-                            &crate::names::property_hook_get_method(property)))
-                        && info.reference_properties.contains(property))),
-        ExprKind::StaticPropertyAccess { .. } => true,
-        ExprKind::ArrayAccess { array, .. } => addressable(ctx, array),
+        ExprKind::PropertyAccess { .. } => reference_getter_method(ctx, place).is_some()
+            || property_plan(ctx, place).is_some_and(|plan| plan.live_addressable),
+        ExprKind::StaticPropertyAccess { .. } => static_place_type(ctx, place)
+            .is_some_and(|ty| ty.supports_live_array_push_place()),
+        ExprKind::ArrayAccess { array, .. } => {
+            let unsafe_indexed_alias = matches!(static_place_type(ctx, place)
+                .map(|ty| ty.codegen_repr()), Some(PhpType::Array(_)))
+                && indexed_place_root_is_ref_bound(ctx, place);
+            !unsafe_indexed_alias && addressable(ctx, array)
+        }
         _ => false,
     }
+}
+
+/// Returns whether an indexed place is rooted in a local already bound to a PHP reference cell.
+fn indexed_place_root_is_ref_bound(ctx: &LoweringContext<'_, '_>, place: &Expr) -> bool {
+    let mut root = place;
+    while let ExprKind::ArrayAccess { array, .. } | ExprKind::ErrorSuppress(array) = &root.kind {
+        root = array;
+    }
+    matches!(&root.kind, ExprKind::Variable(name) if ctx.is_ref_bound_local(name))
 }
 
 /// Leases the managed cell returned by a by-reference getter before later call arguments run.

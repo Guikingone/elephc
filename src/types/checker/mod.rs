@@ -1079,10 +1079,12 @@ impl Checker {
         self.record_reference_alias_root_with_origin(expr, false);
     }
 
-    /// Returns whether a plain local receiver has an alias outside registry builtin mutation.
+    /// Returns whether a local at an indexed receiver's root has a non-builtin reference alias.
     pub(crate) fn local_has_non_builtin_reference_alias(&self, expr: &Expr) -> bool {
         let mut current = expr;
-        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &current.kind
+        while let ExprKind::ArrayAccess { array: value, .. }
+        | ExprKind::NamedArg { value, .. }
+        | ExprKind::ErrorSuppress(value) = &current.kind
         {
             current = value;
         }

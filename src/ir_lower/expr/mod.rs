@@ -245,7 +245,6 @@ pub(crate) use property_access::{
     prepare_scoped_addressable_ref_array_receiver, static_property_result_type,
 };
 pub(crate) use property_fetch_for_write::{
-    container_property_slot_is_addressable,
     is_static_property_write_chain, lower_static_property_write_chain,
     lower_static_property_write_chain_with_operands,
     by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,

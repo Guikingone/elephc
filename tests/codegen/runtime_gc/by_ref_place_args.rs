@@ -50,6 +50,27 @@ echo implode(",", $b->items);
     assert_clean(out, "0,1,2,3");
 }
 
+/// Inferred native property layouts use copy/write-back instead of a boxed live reference cell.
+#[test]
+fn test_array_push_inferred_properties_use_heap_clean_writeback() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class IntPushBox { public $items = [1]; }
+$ints = new IntPushBox();
+$intCount = array_push($ints->items, 2);
+class StringPushBox { public $items = ["a"]; }
+$strings = new StringPushBox();
+$stringCount = array_push($strings->items, "b");
+class StaticPushBox { public static $items = [1]; }
+$staticCount = array_push(StaticPushBox::$items, 2);
+echo $intCount, "|", json_encode($ints->items), "\n";
+echo $stringCount, "|", json_encode($strings->items), "\n";
+echo $staticCount, "|", json_encode(StaticPushBox::$items), "\n";
+"#,
+    );
+    assert_clean(out, "2|[1,2]\n2|[\"a\",\"b\"]\n2|[1,2]\n");
+}
+
 /// The aliased property case: the pre-sort array is still owned by `$copy`, so the
 /// write-back's release of the property's previous occupant must not free it.
 #[test]

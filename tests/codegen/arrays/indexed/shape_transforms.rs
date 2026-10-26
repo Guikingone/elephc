@@ -385,18 +385,14 @@ echo $count, "|", json_encode($values), "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// A reference-aliased indexed receiver still accepts a spread with identical element storage.
+/// Reference aliases accept compatible plain values, while prior builtins do not create aliases.
 #[test]
-fn test_array_push_indexed_reference_alias_compatible_spread_is_heap_clean() {
+fn test_array_push_indexed_reference_alias_compatible_plain_values_are_heap_clean() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
-function compatibleAliasTail(int $first) { return [$first, 3]; }
-for ($i = 0; $i < 32; $i++) {
-    $values = [1];
-    $alias =& $values;
-    $tail = compatibleAliasTail($argc + 1);
-    $count = array_push($alias, ...$tail);
-}
+$values = [1];
+$alias =& $values;
+$count = array_push($alias, 2, 3);
 echo $count, "|", json_encode($values), "|", json_encode($alias), "\n";
 $sequential = [1];
 array_push($sequential, 2);
@@ -409,6 +405,33 @@ echo array_push($sorted, "x"), "|", json_encode($sorted), "\n";
     assert_eq!(
         out.stdout,
         "3|[1,2,3]|[1,2,3]\n3|[1,2,\"x\"]\n3|[1,2,\"x\"]\n",
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nested indexed receivers under a reference-bound root use copy/write-back without crashing.
+#[test]
+fn test_array_push_nested_indexed_reference_root_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$rows = [[1], [2]];
+$alias =& $rows;
+$first = array_push($rows[0], 2);
+$second = array_push($rows[1]);
+$loopRows = [[1], [2]];
+$loopAlias =& $loopRows;
+for ($i = 0; $i < 2; $i++) {
+    array_push($loopRows[$i], (int) ($i + 10));
+}
+echo $first, "|", $second, "|", json_encode($rows), "|", json_encode($alias), "\n";
+echo json_encode($loopRows), "|", json_encode($loopAlias), "\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "2|1|[[1,2],[2]]|[[1,2],[2]]\n[[1,10],[2,11]]|[[1,10],[2,11]]\n",
         "stderr: {}",
         out.stderr
     );

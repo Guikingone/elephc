@@ -35,6 +35,9 @@ impl Checker {
                     && self.current_method.as_ref().is_some_and(|method| method == &get || method == &set);
                 let reference_getter = !in_accessor
                     && info.methods.get(&get).is_some_and(|sig| sig.by_ref_return);
+                let reference_property = info.reference_properties.contains(property);
+                let property_ty = info.visible_property(property)
+                    .map(|(_, (_, ty))| ty.clone());
                 let denied_hook = !in_accessor && !reference_getter
                     && (info.methods.contains_key(&set)
                         || info.methods.get(&get).is_some_and(|sig| !sig.by_ref_return));
@@ -51,7 +54,18 @@ impl Checker {
                     Some(format!("Cannot indirectly modify {}(set) property {owner}::${property} from {scope}",
                         Self::visibility_label(&setter)))
                 } else { None };
-                let plan = crate::types::ArrayPushPropertyPlan { class_name: class.clone(), rejection };
+                let structurally_addressable = self
+                    .ref_property_slot_addressability(object, property, env)?
+                    .is_some_and(|(_, addressable)| addressable);
+                let live_addressable = rejection.is_none()
+                    && (reference_getter
+                        || reference_property
+                        || (structurally_addressable
+                            && property_ty.as_ref()
+                                .is_some_and(PhpType::supports_live_array_push_place)));
+                let plan = crate::types::ArrayPushPropertyPlan {
+                    class_name: class.clone(), rejection, live_addressable,
+                };
                 let key = (self.current_loop_storage_scope.clone(), receiver.span);
                 if self.array_push_property_plans.get(&key).is_some_and(|existing| existing != &plan) {
                     return Err(crate::errors::CompileError::new(receiver.span,
@@ -59,9 +73,8 @@ impl Checker {
                 }
                 let permitted = plan.rejection.is_none();
                 self.array_push_property_plans.insert(key, plan);
-                if permitted && self.ref_property_slot_addressability(object, property, env)?
-                    .is_some_and(|(_, addressable)| addressable)
-                {
+                if permitted && live_addressable && structurally_addressable
+                    && !reference_getter && !reference_property {
                     self.reference_property_promotions.insert((class, property.clone()));
                 }
                 return Ok(!permitted);
@@ -72,6 +85,38 @@ impl Checker {
             _ => {},
         }
         Ok(false)
+    }
+
+    /// Returns whether a runtime spread can safely mutate this `array_push` receiver in place.
+    pub(crate) fn array_push_runtime_spread_supported(
+        &self,
+        receiver: &Expr,
+        receiver_ty: &PhpType,
+    ) -> bool {
+        if matches!(receiver_ty.codegen_repr(), PhpType::Array(_))
+            && self.local_has_non_builtin_reference_alias(receiver)
+        {
+            return false;
+        }
+        let mut root = receiver;
+        while let ExprKind::ArrayAccess { array, .. }
+        | ExprKind::NamedArg { value: array, .. }
+        | ExprKind::ErrorSuppress(array) = &root.kind
+        {
+            root = array;
+        }
+        match &root.kind {
+            ExprKind::Variable(_) => true,
+            ExprKind::PropertyAccess { .. } => self
+                .array_push_property_plans
+                .get(&(self.current_loop_storage_scope.clone(), root.span))
+                .is_some_and(|plan| plan.live_addressable),
+            ExprKind::StaticPropertyAccess { .. } => {
+                matches!(receiver.kind, ExprKind::StaticPropertyAccess { .. })
+                    && receiver_ty.supports_live_array_push_place()
+            }
+            _ => false,
+        }
     }
 
     /// Records a local whose reference binding requires canonical boxed storage after the call.

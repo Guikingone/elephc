@@ -18,7 +18,7 @@
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
-use crate::parser::ast::ExprKind;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 builtin! {
@@ -38,9 +38,15 @@ builtin! {
 /// associative or a declared PHP array with boxed storage. Returns the new element count as `Int`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    let denied_place = cx
+        .checker
+        .record_array_push_reference_place(&cx.args[0], cx.env)?;
     let aliased_indexed_receiver = cx
         .checker
         .local_has_non_builtin_reference_alias(&cx.args[0]);
+    let runtime_spread_supported = cx
+        .checker
+        .array_push_runtime_spread_supported(&cx.args[0], &arr_ty);
     let value_constraint = match arr_ty.codegen_repr() {
         PhpType::AssocArray { value, .. }
             if !matches!(value.codegen_repr(), PhpType::Mixed | PhpType::Iterable) => Some((
@@ -63,10 +69,25 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             let (_, element) = cx
                 .checker
                 .infer_runtime_iterated_call_arg_types(&cx.args[index], cx.env)?;
-            element
+            if is_active_global_argument(cx, &cx.args[index]) {
+                PhpType::Mixed
+            } else {
+                element
+            }
         } else {
-            cx.checker.infer_type(&cx.args[index], cx.env)?
+            let inferred = cx.checker.infer_type(&cx.args[index], cx.env)?;
+            if is_active_global_argument(cx, &cx.args[index]) {
+                PhpType::Mixed
+            } else {
+                inferred
+            }
         };
+        if is_runtime_spread_argument(&cx.args[index]) && !runtime_spread_supported {
+            return Err(CompileError::new(
+                cx.args[index].span,
+                "array_push() runtime spreads require stable non-aliased receiver storage",
+            ));
+        }
         if let Some((expected, message)) = &value_constraint {
             if value_ty.codegen_repr() != expected.codegen_repr() {
                 return Err(CompileError::new(
@@ -76,10 +97,27 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             }
         }
     }
-    let denied_place = cx.checker.record_array_push_reference_place(&cx.args[0], cx.env)?;
     if denied_place || matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || arr_ty.is_php_array() {
         Ok(PhpType::Int)
     } else {
         Err(CompileError::new(cx.span, "array_push() first argument must be array"))
     }
+}
+
+/// Returns whether an unpack source needs the runtime iterator coordinator.
+fn is_runtime_spread_argument(argument: &Expr) -> bool {
+    matches!(&argument.kind, ExprKind::Spread(source)
+        if !matches!(source.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)))
+}
+
+/// Returns whether one pushed value or spread source is backed by boxed global storage.
+fn is_active_global_argument(cx: &BuiltinCheckCtx<'_>, argument: &Expr) -> bool {
+    let mut value = argument;
+    while let ExprKind::Spread(inner)
+    | ExprKind::NamedArg { value: inner, .. }
+    | ExprKind::ErrorSuppress(inner) = &value.kind
+    {
+        value = inner;
+    }
+    matches!(&value.kind, ExprKind::Variable(name) if cx.checker.active_globals.contains(name))
 }

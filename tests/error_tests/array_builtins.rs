@@ -1298,6 +1298,24 @@ array_push($values, ...$tail);
 $values = ["a" => 1];
 array_push($values, "wrong");
 "#,
+        r#"<?php
+$value = 2;
+function pushGlobalValue(): void {
+    global $value;
+    $values = ["a" => 1];
+    array_push($values, $value);
+}
+pushGlobalValue();
+"#,
+        r#"<?php
+$tail = [2, 3];
+function pushGlobalTail(): void {
+    global $tail;
+    $values = ["a" => 1];
+    array_push($values, ...$tail);
+}
+pushGlobalTail();
+"#,
     ] {
         expect_error(
             source,
@@ -1306,9 +1324,9 @@ array_push($values, "wrong");
     }
 }
 
-/// Reference-aliased indexed receivers reject values that would retype only one alias slot.
+/// Runtime spreads reject receivers whose live representation can change through an alias.
 #[test]
-fn test_error_array_push_reference_alias_rejects_incompatible_values() {
+fn test_error_array_push_runtime_spread_rejects_unstable_receivers() {
     for source in [
         r#"<?php
 function generatedAliasValues(): Generator { yield 5; yield 7; }
@@ -1319,18 +1337,53 @@ array_push($alias, ...generatedAliasValues());
         r#"<?php
 $values = [1];
 $alias =& $values;
-$tail = [$argc > 0 ? "wrong" : "also wrong"];
+$tail = [$argc + 1];
 array_push($values, ...$tail);
 "#,
+        r#"<?php
+$values = [1, "s"];
+$alias =& $values;
+$tail = [$argc + 1];
+array_push($values, ...$tail);
+"#,
+        r#"<?php
+$values = [1];
+$tail = [$argc + 4];
+$iteration = 0;
+while ($iteration < 2) {
+    if ($iteration === 1) { $alias =& $values; }
+    array_push($values, ...$tail);
+    $iteration++;
+}
+"#,
+        r#"<?php
+class RuntimePushBox { public $items = [1]; }
+function runtimePropertyTail(int $value) { return [$value]; }
+$box = new RuntimePushBox();
+array_push($box->items, ...runtimePropertyTail(2));
+"#,
+        r#"<?php
+class RuntimeStaticPushBox { public static $items = [1]; }
+function runtimeStaticTail(int $value) { return [$value]; }
+array_push(RuntimeStaticPushBox::$items, ...runtimeStaticTail(2));
+"#,
+    ] {
+        expect_error(
+            source,
+            "array_push() runtime spreads require stable non-aliased receiver storage",
+        );
+    }
+}
+
+/// Reference-aliased indexed receivers reject a plain value that would retype one alias slot.
+#[test]
+fn test_error_array_push_reference_alias_rejects_incompatible_plain_value() {
+    expect_error(
         r#"<?php
 $values = [1];
 $alias =& $values;
 array_push($alias, "wrong");
 "#,
-    ] {
-        expect_error(
-            source,
-            "array_push() cannot widen a reference-aliased indexed receiver",
-        );
-    }
+        "array_push() cannot widen a reference-aliased indexed receiver",
+    );
 }

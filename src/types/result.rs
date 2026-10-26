@@ -64,6 +64,8 @@ pub struct ArrayPushPropertyPlan {
     pub class_name: String,
     /// PHP's catchable Error at reference binding, before evaluating later arguments.
     pub rejection: Option<String>,
+    /// Whether lowering may bind a managed live reference to this exact property slot.
+    pub live_addressable: bool,
 }
 
 #[derive(Debug)]
