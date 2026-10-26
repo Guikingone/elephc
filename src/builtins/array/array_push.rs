@@ -37,9 +37,10 @@ builtin! {
 /// the associative coordinator owns their runtime iterator walk. The receiver must be indexed,
 /// associative or a declared PHP array with boxed storage. Returns the new element count as `Int`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    if cx.argument_plan.is_some_and(|plan| plan.regular_argument_is_unpacked(0)) {
+    if cx.argument_plan.is_some_and(|plan| plan.regular_argument_is_unpacked(0)
+        || plan.source_args.first().is_some_and(|arg| matches!(arg.kind, ExprKind::Spread(_)))) {
         return Err(CompileError::new(cx.args[0].span,
-            "array_push() receiver cannot be supplied by unpacking; pass its variable or place directly"));
+            "array_push() receiver must be supplied directly before unpacked arguments"));
     }
     let indexed_root = indexed_receiver_root(&cx.args[0]);
     if indexed_root.is_some_and(|root| matches!(&root.kind, ExprKind::Variable(name)

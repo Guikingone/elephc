@@ -1288,8 +1288,10 @@ fn test_error_array_push_unpack_cannot_supply_receiver_storage() {
         r#"<?php $h = [1]; array_push(...[$h]);"#,
         r#"<?php $h = [1]; array_push(...[$h], ...[2, 3]);"#,
         r#"<?php $h = [1]; array_push(...[0 => $h], ...[2, 3]);"#,
+        r#"<?php $h = [1]; array_push(...[], array: $h);"#,
+        r#"<?php $h = [1]; $empty = []; array_push(...$empty, array: $h);"#,
     ] {
-        expect_error(source, "array_push() receiver cannot be supplied by unpacking");
+        expect_error(source, "array_push() receiver must be supplied directly before unpacked arguments");
     }
 }
 
