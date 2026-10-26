@@ -1558,6 +1558,11 @@ impl Checker {
         Ok(sig)
     }
 
+    /// Shares the nullsafe selection-chain check with by-reference receiver validation.
+    pub(crate) fn reference_receiver_uses_nullsafe(receiver: &Expr) -> bool {
+        expr_contains_nullsafe_member(receiver)
+    }
+
     /// Returns `true` if `callee_ty` is a union containing both `Callable` and
     /// `Void` and the callee expression contains a nullsafe member access.
     fn is_nullable_callable_from_nullsafe_chain(callee: &Expr, callee_ty: &PhpType) -> bool {

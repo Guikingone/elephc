@@ -1295,6 +1295,78 @@ fn test_error_array_push_unpack_cannot_supply_receiver_storage() {
     }
 }
 
+/// Dynamic property reads do not expose the writable binding required by array_push.
+#[test]
+fn test_error_array_push_dynamic_property_requires_supported_binding() {
+    for source in [
+        r#"<?php
+class DynamicIndexedPushBox { public array<int> $items = [1]; }
+$box = new DynamicIndexedPushBox(); array_push($box->{"items"}, 2);
+"#,
+        r#"<?php
+class DynamicAssocPushBox { public array<string, int> $items = ["a" => 1]; }
+$box = new DynamicAssocPushBox(); array_push($box->{"items"}, 2);
+"#,
+        r#"<?php
+class DynamicBoxedPushBox { public array $items = [1]; }
+$box = new DynamicBoxedPushBox(); $name = "items"; array_push($box->{$name}, 2);
+"#,
+        r#"<?php
+class DynamicNestedPushBox { public array<array<int>> $items = [[1]]; }
+$box = new DynamicNestedPushBox(); array_push($box->{"items"}[0], 2);
+"#,
+    ] {
+        expect_error(source, "array_push() dynamic property receivers are not supported");
+    }
+}
+
+/// Nullsafe selection cannot bind a reference, including when a final member or index is ordinary.
+#[test]
+fn test_error_array_push_nullsafe_receiver_cannot_bind_reference() {
+    for source in [
+        r#"<?php
+class NullsafePushBox { public array<int> $items = [1]; }
+$box = new NullsafePushBox(); array_push($box?->items, 2);
+"#,
+        r#"<?php
+class NullsafeDynamicPushBox { public array<int> $items = [1]; }
+$box = new NullsafeDynamicPushBox(); array_push($box?->{"items"}, 2);
+"#,
+        r#"<?php
+class NullsafeNestedPushBox { public array<array<int>> $items = [[1]]; }
+$box = new NullsafeNestedPushBox(); array_push($box?->items[0], 2);
+"#,
+        r#"<?php
+class NullsafeInnerPushBox { public array<int> $items = [1]; }
+class NullsafeOuterPushBox {
+    public NullsafeInnerPushBox $child;
+    public function __construct() { $this->child = new NullsafeInnerPushBox(); }
+}
+$box = new NullsafeOuterPushBox(); array_push($box?->child->items, 2);
+"#,
+    ] {
+        expect_error(source, "array_push(): Argument #1 ($array) could not be passed by reference");
+    }
+}
+
+/// Temporary hash and boxed receivers need an addressable parent to publish mutations.
+#[test]
+fn test_error_array_push_temporary_hash_receiver_requires_local_parent() {
+    for source in [
+        r#"<?php
+function temporaryHashPushRows(): array<array<string, int>> { return [["a" => 1]]; }
+array_push(temporaryHashPushRows()[0], 2);
+"#,
+        r#"<?php array_push([["a" => 1]][0], 2);"#,
+        r#"<?php
+function temporaryBoxedPushRows(): array<array> { return [[1]]; }
+array_push(temporaryBoxedPushRows()[0], 2);
+"#,
+    ] {
+        expect_error(source, "array_push() temporary associative or declared-array receivers require a local parent variable");
+    }
+}
+
 /// Native copy/write-back cannot keep a selected root or property across arbitrary PHP effects.
 #[test]
 fn test_error_array_push_native_place_rejects_effectful_values() {

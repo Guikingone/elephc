@@ -42,7 +42,15 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         return Err(CompileError::new(cx.args[0].span,
             "array_push() receiver must be supplied directly before unpacked arguments"));
     }
+    if crate::types::checker::Checker::reference_receiver_uses_nullsafe(&cx.args[0]) {
+        return Err(CompileError::new(cx.args[0].span,
+            "array_push(): Argument #1 ($array) could not be passed by reference"));
+    }
     let indexed_root = indexed_receiver_root(&cx.args[0]);
+    if matches!(indexed_root.unwrap_or(&cx.args[0]).kind, ExprKind::DynamicPropertyAccess { .. }) {
+        return Err(CompileError::new(cx.args[0].span,
+            "array_push() dynamic property receivers are not supported; use a direct property name"));
+    }
     if indexed_root.is_some_and(|root| matches!(&root.kind, ExprKind::Variable(name)
         if cx.checker.local_parameter_names.contains(name)
             || cx.checker.boxed_parameter_locals.contains(name)))
@@ -51,6 +59,13 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "array_push() nested parameter storage is not supported"));
     }
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    if (matches!(arr_ty.codegen_repr(), PhpType::AssocArray { .. }) || arr_ty.is_php_array())
+        && indexed_root.is_some_and(|root| !matches!(root.kind, ExprKind::Variable(_)
+            | ExprKind::This | ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }))
+    {
+        return Err(CompileError::new(cx.args[0].span,
+            "array_push() temporary associative or declared-array receivers require a local parent variable"));
+    }
     if matches!(&cx.args[0].kind, ExprKind::Variable(name)
         if cx.checker.active_statics.contains(name))
         && matches!(arr_ty.codegen_repr(), PhpType::AssocArray { .. })

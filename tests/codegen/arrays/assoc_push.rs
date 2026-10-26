@@ -263,6 +263,16 @@ echo array_push($h, ...[2, 3]), "|", json_encode($h), "\n";
     assert_eq!(out, "1|3|{\"a\":1,\"0\":2,\"1\":3}\n");
 }
 
+/// A temporary call result can provide an indexed receiver, matching PHP's reference semantics.
+#[test]
+fn test_array_push_temporary_indexed_receiver_returns_count() {
+    let out = compile_and_run(r#"<?php
+function temporaryPushRows(): array<array<int>> { return [[1]]; }
+echo array_push(temporaryPushRows()[0], 2);
+"#);
+    assert_eq!(out, "2");
+}
+
 /// Mixed-entry tables preserve the actual tags of scalar, null and nested-array values.
 #[test]
 fn test_associative_push_mixed_values_is_heap_clean() {
