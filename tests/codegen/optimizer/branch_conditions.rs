@@ -80,7 +80,7 @@ function truth(mixed $value): void {
 function &flag_ref(): string { $value = "live"; return $value; }
 truth(null); truth(false); truth($argc - 1); truth((float)($argc - 1));
 truth(""); truth("0"); truth("00"); truth([]); truth([0]); truth(new Flag());
-if (flag_ref() && !identity(0)) { echo "R"; }
+if (flag_ref() && !identity(0) && flag_ref()) { echo "R"; }
 "#, "Ff:Ff:Ff:Ff:Ff:Ff:Tt:Ff:Tt:Tt:R");
 }
 

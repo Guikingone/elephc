@@ -84,7 +84,49 @@ echo overlaps((float)$argc, 2.0, 3.0, 4.0);
     }
 }
 
-/// Returning, assigning, and passing logical values still produces boolean results.
+/// Left- and right-nested chains keep operand continuations in forward block-table order.
+#[test]
+fn branch_conditions_keep_chain_blocks_in_source_order() {
+    let module = super::lower_source(r#"<?php
+function or_left(bool $a, bool $b, bool $c, bool $d): int {
+    if ($a || $b || $c || $d) return 1;
+    return 0;
+}
+function or_right(bool $a, bool $b, bool $c, bool $d): int {
+    if ($a || ($b || ($c || $d))) return 1;
+    return 0;
+}
+function and_left(bool $a, bool $b, bool $c, bool $d): int {
+    if ($a && $b && $c && $d) return 1;
+    return 0;
+}
+function and_right(bool $a, bool $b, bool $c, bool $d): int {
+    if ($a && ($b && ($c && $d))) return 1;
+    return 0;
+}
+$a = $argc > 0;
+echo or_left($a, false, true, false), or_right($a, false, true, false);
+echo and_left($a, false, true, false), and_right($a, false, true, false);
+"#);
+    for name in ["or_left", "or_right", "and_left", "and_right"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        assert_direct_conditions(function);
+        let mut continuations = 0;
+        for block in &function.blocks {
+            let Some(Terminator::CondBr { then_target, else_target, .. }) = &block.terminator
+            else { continue; };
+            let next = if name.starts_with("and") { *then_target } else { *else_target };
+            if function.block(next).unwrap().name.starts_with("condition.") {
+                assert!(next.as_raw() > block.id.as_raw(),
+                    "{name}: operand continuation goes backward: {block:?}");
+                continuations += 1;
+            }
+        }
+        assert_eq!(continuations, 3, "{name}: one continuation per later operand");
+    }
+}
+
+/// Returning a logical value still produces a materialized boolean result.
 #[test]
 fn branch_conditions_keep_value_producing_logical_expressions() {
     let module = super::lower_source(r#"<?php
