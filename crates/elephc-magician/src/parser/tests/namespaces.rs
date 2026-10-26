@@ -364,3 +364,21 @@ fn parse_fragment_reads_reserved_inner_name_segments() {
         assert!(format!("{program:?}").contains(r"Vendor\\Default\\Theme\\Box"), "{source}: {program:?}");
     }
 }
+
+/// Cached generic templates retain reserved name tokens and their original source spelling.
+#[test]
+fn parse_fragment_reserved_name_tokens_survive_generic_serialization() {
+    let program = parse_fragment(
+        br"function keep<T>(T $value): T { Vendor\Default\Theme\Box::touch(); return $value; }",
+    ).expect("generic fragment should parse");
+    let EvalStmt::GenericDecl(template) = &program.statements()[0] else {
+        panic!("expected a retained generic template");
+    };
+    assert!(template.tokens.iter().any(|token| matches!(
+        token.kind(), crate::lexer::TokenKind::ReservedNameHead(name) if name == "Default"
+    )));
+    let encoded = bincode::serialize(&program).expect("template should serialize");
+    let decoded: crate::eval_ir::EvalProgram =
+        bincode::deserialize(&encoded).expect("template should deserialize");
+    assert_eq!(decoded.statements(), program.statements());
+}
