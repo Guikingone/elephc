@@ -186,6 +186,19 @@ children or reach the heap free path. AArch64 and x86_64 use the same layout
 through target-aware frame helpers. This storage plan also applies with
 `--no-ir-opt`; it is separate from the EIR bounded-counter pass.
 
+## Short-Circuit Branch Conditions
+
+EIR lowering sends `&&`, `||`, and nested `!` directly to their true and false
+blocks when an `if`, `elseif`, loop header, or full ternary consumes the condition.
+Each operand is evaluated in source order, and a short-circuit edge skips the
+remaining operands. Truthiness conversion also releases any owned operand before
+branching. These conditions need no boolean merge slot or associated stores and
+reloads, even with `--no-ir-opt`, on every supported target.
+
+When the logical result is itself returned, assigned, or passed to a function,
+ordinary expression lowering still materializes its boolean value. The short
+ternary `?:` also keeps its value-producing path because it forwards its left value.
+
 ## Late Instruction Selection and Machine Peepholes
 
 After EIR passes and register allocation, the backend applies a final set of
