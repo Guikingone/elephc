@@ -194,8 +194,9 @@ Each operand is evaluated in source order, and a short-circuit edge skips the
 remaining operands. Truthiness conversion also releases any owned operand before
 branching. These conditions need no boolean merge slot or associated stores and
 reloads, even with `--no-ir-opt`, on every supported target.
-Same-operator chains allocate operand blocks in source order, so intermediate
-continuations can fall through instead of jumping backward between operands.
+Whole logical trees allocate operand blocks in source order, including mixed
+operators and negation, so intermediate continuations can fall through instead
+of jumping backward between operands.
 
 When the logical result is itself returned, assigned, or passed to a function,
 ordinary expression lowering still materializes its boolean value. The short

@@ -84,7 +84,7 @@ echo overlaps((float)$argc, 2.0, 3.0, 4.0);
     }
 }
 
-/// Left- and right-nested chains keep operand continuations in forward block-table order.
+/// Uniform and mixed logical trees keep every operand continuation in forward block-table order.
 #[test]
 fn branch_conditions_keep_chain_blocks_in_source_order() {
     let module = super::lower_source(r#"<?php
@@ -104,25 +104,48 @@ function and_right(bool $a, bool $b, bool $c, bool $d): int {
     if ($a && ($b && ($c && $d))) return 1;
     return 0;
 }
+function mixed_or_left(bool $a, bool $b, bool $c): int {
+    if (($a && $b) || $c) return 1;
+    return 0;
+}
+function mixed_or_middle(bool $a, bool $b, bool $c, bool $d): int {
+    if ($a || ($b && $c) || $d) return 1;
+    return 0;
+}
+function mixed_negated(bool $a, bool $b, bool $c): int {
+    if (!($a && $b) || $c) return 1;
+    return 0;
+}
+function mixed_and_left(bool $a, bool $b, bool $c): int {
+    if (($a || $b) && $c) return 1;
+    return 0;
+}
 $a = $argc > 0;
 echo or_left($a, false, true, false), or_right($a, false, true, false);
 echo and_left($a, false, true, false), and_right($a, false, true, false);
+echo mixed_or_left($a, false, true), mixed_or_middle($a, false, true, false);
+echo mixed_negated($a, false, true), mixed_and_left($a, false, true);
 "#);
-    for name in ["or_left", "or_right", "and_left", "and_right"] {
+    for (name, expected_edges) in [
+        ("or_left", 3), ("or_right", 3), ("and_left", 3), ("and_right", 3),
+        ("mixed_or_left", 3), ("mixed_or_middle", 4), ("mixed_negated", 2),
+        ("mixed_and_left", 3),
+    ] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         assert_direct_conditions(function);
         let mut continuations = 0;
         for block in &function.blocks {
             let Some(Terminator::CondBr { then_target, else_target, .. }) = &block.terminator
             else { continue; };
-            let next = if name.starts_with("and") { *then_target } else { *else_target };
-            if function.block(next).unwrap().name.starts_with("condition.") {
-                assert!(next.as_raw() > block.id.as_raw(),
-                    "{name}: operand continuation goes backward: {block:?}");
-                continuations += 1;
+            for next in [*then_target, *else_target] {
+                if function.block(next).unwrap().name.starts_with("condition.") {
+                    assert!(next.as_raw() > block.id.as_raw(),
+                        "{name}: operand continuation goes backward: {block:?}");
+                    continuations += 1;
+                }
             }
         }
-        assert_eq!(continuations, 3, "{name}: one continuation per later operand");
+        assert_eq!(continuations, expected_edges, "{name}: operand continuation edges");
     }
 }
 
