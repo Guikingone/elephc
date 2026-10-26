@@ -112,3 +112,49 @@ unset($stream, $e, $name);
     assert_eq!(out.stdout, format!("4\n{}:21\n{}", "new".repeat(7), "70000:x\n70001:y\nfilter error\n".repeat(4)), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Write filters retire expanded output buffers for both raw and boxed brigade signatures.
+#[test]
+fn test_fileinfo_write_filter_brigade_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class FileinfoWriteRawBrigade extends php_user_filter {
+    public function filter($in, $out, &$consumed, bool $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $consumed += $bucket->datalen;
+            $bucket->data = str_repeat("x", 70000);
+            $bucket->datalen = strlen($bucket->data);
+            stream_bucket_append($out, $bucket);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+class FileinfoWriteBoxedBrigade extends php_user_filter {
+    public function filter(mixed $in, mixed $out, mixed &$consumed, mixed $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $consumed += $bucket->datalen;
+            $bucket->data = str_repeat("y", 70001);
+            $bucket->datalen = strlen($bucket->data);
+            stream_bucket_append($out, $bucket);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("fileinfo.write.raw", "FileinfoWriteRawBrigade");
+stream_filter_register("fileinfo.write.boxed", "FileinfoWriteBoxedBrigade");
+foreach (["raw", "boxed"] as $name) {
+    $path = tempnam(sys_get_temp_dir(), "write-filter");
+    $stream = fopen($path, "w+b");
+    $filter = stream_filter_append($stream, "fileinfo.write." . $name, STREAM_FILTER_WRITE);
+    for ($i = 0; $i < 3; $i++) { fwrite($stream, "seed"); }
+    fclose($stream);
+    $data = file_get_contents($path);
+    echo strlen($data), ":", substr($data, 0, 1), "\n";
+    unlink($path);
+    unset($path, $stream, $filter, $data);
+}
+unset($name);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "210000:x\n210003:y\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
