@@ -726,6 +726,27 @@ pub(super) fn take_published_container(
     owned
 }
 
+/// Uses the caller-held this borrow only when the complete method keeps its slot concrete.
+pub(super) fn root_method_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> (LoweredValue, Option<crate::ir::LocalSlotId>) {
+    if ctx.this_storage_stays_concrete {
+        if let Some(&slot) = ctx.local_slots.get("this") {
+            let direct_this = ctx.builder.value_defining_instruction(value.value).is_some_and(|inst| {
+                inst.op == Op::LoadLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
+            });
+            if direct_this && ctx.builder.local_kind(slot) == crate::ir::LocalKind::PhpLocal
+                && matches!(ctx.builder.local_php_type(slot).codegen_repr(), PhpType::Object(_))
+            {
+                return (value, None);
+            }
+        }
+    }
+    root_owned_call_operand(ctx, value, span)
+}
+
 /// Publishes a temporary owner in a frame slot and returns its stable invocation operand.
 pub(crate) fn root_owned_call_operand(
     ctx: &mut LoweringContext<'_, '_>,

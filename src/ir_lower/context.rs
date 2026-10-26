@@ -295,6 +295,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// String subjects borrowed through read-only builtin calls whose result must be detached.
     pub(crate) borrowed_string_call_operands: HashSet<ValueId>,
     pub(crate) borrowed_string_calls_enabled: bool,
+    /// Whole-body proof that an instance method cannot widen its immutable this slot.
+    /// Set before body lowering and preserved across speculative snapshots.
+    pub(crate) this_storage_stays_concrete: bool,
     /// Raw offset receiver reads checked against final frame storage before replay.
     pub(crate) string_offset_receivers: Vec<(Span, ValueId)>,
     /// Offset sites whose final local storage requires an independent, guarded receiver.
@@ -617,6 +620,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             string_offset_receivers: Vec::new(),
             owned_string_offset_sites: HashSet::new(),
             borrowed_string_calls_enabled: true,
+            this_storage_stays_concrete: false,
             append_update_cell_aliases: HashSet::new(),
             argument_guards: HashMap::new(),
             argument_guard_scopes: Vec::new(),

@@ -176,7 +176,7 @@ pub(super) fn lower_method_call(
     );
     // A concrete local load may later unbox physical Mixed storage after eval widens
     // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
-    let (object, receiver_owner) = root_owned_call_operand(ctx, object, expr.span);
+    let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
     let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
