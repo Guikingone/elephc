@@ -446,6 +446,9 @@ pub(super) fn instruction_preserves_buffers(function: &Function, inst: &Instruct
         | Op::BufferGetResolved
         | Op::BufferSetResolved => true,
         Op::StoreLocal => store_targets_scalar_local(function, inst),
+        // The NaN-to-bool warning can run handlers despite IsTruthy's read-only effects.
+        Op::IsTruthy if !inst.operands.first().and_then(|&value| function.value(value))
+            .is_some_and(|value| !matches!(value.php_type, PhpType::Float | PhpType::Mixed | PhpType::Union(_))) => false,
         Op::PropGet | Op::PropSet if function.is_packed_field_access(inst) => true,
         _ => inst
             .effects

@@ -196,3 +196,72 @@ echo "after\n";
     assert!(!ir.contains("buffer_resolve"), "{ir}");
     assert_both_modes_fail_after(source, "before\n", "use of buffer after buffer_free()");
 }
+
+/// Implicit float truthiness can warn before a later iteration reads the same buffer.
+const NAN_TRUTHINESS: &str = r#"<?php
+class TruthyBufferOwner {
+    public buffer<float> $value;
+    public function __construct(buffer<float> $value) { $this->value = $value; }
+}
+function scan_truthy(buffer<float> $input, int $n): mixed {
+    $hits = 0;
+    for ($i = 0; $i < $n; $i++) { if ($input[$i]) { $hits++; } }
+    return $hits;
+}
+$input = buffer_new<float>(3);
+$input[0] = NAN; $input[1] = 1.0; $input[2] = 1.0;
+$owner = new TruthyBufferOwner($input);
+set_error_handler(function (int $errno, string $message) use ($owner): bool {
+    $buffer = $owner->value;
+    buffer_free($buffer);
+    return $errno > 0 || $message !== '';
+});
+echo "before\n";
+scan_truthy($input, 3);
+echo "after\n";
+"#;
+
+/// Integer multiplication promotes a boxed accumulator to infinity, then subtraction yields NaN.
+const BOXED_NAN_TRUTHINESS: &str = r#"<?php
+class BoxedTruthyBufferOwner {
+    public buffer<int> $value;
+    public function __construct(buffer<int> $value) { $this->value = $value; }
+}
+function scan_boxed_truthy(buffer<int> $input, int $n): mixed {
+    $hits = 0; $product = 1;
+    for ($i = 0; $i < $n; $i++) {
+        $product *= $input[$i];
+        if ($product - $product) { $hits++; }
+    }
+    return $hits;
+}
+$input = buffer_new<int>(20);
+for ($j = 0; $j < 20; $j++) { $input[$j] = PHP_INT_MAX; }
+$owner = new BoxedTruthyBufferOwner($input);
+set_error_handler(function (int $errno, string $message) use ($owner): bool {
+    $buffer = $owner->value;
+    buffer_free($buffer);
+    return $errno > 0 || $message !== '';
+});
+echo "before\n";
+scan_boxed_truthy($input, 20);
+echo "after\n";
+"#;
+
+/// A float condition's NaN warning handler must invalidate subsequent counter-loop accesses.
+#[test]
+fn test_buffer_numeric_accumulator_rejects_float_truthiness_warning_handler() {
+    let ir = function_ir(NAN_TRUTHINESS, true, "scan_truthy");
+    assert!(ir.contains("is_truthy") && ir.contains("str_inc_dec"), "{ir}");
+    assert!(!ir.contains("buffer_resolve"), "{ir}");
+    assert_both_modes_fail_after(NAN_TRUTHINESS, "before\n", "use of buffer after buffer_free()");
+}
+
+/// A boxed result that becomes NaN cannot keep a descriptor across its implicit bool warning.
+#[test]
+fn test_buffer_numeric_accumulator_rejects_boxed_truthiness_warning_handler() {
+    let ir = function_ir(BOXED_NAN_TRUTHINESS, true, "scan_boxed_truthy");
+    assert!(ir.contains("is_truthy") && ir.contains("mixed_numeric_binop"), "{ir}");
+    assert!(!ir.contains("buffer_resolve"), "{ir}");
+    assert_both_modes_fail_after(BOXED_NAN_TRUTHINESS, "before\n", "use of buffer after buffer_free()");
+}

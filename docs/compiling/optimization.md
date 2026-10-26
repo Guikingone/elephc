@@ -584,6 +584,7 @@ object, an escaped reference, or a conversion that can warn keeps the ordinary
 safety restrictions. Casts to int or bool qualify only for operands already
 known to be ints: float range checks and NaN-to-bool conversions can run a
 warning handler.
+Implicit bool checks of float or boxed numeric values retain the same barrier.
 
 Loops over a buffer property of `$this` can also share one preheader read and
 resolution when no call, property write, free or other invalidating operation
