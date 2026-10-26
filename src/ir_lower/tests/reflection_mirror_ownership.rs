@@ -24,6 +24,11 @@ $attribute = (new ReflectionClass(ReflectionMirrorOwnershipTarget::class))->getA
 echo $method->name, $parameter->name, $attribute->name;
 try { echo ($method->name = 'changed'); }
 catch (ReflectionException $error) { echo $error->getMessage(); }
+function writeNullableReflectionOwnershipMirror(?ReflectionMethod $reflection): void {
+    try { $reflection->name = 'changed'; }
+    catch (Throwable $error) { echo $error->getMessage(); }
+}
+writeNullableReflectionOwnershipMirror($argc > 1 ? $method : null);
 "#;
     let target = crate::codegen::platform::Target::parse(name).unwrap();
     let module = super::lower_source_at_for_target(

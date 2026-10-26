@@ -21,6 +21,18 @@ pub(in crate::interpreter) fn validate_reflection_public_mirror_direct_write(
         return Ok(());
     }
     let runtime_class = eval_reflection_object_class_name(object, context, values)?;
+    // Parent metadata is already registered for AOT and eval classes. Ordinary objects
+    // must not pay repeated runtime ancestry and property-metadata calls for common names.
+    let owner = std::iter::once(runtime_class.clone())
+        .chain(context.class_parent_names(&runtime_class))
+        .find(|name| reflection_owner_kind(name).is_some()
+            || name.eq_ignore_ascii_case("ReflectionAttribute"));
+    let Some(owner) = owner else { return Ok(()); };
+    if !eval_reflection_aot_class_flags(&owner, values)?
+        .is_some_and(|(flags, _)| flags & EVAL_REFLECTION_CLASS_FLAG_INTERNAL != 0)
+    {
+        return Ok(());
+    }
     let declared = if let Some((owner, slot)) = context.class_property(&runtime_class, property) {
         Some((owner, slot.visibility(), slot.write_visibility(), slot.is_static()))
     } else {
@@ -39,26 +51,9 @@ pub(in crate::interpreter) fn validate_reflection_public_mirror_direct_write(
     if validate_eval_member_access(&owner, write_visibility, context).is_err() {
         return Ok(());
     }
-    for owner in [
-        "ReflectionAttribute", "ReflectionClass", "ReflectionObject", "ReflectionEnum",
-        "ReflectionFunction", "ReflectionMethod", "ReflectionProperty", "ReflectionParameter",
-        "ReflectionClassConstant", "ReflectionEnumUnitCase", "ReflectionEnumBackedCase",
-    ] {
-        let matches = dynamic_object_is_a(object, owner, false, context, values)?
-            .map_or_else(|| values.object_is_a(object, owner, false), Ok)?;
-        if !matches {
-            continue;
-        }
-        if !eval_reflection_aot_class_flags(owner, values)?
-            .is_some_and(|(flags, _)| flags & EVAL_REFLECTION_CLASS_FLAG_INTERNAL != 0)
-        {
-            continue;
-        }
-        return eval_throw_reflection_exception(
-            &format!("Cannot set read-only property {runtime_class}::${property}"),
-            context,
-            values,
-        ).map(|_| ());
-    }
-    Ok(())
+    eval_throw_reflection_exception(
+        &format!("Cannot set read-only property {runtime_class}::${property}"),
+        context,
+        values,
+    ).map(|_| ())
 }

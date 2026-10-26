@@ -27,13 +27,15 @@ pub(super) fn lower_property_assign(
         }
     });
     let reflection_write = ctx.throw_access_sites.get(&span).and_then(|info| {
-        if let ThrowAccessKind::ReflectionReadOnlyProperty { property } = &info.kind {
-            Some(property.clone())
+        if let ThrowAccessKind::ReflectionReadOnlyProperty { property: blocked } = &info.kind {
+            (blocked == property).then(|| blocked.clone())
         } else {
             None
         }
     });
-    if readonly_write.is_some() || reflection_write.is_some() {
+    if readonly_write.is_some()
+        || (reflection_write.is_some() && value.span.line == span.line && value.span.col == span.col)
+    {
         if let ExprKind::NullCoalesce { value: read, default } = &value.kind {
             if let ExprKind::PropertyAccess { object: read_object, property: read_property } = &read.kind {
                 if read_object.as_ref() == object && read_property == property {
@@ -73,6 +75,9 @@ pub(super) fn lower_property_assign(
         ctx.box_value_as_mixed(lowered_value, PhpType::Mixed, Some(span))
     } else { lowered_value };
     if let Some(property) = reflection_write {
+        super::readonly_receiver_guard::guard_readonly_write_receiver(
+            ctx, &receiver, lowered_value, &property, span,
+        );
         lower_reflection_property_write_exception(ctx, receiver, lowered_value, &property, span);
         return;
     }

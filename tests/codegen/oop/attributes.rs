@@ -4827,6 +4827,69 @@ rhs|Cannot set read-only property ReflectionMethod::$class|rhs|Cannot set read-o
     );
 }
 
+/// Direct coalesce assignments throw while coalesce updates skip an initialized mirror.
+#[test]
+fn test_reflection_public_mirror_coalesce_write_modes() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionCoalesceMirrorTarget { public function action(): void {} }
+$method = new ReflectionMethod(ReflectionCoalesceMirrorTarget::class, 'action');
+try { $method->name = $method->name ?? 'changed'; }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+$method->name ??= 'changed';
+echo $method->name, '|';
+unset($method->name);
+try { $method->name ??= 'changed'; }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+echo $method->getName();
+"#,
+    );
+    assert_eq!(out,
+        "Cannot set read-only property ReflectionMethod::$name|action|Cannot set read-only property ReflectionMethod::$name|action");
+}
+
+/// Each destructured property write retains its own target and left-to-right throw order.
+#[test]
+fn test_reflection_public_mirror_destructuring_write_order() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionListMirrorTarget { public function action(): void {} }
+class ReflectionListMirrorBox { public string $value = 'before'; }
+$box = new ReflectionListMirrorBox();
+$method = new ReflectionMethod(ReflectionListMirrorTarget::class, 'action');
+try { [$box->value, $method->name] = ['after', 'changed']; }
+catch (ReflectionException $error) { echo $box->value, '|', $error->getMessage(), '|'; }
+try { [$method->class, $method->name] = ['changed', 'changed']; }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+echo $method->class, '|', $method->name;
+"#,
+    );
+    assert_eq!(out,
+        "after|Cannot set read-only property ReflectionMethod::$name|Cannot set read-only property ReflectionMethod::$class|ReflectionListMirrorTarget|action");
+}
+
+/// Invalid nullable and union receivers fail after RHS effects with the ordinary write Error.
+#[test]
+fn test_reflection_public_mirror_invalid_receiver_write_error() {
+    let out = compile_and_run(
+        r#"<?php
+function reflectionInvalidReceiverRhs(): string { echo 'rhs|'; return 'changed'; }
+function writeNullableReflectionMirror(?ReflectionClass $reflection): void {
+    try { $reflection->name = reflectionInvalidReceiverRhs(); }
+    catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+}
+function writeUnionReflectionMirror(ReflectionClass|false $reflection): void {
+    try { $reflection->name = reflectionInvalidReceiverRhs(); }
+    catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(); }
+}
+writeNullableReflectionMirror(null);
+writeUnionReflectionMirror(false);
+"#,
+    );
+    assert_eq!(out,
+        "rhs|Error:Attempt to assign property \"name\" on null|rhs|Error:Attempt to assign property \"name\" on false");
+}
+
 /// Compound writes mutate Reflection's public mirrors without changing private metadata.
 #[test]
 fn test_reflection_public_mirror_compound_writes_remain_mutable() {

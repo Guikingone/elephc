@@ -26162,10 +26162,16 @@ fn test_eval_reflection_public_mirror_write_rules() {
 class EvalMirrorWriteTarget {
     public function action(string $value): void {}
 }
-class EvalMirrorWriteSubclass extends ReflectionClass {
+class EvalMirrorWriteBase extends ReflectionClass {}
+class EvalMirrorWriteSubclass extends EvalMirrorWriteBase {
+    public string $class = '';
+}
+class EvalMirrorPlainNative {
+    public string $name = '';
     public string $class = '';
 }
 $fromAot = new EvalMirrorWriteSubclass(EvalMirrorWriteTarget::class);
+$plainNative = new EvalMirrorPlainNative();
 $code = $argc > 1 ? $argv[1] : <<<'PHP'
 function evalMirrorWriteRhs(): string { echo 'rhs|'; return 'changed'; }
 try { $fromAot->name = evalMirrorWriteRhs(); }
@@ -26184,13 +26190,23 @@ try { $created->{$property} = 'changed'; }
 catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
 echo $created->name, '|';
 unset($created->name);
-echo $created->getName(), '|', $created->getDeclaringClass()->getName();
+echo $created->getName(), '|', $created->getDeclaringClass()->getName(), '|';
+$plainNative->name = 'native';
+$plainNative->class = 'class';
+class EvalMirrorPlainDynamic {
+    public string $name = '';
+    public string $class = '';
+}
+$plainDynamic = new EvalMirrorPlainDynamic();
+$plainDynamic->name = 'dynamic';
+$plainDynamic->class = 'class';
+echo $plainNative->name, ':', $plainNative->class, '|', $plainDynamic->name, ':', $plainDynamic->class;
 PHP;
 eval($code);
 "#,
     );
     assert_eq!(out,
-        "rhs|Cannot set read-only property EvalMirrorWriteSubclass::$name|Cannot set read-only property EvalMirrorWriteSubclass::$class|EvalMirrorWriteTarget!|EvalMirrorWriteTarget|rhs|Cannot set read-only property ReflectionMethod::$class|action?|Cannot set read-only property ReflectionMethod::$name|action?|action|EvalMirrorWriteTarget");
+        "rhs|Cannot set read-only property EvalMirrorWriteSubclass::$name|Cannot set read-only property EvalMirrorWriteSubclass::$class|EvalMirrorWriteTarget!|EvalMirrorWriteTarget|rhs|Cannot set read-only property ReflectionMethod::$class|action?|Cannot set read-only property ReflectionMethod::$name|action?|action|EvalMirrorWriteTarget|native:class|dynamic:class");
 }
 
 /// Verifies eval ReflectionFunction preserves rich eval-declared function signatures.
