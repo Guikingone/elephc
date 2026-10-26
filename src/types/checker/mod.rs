@@ -518,6 +518,13 @@ pub(crate) struct Checker {
     /// A reference can escape through a callee, so the alias is permanent for the rest of the
     /// body.
     pub ref_aliased_locals: HashSet<String>,
+    /// Reference-aliased locals whose alias did not arise solely from a registry builtin call.
+    ///
+    /// Registry builtins can mutate by-reference arguments but do not retain their cells. Direct
+    /// PHP aliases, captures, by-reference parameters, foreach references, and user callees can
+    /// keep another path to the storage, so representation-changing writes must distinguish this
+    /// subset from the broader kill/retype conservatism in `ref_aliased_locals`.
+    pub non_builtin_ref_aliased_locals: HashSet<String>,
     /// Current local bindings that alias a managed container entry whose physical cell payload
     /// is canonical boxed `Mixed`, even when the checker's logical value type is narrower.
     pub boxed_ref_aliased_locals: HashSet<String>,
@@ -669,6 +676,7 @@ pub(crate) struct SavedLocalBindingScope {
     binding_depth: HashMap<String, u32>,
     narrowed_origins: HashMap<String, NarrowedLocalOrigin>,
     ref_aliased: HashSet<String>,
+    non_builtin_ref_aliased: HashSet<String>,
     boxed_ref_aliased: HashSet<String>,
     boxed_ref_invalidations: Vec<HashSet<String>>,
     statics: HashSet<String>,
@@ -864,6 +872,9 @@ impl Checker {
             // origin would measure the closure's store against a binding it does not own.
             narrowed_origins: std::mem::take(&mut self.narrowed_local_origins),
             ref_aliased: std::mem::take(&mut self.ref_aliased_locals),
+            non_builtin_ref_aliased: std::mem::take(
+                &mut self.non_builtin_ref_aliased_locals,
+            ),
             boxed_ref_aliased: std::mem::take(&mut self.boxed_ref_aliased_locals),
             boxed_ref_invalidations: std::mem::take(
                 &mut self.conditional_boxed_ref_invalidations,
@@ -897,6 +908,7 @@ impl Checker {
         self.local_binding_depth = saved.binding_depth;
         self.narrowed_local_origins = saved.narrowed_origins;
         self.ref_aliased_locals = saved.ref_aliased;
+        self.non_builtin_ref_aliased_locals = saved.non_builtin_ref_aliased;
         self.boxed_ref_aliased_locals = saved.boxed_ref_aliased;
         self.conditional_boxed_ref_invalidations = saved.boxed_ref_invalidations;
         self.static_local_names = saved.statics;
@@ -1059,11 +1071,35 @@ impl Checker {
     /// `sort(array: $a)` all reach the local behind the wrapper, and a shape one walker sees
     /// through while the other stops at is exactly how the checker and the pre-scan drift apart.
     pub(crate) fn record_reference_alias_root(&mut self, expr: &Expr) {
+        self.record_reference_alias_root_with_origin(expr, true);
+    }
+
+    /// Records a registry builtin's by-reference argument without treating it as an escaped cell.
+    pub(crate) fn record_builtin_reference_alias_root(&mut self, expr: &Expr) {
+        self.record_reference_alias_root_with_origin(expr, false);
+    }
+
+    /// Returns whether a plain local receiver has an alias outside registry builtin mutation.
+    pub(crate) fn local_has_non_builtin_reference_alias(&self, expr: &Expr) -> bool {
+        let mut current = expr;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &current.kind
+        {
+            current = value;
+        }
+        matches!(&current.kind, ExprKind::Variable(name)
+            if self.non_builtin_ref_aliased_locals.contains(name))
+    }
+
+    /// Records the local root of a reference-producing expression and its origin category.
+    fn record_reference_alias_root_with_origin(&mut self, expr: &Expr, non_builtin: bool) {
         let mut current = expr;
         loop {
             match &current.kind {
                 ExprKind::Variable(name) => {
                     self.ref_aliased_locals.insert(name.clone());
+                    if non_builtin {
+                        self.non_builtin_ref_aliased_locals.insert(name.clone());
+                    }
                     return;
                 }
                 ExprKind::ArrayAccess { array: base, .. }

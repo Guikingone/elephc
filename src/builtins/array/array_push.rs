@@ -18,6 +18,7 @@
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
+use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
@@ -37,25 +38,42 @@ builtin! {
 /// associative or a declared PHP array with boxed storage. Returns the new element count as `Int`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    let restricted_assoc_entries = match arr_ty.codegen_repr() {
+    let aliased_indexed_receiver = cx
+        .checker
+        .local_has_non_builtin_reference_alias(&cx.args[0]);
+    let value_constraint = match arr_ty.codegen_repr() {
         PhpType::AssocArray { value, .. }
-            if !matches!(value.codegen_repr(), PhpType::Mixed | PhpType::Iterable) => true,
-        _ => false,
+            if !matches!(value.codegen_repr(), PhpType::Mixed | PhpType::Iterable) => Some((
+                value.as_ref().clone(),
+                "array_push() values must match the associative receiver entry type",
+            )),
+        PhpType::Array(element)
+            if aliased_indexed_receiver
+                && !matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Iterable) =>
+        {
+            Some((
+                element.as_ref().clone(),
+                "array_push() cannot widen a reference-aliased indexed receiver",
+            ))
+        }
+        _ => None,
     };
     for index in 1..cx.args.len() {
-        if matches!(cx.args[index].kind, crate::parser::ast::ExprKind::Spread(_)) {
-            let (source, _) = cx.checker
+        let value_ty = if matches!(cx.args[index].kind, ExprKind::Spread(_)) {
+            let (_, element) = cx
+                .checker
                 .infer_runtime_iterated_call_arg_types(&cx.args[index], cx.env)?;
-            if restricted_assoc_entries
-                && !matches!(source.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
-            {
+            element
+        } else {
+            cx.checker.infer_type(&cx.args[index], cx.env)?
+        };
+        if let Some((expected, message)) = &value_constraint {
+            if value_ty.codegen_repr() != expected.codegen_repr() {
                 return Err(CompileError::new(
                     cx.args[index].span,
-                    "array_push() runtime spreads require an associative receiver with mixed entries",
+                    message,
                 ));
             }
-        } else {
-            cx.checker.infer_type(&cx.args[index], cx.env)?;
         }
     }
     let denied_place = cx.checker.record_array_push_reference_place(&cx.args[0], cx.env)?;

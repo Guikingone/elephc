@@ -144,6 +144,7 @@ impl Checker {
             local_binding_depth: HashMap::new(),
             narrowed_local_origins: HashMap::new(),
             ref_aliased_locals: HashSet::new(),
+            non_builtin_ref_aliased_locals: HashSet::new(),
             boxed_ref_aliased_locals: HashSet::new(),
             conditional_boxed_ref_invalidations: Vec::new(),
             static_local_names: HashSet::new(),

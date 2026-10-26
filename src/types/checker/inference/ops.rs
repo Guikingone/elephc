@@ -509,6 +509,7 @@ impl Checker {
         // enclosing set.
         for capture in capture_refs {
             self.ref_aliased_locals.insert(capture.clone());
+            self.non_builtin_ref_aliased_locals.insert(capture.clone());
         }
         // Every closure parameter is bound unconditionally on entry, so all of them are
         // recorded at binding depth 0. A `use ($x)` CAPTURE is deliberately absent: it is

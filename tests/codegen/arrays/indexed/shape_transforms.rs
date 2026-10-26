@@ -385,6 +385,36 @@ echo $count, "|", json_encode($values), "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// A reference-aliased indexed receiver still accepts a spread with identical element storage.
+#[test]
+fn test_array_push_indexed_reference_alias_compatible_spread_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function compatibleAliasTail(int $first) { return [$first, 3]; }
+for ($i = 0; $i < 32; $i++) {
+    $values = [1];
+    $alias =& $values;
+    $tail = compatibleAliasTail($argc + 1);
+    $count = array_push($alias, ...$tail);
+}
+echo $count, "|", json_encode($values), "|", json_encode($alias), "\n";
+$sequential = [1];
+array_push($sequential, 2);
+echo array_push($sequential, "x"), "|", json_encode($sequential), "\n";
+$sorted = [2, 1];
+sort($sorted);
+echo array_push($sorted, "x"), "|", json_encode($sorted), "\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "3|[1,2,3]|[1,2,3]\n3|[1,2,\"x\"]\n3|[1,2,\"x\"]\n",
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Indexed spread appends share the ordinary widening path for every source and value shape.
 #[test]
 fn test_array_push_indexed_heterogeneous_spreads_are_heap_clean() {

@@ -269,6 +269,9 @@ pub(super) fn check_ref_assign(
     // be killed or re-bound independently. Recorded before the per-shape checks so an aliasing
     // that fails a later validation is still treated as an alias.
     checker.ref_aliased_locals.insert(target.to_string());
+    checker
+        .non_builtin_ref_aliased_locals
+        .insert(target.to_string());
     checker.record_reference_alias_root(source);
     let result = match &source.kind {
         ExprKind::Variable(source_name) => {

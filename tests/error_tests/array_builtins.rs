@@ -1279,15 +1279,58 @@ fn test_error_associative_push_rejects_non_array_receiver() {
     }
 }
 
-/// Typed associative storage rejects runtime-only spread element layouts at the source span.
+/// Typed associative storage rejects every pushed value whose representation cannot fit.
 #[test]
-fn test_error_associative_push_typed_entries_reject_runtime_spreads() {
-    expect_error(
+fn test_error_associative_push_typed_entries_reject_mismatched_values() {
+    for source in [
         r#"<?php
 function generatedPushValues(): Generator { yield 1; yield 2; }
 $values = ["a" => 1];
 array_push($values, ...generatedPushValues());
 "#,
-        "array_push() runtime spreads require an associative receiver with mixed entries",
-    );
+        r#"<?php
+$values = ["a" => 1];
+function boxedPushTail(): array { return [1, 2]; }
+$tail = boxedPushTail();
+array_push($values, ...$tail);
+"#,
+        r#"<?php
+$values = ["a" => 1];
+array_push($values, "wrong");
+"#,
+    ] {
+        expect_error(
+            source,
+            "array_push() values must match the associative receiver entry type",
+        );
+    }
+}
+
+/// Reference-aliased indexed receivers reject values that would retype only one alias slot.
+#[test]
+fn test_error_array_push_reference_alias_rejects_incompatible_values() {
+    for source in [
+        r#"<?php
+function generatedAliasValues(): Generator { yield 5; yield 7; }
+$values = ["s"];
+$alias =& $values;
+array_push($alias, ...generatedAliasValues());
+"#,
+        r#"<?php
+$values = [1];
+$alias =& $values;
+$tail = [$argc > 0 ? "wrong" : "also wrong"];
+array_push($values, ...$tail);
+"#,
+        r#"<?php
+$values = [1];
+$alias =& $values;
+array_push($alias, "wrong");
+"#,
+    ] {
+        expect_error(
+            source,
+            "array_push() cannot widen a reference-aliased indexed receiver",
+        );
+    }
 }
