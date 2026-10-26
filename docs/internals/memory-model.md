@@ -842,12 +842,12 @@ Passing `--heap-debug` enables additional runtime verification without changing 
 - `__rt_incref` / `__rt_decref_*` reject zero-refcount heap blocks before mutating them (`bad refcount`)
 - `__rt_heap_alloc` / `__rt_heap_free` validate the ordered free list plus the segregated small-bin chains and trap on out-of-range, overlapping, cyclic, mis-sized, or merely-adjacent free blocks (`free-list corruption`)
 - `__rt_heap_free` poisons freed payload bytes with `0xA5`, so stale raw reads stand out immediately in debug repros
-- process exit prints a heap-debug summary with alloc/free counts, live blocks, live bytes, a leak summary line, and the peak live-byte watermark
+- process exit prints a heap-debug summary with alloc/free counts, live blocks, live bytes, a leak summary line, and the live-byte watermark since the latest explicit or request reset
 - non-clean summaries also report up to 64 live block headers: heap-relative offset, total bytes, heap kind, and reference count, without printing payload contents
 
 When one of these checks trips, the program exits with a fatal heap-debug error instead of continuing with corrupted allocator state.
 
-In full-reset `--web` mode, the next request reclaims the previous PHP heap arena after typed cleanup. This bulk release brings cumulative frees up to cumulative allocations and resets live bytes to zero; the process peak watermark is retained. Per-request counter differences therefore describe the current arena, not blocks already reclaimed by earlier resets.
+In full-reset `--web` mode, the next request reclaims the previous PHP heap arena after typed cleanup. This bulk release brings cumulative frees up to cumulative allocations and resets live bytes and their peak watermark to zero for the next request. Per-request counter differences therefore describe the current arena, not blocks already reclaimed by earlier resets.
 
 ### When memory is freed
 

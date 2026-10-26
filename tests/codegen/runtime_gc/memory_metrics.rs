@@ -55,7 +55,15 @@ fn test_memory_metrics_allocation_counters() {
     let source = r#"<?php
 $allocs = memory_get_allocations();
 $frees = memory_get_frees();
-echo memory_get_allocations() === $allocs && memory_get_frees() === $frees ? "cheap|" : "bad|";
+$usage = memory_get_usage();
+$peak = memory_get_peak_usage();
+$false = memory_get_usage(false);
+$true = memory_get_peak_usage(real_usage: true);
+$afterReads = memory_get_allocations();
+$samplesAreCheap = $usage >= 0 && $peak >= $usage && $false >= 0 && $true > 0 && $afterReads === $allocs;
+$countersAreCheap = memory_get_allocations() === $allocs && memory_get_frees() === $frees;
+echo $samplesAreCheap ? "samples|" : "bad|";
+echo $countersAreCheap ? "cheap|" : "bad|";
 $values = [1, 2, 3];
 $copy = $values;
 $copy[] = 4;
@@ -74,7 +82,7 @@ $freeBeforeReset = memory_get_frees();
 memory_reset_peak_usage();
 echo memory_get_allocations() === $beforeReset && memory_get_frees() === $freeBeforeReset ? "stable" : "bad";
 "#;
-    assert_eq!(compile_and_run(source), "cheap|allocated|freed|reused|stable");
+    assert_eq!(compile_and_run(source), "samples|cheap|allocated|freed|reused|stable");
 }
 
 /// First-class and runtime-selected calls preserve optional flags and void reset results.
@@ -107,11 +115,62 @@ $reader = memory_get_allocations(...);
 echo $reader() > 0 && memory_get_frees() >= 0 ? "counts|" : "bad|";
 $reset = memory_reset_peak_usage(...);
 $reset();
-echo function_exists("MEMORY_GET_USAGE") ? "exists" : "bad";' . ' // ' . $argc;
+echo function_exists("MEMORY_GET_USAGE") ? "exists|" : "bad|";
+echo memory_get_usage(0) < memory_get_usage("1") ? "int|string|" : "bad|";
+echo memory_get_usage(0.0) < memory_get_usage(true) ? "float|" : "bad|";
+echo memory_get_usage(null) < memory_get_usage(true) ? "null|" : "bad|";
+try { memory_get_usage([1]); echo "bad|"; }
+catch (TypeError $error) { echo "array|"; }
+try { memory_get_peak_usage(new stdClass()); echo "bad"; }
+catch (TypeError $error) { echo "object|"; }
+set_error_handler(function(int $severity, string $message): bool { throw new Exception("nan flag"); });
+try { memory_get_usage(NAN); echo "bad"; }
+catch (Exception $error) { echo "nan"; }
+restore_error_handler();
+' . ' // ' . $argc;
 eval($code);
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "{}", output.stderr);
-    assert_eq!(output.stdout, "arena|peak|shared|counts|exists");
+    assert_eq!(output.stdout, "arena|peak|shared|counts|exists|int|string|float|null|array|object|nan");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Dynamic container flags throw without leaking caller-owned temporary values.
+#[test]
+fn test_memory_metrics_dynamic_flag_type_errors() {
+    let source = r#"<?php
+function memoryArrayFlag(): mixed { return [1]; }
+function memoryObjectFlag(): mixed { return new stdClass(); }
+try { memory_get_usage(memoryArrayFlag()); echo "bad|"; }
+catch (TypeError $error) { echo "array|"; }
+try { memory_get_peak_usage(memoryObjectFlag()); echo "bad|"; }
+catch (TypeError $error) { echo "object|"; }
+$reader = $argc > 0 ? "memory_get_usage" : "memory_get_peak_usage";
+try { $reader(memoryArrayFlag()); echo "bad"; }
+catch (TypeError $error) { echo "callable"; }
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "array|object|callable");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Float flags preserve PHP 8.5 NAN warnings despite the cheap boolean fast path.
+#[test]
+fn test_memory_metrics_nan_flag_warnings() {
+    let source = r#"<?php
+set_error_handler(function(int $severity, string $message): bool {
+    echo "warn|";
+    return true;
+});
+memory_get_usage(NAN);
+memory_get_peak_usage(NAN);
+set_error_handler(function(int $severity, string $message): bool {
+    throw new Exception("nan flag");
+});
+try { memory_get_usage(NAN); echo "bad"; }
+catch (Exception $error) { echo "caught"; }
+"#;
+    assert_eq!(compile_and_run(source), "warn|warn|caught");
 }

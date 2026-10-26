@@ -186,6 +186,7 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter, features: RuntimeFeatures) {
     emit_aarch64_compare(emitter);
     emit_aarch64_output(emitter);
     emit_aarch64_runtime_builtin_dispatch(emitter, features);
+    memory::emit_boundaries(emitter);
 }
 
 /// Emits Linux x86_64 C-ABI wrappers around the internal mixed value helpers.
@@ -199,6 +200,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter, features: RuntimeFeatures) {
     emit_x86_64_compare(emitter);
     emit_x86_64_output(emitter);
     emit_x86_64_runtime_builtin_dispatch(emitter, features);
+    memory::emit_boundaries(emitter);
 }
 
 /// Emits a global label with platform C-symbol mangling.

@@ -1111,6 +1111,10 @@ impl RuntimeFnId {
             return;
         }
         match self {
+            RuntimeFnId::MemoryGetUsage | RuntimeFnId::MemoryGetPeakUsage => {
+                // Preserve dynamic flags until the builtin can reject non-scalar values.
+                set_callable_param_type(sig, 0, PhpType::Mixed);
+            }
             RuntimeFnId::Count => truncate_callable_params(sig, 1),
             RuntimeFnId::CloneWith => {
                 set_callable_param_type(sig, 0, PhpType::Mixed);
@@ -1524,7 +1528,7 @@ impl RuntimeFnId {
             RuntimeFnId::MemoryGetUsage | RuntimeFnId::MemoryGetPeakUsage => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::READS_HEAP.bits()
-                        | crate::ir::Effects::MAY_WARN.bits(),
+                        | crate::ir::Effects::MAY_WARN.bits() | crate::ir::Effects::MAY_THROW.bits(),
                 )
             }
             RuntimeFnId::MemoryGetAllocations | RuntimeFnId::MemoryGetFrees => {

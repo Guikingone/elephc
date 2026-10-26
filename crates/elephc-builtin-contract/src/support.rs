@@ -187,6 +187,7 @@ pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
         return Some(if matches!(
             runtime_builtin,
             RuntimeBuiltinId::Intval | RuntimeBuiltinId::Round
+                | RuntimeBuiltinId::MemoryGetUsage | RuntimeBuiltinId::MemoryGetPeakUsage
         ) {
             EvalExecution::Adapter {
                 runtime_builtin: Some(runtime_builtin),
@@ -455,8 +456,9 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         // Includes the internal tokenizer ParseError location operation.
         // Includes the five native heap metric operations.
-        assert_eq!(shared_runtime, 91);
-        assert_eq!(hybrid_adapter, 2);
+        assert_eq!(shared_runtime, 89);
+        // Heap usage queries keep a TypeError adapter for non-scalar flags.
+        assert_eq!(hybrid_adapter, 4);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
         // interpreter adapters.
         assert_eq!(interpreter_adapter, 603 + curl_surface);

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/memory_get_usage.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/memory_get_usage.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -26,7 +26,7 @@ sidebar:
 - **Validation**: `shared`
 - **Result type source**: `declared`
 - **Result ownership**: `non_heap`
-- **Effects**: `static (3 declared effects)`
+- **Effects**: `shared`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
@@ -49,8 +49,9 @@ function memory_get_usage(bool $real_usage = false): int
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/memory_get_usage.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/memory_get_usage.rs) (`eval_builtin!`)
-- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(92)`).
-- **Dispatch hooks**: _none_ (shared runtime dispatch)
+- **Execution**: generated-runtime ABI (`RuntimeBuiltinId(92)`) with a Magician fallback adapter.
+- **Adapter reason**: `additional-signature-semantics`.
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

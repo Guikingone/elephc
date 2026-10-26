@@ -572,17 +572,17 @@ mod tests {
     /// `ob_get_length()` when no output buffer is active on both architectures.
     #[test]
     fn ob_get_length_boxes_false_without_an_active_buffer() {
-        for (target, label, next_label, zero_instruction) in [
+        for (target, label, exit_branch, zero_instruction) in [
             (
                 Target::new(Platform::Linux, Arch::AArch64),
                 "__elephc_runtime_builtin_v1_ob_length_false:\n",
-                "__elephc_runtime_builtin_v1_result:\n",
+                "b __elephc_runtime_builtin_v1_result",
                 "mov x0, #0",
             ),
             (
                 Target::new(Platform::Linux, Arch::X86_64),
                 "__elephc_runtime_builtin_v1_ob_length_false_x86:\n",
-                "__elephc_runtime_builtin_v1_result_x86:\n",
+                "jmp __elephc_runtime_builtin_v1_result_x86",
                 "xor edi, edi",
             ),
         ] {
@@ -591,9 +591,9 @@ mod tests {
                 .split(label)
                 .nth(1)
                 .unwrap_or_else(|| panic!("missing false arm for {target:?}:\n{asm}"))
-                .split(next_label)
-                .next()
-                .expect("false arm precedes the shared result arm");
+                .split_once(exit_branch)
+                .expect("false arm must exit through the shared result branch")
+                .0;
             let bool_boxer = target.extern_symbol("__elephc_eval_value_bool");
             let null_boxer = target.extern_symbol("__elephc_eval_value_null");
             assert!(

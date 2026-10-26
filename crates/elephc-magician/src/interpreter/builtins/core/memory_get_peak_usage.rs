@@ -5,11 +5,11 @@
 //! - Magician builtin registry inventory assembly.
 //!
 //! Key details:
-//! - Reads the same native heap as compiled PHP through `RuntimeBuiltinId`.
+//! - Scalar samples use `RuntimeBuiltinId`; invalid flags use the Core TypeError adapter.
 
 eval_builtin! {
     contract: "memory_get_peak_usage",
     area: Core,
-    direct: none,
-    values: none,
+    direct: Core,
+    values: Core,
 }

@@ -276,3 +276,25 @@ fn memory_metrics_effects_observe_heap_and_peak_resets() {
     }
     assert!(RuntimeFnId::MemoryResetPeakUsage.effects().contains(Effects::WRITES_GLOBAL));
 }
+
+/// Proven scalar flags retain read-only sampling, while dynamic errors and NAN warnings remain visible.
+#[test]
+fn memory_metrics_effects_follow_flag_types() {
+    use crate::builtins::semantics::{BuiltinSemanticInput, resolve_builtin_effects};
+    use crate::types::PhpType;
+    for name in ["memory_get_usage", "memory_get_peak_usage"] {
+        let definition = crate::builtins::registry::lookup(name).unwrap();
+        for ty in [PhpType::Bool, PhpType::Int, PhpType::Str, PhpType::Void] {
+            let input = BuiltinSemanticInput { name, args: &[], arg_types: &[ty], span: crate::span::Span::dummy() };
+            let effects = resolve_builtin_effects(definition, &input);
+            assert_eq!(effects, Effects::READS_GLOBAL | Effects::READS_HEAP);
+            assert!(!effects.contains(Effects::MAY_WARN));
+        }
+        let input = BuiltinSemanticInput { name, args: &[], arg_types: &[PhpType::Float], span: crate::span::Span::dummy() };
+        assert!(resolve_builtin_effects(definition, &input).contains(Effects::MAY_WARN));
+        let input = BuiltinSemanticInput { name, args: &[], arg_types: &[PhpType::Mixed], span: crate::span::Span::dummy() };
+        assert!(resolve_builtin_effects(definition, &input).contains(Effects::MAY_THROW));
+        let input = BuiltinSemanticInput { name, args: &[], arg_types: &[PhpType::Array(Box::new(PhpType::Int))], span: crate::span::Span::dummy() };
+        assert!(resolve_builtin_effects(definition, &input).contains(Effects::MAY_THROW));
+    }
+}
