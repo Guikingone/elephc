@@ -2,7 +2,7 @@
 title: "_imagick_pixel_from_int() - internals"
 description: "Compiler internals for _imagick_pixel_from_int(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1217
+  order: 1224
 ---
 
 ## `_imagick_pixel_from_int()` - internals

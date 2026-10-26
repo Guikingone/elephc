@@ -799,6 +799,7 @@ dependencies = [
  "elephc-pdo",
  "elephc-phar",
  "elephc-probe",
+ "elephc-random",
  "elephc-tls",
  "elephc-tz",
  "elephc-web",
@@ -986,6 +987,10 @@ version = "0.1.0"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "elephc-random"
+version = "0.1.0"
 
 [[package]]
 name = "elephc-tls"

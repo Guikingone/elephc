@@ -247,4 +247,3 @@ pub(super) fn lower_gzinflate_x86_64(
     ctx.emitter.label(done);
     ctx.emitter.instruction("add rsp, 176");                                    // release z_stream scratch storage
 }
-

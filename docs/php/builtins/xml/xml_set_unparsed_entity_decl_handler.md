@@ -2,7 +2,7 @@
 title: "xml_set_unparsed_entity_decl_handler()"
 description: "Sets the unparsed (NDATA) entity declaration handler."
 sidebar:
-  order: 1045
+  order: 1051
 ---
 
 ## xml_set_unparsed_entity_decl_handler()
