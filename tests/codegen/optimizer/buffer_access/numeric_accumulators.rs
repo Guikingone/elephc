@@ -280,6 +280,45 @@ fn test_buffer_numeric_accumulator_rejects_callee_truthiness_warning_handler() {
     assert_both_modes_fail_after(&source, "before\n", "use of buffer after buffer_free()");
 }
 
+/// A borrowed boxed argument's call-boundary bool warning must invalidate the descriptor.
+#[test]
+fn test_buffer_numeric_accumulator_rejects_mixed_bool_parameter_warning() {
+    let source = r#"<?php
+class MixedBoolBufferOwner {
+    public buffer<int> $value;
+    public function __construct(buffer<int> $value) { $this->value = $value; }
+}
+function flag_predicate(int $depth, bool $flag): bool {
+    if ($depth === 0) { return $flag; }
+    return flag_predicate($depth >> 1, $flag);
+}
+function scan_flagged(buffer<int> $input, int $n, mixed $flag): mixed {
+    $hits = 0;
+    for ($i = 0; $i < $n; $i++) {
+        $hits += $input[$i];
+        if (flag_predicate(1, $flag)) { $hits++; }
+    }
+    return $hits;
+}
+$input = buffer_new<int>(3);
+$input[0] = 1; $input[1] = 2; $input[2] = 3;
+$owner = new MixedBoolBufferOwner($input);
+set_error_handler(function (int $errno, string $message) use ($owner): bool {
+    $buffer = $owner->value;
+    buffer_free($buffer);
+    return $errno > 0 || $message !== '';
+});
+echo "before\n";
+scan_flagged($input, 3, NAN);
+echo "after\n";
+"#;
+    let ir = function_ir(source, true, "scan_flagged");
+    let call = ir.lines().find(|line| line.contains("= call ")).expect("non-inlined predicate call");
+    assert!(call.contains("may_warn"), "{ir}");
+    assert!(!ir.contains("buffer_resolve"), "{ir}");
+    assert_both_modes_fail_after(source, "before\n", "use of buffer after buffer_free()");
+}
+
 /// A preheader warning must finish before the loop's descriptor is resolved.
 #[test]
 fn test_buffer_numeric_accumulator_positions_resolver_after_truthiness_warning() {
