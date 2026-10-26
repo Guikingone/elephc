@@ -59,13 +59,13 @@ try { mime_content_type(""); } catch (ValueError $e) { echo "mime-empty:", $e->g
 try { $f->file("a\0b"); } catch (TypeError $e) { echo "type\n"; } catch (ValueError $e) { echo "value\n"; }
 try { finfo_file($f, "a\0b"); } catch (TypeError $e) { echo "type:", $e->getMessage(), "\n"; } catch (ValueError $e) { echo "value:", $e->getMessage(), "\n"; }
 try { finfo_file($f, ""); } catch (ValueError $e) { echo "empty:", $e->getMessage(), "\n"; }
-try { new finfo(0, "a\0b"); } catch (ValueError $e) { echo "database-value\n"; }
-try { finfo_open(0, "a\0b"); } catch (ValueError $e) { echo "open-value\n"; }
+try { new finfo(0, "a\0b"); } catch (ValueError $e) { echo "database-value:", $e->getMessage(), "\n"; }
+try { finfo_open(0, "a\0b"); } catch (ValueError $e) { echo "open-value:", $e->getMessage(), "\n"; }
 echo $f->buffer("hello"), "\n";
 "#;
     for (profile, class) in [(elephc::php_version::PhpVersion::Php84, "type"), (elephc::php_version::PhpVersion::Php85, "value")] {
         assert_eq!(compile_and_run_with_php_version(source, profile), format!(
-            "mime-nul:mime_content_type(): Argument #1 ($filename) must not contain any null bytes\nmime-empty:mime_content_type(): Argument #1 ($filename) must not be empty\n{class}\n{class}:finfo_file(): Argument #2 ($filename) must not contain any null bytes\nempty:finfo_file(): Argument #2 ($filename) must not be empty\ndatabase-value\nopen-value\ntext/plain\n"
+            "mime-nul:mime_content_type(): Argument #1 ($filename) must not contain any null bytes\nmime-empty:mime_content_type(): Argument #1 ($filename) must not be empty\n{class}\n{class}:finfo_file(): Argument #2 ($filename) must not contain any null bytes\nempty:finfo_file(): Argument #2 ($filename) must not be empty\ndatabase-value:finfo::__construct(): Argument #2 ($magic_database) must not contain any null bytes\nopen-value:finfo_open(): Argument #2 ($magic_database) must not contain any null bytes\ntext/plain\n"
         ));
     }
 }
@@ -140,12 +140,12 @@ fclose($stream);
     }
 }
 
-/// Constructors throw warning exceptions while procedural opens emit their own warning names.
+/// Constructors throw plain exceptions while procedural opens emit their own warning names.
 #[test]
 fn test_fileinfo_open_error_diagnostics() {
     if fileinfo_native::skip("test_fileinfo_open_error_diagnostics") { return; }
     let out = compile_and_run(r#"<?php
-try { new finfo(0, "/elephc-fileinfo-missing/magic"); } catch (ErrorException $e) { echo get_class($e), ":", $e->getSeverity(), ":", $e->getMessage(), "\n"; }
+try { new finfo(0, "/elephc-fileinfo-missing/magic"); } catch (Exception $e) { echo get_class($e), ":", $e->getMessage(), "\n"; }
 set_error_handler(function(int $level, string $message): bool { echo $level, ":", $message, "\n"; return true; });
 echo finfo_open(0, "/elephc-fileinfo-missing/magic") === false ? "database\n" : "bad\n";
 $f = new finfo(FILEINFO_MIME_TYPE);
@@ -155,7 +155,7 @@ echo mime_content_type("file:///elephc-fileinfo-missing/file") === false ? "mime
 restore_error_handler();
 echo $f->buffer("hello"), "\n";
 "#);
-    assert_eq!(out, "ErrorException:2:finfo::__construct(): Failed to load magic database at \"/elephc-fileinfo-missing/magic\"\n2:finfo_open(): Failed to load magic database at \"/elephc-fileinfo-missing/magic\"\ndatabase\n2:finfo::file(/elephc-fileinfo-missing/file): Failed to open stream: No such file or directory\nmethod\n2:finfo_file(/elephc-fileinfo-missing/file): Failed to open stream: No such file or directory\nfunction\n2:mime_content_type(file:///elephc-fileinfo-missing/file): Failed to open stream: No such file or directory\nmime\ntext/plain\n");
+    assert_eq!(out, "Exception:finfo::__construct(): Failed to load magic database at \"/elephc-fileinfo-missing/magic\"\n2:finfo_open(): Failed to load magic database at \"/elephc-fileinfo-missing/magic\"\ndatabase\n2:finfo::file(/elephc-fileinfo-missing/file): Failed to open stream: No such file or directory\nmethod\n2:finfo_file(/elephc-fileinfo-missing/file): Failed to open stream: No such file or directory\nfunction\n2:mime_content_type(file:///elephc-fileinfo-missing/file): Failed to open stream: No such file or directory\nmime\ntext/plain\n");
 }
 
 /// Directory identification requires an openable descriptor even when stat succeeds.

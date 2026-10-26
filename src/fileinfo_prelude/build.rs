@@ -99,7 +99,7 @@ fn finfo_class() -> Stmt {
         s_prop_assign(e_this(), "__elephc_owner", e_null()),
         s_assign("_raw", e_call("elephc_fileinfo_open", vec![e_var("flags"), e_var("_database")])),
     ];
-    constructor.push(s_if(eq(e_var("_raw"), e_int(0)), vec![s_throw(e_new_fq("ErrorException", vec![concat(e_str("finfo::__construct(): "), e_call("elephc_fileinfo_error", vec![])), e_int(0), e_const("E_WARNING")]))], vec![], None));
+    constructor.push(s_if(eq(e_var("_raw"), e_int(0)), vec![s_throw(e_new_fq("Exception", vec![concat(e_str("finfo::__construct(): "), e_call("elephc_fileinfo_error", vec![]))]))], vec![], None));
     constructor.push(s_prop_assign(e_this(), "__elephc_owner", e_new_fq("__ElephcFinfoHandle", vec![e_var("_raw")])));
     constructor.push(s_prop_assign(e_this(), "__elephc_handle", e_var("_raw")));
     let mut set_flags = require_handle();
@@ -144,8 +144,10 @@ fn functions() -> Program {
         function("finfo_open").param_default("flags", TypeExpr::Int, e_int(0))
             .param_default("magic_database", t_nullable(TypeExpr::Str), e_null())
             .returns(t_union(vec![t_class("finfo"), TypeExpr::False]))
-            .body(vec![s_try(vec![s_return(e_new_fq("finfo", vec![e_var("flags"), e_var("magic_database")]))],
-                vec![(vec!["ErrorException"], Some("_error"), vec![
+            .body(vec![
+                reject(e_binop(e_call("strpos", vec![e_cast(CastType::String, e_var("magic_database")), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)), "ValueError", "finfo_open(): Argument #2 ($magic_database) must not contain any null bytes"),
+                s_try(vec![s_return(e_new_fq("finfo", vec![e_var("flags"), e_var("magic_database")]))],
+                vec![(vec!["Exception"], Some("_error"), vec![
                     s_expr(e_call("__elephc_builtin_warning", vec![concat(e_str("finfo_open(): "), e_call("substr", vec![e_method_call(e_var("_error"), "getMessage", vec![]), e_int("finfo::__construct(): ".len() as i64)]))])),
                     s_return(e_bool(false)),
                 ])], None)]).build(),
