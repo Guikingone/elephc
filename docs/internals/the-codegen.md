@@ -404,9 +404,9 @@ Folded values apply last-wins keys and compact lists recursively; arrays inside 
 retain all folded keys. Null or fractional keys keep the array's written form instead.
 String key identity uses PHP bytes, so equivalent Unicode and byte-escape spellings overwrite
 the same key. Constant references left in the AST retain their names without being evaluated.
-Global and scoped array-valued constants fall back to that source export when the scalar-only
-constant metadata evaluator cannot retain a value, including inside object default arguments.
-Declaring-class constant metadata remains limited to scalar, null and enum-case values.
+Global and scoped array-valued defaults retain their written constant name independently of
+their resolved value. The constant metadata evaluator also retains nested arrays, including
+class constants exposed by declaring-class Reflection objects.
 Relative class-name defaults resolve in the method's declaring scope. Trait-relative class names
 remain written even through composition and aliases; the EIR module retains imported trait method
 keys separately so display scope does not change `getDefaultValue()` binding.
@@ -754,6 +754,49 @@ Doing this in the backend instead does not work, and the reason is worth keeping
 source owns a reference is not a property of its type. A backend release gated on types alone
 destroyed the property's own reference for a *borrowed* source, which reads back as a pointer and
 trips `heap debug detected bad refcount`.
+
+### Reflection constant values
+
+Static Reflection metadata folds constant expressions at compile time in
+`reflection_constant_value` (`src/codegen/lower_inst/objects/reflection/names_constants.rs`),
+which is distinct from the pure `resolve_const_default` resolver in
+`src/codegen/const_default_values.rs`: the reflection folder returns the recursive
+`ReflectionConstantValue` metadata enum, while the pure resolver returns the
+target-neutral `ConstDefaultValue` consumed by eval-bridge default registration
+and descriptor invokers. The two are not interchangeable.
+
+Supported forms: scalar literals, `self::`/`parent::`/`ClassName::` scoped
+access with ancestry, global `const` references, `::class`, negation, the
+binary arithmetic and concatenation operators, `null`, unit/backed enum cases,
+indexed and associative array literals, and mixed array literals. A mixed
+literal (`ArrayLiteralMixed`) folds each entry in PHP evaluation order: bare
+elements take the next free integer slot, explicit keys are kept, and a
+spread's integer keys are renumbered into a contiguous block starting after the
+destination's highest integer key (`0` when it has none) while its string keys
+are kept in place. The implicit key after a negative integer key starts at `0`
+for PHP 8.0–8.2 and advances from that key for PHP 8.3+, following the selected
+compile profile. The parser preserves those bare entries, and AST folding normalizes
+spread-free mixed literals through `src/types/array_literals.rs` before their consumers.
+Unpacked pure arrays share the resolver in `src/codegen/const_default_values/arrays.rs`
+for native inventories, eval registration and callable defaults. Array keys
+normalize with PHP's rules (integer strings, `false`, truncated floats, `null`
+to `""`). Float keys use PHP's modulo integer conversion, including non-finite and
+out-of-range values. Unsupported class-constant metadata reports the unsupported form;
+parameter defaults retain the existing lazy-helper and unavailable-value fallbacks.
+
+Literal string keys and values decode to PHP bytes at the storage or wire boundary;
+metadata names keep their ordinary UTF-8 encoding. Native array-default records retain
+binary string payloads and keys without requiring valid UTF-8, while class and parameter
+names still use the checked UTF-8 codec. AOT AST literals retain lexer markers until
+this boundary; Magician `EvalConst::String` and `EvalConst::Bytes` already hold decoded
+PHP data and must not be encoded again. Synthesized `::class` literals protect genuine
+private-use Unicode characters from the byte-escape marker representation.
+
+The folded values emit through `emit_reflection_constant_value_as_mixed`
+(`default_emit.rs`), which materializes a fresh boxed `Mixed` array (recursive,
+mixed payload slots) for array forms. Consumers: `ReflectionParameter`
+defaults, `ReflectionClass::getConstant()` / `getConstants()`,
+`ReflectionClassConstant::getValue()`, and enum backing values.
 
 ## Backend Contract
 
