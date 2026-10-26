@@ -10,21 +10,40 @@
 
 use crate::support::*;
 
-/// Generated warning and deprecation frames retain the public source call line and default output.
+/// Warning locations survive wrapper callbacks and handlers that publish another call site.
 #[test]
 fn test_fileinfo_diagnostic_call_site_lines() {
     if fileinfo_native::skip("test_fileinfo_diagnostic_call_site_lines") { return; }
     let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
-class FileinfoExpectedLine { public static int $line = 0; }
+class FileinfoExpectedLine {
+    public static int $line = 0;
+    public static int $wrapperLine = 0;
+    public static bool $defaultOutput = false;
+}
+class FileinfoLineOpenFailure {
+    public $context;
+    public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool {
+        FileinfoExpectedLine::$wrapperLine = __LINE__ + 1;
+        trigger_error("wrapper", E_USER_WARNING);
+        return false;
+    }
+    public function stream_stat(): array { return []; }
+}
 function fileinfoLineCaller(finfo $f): bool {
     FileinfoExpectedLine::$line = __LINE__ + 1;
     return finfo_close($f);
 }
+function fileinfoLineHandlerCallback(): void {
+    trigger_error("nested", E_USER_NOTICE);
+}
 $f = new finfo(FILEINFO_MIME_TYPE);
 $context = fopen("php://memory", "w+b");
+error_reporting(E_ALL & ~E_USER_NOTICE);
 set_error_handler(function(int $level, string $message, string $file, int $line): bool {
-    echo $file === __FILE__ && $line === FileinfoExpectedLine::$line ? "ok\n" : "bad:" . $line . ":" . FileinfoExpectedLine::$line . "\n";
-    return true;
+    $expected = $message === "wrapper" ? FileinfoExpectedLine::$wrapperLine : FileinfoExpectedLine::$line;
+    echo $file === __FILE__ && $line === $expected ? "ok\n" : "bad:" . $line . ":" . $expected . "\n";
+    fileinfoLineHandlerCallback();
+    return !FileinfoExpectedLine::$defaultOutput;
 });
 FileinfoExpectedLine::$line = __LINE__ + 1;
 finfo_close($f);
@@ -36,13 +55,29 @@ FileinfoExpectedLine::$line = __LINE__ + 1;
 $f->buffer("HELLO", 0, $context);
 FileinfoExpectedLine::$line = __LINE__ + 1;
 finfo_file($f, "data:text");
+stream_wrapper_register("fileinfoline", "FileinfoLineOpenFailure");
+FileinfoExpectedLine::$line = __LINE__ + 1;
+$f->file("php://filter/resource=fileinfoline://warning");
+FileinfoExpectedLine::$defaultOutput = true;
+FileinfoExpectedLine::$line = __LINE__ + 1;
+$f->file("fileinfolinemissing://warning");
+echo "handler-default:", FileinfoExpectedLine::$line, "\n";
 restore_error_handler();
+error_reporting(E_ALL);
+echo "callback-default:", __LINE__ + 1, "\n";
+$f->file("php://filter/resource=fileinfoline://warning");
+stream_wrapper_unregister("fileinfoline");
 echo "default:", __LINE__ + 1, "\n";
 finfo_close($f);
 fclose($context); unset($f, $context, $close);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert!(out.stdout.starts_with(&"ok\n".repeat(5)), "{}\n{}", out.stdout, out.stderr);
+    assert!(out.stdout.starts_with(&"ok\n".repeat(10)), "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(out.stdout.lines().count(), 13, "{}\n{}", out.stdout, out.stderr);
+    let handler_line = out.stdout.lines().find_map(|line| line.strip_prefix("handler-default:")).unwrap();
+    assert_eq!(out.stderr.matches(&format!("on line {handler_line}\n")).count(), 3, "{}", out.stderr);
+    let callback_line = out.stdout.lines().find_map(|line| line.strip_prefix("callback-default:")).unwrap();
+    assert!(out.stderr.contains(&format!("on line {callback_line}\n")), "{}", out.stderr);
     let line = out.stdout.lines().last().unwrap().strip_prefix("default:").unwrap();
     assert!(out.stderr.contains(&format!("on line {line}\n")), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);

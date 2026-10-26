@@ -198,7 +198,10 @@ pub(super) fn lower_trigger_error(
     // reports it at the user's call site, which `prepare_call_site` published for the
     // entering call. The prelude's own synthetic span would otherwise name the injected
     // source instead.
-    let caller_site = inst.span.is_some_and(|span| !span.is_from_source());
+    // Internal warning operands already carry the live caller-frame line. A callback
+    // can change the published globals before that diagnostic is emitted.
+    let caller_site = internal_category.is_none()
+        && inst.span.is_some_and(|span| !span.is_from_source());
     let default_label = ctx.next_label("trigger_error_default");
     let done_label = ctx.next_label("trigger_error_done");
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
