@@ -27296,7 +27296,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             ParamSpec {
                 name: "matches",
                 ty: TypeSpec::Mixed,
-                default: Some(DefaultSpec::EmptyArray),
+                default: Some(DefaultSpec::Null),
                 by_ref: true,
             },
         ],
@@ -27305,7 +27305,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Int,
+        returns: TypeSpec::Union(&[TypeSpec::Int, TypeSpec::False]),
         by_ref_return: false,
         summary: "Performs a regular expression match.",
         examples: &[
@@ -27339,7 +27339,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             ParamSpec {
                 name: "matches",
                 ty: TypeSpec::Mixed,
-                default: Some(DefaultSpec::EmptyArray),
+                default: Some(DefaultSpec::Null),
                 by_ref: true,
             },
             ParamSpec {
@@ -27354,9 +27354,9 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Int,
+        returns: TypeSpec::Union(&[TypeSpec::Int, TypeSpec::False]),
         by_ref_return: false,
-        summary: "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes return 0 and clear a supplied capture destination on both backends.",
+        summary: "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes raise PHP's `ValueError` on both backends.",
         examples: &[
         ],
         php_manual: None,
@@ -27397,7 +27397,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Str,
+        returns: TypeSpec::Mixed,
         by_ref_return: false,
         summary: "Performs a regular expression search and replace.",
         examples: &[
@@ -27489,7 +27489,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: Some("preg_split() takes between 2 and 4 arguments"),
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Union(&[TypeSpec::Array, TypeSpec::False]),
         by_ref_return: false,
         summary: "Splits a string by a regular expression.",
         examples: &[
