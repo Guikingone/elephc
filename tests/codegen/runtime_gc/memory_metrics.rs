@@ -120,9 +120,9 @@ echo memory_get_usage(0) < memory_get_usage("1") ? "int|string|" : "bad|";
 echo memory_get_usage(0.0) < memory_get_usage(true) ? "float|" : "bad|";
 echo memory_get_usage(null) < memory_get_usage(true) ? "null|" : "bad|";
 try { memory_get_usage([1]); echo "bad|"; }
-catch (TypeError $error) { echo "array|"; }
+catch (TypeError $error) { echo $error->getMessage() === "memory_get_usage(): Argument #1 (\$real_usage) must be of type bool, array given" ? "array|" : "bad|"; }
 try { memory_get_peak_usage(new stdClass()); echo "bad"; }
-catch (TypeError $error) { echo "object|"; }
+catch (TypeError $error) { echo $error->getMessage() === "memory_get_peak_usage(): Argument #1 (\$real_usage) must be of type bool, stdClass given" ? "object|" : "bad|"; }
 set_error_handler(function(int $severity, string $message): bool { throw new Exception("nan flag"); });
 try { memory_get_usage(NAN); echo "bad"; }
 catch (Exception $error) { echo "nan"; }
@@ -143,9 +143,9 @@ fn test_memory_metrics_dynamic_flag_type_errors() {
 function memoryArrayFlag(): mixed { return [1]; }
 function memoryObjectFlag(): mixed { return new stdClass(); }
 try { memory_get_usage(memoryArrayFlag()); echo "bad|"; }
-catch (TypeError $error) { echo "array|"; }
+catch (TypeError $error) { echo $error->getMessage() === "memory_get_usage(): Argument #1 (\$real_usage) must be of type bool, array given" ? "array|" : "bad|"; }
 try { memory_get_peak_usage(memoryObjectFlag()); echo "bad|"; }
-catch (TypeError $error) { echo "object|"; }
+catch (TypeError $error) { echo $error->getMessage() === "memory_get_peak_usage(): Argument #1 (\$real_usage) must be of type bool, stdClass given" ? "object|" : "bad|"; }
 $reader = $argc > 0 ? "memory_get_usage" : "memory_get_peak_usage";
 try { $reader(memoryArrayFlag()); echo "bad"; }
 catch (TypeError $error) { echo "callable"; }
@@ -173,4 +173,20 @@ try { memory_get_usage(NAN); echo "bad"; }
 catch (Exception $error) { echo "caught"; }
 "#;
     assert_eq!(compile_and_run(source), "warn|warn|caught");
+}
+
+/// Nullable scalar flags retain their tag word instead of being unboxed as heap pointers.
+#[test]
+fn test_memory_metrics_nullable_flags() {
+    let source = r#"<?php
+function memoryNullableUsage(?int $flag): int { return memory_get_usage($flag); }
+function memoryNullablePeak(?bool $flag): int { return memory_get_peak_usage($flag); }
+$value = $argc > 5 ? null : $argc;
+echo memoryNullableUsage(null) < memoryNullableUsage($value) ? "nullable|" : "bad|";
+echo memoryNullableUsage(0) === memoryNullableUsage(null) ? "zero|" : "bad|";
+echo memoryNullablePeak(null) < memoryNullablePeak(true) ? "peak|" : "bad|";
+echo memoryNullablePeak(false) === memoryNullablePeak(null) ? "false" : "bad";
+"#;
+    assert_eq!(compile_and_run(source), "nullable|zero|peak|false");
+    assert_eq!(without_ir_opt(|| compile_and_run(source)), "nullable|zero|peak|false");
 }
