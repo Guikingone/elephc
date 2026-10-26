@@ -71,7 +71,7 @@ class FileinfoFilterOwner extends php_user_filter {
     public static int $closed = 0;
     private string $payload = "";
     public function onCreate(): bool { $this->payload = str_repeat("x", 41); return true; }
-    public function onClose(): void { FileinfoFilterOwner::$closed++; }
+    public function onClose(): void { if (strlen($this->params["payload"]) < 30) { echo "lost params\n"; } FileinfoFilterOwner::$closed++; }
     public function filter($in, $out, &$consumed, $closing): int { return PSFS_PASS_ON; }
     public function __destruct() { FileinfoFilterOwner::$dropped++; }
 }
@@ -84,6 +84,7 @@ class FileinfoFilterCreateThrows extends FileinfoFilterOwner {
 class FileinfoFilterCloseThrows extends FileinfoFilterOwner {
     public function onClose(): void { FileinfoFilterOwner::$closed++; throw new Exception("close"); }
 }
+function fileinfoFilterParams(): mixed { return ["payload" => str_repeat("m", 45)]; }
 stream_filter_register("fileinfo.owner", "FileinfoFilterOwner");
 stream_filter_register("fileinfo.refuses", "FileinfoFilterRefuses");
 stream_filter_register("fileinfo.create.throws", "FileinfoFilterCreateThrows");
@@ -91,7 +92,9 @@ stream_filter_register("fileinfo.close.throws", "FileinfoFilterCloseThrows");
 for ($i = 0; $i < 8; $i++) {
     foreach ([STREAM_FILTER_READ, STREAM_FILTER_WRITE] as $mode) {
         $stream = fopen("php://temp", "w+b");
-        $filter = stream_filter_append($stream, "fileinfo.owner", $mode, ["payload" => str_repeat("p", 33)]);
+        $params = fileinfoFilterParams();
+        $filter = stream_filter_append($stream, "fileinfo.owner", $mode, $params);
+        unset($params);
         fclose($stream); unset($filter);
     }
     $stream = fopen("php://temp", "w+b");
@@ -99,7 +102,7 @@ for ($i = 0; $i < 8; $i++) {
     if ($filter !== false) { echo "refusal failed\n"; }
     fclose($stream); unset($filter);
     $stream = fopen("php://temp", "w+b");
-    try { stream_filter_append($stream, "fileinfo.create.throws", STREAM_FILTER_READ, ["payload" => str_repeat("t", 37)]); }
+    try { stream_filter_append($stream, "fileinfo.create.throws", STREAM_FILTER_READ, fileinfoFilterParams()); }
     catch (Exception $e) { if ($e->getMessage() !== "create") { echo "wrong create error\n"; } }
     fclose($stream);
     $stream = fopen("php://temp", "w+b");

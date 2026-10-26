@@ -2617,6 +2617,10 @@ impl RuntimeFnId {
                 | RuntimeFnId::PrintR
                 | RuntimeFnId::PtrReadString
                 | RuntimeFnId::ElephcPtrReadString
+                // Filter attachment boxes a new resource or false. The helper retains
+                // its own params owner, so none of the result storage aliases an input.
+                | RuntimeFnId::StreamFilterAppend
+                | RuntimeFnId::StreamFilterPrepend
                 | RuntimeFnId::Range
                 | RuntimeFnId::StrSplit
                 | RuntimeFnId::Strtotime
