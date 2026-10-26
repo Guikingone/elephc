@@ -56,39 +56,38 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
 /// array while `ReflectionClass` itself now holds a name-keyed map. Codegen populates a
 /// subclass through the Reflection owner path, which writes the patched shapes, and then frees
 /// the object through the subclass's own property tags; the stale tags released a hash as an
-/// indexed array. Only members still declared by the builtin ancestor are copied, so user
-/// overrides and user-declared properties keep their own types.
+/// indexed array. Property patches follow the builtin ancestor's physical layout prefix so a
+/// same-named private property appended by the user cannot hide the inherited slot. Method
+/// patches still apply only where the builtin ancestor remains the declaring class.
 fn propagate_reflection_patches_to_user_subclasses(checker: &mut Checker) {
     let is_builtin = is_builtin_reflection_class;
-    let subclass_names = checker
+    let subclasses = checker
         .classes
         .iter()
-        .filter(|(name, info)| {
-            !is_builtin(name) && reflection_builtin_ancestor(checker, info).is_some()
+        .filter_map(|(name, info)| {
+            if is_builtin(name) {
+                return None;
+            }
+            reflection_builtin_ancestor(checker, info)
+                .map(|ancestor| (name.clone(), ancestor.to_string()))
         })
-        .map(|(name, _)| name.clone())
         .collect::<Vec<_>>();
-    for subclass_name in subclass_names {
+    for (subclass_name, builtin_ancestor) in subclasses {
         let Some(subclass) = checker.classes.get(&subclass_name) else {
             continue;
         };
-        let property_types = subclass
-            .properties
-            .iter()
+        let property_types = checker
+            .classes
+            .get(&builtin_ancestor)
+            .into_iter()
+            .flat_map(|ancestor| ancestor.properties.iter())
             .enumerate()
-            .filter_map(|(index, (property_name, _))| {
-                let declaring = subclass.property_declaring_classes.get(property_name)?;
-                if !is_builtin(declaring) {
-                    return None;
-                }
-                let builtin_type = checker
-                    .classes
-                    .get(declaring)?
+            .filter_map(|(index, (property_name, builtin_type))| {
+                subclass
                     .properties
-                    .iter()
-                    .find(|(name, _)| name == property_name)
-                    .map(|(_, ty)| ty.clone())?;
-                Some((index, builtin_type))
+                    .get(index)
+                    .is_some_and(|(name, _)| name == property_name)
+                    .then(|| (index, builtin_type.clone()))
             })
             .collect::<Vec<_>>();
         let method_sigs = subclass

@@ -124,6 +124,8 @@ pub(super) fn emit_reflection_attrs_property(
     attr_names: &[String],
     attr_args: &[Option<Vec<AttrArgEntry>>],
 ) -> Result<()> {
+    let target_owner = reflection_owner_base_class(ctx, class_name)
+        .unwrap_or_else(|| class_name.to_string());
     let (attrs_low_offset, attrs_high_offset) = reflection_attrs_offsets(ctx, class_name)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
@@ -135,7 +137,7 @@ pub(super) fn emit_reflection_attrs_property(
         ctx,
         attr_names,
         attr_args,
-        reflection_attribute_target_for_owner(class_name),
+        reflection_attribute_target_for_owner(&target_owner),
     )?;
     emit_box_current_owned_value_as_mixed(
         ctx.emitter,

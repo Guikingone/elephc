@@ -4582,7 +4582,12 @@ class SubclassTarget implements SubclassMarker {
     public function go(int $a) {}
 }
 enum SubclassBacked: string { case One = 'one'; }
-class SubclassOfClass extends ReflectionClass { private string $mine = 'c'; }
+class SubclassOfClass extends ReflectionClass {
+    private string $mine = 'c';
+    private array $__interfaces = ['user'];
+    public function mine(): string { return $this->mine; }
+    public function shadow(): string { return $this->__interfaces[0]; }
+}
 class SubclassOfObject extends ReflectionObject {}
 class SubclassOfEnum extends ReflectionEnum {}
 $values = [
@@ -4597,7 +4602,8 @@ foreach ($values as $label => $value) {
 $class = $values['class'];
 echo json_encode(array_keys($class->getInterfaces())), ' ',
     json_encode(array_keys($class->getTraits())), ' ',
-    json_encode($class->getStaticProperties()), ' ', count($class->getMethods()), "\n";
+    json_encode($class->getStaticProperties()), ' ', count($class->getMethods()), ' ',
+    $class->mine(), ' ', $class->shadow(), "\n";
 echo json_encode(array_keys($values['object']->getInterfaces())), "\n";
 unset($values, $class);
 $bare = new SubclassOfClass('SubclassTarget');
@@ -4610,8 +4616,48 @@ echo "done\n";
         "class SubclassOfClass SubclassTarget SubclassTarget {\"name\":\"SubclassTarget\"}\n\
 object SubclassOfObject SubclassTarget SubclassTarget {\"name\":\"SubclassTarget\"}\n\
 enum SubclassOfEnum SubclassBacked SubclassBacked {\"name\":\"SubclassBacked\"}\n\
-[\"SubclassMarker\"] [\"SubclassHelper\"] {\"count\":3} 2\n\
+[\"SubclassMarker\"] [\"SubclassHelper\"] {\"count\":3} 2 c user\n\
 [\"SubclassMarker\"]\n\
+done\n"
+    );
+}
+
+/// Reflection subclasses use ordinary allocation before metadata population, preserving user
+/// defaults, owned reference cells, dynamic-property storage, and constructor execution.
+#[test]
+fn test_reflection_subclass_preserves_normal_construction() {
+    let out = compile_and_run(
+        r#"<?php
+class ExpandedReflectionTarget {}
+
+#[AllowDynamicProperties]
+class ExpandedReflectionClass extends ReflectionClass {
+    private string $mine = 'default';
+    public string $label = 'before';
+    public string $ownedValue = 'seed';
+
+    public function __construct(string $name, string $label) {
+        parent::__construct($name);
+        $this->label = $label;
+        $this->dynamicValue = 'tail';
+    }
+
+    public function mine(): string { return $this->mine; }
+    public function &owned(): string { return $this->ownedValue; }
+}
+
+$reflection = new ExpandedReflectionClass(ExpandedReflectionTarget::class, 'constructed');
+$alias =& $reflection->owned();
+$alias = 'changed';
+echo $reflection->getName(), '|', $reflection->name, '|', $reflection->mine(), '|',
+    $reflection->label, '|', $reflection->dynamicValue, '|', $reflection->ownedValue, "\n";
+unset($alias, $reflection);
+echo "done\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "ExpandedReflectionTarget|ExpandedReflectionTarget|default|constructed|tail|changed\n\
 done\n"
     );
 }

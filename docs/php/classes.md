@@ -1658,6 +1658,12 @@ name with `isBuiltin()` false.
 | `ReflectionIntersectionType::getTypes()` | `ReflectionNamedType[]` | The named members of a supported intersection |
 | `ReflectionIntersectionType::allowsNull()` | `bool` | Always false for supported intersections |
 
+Builtin Reflection objects expose PHP's public `name` and `class` mirrors through property access,
+array casts, `get_object_vars()`, `var_dump()`, `print_r()`, and `var_export()` while keeping
+compiler-only private backing slots hidden. User subclasses of supported Reflection owners retain
+their ordinary property defaults, reference-property storage, dynamic-property capacity, and user
+constructors while receiving the same compile-time Reflection metadata as the builtin owner.
+
 Limitations today:
 - All arguments to `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and `new ReflectionClass/Function/Method/Property/Parameter(...)` must be compile-time class/member/function strings or literal parameter selectors. `ClassName::class` is accepted for supported class-name arguments, and normal named-argument / static associative-spread normalization runs before the literal-string check. `ReflectionClass` can resolve statically known classes, enums, interfaces, traits, and statically typed object expressions, including anonymous-class objects; class-attribute materialization is currently backed by class/enum metadata. Dynamic class, method, property, function, parameter, or attribute names require a runtime name->id lookup table that is not yet implemented.
 - Attribute arguments materialized by reflection today include: string, int, float, bool, null, negation (`-N`) of a numeric literal, `ClassName::class` strings, arrays (positional and associative, nested, with heterogeneous element types), **named arguments**, and **symbolic references** - a global constant (`#[A(SOME_CONST)]`), a class/interface constant (`#[A(C::BAR)]`), or an enum case (`#[A(E::Case)]`). `ReflectionClass`/`ReflectionMethod`/`ReflectionProperty::getAttributes()` -> `getArguments()` returns named arguments under their string keys and positional arguments under their integer keys, matching PHP. A constant reference resolves to its value and an enum-case reference resolves to the case object (so reading its `->value`/`->name` works just like PHP), and `newInstance()` constructs the attribute with those arguments.

@@ -356,6 +356,28 @@ echo $reflection->getName();
     assert!(method_names.contains("ReflectionClass::getName"));
 }
 
+/// Verifies a user Reflection subclass retains the builtin constructor and inherited methods.
+#[test]
+fn native_reflection_subclass_lowers_reachable_builtin_methods() {
+    let module = lower_source(
+        r#"<?php
+class ReflectedTarget {}
+class UserReflection extends ReflectionClass {
+    public function __construct(string $name) { parent::__construct($name); }
+}
+$reflection = new UserReflection(ReflectedTarget::class);
+echo $reflection->getName();
+"#,
+    );
+    let method_names = module
+        .class_methods
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect::<HashSet<_>>();
+    assert!(method_names.contains("ReflectionClass::__construct"));
+    assert!(method_names.contains("ReflectionClass::getName"));
+}
+
 /// Verifies mixed float/integer comparisons coerce both operands before `fcmp`.
 #[test]
 fn float_comparison_coerces_integer_operand() {

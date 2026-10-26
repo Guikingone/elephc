@@ -95,7 +95,8 @@ use type_object_emit::*;
 use flags_offsets::*;
 
 pub(super) use owner_dispatch::{
-    is_reflection_owner_class, lower_reflection_owner_new, reflection_owner_base_class,
+    is_reflection_owner_class, lower_reflection_owner_new, populate_reflection_owner_new,
+    reflection_owner_base_class,
 };
 
 /// Compile-time metadata used to populate one Reflection owner object.

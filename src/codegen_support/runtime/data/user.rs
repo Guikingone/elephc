@@ -43,7 +43,6 @@ const EVAL_REFLECTION_PROPERTY_FLAG_PROMOTED: u64 = 512;
 const EVAL_REFLECTION_PROPERTY_FLAG_VIRTUAL: u64 = 1024;
 const EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED_SET: u64 = 2048;
 const EVAL_REFLECTION_PROPERTY_FLAG_PRIVATE_SET: u64 = 4096;
-
 const EVAL_REFLECTION_METHOD_FLAG_STATIC: u64 = 1;
 const EVAL_REFLECTION_METHOD_FLAG_PUBLIC: u64 = 2;
 const EVAL_REFLECTION_METHOD_FLAG_PROTECTED: u64 = 4;
@@ -496,7 +495,7 @@ pub(crate) fn emit_runtime_data_user(
         for class_id in 0..=max_class_id {
             let flag = class_name_by_id
                 .get(&class_id)
-                .is_some_and(|class_name| is_builtin_reflection_object_class(class_name));
+                .is_some_and(|class_name| REFLECTION_CLASS_NAMES.contains(&class_name.as_str()));
             out.push_str(&format!("    .quad {}\n", u8::from(flag)));
         }
     }
@@ -3635,7 +3634,7 @@ fn var_dump_descriptor_rows(
             })
             .collect();
     }
-    let rows = class_info
+    class_info
         .properties
         .iter()
         .enumerate()
@@ -3659,8 +3658,7 @@ fn var_dump_descriptor_rows(
                 type_name: var_dump_property_type_name(prop_ty),
             })
         })
-        .collect::<Vec<_>>();
-    rows
+        .collect()
 }
 
 /// Returns whether `prop_name` is one of the compiler-only private backing slots elephc
@@ -3670,9 +3668,9 @@ fn var_dump_descriptor_rows(
 /// `__`-prefixed slot is compiler storage that backs an accessor (`getName()` reads
 /// `__name`). Every object renderer that walks the full declared-property list must
 /// therefore omit them. This is the renderer-side counterpart of the cast-path filter
-/// `_class_reflection_parameter_cast_public_flags` in `runtime/objects/object_vars.rs`,
-/// which today covers only `ReflectionParameter`; `var_dump`, `print_r` and `var_export`
-/// all read the rows filtered here, so the three renderers stay in agreement.
+/// `_class_reflection_public_cast_flags` in `runtime/objects/object_vars.rs`, which applies
+/// the same public-only policy to every builtin Reflection owner. `var_dump`, `print_r` and
+/// `var_export` all read the rows filtered here, so the object views stay in agreement.
 ///
 /// WHY THE DECLARING CLASS. A user class may legitimately declare its own private
 /// `__`-prefixed property, and PHP's `var_dump` shows it. The skip is therefore gated on

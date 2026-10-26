@@ -16,10 +16,6 @@ pub(super) fn emit_reflection_owner_object(
     class_name: &str,
     metadata: &ReflectionOwnerMetadata,
 ) -> Result<()> {
-    let owner_class_name =
-        reflection_owner_base_class(ctx, class_name).unwrap_or_else(|| class_name.to_string());
-    let is_reflection_class_owner =
-        matches!(owner_class_name.as_str(), "ReflectionClass" | "ReflectionObject");
     let (class_id, property_count, uninitialized_marker_offsets) = {
         let class_info = ctx
             .module
@@ -40,12 +36,28 @@ pub(super) fn emit_reflection_owner_object(
         &uninitialized_marker_offsets,
         &[],
     )?;
+    emit_reflection_owner_metadata(ctx, class_name, metadata)
+}
+
+/// Populates Reflection metadata on an object already held in the integer result register.
+/// Builtin-owner offsets keep same-named private properties declared by a user subclass intact.
+pub(super) fn emit_reflection_owner_metadata(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+) -> Result<()> {
+    let object_class_name = class_name;
+    let owner_class_name = reflection_owner_base_class(ctx, object_class_name)
+        .unwrap_or_else(|| object_class_name.to_string());
+    let class_name = owner_class_name.as_str();
+    let is_reflection_class_owner =
+        matches!(class_name, "ReflectionClass" | "ReflectionObject");
     if let Some(reflected_name) = metadata.reflected_name.as_deref() {
         emit_reflection_owner_string_property_by_name(ctx, class_name, "__name", reflected_name)?;
         let public_name_offset = ctx
             .module
             .class_infos
-            .get(class_name)
+            .get(object_class_name)
             .and_then(|info| info.property_offsets.get("name").copied());
         if let Some(offset) = public_name_offset {
             if owner_class_name != "ReflectionParameter" {
