@@ -37,6 +37,10 @@ builtin! {
 /// the associative coordinator owns their runtime iterator walk. The receiver must be indexed,
 /// associative or a declared PHP array with boxed storage. Returns the new element count as `Int`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    if cx.argument_plan.is_some_and(|plan| plan.regular_argument_is_unpacked(0)) {
+        return Err(CompileError::new(cx.args[0].span,
+            "array_push() receiver cannot be supplied by unpacking; pass its variable or place directly"));
+    }
     let indexed_root = indexed_receiver_root(&cx.args[0]);
     if indexed_root.is_some_and(|root| matches!(&root.kind, ExprKind::Variable(name)
         if cx.checker.local_parameter_names.contains(name)
@@ -65,6 +69,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let runtime_spread_supported = cx
         .checker
         .array_push_runtime_spread_supported(&cx.args[0], &arr_ty, cx.env)?;
+    if !denied_place && !runtime_spread_supported && !literal_or_local_indexes(&cx.args[0]) {
+        return Err(CompileError::new(cx.args[0].span,
+            "array_push() native receiver places require literal or local indexes"));
+    }
     let value_constraint = match arr_ty.codegen_repr() {
         PhpType::AssocArray { value, .. }
             if !matches!(value.codegen_repr(), PhpType::Mixed | PhpType::Iterable) => Some((
@@ -106,6 +114,13 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 "array_push() runtime spreads require stable non-aliased receiver storage",
             ));
         }
+        if !denied_place && !runtime_spread_supported
+            && !matches!(cx.args[0].kind, ExprKind::Variable(_))
+            && !literal_or_local_value(&cx.args[index])
+        {
+            return Err(CompileError::new(cx.args[index].span,
+                "array_push() native receiver places require literal or local values; use a declared array property for effectful values"));
+        }
         if let Some((expected, message)) = &value_constraint {
             if value_ty.codegen_repr() != expected.codegen_repr() {
                 return Err(CompileError::new(
@@ -120,6 +135,35 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         Ok(PhpType::Int)
     } else {
         Err(CompileError::new(cx.span, "array_push() first argument must be array"))
+    }
+}
+
+/// Bounds native copy/write-back to operand trees that cannot change the selected storage.
+/// Calls, casts, member reads and other computed values may enter PHP handlers or rebind a root.
+fn literal_or_local_value(value: &Expr) -> bool {
+    match &value.kind {
+        ExprKind::Variable(_) | ExprKind::This | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_) | ExprKind::StringLiteral(_) | ExprKind::BoolLiteral(_)
+        | ExprKind::Null | ExprKind::ConstRef(_) => true,
+        ExprKind::ArrayLiteral(items) => items.iter().all(literal_or_local_value),
+        ExprKind::ArrayLiteralAssoc(items) => items.iter().all(|(key, value)|
+            matches!(key.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_))
+                && literal_or_local_value(value)),
+        ExprKind::Spread(inner) | ExprKind::NamedArg { value: inner, .. }
+        | ExprKind::ErrorSuppress(inner) => literal_or_local_value(inner),
+        _ => false,
+    }
+}
+
+/// A native parent is not leased before evaluating a computed index, so its selection must be inert.
+fn literal_or_local_indexes(place: &Expr) -> bool {
+    match &place.kind {
+        ExprKind::ArrayAccess { array, index } => literal_or_local_indexes(array)
+            && matches!(index.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_)
+                | ExprKind::Variable(_)),
+        ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) =>
+            literal_or_local_indexes(value),
+        _ => true,
     }
 }
 

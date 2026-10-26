@@ -1279,6 +1279,60 @@ fn test_error_associative_push_rejects_non_array_receiver() {
     }
 }
 
+/// Literal unpack entries have their own storage and cannot masquerade as the original receiver.
+#[test]
+fn test_error_array_push_unpack_cannot_supply_receiver_storage() {
+    for source in [
+        r#"<?php $h = ["a" => 1, "b" => "x"]; array_push(...["array" => $h]);"#,
+        r#"<?php $h = ["a" => 1, "b" => "x"]; array_push(...["array" => $h], ...[2, 3]);"#,
+        r#"<?php $h = [1]; array_push(...[$h]);"#,
+        r#"<?php $h = [1]; array_push(...[$h], ...[2, 3]);"#,
+        r#"<?php $h = [1]; array_push(...[0 => $h], ...[2, 3]);"#,
+    ] {
+        expect_error(source, "array_push() receiver cannot be supplied by unpacking");
+    }
+}
+
+/// Native copy/write-back cannot keep a selected root or property across arbitrary PHP effects.
+#[test]
+fn test_error_array_push_native_place_rejects_effectful_values() {
+    for source in [
+        r#"<?php
+$rows = [["a" => 1, "s" => "s"]];
+$alias =& $rows;
+array_push($rows[0], (function () use (&$rows) {
+    $rows = [["b" => 9, "s" => "s"]];
+    return 2;
+})());
+"#,
+        r#"<?php
+class FallbackMixedBox { public $items = ["a" => 1, "s" => "s"]; }
+$box = new FallbackMixedBox();
+$held = $box;
+array_push($box->items, (function () use (&$box) {
+    $box = new FallbackMixedBox();
+    return 2;
+})());
+"#,
+        r#"<?php
+$rows = [["a" => 1, "s" => "s"], ["b" => 9, "s" => "s"]];
+$alias =& $rows;
+$key = 0;
+array_push($rows[$key], (function () use (&$key) { $key = 1; return 2; })());
+"#,
+    ] {
+        expect_error(source, "array_push() native receiver places require literal or local values");
+    }
+    expect_error(r#"<?php
+$rows = [["a" => 1, "s" => "s"]];
+$alias =& $rows;
+array_push($rows[(function () use (&$rows) {
+    $rows = [["b" => 9, "s" => "s"]];
+    return 0;
+})()], 2);
+"#, "array_push() native receiver places require literal or local indexes");
+}
+
 /// Typed associative storage rejects every pushed value whose representation cannot fit.
 #[test]
 fn test_error_associative_push_typed_entries_reject_mismatched_values() {
