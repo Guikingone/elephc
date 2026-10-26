@@ -37,9 +37,23 @@ builtin! {
 /// associative or a declared PHP array with boxed storage. Returns the new element count as `Int`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    let restricted_assoc_entries = match arr_ty.codegen_repr() {
+        PhpType::AssocArray { value, .. }
+            if !matches!(value.codegen_repr(), PhpType::Mixed | PhpType::Iterable) => true,
+        _ => false,
+    };
     for index in 1..cx.args.len() {
         if matches!(cx.args[index].kind, crate::parser::ast::ExprKind::Spread(_)) {
-            cx.checker.infer_runtime_iterated_call_arg_type(&cx.args[index], cx.env)?;
+            let (source, _) = cx.checker
+                .infer_runtime_iterated_call_arg_types(&cx.args[index], cx.env)?;
+            if restricted_assoc_entries
+                && !matches!(source.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+            {
+                return Err(CompileError::new(
+                    cx.args[index].span,
+                    "array_push() runtime spreads require an associative receiver with mixed entries",
+                ));
+            }
         } else {
             cx.checker.infer_type(&cx.args[index], cx.env)?;
         }

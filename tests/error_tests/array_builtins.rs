@@ -1278,3 +1278,16 @@ fn test_error_associative_push_rejects_non_array_receiver() {
         expect_error(source, "array_push() first argument must be array");
     }
 }
+
+/// Typed associative storage rejects runtime-only spread element layouts at the source span.
+#[test]
+fn test_error_associative_push_typed_entries_reject_runtime_spreads() {
+    expect_error(
+        r#"<?php
+function generatedPushValues(): Generator { yield 1; yield 2; }
+$values = ["a" => 1];
+array_push($values, ...generatedPushValues());
+"#,
+        "array_push() runtime spreads require an associative receiver with mixed entries",
+    );
+}

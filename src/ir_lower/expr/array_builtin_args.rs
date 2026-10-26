@@ -46,50 +46,8 @@ pub(super) fn lower_static_array_push(
     // Interleaving the two loops was invisible while the arity was pinned at one value.
     let values: Vec<LoweredValue> = args[1..].iter().map(|arg| lower_expr(ctx, arg)).collect();
     for value in values {
-        // Re-read the local for every append: an earlier one may have replaced the slot's
-        // pointer, and appending into the stale one would write to freed storage.
-        let array_value = ctx.load_local(array_name, Some(args[0].span));
-        // A packed record address or `null` appended to pointers is the pointer word, as in
-        // the `$a[] = ...` statement.
-        let array_ty = ctx.builder.value_php_type(array_value.value);
-        let value = ctx.retype_value_for_container_element(&array_ty, value, Some(expr.span));
-        let (array_value, updated_ty, needs_storeback) =
-            if crate::ir_lower::stmt::ref_bound_mixed_indexed_array_write(ctx, array_name, value) {
-                (array_value, Some(ctx.local_type(array_name)), true)
-            } else {
-                crate::ir_lower::stmt::prepare_indexed_array_local_write(
-                    ctx,
-                    array_value,
-                    value,
-                    expr.span,
-                )
-            };
-        ctx.emit_void(
-            Op::ArrayPush,
-            vec![array_value.value, value.value],
-            None,
-            Op::ArrayPush.default_effects(),
-            Some(expr.span),
-        );
-        let elem_ty = crate::ir_lower::stmt::indexed_array_write_element_type(
-            ctx,
-            array_value,
-            updated_ty.as_ref(),
-        );
-        crate::ir_lower::stmt::finish_indexed_array_local_write(
-            ctx,
-            array_name,
-            array_value,
-            updated_ty,
-            needs_storeback,
-            expr.span,
-        );
-        crate::ir_lower::stmt::release_indexed_array_write_operand(
-            ctx,
-            elem_ty.as_ref(),
-            value,
-            expr.span,
-        );
+        let appended = try_append_indexed_array_local_value(ctx, array_name, value, expr.span);
+        debug_assert!(appended, "static array_push receiver stopped being an indexed array");
     }
     // PHP returns the new element count. Reading it from the final array rather than tracking it
     // across the appends also gives the value-less form its answer for free.
@@ -102,6 +60,70 @@ pub(super) fn lower_static_array_push(
         Op::ArrayLen.default_effects(),
         Some(expr.span),
     ))
+}
+
+/// Appends one value to an indexed local while preserving its evolving storage type.
+///
+/// A heterogeneous append converts typed storage to Mixed before the write, republishes a
+/// relocated pointer, updates the local type fact, and releases only an operand the write owned.
+/// Returning `false` leaves non-indexed or boxed receivers for their ordinary builtin path.
+pub(super) fn try_append_indexed_array_local_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_name: &str,
+    value: LoweredValue,
+    span: Span,
+) -> bool {
+    if !matches!(ctx.local_type(array_name).codegen_repr(), PhpType::Array(_)) {
+        return false;
+    }
+    // Re-read the local for every append: an earlier one may have replaced the slot's pointer,
+    // and appending into the stale one would write to freed storage.
+    let array_value = ctx.load_local(array_name, Some(span));
+    if array_value.ir_type != IrType::Heap(IrHeapKind::Array) {
+        return false;
+    }
+    // A packed record address or `null` appended to pointers is the pointer word, as in the
+    // `$a[] = ...` statement.
+    let array_ty = ctx.builder.value_php_type(array_value.value);
+    let value = ctx.retype_value_for_container_element(&array_ty, value, Some(span));
+    let (array_value, updated_ty, needs_storeback) =
+        if crate::ir_lower::stmt::ref_bound_mixed_indexed_array_write(ctx, array_name, value) {
+            (array_value, Some(ctx.local_type(array_name)), true)
+        } else {
+            crate::ir_lower::stmt::prepare_indexed_array_local_write(
+                ctx,
+                array_value,
+                value,
+                span,
+            )
+        };
+    ctx.emit_void(
+        Op::ArrayPush,
+        vec![array_value.value, value.value],
+        None,
+        Op::ArrayPush.default_effects(),
+        Some(span),
+    );
+    let elem_ty = crate::ir_lower::stmt::indexed_array_write_element_type(
+        ctx,
+        array_value,
+        updated_ty.as_ref(),
+    );
+    crate::ir_lower::stmt::finish_indexed_array_local_write(
+        ctx,
+        array_name,
+        array_value,
+        updated_ty,
+        needs_storeback,
+        span,
+    );
+    crate::ir_lower::stmt::release_indexed_array_write_operand(
+        ctx,
+        elem_ty.as_ref(),
+        value,
+        span,
+    );
+    true
 }
 
 /// Lowers builtin call operands, applying builtin-specific preservation where source order matters.

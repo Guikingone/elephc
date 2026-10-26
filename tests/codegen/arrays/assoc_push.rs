@@ -351,11 +351,17 @@ $sources = ["ok" => [2]];
 try { array_push($h, ...$sources["missing"]); }
 catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 echo json_encode($h), "\n";
+function invalidPushSource(): mixed { return new stdClass; }
+try { array_push($h, ...invalidPushSource()); }
+catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+echo json_encode($h), "\n";
 "#);
     assert_eq!(out.stdout, concat!(
         "array_push() does not accept unknown named parameters\n",
         "{\"a\":1,\"b\":\"x\"}\n",
         "Only arrays and Traversables can be unpacked, null given\n",
+        "{\"a\":1,\"b\":\"x\"}\n",
+        "Only arrays and Traversables can be unpacked, stdClass given\n",
         "{\"a\":1,\"b\":\"x\"}\n",
     ), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);

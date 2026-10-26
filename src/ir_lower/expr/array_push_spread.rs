@@ -114,7 +114,7 @@ fn stage_spread(
     let iterable = ctx.emit_value(Op::TypePredicate, vec![source.value],
         Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Iterable)), PhpType::Bool,
         Op::TypePredicate.default_effects(), Some(span));
-    require(ctx, iterable, "TypeError", "Only arrays and Traversables can be unpacked", true, span);
+    require_iterable(ctx, iterable, &source_slot, span);
     let source_type = ctx.local_type(&source_slot).codegen_repr();
     let element = match source_type.clone() {
         PhpType::Array(element) => *element,
@@ -268,8 +268,41 @@ fn append_value(
     ctx: &mut LoweringContext<'_, '_>, canonical: &str, receiver: &str,
     value: LoweredValue, span: Span,
 ) {
+    if try_append_indexed_array_local_value(ctx, receiver, value, span) {
+        return;
+    }
     let array = ctx.load_local(receiver, Some(span));
     emit_builtin_call_value(ctx, canonical, vec![array.value, value.value], PhpType::Int, span, None);
+}
+
+/// Raises PHP's dynamic unpack TypeError when a staged source is not iterable.
+fn require_iterable(
+    ctx: &mut LoweringContext<'_, '_>, condition: LoweredValue, source_slot: &str, span: Span,
+) {
+    let valid = ctx.builder.create_named_block("push.unpack.iterable", Vec::new());
+    let invalid = ctx.builder.create_named_block("push.unpack.non_iterable", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: condition.value,
+        then_target: valid,
+        then_args: Vec::new(),
+        else_target: invalid,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(invalid);
+    let source = Expr::new(ExprKind::Variable(source_slot.to_string()), span);
+    let message = super::enum_argument_guards::concat(
+        Expr::new(ExprKind::StringLiteral(
+            "Only arrays and Traversables can be unpacked, ".into(),
+        ), span),
+        super::enum_argument_guards::concat(
+            super::enum_argument_guards::runtime_debug_type(&source, span),
+            Expr::new(ExprKind::StringLiteral(" given".into()), span),
+            span,
+        ),
+        span,
+    );
+    super::enum_argument_guards::throw_message(ctx, "TypeError", message, span);
+    ctx.builder.position_at_end(valid);
 }
 
 /// Emits a catchable PHP argument error while preserving all outer argument owner records.

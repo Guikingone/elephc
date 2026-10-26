@@ -385,6 +385,44 @@ echo $count, "|", json_encode($values), "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Indexed spread appends share the ordinary widening path for every source and value shape.
+#[test]
+fn test_array_push_indexed_heterogeneous_spreads_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function heterogeneousPushGenerator(): Generator { yield "x"; yield 1.5; }
+function emptyPushGenerator(): Generator { yield "g"; yield 2.5; }
+$dynamic = [1, 2];
+$tail = [$argc > 0 ? "x" : "y", "z"];
+echo array_push($dynamic, ...$tail), "|", json_encode($dynamic), "\n";
+$literal = [$argc];
+echo array_push($literal, ...["a", "b"]), "|", json_encode($literal), "\n";
+$generated = [1, 2];
+echo array_push($generated, ...heterogeneousPushGenerator()), "|", json_encode($generated), "\n";
+$plain = [1];
+$more = [$argc + 1];
+echo array_push($plain, "s", ...$more), "|", json_encode($plain), "\n";
+$empty = [];
+$items = [$argc + 1, 2, $argc + 3];
+echo array_push($empty, ...$items), "|", $empty[0] + $empty[2], "|", json_encode($empty), "\n";
+$emptyGenerated = [];
+echo array_push($emptyGenerated, ...emptyPushGenerator()), "|", json_encode($emptyGenerated), "\n";
+$strings = ["a"];
+echo array_push($strings, ...[$argc + 1, 5]), "|", json_encode($strings), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, concat!(
+        "4|[1,2,\"x\",\"z\"]\n",
+        "3|[1,\"a\",\"b\"]\n",
+        "4|[1,2,\"x\",1.5]\n",
+        "3|[1,\"s\",2]\n",
+        "3|6|[2,2,4]\n",
+        "2|[\"g\",2.5]\n",
+        "3|[\"a\",2,5]\n",
+    ), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies a multi-value `array_push()` neither leaks the appended values nor double releases
 /// the storage its own growth relocated.
 ///
