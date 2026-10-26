@@ -331,3 +331,14 @@ fn test_buffer_object_loop_formatted_output_resets_each_iteration() {
         assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"));
     }
 }
+
+/// Reassigning an inlined by-value parameter must change only its local index before the read.
+#[test]
+fn test_buffer_object_loop_reassigned_parameter_matches_both_modes() {
+    for optimized in [false, true] {
+        let output = run_property_loop(include_str!("../../fixtures/optimizer/buffer_object_reassigned_parameter.php"), optimized);
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "2 7 7 7 \n");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"));
+    }
+}

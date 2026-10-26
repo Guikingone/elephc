@@ -10,8 +10,9 @@
 use std::path::Path;
 
 use crate::codegen::platform::Target;
-use crate::ir::{Module, Op};
+use crate::ir::{Immediate, LocalKind, Module, Op};
 use crate::ir_passes::{compute_dominance, compute_loops};
+use crate::types::PhpType;
 
 /// Lowers the ECS example and applies the complete EIR optimization pipeline.
 fn optimized(target: &str) -> Module {
@@ -148,4 +149,29 @@ fn buffer_object_loop_formatted_body_keeps_reset_and_guard() {
     assert!(instructions.iter().any(|inst| inst.op == Op::IsNull));
     assert!(instructions.iter().any(|inst| inst.op == Op::ConcatReset));
     assert!(!instructions.iter().any(|inst| inst.op == Op::MethodCall));
+}
+
+/// A conditionally reassigned accessor parameter retains both stores and its borrowed-slot reads.
+#[test]
+fn buffer_object_loop_reassigned_parameter_preserves_storage() {
+    let mut module = crate::ir_lower::tests::lower_source_at_for_target(
+        include_str!("../../../tests/fixtures/optimizer/buffer_object_reassigned_parameter.php"),
+        Path::new("main.php"), Path::new("."), Target::parse("linux-x86_64").unwrap(),
+    );
+    crate::ir_passes::optimize_module(&mut module);
+    let function = module.functions.iter().find(|function| function.name == "showReassignedRows").unwrap();
+    let instructions: Vec<_> = function.blocks.iter().flat_map(|block| {
+        block.instructions.iter().map(|id| &function.instructions[id.as_raw() as usize])
+    }).collect();
+    assert!(!instructions.iter().any(|inst| inst.op == Op::MethodCall), "accessor must be inlined");
+    assert!(function.locals.iter().any(|local| {
+        if local.kind != LocalKind::BorrowedTemp || local.php_type != PhpType::Int { return false; }
+        let stores = instructions.iter().filter(|inst| {
+            inst.immediate == Some(Immediate::LocalSlot(local.id)) && inst.op == Op::StoreLocal
+        }).count();
+        let loads = instructions.iter().filter(|inst| {
+            inst.immediate == Some(Immediate::LocalSlot(local.id)) && inst.op == Op::LoadLocal
+        }).count();
+        stores == 2 && loads >= 1
+    }), "conditional parameter updates must keep their borrowed storage");
 }
