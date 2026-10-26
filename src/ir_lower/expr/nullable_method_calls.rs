@@ -178,6 +178,11 @@ fn lower_method_call_with_binding(
     } else {
         (object, None)
     };
+    // Nullable dispatch also borrows an independent receiver until invocation and cleanup
+    // finish. Publish that owner across throws without acquiring a borrowed local.
+    let receiver_pins = if default_receiver_owner.is_none() {
+        pin_in_flight_owners(ctx, &[object.value], expr.span)
+    } else { Vec::new() };
     let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
     let enum_args = singular_object_class(&ctx.builder.value_php_type(object.value))
@@ -228,6 +233,7 @@ fn lower_method_call_with_binding(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    unpin_in_flight_owners(ctx, receiver_pins, expr.span);
     if let Some(owner) = default_receiver_owner {
         retire_owned_call_operand(ctx, owner, expr.span);
     } else {

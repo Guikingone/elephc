@@ -184,10 +184,9 @@ pub(super) fn lower_method_call(
     } else {
         (object, None)
     };
-    // Internal value-class methods can reject a scalar after their temporary receiver exists.
-    let receiver_pins = if crate::types::object_operators::operator_class(
-        &ctx.builder.value_php_type(object.value),
-    ).is_some() {
+    // Any method or argument evaluation can throw while an independently owned receiver
+    // is still an SSA temporary. A pre-default root already protects its own receiver.
+    let receiver_pins = if default_receiver_owner.is_none() {
         pin_in_flight_owners(ctx, &[object.value], object_expr.span)
     } else { Vec::new() };
     let mut operands = vec![object.value];

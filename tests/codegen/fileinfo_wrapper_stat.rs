@@ -96,7 +96,7 @@ unset($f, $stream, $scheme, $url, $code);
 #[test]
 fn test_fileinfo_user_wrapper_stat_callback_order() {
     if fileinfo_native::skip("test_fileinfo_user_wrapper_stat_callback_order") { return; }
-    let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+    let source = r#"<?php
 class FileinfoStatOrder {
     public $context;
     private bool $fail = false;
@@ -128,9 +128,19 @@ try { $f->file("php://filter/read=fileinfo.stat.create/resource=statorder://fals
 try { $f->file("php://filter/read=fileinfo.stat.close|fileinfo.stat/resource=statorder://false"); } catch (Error $error) { echo $error->getMessage(), "\n"; }
 echo var_export($f->file("php://filter/read=fileinfo.stat/resource=statorder://false"), true), "\n";
 stream_wrapper_unregister("statorder"); unset($f, $error);
-"#);
+"#;
+    let (out, _) = compile_and_run_with_heap_debug_and_asm(source);
     assert!(out.success, "fileinfo program failed: {}", out.stderr);
     assert_eq!(out.stdout, "open\ncreate\nstat\nclose\nfilter-close\nfalse\nopen\ncreate\nstat\nstat failed\nopen\ncreate\ncreate failed\nopen\ncreate\ncreate\nstat\nclose\nfilter-close\nclose failed\nopen\ncreate\nstat\nclose\nfilter-close\nfalse\n");
+    if !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+        let declarations = source.split("\nstream_wrapper_register(").next().unwrap();
+        for (label, filter, target) in [("normal", "fileinfo.stat", "false"), ("stat", "fileinfo.stat", "throw"),
+            ("create", "fileinfo.stat.create", "false"), ("close", "fileinfo.stat.close|fileinfo.stat", "false")] {
+            let tail = format!(r#"stream_wrapper_register("statorder", "FileinfoStatOrder"); stream_filter_register("fileinfo.stat", "FileinfoStatFilter"); stream_filter_register("fileinfo.stat.create", "FileinfoStatCreateFilter"); stream_filter_register("fileinfo.stat.close", "FileinfoStatCloseFilter"); $f = new finfo(FILEINFO_MIME_TYPE); try {{ $f->file("php://filter/read={filter}/resource=statorder://{target}"); }} catch (Error $error) {{ echo $error->getMessage(); }} stream_wrapper_unregister("statorder"); unset($f, $error);"#);
+            let (control, _) = compile_and_run_with_heap_debug_and_asm(&format!("{declarations}\n{tail}"));
+            eprintln!("stat order ownership control {label}: {}\n{}", control.stdout, control.stderr);
+        }
+    }
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

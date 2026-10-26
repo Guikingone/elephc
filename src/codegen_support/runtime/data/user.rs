@@ -2963,10 +2963,11 @@ fn user_wrapper_cast_result_tag(class_info: &ClassInfo) -> u64 {
 /// `filter($in, $out, &$consumed, $closing): int` with bucket brigades.
 /// Slot 4 is a non-method byte offset for `php_user_filter::$params`, or zero
 /// when the class has no statically declared params property.
+/// Slot 5 is a bitmask of boxed Mixed parameter representations for brigade calls.
 /// The flag is read by the runtime dispatcher to choose which code path
 /// to invoke. Adding the flag inline in the vtable lets the dispatcher
 /// branch with a single load + cmp.
-pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 5;
+pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 6;
 
 /// Returns true when a method key belongs to the fixed-ABI stream-wrapper
 /// vtable surface dispatched by the runtime with raw arguments.
@@ -3142,6 +3143,16 @@ fn emit_user_filter_vtable(
         .copied()
         .unwrap_or(0);
     out.push_str(&format!("    .quad {}\n", params_offset));
+    // Slot 5 distinguishes boxed parameters from their native object/scalar ABI.
+    let boxed_params = class_info.methods.get("filter")
+        .map(source_method_adapters::source_visible_signature).transpose()?
+        .map(|sig| sig.params.iter().take(4).enumerate().fold(0u32, |mask, (index, (_, ty))| {
+            if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                mask | (1 << index)
+            } else { mask }
+        })).unwrap_or(0);
+    out.push_str(&format!("    .quad {boxed_params}\n"));
+
     Ok(())
 }
 

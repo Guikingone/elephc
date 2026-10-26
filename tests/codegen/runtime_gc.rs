@@ -38,6 +38,7 @@ mod mixed_string_cast_return;
 mod stream_registry;
 #[path = "runtime_gc/pointer_read_owners.rs"]
 mod pointer_read_owners;
+mod filter_brigade_owners;
 #[path = "runtime_gc/object_cast.rs"]
 mod object_cast;
 #[path = "runtime_gc/array_cast.rs"]
