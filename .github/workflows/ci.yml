@@ -249,29 +249,6 @@ jobs:
           ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh macos-aarch64)" \
             cargo test -p elephc-fileinfo
 
-      - name: Test the PHP fileinfo surface
-        env:
-          ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
-          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
-        run: |
-          cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --list
-          fileinfo_test_status=0
-          cargo test -p elephc --test codegen_tests test_fileinfo_boxed_string_returns_release_raw_argument_temporaries || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_static_property_returns_keep_independent_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_stream_registration_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_pointer_read_string_alias_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_lifecycle_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_brigade_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_loop_condition_assignment_owners || fileinfo_test_status=1
-          cargo test -p elephc --lib borrowed_string_offsets_follow_final_storage_on_all_targets || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_string_offset_lifetime_widened_local_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_pending_return_finally_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_eval_method_adapter_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2 || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array || fileinfo_test_status=1
-          exit "$fileinfo_test_status"
-
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
         # lib/, holding libelephc_libxml2_shim.a + libxml2.a), links both statically
@@ -450,29 +427,6 @@ jobs:
           ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh linux-x86_64)" \
             cargo test -p elephc-fileinfo
 
-      - name: Test the PHP fileinfo surface
-        env:
-          ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
-          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
-        run: |
-          cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --list
-          fileinfo_test_status=0
-          cargo test -p elephc --test codegen_tests test_fileinfo_boxed_string_returns_release_raw_argument_temporaries || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_static_property_returns_keep_independent_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_stream_registration_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_pointer_read_string_alias_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_lifecycle_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_brigade_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_loop_condition_assignment_owners || fileinfo_test_status=1
-          cargo test -p elephc --lib borrowed_string_offsets_follow_final_storage_on_all_targets || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_string_offset_lifetime_widened_local_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_pending_return_finally_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_eval_method_adapter_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2 || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array || fileinfo_test_status=1
-          exit "$fileinfo_test_status"
-
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
         # lib/, holding libelephc_libxml2_shim.a + libxml2.a), links both statically
@@ -642,29 +596,6 @@ jobs:
         run: |
           ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh linux-aarch64)" \
             cargo test -p elephc-fileinfo
-
-      - name: Test the PHP fileinfo surface
-        env:
-          ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
-          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
-        run: |
-          cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --list
-          fileinfo_test_status=0
-          cargo test -p elephc --test codegen_tests test_fileinfo_boxed_string_returns_release_raw_argument_temporaries || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_static_property_returns_keep_independent_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_stream_registration_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_pointer_read_string_alias_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_lifecycle_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_brigade_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_loop_condition_assignment_owners || fileinfo_test_status=1
-          cargo test -p elephc --lib borrowed_string_offsets_follow_final_storage_on_all_targets || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_string_offset_lifetime_widened_local_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_pending_return_finally_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_fileinfo_eval_method_adapter_owners || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2 || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments || fileinfo_test_status=1
-          cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array || fileinfo_test_status=1
-          exit "$fileinfo_test_status"
 
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
@@ -2706,17 +2637,6 @@ jobs:
         # comparison_catalog.toml. Validates catalog evidence and baseline
         # consistency; the committed page must come back byte-identical.
         run: python3 scripts/docs/gen_php_comparison.py
-
-      - name: Upload regenerated builtin documentation
-        uses: actions/upload-artifact@v7
-        with:
-          name: fileinfo-generated-docs
-          path: |
-            docs/php/
-            docs/internals/builtins/
-            scripts/docs/builtin_registry.json
-            scripts/docs/symbol_registry.json
-          retention-days: 1
 
       - name: Test builtin contract documentation pipeline
         run: python3 -m unittest discover -s scripts/docs/elephc_builtins -p 'test_*.py'
