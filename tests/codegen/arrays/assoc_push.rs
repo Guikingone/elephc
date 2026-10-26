@@ -9,6 +9,68 @@
 
 use crate::support::*;
 
+/// Live nested receiver promotion remains visible through returns and conditional control flow.
+#[test]
+fn test_associative_push_nested_parent_storage_survives_function_boundaries() {
+    for (name, source, expected) in [
+        ("indexed return and repeated push", r#"<?php
+function makeIndexedPushRows() { $rows = [[1]]; array_push($rows[0], 2); array_push($rows[0], 3); return $rows; }
+$rows = makeIndexedPushRows(); echo $rows[0][0], "|", $rows[0][1], "|", json_encode($rows);
+"#, "1|2|[[1,2,3]]"),
+        ("hash return", r#"<?php
+function makeHashPushRows() { $rows = ["inner" => [3]]; array_push($rows["inner"], 4); return $rows; }
+$rows = makeHashPushRows(); echo $rows["inner"][0], "|", $rows["inner"][1], "|", json_encode($rows);
+"#, "3|4|{\"inner\":[3,4]}"),
+        ("native reference alias", r#"<?php
+function makeAliasedPushRows() { $rows = [[9]]; $alias =& $rows; array_push($rows[0], 10); return $alias; }
+echo json_encode(makeAliasedPushRows());
+"#, "[[9,10]]"),
+        ("hash reference alias", r#"<?php
+function makeAliasedHashPushRows() {
+    $rows = ["row" => ["value" => 1], "other" => ["value" => 7]];
+    $alias =& $rows; array_push($rows["row"], 2); return $alias;
+}
+$rows = makeAliasedHashPushRows(); echo $rows["row"][0], "|", $rows["other"]["value"];
+"#, "2|7"),
+        ("callee read", r#"<?php
+function showPromotedPushRows($rows) { echo $rows[0][0]; }
+$rows = [[11]]; array_push($rows[0], 12); showPromotedPushRows($rows);
+"#, "11"),
+    ] {
+        eprintln!("nested push boundary case: {name}");
+        let out = compile_and_run_with_heap_debug(source);
+        assert_eq!(out.stdout, expected, "{name}, stderr: {}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{name}: {}", out.stderr);
+    }
+}
+
+/// Conditional push promotion agrees with return inference on executed and skipped paths.
+#[test]
+fn test_associative_push_nested_parent_storage_survives_control_flow() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function makeConditionalPushRows(bool $push) {
+    $rows = [[5]];
+    if ($push) { array_push($rows[0], 6); }
+    return $rows;
+}
+function makeShortCircuitPushRows(bool $push) {
+    $rows = [[7]];
+    $push && array_push($rows[0], 8);
+    return $rows;
+}
+function makeLoopPushRows(int $count) {
+    $rows = [[9]];
+    for ($i = 0; $i < $count; $i++) { array_push($rows[0], 10); }
+    return $rows;
+}
+echo json_encode(makeConditionalPushRows($argc > 0)), "|", json_encode(makeConditionalPushRows($argc < 0)), "\n";
+echo json_encode(makeShortCircuitPushRows($argc > 0)), "|", json_encode(makeShortCircuitPushRows($argc < 0)), "\n";
+echo json_encode(makeLoopPushRows(2)), "|", json_encode(makeLoopPushRows(0)), "\n";
+"#);
+    assert_eq!(out.stdout, "[[5,6]]|[[5]]\n[[7,8]]|[[7]]\n[[9,10,10]]|[[9]]\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// The full `array_push()` surface over an associative receiver.
 ///
 /// Iteration verifies the mixed integer/string key sequence as well as the values.

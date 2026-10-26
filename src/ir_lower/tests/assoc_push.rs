@@ -63,6 +63,12 @@ $capturedRows = [[1]];
 $writeCapturedRows = function () use (&$capturedRows) { array_push($capturedRows[0], 2); };
 $writeCapturedRows();
 echo $capturedRows[0][0], $capturedRows[0][1];
+function targetReturnedPushRows() {
+    $rows = [[1]];
+    array_push($rows[0], 2);
+    return $rows;
+}
+echo targetReturnedPushRows()[0][0];
 echo json_encode($values), json_encode($copy), json_encode($mixed);
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {

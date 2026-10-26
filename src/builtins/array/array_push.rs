@@ -37,6 +37,14 @@ builtin! {
 /// the associative coordinator owns their runtime iterator walk. The receiver must be indexed,
 /// associative or a declared PHP array with boxed storage. Returns the new element count as `Int`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    let indexed_root = indexed_receiver_root(&cx.args[0]);
+    if indexed_root.is_some_and(|root| matches!(&root.kind, ExprKind::Variable(name)
+        if cx.checker.local_parameter_names.contains(name)
+            || cx.checker.boxed_parameter_locals.contains(name)))
+    {
+        return Err(CompileError::new(cx.args[0].span,
+            "array_push() nested parameter storage is not supported"));
+    }
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     if matches!(&cx.args[0].kind, ExprKind::Variable(name)
         if cx.checker.active_statics.contains(name))
@@ -52,7 +60,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         .checker
         .local_has_ref_assign_alias(&cx.args[0])
         || cx.checker.local_has_prior_array_capture(&cx.args[0])
-        || (is_indexed_receiver(&cx.args[0])
+        || (indexed_root.is_some()
             && cx.checker.local_has_non_builtin_reference_alias(&cx.args[0]));
     let runtime_spread_supported = cx
         .checker
@@ -108,6 +116,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     }
     if denied_place || matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || arr_ty.is_php_array() {
+        cx.checker.record_array_push_parent_storage(&cx.args[0], cx.span, cx.env);
         Ok(PhpType::Int)
     } else {
         Err(CompileError::new(cx.span, "array_push() first argument must be array"))
@@ -134,11 +143,15 @@ fn is_boxed_argument_source(cx: &BuiltinCheckCtx<'_>, argument: &Expr) -> bool {
             || cx.checker.boxed_parameter_locals.contains(name))
 }
 
-/// Identifies nested receivers whose native parent layout must stay valid through a reference.
-fn is_indexed_receiver(receiver: &Expr) -> bool {
+/// Finds the storage root when the receiver selects an element beneath an indexed container.
+fn indexed_receiver_root(receiver: &Expr) -> Option<&Expr> {
     let mut current = receiver;
     while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &current.kind {
         current = value;
     }
-    matches!(current.kind, ExprKind::ArrayAccess { .. })
+    if !matches!(current.kind, ExprKind::ArrayAccess { .. }) { return None; }
+    while let ExprKind::ArrayAccess { array, .. }
+    | ExprKind::NamedArg { value: array, .. }
+    | ExprKind::ErrorSuppress(array) = &current.kind { current = array; }
+    Some(current)
 }

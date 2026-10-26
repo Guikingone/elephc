@@ -1284,6 +1284,12 @@ fn test_error_associative_push_rejects_non_array_receiver() {
 fn test_error_associative_push_typed_entries_reject_mismatched_values() {
     for source in [
         r#"<?php
+$rows = ["row" => ["value" => 1]];
+$alias =& $rows;
+array_push($rows["row"], 2);
+array_push($rows["row"], "wrong");
+"#,
+        r#"<?php
 function generatedPushValues(): Generator { yield 1; yield 2; }
 $values = ["a" => 1];
 array_push($values, ...generatedPushValues());
@@ -1454,6 +1460,31 @@ pushCopiedUntyped(5);
 "#,
     ] {
         expect_error(source, "array_push() values must match the associative receiver entry type");
+    }
+}
+
+/// Nested parameter storage and its boxed local copies fail before unsupported backend lowering.
+#[test]
+fn test_error_array_push_nested_parameter_storage_has_source_diagnostics() {
+    for source in [
+        r#"<?php
+function parameterPush($rows) { array_push($rows[0], 2); return $rows; }
+echo json_encode(parameterPush([[1]]));
+"#,
+        r#"<?php
+function copiedParameterPush($rows) { $copy = $rows; array_push($copy[0], 2); return $copy; }
+echo json_encode(copiedParameterPush([[1]]));
+"#,
+        r#"<?php
+$push = function (array $rows) { array_push($rows[0], 2); return $rows; };
+echo json_encode($push([[1]]));
+"#,
+        r#"<?php
+class ParameterPusher { public function push(array $rows) { array_push($rows[0], 2); return $rows; } }
+$pusher = new ParameterPusher(); echo json_encode($pusher->push([[1]]));
+"#,
+    ] {
+        expect_error(source, "array_push() nested parameter storage is not supported");
     }
 }
 

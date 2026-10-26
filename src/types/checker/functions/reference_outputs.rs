@@ -16,6 +16,44 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::Checker;
 
 impl Checker {
+    /// Records the hash layout that live nested push references install in their local root.
+    pub(crate) fn record_array_push_parent_storage(
+        &mut self, receiver: &Expr, call_span: Span, env: &TypeEnv,
+    ) {
+        if !call_span.identifies_a_node() { return; }
+        let mut root = receiver;
+        let mut indexed = false;
+        loop {
+            match &root.kind {
+                ExprKind::ArrayAccess { array, .. } => { indexed = true; root = array; }
+                ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) => root = value,
+                _ => break,
+            }
+        }
+        if !indexed { return; }
+        let ExprKind::Variable(name) = &root.kind else { return; };
+        if self.local_parameter_names.contains(name) || self.active_globals.contains(name)
+            || self.active_statics.contains(name) || self.mixed_storage_locals.contains(name)
+            || self.local_has_non_builtin_reference_alias(receiver)
+        { return; }
+        let Some(ty) = env.get(name) else { return; };
+        let boxed_value = |value: &PhpType| {
+            if matches!(value, PhpType::Array(_) | PhpType::AssocArray { .. }) || value.is_php_array() {
+                PhpType::php_array()
+            } else { PhpType::Mixed }
+        };
+        let storage = match ty.codegen_repr() {
+            PhpType::Array(value) =>
+                PhpType::AssocArray { key: Box::new(PhpType::Int), value: Box::new(boxed_value(&value)) },
+            PhpType::AssocArray { key, value } =>
+                PhpType::AssocArray { key, value: Box::new(boxed_value(&value)) },
+            _ => return,
+        };
+        self.boxed_reference_outputs
+            .entry((self.current_loop_storage_scope.clone(), call_span))
+            .or_default().insert(name.clone(), storage);
+    }
+
     /// Records property storage before argument effects erase EIR class facts.
     /// Returns true when reference binding itself raises Error, including a nested Mixed read.
     pub(crate) fn record_array_push_reference_place(
