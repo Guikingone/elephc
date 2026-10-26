@@ -69,6 +69,20 @@ fn name_is_fileinfo_class(name: &Name) -> bool {
     })
 }
 
+/// Literal function targets in reflection constructors require the same declarations as calls.
+fn reflection_refs_fileinfo(class_name: &Name, args: &[Expr]) -> bool {
+    if !matches!(class_name.parts.as_slice(), [name]
+        if name.eq_ignore_ascii_case("ReflectionFunction") || name.eq_ignore_ascii_case("ReflectionParameter")) {
+        return false;
+    }
+    let target = args.iter().find_map(|arg| match &arg.kind {
+        ExprKind::NamedArg { name, value } if name == "function" => Some(value.as_ref()),
+        _ => None,
+    }).or_else(|| args.first().filter(|arg| !matches!(&arg.kind, ExprKind::NamedArg { .. })));
+    matches!(target.map(|expr| &expr.kind), Some(ExprKind::StringLiteral(name))
+        if fileinfo_functions().iter().any(|candidate| name.trim_start_matches('\\').eq_ignore_ascii_case(candidate)))
+}
+
 /// Returns whether a static receiver names a fileinfo class in a scoped expression.
 /// `self`, `static`, and `parent` never resolve to a fileinfo class at this position.
 fn receiver_refs_fileinfo(receiver: &StaticReceiver) -> bool {
@@ -283,7 +297,9 @@ fn expr_refs_fileinfo(expr: &Expr) -> bool {
             expr_refs_fileinfo(callee) || args.iter().any(expr_refs_fileinfo)
         }
         ExprKind::NewObject { class_name, args } => {
-            name_is_fileinfo_class(class_name) || args.iter().any(expr_refs_fileinfo)
+            name_is_fileinfo_class(class_name)
+                || reflection_refs_fileinfo(class_name, args)
+                || args.iter().any(expr_refs_fileinfo)
         }
         ExprKind::NewGeneric { class_type, args } => {
             type_refs_fileinfo(class_type) || args.iter().any(expr_refs_fileinfo)
@@ -563,6 +579,10 @@ mod tests {
             "<?php $f = \\FINFO_OPEN(...);",
             "<?php function f(finfo ...$infos): void {}",
             "<?php enum E { case A; public function inspect() { return new \\finfo(); } }",
+            "<?php new ReflectionFunction('finfo_close');",
+            r"<?php new \ReflectionFunction(function: '\FiNfO_Close');",
+            "<?php namespace App; use ReflectionFunction as Ref; new Ref('finfo_buffer');",
+            "<?php new ReflectionParameter(parameter: 'finfo', function: 'finfo_close');",
         ] {
             let tokens = crate::lexer::tokenize(source).unwrap();
             let ast = crate::parser::parse(&tokens).unwrap();
@@ -577,6 +597,9 @@ mod tests {
             "<?php namespace App; function finfo_open() { return 1; } finfo_open();",
             "<?php \\App\\finfo_open();",
             "<?php echo FILEINFO_MIME_TYPE;",
+            r"<?php new ReflectionFunction('App\finfo_close');",
+            "<?php namespace App; class ReflectionFunction { public function __construct(string $name) {} } new ReflectionFunction('finfo_close');",
+            "<?php function custom($finfo_close) {} new ReflectionParameter(function: 'custom', parameter: 'finfo_close');",
         ] {
             let tokens = crate::lexer::tokenize(source).unwrap();
             let ast = crate::parser::parse(&tokens).unwrap();

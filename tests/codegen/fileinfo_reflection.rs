@@ -5,15 +5,16 @@
 //! - The codegen integration harness on supported executable targets.
 //!
 //! Key details:
-//! - Reflection-only lookup exercises the builtin fallback without enabling fileinfo.
+//! - Literal reflection targets activate fileinfo without a direct function or class reference.
 //! - Each eval bundle compiles related owner, attribute and declaring-function cases together.
 
 use crate::support::*;
 use elephc::php_version::PhpVersion;
 
-/// Reflection-only references must honor the deprecation profile without activating a bridge.
+/// Reflection-only references activate declarations and honor the selected deprecation profile.
 #[test]
 fn test_fileinfo_reflection_only_deprecation_profiles() {
+    if fileinfo_native::skip("test_fileinfo_reflection_only_deprecation_profiles") { return; }
     let source = r#"<?php
 $ref = new ReflectionFunction("finfo_close");
 echo $ref->isDeprecated() ? "deprecated" : "current";
