@@ -57,8 +57,6 @@ pub enum ThrowAccessKind {
     },
     /// A direct write to one of Reflection's internal public metadata mirrors.
     ReflectionReadOnlyProperty {
-        /// Runtime-visible receiver class used in PHP's message.
-        class_name: String,
         /// Property name without the leading `$`.
         property: String,
     },

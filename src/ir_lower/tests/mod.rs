@@ -79,6 +79,7 @@ mod static_nested_updates;
 mod reference_cells;
 mod reference_detach;
 mod reference_property_payload;
+mod reflection_mirror_ownership;
 mod reference_return_boundaries;
 mod callable_operand_owners;
 mod capture_view_owners;

@@ -10,7 +10,8 @@
 //! Key details:
 //! - Reflection owner objects store private metadata slots such as `__attrs`,
 //!   `__name`, `__parameters`, and the ReflectionClass metadata-name arrays.
-//! - PHP-visible `name` and `class` mirrors retain their own string references.
+//! - PHP-visible `name` and `class` mirrors own independent string allocations so
+//!   unset and reference overwrite cannot invalidate private metadata slots.
 //! - The helper retains supplied array payloads for object ownership.
 
 use crate::codegen::abi;
@@ -1005,11 +1006,9 @@ fn emit_set_owner_name_property_aarch64(emitter: &mut Emitter, layout: &Reflecti
     if let (Some(public_name_lo), Some(public_name_hi)) =
         (layout.public_name_lo, layout.public_name_hi)
     {
-        emitter.instruction("str x1, [sp, #40]");                               // preserve the persisted name across retaining its second property owner
-        emitter.instruction("mov x0, x1");                                      // retain one reference for the public name property
-        emitter.instruction("bl __rt_incref");                                  // both public and private slots own the shared string
-        emitter.instruction("ldr x1, [sp, #40]");                               // reload the persisted name
-        emitter.instruction("ldr x2, [sp, #16]");                               // restore its byte length
+        emitter.instruction("ldr x1, [sp, #8]");                                // reload the original name pointer for the public mirror copy
+        emitter.instruction("ldr x2, [sp, #16]");                               // reload the original name length for the public mirror copy
+        emitter.instruction("bl __rt_str_persist");                             // give the mutable public mirror independent string storage
         emitter.instruction("ldr x9, [sp, #32]");                               // reload the Reflection owner object pointer
         abi::emit_store_to_address(emitter, "x1", "x9", public_name_lo);
         abi::emit_store_to_address(emitter, "x2", "x9", public_name_hi);
@@ -1107,11 +1106,9 @@ fn emit_set_owner_name_property_x86_64(emitter: &mut Emitter, layout: &Reflectio
     if let (Some(public_name_lo), Some(public_name_hi)) =
         (layout.public_name_lo, layout.public_name_hi)
     {
-        emitter.instruction("mov QWORD PTR [rbp - 48], rax");                   // preserve the persisted name across retaining its second property owner
-        emitter.instruction("mov rdi, rax");                                    // retain one reference for the public name property
-        emitter.instruction("call __rt_incref");                                // both public and private slots own the shared string
-        emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                   // reload the persisted name
-        emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                   // restore its byte length
+        emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                   // reload the original name pointer for the public mirror copy
+        emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                   // reload the original name length for the public mirror copy
+        emitter.instruction("call __rt_str_persist");                           // give the mutable public mirror independent string storage
         emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                   // reload the Reflection owner object pointer
         abi::emit_store_to_address(emitter, "rax", "r10", public_name_lo);
         abi::emit_store_to_address(emitter, "rdx", "r10", public_name_hi);
@@ -2402,15 +2399,12 @@ fn emit_set_owner_parent_class_property_aarch64(
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject malformed declaring-class metadata
     abi::emit_load_from_address(emitter, "x10", "x1", layout.related_class_name_lo);
     abi::emit_load_from_address(emitter, "x11", "x1", layout.related_class_name_hi);
-    emitter.instruction("sub sp, sp, #16");                                     // preserve the declaring-class name across its retain
-    emitter.instruction("stp x10, x11, [sp]");                                  // save both words of the public class string
-    emitter.instruction("mov x0, x10");                                         // pass the shared string payload to incref
-    emitter.instruction("bl __rt_incref");                                      // give the public class mirror its own owner
-    emitter.instruction("ldp x10, x11, [sp]");                                  // restore the retained class-name pair
-    emitter.instruction("add sp, sp, #16");                                     // restore the helper frame base
+    emitter.instruction("mov x1, x10");                                         // pass the declaring-class name pointer for an independent copy
+    emitter.instruction("mov x2, x11");                                         // pass the declaring-class name length for an independent copy
+    emitter.instruction("bl __rt_str_persist");                                 // give the mutable public class mirror independent storage
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection member object pointer
-    abi::emit_store_to_address(emitter, "x10", "x9", public_low);
-    abi::emit_store_to_address(emitter, "x11", "x9", public_high);
+    abi::emit_store_to_address(emitter, "x1", "x9", public_low);
+    abi::emit_store_to_address(emitter, "x2", "x9", public_high);
 }
 
 /// Stores a retained x86_64 boxed parent ReflectionClass-or-false cell.
@@ -2442,17 +2436,12 @@ fn emit_set_owner_parent_class_property_x86_64(
     emitter.instruction(&format!("jne {}", fail_label));                        // reject malformed declaring-class metadata
     abi::emit_load_from_address(emitter, "r8", "rdi", layout.related_class_name_lo);
     abi::emit_load_from_address(emitter, "r9", "rdi", layout.related_class_name_hi);
-    emitter.instruction("sub rsp, 16");                                         // preserve the declaring-class name across its retain
-    emitter.instruction("mov QWORD PTR [rsp], r8");                             // save the public class string pointer
-    emitter.instruction("mov QWORD PTR [rsp + 8], r9");                         // save the public class string length
-    emitter.instruction("mov rax, r8");                                         // pass the shared string payload to incref
-    emitter.instruction("call __rt_incref");                                    // give the public class mirror its own owner
-    emitter.instruction("mov r8, QWORD PTR [rsp]");                             // restore the retained class-name pointer
-    emitter.instruction("mov r9, QWORD PTR [rsp + 8]");                         // restore the retained class-name length
-    emitter.instruction("add rsp, 16");                                         // restore the helper frame base
+    emitter.instruction("mov rax, r8");                                         // pass the declaring-class name pointer for an independent copy
+    emitter.instruction("mov rdx, r9");                                         // pass the declaring-class name length for an independent copy
+    emitter.instruction("call __rt_str_persist");                               // give the mutable public class mirror independent storage
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection member object pointer
-    abi::emit_store_to_address(emitter, "r8", "r10", public_low);
-    abi::emit_store_to_address(emitter, "r9", "r10", public_high);
+    abi::emit_store_to_address(emitter, "rax", "r10", public_low);
+    abi::emit_store_to_address(emitter, "rdx", "r10", public_high);
 }
 
 /// Stores a retained ARM64 boxed declaring ReflectionFunction/Method cell.

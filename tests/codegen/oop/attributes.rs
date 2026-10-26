@@ -4826,3 +4826,51 @@ rhs|Cannot set read-only property ReflectionMirrorSubclass::$name|ReflectionMirr
 rhs|Cannot set read-only property ReflectionMethod::$class|rhs|Cannot set read-only property ReflectionMethod::$name|ReflectionMirrorTarget|action"
     );
 }
+
+/// Compound writes mutate Reflection's public mirrors without changing private metadata.
+#[test]
+fn test_reflection_public_mirror_compound_writes_remain_mutable() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionCompoundMirrorTarget {
+    public function action(): void {}
+}
+$method = new ReflectionMethod(ReflectionCompoundMirrorTarget::class, 'action');
+$method->name .= '!';
+$method->class .= '?';
+echo $method->name, '|', $method->class, '|';
+echo $method->getName(), '|', $method->getDeclaringClass()->getName();
+"#,
+    );
+    assert_eq!(
+        out,
+        "action!|ReflectionCompoundMirrorTarget?|action|ReflectionCompoundMirrorTarget"
+    );
+}
+
+/// Direct mirror writes use Reflection ancestry and report the receiver's runtime subclass.
+#[test]
+fn test_reflection_public_mirror_direct_write_names_runtime_subclass() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionRuntimeMirrorTarget {}
+class ReflectionRuntimeMirrorSubclass extends ReflectionClass {
+    public string $class = '';
+}
+function writeReflectionMirrors(ReflectionClass $reflection): void {
+    try { $reflection->name = 'changed'; }
+    catch (ReflectionException $error) { echo $error->getMessage(); }
+}
+$reflection = new ReflectionRuntimeMirrorSubclass(ReflectionRuntimeMirrorTarget::class);
+writeReflectionMirrors($reflection);
+echo '|';
+try { $reflection->class = 'changed'; }
+catch (ReflectionException $error) { echo $error->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot set read-only property ReflectionRuntimeMirrorSubclass::$name|\
+Cannot set read-only property ReflectionRuntimeMirrorSubclass::$class"
+    );
+}

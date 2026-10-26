@@ -241,11 +241,9 @@ fn emit_set_name_property_aarch64(emitter: &mut Emitter, layout: &ReflectionAttr
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the ReflectionAttribute object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", layout.name_lo);
     abi::emit_store_to_address(emitter, "x2", "x9", layout.name_hi);
-    emitter.instruction("str x1, [sp, #56]");                                   // preserve the persisted name across its second retain
-    emitter.instruction("mov x0, x1");                                          // pass the shared name payload to incref
-    emitter.instruction("bl __rt_incref");                                      // give the public name mirror its own owner
-    emitter.instruction("ldr x1, [sp, #56]");                                   // reload the retained attribute name
-    emitter.instruction("ldr x2, [sp, #8]");                                    // restore the attribute-name length
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the original name pointer for the public mirror copy
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the original name length for the public mirror copy
+    emitter.instruction("bl __rt_str_persist");                                 // give the mutable public mirror independent string storage
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the ReflectionAttribute object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", layout.public_name_lo);
     abi::emit_store_to_address(emitter, "x2", "x9", layout.public_name_hi);
@@ -259,10 +257,9 @@ fn emit_set_name_property_x86_64(emitter: &mut Emitter, layout: &ReflectionAttri
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the ReflectionAttribute object pointer
     abi::emit_store_to_address(emitter, "rax", "r10", layout.name_lo);
     abi::emit_store_to_address(emitter, "rdx", "r10", layout.name_hi);
-    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // preserve the persisted name across its second retain
-    emitter.instruction("call __rt_incref");                                    // give the public name mirror its own owner
-    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the retained attribute name
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the attribute-name length
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the original name pointer for the public mirror copy
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the original name length for the public mirror copy
+    emitter.instruction("call __rt_str_persist");                               // give the mutable public mirror independent string storage
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the ReflectionAttribute object pointer
     abi::emit_store_to_address(emitter, "rax", "r10", layout.public_name_lo);
     abi::emit_store_to_address(emitter, "rdx", "r10", layout.public_name_hi);

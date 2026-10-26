@@ -10,7 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
-use crate::parser::ast::Expr;
+use crate::parser::ast::{is_compound_property_assignment_self_read, Expr};
 use crate::span::Span;
 use crate::types::{
     merge_array_key_types, normalized_array_key_type, static_array_key_forces_hash_storage,
@@ -391,14 +391,15 @@ fn check_object_property_write(
         validate_object_property_access(
             checker, class_name, property, !(readonly_null_coalesce || readonly_write_guard), span,
         )?;
-        if reflection_public_mirror_property(&declaring_class, property) {
+        if reflection_public_mirror_property(checker, class_name, property)
+            && !is_compound_property_assignment_self_read(value, object, property, span)
+        {
             crate::types::checker::record_throw_access_site(
                 &mut checker.throw_access_sites,
                 span,
                 crate::types::ThrowAccessInfo {
                     span,
                     kind: crate::types::ThrowAccessKind::ReflectionReadOnlyProperty {
-                        class_name: class_name.trim_start_matches('\\').to_string(),
                         property: property.to_string(),
                     },
                 },
@@ -487,36 +488,38 @@ fn check_object_property_write(
 /// Returns whether a declared property is one of PHP Reflection's direct-write-only mirrors.
 ///
 /// These properties are not ordinary language-level `readonly` properties: PHP permits
-/// `unset()` and reference binding, but a direct assignment raises `ReflectionException`.
-/// Matching the declaring synthetic class keeps a user property that merely reuses the same
-/// name writable.
-fn reflection_public_mirror_property(declaring_class: &str, property: &str) -> bool {
-    let declaring_class = declaring_class.trim_start_matches('\\');
-    match property {
-        "name" => matches!(
-            declaring_class,
-            "ReflectionAttribute"
-                | "ReflectionClass"
-                | "ReflectionObject"
-                | "ReflectionEnum"
-                | "ReflectionFunction"
-                | "ReflectionMethod"
-                | "ReflectionProperty"
-                | "ReflectionParameter"
-                | "ReflectionClassConstant"
-                | "ReflectionEnumUnitCase"
-                | "ReflectionEnumBackedCase"
-        ),
-        "class" => matches!(
-            declaring_class,
-            "ReflectionMethod"
-                | "ReflectionProperty"
-                | "ReflectionClassConstant"
-                | "ReflectionEnumUnitCase"
-                | "ReflectionEnumBackedCase"
-        ),
-        _ => false,
+/// `unset()`, reference binding, and compound mutation, but a direct assignment raises
+/// `ReflectionException`. PHP applies the rule from the runtime object's Reflection ancestry,
+/// even when a user subclass redeclares `name` or `class` itself.
+fn reflection_public_mirror_property(
+    checker: &Checker,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    if !matches!(property, "name" | "class") {
+        return false;
     }
+    const OWNERS: &[&str] = &[
+        "ReflectionAttribute",
+        "ReflectionClass",
+        "ReflectionObject",
+        "ReflectionEnum",
+        "ReflectionFunction",
+        "ReflectionMethod",
+        "ReflectionProperty",
+        "ReflectionParameter",
+        "ReflectionClassConstant",
+        "ReflectionEnumUnitCase",
+        "ReflectionEnumBackedCase",
+    ];
+    let class_name = class_name.trim_start_matches('\\');
+    OWNERS.iter().any(|owner| {
+        checker
+            .classes
+            .get(*owner)
+            .is_some_and(|class_info| class_info.is_internal)
+            && (class_name == *owner || checker.is_subclass_of(class_name, owner))
+    })
 }
 
 /// Validates that the current context can access a named property, checking visibility and class scope.

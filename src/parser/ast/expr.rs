@@ -448,6 +448,33 @@ pub fn is_compound_assignment_self_read(
     }
 }
 
+/// Returns `true` when a property assignment value came from a compound binary write.
+///
+/// The parser lowers `$object->property op= rhs` and property `++`/`--` to an ordinary
+/// `PropertyAssign` whose value reads the same property. The synthetic binary expression keeps
+/// the assignment span, which distinguishes it from a direct assignment such as
+/// `$object->property = $object->property . $rhs`.
+pub fn is_compound_property_assignment_self_read(
+    value: &Expr,
+    object: &Expr,
+    property: &str,
+    assignment_span: Span,
+) -> bool {
+    if value.span.line != assignment_span.line || value.span.col != assignment_span.col {
+        return false;
+    }
+    let ExprKind::BinaryOp { left, .. } = &value.kind else {
+        return false;
+    };
+    matches!(
+        &left.kind,
+        ExprKind::PropertyAccess {
+            object: read_object,
+            property: read_property,
+        } if read_object.as_ref() == object && read_property == property
+    )
+}
+
 impl PartialEq for Expr {
     /// Compares two expressions by comparing their `ExprKind`s only.
     /// Spans are not considered in equality.

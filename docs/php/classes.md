@@ -1666,7 +1666,9 @@ Builtin Reflection objects expose PHP's public `name` and `class` mirrors throug
 array casts, `get_object_vars()`, `var_dump()`, `print_r()`, and `var_export()` while keeping
 compiler-only private backing slots hidden. User subclasses of supported Reflection owners retain
 their ordinary property defaults, reference-property storage, dynamic-property capacity, and user
-constructors while receiving the same compile-time Reflection metadata as the builtin owner.
+constructors while receiving the same compile-time Reflection metadata as the builtin owner. As in
+PHP, `unset()`, reference overwrite, and compound writes mutate only the public mirror, while plain
+direct assignment raises `ReflectionException`; private metadata getters remain unchanged.
 
 Limitations today:
 - All arguments to `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and `new ReflectionClass/Function/Method/Property/Parameter(...)` must be compile-time class/member/function strings or literal parameter selectors. `ClassName::class` is accepted for supported class-name arguments, and normal named-argument / static associative-spread normalization runs before the literal-string check. `ReflectionClass` can resolve statically known classes, enums, interfaces, traits, and statically typed object expressions, including anonymous-class objects; class-attribute materialization is currently backed by class/enum metadata. Dynamic class, method, property, function, parameter, or attribute names require a runtime name->id lookup table that is not yet implemented.

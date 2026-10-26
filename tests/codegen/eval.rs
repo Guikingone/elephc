@@ -26077,6 +26077,83 @@ eval($code);
     );
 }
 
+/// Eval Reflection mirrors own independent strings across unset and reference mutation.
+#[test]
+fn test_eval_reflection_public_mirror_mutation_preserves_private_metadata() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+#[Attribute]
+class EvalReflectionMutableMirrorAttribute {}
+#[EvalReflectionMutableMirrorAttribute]
+class EvalReflectionMutableMirrorTarget {
+    public function action(string $value): void {}
+}
+function inspectEvalReflectionMethod(ReflectionMethod $method): void {
+    unset($method->name);
+    echo $method->getName(), '|';
+    $classAlias =& $method->class;
+    $classAlias = 'changed';
+    echo $method->getDeclaringClass()->getName(), '|';
+}
+function inspectEvalReflectionParameter(ReflectionParameter $parameter): void {
+    $parameterAlias =& $parameter->name;
+    $parameterAlias = 'changed';
+    echo $parameter->getName(), '|';
+}
+function inspectEvalReflectionAttributeReference(ReflectionAttribute $attribute): void {
+    $attributeAlias =& $attribute->name;
+    $attributeAlias = 'changed';
+    echo $attribute->getName();
+}
+$methodCode = $argc > 1 ? $argv[1] : 'return new ReflectionMethod("EvalReflectionMutableMirrorTarget", "action");';
+$method = eval($methodCode);
+if ($method instanceof ReflectionMethod) { inspectEvalReflectionMethod($method); }
+$parameterCode = $argc > 1 ? $argv[1] : 'return (new ReflectionMethod("EvalReflectionMutableMirrorTarget", "action"))->getParameters()[0];';
+$parameter = eval($parameterCode);
+if ($parameter instanceof ReflectionParameter) { inspectEvalReflectionParameter($parameter); }
+$attributeCode = $argc > 1 ? $argv[1] : 'return (new ReflectionClass("EvalReflectionMutableMirrorTarget"))->getAttributes()[0];';
+$attribute = eval($attributeCode);
+if ($attribute instanceof ReflectionAttribute) { inspectEvalReflectionAttributeReference($attribute); }
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "action|EvalReflectionMutableMirrorTarget|value|EvalReflectionMutableMirrorAttribute"
+    );
+
+    let unset_out = compile_and_run_with_heap_debug(
+        r#"<?php
+#[Attribute]
+class EvalReflectionUnsetMirrorAttribute {}
+#[EvalReflectionUnsetMirrorAttribute]
+class EvalReflectionUnsetMirrorTarget {}
+function inspectEvalReflectionAttributeUnset(ReflectionAttribute $attribute): void {
+    unset($attribute->name);
+    echo $attribute->getName();
+}
+$attributeCode = $argc > 1 ? $argv[1] : 'return (new ReflectionClass("EvalReflectionUnsetMirrorTarget"))->getAttributes()[0];';
+$attribute = eval($attributeCode);
+if ($attribute instanceof ReflectionAttribute) { inspectEvalReflectionAttributeUnset($attribute); }
+"#,
+    );
+    assert!(
+        unset_out.success,
+        "program failed: stdout={:?} stderr={}",
+        unset_out.stdout,
+        unset_out.stderr
+    );
+    assert_eq!(
+        unset_out.stdout,
+        "EvalReflectionUnsetMirrorAttribute"
+    );
+}
+
 /// Verifies eval ReflectionFunction preserves rich eval-declared function signatures.
 #[test]
 fn test_eval_reflection_function_reports_signature_metadata() {

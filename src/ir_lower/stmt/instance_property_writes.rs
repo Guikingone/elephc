@@ -27,11 +27,8 @@ pub(super) fn lower_property_assign(
         }
     });
     let reflection_write = ctx.throw_access_sites.get(&span).and_then(|info| {
-        if let ThrowAccessKind::ReflectionReadOnlyProperty { class_name, property } = &info.kind {
-            Some(format!(
-                "Cannot set read-only property {}::${}",
-                class_name, property
-            ))
+        if let ThrowAccessKind::ReflectionReadOnlyProperty { property } = &info.kind {
+            Some(property.clone())
         } else {
             None
         }
@@ -75,15 +72,8 @@ pub(super) fn lower_property_assign(
     {
         ctx.box_value_as_mixed(lowered_value, PhpType::Mixed, Some(span))
     } else { lowered_value };
-    if let Some(message) = reflection_write {
-        lower_property_write_exception(
-            ctx,
-            receiver,
-            lowered_value,
-            "ReflectionException",
-            &message,
-            span,
-        );
+    if let Some(property) = reflection_write {
+        lower_reflection_property_write_exception(ctx, receiver, lowered_value, &property, span);
         return;
     }
     if let Some((overwrite_message, initialization_error)) = readonly_write {
@@ -153,6 +143,86 @@ fn lower_property_write_exception(
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
     lower_throw_access_exception(ctx, exception_class, message, span);
+}
+
+/// Raises Reflection's direct-write exception with the receiver's runtime class name.
+///
+/// A function parameter typed as `ReflectionClass` can hold a user subclass, and PHP names that
+/// concrete subclass in the message. The class-name bytes are copied into a published temporary
+/// before the receiver is released, so temporary subclasses and eval-owned metadata cannot leave
+/// the diagnostic pointing into dead storage.
+fn lower_reflection_property_write_exception(
+    ctx: &mut LoweringContext<'_, '_>,
+    mut receiver: property_write_receiver::PropertyWriteReceiver,
+    value: LoweredValue,
+    property: &str,
+    span: Span,
+) {
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    let target = crate::ir::RuntimeFnId::GetClass;
+    let runtime_class = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![receiver.value.value],
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))),
+        PhpType::Str,
+        target.effects(),
+        Some(span),
+    );
+    let persisted_class = ctx.emit_owned_value(
+        Op::StrPersist,
+        vec![runtime_class.value],
+        None,
+        PhpType::Str,
+        Op::StrPersist.default_effects(),
+        Some(span),
+    );
+    if ctx.value_is_owning_temporary(runtime_class) {
+        crate::ir_lower::ownership::release_if_owned(ctx, runtime_class, Some(span));
+    }
+    let class_temp = ctx.declare_hidden_temp(PhpType::Str);
+    ctx.store_local(&class_temp, persisted_class, PhpType::Str, Some(span));
+    let class_slot = ctx.local_slots[&class_temp];
+    crate::ir_lower::expr::register_owned_call_operand(ctx, class_slot, span);
+    receiver.place_above_operand_roots(ctx, &[class_slot], span);
+    receiver.finish(ctx, span);
+
+    let concat = |left, right| {
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(left),
+                op: crate::parser::ast::BinOp::Concat,
+                right: Box::new(right),
+            },
+            span,
+        )
+    };
+    let message = concat(
+        concat(
+            Expr::new(
+                ExprKind::StringLiteral("Cannot set read-only property ".to_string()),
+                span,
+            ),
+            Expr::new(ExprKind::Variable(class_temp.clone()), span),
+        ),
+        Expr::new(
+            ExprKind::StringLiteral(format!("::${property}")),
+            span,
+        ),
+    );
+    let exception = lower_expr(
+        ctx,
+        &Expr::new(
+            ExprKind::NewObject {
+                class_name: crate::names::Name::unqualified("ReflectionException"),
+                args: vec![message],
+            },
+            span,
+        ),
+    );
+    crate::ir_lower::expr::retire_owned_call_operand(ctx, class_slot, span);
+    terminate_throw(ctx, exception.value);
 }
 
 /// Fuses the parser's readonly coalesce receiver temporary into a scoped EIR owner.
