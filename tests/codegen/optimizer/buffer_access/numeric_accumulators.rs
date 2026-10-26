@@ -167,3 +167,32 @@ echo "after\n";
         assert_both_modes_fail_after(fixture, "before\n", "use of buffer after buffer_free()");
     }
 }
+
+/// A NaN-to-bool warning must not leave a pending store using an invalidated descriptor.
+#[test]
+fn test_buffer_numeric_accumulator_rejects_nan_bool_warning_handler() {
+    let source = r#"<?php
+class NanBufferOwner {
+    public buffer<int> $value;
+    public function __construct(buffer<int> $value) { $this->value = $value; }
+}
+function bool_into_buffer(buffer<float> $input, buffer<int> $out, int $n): void {
+    for ($i = 0; $i < $n; $i++) { $out[$i] = (bool)$input[$i] ? 7 : 3; }
+}
+$input = buffer_new<float>(1);
+$out = buffer_new<int>(1);
+$input[0] = NAN;
+$owner = new NanBufferOwner($out);
+set_error_handler(function (int $errno, string $message) use ($owner): bool {
+    $buffer = $owner->value;
+    buffer_free($buffer);
+    return $errno > 0 || $message !== '';
+});
+echo "before\n";
+bool_into_buffer($input, $out, 1);
+echo "after\n";
+"#;
+    let ir = function_ir(source, true, "bool_into_buffer");
+    assert!(!ir.contains("buffer_resolve"), "{ir}");
+    assert_both_modes_fail_after(source, "before\n", "use of buffer after buffer_free()");
+}

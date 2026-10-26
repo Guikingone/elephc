@@ -581,8 +581,9 @@ hoisting when the compiler proves every value stored in it is an integer or
 float. Overflow still promotes the accumulator to float. Allocating or retiring
 these numeric boxes cannot invalidate a buffer; a value that may contain an
 object, an escaped reference, or a conversion that can warn keeps the ordinary
-safety restrictions. This includes explicit raw float-to-int casts, which can
-warn when the value is outside the integer range.
+safety restrictions. Casts to int or bool qualify only for operands already
+known to be ints: float range checks and NaN-to-bool conversions can run a
+warning handler.
 
 Loops over a buffer property of `$this` can also share one preheader read and
 resolution when no call, property write, free or other invalidating operation

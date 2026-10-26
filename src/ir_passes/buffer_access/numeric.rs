@@ -48,18 +48,18 @@ pub(super) fn preserving_instructions(function: &Function) -> HashSet<InstId> {
     }).collect()
 }
 
-/// Excludes diagnostic conversions, including explicit raw float-to-int range warnings.
+/// Admits only numeric casts whose storage path cannot emit PHP coercion diagnostics.
 fn warning_free_numeric_cast(function: &Function, inst: &Instruction) -> bool {
     let Some(Immediate::CastTarget(target @ (IrType::I64 | IrType::F64))) = inst.immediate
     else { return false; };
     if !matches!(inst.result_php_type.codegen_repr(), PhpType::Int | PhpType::Float | PhpType::Bool) {
         return false;
     }
-    // Raw floats use emit_explicit_float_result_to_int, whose range warning runs PHP handlers.
-    // A boxed numeric input instead uses the silent __rt_mixed_cast_int helper.
-    !(target == IrType::I64 && inst.result_php_type != PhpType::Bool
-        && inst.operands.first().and_then(|&value| function.value(value))
-            .is_some_and(|value| value.php_type.codegen_repr() == PhpType::Float))
+    // Float-to-int range checks and NaN-to-bool coercions can run PHP warning handlers.
+    // Boxed numeric values can hold either tag, so I64-target casts require an actual int.
+    target == IrType::F64
+        || inst.operands.first().and_then(|&value| function.value(value))
+            .is_some_and(|value| value.php_type.codegen_repr() == PhpType::Int)
 }
 
 #[cfg(test)]
@@ -128,12 +128,11 @@ mod tests {
         assert!(preserving_instructions(&uninitialized).is_empty());
     }
 
-    /// Diagnostic integer conversions can call handlers even for proven numeric inputs.
+    /// Boxed numeric storage keeps integer-target conversions behind a conservative barrier.
     #[test]
     fn buffer_numeric_preservation_rejects_warning_capable_casts() {
         for immediate in [Immediate::CastTarget(IrType::I64), Immediate::ImplicitIntCast, Immediate::StringOffsetCast] {
             let mut function = cycle(true);
-            let expected = matches!(immediate, Immediate::CastTarget(_));
             let end = function.blocks[0].terminator.take().unwrap();
             let mut b = Builder::new(&mut function);
             b.position_at_end(crate::ir::BlockId::from_raw(0));
@@ -141,7 +140,7 @@ mod tests {
             b.emit(Op::Cast, vec![value], Some(immediate), IrType::I64, PhpType::Int, Ownership::NonHeap);
             b.terminate(end);
             let inst = InstId::from_raw(function.instructions.len() as u32 - 1);
-            assert_eq!(preserving_instructions(&function).contains(&inst), expected);
+            assert!(!preserving_instructions(&function).contains(&inst));
         }
     }
 
@@ -150,7 +149,7 @@ mod tests {
     fn buffer_numeric_preservation_rejects_raw_float_int_casts() {
         for (target, php_type, expected) in [
             (IrType::I64, PhpType::Int, false),
-            (IrType::I64, PhpType::Bool, true),
+            (IrType::I64, PhpType::Bool, false),
             (IrType::F64, PhpType::Float, true),
         ] {
             let mut function = Function::new("float_cast_preservation".into(), IrType::Void, PhpType::Void);
@@ -163,6 +162,40 @@ mod tests {
             b.terminate(Terminator::Return { value: None });
             let cast = InstId::from_raw(function.instructions.len() as u32 - 1);
             assert_eq!(preserving_instructions(&function).contains(&cast), expected);
+        }
+        for (target, php_type) in [(IrType::I64, PhpType::Int), (IrType::I64, PhpType::Bool), (IrType::F64, PhpType::Float)] {
+            let mut function = Function::new("int_cast_preservation".into(), IrType::Void, PhpType::Void);
+            let mut b = Builder::new(&mut function);
+            let entry = b.create_named_block("entry", vec![]);
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let value = b.emit_const_i64(1);
+            b.emit(Op::Cast, vec![value], Some(Immediate::CastTarget(target)), target, php_type, Ownership::NonHeap);
+            b.terminate(Terminator::Return { value: None });
+            let cast = InstId::from_raw(function.instructions.len() as u32 - 1);
+            assert!(preserving_instructions(&function).contains(&cast));
+        }
+    }
+
+    /// Both raw and boxed NaN-to-bool conversions can dispatch a PHP warning handler.
+    #[test]
+    fn buffer_numeric_preservation_rejects_nan_bool_casts() {
+        for boxed in [false, true] {
+            let mut function = Function::new("nan_bool_preservation".into(), IrType::Void, PhpType::Void);
+            let mut b = Builder::new(&mut function);
+            let entry = b.create_named_block("entry", vec![]);
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let value = b.emit_const_f64(f64::NAN);
+            let value = if boxed {
+                b.emit(Op::MixedBox, vec![value], None, IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed, Ownership::Owned).unwrap()
+            } else { value };
+            b.emit(Op::Cast, vec![value], Some(Immediate::CastTarget(IrType::I64)),
+                IrType::I64, PhpType::Bool, Ownership::NonHeap);
+            b.terminate(Terminator::Return { value: None });
+            let cast = InstId::from_raw(function.instructions.len() as u32 - 1);
+            assert!(!preserving_instructions(&function).contains(&cast));
         }
     }
 }
