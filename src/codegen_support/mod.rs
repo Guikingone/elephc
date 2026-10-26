@@ -16,6 +16,7 @@ pub(crate) mod callable_invoker_args;
 pub(crate) mod cdylib;
 mod compilation_context;
 pub(crate) mod data_section;
+pub(crate) mod deferred_array_keys;
 mod declaration_order;
 mod driver_support;
 pub(crate) mod dynamic_new;

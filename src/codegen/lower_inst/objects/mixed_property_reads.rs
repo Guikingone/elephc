@@ -37,7 +37,7 @@ pub(super) fn lower_union_object_prop_get(
         PropertyReadMissingResult::Instruction(inst),
     )?;
     emit_property_load(ctx, &slot, base_reg)?;
-    materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+    materialize_loaded_property_result(ctx, inst, &slot)?;
     if let Some(read_done) = read_done {
         ctx.emitter.label(&read_done);
     }
@@ -598,7 +598,7 @@ pub(super) fn lower_nullable_prop_get_with_warning(
         PropertyReadMissingResult::Instruction(inst),
     )?;
     emit_property_load(ctx, &slot, base_reg)?;
-    materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+    materialize_loaded_property_result(ctx, inst, &slot)?;
     if let Some(read_done) = read_done {
         ctx.emitter.label(&read_done);
     }

@@ -709,6 +709,26 @@ try {
     );
 }
 
+/// Verifies the full-cache guard names the RUNTIME class (a subclass) like php's `get_class($this)`.
+#[test]
+fn test_caching_iterator_full_cache_error_names_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+class MyCachingIterator extends CachingIterator {}
+$it = new MyCachingIterator(new ArrayIterator([1]));
+try {
+    $it->count();
+} catch (BadMethodCallException $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "MyCachingIterator does not use a full cache (see CachingIterator::__construct)"
+    );
+}
+
 /// Verifies that append iterator skips empty iterators and exposes storage.
 #[test]
 fn test_append_iterator_skips_empty_iterators_and_exposes_storage() {

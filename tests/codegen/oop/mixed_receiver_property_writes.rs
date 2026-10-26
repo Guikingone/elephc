@@ -61,10 +61,14 @@ var_dump($t->s, $t->f);
     assert_eq!(out, "string(1) \"z\"\nfloat(2.5)\n");
 }
 
-/// A same-type write into a refined untyped slot now lands: PHP stores the value as-is, and the
-/// runtime tag matches the slot's refined representation.
+/// Refined untyped slots widen to boxed `Mixed` when a mixed-receiver write can reach them.
+///
+/// php's untyped properties accept every value: `$o->u = 9` on `class T { public $u = 1; }`
+/// stores the integer. The slot's storage was once refined from its default and the whole write
+/// refused at run time; the mixed-receiver write now widens the slot instead, which is php's
+/// answer.
 #[test]
-fn test_mixed_receiver_write_accepts_a_matching_refined_untyped_property() {
+fn test_mixed_receiver_write_widens_an_untyped_refined_property() {
     let out = compile_and_run(
         r#"<?php
 class T { public $u = 1; }
@@ -77,50 +81,9 @@ var_dump($t->u);
     assert_eq!(out, "int(9)\n");
 }
 
-/// The issue's reproduction: int- and string-refined untyped properties both accept a same-type
-/// write through a `mixed` receiver, matching PHP's `6b`.
+/// Widening an untyped object slot keeps runtime property reads on the new class layout.
 #[test]
-fn test_mixed_receiver_write_reaches_untyped_refined_scalars() {
-    let out = compile_and_run(
-        r#"<?php
-class T { public $pub = 3; public $s = "a"; }
-function direct(mixed $o): void { $o->pub = 6; $o->s = "b"; }
-$t = new T();
-direct($t);
-echo $t->pub, $t->s, "\n";
-"#,
-    );
-    assert_eq!(out, "6b\n");
-}
-
-/// A runtime type the refined slot cannot represent still fails closed rather than coercing it,
-/// which would diverge from PHP's store-as-is rule for an untyped property.
-#[test]
-fn test_mixed_receiver_write_refuses_a_mismatched_refined_untyped_property() {
-    let out = compile_and_run_capture(
-        r#"<?php
-class T { public $u = 1; }
-function write(mixed $o): void { $o->u = "z"; }
-        write(new T());
-"#,
-    );
-    let diagnostic = format!("{}{}", out.stdout, out.stderr);
-    assert!(
-        !out.success,
-        "mismatched refined untyped property write unexpectedly succeeded"
-    );
-    assert!(
-        diagnostic.contains("Unsupported dynamic property write: runtime Mixed value cannot be stored safely in the refined untyped property T::$u"),
-        "output: {}",
-        diagnostic
-    );
-}
-
-/// A runtime value of an UNRELATED class must be refused, not stored and then read back through
-/// the refined class's offsets (#1319 review). The slot's layout belongs to the refined class
-/// alone, so a foreign object would read the wrong words.
-#[test]
-fn test_mixed_receiver_write_refuses_a_mismatched_refined_untyped_object_property() {
+fn test_mixed_receiver_write_accepts_an_unrelated_object_without_reusing_old_offsets() {
     let out = compile_and_run_capture(
         r#"<?php
 class A { public $x = 10; public $n = 3; }
@@ -132,16 +95,8 @@ w($h, new B());
 var_dump($h->o->n);
 "#,
     );
-    let diagnostic = format!("{}{}", out.stdout, out.stderr);
-    assert!(
-        !out.success,
-        "an unrelated class into a refined object slot unexpectedly succeeded"
-    );
-    assert!(
-        diagnostic.contains("Unsupported dynamic property write: runtime Mixed value cannot be stored safely in the refined untyped property H::$o"),
-        "output: {}",
-        diagnostic
-    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "int(2)\n");
 }
 
 /// A same-class or subclass runtime value still lands in the refined untyped object slot: the
@@ -346,4 +301,34 @@ fn test_example_mixed_property_write_compiles_and_runs() {
         out,
         "Ada\n"
     );
+}
+
+/// Refined untyped scalar properties accept writes through a mixed receiver.
+#[test]
+fn test_mixed_receiver_write_reaches_untyped_refined_scalars() {
+    let out = compile_and_run(
+        r#"<?php
+class T { public $pub = 3; public $s = "a"; }
+function direct(mixed $o): void { $o->pub = 6; $o->s = "b"; }
+$t = new T();
+direct($t);
+echo $t->pub, $t->s, "\n";
+"#,
+    );
+    assert_eq!(out, "6b\n");
+}
+
+/// An untyped property accepts values of a different type after a mixed-receiver write.
+#[test]
+fn test_mixed_receiver_write_changes_a_refined_untyped_property_type() {
+    let out = compile_and_run(
+        r#"<?php
+class T { public $u = 1; }
+function write(mixed $o): void { $o->u = "z"; }
+$t = new T();
+write($t);
+var_dump($t->u);
+"#,
+    );
+    assert_eq!(out, "string(1) \"z\"\n");
 }

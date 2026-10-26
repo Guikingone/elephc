@@ -1,137 +1,22 @@
 //! Purpose:
-//! Emits the `print_r` return-mode capture helpers: `__rt_pr_append`,
-//! `__rt_pr_write`, and `__rt_pr_finish`. These let `print_r($value, true)`
-//! render into an in-memory buffer instead of stdout, then return the captured
-//! bytes as an owned heap string.
+//! Emits print_r capture writers and transfers complete buffers to owned PHP strings.
+//! Keeps writers target-aware while each capture owns its storage.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via
-//!   `crate::codegen_support::runtime::io`.
-//! - The `print_r` runtime walkers (`__rt_print_r_*`) call `__rt_pr_write`
-//!   instead of a raw `write(1, …)` syscall so return-mode captures their bytes.
-//! - `__rt_stdout_write` tail-calls `__rt_pr_append` when `_print_r_mode` is set
-//!   so codegen-side scalar/literal writes are captured too.
-//! - The `print_r` builtin codegen (`crate::codegen::lower_inst::builtins::debug`)
-//!   calls `__rt_pr_finish` to materialize the returned string.
+//! - The platform runtime emitter and print_r lowering/value walkers.
+//! - `__rt_stdout_write` delegates writes while a capture is active.
 //!
 //! Key details:
-//! - `_print_r_mode` (0/1), `_print_r_off` (byte count), and `_print_r_buf`
-//!   (64 KiB) live in the fixed runtime data section and default to zero.
-//! - `__rt_pr_append` owns the byte-copy loop and clamps the copy length to the
-//!   remaining buffer capacity (oversized captures truncate at 64 KiB instead of
-//!   overflowing adjacent data); `__rt_pr_write` is the walker-ABI wrapper that
-//!   branches on mode (syscall vs. append); `__rt_pr_finish` persists the buffer
-//!   through `__rt_str_persist` and resets the state.
-//! - Return ABI of `__rt_pr_finish` matches the platform string result registers
-//!   (AArch64 x1=ptr, x2=len; x86_64 rax=ptr, rdx=len) so the caller stores it
-//!   directly as a `Str` value.
+//! - Active buffer pointer, capacity, length and mode are separate globals.
+//! - Appending grows a string allocation; finish transfers its sole owner.
+//! - Empty captures still return an independently owned empty string.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
-/// Emits `__rt_pr_append`: append `len` bytes from `buf` to `_print_r_buf` at
-/// `_print_r_off` and advance the offset. No mode check. The length is clamped
-/// to the remaining buffer capacity (64 KiB total), so oversized captures
-/// truncate instead of overflowing into adjacent runtime data.
-///
-/// Inputs: AArch64 x0=buf, x1=len / x86_64 rdi=buf, rsi=len. No result.
-pub fn emit_pr_append(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_pr_append_linux_x86_64(emitter);
-        return;
-    }
+mod growth;
 
-    emitter.blank();
-    emitter.comment("--- runtime: pr_append ---");
-    emitter.label_global("__rt_pr_append");
-
-    // -- set up a frame and spill the incoming buf/len across the offset loads --
-    emitter.instruction("sub sp, sp, #32");                                     // allocate the append-helper frame
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish the append-helper frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save the source byte pointer
-    emitter.instruction("str x1, [sp, #8]");                                    // save the source byte length
-
-    // -- load the current append offset --
-    abi::emit_symbol_address(emitter, "x9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("ldr x10, [x9]");                                       // load the current append offset
-    abi::emit_symbol_address(emitter, "x11", "_print_r_buf");                   // materialize the base address of the capture buffer
-
-    // -- clamp the requested length to the remaining buffer capacity --
-    emitter.instruction("mov x12, #65536");                                     // total capture-buffer capacity in bytes
-    emitter.instruction("sub x12, x12, x10");                                   // remaining capacity = capacity - current offset
-    emitter.instruction("ldr x13, [sp, #8]");                                   // reload the requested byte length
-    emitter.instruction("cmp x13, x12");                                        // does the request exceed the remaining capacity?
-    emitter.instruction("csel x13, x12, x13, hi");                              // clamp the copy length to the remaining capacity
-    emitter.instruction("str x13, [sp, #8]");                                   // save the clamped byte length
-
-    // -- copy len bytes from buf to buf_base + off (byte loop) --
-    emitter.label("__rt_pr_append_loop");
-    emitter.instruction("ldr x12, [sp, #8]");                                   // reload the remaining byte count
-    emitter.instruction("cbz x12, __rt_pr_append_done");                        // no more bytes → finish
-    emitter.instruction("ldr x13, [sp, #0]");                                   // reload the current source cursor
-    emitter.instruction("ldrb w14, [x13]");                                     // load the next source byte
-    emitter.instruction("strb w14, [x11, x10]");                                // store the byte at buf_base + off
-    emitter.instruction("add x10, x10, #1");                                    // advance the destination offset
-    emitter.instruction("add x13, x13, #1");                                    // advance the source cursor
-    emitter.instruction("str x13, [sp, #0]");                                   // save the advanced source cursor
-    emitter.instruction("sub x12, x12, #1");                                    // decrement the remaining count
-    emitter.instruction("str x12, [sp, #8]");                                   // save the decremented remaining count
-    emitter.instruction("b __rt_pr_append_loop");                               // continue copying
-
-    emitter.label("__rt_pr_append_done");
-    abi::emit_symbol_address(emitter, "x9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("str x10, [x9]");                                       // store the advanced append offset
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the append-helper frame
-    emitter.instruction("ret");                                                 // return to caller
-}
-
-/// Emits the Linux x86_64 variant of `__rt_pr_append`.
-fn emit_pr_append_linux_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: pr_append ---");
-    emitter.label_global("__rt_pr_append");
-
-    emitter.instruction("push rbp");                                            // save the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish the append-helper frame pointer
-    emitter.instruction("sub rsp, 32");                                         // allocate the append-helper frame
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source byte pointer
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the source byte length
-
-    abi::emit_symbol_address(emitter, "r9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current append offset
-    abi::emit_symbol_address(emitter, "r11", "_print_r_buf");                   // materialize the base address of the capture buffer
-
-    // -- clamp the requested length to the remaining buffer capacity --
-    emitter.instruction("mov rcx, 65536");                                      // total capture-buffer capacity in bytes
-    emitter.instruction("sub rcx, r10");                                        // remaining capacity = capacity - current offset
-    emitter.instruction("cmp QWORD PTR [rbp - 16], rcx");                       // does the request exceed the remaining capacity?
-    emitter.instruction("jbe __rt_pr_append_len_ok_x86");                       // request fits → keep it
-    emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // clamp the copy length to the remaining capacity
-    emitter.label("__rt_pr_append_len_ok_x86");
-
-    emitter.label("__rt_pr_append_loop_x86");
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the remaining byte count
-    emitter.instruction("test rcx, rcx");                                       // any bytes left to copy?
-    emitter.instruction("jz __rt_pr_append_done_x86");                          // no more bytes → finish
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the current source cursor
-    emitter.instruction("mov dl, BYTE PTR [rax]");                              // load the next source byte
-    emitter.instruction("mov BYTE PTR [r11 + r10], dl");                        // store the byte at buf_base + off
-    emitter.instruction("add r10, 1");                                          // advance the destination offset
-    emitter.instruction("add rax, 1");                                          // advance the source cursor
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the advanced source cursor
-    emitter.instruction("sub rcx, 1");                                          // decrement the remaining count
-    emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save the decremented remaining count
-    emitter.instruction("jmp __rt_pr_append_loop_x86");                         // continue copying
-
-    emitter.label("__rt_pr_append_done_x86");
-    abi::emit_symbol_address(emitter, "r9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // store the advanced append offset
-    emitter.instruction("add rsp, 32");                                         // release the append-helper frame
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return to caller
-}
+pub use growth::emit_pr_append;
 
 /// Emits `__rt_pr_write`: the print_r walker terminal-write indirection.
 /// Branches on `_print_r_mode`: 1 → append to the capture buffer via
@@ -232,63 +117,28 @@ fn emit_pr_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
-/// Emits `__rt_pr_finish`: materialize the captured bytes as an owned heap
-/// string, reset the capture state, and return the string in the platform string
-/// result registers (AArch64 x1=ptr, x2=len / x86_64 rax=ptr, rdx=len).
-///
-/// No inputs. Calls `__rt_str_persist` with ptr=`_print_r_buf` and len=`_print_r_off`,
-/// then stores 0 back to `_print_r_off` and `_print_r_mode`.
+/// Adopts the complete capture allocation as the returned string and clears active state.
 pub fn emit_pr_finish(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_pr_finish_linux_x86_64(emitter);
-        return;
+    emitter.blank();
+    emitter.label_global("__rt_pr_finish");
+    abi::emit_frame_prologue(emitter, 16);
+    let result = abi::int_result_reg(emitter);
+    abi::emit_load_symbol_to_reg(emitter, result, "_print_r_buf", 0);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_pr_finish_empty");
+    let (pointer, length) = abi::string_result_regs(emitter);
+    abi::emit_reg_move(emitter, pointer, result);
+    abi::emit_load_symbol_to_reg(emitter, length, "_print_r_off", 0);
+    abi::emit_jump(emitter, "__rt_pr_finish_reset");
+    emitter.label("__rt_pr_finish_empty");
+    abi::emit_symbol_address(emitter, pointer, "_pr_nl");
+    abi::emit_load_int_immediate(emitter, length, 0);
+    abi::emit_call_label(emitter, "__rt_str_persist");
+    emitter.label("__rt_pr_finish_reset");
+    for symbol in ["_print_r_buf", "_print_r_cap", "_print_r_off", "_print_r_mode"] {
+        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
     }
-
-    emitter.blank();
-    emitter.comment("--- runtime: pr_finish ---");
-    emitter.label_global("__rt_pr_finish");
-
-    // -- set up a frame across the str_persist call --
-    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish a frame pointer for the call
-
-    // -- load the captured length and buffer pointer into the str_persist ABI --
-    abi::emit_symbol_address(emitter, "x9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("ldr x2, [x9]");                                        // load the captured byte length into the string-length result reg
-    abi::emit_symbol_address(emitter, "x1", "_print_r_buf");                    // load the capture-buffer address into the string-pointer result reg
-    emitter.instruction("bl __rt_str_persist");                                 // persist the buffer as an owned heap string → x1=ptr, x2=len
-
-    // -- reset the capture state (x1/x2 result survives scratch stores) --
-    abi::emit_symbol_address(emitter, "x9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("str xzr, [x9]");                                       // reset the append offset to 0
-    abi::emit_symbol_address(emitter, "x9", "_print_r_mode");                   // materialize the address of the capture-mode flag
-    emitter.instruction("str xzr, [x9]");                                       // reset the capture-mode flag to 0 (restore stdout mode)
-
-    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and return address
-    emitter.instruction("ret");                                                 // return with x1=owned string ptr, x2=length
-}
-
-/// Emits the Linux x86_64 variant of `__rt_pr_finish`.
-fn emit_pr_finish_linux_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: pr_finish ---");
-    emitter.label_global("__rt_pr_finish");
-
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer across the str_persist call
-    emitter.instruction("mov rbp, rsp");                                        // establish a frame base
-
-    abi::emit_symbol_address(emitter, "r11", "_print_r_off");                   // materialize the address of the append-offset global
-    emitter.instruction("mov rdx, QWORD PTR [r11]");                            // load the captured byte length into the string-length result reg
-    abi::emit_symbol_address(emitter, "rax", "_print_r_buf");                   // load the capture-buffer address into the string-pointer result reg
-    emitter.instruction("call __rt_str_persist");                               // persist the buffer as an owned heap string → rax=ptr, rdx=len
-
-    abi::emit_symbol_address(emitter, "r11", "_print_r_off");                   // materialize the address of the append-offset global
-    emitter.instruction("mov QWORD PTR [r11], 0");                              // reset the append offset to 0
-    abi::emit_symbol_address(emitter, "r11", "_print_r_mode");                  // materialize the address of the capture-mode flag
-    emitter.instruction("mov QWORD PTR [r11], 0");                              // reset the capture-mode flag to 0 (restore stdout mode)
-
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return with rax=owned string ptr, rdx=length
+    abi::emit_frame_restore(emitter, 16);
+    abi::emit_return(emitter);
 }
 
 #[cfg(test)]
@@ -350,9 +200,9 @@ mod tests {
         assert!(linux_x86.contains("__rt_pr_write_syscall"));
     }
 
-    /// Verifies the finish helper persists the buffer and resets the state.
+    /// Verifies finish can create an empty owned result and resets the active state.
     #[test]
-    fn pr_finish_persists_and_resets_state() {
+    fn pr_finish_returns_owned_string_and_resets_state() {
         let mac = render(Platform::MacOS, Arch::AArch64);
         assert!(mac.contains("bl __rt_str_persist"));
         assert!(mac.contains("_print_r_off"));

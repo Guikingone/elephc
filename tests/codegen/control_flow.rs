@@ -30,3 +30,114 @@ mod match_expressions;
 mod closures;
 #[path = "control_flow/guarded_reassignment.rs"]
 mod guarded_reassignment;
+
+/// Verifies php's return-coverage rule is a RUN-TIME check, not a compile-time one.
+///
+/// php compiles `function foo(): int { }` as-is and raises a catchable
+/// `TypeError: foo(): Return value must be of type int, none returned` at run time when a path
+/// completes without a value. elephc used to refuse to compile.
+#[test]
+fn test_function_return_coverage_raises_runtime_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+function foo(): int { }
+try {
+    foo();
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "foo(): Return value must be of type int, none returned\n");
+}
+
+/// Verifies the partial-fallthrough path raises php's catchable TypeError at run time.
+#[test]
+fn test_function_partial_fallthrough_raises_runtime_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+function foo(bool $ok): int { if ($ok) { return 1; } }
+try {
+    var_dump(foo(true));
+} catch (TypeError $e) {
+    echo "unreachable\n";
+}
+try {
+    var_dump(foo(false));
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(1)\nfoo(): Return value must be of type int, none returned\n"
+    );
+}
+
+/// Verifies a switch `break` path raises php's catchable TypeError at run time.
+#[test]
+fn test_function_switch_break_path_raises_runtime_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+function foo(int $x): int { switch ($x) { case 1: if ($x > 0) { break; } return 1; default: return 2; } }
+try {
+    var_dump(foo(1));
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "foo(): Return value must be of type int, none returned\n");
+}
+
+/// Verifies a METHOD body that does not return on every path raises php's catchable TypeError
+/// at run time, with php's `Class::method()` prefix.
+#[test]
+fn test_method_return_coverage_raises_runtime_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public function value(): int { } }
+try {
+    (new Box())->value();
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Box::value(): Return value must be of type int, none returned\n"
+    );
+}
+
+/// Verifies a CLOSURE body that does not return on every path raises php's catchable TypeError
+/// at run time.
+#[test]
+fn test_closure_return_coverage_raises_runtime_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function(): int { };
+try {
+    $f();
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert!(out.contains("Return value must be of type int, none returned"), "{out}");
+}
+
+/// Verifies a `: mixed` body that falls off the end is php-legal: mixed accepts null.
+#[test]
+fn test_mixed_return_coverage_accepts_implicit_null() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function(): mixed { };
+var_dump($f());
+class C { public function pick(): mixed {} }
+var_dump((new C)->pick());
+"#,
+    );
+    assert_eq!(out, "NULL\nNULL\n");
+}

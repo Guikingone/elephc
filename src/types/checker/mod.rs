@@ -63,8 +63,7 @@ use crate::types::{
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
 pub(crate) use loop_storage::loop_carried_storage_types;
 pub(crate) use inference::closure_body_uses_this;
-pub(crate) use builtin_types::InterfaceDeclInfo;
-pub(crate) use builtin_types::REFLECTION_CLASS_NAMES;
+pub(crate) use builtin_types::{InterfaceDeclInfo, REFLECTION_CLASS_NAMES};
 use builtin_types::validate_magic_method_contracts;
 use schema::propagate_abstract_return_types;
 
@@ -354,12 +353,11 @@ pub(crate) struct Checker {
     /// Never-declared variables named by a null probe (`isset`/`empty`/`unset`/`??`) at top level,
     /// with the span to blame if the tolerance turns out to be unjustified.
     ///
-    /// PHP answers these probes without an `Undefined variable` warning, but EIR lowering can only
-    /// represent the storage when the variable stays `null` for the whole scope: main's local
-    /// types come from `global_env`, so a name that is *also* assigned somewhere at top level ends
-    /// up with that assigned type and its slot is read before any store. `check_top_level_program`
-    /// therefore defers the decision to the end of the pass, where `global_env` is authoritative.
+    /// Bare local `isset` uses an EIR presence flag even when the final environment has a value
+    /// type. Other probe shapes still need deferred validation against that environment.
     pub pending_null_probe_roots: Vec<(String, Span)>,
+    /// Bare local isset sites supported by explicit EIR presence tracking in the current pass.
+    pub local_presence_probe_sites: HashSet<Span>,
     /// Nesting depth of null-probe operand inference (`isset`/`empty`/`unset` arguments and the
     /// left operand of `??`).
     ///
@@ -403,6 +401,11 @@ pub(crate) struct Checker {
     /// every declared slot, while a strict ancestor's private name becomes a distinct dynamic
     /// property outside its declaring scope. Both need per-instance hash storage.
     pub scope_dynamic_mutation_targets: scope_dynamic_storage::ScopeDynamicMutationTargets,
+    /// Classes whose refined UNTYPED property slots must widen to boxed `Mixed` because a
+    /// mixed-receiver write (`$o->name = v` with `$o` only known at run time) can store any
+    /// value into any of them. php's untyped properties accept every value; the refined slot
+    /// shapes used to refuse the whole write once the runtime class arm matched.
+    pub scope_dynamic_widen_targets: std::collections::HashSet<String>,
     /// Statically-decided access violations that must lower to a catchable
     /// `Error` throw instead of a compile-time error, keyed by source span.
     ///

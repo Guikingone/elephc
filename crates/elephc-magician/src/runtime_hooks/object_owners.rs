@@ -1,5 +1,5 @@
 //! Purpose:
-//! Keeps eval closure receiver owners visible to native GC without adding PHP properties.
+//! Keeps eval closure capture and receiver owners visible to native GC without adding PHP properties.
 //!
 //! Called from:
 //! - Closure construction through RuntimeValueOps and native collector/free callbacks.
@@ -64,8 +64,11 @@ pub(super) extern "C" fn release_object_children(identity: u64) -> *mut RuntimeC
     std::panic::catch_unwind(|| {
         let children = object_owners().lock().ok()
             .and_then(|mut owners| owners.remove(&identity));
+        let metadata = crate::ffi::dynamic_destructors::retire_released_closure_metadata(identity);
         let thrown = super::release::release_native_cells(owned_children(children.unwrap_or_default()), None);
         crate::ffi::dynamic_destructors::forget_released_object(identity);
+        // Keep foreign context leases alive through every captured object's destructor.
+        drop(metadata);
         thrown.map_or(std::ptr::null_mut(), RuntimeCellHandle::as_ptr)
     }).unwrap_or(std::ptr::null_mut())
 }

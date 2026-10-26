@@ -18,6 +18,22 @@ pub(in crate::codegen::lower_inst) fn emit_object_allocation(
     uninitialized_marker_offsets: &[usize],
     owned_reference_property_offsets: &[(usize, PhpType, bool)],
 ) -> Result<()> {
+    emit_object_allocation_impl(ctx, class_id, property_count, allow_dynamic_properties,
+        uninitialized_marker_offsets, owned_reference_property_offsets, None)
+}
+
+/// The allocation body. `reserved_handle` binds a handle the construction reserved BEFORE
+/// its arguments were evaluated (php numbers a `new` receiver first); `None` keeps the
+/// fused path's pool acquisition immediately after the allocation.
+pub(super) fn emit_object_allocation_impl(
+    ctx: &mut FunctionContext<'_>,
+    class_id: u64,
+    property_count: usize,
+    allow_dynamic_properties: bool,
+    uninitialized_marker_offsets: &[usize],
+    owned_reference_property_offsets: &[(usize, PhpType, bool)],
+    reserved_handle: Option<crate::ir::ValueId>,
+) -> Result<()> {
     let dynamic_properties_offset = dynamic_property_hash_offset(property_count);
     let dynamic_properties_bytes = if allow_dynamic_properties { 8 } else { 0 };
     let creation_line_offset = crate::codegen_support::throwable_layout::ordinary_creation_line_offset_by_id(
@@ -27,24 +43,42 @@ pub(in crate::codegen::lower_inst) fn emit_object_allocation(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("mov x0, #{}", payload_size)); // request object payload storage for the class id and property slots
+                .instruction(&format!("mov x0, #{}", payload_size));            // request object payload storage for the class id and property slots
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks object instances for ownership helpers
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the object payload
-            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
+            match reserved_handle {
+                None => {
+                    ctx.emitter.instruction("bl __rt_object_handle_acquire");   // acquire the pool's next handle
+                }
+                Some(handle) => {
+                    ctx.emitter.instruction("mov x1, x0");                      // the bind takes the payload in x0 and the handle in x1
+                    ctx.load_value_to_reg(handle, "x1")?;
+                    ctx.emitter.instruction("bl __rt_object_handle_bind");      // bind the pre-reserved handle to the payload
+                }
+            }
             ctx.emitter.instruction(&format!("mov x10, #{}", class_id));        // materialize the compile-time class id
             ctx.emitter.instruction("str x10, [x0]");                           // store the class id at object payload offset zero
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("mov rax, {}", payload_size)); // request object payload storage for the class id and property slots
+                .instruction(&format!("mov rax, {}", payload_size));            // request object payload storage for the class id and property slots
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction(&format!(                                   // materialize the x86_64 object heap kind word
                 "mov r10, 0x{:x}",
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
             ));
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the object payload
-            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
+            match reserved_handle {
+                None => {
+                    ctx.emitter.instruction("call __rt_object_handle_acquire"); // acquire the pool's next handle
+                }
+                Some(handle) => {
+                    ctx.emitter.instruction("mov rsi, rax");                    // the bind takes the payload in rax and the handle in rsi
+                    ctx.load_value_to_reg(handle, "rsi")?;
+                    ctx.emitter.instruction("call __rt_object_handle_bind");    // bind the pre-reserved handle to the payload
+                }
+            }
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the compile-time class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object payload offset zero
         }
@@ -156,6 +190,7 @@ pub(super) fn emit_clone_declared_property_slots(
     property_count: usize,
     retained_offsets: &[usize],
     owned_references: &[(usize, PhpType, bool)],
+    mixed_offsets: &[usize],
 ) {
     for index in 0..property_count {
         let offset = 8 + index * 16;
@@ -172,6 +207,8 @@ pub(super) fn emit_clone_declared_property_slots(
             abi::emit_pop_reg(ctx.emitter, dest_reg);
             abi::emit_pop_reg(ctx.emitter, source_reg);
             abi::emit_store_to_address(ctx.emitter, result, dest_reg, offset);
+        } else if mixed_offsets.contains(&offset) {
+            emit_retain_cloned_mixed_property(ctx, source_reg, dest_reg, offset);
         } else if retained_offsets.contains(&offset) {
             emit_retain_cloned_property_pointer(ctx, source_reg, dest_reg, offset);
         }
@@ -209,6 +246,41 @@ pub(super) fn emit_retain_cloned_property_pointer(
     abi::emit_pop_reg(ctx.emitter, source_reg);
 }
 
+/// Copies an active borrowed native view before acquiring any retiring physical Mixed box.
+fn emit_retain_cloned_mixed_property(
+    ctx: &mut FunctionContext<'_>, source: &str, destination: &str, offset: usize,
+) {
+    let ordinary = ctx.next_label("clone_mixed_ordinary");
+    let done = ctx.next_label("clone_mixed_acquired");
+    let function = abi::symbol_scratch_reg(ctx.emitter);
+    let value = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, source);
+    abi::emit_push_reg(ctx.emitter, destination);
+    abi::emit_load_symbol_to_reg(ctx.emitter, function, "_native_property_read_fn", 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {function}, {ordinary}"));    // ordinary copies keep their existing retained Mixed owner
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {function}, {function}"));   // inspect the optional native-view callback
+            ctx.emitter.instruction(&format!("jz {ordinary}"));                 // ordinary copies keep their existing retained Mixed owner
+        }
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 16);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), offset as i64);
+    abi::emit_load_symbol_to_reg(ctx.emitter, function, "_native_property_read_fn", 0);
+    abi::emit_call_reg(ctx.emitter, function);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&ordinary);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, value, 0);
+    abi::emit_load_from_address(ctx.emitter, value, value, offset);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.label(&done);
+    abi::emit_pop_reg(ctx.emitter, destination);
+    abi::emit_pop_reg(ctx.emitter, source);
+    abi::emit_store_to_address(ctx.emitter, value, destination, offset);
+}
+
 /// Replaces the constructor-seeded dynamic-property hash with a shallow clone of the source hash.
 pub(super) fn emit_clone_dynamic_property_hash(
     ctx: &mut FunctionContext<'_>,
@@ -224,11 +296,11 @@ pub(super) fn emit_clone_dynamic_property_hash(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("cbz {}, {}", result_reg, null_label)); // missing dynamic-property hash clones as a null hash pointer
+                .instruction(&format!("cbz {}, {}", result_reg, null_label));   // missing dynamic-property hash clones as a null hash pointer
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("test {}, {}", result_reg, result_reg)); // check whether the source dynamic-property hash exists
+                .instruction(&format!("test {}, {}", result_reg, result_reg));  // check whether the source dynamic-property hash exists
             ctx.emitter.instruction(&format!("jz {}", null_label));             // missing dynamic-property hash clones as a null hash pointer
         }
     }

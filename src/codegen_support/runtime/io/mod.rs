@@ -141,8 +141,20 @@ mod user_wrapper_set_option;
 mod user_wrapper_url_stat;
 mod print_r_walk;
 mod print_r_buffer;
+mod print_r_scope;
+mod print_r_php_call;
+mod print_r_value_scope;
+mod print_r_magic_view;
+mod debug_key_parts;
 mod var_dump_object;
+mod var_dump_object_header;
+mod object_debug_view;
 mod var_dump_walk;
+mod var_dump_value_scope;
+
+pub(crate) use object_debug_view::emit_object_debug_info;
+pub(crate) use var_dump_object_header::emit_var_dump_open_object_info;
+pub(crate) use var_dump_value_scope::emit_var_dump_value_scope;
 
 pub(crate) use basename::emit_basename;
 pub(crate) use backtrace_arg::emit_backtrace_print_arg;
@@ -281,6 +293,11 @@ pub(crate) use print_r_walk::{
     emit_print_r_close, emit_print_r_hash, emit_print_r_indexed, emit_print_r_int_key,
     emit_print_r_open, emit_print_r_spaces, emit_print_r_str_key, emit_print_r_value,
 };
+pub(crate) use print_r_scope::emit_print_r_scope;
+pub(crate) use print_r_php_call::emit_print_r_php_call;
+pub(crate) use print_r_value_scope::emit_print_r_value_scope;
+pub(crate) use print_r_magic_view::emit_print_r_magic_view;
+pub(crate) use var_dump_debug_key::emit_print_r_debug_key;
 pub(crate) use print_r_buffer::{emit_pr_append, emit_pr_finish, emit_pr_write};
 pub(crate) use ob_buffer::{
     emit_ob_append, emit_ob_contents, emit_ob_flush_all, emit_ob_gated_ops, emit_ob_get_pop_ops,
@@ -294,7 +311,8 @@ pub(crate) use ob_status::{emit_ob_get_status, emit_ob_list_handlers, emit_ob_st
 pub(crate) use var_dump_object::{
     emit_var_dump_emit_object_key, emit_var_dump_emit_recursion_line,
     emit_var_dump_emit_uninit_line, emit_var_dump_object, emit_var_dump_open_object,
-    emit_vd_obj_count, emit_vd_obj_desc, emit_vd_seen_find, emit_vd_seen_pop, emit_vd_seen_push,
+    emit_vd_container_adapters, emit_vd_dll_adapters, emit_vd_obj_count, emit_vd_obj_desc,
+    emit_vd_seen_find, emit_vd_seen_pop, emit_vd_seen_push,
 };
 pub(crate) use var_dump_walk::{
     emit_var_dump_array_bool, emit_var_dump_array_float, emit_var_dump_array_int,
@@ -305,3 +323,11 @@ pub(crate) use var_dump_walk::{
     emit_var_dump_indexed, emit_var_dump_open_container, emit_var_dump_pad, emit_var_dump_value,
     emit_var_dump_write,
 };
+
+mod var_dump_object_view;
+pub(crate) use var_dump_object_view::emit_var_dump_object_view;
+mod debug_info_diagnostics;
+pub(crate) use debug_info_diagnostics::emit_debug_info_diagnostics;
+
+mod var_dump_debug_key;
+pub(crate) use var_dump_debug_key::emit_var_dump_debug_key;

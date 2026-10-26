@@ -23,7 +23,7 @@ sidebar:
 
 - **Target strategy**: `eir_primitive`
 - **Validation**: `checker_hook`
-- **Result type source**: `checked`
+- **Result type source**: `shared`
 - **Result ownership**: `fresh`
 - **Effects**: `static (7 declared effects)`
 - **Requirements**: `static (0 requirements)`

@@ -163,7 +163,7 @@ Codegen:
                           or use @file with one name per line)
   --heap-debug            Enable heap debug instrumentation
   --define SYMBOL         Define a symbol for `ifdef` conditional compilation
-  --ini KEY=VALUE         Bake an INI directive override (OPcache and mbstring startup)
+  --ini KEY=VALUE         Bake an INI override (OPcache, mbstring, warning destinations)
   --strict-opcache        Throw when opcache_invalidate() targets AOT-frozen code
 
 Linking:

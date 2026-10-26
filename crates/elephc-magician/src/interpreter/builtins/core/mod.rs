@@ -64,6 +64,7 @@ mod runtime_introspection;
 mod set_error_handler;
 mod set_exception_handler;
 mod trigger_error;
+mod __elephc_deprecated;
 mod user_error;
 mod var_dump;
 mod zend_version;
@@ -116,7 +117,7 @@ pub(in crate::interpreter) fn eval_builtin_core_call(
         | "get_extension_funcs" | "get_included_files" | "get_mangled_object_vars"
         | "get_required_files" | "get_resources" | "restore_error_handler"
         | "restore_exception_handler" | "set_error_handler" | "set_exception_handler"
-        | "trigger_error" | "user_error" => {
+        | "trigger_error" | "user_error" | "__elephc_deprecated" => {
             eval_builtin_runtime_introspection_call(name, args, context, scope, values)
         }
         "die" => eval_builtin_die(args, context, scope, values),
@@ -180,7 +181,7 @@ pub(in crate::interpreter) fn eval_core_values_result(
         | "get_extension_funcs" | "get_included_files" | "get_mangled_object_vars"
         | "get_required_files" | "get_resources" | "restore_error_handler"
         | "restore_exception_handler" | "set_error_handler" | "set_exception_handler"
-        | "trigger_error" | "user_error" => {
+        | "trigger_error" | "user_error" | "__elephc_deprecated" => {
             eval_runtime_introspection_values_result(name, evaluated_args, context, values)
         }
         "die" => eval_die_values_result(evaluated_args, values),

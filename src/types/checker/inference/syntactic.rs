@@ -310,6 +310,8 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             target: CastType::Array,
             expr,
         } => crate::types::array_cast_result_type(&infer_expr_type_syntactic(expr)),
+        ExprKind::FunctionCall { name, .. } if name.compiler_runtime().is_some() =>
+            name.compiler_runtime().expect("compiler call guard").result_type(),
         ExprKind::FunctionCall { name, args } => match name.as_str() {
             "eval" => PhpType::Mixed,
             "substr" | "strtolower" | "strtoupper" | "trim" | "ltrim" | "rtrim" | "str_repeat"

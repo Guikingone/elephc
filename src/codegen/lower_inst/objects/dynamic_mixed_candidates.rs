@@ -459,11 +459,6 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
             result,
         );
     }
-    if is_spl_doubly_linked_list_family(&candidate.class_name)
-        && constructor_arg_container.is_none()
-    {
-        return emit_dynamic_new_mixed_spl_dll_candidate(ctx, candidate.class_id, result);
-    }
     emit_object_allocation(
         ctx,
         candidate.class_id,
@@ -583,23 +578,6 @@ pub(super) fn emit_dynamic_new_mixed_spl_fixed_array_candidate(
         ctx.emitter,
         &PhpType::Object("SplFixedArray".to_string()),
     );
-    ctx.store_result_value(result)
-}
-
-/// Allocates a dynamic SPL doubly-linked-list-family candidate through runtime storage.
-pub(super) fn emit_dynamic_new_mixed_spl_dll_candidate(
-    ctx: &mut FunctionContext<'_>,
-    class_id: u64,
-    result: ValueId,
-) -> Result<()> {
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        class_id as i64,
-    );
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 0);
-    abi::emit_call_label(ctx.emitter, "__rt_spl_dll_new");
-    emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
     ctx.store_result_value(result)
 }
 

@@ -92,11 +92,25 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if method_name.eq_ignore_ascii_case("getClosure") {
+        if let Some(object) = context.eval_reflection_function_closure_object(identity) {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            return values.retain(object).map(Some);
+        }
+    }
     let Some(target) = eval_reflection_function_method_target(identity, context, values)? else {
         return Ok(None);
     };
     let method_key = method_name.to_ascii_lowercase();
     match method_key.as_str() {
+        "getclosure" => match &target {
+            EvalReflectionFunctionMethodTarget::Function { name, closure_target, .. } => {
+                eval_reflection_bind_no_args(evaluated_args)?;
+                let target = closure_target.clone().unwrap_or_else(|| EvalClosureObjectTarget::Named(name.to_ascii_lowercase()));
+                eval_closure_object_expr(target, context, values).map(Some)
+            }
+            EvalReflectionFunctionMethodTarget::Method { .. } => Ok(None),
+        },
         "getshortname" => {
             eval_reflection_bind_no_args(evaluated_args)?;
             values

@@ -556,3 +556,49 @@ return function_exists("get_resources");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Internal deprecations use the engine severity for direct and evaluated-value eval calls.
+#[test]
+fn execute_program_internal_deprecation_dispatches_engine_severity() {
+    let program = parse_fragment(br#"
+function engine_handler($level, $message) {
+    echo $level . ":" . $message . "|";
+    return true;
+}
+error_reporting(0);
+set_error_handler("engine_handler", E_DEPRECATED);
+__elephc_deprecated("direct");
+call_user_func("__elephc_deprecated", "values");
+restore_error_handler();
+return true;
+"#).expect("parse internal deprecation fixture");
+    let mut context = ElephcEvalContext::new();
+    context.set_call_site("/tmp/internal.php", "/tmp", 42);
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("execute internal deprecation fixture");
+    assert_eq!(values.output, "8192:direct|8192:values|");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert!(values.warnings.is_empty());
+}
+
+/// Eval's default diagnostic obeys the engine reporting mask and preserves the source site.
+#[test]
+fn execute_program_internal_deprecation_default_uses_engine_reporting_mask() {
+    let program = parse_fragment(br#"
+error_reporting(E_DEPRECATED);
+__elephc_deprecated("engine");
+error_reporting(E_USER_DEPRECATED);
+__elephc_deprecated("suppressed");
+return true;
+"#).expect("parse engine reporting mask fixture");
+    let mut context = ElephcEvalContext::new();
+    context.set_call_site("/tmp/internal.php", "/tmp", 42);
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("execute engine reporting mask fixture");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert_eq!(values.warnings, vec!["Deprecated: engine in /tmp/internal.php on line 42\n"]);
+}

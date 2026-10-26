@@ -20,7 +20,7 @@ use super::{
     NAMED_PARAMETER_OVERWRITE_PREFIX, NAMED_PARAMETER_OVERWRITE_SUFFIX,
     OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX,
     SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX, SERIALIZABLE_RESULT_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
-    CLOSURE_CLASS_NAME, POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
+    CANNOT_UNSET_NON_ARRAY_MSG, CLOSURE_CLASS_NAME, POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
     OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
@@ -69,6 +69,10 @@ pub(crate) fn emit_runtime_data_fixed(
 ) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
+    out.push_str(&format!(
+        ".globl _php_array_offset_type_suffix\n_php_array_offset_type_suffix:\n    .ascii {:?}\n",
+        crate::codegen_support::deferred_array_keys::ARRAY_OFFSET_TYPE_SUFFIX,
+    ));
     out.push_str(&comm_directive("_concat_buf", 65536, target));
     out.push_str(&comm_directive("_concat_off", 8, target));
     out.push_str(&comm_directive("_mbstring_catalog_array", 8, target));
@@ -139,6 +143,9 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _positional_after_named_msg\n_positional_after_named_msg:\n    .ascii {POSITIONAL_AFTER_NAMED_MSG:?}\n"
     ));
     out.push_str(&format!(
+        ".globl _cannot_unset_non_array_msg\n_cannot_unset_non_array_msg:\n    .ascii {CANNOT_UNSET_NON_ARRAY_MSG:?}\n"
+    ));
+    out.push_str(&format!(
         ".globl _unser_object_string_error_prefix\n_unser_object_string_error_prefix:\n    .ascii {UNSER_OBJECT_STRING_ERROR_PREFIX:?}\n"
     ));
     out.push_str(&format!(
@@ -203,14 +210,16 @@ pub(crate) fn emit_runtime_data_fixed(
     ));
     out.push_str(".globl _incomplete_class_property_name\n_incomplete_class_property_name:\n    .ascii \"__PHP_Incomplete_Class_Name\"\n");
     // print_r($value, true) return-mode capture state. _print_r_mode is a flag
-    // (0 = write to stdout, 1 = append to _print_r_buf) consulted by
+    // (0 = write to stdout, 1 = append to the owned capture buffer) consulted by
     // __rt_stdout_write and __rt_pr_write; _print_r_off tracks the accumulated
-    // byte count; _print_r_buf is the 64 KiB accumulation buffer finalized by
+    // byte count; _print_r_buf owns growable storage whose capacity is _print_r_cap, finalized by
     // __rt_pr_finish into an owned heap string. Only non-zero during an active
     // print_r return-mode rendering, so non-print_r output is unaffected.
     out.push_str(&comm_directive("_print_r_mode", 8, target));
     out.push_str(&comm_directive("_print_r_off", 8, target));
-    out.push_str(&comm_directive("_print_r_buf", 65536, target));
+    out.push_str(&comm_directive("_print_r_buf", 8, target));
+    out.push_str(&comm_directive("_print_r_cap", 8, target));
+    out.push_str(&comm_directive("_print_r_scope", 8, target));
     // Output-buffering (ob_*) stack state. _ob_level is the active nesting depth
     // (0 = no buffering) consulted by __rt_stdout_write and __rt_pr_write before
     // the terminal write syscall; _ob_ptrs/_ob_lens/_ob_caps are 64-slot parallel
@@ -360,6 +369,9 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_global_argv", 8, target));
     out.push_str(&comm_directive("_exc_handler_top", 8, target));
     out.push_str(&comm_directive("_exc_call_frame_top", 8, target));
+    // The frame-chain head as it stood at the MOST RECENT throw: the uncaught report walks it
+    // after the unwind has already popped every activation off the live chain.
+    out.push_str(&comm_directive("_uncaught_trace_snapshot", 8, target));
     // Head of the stack-resident boxed-array-walk borrow chain. Each active callback
     // publishes the exact hash-entry value slot it lends as `mixed &$value`, allowing
     // escape boundaries to reject only that unmanaged reference instead of ordinary
@@ -372,6 +384,14 @@ pub(crate) fn emit_runtime_data_fixed(
     for (symbol, value) in [("_rt_warning_prefix", "Warning: "), ("_rt_notice_prefix", "Notice: "), ("_rt_deprecated_prefix", "Deprecated: ")] {
         out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii \"{value}\"\n"));
     }
+    // Static fragments of PHP's display-diagnostic suffix: `<message> in <file> on line <N>\n`.
+    for (symbol, value) in [
+        ("_rt_php_loc_infix", " in "),
+        ("_rt_php_loc_on_line", " on line "),
+    ] {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii \"{value}\"\n"));
+    }
+    out.push_str(".globl _rt_php_loc_newline\n_rt_php_loc_newline:\n    .byte 10\n");
     out.push_str(&comm_directive("_exc_value", 8, target));
     out.push_str(&comm_directive("_fiber_current", 8, target));
     out.push_str(&comm_directive("_magic_set_guard_head", 8, target));
@@ -496,6 +516,10 @@ pub(crate) fn emit_runtime_data_fixed(
     // Keep payload alignment stable when preceding runtime symbols change.
     out.push_str(&comm_directive_aligned("_heap_buf", heap_size, 16, target));
     out.push_str(&comm_directive("_heap_off", 8, target));
+    out.push_str(&comm_directive("_spl_heap_scope_head", 8, target));
+    out.push_str(&comm_directive("_native_property_scope_head", 8, target));
+    out.push_str(&comm_directive("_native_property_read_fn", 8, target));
+    out.push_str(&comm_directive("_spl_heap_scope_clone_fn", 8, target));
     out.push_str(&comm_directive("_heap_free_list", 8, target));
     out.push_str(&comm_directive("_heap_small_bins", 32, target));
     out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
@@ -539,6 +563,16 @@ pub(crate) fn emit_runtime_data_fixed(
         target,
     ));
     out.push_str(&comm_directive("_obj_handle_free_top", 8, target));
+    // Inverse entries borrow payloads without becoming GC roots. Pool capacity
+    // includes handle zero; reset retires both directions before reusing an arena.
+    let handle_capacity = crate::codegen_support::runtime::object_handle_free_slots(heap_size);
+    let handle_index_count = crate::codegen_support::runtime::object_handle_index_slots(heap_size);
+    out.push_str(&comm_directive("_obj_handle_live", handle_capacity * 8, target));
+    out.push_str(&comm_directive("_obj_handle_live_ptr", 8, target));
+    out.push_str(&comm_directive("_obj_handle_shutdown", 8, target));
+    out.push_str(&format!(".p2align 3\n.globl _obj_handle_initial_capacity\n_obj_handle_initial_capacity:\n    .quad {handle_capacity}\n"));
+    out.push_str(&format!(".p2align 3\n.globl _obj_handle_capacity\n_obj_handle_capacity:\n    .quad {handle_capacity}\n"));
+    out.push_str(&format!(".p2align 3\n.globl _obj_handle_index_count\n_obj_handle_index_count:\n    .quad {handle_index_count}\n"));
     // PHP RESOURCE ids. A SEPARATE numbering space from the object handles above —
     // php-src keeps `zend_resource.handle` and `zend_object.handle` in two unrelated
     // lists, so `resource(5)` and `object(C)#5` can and do coexist. The table maps a
@@ -583,6 +617,9 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _php_error_reporting\n_php_error_reporting:\n    .quad {}\n",
         php_version.error_reporting_mask()
     ));
+    // Program entry publishes effective destinations; cached runtime defaults preserve legacy routing.
+    out.push_str(".globl _php_display_errors\n_php_display_errors:\n    .quad 1\n");
+    out.push_str(".globl _php_log_errors\n_php_log_errors:\n    .quad 1\n");
     // PHP user-handler state. Each current callback owns one boxed Mixed cell and
     // one normalized callable descriptor. Replacements move the previous state
     // into an unbounded heap-backed linked stack so restore_*_handler() can unwind
@@ -807,6 +844,16 @@ pub(crate) fn emit_runtime_data_fixed(
             "_iterator_iterator_downcast_msg",
             "Class to downcast to not found or not base class or does not implement Traversable",
         ),
+        // Rendered `var_dump` keys for the SplDoublyLinkedList family's two internal fields,
+        // printed as `["flags":"SplDoublyLinkedList":private]` / `["dllist":...:private]`.
+        (
+            "_vd_dll_flags_key",
+            "\"flags\":\"SplDoublyLinkedList\":private",
+        ),
+        (
+            "_vd_dll_dllist_key",
+            "\"dllist\":\"SplDoublyLinkedList\":private",
+        ),
     ] {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
@@ -818,6 +865,12 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _uncaught_exc_in\n_uncaught_exc_in:\n    .ascii \" in \"\n");
     out.push_str(".globl _uncaught_exc_colon\n_uncaught_exc_colon:\n    .ascii \":\"\n");
     out.push_str(".globl _uncaught_exc_nl\n_uncaught_exc_nl:\n    .ascii \"\\n\"\n");
+    // PHP's uncaught report continues with a stack trace; these are its literal separators.
+    out.push_str(".globl _uncaught_exc_stack\n_uncaught_exc_stack:\n    .ascii \"Stack trace:\\n\"\n");
+    out.push_str(".globl _uncaught_exc_hash\n_uncaught_exc_hash:\n    .ascii \"#\"\n");
+    out.push_str(".globl _uncaught_exc_main\n_uncaught_exc_main:\n    .ascii \" {main}\\n\"\n");
+    out.push_str(".globl _uncaught_exc_thrown\n_uncaught_exc_thrown:\n    .ascii \"  thrown in \"\n");
+    out.push_str(".globl _uncaught_exc_online\n_uncaught_exc_online:\n    .ascii \" on line \"\n");
     // Printed only when `__rt_exception_matches` walks into the "metadata never emitted"
     // sentinel, which no correct build should reach — see that helper for why it aborts there
     // instead of answering "no match".

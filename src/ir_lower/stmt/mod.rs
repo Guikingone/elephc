@@ -60,6 +60,10 @@ mod readonly_receiver_guard;
 mod static_property_writes;
 mod property_array_writes;
 pub(crate) mod property_write_receiver;
+mod spl_storage_writes;
+pub(in crate::ir_lower) use spl_storage_writes::{
+    is_live_storage_access, live_storage_cell, release_live_storage_cell,
+};
 mod metadata_control;
 mod nested_append;
 mod return_coercions;
@@ -77,6 +81,7 @@ use typed_foreach::*;
 use switches::*;
 use includes::*;
 use exceptions::*;
+pub(crate) use control_exit::lower_static_type_error;
 use control_exit::*;
 use declarations::*;
 use instance_property_writes::*;
@@ -86,7 +91,7 @@ use metadata_control::*;
 use return_coercions::*;
 use static_property_helpers::*;
 
-pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error_expr};
+pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error_expr, lower_throw_access_error_of_class};
 pub(crate) use control_exit::terminate_return;
 // Shared with `crate::ir_lower::expr::unset`, which needs the same runtime-subclass accessor peel
 // for `__unset` that the write path needs for `__set`.

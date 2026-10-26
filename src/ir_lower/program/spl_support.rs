@@ -16,6 +16,7 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
         "SplFileInfo" => matches!(
             method_key,
             "__construct"
+                | "__debuginfo"
                 | "__tostring"
                 | "getpath"
                 | "getfilename"
@@ -71,6 +72,10 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "getmaxlinelen"
                 | "setmaxlinelen"
                 | "setcsvcontrol"
+                | "getcsvcontrol"
+                | "fflush"
+                | "flock"
+                | "fstat"
                 | "fgetcsv"
                 | "fputcsv"
         ),
@@ -119,6 +124,18 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
         "ArrayIterator" => matches!(
             method_key,
             "__construct"
+                | "__debuginfo"
+                | "natsort"
+                | "natcasesort"
+                | "__elephcstrnatcmp"
+                | "__elephcisnatspace"
+                | "__elephcstoragearray"
+                | "__elephcstoragearrayof"
+                | "__elephcstoragerawstore"
+                | "__elephcwritestoreproperty"
+                | "__elephcunsetstoreproperty"
+                | "__elephcwritestorageoffset"
+                | "__elephcremovestorageoffset"
                 | "current"
                 | "key"
                 | "next"
@@ -126,6 +143,12 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "valid"
                 | "seek"
                 | "count"
+                | "getflags"
+                | "setflags"
+                | "asort"
+                | "ksort"
+                | "uasort"
+                | "uksort"
                 | "offsetexists"
                 | "offsetget"
                 | "offsetset"
@@ -136,8 +159,29 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
         "ArrayObject" => matches!(
             method_key,
             "__construct"
+                | "__debuginfo"
+                | "natsort"
+                | "natcasesort"
+                | "__elephcstrnatcmp"
+                | "__elephcisnatspace"
+                | "__elephcstoragearray"
+                | "__elephcstoragearrayof"
+                | "__elephcstoragerawstore"
+                | "__elephcwritestoreproperty"
+                | "__elephcunsetstoreproperty"
+                | "__elephcwritestorageoffset"
+                | "__elephcremovestorageoffset"
                 | "getiterator"
                 | "count"
+                | "getflags"
+                | "setflags"
+                | "getiteratorclass"
+                | "setiteratorclass"
+                | "exchangearray"
+                | "asort"
+                | "ksort"
+                | "uasort"
+                | "uksort"
                 | "offsetexists"
                 | "offsetget"
                 | "offsetset"
@@ -213,9 +257,13 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "recoverfromcorruption"
                 | "iscorrupted"
                 | "__debuginfo"
+                | "__serialize"
+                | "__unserialize"
                 | "compare"
-                | "__elephcbestindex"
-                | "__elephcremoveat"
+                | "__elephcheapassert"
+                | "__elephcheapcompare"
+                | "__elephcheapfinish"
+                | "__elephcheapremovetop"
         ),
         "SplMaxHeap" | "SplMinHeap" => matches!(method_key, "compare"),
         "SplPriorityQueue" => matches!(
@@ -237,9 +285,13 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "recoverfromcorruption"
                 | "iscorrupted"
                 | "__debuginfo"
-                | "__elephcbestindex"
-                | "__elephcoutputat"
-                | "__elephcremoveat"
+                | "__serialize"
+                | "__unserialize"
+                | "__elephcheapassert"
+                | "__elephcheapcompare"
+                | "__elephcheapfinish"
+                | "__elephcheapremovetop"
+                | "__elephcheapoutput"
         ),
         "SplObjectStorage" => matches!(
             method_key,
@@ -396,6 +448,7 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
         "MultipleIterator" => matches!(
             method_key,
             "__construct"
+                | "__debuginfo"
                 | "getflags"
                 | "setflags"
                 | "attachiterator"
@@ -456,9 +509,25 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "getdepth"
                 | "getinneriterator"
                 | "getsubiterator"
+                | "beginiteration"
+                | "enditeration"
+                | "beginchildren"
+                | "endchildren"
+                | "nextelement"
                 | "__elephcadvance"
                 | "__elephcslotfordepth"
                 | "__elephcassumerecursiveiterator"
+        ),
+        "RecursiveTreeIterator" => matches!(
+            method_key,
+            "__construct"
+                | "getprefix"
+                | "setprefixpart"
+                | "getentry"
+                | "setpostfix"
+                | "getpostfix"
+                | "current"
+                | "key"
         ),
         "__ElephcAppendIteratorArrayIterator" => matches!(
             method_key,

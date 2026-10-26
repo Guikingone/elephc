@@ -157,7 +157,7 @@ pub(super) fn emit_reflection_assoc_array_default_to_result(
     ctx: &mut FunctionContext<'_>,
     entries: &[ReflectionDefaultAssocEntry],
 ) {
-    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Mixed);
+    emit_reflection_assoc_array_allocation(ctx, &PhpType::Mixed, entries.len());
     for entry in entries {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_default_value_as_mixed(ctx, &entry.value);

@@ -40,9 +40,10 @@ pub(super) fn lower_mixed_array_runtime_get(
     let receiver = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
     let warn_on_missing = expect_operand(inst, 2)?;
+    let object_done = emit_boxed_array_access_object_branch(ctx, inst, "offsetGet")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            hashes::materialize_hash_key_aarch64(ctx, key)?;
+            hash_keys_deferred::materialize_key(ctx, key, hashes::HashKeyNormalization::Php)?;
             if for_write {
                 abi::emit_load_int_immediate(ctx.emitter, "x3", i64::from(pending_append));
             } else {
@@ -51,7 +52,7 @@ pub(super) fn lower_mixed_array_runtime_get(
             ctx.load_value_to_reg(receiver, "x0")?;
         }
         Arch::X86_64 => {
-            hashes::materialize_hash_key_x86_64(ctx, key)?;
+            hash_keys_deferred::materialize_key(ctx, key, hashes::HashKeyNormalization::Php)?;
             if for_write {
                 abi::emit_load_int_immediate(ctx.emitter, "rcx", i64::from(pending_append));
             } else {
@@ -69,7 +70,9 @@ pub(super) fn lower_mixed_array_runtime_get(
         },
     );
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
-    store_if_result(ctx, inst)
+    store_if_result(ctx, inst)?;
+    if let Some(done) = object_done { ctx.emitter.label(&done); }
+    Ok(())
 }
 
 /// Lowers typed fetch-for-write parent reads of nested array writes (issue #555).
@@ -99,21 +102,24 @@ pub(super) fn lower_array_fetch_for_write_runtime_call(
     } else { hashes::HashKeyNormalization::Php };
     match receiver_ty {
         PhpType::Mixed | PhpType::Union(_) => {
+            let object_done = emit_boxed_array_access_object_branch(ctx, inst, "offsetGet")?;
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    hashes::materialize_hash_key_aarch64_with(ctx, key, normalization)?;
+                    hash_keys_deferred::materialize_key(ctx, key, normalization)?;
                     abi::emit_load_int_immediate(ctx.emitter, "x3", i64::from(pending_append));
                     ctx.load_value_to_reg(receiver, "x0")?;
                 }
                 Arch::X86_64 => {
-                    hashes::materialize_hash_key_x86_64_with(ctx, key, normalization)?;
+                    hash_keys_deferred::materialize_key(ctx, key, normalization)?;
                     abi::emit_load_int_immediate(ctx.emitter, "rcx", i64::from(pending_append));
                     ctx.load_value_to_reg(receiver, "rdi")?;
                 }
             }
             abi::emit_call_label(ctx.emitter, "__rt_mixed_array_get_for_write");
             cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
-            store_if_result(ctx, inst)
+            store_if_result(ctx, inst)?;
+            if let Some(done) = object_done { ctx.emitter.label(&done); }
+            Ok(())
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             let indexed = matches!(receiver_ty, PhpType::Array(_));
@@ -186,6 +192,7 @@ pub(super) fn lower_mixed_array_runtime_set(ctx: &mut FunctionContext<'_>, inst:
             )))
         }
     }
+    let object_done = emit_boxed_array_access_object_branch(ctx, inst, "offsetSet")?;
     let normalization = if matches!(inst.immediate, Some(Immediate::Bool(true))) {
         hashes::HashKeyNormalization::PhpAlreadyDiagnosed
     } else {
@@ -199,6 +206,7 @@ pub(super) fn lower_mixed_array_runtime_set(ctx: &mut FunctionContext<'_>, inst:
             lower_mixed_array_runtime_set_x86_64(ctx, receiver, key, value, normalization)?
         }
     }
+    if let Some(done) = object_done { ctx.emitter.label(&done); }
     Ok(())
 }
 
@@ -217,7 +225,7 @@ pub(super) fn lower_mixed_array_runtime_set_aarch64(
         emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
     }
     abi::emit_push_reg(ctx.emitter, "x0");
-    hashes::materialize_hash_key_aarch64_with(ctx, key, normalization)?;
+    hash_keys_deferred::materialize_key(ctx, key, normalization)?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
     ctx.load_value_to_reg(receiver, "x0")?;
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
@@ -241,7 +249,7 @@ pub(super) fn lower_mixed_array_runtime_set_x86_64(
         emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
     }
     abi::emit_push_reg(ctx.emitter, "rax");
-    hashes::materialize_hash_key_x86_64_with(ctx, key, normalization)?;
+    hash_keys_deferred::materialize_key(ctx, key, normalization)?;
     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
     ctx.load_value_to_reg(receiver, "rdi")?;
     abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");

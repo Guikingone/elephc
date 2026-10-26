@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
+//! - Captured instance descriptors own strings detached from their invoker result box.
 
 use super::*;
 
@@ -16,12 +17,15 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
     }
     let mut result_type = None;
     let mut instance_signature = None;
+    let mut instance_descriptor = false;
     let mut instance_return_alias = ReturnArgAlias::Unknown;
     let mut tracked_instance_descriptor_spread = false;
     let descriptor_signature = ctx.callable_param_signature(var).cloned();
     if let Some(target) = ctx.static_callable_local(var) {
         result_type = Some(static_callable_return_type(ctx, &target));
         instance_signature = instance_callable_signature(&target).cloned();
+        instance_descriptor = matches!(&target,
+            StaticCallableBinding::InstanceMethod { direct_call: false, .. });
         if let StaticCallableBinding::InstanceMethod { object, method, .. } = &target {
             if let Some(class_name) = instance_callable_object_class(ctx, object) {
                 instance_return_alias = class_method_return_arg_alias(
@@ -96,14 +100,18 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
     );
     let mut operands = vec![callable.value];
     operands.extend(arg_values.iter().copied());
-    let call = ctx.emit_value(
-        Op::ClosureCall,
-        operands,
-        callable_profile_immediate(),
-        result_type,
-        Op::ClosureCall.default_effects(),
-        Some(expr.span),
-    );
+    let call = if instance_descriptor {
+        // Captured instance-method descriptors detach an owned string from the
+        // invoker result box; raw closures keep their general return contract.
+        emit_descriptor_invoker_value(
+            ctx, Op::ClosureCall, operands, callable_profile_immediate(), result_type, expr.span,
+        )
+    } else {
+        ctx.emit_value(
+            Op::ClosureCall, operands, callable_profile_immediate(), result_type,
+            Op::ClosureCall.default_effects(), Some(expr.span),
+        )
+    };
     stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
     release_owned_call_arg_temporaries_with_roots(
         ctx,

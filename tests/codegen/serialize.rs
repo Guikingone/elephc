@@ -1543,12 +1543,11 @@ var_dump($u);
     );
 }
 
-/// `unserialize()` into a tagged `?int` property stores an int and a null as themselves, and
-/// raises PHP's `TypeError` for a string, float, bool or array instead of writing the wrong
-/// payload (#1629). The heap is not asserted clean: `unserialize()` of an object leaks on main
-/// whatever the property type (#1562).
+/// Nullable integer hydration preserves int/null and rejects incompatible wire values with PHP's
+/// catchable TypeError. Producer cells and discarded partial objects must retire on every error.
+
 #[test]
-fn test_unserialize_mismatched_value_into_nullable_int_property_raises_type_error() {
+fn test_unserialize_rejects_mismatched_value_into_nullable_int_property() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
 class C { public ?int $n = null; }
@@ -1559,8 +1558,8 @@ for ($i = 0; $i < 20 + $argc; $i++) {
         try {
             $o = unserialize('O:1:"C":1:{s:1:"n";' . $payload . '}');
             $out .= json_encode($o->n) . " ";
-        } catch (Throwable $error) {
-            $out .= get_class($error) . " ";
+        } catch (TypeError $e) {
+            $out .= $e->getMessage() . "|";
         }
     }
 }
@@ -1568,7 +1567,14 @@ echo $out, "\n";
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "7 null TypeError TypeError TypeError TypeError \n");
+    assert_eq!(out.stdout, concat!(
+        "7 null ",
+        "Cannot assign string to property C::$n of type ?int|",
+        "Cannot assign float to property C::$n of type ?int|",
+        "Cannot assign true to property C::$n of type ?int|",
+        "Cannot assign array to property C::$n of type ?int|\n",
+    ));
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
 }
 
 /// The exact wording of PHP 8.4's typed-property hydration `TypeError` for every mismatched

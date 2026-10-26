@@ -155,6 +155,117 @@ foreach ($child as $key => $value) {
     );
 }
 
+/// Verifies `RecursiveTreeIterator` renders php's ASCII tree prefix and postfix.
+///
+/// The default prefixes (`| `, `  `, `|-`, `\-`) are chosen per active level from each level's
+/// `hasNext()`, and `setPrefixPart()`/`setPostfix()` replace one part.
+#[test]
+fn test_recursive_tree_iterator_prefix_and_postfix() {
+    let out = compile_and_run(
+        r#"<?php
+$it = new RecursiveTreeIterator(new RecursiveArrayIterator(["a" => [1, 2], "b" => 3]));
+foreach ($it as $key => $value) {
+    echo "[$key] => $value\n";
+}
+$it2 = new RecursiveTreeIterator(new RecursiveArrayIterator(["a" => [1]]));
+$it2->setPostfix("!");
+$it2->setPrefixPart(RecursiveTreeIterator::PREFIX_END_LAST, "+");
+foreach ($it2 as $key => $value) {
+    echo "[$key] => $value\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "[a] => |-Array\n",
+            "[0] => | |-1\n",
+            "[1] => | \\-2\n",
+            "[b] => \\-3\n",
+            "[a] => +Array!\n",
+            "[0] =>   +1!\n",
+        )
+    );
+}
+
+/// Verifies `RecursiveTreeIterator::setPrefixPart()` rejects an out-of-range part index.
+#[test]
+fn test_recursive_tree_iterator_set_prefix_part_rejects_out_of_range() {
+    let out = compile_and_run(
+        r#"<?php
+$it = new RecursiveTreeIterator(new RecursiveArrayIterator([1]));
+try {
+    $it->setPrefixPart(6, "");
+} catch (ValueError $e) {
+    echo $e->getMessage(), "\n";
+}
+try {
+    $it->setPrefixPart(-1, "");
+} catch (ValueError $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "RecursiveTreeIterator::setPrefixPart(): Argument #1 ($part) must be a \
+             RecursiveTreeIterator::PREFIX_* constant\n",
+            "RecursiveTreeIterator::setPrefixPart(): Argument #1 ($part) must be a \
+             RecursiveTreeIterator::PREFIX_* constant\n",
+        )
+    );
+}
+
+/// Verifies php's begin/end-iteration and next-element hooks fire on a subclass.
+///
+/// `beginIteration()` fires once after the root frame exists but before the first advance,
+/// `nextElement()` fires before each yielded element, and `endIteration()` fires from the first
+/// exhausted `valid()` — matching php-src's `spl_recursive_it_*` traversal.
+#[test]
+fn test_recursive_iterator_iterator_traversal_hooks() {
+    let out = compile_and_run(
+        r#"<?php
+class HookedRecursiveIteratorIterator extends RecursiveIteratorIterator {
+    public function beginIteration(): void { echo "begin\n"; }
+    public function endIteration(): void { echo "end\n"; }
+    public function nextElement(): void { echo "nextElement\n"; }
+}
+$it = new HookedRecursiveIteratorIterator(new RecursiveArrayIterator([1, 2]));
+foreach ($it as $element) {
+    var_dump($element);
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "begin\nnextElement\nint(1)\nnextElement\nint(2)\nend\n"
+    );
+}
+
+/// Verifies `beginIteration()` can call `$this->next()` to skip the first element.
+///
+/// php's `next()` advances even from the not-yet-started state the hook runs in, so the loop
+/// resumes on the second element.
+#[test]
+fn test_recursive_iterator_iterator_begin_iteration_can_skip() {
+    let out = compile_and_run(
+        r#"<?php
+class SkipsFirstRecursiveIteratorIterator extends RecursiveIteratorIterator {
+    public function beginIteration(): void {
+        echo "begin\n";
+        $this->next();
+    }
+}
+$it = new SkipsFirstRecursiveIteratorIterator(new RecursiveArrayIterator([1, 2]));
+foreach ($it as $element) {
+    var_dump($element);
+}
+"#,
+    );
+    assert_eq!(out, "begin\nint(2)\n");
+}
+
 /// Verifies that recursive iterator iterator sees source mutation after rewind.
 #[test]
 fn test_recursive_iterator_iterator_sees_source_mutation_after_rewind() {

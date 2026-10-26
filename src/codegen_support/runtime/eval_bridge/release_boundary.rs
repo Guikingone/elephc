@@ -33,7 +33,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_eval_release_begin");
     abi::store_at_offset(emitter, result, THROWN);
     abi::load_at_offset(emitter, result, VALUE);
-    super::super::exceptions::emit_guarded_cleanup_call(emitter, "__rt_decref_mixed", result, THROWN);
+    super::super::exceptions::emit_guarded_cleanup_call(emitter, "__rt_eval_release_mixed_owner", result, THROWN);
     abi::store_at_offset(emitter, result, CAUGHT);
     abi::load_at_offset(emitter, result, THROWN);
     abi::emit_branch_if_int_result_zero(emitter, "__rt_eval_release_return");
@@ -44,6 +44,23 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, result, CAUGHT);
     abi::emit_frame_restore(emitter, FRAME);
     abi::emit_return(emitter);
+
+    // Object-owned eval edges may already have been reclaimed by the collector's sweep.
+    emitter.label("__rt_eval_release_mixed_owner");
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_gc_freeing_unreachable", 0);
+    let strict = "__rt_eval_release_mixed_strict";
+    match emitter.target.arch {
+        super::Arch::AArch64 => {
+            emitter.instruction(&format!("cbz {scratch}, {strict}"));           // ordinary release retains strict Mixed validation
+        }
+        super::Arch::X86_64 => {
+            emitter.instruction(&format!("test {scratch}, {scratch}"));         // inspect sweep state without clobbering the boxed value
+            emitter.instruction(&format!("jz {strict}"));                       // ordinary release retains strict Mixed validation
+        }
+    }
+    abi::emit_jump(emitter, "__rt_decref_any");
+    emitter.label(strict);
+    abi::emit_jump(emitter, "__rt_decref_mixed");
 }
 
 #[cfg(test)]
@@ -66,6 +83,8 @@ mod tests {
             // Count calls instead, proving release cannot bypass the containing native boundary.
             let call = if target.arch == super::super::Arch::AArch64 { "bl" } else { "call" };
             assert!(asm.contains("__rt_decref_mixed"), "{name}");
+            assert!(asm.contains("_gc_freeing_unreachable"), "{name}");
+            assert!(asm.contains("__rt_decref_any"), "{name}");
             assert_eq!(asm.lines().filter(|line| line.trim() == format!("{call} __rt_cleanup_invoke")).count(), 1, "{name}");
             assert!(!asm.lines().any(|line| line.trim() == format!("{call} __rt_decref_mixed")), "{name}");
             assert!(!asm.contains("__rt_throw_current"), "{name}");

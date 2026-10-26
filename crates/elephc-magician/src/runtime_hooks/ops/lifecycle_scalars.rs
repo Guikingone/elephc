@@ -150,14 +150,23 @@ macro_rules! impl_lifecycle_scalar_ops {
 
     /// Emits one PHP warning through the generated runtime diagnostic helper.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
-        // Magician submits complete diagnostics, unlike native fragment producers.
-        let terminated;
-        let message = if message.ends_with('\n') { message } else {
-            terminated = format!("{message}\n");
-            &terminated
-        };
+        // PHP renders a runtime diagnostic as `<Level>: <message>`. The eval bridge submits some
+        // messages without a level, so default those to `Warning: ` (php's E_WARNING) while leaving
+        // already-labelled notices/deprecations untouched. Magician submits complete diagnostics,
+        // unlike native fragment producers, so a trailing newline is added when missing.
+        let labelled = ["Warning: ", "Notice: ", "Deprecated: ", "Fatal error: "]
+            .iter()
+            .any(|prefix| message.starts_with(prefix));
+        let mut owned = String::with_capacity(message.len() + 10);
+        if !labelled {
+            owned.push_str("Warning: ");
+        }
+        owned.push_str(message);
+        if !owned.ends_with('\n') {
+            owned.push('\n');
+        }
         unsafe {
-            __elephc_eval_warning(message.as_ptr(), message.len() as u64);
+            __elephc_eval_warning(owned.as_ptr(), owned.len() as u64);
         }
         Ok(())
     }

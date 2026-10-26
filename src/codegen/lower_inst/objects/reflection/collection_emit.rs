@@ -37,9 +37,10 @@ pub(super) fn emit_reflection_property_hook_array(
     ctx: &mut FunctionContext<'_>,
     members: &[(String, ReflectionListedMember)],
 ) -> Result<()> {
-    emit_empty_assoc_array_literal_to_result(
+    emit_reflection_assoc_array_allocation(
         ctx,
         &PhpType::Object("ReflectionMethod".to_string()),
+        members.len(),
     );
     for (key, member) in members {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
@@ -76,7 +77,7 @@ pub(super) fn emit_reflection_constant_array(
     ctx: &mut FunctionContext<'_>,
     members: &[ReflectionConstantMember],
 ) -> Result<()> {
-    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Mixed);
+    emit_reflection_assoc_array_allocation(ctx, &PhpType::Mixed, members.len());
     for member in members {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_constant_value_as_mixed(ctx, &member.value);
@@ -87,7 +88,9 @@ pub(super) fn emit_reflection_constant_array(
 
 /// Allocates and populates a name-keyed map of full ReflectionClass objects.
 pub(super) fn emit_reflection_class_array(ctx: &mut FunctionContext<'_>, names: &[String]) -> Result<()> {
-    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Object("ReflectionClass".to_string()));
+    emit_reflection_assoc_array_allocation(
+        ctx, &PhpType::Object("ReflectionClass".to_string()), names.len(),
+    );
     for name in names {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         let metadata = reflection_class_metadata_for_name(ctx, name)?;
@@ -219,7 +222,7 @@ pub(super) fn emit_reflection_string_assoc_array(
     ctx: &mut FunctionContext<'_>,
     entries: &[(String, String)],
 ) {
-    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Str);
+    emit_reflection_assoc_array_allocation(ctx, &PhpType::Str, entries.len());
     for (key, value) in entries {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_string_literal_default_to_result(ctx, value);
@@ -260,7 +263,7 @@ pub(super) fn emit_reflection_default_property_array(
     ctx: &mut FunctionContext<'_>,
     members: &[ReflectionDefaultPropertyMember],
 ) {
-    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Mixed);
+    emit_reflection_assoc_array_allocation(ctx, &PhpType::Mixed, members.len());
     for member in members {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_default_value_as_mixed(ctx, &member.value);
@@ -273,7 +276,7 @@ pub(super) fn emit_reflection_static_property_array(
     ctx: &mut FunctionContext<'_>,
     members: &[ReflectionStaticPropertyMember],
 ) {
-    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Mixed);
+    emit_reflection_assoc_array_allocation(ctx, &PhpType::Mixed, members.len());
     for member in members {
         let skip_label = emit_skip_if_static_property_uninitialized(ctx, member);
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
@@ -323,3 +326,23 @@ pub(super) fn emit_skip_if_static_property_uninitialized(
     Some(skip_label)
 }
 
+
+/// Allocates metadata maps without reserving sixteen buckets for every empty slot.
+/// Keep a power-of-two capacity and spare buckets for the known entries; maps
+/// exposed by Reflection getters continue to grow through the ordinary hash runtime.
+pub(super) fn emit_reflection_assoc_array_allocation(
+    ctx: &mut FunctionContext<'_>,
+    value_type: &PhpType,
+    entry_count: usize,
+) {
+    let capacity = (entry_count * 2).next_power_of_two();
+    let capacity_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let value_tag_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_int_immediate(ctx.emitter, capacity_reg, capacity as i64);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        value_tag_reg,
+        runtime_value_tag(&value_type.codegen_repr()) as i64,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+}

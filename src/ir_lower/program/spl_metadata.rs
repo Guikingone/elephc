@@ -18,6 +18,14 @@ pub(super) fn push_builtin_spl_metadata_methods(
     let mut current = Some(class_name);
     while let Some(name) = current {
         push_builtin_spl_interface_metadata_methods(methods, module, name);
+        // Native debug descriptors invoke this hook without a PHP source method call.
+        if let Some(implementation) = module.class_infos.get(name)
+            .and_then(|info| info.method_impl_classes.get("__debuginfo"))
+        {
+            if is_supported_builtin_spl_method(implementation, "__debuginfo") {
+                methods.push((implementation.clone(), "__debuginfo".to_string()));
+            }
+        }
         for method_name in required_builtin_spl_metadata_methods(name) {
             let method_key = php_method_key(method_name);
             if is_supported_builtin_spl_method(name, &method_key) {
@@ -71,6 +79,7 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
     match class_name {
         "EmptyIterator" => &["current", "key", "next", "rewind", "valid"],
         "ArrayIterator" => &[
+            "getArrayCopy",
             "current",
             "key",
             "next",
@@ -84,6 +93,7 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
             "count",
         ],
         "ArrayObject" => &[
+            "getArrayCopy",
             "getIterator",
             "count",
             "offsetExists",
@@ -168,6 +178,7 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
         ],
         "MultipleIterator" => &["current", "key", "next", "rewind", "valid"],
         "__ElephcAppendIteratorArrayIterator" => &[
+            "getArrayCopy",
             "current",
             "key",
             "next",
@@ -214,6 +225,7 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
         "RecursiveRegexIterator" => &["accept", "current", "key", "hasChildren", "getChildren"],
         "ParentIterator" => &["accept", "getChildren"],
         "RecursiveIteratorIterator" => &[
+            "__construct",
             "current",
             "key",
             "next",
@@ -221,6 +233,7 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
             "valid",
             "getInnerIterator",
         ],
+        "RecursiveTreeIterator" => &["__construct", "current", "key"],
         "SplFileInfo" => &["__toString"],
         "SplFileObject" => &[
             "current",

@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Runtime-managed payload rejection and Mixed boxing preserve ownership.
+//! - SPL list clones split native storage and reset their cursor before boxing.
 //! - The Mixed cell is built by hand so the allocator's single clone reference is
 //!   TRANSFERRED into it. Boxing through `__rt_mixed_from_value` would retain a second
 //!   owner that nothing releases, and compensating for that with a refcount decrement
@@ -39,6 +40,16 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r11", "_class_gc_desc_count", 0);
     emitter.instruction("cmp rax, r11");                                        // is this class id inside the descriptor table?
     emitter.instruction("jae __rt_object_clone_shallow_boxed_null_x86");        // unknown class layouts cannot be cloned by the eval bridge
+    // -- an intrinsic container supplies its own clone adapter --
+    abi::emit_symbol_address(emitter, "r11", "_class_clone_adapter_ptrs");
+    emitter.instruction("mov r11, QWORD PTR [r11 + rax * 8]");                  // load this class's clone adapter, or 0
+    emitter.instruction("test r11, r11");                                       // does this class have a clone adapter?
+    emitter.instruction("jz __rt_object_clone_shallow_boxed_generic_x86");      // no adapter: fall through to the generic property copy
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the source payload to the adapter
+    emitter.instruction("call r11");                                            // adapter returns the finished clone payload
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the clone payload for the shared boxing step
+    emitter.instruction("jmp __rt_object_clone_shallow_boxed_box_x86");         // box the adapter's clone
+    emitter.label("__rt_object_clone_shallow_boxed_generic_x86");
     abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_ptrs");
     emitter.instruction("mov r11, QWORD PTR [r11 + rax * 8]");                  // load the class property-tag descriptor pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save descriptor pointer for the property-copy loop
@@ -102,7 +113,7 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, 6");                                          // does the slot hold a retained object payload?
     emitter.instruction("je __rt_object_clone_shallow_boxed_retain_x86");       // retained object slots need an extra owner reference
     emitter.instruction("cmp r11, 7");                                          // does the slot hold a retained boxed Mixed payload?
-    emitter.instruction("je __rt_object_clone_shallow_boxed_retain_x86");       // retained Mixed slots need an extra owner reference
+    emitter.instruction("je __rt_object_clone_shallow_boxed_mixed_x86");        // acquire an active logical view before retaining a physical cell
     emitter.instruction("jmp __rt_object_clone_shallow_boxed_next_x86");        // scalar slots are copied without ownership changes
     emitter.label("__rt_object_clone_shallow_boxed_reference_x86");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the property index across reference-cell cloning
@@ -116,6 +127,8 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.label("__rt_object_clone_shallow_boxed_string_x86");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve property index across string persistence
     emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // preserve the low-word slot offset across the helper
+    emitter.instruction("test rax, rax");                                       // is this string slot actually null?
+    emitter.instruction("jz __rt_object_clone_shallow_boxed_next_x86");         // a null string slot stays null on the clone instead of dereferencing null
     emitter.instruction("call __rt_str_persist");                               // duplicate the string payload for clone ownership
     emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // restore the low-word slot offset after persistence
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the clone object pointer after persistence
@@ -123,6 +136,24 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r8 + rcx + 8], rdx");                   // install the persisted string length on the clone
     emitter.instruction("jmp __rt_object_clone_shallow_boxed_next_x86");        // continue with the next declared property
 
+    emitter.label("__rt_object_clone_shallow_boxed_mixed_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the index across logical-view lookup
+    emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // preserve the low-word property offset
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_native_property_read_fn", 0);
+    emitter.instruction("test r11, r11");                                       // inspect the optional logical-view callback
+    emitter.instruction("jz __rt_object_clone_shallow_boxed_mixed_ordinary_x86"); // ordinary clones retain their copied cell
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // supply the original receiver
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // select the copied physical slot
+    emitter.instruction("call r11");                                            // acquire the logical property as an independent owner
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // recover the property offset
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // recover the clone receiver
+    emitter.instruction("mov QWORD PTR [r8 + rcx], rax");                       // install the acquired logical value
+    emitter.instruction("jmp __rt_object_clone_shallow_boxed_next_x86");        // continue after logical ownership is installed
+    emitter.label("__rt_object_clone_shallow_boxed_mixed_ordinary_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // restore the ordinary retain path's index
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // recover the property offset
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // recover the clone receiver
+    emitter.instruction("mov rax, QWORD PTR [r8 + rcx]");                       // reload the copied physical cell for normal retention
     emitter.label("__rt_object_clone_shallow_boxed_retain_x86");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve property index across the retain helper
     emitter.instruction("mov rdi, rax");                                        // pass the copied heap payload to the retain helper
@@ -157,6 +188,14 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r11 + r10], 0");                        // clear the clone's dynamic-property hash slot
 
     emitter.label("__rt_object_clone_shallow_boxed_box_x86");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_heap_scope_clone_fn", 0);
+    emitter.instruction("test r10, r10");                                       // ordinary clones have no active native heap view to materialize
+    emitter.instruction("jz __rt_heap_scope_clone_boxed_skip_x86");             // keep the generic clone path when no mutation scope is active
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // supply the original receiver whose scope owns the logical view
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // finish the copied clone before any PHP clone hook can observe it
+    emitter.instruction("call r10");                                            // materialize the active heap prefix through the optional native callback
+    emitter.label("__rt_heap_scope_clone_boxed_skip_x86");
+    spl_list_clone::emit_x86_64(emitter);
     emitter.instruction("mov rax, 24");                                         // a Mixed cell stores a runtime tag and two payload words
     emitter.instruction("call __rt_heap_alloc");                                // allocate the Mixed cell that will own the fresh clone
     emitter.instruction(&x86_64_mixed_heap_kind_instruction());                 // materialize the Mixed-cell heap kind marker

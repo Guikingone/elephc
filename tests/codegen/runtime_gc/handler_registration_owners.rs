@@ -134,3 +134,43 @@ echo "done";
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+/// Throwing handlers release the native diagnostic argument container on every invocation.
+#[test]
+fn test_core_error_handler_throw_releases_argument_container() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+error_reporting(0);
+set_error_handler(function(int $severity, string $message): bool {
+    throw new Exception('stop');
+}, E_USER_WARNING);
+for ($i = 0; $i < 3; $i++) {
+    try { trigger_error('diagnostic', E_USER_WARNING); }
+    catch (Exception $error) { echo $error->getMessage(), "|"; unset($error); }
+}
+restore_error_handler();
+echo "done";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "stop|stop|stop|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An exception preserves a replacement registration while retiring the old call arguments.
+#[test]
+fn test_core_error_handler_throw_preserves_replacement_registration() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+error_reporting(0);
+set_error_handler(function(int $severity, string $message): bool {
+    set_error_handler(function(int $level, string $text): bool { echo "replacement|"; return true; });
+    throw new Exception('stop');
+});
+try { trigger_error('first', E_USER_WARNING); }
+catch (Exception $error) { echo $error->getMessage(), "|"; unset($error); }
+trigger_error('second', E_USER_WARNING);
+restore_error_handler();
+restore_error_handler();
+echo "done";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "stop|replacement|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

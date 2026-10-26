@@ -51,6 +51,9 @@ fn recursive_iterator_iterator_properties() -> Vec<ClassProperty> {
         storage_property("depth", TypeExpr::Int),
         storage_property("slot", TypeExpr::Int),
         storage_property("currentValid", TypeExpr::Bool),
+        // php guards `beginIteration()`/`endIteration()` with an `in_iteration` flag so a nested
+        // rewind cannot re-fire the begin hook and an exhausted `valid()` fires the end hook once.
+        storage_property("inIteration", TypeExpr::Bool),
     ]
 }
 
@@ -60,7 +63,9 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
         method_with_body(
             "__construct",
             vec![
-                param("iterator", named_type("RecursiveIterator")),
+                // PHP declares this as `Traversable`; the constructor validates at runtime that a
+                // `RecursiveIterator` was supplied, so the stored root goes through the assume hook.
+                param("iterator", named_type("Traversable")),
                 param_default("mode", TypeExpr::Int, int_expr(0)),
                 param_default("flags", TypeExpr::Int, int_expr(0)),
             ],
@@ -87,7 +92,10 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
         method_with_body(
             "getSubIterator",
             vec![param_default("level", TypeExpr::Int, int_expr(-1))],
-            Some(TypeExpr::Nullable(Box::new(named_type("RecursiveIterator")))),
+            // php declares `?RecursiveIterator`, but the active sub-iterator is a caching iterator
+            // whose `hasNext()` is not on that interface, and user code (`getArrayCopy()`) reaches
+            // past it too. A `mixed` result defers the member lookup to runtime dispatch.
+            Some(mixed_type()),
             recursive_iterator_iterator_get_sub_iterator_body(),
         ),
         method_with_body(
@@ -108,6 +116,12 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
             Some(named_type("RecursiveIterator")),
             return_body(var_expr("iterator")),
         ),
+        // php's traversal hooks; the traversal calls them, subclasses override them.
+        method_with_body("beginIteration", Vec::new(), Some(TypeExpr::Void), Vec::new()),
+        method_with_body("endIteration", Vec::new(), Some(TypeExpr::Void), Vec::new()),
+        method_with_body("beginChildren", Vec::new(), Some(TypeExpr::Void), Vec::new()),
+        method_with_body("endChildren", Vec::new(), Some(TypeExpr::Void), Vec::new()),
+        method_with_body("nextElement", Vec::new(), Some(TypeExpr::Void), Vec::new()),
     ]
 }
 

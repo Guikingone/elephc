@@ -28,6 +28,8 @@ mod intrinsics;
 mod redirects;
 #[path = "spl/exceptions.rs"]
 mod exceptions;
+#[path = "spl/phar_arity.rs"]
+mod phar_arity;
 #[path = "spl/filesystem.rs"]
 mod filesystem;
 #[path = "spl/recursive.rs"]
@@ -36,6 +38,16 @@ mod recursive;
 mod regex;
 #[path = "spl/storage.rs"]
 mod storage;
+mod storage_append;
+mod storage_subclasses;
+mod object_property_append;
+
+#[path = "spl/compliance_1806.rs"]
+mod compliance_1806;
+
+#[path = "spl/object_projection.rs"]
+mod object_projection;
 
 /// Large offset TypeError message ownership regressions.
+#[path = "spl/offset_errors.rs"]
 mod offset_errors;

@@ -92,6 +92,16 @@ pub(super) fn check(
 /// [`null_probe_env`]): probing storage that may not exist is exactly what `isset()` is for, and
 /// PHP answers `false` rather than warning.
 fn check_isset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
+    if let ExprKind::Variable(name) = &arg.kind {
+        if checker.null_probe_scope_is_top_level
+            && !checker.name_is_seeded_program_storage(name)
+            && !checker.program_global_names.contains(name)
+            && !crate::names::is_generated_local_name(name)
+            && arg.span.line != 0
+        {
+            checker.local_presence_probe_sites.insert(arg.span);
+        }
+    }
     let probed = null_probe_env(checker, arg, env);
     let env = probed.as_ref().unwrap_or(env);
     if let ExprKind::PropertyAccess { object, .. }

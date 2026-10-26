@@ -103,6 +103,37 @@ pub(crate) fn lower_object_prop_value(
     store_if_result(ctx, inst)
 }
 
+/// Materializes borrowed object/name/value inputs for serialized property restoration.
+pub(crate) fn lower_object_restore_property(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_object_restore_property", 3)?;
+    let value = expect_operand(inst, 2)?;
+    let ty = ctx.load_value_to_result(value)?.codegen_repr();
+    if ty != PhpType::Mixed {
+        return Err(crate::codegen::CodegenIrError::unsupported("property restoration requires a boxed value"));
+    }
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    ctx.load_value_to_result(expect_operand(inst, 1)?)?;
+    let (name, length) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, name, length);
+    emit_object_pointer_from_operand(ctx, expect_operand(inst, 0)?)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_pop_reg(ctx.emitter, "x3");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // raw receiver is the first C argument
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            abi::emit_pop_reg(ctx.emitter, "rcx");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_object_restore_property");
+    store_if_result(ctx, inst)
+}
+
 /// Materializes the object pointer in the first argument register and the property
 /// index in the second, evaluating the index FIRST so the object pointer is not
 /// clobbered by the index load.

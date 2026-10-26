@@ -8,6 +8,8 @@
 //! - Separates callable metadata, class reachability, static-member references, and dynamic references.
 
 mod callables;
+mod debug_info;
+mod intrinsic_wrappers;
 mod classes;
 mod dynamic_references;
 mod static_members;
@@ -22,6 +24,8 @@ use crate::types::{ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 use std::collections::{HashMap, HashSet};
 
 pub(super) use callables::*;
+pub(super) use debug_info::*;
+pub(super) use intrinsic_wrappers::*;
 pub(super) use classes::*;
 pub(super) use dynamic_references::*;
 pub(super) use static_members::*;

@@ -29,9 +29,10 @@
 //!   payload addresses differ by at least 24 > 16. That makes the mapping exact
 //!   with no probing, no collisions, no capacity failure mode and no rehash — and
 //!   it needs no allocation of its own, so it cannot recurse into the allocator.
-//! - IT HOLDS NO OWNERSHIP. The table stores a handle keyed BY POSITION; it never
-//!   stores an object pointer, never increments a refcount and is never scanned as
-//!   a GC root, so it cannot keep an object alive or resurrect a freed one. A slot
+//! - IT HOLDS NO OWNERSHIP. The forward table stores handles keyed BY POSITION;
+//!   the inverse table borrows payload pointers keyed by handle for shutdown's
+//!   object-store traversal. Neither table increments refcounts or is scanned as
+//!   a GC root, so neither can keep an object alive or resurrect a freed one. A slot
 //!   is cleared the moment its block is freed, and `acquire` unconditionally
 //!   overwrites the slot it targets, so a granule reused by a later allocation can
 //!   never report a previous tenant's handle.
@@ -39,11 +40,12 @@
 //!   `_obj_handle_free` and popped before a fresh handle is minted, so
 //!   `$a = new P(); $b = new P(); unset($a); unset($b);` hands the next two objects
 //!   `#2` then `#1`, exactly as PHP 8.5 does.
-//! - FREE-STACK CAPACITY CANNOT OVERFLOW. The number of distinct handles ever
-//!   minted equals the peak number of simultaneously live objects (reuse pops
-//!   before minting), and each live object owns at least 24 heap bytes, so at most
-//!   `heap_size / 24` handles can exist. `_obj_handle_free` is sized
-//!   `heap_size / 24 + 16` entries, which is that bound plus slack.
+//! - FREE-STACK CAPACITY CANNOT OVERFLOW. During ordinary execution, reuse pops
+//!   before minting, so at most `heap_size / 24` distinct handles are needed.
+//!   `_obj_handle_free` reserves that bound plus slack. Shutdown bypasses both
+//!   reuse and free-stack pushes, matching php-src's object-store no-reuse flag.
+//!   Its monotonically increasing identities can exceed the ordinary peak; the
+//!   inverse table then grows in separately owned, non-GC metadata storage.
 //! - HANDLE 0 MEANS "NO HANDLE". A block that never went through
 //!   `__rt_object_handle_acquire` reads back 0, which renders as `#0` rather than
 //!   as a plausible-looking small integer — a missed allocation site is meant to
@@ -74,25 +76,161 @@ pub(crate) fn emit_object_handles(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emit_object_handle_acquire_arm64(emitter);
+            emit_object_handle_reserve_arm64(emitter);
+            emit_object_handle_bind_arm64(emitter);
             emit_object_handle_of_arm64(emitter);
             emit_object_handle_release_arm64(emitter);
             emit_spl_object_hash_arm64(emitter);
         }
         Arch::X86_64 => {
             emit_object_handle_acquire_x86_64(emitter);
+            emit_object_handle_reserve_x86_64(emitter);
+            emit_object_handle_bind_x86_64(emitter);
             emit_object_handle_of_x86_64(emitter);
             emit_object_handle_release_x86_64(emitter);
             emit_spl_object_hash_x86_64(emitter);
         }
     }
+    super::object_store::emit_object_store(emitter);
+    super::object_store_growth::emit_object_store_growth(emitter);
+}
+
+/// Emits the AArch64 `__rt_object_handle_reserve`.
+///
+/// Mints or pops one handle WITHOUT binding it to a payload: php numbers a `new` receiver
+/// BEFORE evaluating the constructor arguments, so a nested
+/// `new ArrayObject(new ArrayObject($a))` numbers the outer object first. The lowering
+/// reserves the handle first and binds it once the payload exists
+/// (`__rt_object_handle_bind`).
+///
+/// Input: none. Output: `x0` = the reserved handle (the pool starts at 1).
+fn emit_object_handle_reserve_arm64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: object_handle_reserve ---");
+    emitter.label_global("__rt_object_handle_reserve");
+
+    emitter.instruction("stp x11, x12, [sp, #-32]!");
+    emitter.instruction("stp x13, x14, [sp, #16]");
+
+    abi::emit_symbol_address(emitter, "x11", "_obj_handle_free_top");
+    emitter.instruction("ldr x12, [x11]");
+    emitter.instruction("cbz x12, __rt_object_handle_reserve_fresh");
+    emitter.instruction("sub x12, x12, #1");
+    emitter.instruction("str x12, [x11]");
+    abi::emit_symbol_address(emitter, "x13", "_obj_handle_free");
+    emitter.instruction("ldr w14, [x13, x12, lsl #2]");
+    emitter.instruction("b __rt_object_handle_reserve_done");
+
+    emitter.label("__rt_object_handle_reserve_fresh");
+    abi::emit_symbol_address(emitter, "x13", "_obj_handle_next");
+    emitter.instruction("ldr x14, [x13]");
+    emitter.instruction("add x12, x14, #1");
+    emitter.instruction("str x12, [x13]");
+
+    emitter.label("__rt_object_handle_reserve_done");
+    emitter.instruction("mov x0, x14");
+    emitter.instruction("ldp x13, x14, [sp, #16]");
+    emitter.instruction("ldp x11, x12, [sp], #32");
+    emitter.instruction("ret");
+}
+
+/// Emits the AArch64 `__rt_object_handle_bind`.
+///
+/// Binds a previously RESERVED handle to a freshly allocated payload — the second half of
+/// php's numbering order, run after the constructor arguments have been evaluated.
+///
+/// Input: `x0` = object payload pointer, `x1` = the reserved handle. Output: none — both
+/// input registers are preserved.
+fn emit_object_handle_bind_arm64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: object_handle_bind ---");
+    emitter.label_global("__rt_object_handle_bind");
+
+    emitter.instruction("stp x9, x10, [sp, #-16]!");
+    emitter.instruction("cbz x0, __rt_object_handle_bind_done");
+    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    emitter.instruction("subs x10, x0, x9");
+    emitter.instruction("b.lo __rt_object_handle_bind_done");
+    emitter.instruction("lsr x10, x10, #4");
+    abi::emit_symbol_address(emitter, "x9", "_obj_handle_index");
+    emitter.instruction("str w1, [x9, x10, lsl #2]");
+
+    emitter.label("__rt_object_handle_bind_done");
+    emitter.instruction("ldp x9, x10, [sp], #16");
+    emitter.instruction("ret");
+}
+
+/// Emits the x86_64 `__rt_object_handle_reserve` — see the AArch64 arm for the contract.
+fn emit_object_handle_reserve_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: object_handle_reserve ---");
+    emitter.label_global("__rt_object_handle_reserve");
+
+    emitter.instruction("push r8");
+    emitter.instruction("push r9");
+    emitter.instruction("push r10");
+    emitter.instruction("push rcx");
+
+    abi::emit_symbol_address(emitter, "r8", "_obj_handle_free_top");
+    emitter.instruction("mov rcx, QWORD PTR [r8]");
+    emitter.instruction("test rcx, rcx");
+    emitter.instruction("jz __rt_object_handle_reserve_fresh");
+    emitter.instruction("sub rcx, 1");
+    emitter.instruction("mov QWORD PTR [r8], rcx");
+    abi::emit_symbol_address(emitter, "r9", "_obj_handle_free");
+    emitter.instruction("mov r10d, DWORD PTR [r9 + rcx * 4]");
+    emitter.instruction("jmp __rt_object_handle_reserve_done");
+
+    emitter.label("__rt_object_handle_reserve_fresh");
+    abi::emit_symbol_address(emitter, "r9", "_obj_handle_next");
+    emitter.instruction("mov r10, QWORD PTR [r9]");
+    emitter.instruction("mov rcx, r10");
+    emitter.instruction("add rcx, 1");
+    emitter.instruction("mov QWORD PTR [r9], rcx");
+
+    emitter.label("__rt_object_handle_reserve_done");
+    emitter.instruction("mov rax, r10");
+    emitter.instruction("pop rcx");
+    emitter.instruction("pop r10");
+    emitter.instruction("pop r9");
+    emitter.instruction("pop r8");
+    emitter.instruction("ret");
+}
+
+/// Emits the x86_64 `__rt_object_handle_bind` — see the AArch64 arm for the contract.
+fn emit_object_handle_bind_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: object_handle_bind ---");
+    emitter.label_global("__rt_object_handle_bind");
+
+    emitter.instruction("push rdx");
+    emitter.instruction("push r8");
+    emitter.instruction("push r11");
+
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_object_handle_bind_done");
+    abi::emit_symbol_address(emitter, "r11", "_heap_buf");
+    emitter.instruction("cmp rax, r11");
+    emitter.instruction("jb __rt_object_handle_bind_done");
+    emitter.instruction("mov rdx, rax");
+    emitter.instruction("sub rdx, r11");
+    emitter.instruction("shr rdx, 4");
+    abi::emit_symbol_address(emitter, "r8", "_obj_handle_index");
+    emitter.instruction("mov DWORD PTR [r8 + rdx * 4], esi");
+
+    emitter.label("__rt_object_handle_bind_done");
+    emitter.instruction("pop r11");
+    emitter.instruction("pop r8");
+    emitter.instruction("pop rdx");
+    emitter.instruction("ret");
 }
 
 /// Emits the AArch64 `__rt_object_handle_acquire`.
 ///
 /// Input: `x0` = freshly allocated object payload pointer.
-/// Output: none — `x0` and every other register are preserved, so the helper can be
-/// dropped straight after a kind stamp without disturbing the allocation site.
-/// Contains no nested `bl`, so it returns with `ret` and never clobbers `x30`.
+/// Output: none — visible integer and vector registers are preserved, so the helper
+/// can follow a kind stamp without disturbing constructor arguments. The rare inverse
+/// growth path preserves volatile registers too; this frame saves the original linkage.
 fn emit_object_handle_acquire_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: object_handle_acquire ---");
@@ -101,6 +239,7 @@ fn emit_object_handle_acquire_arm64(emitter: &mut Emitter) {
     emitter.instruction("stp x9, x10, [sp, #-64]!");                            // preserve the scratch registers this helper reuses
     emitter.instruction("stp x11, x12, [sp, #16]");                             // preserve the free-stack scratch pair
     emitter.instruction("stp x13, x14, [sp, #32]");                             // preserve the table-address and handle scratch pair
+    emitter.instruction("str x30, [sp, #56]");                                  // preserve linkage across the rare inverse-table growth call
     emitter.instruction("str x15, [sp, #48]");                                  // preserve the fresh-handle increment scratch
 
     emitter.instruction("cbz x0, __rt_object_handle_acquire_done");             // a null allocation carries no identity
@@ -109,6 +248,8 @@ fn emit_object_handle_acquire_arm64(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_object_handle_acquire_done");                // reject pointers that do not belong to the managed heap
     emitter.instruction("lsr x10, x10, #4");                                    // x10 = 16-byte granule index of this block
 
+    abi::emit_load_symbol_to_reg(emitter, "x15", "_obj_handle_shutdown", 0);
+    emitter.instruction("cbnz x15, __rt_object_handle_acquire_fresh");          // php-src never reuses object handles during shutdown traversal
     abi::emit_symbol_address(emitter, "x11", "_obj_handle_free_top");
     emitter.instruction("ldr x12, [x11]");                                      // x12 = number of released handles waiting for reuse
     emitter.instruction("cbz x12, __rt_object_handle_acquire_fresh");           // no released handle to reuse — mint the next fresh one
@@ -121,14 +262,29 @@ fn emit_object_handle_acquire_arm64(emitter: &mut Emitter) {
     emitter.label("__rt_object_handle_acquire_fresh");
     abi::emit_symbol_address(emitter, "x13", "_obj_handle_next");
     emitter.instruction("ldr x14, [x13]");                                      // x14 = next never-used handle (the pool starts at 1)
+    emitter.instruction("lsr x15, x14, #32");                                   // object-store handles must fit the shared unsigned 32-bit index
+    emitter.instruction("cbz x15, __rt_object_handle_acquire_valid");           // keep the failure branch within this helper's conditional range
+    emitter.instruction("b __rt_heap_allocation_failed");                       // refuse exhausted handles before wrapping to zero
+    emitter.label("__rt_object_handle_acquire_valid");
     emitter.instruction("add x15, x14, #1");                                    // advance the never-used handle cursor
     emitter.instruction("str x15, [x13]");                                      // publish the advanced cursor
 
     emitter.label("__rt_object_handle_acquire_store");
+    abi::emit_load_symbol_to_reg(emitter, "x15", "_obj_handle_capacity", 0);
+    emitter.instruction("cmp x14, x15");                                        // compare the acquired identity against reserved inverse storage
+    emitter.instruction("b.lo __rt_object_handle_acquire_capacity_ready");      // ordinary pool reuse needs no C allocation
+    emitter.instruction("bl __rt_object_store_grow");                           // preserve all codegen-visible registers while extending storage
+    emitter.label("__rt_object_handle_acquire_capacity_ready");
     abi::emit_symbol_address(emitter, "x13", "_obj_handle_index");
     emitter.instruction("str w14, [x13, x10, lsl #2]");                         // bind this heap granule to the acquired handle
+    abi::emit_load_symbol_to_reg(emitter, "x13", "_obj_handle_live_ptr", 0);
+    emitter.instruction("cbnz x13, __rt_object_handle_acquire_inverse_ready");  // prefer grown storage once it exists
+    abi::emit_symbol_address(emitter, "x13", "_obj_handle_live");
+    emitter.label("__rt_object_handle_acquire_inverse_ready");
+    emitter.instruction("str x0, [x13, x14, lsl #3]");                          // borrow this live payload under its PHP object-store handle
 
     emitter.label("__rt_object_handle_acquire_done");
+    emitter.instruction("ldr x30, [sp, #56]");                                  // restore the original caller linkage after any capacity growth
     emitter.instruction("ldr x15, [sp, #48]");                                  // restore the fresh-handle increment scratch
     emitter.instruction("ldp x13, x14, [sp, #32]");                             // restore the table-address and handle scratch pair
     emitter.instruction("ldp x11, x12, [sp, #16]");                             // restore the free-stack scratch pair
@@ -190,7 +346,14 @@ fn emit_object_handle_release_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldr w14, [x13, x10, lsl #2]");                         // load the handle bound to this granule
     emitter.instruction("cbz w14, __rt_object_handle_release_done");            // non-object blocks leave the pool untouched
     emitter.instruction("str wzr, [x13, x10, lsl #2]");                         // unbind the granule so a reused block starts handle-less
+    abi::emit_load_symbol_to_reg(emitter, "x13", "_obj_handle_live_ptr", 0);
+    emitter.instruction("cbnz x13, __rt_object_handle_release_inverse_ready");  // clear the same inverse storage used at acquisition
+    abi::emit_symbol_address(emitter, "x13", "_obj_handle_live");
+    emitter.label("__rt_object_handle_release_inverse_ready");
+    emitter.instruction("str xzr, [x13, x14, lsl #3]");                         // retire the borrowed payload before its handle can be reused
 
+    abi::emit_load_symbol_to_reg(emitter, "x13", "_obj_handle_shutdown", 0);
+    emitter.instruction("cbnz x13, __rt_object_handle_release_done");           // retired shutdown identities never enter the bounded reuse stack
     abi::emit_symbol_address(emitter, "x11", "_obj_handle_free_top");
     emitter.instruction("ldr x12, [x11]");                                      // x12 = current released-handle stack depth
     abi::emit_symbol_address(emitter, "x13", "_obj_handle_free");
@@ -231,6 +394,9 @@ fn emit_object_handle_acquire_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rdx, r11");                                        // rdx = payload offset from the heap base
     emitter.instruction("shr rdx, 4");                                          // rdx = 16-byte granule index of this block
 
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_obj_handle_shutdown", 0);
+    emitter.instruction("test rcx, rcx");                                       // inspect the object-store shutdown no-reuse policy
+    emitter.instruction("jnz __rt_object_handle_acquire_fresh");                // shutdown identities are always minted above the previous high-water mark
     abi::emit_symbol_address(emitter, "r8", "_obj_handle_free_top");
     emitter.instruction("mov rcx, QWORD PTR [r8]");                             // rcx = number of released handles waiting for reuse
     emitter.instruction("test rcx, rcx");                                       // is the released-handle stack empty?
@@ -244,13 +410,29 @@ fn emit_object_handle_acquire_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_object_handle_acquire_fresh");
     abi::emit_symbol_address(emitter, "r9", "_obj_handle_next");
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // r10 = next never-used handle (the pool starts at 1)
+    emitter.instruction("mov rcx, r10");
+    emitter.instruction("shr rcx, 32");                                         // reject an identity that cannot fit the unsigned 32-bit pool
+    emitter.instruction("jnz __rt_heap_allocation_failed");                     // never wrap an exhausted object store to handle zero
     emitter.instruction("mov rcx, r10");                                        // copy it before advancing the never-used cursor
     emitter.instruction("add rcx, 1");                                          // advance the never-used handle cursor
     emitter.instruction("mov QWORD PTR [r9], rcx");                             // publish the advanced cursor
 
     emitter.label("__rt_object_handle_acquire_store");
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_obj_handle_capacity", 0);
+    emitter.instruction("cmp r10, rcx");                                        // compare the acquired identity against reserved inverse storage
+    emitter.instruction("jb __rt_object_handle_acquire_capacity_ready");        // ordinary pool reuse needs no C allocation
+    emitter.instruction("sub rsp, 8");                                          // align the nested growth call without disturbing saved registers
+    emitter.instruction("call __rt_object_store_grow");                         // extend inverse storage with every visible register preserved
+    emitter.instruction("add rsp, 8");                                          // restore the acquire helper's original scratch frame
+    emitter.label("__rt_object_handle_acquire_capacity_ready");
     abi::emit_symbol_address(emitter, "r8", "_obj_handle_index");
     emitter.instruction("mov DWORD PTR [r8 + rdx * 4], r10d");                  // bind this heap granule to the acquired handle
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_obj_handle_live_ptr", 0);
+    emitter.instruction("test r8, r8");                                         // use static inverse storage until shutdown growth is needed
+    emitter.instruction("jnz __rt_object_handle_acquire_inverse_ready");        // grown storage owns the current object-store entries
+    abi::emit_symbol_address(emitter, "r8", "_obj_handle_live");
+    emitter.label("__rt_object_handle_acquire_inverse_ready");
+    emitter.instruction("mov QWORD PTR [r8 + r10 * 8], rax");                   // borrow this live payload under its PHP object-store handle
 
     emitter.label("__rt_object_handle_acquire_done");
     emitter.instruction("pop r11");                                             // restore the heap-base scratch
@@ -322,7 +504,16 @@ fn emit_object_handle_release_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10d, r10d");                                     // did this block ever acquire a handle?
     emitter.instruction("jz __rt_object_handle_release_done");                  // non-object blocks leave the pool untouched
     emitter.instruction("mov DWORD PTR [r8 + rdx * 4], 0");                     // unbind the granule so a reused block starts handle-less
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_obj_handle_live_ptr", 0);
+    emitter.instruction("test r8, r8");                                         // retire the payload from the same inverse store used at acquisition
+    emitter.instruction("jnz __rt_object_handle_release_inverse_ready");        // dynamic capacity remains outside the PHP heap
+    abi::emit_symbol_address(emitter, "r8", "_obj_handle_live");
+    emitter.label("__rt_object_handle_release_inverse_ready");
+    emitter.instruction("mov QWORD PTR [r8 + r10 * 8], 0");                     // retire the borrowed payload before its handle can be reused
 
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_obj_handle_shutdown", 0);
+    emitter.instruction("test rcx, rcx");                                       // shutdown handles cannot be reused by later destructor allocations
+    emitter.instruction("jnz __rt_object_handle_release_done");                 // avoid growing the fixed free stack with lifetime allocation count
     abi::emit_symbol_address(emitter, "r8", "_obj_handle_free_top");
     emitter.instruction("mov rcx, QWORD PTR [r8]");                             // rcx = current released-handle stack depth
     abi::emit_symbol_address(emitter, "r9", "_obj_handle_free");

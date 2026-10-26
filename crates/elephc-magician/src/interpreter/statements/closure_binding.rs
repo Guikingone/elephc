@@ -59,10 +59,18 @@ pub(super) fn eval_closure_from_callable(
         Err(status) => return Err(status),
     };
     let callable = callable.into_callable_transferring_receiver();
-    let valid = eval_validate_closure_from_callable_callback(&callable, context, values);
+    let existing = eval_existing_closure_from_callable(callback, &callable, context, values);
+    let valid = if matches!(&existing, Ok(None)) {
+        eval_validate_closure_from_callable_callback(&callable, context, values)
+    } else {
+        Ok(())
+    };
     let mut target = eval_closure_object_target_from_callable(callable);
     let receiver = target.receiver_mut().copied();
-    let result = valid.and_then(|()| eval_closure_object_from_target(target, context, values));
+    let result = existing.and_then(|existing| match existing {
+        Some(object) => Ok(object),
+        None => valid.and_then(|()| eval_closure_object_from_target(target, context, values)),
+    });
     let cleanup = match receiver {
         Some(receiver) => release_expr_result(receiver, context, values),
         None => Ok(()),
@@ -74,6 +82,44 @@ pub(super) fn eval_closure_from_callable(
             Err(status)
         }
         (Ok(object), Ok(())) => Ok(object),
+    }
+}
+
+/// Copies existing Closure objects, including their public `__invoke` trampoline, without new PHP handles.
+fn eval_existing_closure_from_callable(
+    callback: RuntimeCellHandle,
+    callable: &EvaluatedCallable,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if let EvaluatedCallable::ForeignContext { callback: inner, owner } = callable {
+        let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        let Some(object) = eval_existing_closure_from_callable(callback, inner, owner_context, values)? else {
+            return Ok(None);
+        };
+        return match register_foreign_closure_result(object, owner.clone(), owner_context, context, values) {
+            Ok(object) => Ok(Some(object)),
+            Err(status) => {
+                let _ = eval_release_value(context, values, object);
+                Err(status)
+            }
+        };
+    }
+    let object = if values.type_tag(callback)? == EVAL_TAG_OBJECT {
+        Some(callback)
+    } else if let EvaluatedCallable::ObjectMethod { object, method, .. } = callable {
+        method.eq_ignore_ascii_case("__invoke").then_some(*object)
+    } else {
+        None
+    };
+    let Some(object) = object else { return Ok(None); };
+    let identity = values.object_identity(object)?;
+    if context.closure_object_target(identity).is_some() {
+        values.retain(object).map(Some)
+    } else {
+        Ok(None)
     }
 }
 

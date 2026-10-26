@@ -455,6 +455,103 @@ impl Checker {
                 if method_key == "__call" {
                     Self::relax_magic_call_validation_sig(&mut effective_sig);
                 }
+                // php defers an INTERNAL class's argument-count error to run time, where it is a
+                // catchable `ArgumentCountError` with php's own wording; elephc's compile-time
+                // refusal is reserved for user-declared classes, which the error_tests document.
+                // Only a spread-free positional call takes the recorded-throw path — a spread or
+                // named argument's count is not statically decidable here, so those keep the
+                // compile-time check.
+                if !self.class_is_user_declared(class_name)
+                    && !args.iter().any(|arg| {
+                        matches!(arg.kind, ExprKind::Spread(_) | ExprKind::NamedArg { .. })
+                    })
+                {
+                    let regular_param_count = if effective_sig.variadic.is_some() {
+                        effective_sig.params.len().saturating_sub(1)
+                    } else {
+                        effective_sig.params.len()
+                    };
+                    let required = effective_sig
+                        .defaults
+                        .iter()
+                        .take(regular_param_count)
+                        .filter(|default| default.is_none())
+                        .count();
+                    let given = args.len();
+                    let arity_mismatch = if effective_sig.variadic.is_some() {
+                        given < required
+                    } else {
+                        given < required || given > effective_sig.params.len()
+                    };
+                    if arity_mismatch {
+                        // php-src's wording: a callee whose minimum equals its maximum always
+                        // says "exactly" (in either direction); a callee with optional
+                        // parameters says "at least" below its minimum and "at most" above its
+                        // maximum. "argument" is singular for one.
+                        let argument = |count: usize| if count == 1 { "argument" } else { "arguments" };
+                        let message = if effective_sig.variadic.is_some() {
+                            format!(
+                                "{}::{}() expects at least {} {}, {} given",
+                                class_name,
+                                method,
+                                required,
+                                argument(required),
+                                given
+                            )
+                        } else if given < required {
+                            let wording = if effective_sig.params.len() == required {
+                                "exactly"
+                            } else {
+                                "at least"
+                            };
+                            format!(
+                                "{}::{}() expects {} {} {}, {} given",
+                                class_name,
+                                method,
+                                wording,
+                                required,
+                                argument(required),
+                                given
+                            )
+                        } else if effective_sig.params.len() == required {
+                            format!(
+                                "{}::{}() expects exactly {} {}, {} given",
+                                class_name,
+                                method,
+                                effective_sig.params.len(),
+                                argument(effective_sig.params.len()),
+                                given
+                            )
+                        } else {
+                            format!(
+                                "{}::{}() expects at most {} {}, {} given",
+                                class_name,
+                                method,
+                                effective_sig.params.len(),
+                                argument(effective_sig.params.len()),
+                                given
+                            )
+                        };
+                        let return_type = late_static_return_type
+                            .clone()
+                            .unwrap_or_else(|| sig.return_type.clone());
+                        // Even a refused call evaluates and type-checks argument expressions.
+                        for arg in args {
+                            self.infer_type(arg, env)?;
+                        }
+                        crate::types::checker::record_throw_access_site(
+                            &mut self.throw_access_sites,
+                            expr.span,
+                            crate::types::ThrowAccessInfo {
+                                span: expr.span,
+                                kind: crate::types::ThrowAccessKind::ArgumentCount {
+                                    message,
+                                },
+                            },
+                        );
+                        return Ok(return_type);
+                    }
+                }
                 normalized_args = self.normalize_method_call_args_with_options(
                     &effective_sig,
                     args,
@@ -548,6 +645,21 @@ impl Checker {
             } else {
                 self.infer_type(arg, env)?
             });
+        }
+        // An `ArrayObject::exchangeArray()` argument REPLACES the backing store, and the
+        // synthetic keyed-write body later writes `$store->{$name} = $value` on it. The write
+        // lowers through the mixed ladder, which dispatches on the RUNTIME class, so the
+        // replacement object's class must reserve its dynamic-property hash exactly like a
+        // construction site does.
+        if method_key == "exchangearray"
+            && super::constructors::is_object_backing_storage_class(self, class_name)
+        {
+            if let Some(backing_ty) = arg_types.first() {
+                crate::types::checker::scope_dynamic_storage::record_scope_dynamic_runtime_name_receiver_mutation(
+                    self,
+                    backing_ty,
+                );
+            }
         }
 
         let impl_class_name = self

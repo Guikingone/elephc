@@ -163,6 +163,14 @@ pub enum RuntimeFnId {
     FunctionExists,
     GetClass,
     GetObjectVars,
+    /// Copies raw SPL object property keys without PHP array-key normalization.
+    ElephcSplObjectVarsRaw,
+    /// Projects only named SPL object properties for ordinary offset lookup.
+    ElephcSplObjectVarsNamed,
+    /// Projects public SPL iteration properties without normalizing key kinds.
+    ElephcSplObjectVarsIter,
+    /// Inserts an integer bucket into an SPL backing object property table.
+    ElephcSplObjectAppend,
     GetDeclaredClasses,
     GetDeclaredInterfaces,
     GetDeclaredTraits,
@@ -418,6 +426,8 @@ pub enum RuntimeFnId {
     ElephcObjectPropCount,
     ElephcObjectPropName,
     ElephcObjectPropValue,
+    /// Restores one serialized property through the typed replacement writer.
+    ElephcObjectRestoreProperty,
     ElephcOpcacheRtBlacklistEntry,
     ElephcOpcacheRtScriptField,
     ElephcOpcacheRtScriptPath,
@@ -885,6 +895,15 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayValues => match arg_types.first().map(PhpType::codegen_repr) {
                 Some(PhpType::Array(element)) => PhpType::Array(element),
                 Some(PhpType::AssocArray { value, .. }) => PhpType::Array(value),
+                // A boxed `mixed`/union argument is a PHP array at runtime (any other type makes
+                // `array_values()` throw before a result exists), so a synthesized call with no
+                // checked call-site type answers with the indexed array layout, not `mixed`.
+                // Returning the broad `mixed` lowered `array_values($boxed)` to a Mixed result
+                // followed by a runtime unbox call, which read the raw array pointer as a boxed
+                // cell and crashed.
+                Some(PhpType::Mixed | PhpType::Union(_)) => {
+                    PhpType::Array(Box::new(PhpType::Mixed))
+                }
                 Some(other) => other,
                 None => declared.clone(),
             },
@@ -933,6 +952,17 @@ impl RuntimeFnId {
             RuntimeFnId::ClassGetAttributes => PhpType::Array(Box::new(PhpType::Object(
                 "ReflectionAttribute".to_string(),
             ))),
+            // `get_object_vars()` always answers with a string-keyed hash. A synthesized call has
+            // no checked call-site type, and the broad declared `mixed` made the backend treat the
+            // raw hash pointer as a boxed cell (`mixed_clone`/unbox), which crashed.
+            RuntimeFnId::ElephcSplObjectVarsRaw | RuntimeFnId::ElephcSplObjectVarsNamed | RuntimeFnId::ElephcSplObjectVarsIter => PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            },
+            RuntimeFnId::GetObjectVars => PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            },
             RuntimeFnId::ElephcPharListEntries => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::OpensslGetCipherMethods => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::PregSplit => PhpType::Array(Box::new(PhpType::Mixed)),
@@ -1474,7 +1504,8 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcObjectPropValue => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
             ),
-            RuntimeFnId::GetObjectVars => crate::ir::Effects::from_bits_retain(
+            RuntimeFnId::ElephcSplObjectAppend | RuntimeFnId::ElephcObjectRestoreProperty => crate::ir::Effects::all(),
+            RuntimeFnId::GetObjectVars | RuntimeFnId::ElephcSplObjectVarsRaw | RuntimeFnId::ElephcSplObjectVarsNamed | RuntimeFnId::ElephcSplObjectVarsIter => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits()
                     | crate::ir::Effects::ALLOC_HEAP.bits()
                     | crate::ir::Effects::REFCOUNT_OP.bits()
@@ -2296,6 +2327,8 @@ impl RuntimeFnId {
                 // The clone override reference guard answers nothing at all: it returns or
                 // throws, so a result temporary would only keep the override array alive.
                 | RuntimeFnId::ElephcCloneOverrideReferenceGuard
+                | RuntimeFnId::ElephcSplObjectAppend
+                | RuntimeFnId::ElephcObjectRestoreProperty
         ) {
             return BuiltinResultOwnership::NonHeap;
         }
@@ -2541,6 +2574,9 @@ impl RuntimeFnId {
                 // bucket would keep an owned name temporary — and skip releasing the hash.
                 | RuntimeFnId::Getenv
                 | RuntimeFnId::GetObjectVars
+                | RuntimeFnId::ElephcSplObjectVarsRaw
+                | RuntimeFnId::ElephcSplObjectVarsNamed
+                | RuntimeFnId::ElephcSplObjectVarsIter
                 | RuntimeFnId::CloneWith
                 // The join lowerer persists every result before retiring normalized
                 // input values, so destructor reentry cannot overwrite returned bytes.
@@ -2745,6 +2781,10 @@ impl RuntimeFnId {
             RuntimeFnId::FunctionExists => "function_exists",
             RuntimeFnId::GetClass => "get_class",
             RuntimeFnId::GetObjectVars => "get_object_vars",
+            RuntimeFnId::ElephcSplObjectVarsRaw => "__elephc_spl_object_vars_raw",
+            RuntimeFnId::ElephcSplObjectVarsNamed => "__elephc_spl_object_vars_named",
+            RuntimeFnId::ElephcSplObjectVarsIter => "__elephc_spl_object_vars_iter",
+            RuntimeFnId::ElephcSplObjectAppend => "__elephc_spl_object_append",
             RuntimeFnId::GetDeclaredClasses => "get_declared_classes",
             RuntimeFnId::GetDeclaredInterfaces => "get_declared_interfaces",
             RuntimeFnId::GetDeclaredTraits => "get_declared_traits",
@@ -3001,6 +3041,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcObjectPropCount => "__elephc_object_prop_count",
             RuntimeFnId::ElephcObjectPropName => "__elephc_object_prop_name",
             RuntimeFnId::ElephcObjectPropValue => "__elephc_object_prop_value",
+            RuntimeFnId::ElephcObjectRestoreProperty => "__elephc_object_restore_property",
             RuntimeFnId::ElephcOpcacheRtScriptField => "__elephc_opcache_rt_script_field",
             RuntimeFnId::ElephcOpcacheRtScriptPath => "__elephc_opcache_rt_script_path",
             RuntimeFnId::ElephcOpcacheRtBlacklistEntry => "__elephc_opcache_rt_blacklist_entry",

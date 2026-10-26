@@ -270,6 +270,7 @@ pub(crate) fn eval_object_clone_with_properties_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let identity = values.object_identity(object)?;
+    let closure_target = context.closure_object_target(identity).cloned();
     let dynamic_class_name = context
         .dynamic_object_class(identity)
         .map(|class| class.name().to_string());
@@ -311,6 +312,11 @@ pub(crate) fn eval_object_clone_with_properties_result(
     };
     context.begin_clone_initialization(clone_identity);
     let initialization = (|| {
+        if let Some(mut target) = closure_target {
+            eval_attach_closure_target_children(clone, &mut target, context, values)?;
+            context.register_closure_object_target(clone_identity, target);
+            crate::ffi::dynamic_destructors::register_dynamic_object_context(clone_identity, context);
+        }
         if let Some(class_name) = dynamic_class_name {
             context.register_dynamic_object(clone_identity, &class_name);
             context.clone_dynamic_property_aliases(identity, clone_identity);

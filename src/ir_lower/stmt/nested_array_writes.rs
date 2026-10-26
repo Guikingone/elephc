@@ -10,6 +10,17 @@
 
 use super::*;
 
+/// Adds one nested-write operand to the same ordered unwind/normal cleanup ledger.
+fn root_nested_write_operand(
+    ctx: &mut LoweringContext<'_, '_>, operand: LoweredValue,
+    roots: &mut Vec<LocalSlotId>, span: Span,
+) -> LoweredValue {
+    let (operand, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, operand, span);
+    if let Some(owner) = owner { roots.push(owner); }
+    operand
+}
+
+
 /// Writes an expression's captured nested update without repeating its key diagnoses.
 pub(crate) fn lower_nested_array_assign_after_read(
     ctx: &mut LoweringContext<'_, '_>,
@@ -106,14 +117,9 @@ fn lower_nested_array_assign_inner(
         let deferred = nested_target_is_all_bare_variables(target)
             || nested_target_has_static_root(target);
         let mut roots = Vec::new();
-        let mut root_operand = |ctx: &mut LoweringContext<'_, '_>, operand: LoweredValue| {
-            let (operand, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, operand, span);
-            if let Some(owner) = owner { roots.push(owner); }
-            operand
-        };
         let value_first = deferred.then(|| {
             let value = lower_expr(ctx, value);
-            root_operand(ctx, value)
+            root_nested_write_operand(ctx, value, &mut roots, span)
         });
         let parent = if key_already_diagnosed {
             lower_nested_assign_parent_with_diagnosed_key(ctx, array, span, true)
@@ -129,14 +135,15 @@ fn lower_nested_array_assign_inner(
             crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
             resolved
         } else { parent };
-        let parent = root_operand(ctx, parent);
+        let parent = root_nested_write_operand(ctx, parent, &mut roots, span);
         let key = lower_expr(ctx, index);
-        let key = root_operand(ctx, key);
+        let (key, key_owner) = crate::ir_lower::expr::capture_array_write_key(ctx, key, index.span);
+        if let Some(owner) = key_owner { roots.push(owner); }
         let value = match value_first {
             Some(value) => value,
             None => {
                 let value = lower_expr(ctx, value);
-                root_operand(ctx, value)
+                root_nested_write_operand(ctx, value, &mut roots, span)
             }
         };
         if !super::nested_write_guards::guard_nested_write_parent(ctx, parent, Some(index), span) {

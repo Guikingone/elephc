@@ -9,6 +9,7 @@
 //! - Helper names are consumed directly by codegen paths for `stdClass` and JSON-decoded `Mixed` values.
 
 mod call_destructor;
+mod deferred_array_key;
 mod dump_dynamic_props;
 mod enum_debug;
 mod export_props;
@@ -19,9 +20,16 @@ mod mixed_array_fetch_for_write;
 mod mixed_array_get;
 mod object_not_array;
 mod mixed_array_set;
+mod mixed_array_unset;
 mod mixed_cell_autovivify;
 mod new_by_name;
 mod object_vars;
+mod array_cast;
+mod property_append;
+mod object_store;
+mod object_store_growth;
+mod shutdown;
+mod shutdown_exception;
 mod print_r_object;
 mod stdclass;
 mod weak_reference;
@@ -30,6 +38,7 @@ pub(crate) use weak_map::emit_weak_map;
 pub(crate) use weak_reference::emit_weak_reference;
 
 pub(crate) use call_destructor::emit_call_object_destructor;
+pub(crate) use shutdown::emit_handler_shutdown;
 pub(crate) use dump_dynamic_props::{
     emit_load_dump_dyn_hash, emit_obj_dump_dyn_props, emit_obj_dyn_prop_at,
 };
@@ -51,10 +60,15 @@ pub(crate) use object_not_array::{
     emit_throw_object_not_array, emit_throw_serialization_denied, emit_throw_unserialization_denied,
 };
 pub(crate) use mixed_array_set::emit_mixed_array_set;
+pub(crate) use mixed_array_unset::emit_mixed_array_unset;
 pub(crate) use mixed_cell_autovivify::emit_mixed_cell_autovivify_array;
 pub(crate) use new_by_name::emit_new_by_name;
 pub(crate) use object_vars::emit_object_to_hash;
+pub(crate) use property_append::emit_object_property_append;
 pub(crate) use stdclass::{
     emit_json_encode_stdclass, emit_mixed_property_get, emit_mixed_property_set,
     emit_stdclass_from_hash, emit_stdclass_get, emit_stdclass_new, emit_stdclass_set,
 };
+
+pub(crate) use array_cast::emit_object_array_cast;
+pub(crate) use deferred_array_key::emit_deferred_array_key_runtime;

@@ -99,15 +99,14 @@ fn test_error_string_offset_assignment_is_not_supported() {
     );
 }
 
-/// Verifies that by-reference foreach over a parameter typed `iterable` is rejected.
-/// Input: `function f(iterable $items) { foreach ($items as &$value) {} }`
-#[test]
-fn test_error_by_reference_foreach_rejects_iterable_type() {
-    expect_error(
-        "<?php function f(iterable $items) { foreach ($items as &$value) {} }",
-        "by-reference foreach over Iterator/IteratorAggregate objects",
-    );
-}
+/// Verifies that by-reference foreach over a parameter typed `iterable` is accepted at compile
+/// time and raised at RUN time.
+///
+/// php raises `Error: An iterator cannot be used with foreach by reference` when the loop runs,
+/// not a compile error, so the compile-time rejection these tests used to assert was not php's
+/// behavior. The runtime behavior is covered by the codegen tests
+/// `test_by_reference_foreach_over_iterator_throws` and
+/// `test_by_reference_foreach_over_iterator_uncaught_reports_location_and_trace`.
 
 /// Builtin iterator-interface parameters are valid foreach sources in every canonical spelling.
 #[test]
@@ -141,58 +140,11 @@ fn test_foreach_rejects_non_iterable_objects_and_namespaced_traversable_lookalik
     }
 }
 
-/// Verifies that by-reference foreach over a parameter typed `Iterator` is rejected.
-/// Input: `function f(Iterator $items) { foreach ($items as &$value) {} }`
-#[test]
-fn test_error_by_reference_foreach_rejects_iterator_object_type() {
-    expect_error(
-        "<?php function f(Iterator $items) { foreach ($items as &$value) {} }",
-        "by-reference foreach over Iterator/IteratorAggregate objects",
-    );
-}
+/// Verifies that by-reference foreach over a parameter typed `Iterator` is accepted at compile
+/// time and raised at RUN time (see the note on the iterable case above).
 
-/// Verifies that by-reference foreach over a concrete class implementing `Iterator` is rejected.
-/// Uses a `Counter` class that implements Iterator with an int counter field.
-#[test]
-fn test_error_by_reference_foreach_rejects_concrete_iterator_object() {
-    expect_error(
-        r#"<?php
-class Counter implements Iterator {
-    private int $i = 0;
-    public function rewind(): void { $this->i = 0; }
-    public function valid(): bool { return $this->i < 3; }
-    public function current(): mixed { return $this->i; }
-    public function key(): mixed { return $this->i; }
-    public function next(): void { $this->i = $this->i + 1; }
-}
-foreach (new Counter() as &$value) {}
-"#,
-        "by-reference foreach over Iterator/IteratorAggregate objects",
-    );
-}
-
-/// Verifies that by-reference foreach over a concrete class implementing `IteratorAggregate` is rejected.
-/// Uses a `Counters` class that returns a `Counter` iterator via `getIterator()`.
-#[test]
-fn test_error_by_reference_foreach_rejects_iterator_aggregate_object() {
-    expect_error(
-        r#"<?php
-class Counter implements Iterator {
-    private int $i = 0;
-    public function rewind(): void { $this->i = 0; }
-    public function valid(): bool { return $this->i < 3; }
-    public function current(): mixed { return $this->i; }
-    public function key(): mixed { return $this->i; }
-    public function next(): void { $this->i = $this->i + 1; }
-}
-class Counters implements IteratorAggregate {
-    public function getIterator(): Traversable { return new Counter(); }
-}
-foreach (new Counters() as &$value) {}
-"#,
-        "by-reference foreach over Iterator/IteratorAggregate objects",
-    );
-}
+/// Verifies that by-reference foreach over a concrete class implementing `Iterator` is accepted
+/// at compile time and raised at RUN time (see the note on the iterable case above).
 
 /// Verifies that a union-typed local variable rejects an initializer of an incompatible type.
 /// Input: `int|string $value = 1.5;` — float is not int or string.
@@ -1358,18 +1310,18 @@ fn test_null_probes_accept_a_never_declared_variable() {
     expect_no_error("<?php var_dump(isset($neverE['k']));");
 }
 
-/// Verifies a probed name that is ALSO assigned in the same scope keeps the diagnostic.
-///
-/// The tolerance is only sound while the variable stays `null` for the whole scope: main's local
-/// types come from the final global environment, so an assigned name gets that assigned type on a
-/// slot the probe would read before any store. Accepting it would miscompile, so the deferred
-/// check restores the original error.
+/// Bare local isset can probe before a later binding without reading its typed slot.
 #[test]
-fn test_null_probe_on_a_later_assigned_variable_is_still_rejected() {
-    expect_error(
-        "<?php if (!isset($cfg)) { $cfg = 3; } var_dump($cfg);",
-        "Undefined variable: $cfg",
-    );
+fn test_null_probe_bare_isset_accepts_a_later_assignment() {
+    expect_no_error("<?php if (!isset($cfg)) { $cfg = 3; } var_dump($cfg);");
+}
+
+/// Probe shapes without local presence lowering retain their storage diagnostic.
+#[test]
+fn test_null_probe_other_shapes_on_later_assignments_are_rejected() {
+    expect_error("<?php var_dump(empty($cfg)); $cfg = 3;", "Undefined variable: $cfg");
+    expect_error("<?php var_dump($cfg ?? 4); $cfg = 3;", "Undefined variable: $cfg");
+    expect_error("<?php var_dump(isset($cfg['k'])); $cfg = ['k' => 3];", "Undefined variable: $cfg");
 }
 
 /// Verifies a lossy float constant at an `int` parameter is rejected instead of silently

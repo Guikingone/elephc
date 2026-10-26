@@ -18,6 +18,7 @@
 //!   shared cell helper before any container header is dereferenced.
 //! - Packed invoker-marker overwrites promote to the shared hash setter to retain caller identity.
 
+use crate::codegen_support::deferred_array_keys::emit_array_key_guard;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -84,6 +85,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_array_set_autovivify");                // PHP keyed writes autovivify null into an array
     emitter.instruction("b __rt_mixed_array_set_drop");                         // non-array Mixed payloads cannot be mutated here
     emitter.label("__rt_mixed_array_set_indexed");
+    emit_array_key_guard(emitter, "__rt_mixed_array_set_indexed_key_valid", true);
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the indexed-array pointer from the Mixed payload
     emit_branch_if_null_container(emitter, "x10", "x9", "__rt_mixed_array_set_autovivify");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload key_hi
@@ -176,6 +178,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_array_set_assoc");                        // finish the write through the associative path
 
     emitter.label("__rt_mixed_array_set_assoc");
+    emit_array_key_guard(emitter, "__rt_mixed_array_set_assoc_key_valid", true);
     emitter.instruction("ldr x0, [x0, #8]");                                    // pass the associative payload to its COW boundary
     emitter.instruction("bl __rt_hash_ensure_unique");                          // detach shared hash storage before examining reference slots
     emitter.instruction("ldr x9, [sp, #0]");                                    // recover the concrete owning cell
@@ -235,38 +238,18 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_array_set_spl_dll");                   // SplQueue shares list storage
     emitter.instruction("b __rt_mixed_array_set_php_offset_set");               // any other class may still be a PHP ArrayAccess
     emitter.label("__rt_mixed_array_set_spl_fixed");
-    emitter.instruction("ldr x11, [sp, #16]");                                  // reload normalized key high word
-    emitter.instruction("cmn x11, #1");                                         // does key_hi carry the integer-key sentinel?
-    emitter.instruction("b.eq __rt_mixed_array_set_spl_fixed_int_key");         // integer keys box as Mixed int
-    emitter.instruction("mov x0, #1");                                          // tag = string for mixed_from_value
-    emitter.instruction("ldr x1, [sp, #8]");                                    // key string pointer
-    emitter.instruction("ldr x2, [sp, #16]");                                   // key string length
-    emitter.instruction("b __rt_mixed_array_set_spl_fixed_box_key");            // share offsetSet after key boxing
-    emitter.label("__rt_mixed_array_set_spl_fixed_int_key");
-    emitter.instruction("mov x0, #0");                                          // tag = int for mixed_from_value
-    emitter.instruction("ldr x1, [sp, #8]");                                    // key integer payload
-    emitter.instruction("mov x2, #0");                                          // integer keys have no high payload
-    emitter.label("__rt_mixed_array_set_spl_fixed_box_key");
-    emitter.instruction("bl __rt_mixed_from_value");                            // allocate the boxed ArrayAccess offset
+    emitter.instruction("ldr x1, [sp, #8]");                                    // borrow the original offset payload before native/PHP dispatch
+    emitter.instruction("ldr x2, [sp, #16]");                                   // preserve its normalized or deferred runtime type
+    abi::emit_call_label(emitter, "__rt_box_deferred_array_key");
     emitter.instruction("mov x1, x0");                                          // pass boxed offset as argument 1
     emitter.instruction("ldr x0, [sp, #32]");                                   // pass unboxed SplFixedArray receiver as argument 0
     emitter.instruction("ldr x2, [sp, #24]");                                   // pass owned Mixed value as argument 2
     emitter.instruction("bl __rt_spl_fixed_offset_set");                        // write through SplFixedArray::offsetSet
     emitter.instruction("b __rt_mixed_array_set_done");                         // value ownership was consumed by offsetSet
     emitter.label("__rt_mixed_array_set_spl_dll");
-    emitter.instruction("ldr x11, [sp, #16]");                                  // reload normalized key high word
-    emitter.instruction("cmn x11, #1");                                         // does key_hi carry the integer-key sentinel?
-    emitter.instruction("b.eq __rt_mixed_array_set_spl_dll_int_key");           // integer keys box as Mixed int
-    emitter.instruction("mov x0, #1");                                          // tag = string for mixed_from_value
-    emitter.instruction("ldr x1, [sp, #8]");                                    // key string pointer
-    emitter.instruction("ldr x2, [sp, #16]");                                   // key string length
-    emitter.instruction("b __rt_mixed_array_set_spl_dll_box_key");              // share offsetSet after key boxing
-    emitter.label("__rt_mixed_array_set_spl_dll_int_key");
-    emitter.instruction("mov x0, #0");                                          // tag = int for mixed_from_value
-    emitter.instruction("ldr x1, [sp, #8]");                                    // key integer payload
-    emitter.instruction("mov x2, #0");                                          // integer keys have no high payload
-    emitter.label("__rt_mixed_array_set_spl_dll_box_key");
-    emitter.instruction("bl __rt_mixed_from_value");                            // allocate the boxed ArrayAccess offset
+    emitter.instruction("ldr x1, [sp, #8]");                                    // borrow the original offset payload before native/PHP dispatch
+    emitter.instruction("ldr x2, [sp, #16]");                                   // preserve its normalized or deferred runtime type
+    abi::emit_call_label(emitter, "__rt_box_deferred_array_key");
     emitter.instruction("mov x1, x0");                                          // pass boxed offset as argument 1
     emitter.instruction("ldr x0, [sp, #32]");                                   // pass unboxed SPL list receiver as argument 0
     emitter.instruction("ldr x2, [sp, #24]");                                   // pass owned Mixed value as argument 2
@@ -285,19 +268,9 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x12", "_class_offsetset_ptrs");
     emitter.instruction("ldr x12, [x12, x11, lsl #3]");                         // resolve the concrete or inherited offsetSet
     emitter.instruction("cbz x12, __rt_mixed_array_set_not_indexable");         // 0 means the class is not ArrayAccess at all
-    emitter.instruction("ldr x11, [sp, #16]");                                  // reload normalized key high word
-    emitter.instruction("cmn x11, #1");                                         // does key_hi carry the integer-key sentinel?
-    emitter.instruction("b.eq __rt_mixed_array_set_php_int_key");               // integer keys box as Mixed int
-    emitter.instruction("mov x0, #1");                                          // tag = string for mixed_from_value
-    emitter.instruction("ldr x1, [sp, #8]");                                    // key string pointer
-    emitter.instruction("ldr x2, [sp, #16]");                                   // key string length
-    emitter.instruction("b __rt_mixed_array_set_php_box_key");                  // share offsetSet after key boxing
-    emitter.label("__rt_mixed_array_set_php_int_key");
-    emitter.instruction("mov x0, #0");                                          // tag = int for mixed_from_value
-    emitter.instruction("ldr x1, [sp, #8]");                                    // key integer payload
-    emitter.instruction("mov x2, #0");                                          // integer keys have no high payload
-    emitter.label("__rt_mixed_array_set_php_box_key");
-    emitter.instruction("bl __rt_mixed_from_value");                            // allocate the boxed ArrayAccess offset
+    emitter.instruction("ldr x1, [sp, #8]");                                    // borrow the original offset payload before native/PHP dispatch
+    emitter.instruction("ldr x2, [sp, #16]");                                   // preserve its normalized or deferred runtime type
+    abi::emit_call_label(emitter, "__rt_box_deferred_array_key");
     emitter.instruction("str x0, [sp, #8]");                                    // stash the box; key_lo has served its purpose
     emitter.instruction("mov x1, x0");                                          // pass boxed offset as argument 1
     emitter.instruction("ldr x0, [sp, #32]");                                   // pass unboxed receiver as argument 0
@@ -377,6 +350,7 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_set_autovivify");                  // PHP keyed writes autovivify null into an array
     emitter.instruction("jmp __rt_mixed_array_set_drop");                       // non-array Mixed payloads cannot be mutated here
     emitter.label("__rt_mixed_array_set_indexed");
+    emit_array_key_guard(emitter, "__rt_mixed_array_set_indexed_key_valid", true);
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the indexed-array pointer from the Mixed payload
     emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_array_set_autovivify");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload key_hi
@@ -466,6 +440,7 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_array_set_assoc");                      // finish the write through the associative path
 
     emitter.label("__rt_mixed_array_set_assoc");
+    emit_array_key_guard(emitter, "__rt_mixed_array_set_assoc_key_valid", true);
     emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // pass the associative payload to its COW boundary
     emitter.instruction("call __rt_hash_ensure_unique");                        // detach shared hash storage before examining reference slots
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // recover the concrete owning cell
@@ -520,38 +495,18 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_set_spl_dll");                     // SplQueue shares list storage
     emitter.instruction("jmp __rt_mixed_array_set_php_offset_set");             // any other class may still be a PHP ArrayAccess
     emitter.label("__rt_mixed_array_set_spl_fixed");
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload normalized key high word
-    emitter.instruction("cmp r11, -1");                                         // does key_hi carry the integer-key sentinel?
-    emitter.instruction("je __rt_mixed_array_set_spl_fixed_int_key");           // integer keys box as Mixed int
-    emitter.instruction("mov rax, 1");                                          // tag = string for mixed_from_value
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // key string pointer
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // key string length
-    emitter.instruction("jmp __rt_mixed_array_set_spl_fixed_box_key");          // share offsetSet after key boxing
-    emitter.label("__rt_mixed_array_set_spl_fixed_int_key");
-    emitter.instruction("mov rax, 0");                                          // tag = int for mixed_from_value
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // key integer payload
-    emitter.instruction("xor esi, esi");                                        // integer keys have no high payload
-    emitter.label("__rt_mixed_array_set_spl_fixed_box_key");
-    emitter.instruction("call __rt_mixed_from_value");                          // allocate the boxed ArrayAccess offset
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // borrow the original offset payload before native/PHP dispatch
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // preserve its normalized or deferred runtime type
+    abi::emit_call_label(emitter, "__rt_box_deferred_array_key");
     emitter.instruction("mov rsi, rax");                                        // pass boxed offset as argument 1
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // pass unboxed SplFixedArray receiver as argument 0
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // pass owned Mixed value as argument 2
     emitter.instruction("call __rt_spl_fixed_offset_set");                      // write through SplFixedArray::offsetSet
     emitter.instruction("jmp __rt_mixed_array_set_done");                       // value ownership was consumed by offsetSet
     emitter.label("__rt_mixed_array_set_spl_dll");
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload normalized key high word
-    emitter.instruction("cmp r11, -1");                                         // does key_hi carry the integer-key sentinel?
-    emitter.instruction("je __rt_mixed_array_set_spl_dll_int_key");             // integer keys box as Mixed int
-    emitter.instruction("mov rax, 1");                                          // tag = string for mixed_from_value
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // key string pointer
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // key string length
-    emitter.instruction("jmp __rt_mixed_array_set_spl_dll_box_key");            // share offsetSet after key boxing
-    emitter.label("__rt_mixed_array_set_spl_dll_int_key");
-    emitter.instruction("mov rax, 0");                                          // tag = int for mixed_from_value
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // key integer payload
-    emitter.instruction("xor esi, esi");                                        // integer keys have no high payload
-    emitter.label("__rt_mixed_array_set_spl_dll_box_key");
-    emitter.instruction("call __rt_mixed_from_value");                          // allocate the boxed ArrayAccess offset
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // borrow the original offset payload before native/PHP dispatch
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // preserve its normalized or deferred runtime type
+    abi::emit_call_label(emitter, "__rt_box_deferred_array_key");
     emitter.instruction("mov rsi, rax");                                        // pass boxed offset as argument 1
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // pass unboxed SPL list receiver as argument 0
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // pass owned Mixed value as argument 2
@@ -563,25 +518,17 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_set_php_offset_set");
     emitter.instruction("test r11, r11");                                       // reject negative synthetic class ids
     emitter.instruction("js __rt_mixed_array_set_not_indexable");               // synthetic ids cannot index metadata
-    emitter.instruction("cmp r11, QWORD PTR [rip + _class_iface_method_count]"); // is the id within the dense table?
+    emitter.instruction(
+        "cmp r11, QWORD PTR [rip + _class_iface_method_count]",
+    );                                                                          // is the id within the dense table?
     emitter.instruction("jae __rt_mixed_array_set_not_indexable");              // out-of-range ids have no entry
     emitter.instruction("lea r12, [rip + _class_offsetset_ptrs]");              // dense ArrayAccess::offsetSet table
     emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");                  // resolve the concrete or inherited offsetSet
     emitter.instruction("test r12, r12");                                       // 0 means the class is not ArrayAccess at all
     emitter.instruction("jz __rt_mixed_array_set_not_indexable");               // refuse rather than drop the write
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload normalized key high word
-    emitter.instruction("cmp r11, -1");                                         // does key_hi carry the integer-key sentinel?
-    emitter.instruction("je __rt_mixed_array_set_php_int_key");                 // integer keys box as Mixed int
-    emitter.instruction("mov rax, 1");                                          // tag = string for mixed_from_value
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // key string pointer
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // key string length
-    emitter.instruction("jmp __rt_mixed_array_set_php_box_key");                // share offsetSet after key boxing
-    emitter.label("__rt_mixed_array_set_php_int_key");
-    emitter.instruction("mov rax, 0");                                          // tag = int for mixed_from_value
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // key integer payload
-    emitter.instruction("xor esi, esi");                                        // integer keys have no high payload
-    emitter.label("__rt_mixed_array_set_php_box_key");
-    emitter.instruction("call __rt_mixed_from_value");                          // allocate the boxed ArrayAccess offset
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // borrow the original offset payload before native/PHP dispatch
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // preserve its normalized or deferred runtime type
+    abi::emit_call_label(emitter, "__rt_box_deferred_array_key");
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // stash the box; key_lo has served its purpose
     emitter.instruction("mov rsi, rax");                                        // pass boxed offset as argument 1
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // pass unboxed receiver as argument 0

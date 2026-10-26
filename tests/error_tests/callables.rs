@@ -560,25 +560,31 @@ fn test_error_arrow_return_type_rejects_mismatch() {
 }
 
 /// Verifies that error closure return type requires return value.
+///
+/// php COMPILES a closure body that does not return on every path and raises
+/// `TypeError: {closure}(): Return value must be of type int, none returned` at run time when
+/// the closure is invoked.
+/// Verifies that php's return-coverage rule is a RUN-TIME check, not a compile-time one.
+///
+/// php compiles `"<?php $f = function(): int { };"` as-is; the runtime TypeError is covered by the codegen suite's
+/// `functions_return_coverage` tests.
 #[test]
 fn test_error_closure_return_type_requires_return_value() {
-    // Verifies a closure with an explicit return type and an empty body (no return)
-    // produces a diagnostic about every path needing to return a value.
-    expect_error(
-        "<?php $f = function(): int { };",
-        "Closure must return a value on every path",
+    assert!(
+        check_source("<?php $f = function(): int { };").is_ok(),
+        "php compiles a closure body that does not return on every path"
     );
 }
 
 /// Verifies that error closure return type rejects partial fallthrough.
+///
+/// php COMPILES the closure and raises the catchable TypeError at run time when the
+/// fall-through path runs.
 #[test]
 fn test_error_closure_return_type_rejects_partial_fallthrough() {
-    // Verifies a closure with an explicit return type where only some branches
-    // return a value (missing return in else branch) produces a diagnostic
-    // about every path needing to return a value.
-    expect_error(
-        "<?php $f = function(bool $ok): int { if ($ok) { return 1; } };",
-        "Closure must return a value on every path",
+    assert!(
+        check_source("<?php $f = function(bool $ok): int { if ($ok) { return 1; } };").is_ok(),
+        "php compiles a closure body that does not return on every path"
     );
 }
 

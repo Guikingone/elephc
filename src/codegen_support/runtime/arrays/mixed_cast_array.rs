@@ -74,7 +74,7 @@ fn emit_mixed_cast_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #16]");                                   // pass the unboxed object pointer to property projection
     emitter.instruction("mov x1, #1");                                          // non-zero mode requests visibility-mangled cast keys
     emitter.instruction("mov x2, #-1");                                         // array casts have no lexical class visibility scope
-    emitter.instruction("bl __rt_object_to_hash");                              // allocate the associative object-property projection
+    emitter.instruction("bl __rt_object_array_cast");                           // allocate the associative object-property projection
     emitter.instruction("str x0, [sp, #32]");                                   // preserve the owned raw hash across boxing
     emitter.instruction("mov x1, x0");                                          // pass the hash pointer as the boxed low payload
     emitter.instruction("mov x2, xzr");                                         // hashes have no high payload word
@@ -148,7 +148,7 @@ fn emit_mixed_cast_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // pass the unboxed object pointer to property projection
     emitter.instruction("mov rdx, 1");                                          // non-zero mode requests visibility-mangled cast keys
     emitter.instruction("mov rcx, -1");                                         // array casts have no lexical class visibility scope
-    emitter.instruction("call __rt_object_to_hash");                            // allocate the associative object-property projection
+    emitter.instruction("call __rt_object_array_cast");                         // allocate the associative object-property projection
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the owned raw hash across boxing
     emitter.instruction("mov rdi, rax");                                        // pass the hash pointer as the boxed low payload
     emitter.instruction("xor esi, esi");                                        // hashes have no high payload word

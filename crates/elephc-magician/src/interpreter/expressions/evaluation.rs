@@ -170,10 +170,20 @@ pub(super) fn eval_new_object_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let concrete = ensure_generic_class(class_name, Some(&args), "__construct", context, scope, values)?;
     let class_name = concrete.as_str();
-    if let Some(object) =
-        eval_reflection_owner_new_object(class_name, args.clone(), context, values)?
-    {
-        return Ok(object);
+    match eval_reflection_owner_new_object(class_name, args.clone(), context, values) {
+        Ok(Some(object)) => {
+            let cleanup = release_constructor_source_args(&args, context, values);
+            if let Err(status) = cleanup {
+                let _ = eval_release_value(context, values, object);
+                return Err(status);
+            }
+            return Ok(object);
+        }
+        Err(status) => {
+            let _ = release_constructor_source_args(&args, context, values);
+            return Err(status);
+        }
+        Ok(None) => {}
     }
     if let Some(class) = context.class(class_name).cloned() {
         return eval_dynamic_class_new_object(&class, args, context, scope, values);
@@ -203,6 +213,20 @@ pub(super) fn eval_new_object_result(
         return Err(err);
     }
     Ok(object)
+}
+
+/// Releases source argument temporaries after a synthetic constructor consumes borrowed views.
+fn release_constructor_source_args(
+    args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let mut result = Ok(());
+    for arg in args {
+        let cleanup = release_expr_result(arg.value, context, values);
+        if result.is_ok() { result = cleanup; }
+    }
+    result
 }
 
 /// Resolves special class names used by `new` while preserving AOT fallback names.
@@ -379,79 +403,6 @@ fn eval_instanceof_object_result(
 ) -> Result<bool, EvalStatus> {
     dynamic_object_is_a(value, target_class, false, context, values)?
         .map_or_else(|| values.object_is_a(value, target_class, false), Ok)
-}
-
-/// Materializes one eval closure literal as a PHP-visible `Closure` object.
-pub(super) fn eval_closure_expr(
-    function: &EvalFunction,
-    captures: &[crate::eval_ir::EvalClosureCapture],
-    is_static: bool,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut bindings = Vec::with_capacity(captures.len());
-    for capture in captures {
-        bindings.push(eval_closure_capture(capture, context, scope, values)?);
-    }
-    let closure = EvalClosure::new(function.clone(), bindings, is_static);
-    let name = context.define_closure(closure);
-    eval_closure_object_expr(EvalClosureObjectTarget::Named(name), context, values)
-}
-
-/// Materializes one PHP-visible `Closure` object for an eval callable target.
-pub(in crate::interpreter) fn eval_closure_object_expr(
-    mut target: EvalClosureObjectTarget,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let object = values.new_object("stdClass")?;
-    let attached = (|| {
-        if let Some(receiver) = target.receiver_mut() {
-            values.retain_object_children(object, &[*receiver])?;
-            // Metadata borrows the cell owned by the runtime edge, not its caller's scope.
-            *receiver = receiver.borrowed();
-        }
-        values.object_identity(object)
-    })();
-    let identity = match attached {
-        Ok(identity) => identity,
-        Err(status) => {
-            let _ = values.release(object);
-            return Err(status);
-        }
-    };
-    context.register_closure_object_target(identity, target);
-    crate::ffi::dynamic_destructors::register_dynamic_object_context(identity, context);
-    Ok(object)
-}
-
-/// Evaluates one closure capture from the defining scope.
-fn eval_closure_capture(
-    capture: &crate::eval_ir::EvalClosureCapture,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<EvalClosureCaptureBinding, EvalStatus> {
-    if capture.by_ref() {
-        if let Some(reference) = eval_persistent_variable_reference(capture.name(), context, scope, values)? {
-            let reference = values.retain(reference)?;
-            return Ok(EvalClosureCaptureBinding::new(capture.name(), reference, Some(EvalReferenceTarget::Cell { cell: reference })));
-        }
-        let expr = EvalExpr::LoadVar(capture.name().to_string());
-        let (value, target) = eval_call_arg_value(&expr, context, scope, values)?;
-        return Ok(EvalClosureCaptureBinding::new(
-            capture.name(),
-            value,
-            target,
-        ));
-    }
-    let value = if let Some(value) = visible_scope_cell(context, scope, capture.name()) {
-        if values.is_reference(value)? { values.copy_value(value)? } else { values.retain(value)? }
-    } else {
-        values.null()?
-    };
-    Ok(EvalClosureCaptureBinding::new(capture.name(), value, None))
 }
 
 /// Evaluates a PHP `match` expression with strict comparison and lazy arm values.

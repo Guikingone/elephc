@@ -25,6 +25,7 @@ mod repl;
 mod strict_php;
 mod strict_php_source_guards;
 mod lfc;
+mod inline_html;
 mod benchmarks;
 mod echo_vars;
 mod eval;

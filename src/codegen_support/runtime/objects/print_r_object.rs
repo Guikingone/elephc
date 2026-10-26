@@ -26,20 +26,23 @@
 //!   `(key_ptr, key_len, byte_offset, value_tag, plain_key_ptr, plain_key_len)`.
 //!   `key` already carries print_r's visibility annotation (`x`, `y:protected`,
 //!   `z:C:private`), so no visibility reasoning happens at runtime. The rows are
-//!   the SAME rows `_class_vd_desc_*` uses, so print_r and var_dump can never
-//!   disagree about an object's shape.
+//!   the shared declared-property rows used by the other renderers. Native debug
+//!   handlers append their render-only fields after those properties.
 //! - Uninitialized typed properties are SKIPPED entirely (PHP omits them from
 //!   `print_r`, unlike var_dump which prints `uninitialized(T)`); the marker is
 //!   the `UNINITIALIZED_TYPED_PROPERTY_SENTINEL` in the slot's high word.
 //! - RECURSION GUARD: this reuses var_dump's `_vd_seen` pointer stack through
 //!   `__rt_vd_seen_find` / `__rt_vd_seen_push` / `__rt_vd_seen_pop`. The two
-//!   renderers can never be walking at the same time (no PHP callback runs inside
-//!   either), and sharing the stack keeps one bound and one `*RECURSION*` policy.
+//!   renderers share one membership set; callbacks restore their enclosing state.
 //!   PHP marks the object only around its BODY, so two sibling references to one
 //!   instance both render in full.
+//! - Native SPL debug fields follow user properties and use a separate render-only view.
 //! - DYNAMIC PROPERTIES are not in the descriptor: after the declared rows the walker
 //!   appends the instance's dynamic-property hash (`__rt_obj_dump_dyn_props`) through
 //!   `__rt_print_r_hash_entries`, in insertion order, at the same entry indent.
+
+#[path = "print_r_spl.rs"]
+mod native_spl;
 
 use crate::codegen_support::abi;
 use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
@@ -98,6 +101,7 @@ pub fn emit_pr_obj_desc(emitter: &mut Emitter) {
 /// instance is already being walked.
 /// Input: AArch64 x0=object x1=base indent / x86_64 rdi=object rsi=base indent.
 pub fn emit_print_r_object(emitter: &mut Emitter) {
+    native_spl::emit(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_print_r_object_linux_x86_64(emitter);
         return;
@@ -165,6 +169,10 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_vd_seen_find");                                // is this object already on the walk stack?
     emitter.instruction("cbnz x0, __rt_pr_obj_recursion");                      // PHP renders a revisited object as *RECURSION*
+    emitter.instruction("ldr x0, [sp, #0]"); // bind the current leased receiver to its magic view
+    emitter.instruction("ldr x1, [sp, #8]"); // pass the object's existing body indentation
+    emitter.instruction("bl __rt_print_r_magic_view"); // render a custom debug body when its hook is present
+    emitter.instruction("cbnz x0, __rt_pr_obj_exit"); // custom views replace ordinary declared and native fields
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_vd_seen_push");                                // mark the object as being walked
 
@@ -247,9 +255,13 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     // -- dynamic properties follow the declared ones, in insertion order --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_obj_dump_dyn_props");                          // x0 = dynamic-property hash, or 0
-    emitter.instruction("cbz x0, __rt_pr_obj_close");                           // no dynamic properties to append
+    emitter.instruction("cbz x0, __rt_pr_obj_native");                          // native debug entries follow any dynamic properties
     emitter.instruction("ldr x1, [sp, #16]");                                   // entry indent → entry walker
     emitter.instruction("bl __rt_print_r_hash_entries");                        // write one `[name] => value` line per dynamic property
+    emitter.label("__rt_pr_obj_native");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // pass the receiver to its native debug view
+    emitter.instruction("ldr x1, [sp, #16]");                                   // pass the existing entry indentation
+    emitter.instruction("bl __rt_print_r_native_spl_entries");                  // append native fields without exposing them to property/export views
     emitter.label("__rt_pr_obj_close");
     emitter.instruction("ldr x0, [sp, #8]");                                    // base → close helper argument
     emitter.instruction("bl __rt_print_r_close");                               // write `<base>)\n`
@@ -343,6 +355,11 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_vd_seen_find");                              // is this object already on the walk stack?
     emitter.instruction("cmp rax, 0");                                          // a hit means we are inside this same instance
     emitter.instruction("jne __rt_pr_obj_recursion_x86");                       // PHP renders a revisited object as *RECURSION*
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]"); // bind the current leased receiver to its magic view
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]"); // pass the object's existing body indentation
+    emitter.instruction("call __rt_print_r_magic_view"); // render a custom debug body when its hook is present
+    emitter.instruction("test rax, rax"); // did the custom view replace ordinary property rendering?
+    emitter.instruction("jnz __rt_pr_obj_exit_x86"); // custom views replace ordinary declared and native fields
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_vd_seen_push");                              // mark the object as being walked
 
@@ -418,10 +435,14 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_obj_dump_dyn_props");                        // rax = dynamic-property hash, or 0
     emitter.instruction("test rax, rax");                                       // does the object carry dynamic properties?
-    emitter.instruction("jz __rt_pr_obj_close_x86");                            // no dynamic properties to append
+    emitter.instruction("jz __rt_pr_obj_native_x86");                           // native debug entries follow any dynamic properties
     emitter.instruction("mov rdi, rax");                                        // dynamic-property hash → entry walker
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // entry indent → entry walker
     emitter.instruction("call __rt_print_r_hash_entries");                      // write one `[name] => value` line per dynamic property
+    emitter.label("__rt_pr_obj_native_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the receiver to its native debug view
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the existing entry indentation
+    emitter.instruction("call __rt_print_r_native_spl_entries");                // append native fields without exposing them to property/export views
     emitter.label("__rt_pr_obj_close_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // base → close helper argument
     emitter.instruction("call __rt_print_r_close");                             // write `<base>)\n`

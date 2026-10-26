@@ -609,6 +609,30 @@ pub(crate) fn lower_throw_access_error(
     terminate_throw(ctx, error_value.value);
 }
 
+/// Lowers a statically-decided return-coverage violation as a catchable `TypeError` throw.
+///
+/// php compiles a body that does not return on every path and raises
+/// `TypeError: X(): Return value must be of type Y, none returned` at run time when a path
+/// completes without a value. Builds a synthetic `new TypeError($message)` expression, lowers it,
+/// and terminates the block with the throw.
+pub(crate) fn lower_static_type_error(ctx: &mut LoweringContext<'_, '_>, message: &str) {
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    let error_expr = Expr::new(
+        ExprKind::NewObject {
+            class_name: crate::names::Name::unqualified("TypeError"),
+            args: vec![Expr::new(
+                ExprKind::StringLiteral(message.to_string()),
+                crate::span::Span::dummy(),
+            )],
+        },
+        crate::span::Span::dummy(),
+    );
+    let error_value = crate::ir_lower::expr::lower_expr(ctx, &error_expr);
+    terminate_throw(ctx, error_value.value);
+}
+
 /// Lowers a statically-decided access violation as a catchable `Error` throw in
 /// expression position and returns a placeholder null value.
 ///
@@ -621,9 +645,23 @@ pub(crate) fn lower_throw_access_error_expr(
     message: &str,
     span: Span,
 ) -> LoweredValue {
+    lower_throw_access_error_of_class(ctx, "Error", message, span)
+}
+
+/// Throws a caught-or-uncaught `Throwable` of a SPECIFIC error class at a recorded access site.
+///
+/// php's argument-count violation is an `ArgumentCountError` — a subclass a `catch
+/// (ArgumentCountError)` matches — so the recorded-throw path needs the class, not just the
+/// message the generic `Error` form carries.
+pub(crate) fn lower_throw_access_error_of_class(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    message: &str,
+    span: Span,
+) -> LoweredValue {
     let error_expr = Expr::new(
         ExprKind::NewObject {
-            class_name: crate::names::Name::unqualified("Error"),
+            class_name: crate::names::Name::unqualified(class_name),
             args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), span)],
         },
         span,

@@ -6,6 +6,7 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
 //!
 //! Key details:
+//! - SPL list storage follows normal inherited property descriptors.
 //! - Deep free helpers recursively release owned child storage and must match the heap kind/tag layout exactly.
 //! - Destructor exceptions are deferred until sibling owners and the object storage have been released.
 
@@ -202,26 +203,6 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("b __rt_object_free_deep_struct");                      // free the coroutine struct without walking property descriptors
     emitter.label("__rt_object_free_deep_not_generator");
     }
-
-    // -- SPL doubly-linked-list family: release custom internal storage, not PHP property slots --
-    emitter.instruction("ldr x10, [x0]");                                       // x10 = receiver class_id
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x11", "_spl_dll_class_id", 0); // x11 = class id of SplDoublyLinkedList
-    emitter.instruction("cmp x10, x11");                                        // is the receiver a SplDoublyLinkedList?
-    emitter.instruction("b.eq __rt_object_free_deep_spl_dll");                  // release SPL list storage for SplDoublyLinkedList
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x11", "_spl_stack_class_id", 0); // x11 = class id of SplStack
-    emitter.instruction("cmp x10, x11");                                        // is the receiver a SplStack?
-    emitter.instruction("b.eq __rt_object_free_deep_spl_dll");                  // release SPL list storage for SplStack
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x11", "_spl_queue_class_id", 0); // x11 = class id of SplQueue
-    emitter.instruction("cmp x10, x11");                                        // is the receiver a SplQueue?
-    emitter.instruction("b.ne __rt_object_free_deep_not_spl_dll");              // skip SPL list cleanup for ordinary objects
-    emitter.label("__rt_object_free_deep_spl_dll");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved SPL list object pointer
-    emitter.instruction(&format!("ldr x0, [x0, #{}]", crate::codegen_support::runtime::spl::SPL_DLL_STORAGE_OFFSET)); // load the owned internal Mixed storage array
-    super::deep_cleanup::invoke(emitter, "__rt_decref_array", "x0");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved SPL list object pointer after storage release
-    emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::runtime::spl::SPL_DLL_STORAGE_OFFSET)); // clear the storage pointer after release
-    emitter.instruction("b __rt_object_free_deep_no_dyn_props");                // free the custom object storage without generic descriptor walking
-    emitter.label("__rt_object_free_deep_not_spl_dll");
 
     // -- SplFixedArray custom storage: release the owned fixed-size Mixed array --
     emitter.instruction("ldr x10, [x0]");                                       // x10 = receiver class_id
@@ -486,26 +467,6 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.instruction("jmp __rt_object_free_deep_struct");                    // free the coroutine struct without walking property descriptors
     emitter.label("__rt_object_free_deep_not_generator");
     }
-
-    // -- SPL doubly-linked-list family: release custom internal storage, not PHP property slots --
-    emitter.instruction("mov r10, QWORD PTR [rax]");                            // r10 = receiver class_id
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r11", "_spl_dll_class_id", 0); // r11 = class id of SplDoublyLinkedList
-    emitter.instruction("cmp r10, r11");                                        // is the receiver a SplDoublyLinkedList?
-    emitter.instruction("je __rt_object_free_deep_spl_dll");                    // release SPL list storage for SplDoublyLinkedList
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r11", "_spl_stack_class_id", 0); // r11 = class id of SplStack
-    emitter.instruction("cmp r10, r11");                                        // is the receiver a SplStack?
-    emitter.instruction("je __rt_object_free_deep_spl_dll");                    // release SPL list storage for SplStack
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r11", "_spl_queue_class_id", 0); // r11 = class id of SplQueue
-    emitter.instruction("cmp r10, r11");                                        // is the receiver a SplQueue?
-    emitter.instruction("jne __rt_object_free_deep_not_spl_dll");               // skip SPL list cleanup for ordinary objects
-    emitter.label("__rt_object_free_deep_spl_dll");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved SPL list object pointer
-    emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", crate::codegen_support::runtime::spl::SPL_DLL_STORAGE_OFFSET)); // load the owned internal Mixed storage array
-    super::deep_cleanup::invoke(emitter, "__rt_decref_array", "rax");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved SPL list object pointer after storage release
-    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::runtime::spl::SPL_DLL_STORAGE_OFFSET)); // clear the storage pointer after release
-    emitter.instruction("jmp __rt_object_free_deep_no_dyn_props");              // free the custom object storage without generic descriptor walking
-    emitter.label("__rt_object_free_deep_not_spl_dll");
 
     // -- SplFixedArray custom storage: release the owned fixed-size Mixed array --
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // r10 = receiver class_id

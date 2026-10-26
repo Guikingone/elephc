@@ -5,10 +5,12 @@
 //! - Reflection owner-specific constructors after resolving metadata.
 //!
 //! Key details:
+//! - Collection builders retire fresh keys and member values after borrowed array stores.
 //! - Temporary arrays and object handles are transferred through runtime ownership APIs.
 //! - Full and shallow class owners avoid recursive metadata expansion.
 
 use super::*;
+use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
 /// Materializes one Reflection owner object and transfers the temporary attribute array.
 pub(super) fn eval_reflection_owner_object(
@@ -521,13 +523,11 @@ pub(super) fn eval_reflection_string_assoc_result(
     pairs: Vec<(String, String)>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(pairs.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, pairs.len())?;
     for (key, value) in pairs {
-        let key = values.string(&key)?;
-        let value = values.string(&value)?;
-        result = values.array_set(result, key, value)?;
+        result.string(&key, |values| values.string(&value))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Builds a name-keyed PHP array of full ReflectionClass objects.
@@ -536,13 +536,13 @@ pub(super) fn eval_reflection_class_object_map_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(names.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, names.len())?;
     for name in names {
-        let key = values.string(name)?;
-        let object = eval_reflection_full_class_object_result(name, context, values)?;
-        result = values.array_set(result, key, object)?;
+        result.string(name, |values| {
+            eval_reflection_full_class_object_result(name, context, values)
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Maps a synthetic reflection owner kind to PHP's `Attribute::TARGET_*` bitmask.
@@ -575,13 +575,13 @@ pub(super) fn eval_reflection_parameter_object_array_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(parameters.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, parameters.len())?;
     for parameter in parameters {
-        let parameter_object = eval_reflection_parameter_object_result(parameter, context, values)?;
-        let key = values.int(parameter.position as i64)?;
-        result = values.array_set(result, key, parameter_object)?;
+        result.index(parameter.position, |values| {
+            eval_reflection_parameter_object_result(parameter, context, values)
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Materializes one ReflectionParameter object through the shared reflection helper.
@@ -955,13 +955,13 @@ pub(super) fn eval_reflection_named_type_object_array_result(
     types: &[EvalReflectionNamedTypeMetadata],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(types.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, types.len())?;
     for (position, type_metadata) in types.iter().enumerate() {
-        let type_object = eval_reflection_named_type_object_result(type_metadata, values)?;
-        let key = values.int(position as i64)?;
-        result = values.array_set(result, key, type_object)?;
+        result.index(position, |values| {
+            eval_reflection_named_type_object_result(type_metadata, values)
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Builds the `ReflectionMethod|null` value stored in ReflectionClass::__constructor.
@@ -1084,7 +1084,7 @@ pub(super) fn eval_reflection_member_object_array_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(names.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, names.len())?;
     let mut index = 0;
     for name in names {
         let Some(member) = eval_reflection_member_metadata(owner_kind, class_name, name, context)
@@ -1094,13 +1094,12 @@ pub(super) fn eval_reflection_member_object_array_result(
         if !eval_reflection_member_matches_filter(&member, filter) {
             continue;
         }
-        let member_object =
-            eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
-        let key = values.int(index)?;
-        result = values.array_set(result, key, member_object)?;
+        result.index(index, |values| {
+            eval_reflection_member_object_result(owner_kind, name, &member, context, values)
+        })?;
         index += 1;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Builds an indexed array of AOT ReflectionMethod or ReflectionProperty objects for a class.
@@ -1112,12 +1111,12 @@ pub(super) fn eval_reflection_aot_member_object_array_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(names.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, names.len())?;
     let mut index = 0;
     for name in names {
         let member = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
             eval_reflection_aot_method_metadata_with_signature_if_exists(
-                class_name, name, context, values,
+                class_name, name, context, result.values(),
             )?
         } else {
             eval_reflection_native_interface_property_requirement(class_name, name, context)
@@ -1125,7 +1124,7 @@ pub(super) fn eval_reflection_aot_member_object_array_result(
                     eval_reflection_interface_property_metadata(declaring_class, &property)
                 })
                 .or(eval_reflection_aot_property_metadata_if_exists(
-                    class_name, name, context, values,
+                    class_name, name, context, result.values(),
                 )?)
         };
         let Some(member) = member else {
@@ -1139,11 +1138,10 @@ pub(super) fn eval_reflection_aot_member_object_array_result(
         // answer `match` for a method written `Match`, disagreeing with the same program's AOT
         // reflection and with PHP (issue #571). Property names were never keyed
         // case-insensitively, so they were already passed through.
-        let member_object =
-            eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
-        let key = values.int(index)?;
-        result = values.array_set(result, key, member_object)?;
+        result.index(index, |values| {
+            eval_reflection_member_object_result(owner_kind, name, &member, context, values)
+        })?;
         index += 1;
     }
-    Ok(result)
+    Ok(result.finish())
 }

@@ -25,7 +25,12 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_heap_debug_validate_free_list(emitter);
     arrays::emit_heap_debug_report(emitter);
     arrays::emit_heap_kind(emitter);
-    arrays::emit_heap_free(emitter, features.eval_bridge, features.mbstring || features.eval_bridge);
+    if features.heap_scopes {
+        arrays::emit_heap_scopes(emitter);
+        arrays::emit_heap_free_scoped(emitter, features.eval_bridge, features.mbstring || features.eval_bridge);
+    } else {
+        arrays::emit_heap_free(emitter, features.eval_bridge, features.mbstring || features.eval_bridge);
+    }
     arrays::emit_array_free_deep(emitter);
     arrays::emit_array_clone_shallow(emitter);
     arrays::emit_array_ensure_unique(emitter);
@@ -189,6 +194,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_gc_collect_cycles(emitter);
     arrays::emit_mixed_reference(emitter);
     arrays::emit_mixed_clone(emitter);
+    arrays::emit_borrowed_value(emitter);
     arrays::emit_mixed_from_value(emitter);
     arrays::emit_mixed_cast_array(emitter);
     arrays::emit_mixed_abs(emitter);
@@ -244,19 +250,23 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     // Object runtime functions
     objects::emit_object_handles(emitter);
     objects::emit_object_to_hash(emitter);
+    objects::emit_object_array_cast(emitter);
     objects::emit_stdclass_new(emitter);
     objects::emit_stdclass_from_hash(emitter);
     objects::emit_stdclass_get(emitter);
     objects::emit_stdclass_set(emitter);
+    objects::emit_object_property_append(emitter);
     objects::emit_mixed_property_get(emitter);
     objects::emit_mixed_property_set(emitter);
     objects::emit_magic_set_guard(emitter);
     objects::emit_mixed_cell_autovivify_array(emitter);
     objects::emit_mixed_array_get(emitter);
     objects::emit_throw_object_not_array(emitter);
+    objects::emit_deferred_array_key_runtime(emitter);
     objects::emit_throw_serialization_denied(emitter);
     objects::emit_throw_unserialization_denied(emitter);
     objects::emit_mixed_array_set(emitter);
+    objects::emit_mixed_array_unset(emitter);
     objects::emit_mixed_array_append(emitter);
     objects::emit_mixed_array_fetch_for_write(emitter);
     objects::emit_new_by_name(emitter);

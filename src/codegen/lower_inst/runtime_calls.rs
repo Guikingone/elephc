@@ -18,6 +18,10 @@ use crate::types::PhpType;
 use super::receiver_place::ReceiverPlace;
 use super::{expect_operand, store_if_result};
 
+mod borrowed_value;
+mod heap_scopes;
+mod exception_chain_mixed;
+
 /// Lowers one typed runtime operation through its target-specific helper ABI.
 pub(super) fn lower(
     ctx: &mut FunctionContext<'_>,
@@ -25,6 +29,11 @@ pub(super) fn lower(
     target: RuntimeCallTarget,
 ) -> Result<()> {
     match target {
+        RuntimeCallTarget::ExceptionChainMixed => exception_chain_mixed::lower(ctx, inst),
+        RuntimeCallTarget::NativePropertyRestore | RuntimeCallTarget::NativePropertyReplace | RuntimeCallTarget::HeapScopeBegin | RuntimeCallTarget::HeapScopeRead
+        | RuntimeCallTarget::HeapScopeRootWritten | RuntimeCallTarget::HeapScopeEnd | RuntimeCallTarget::HeapScopeReleaseRoot => heap_scopes::lower(ctx, inst, target),
+        RuntimeCallTarget::BorrowedValueSnapshot | RuntimeCallTarget::BorrowedValueRead
+        | RuntimeCallTarget::BorrowedValueFree => borrowed_value::lower(ctx, inst, target),
         RuntimeCallTarget::WeakObjectId => {
             let receiver = expect_operand(inst, 0)?;
             ctx.load_value_to_result(receiver)?;

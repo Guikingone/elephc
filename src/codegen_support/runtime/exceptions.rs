@@ -32,6 +32,7 @@ mod ref_cell_release;
 mod previous;
 mod throw_current;
 mod uncaught_report;
+mod uncaught_trace;
 
 pub use class_implements::emit_class_implements_interface;
 pub use boxed_owner::emit_throwable_boxed_owners;
@@ -54,4 +55,5 @@ pub use ref_cell_release::emit_local_ref_cell_release;
 pub use previous::emit_throwable_previous;
 pub use throw_current::emit_throw_current;
 pub use uncaught_report::emit_report_uncaught_exception;
+pub(crate) use uncaught_trace::emit_uncaught_print_stack_trace;
 pub(crate) use uncaught_report::UNCAUGHT_EXIT_STATUS;

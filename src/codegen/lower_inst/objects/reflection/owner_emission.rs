@@ -5,6 +5,7 @@
 //! - `crate::codegen::lower_inst::objects::reflection`.
 //!
 //! Key details:
+//! - Name parts are initialized once; overwriting an owned string would abandon its first value.
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
 
 use super::*;
@@ -145,9 +146,6 @@ pub(super) fn emit_reflection_owner_object(
                 "ReflectionProperty",
                 &metadata.property_members,
             )?;
-        } else if class_name == "ReflectionFunction" {
-            let (_, short_name) = reflection_name_parts(reflected_name);
-            emit_reflection_owner_string_property_by_name(ctx, class_name, "__short_name", short_name)?;
         }
         if class_name == "ReflectionEnum" {
             let case_names = metadata

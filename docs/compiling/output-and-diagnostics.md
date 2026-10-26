@@ -162,6 +162,17 @@ elephc --mascotte hello.php
 
 These flags instrument the **compiled program**, not the compiler.
 
+### Runtime warnings and notices
+
+A compiled program mirrors PHP's `display_errors` behavior for its own runtime
+diagnostics (undefined array keys, deprecations, failed stream opens, …). Each
+`Warning:`, `Notice:`, or `Deprecated:` message is also written to **stdout** as
+`<level>: <message> in <file> on line <line>` — the exact text `php` prints — so
+a program's output matches a reference `php` run byte for byte. An `@`-suppressed
+expression hides the display line, and a startup diagnostic with no source file
+keeps its legacy stderr-only form. The legacy message is still written to
+**stderr** as well.
+
 ### `--gc-stats`
 
 Compiles the program so it prints allocation and free counters to stderr when it
@@ -193,3 +204,34 @@ elephc --heap-debug heavy.php
 
 See [Memory Model](../internals/memory-model.md) and
 [The Runtime](../internals/the-runtime.md) for what these report on.
+
+### Runtime diagnostic capture
+
+Displayed warnings, notices and deprecations pass through the same output path
+as `echo`. An active `ob_start()` captures them; `ob_get_clean()` returns their
+text and `ob_end_clean()` discards it. Web builds include displayed diagnostics
+in the captured response. The legacy stderr diagnostic copy remains separate.
+Diagnostics raised inside synthetic SPL methods use the PHP call site's source
+line, including the line passed to a user error handler.
+
+### Startup warning destinations
+
+Startup overrides select where warnings, notices and deprecations are sent:
+
+```bash
+elephc --ini display_errors=1 --ini log_errors=0 app.php
+# one displayed diagnostic on stdout, without a duplicate stderr log
+
+elephc --ini display_errors=stderr --ini log_errors=0 app.php
+# displayed diagnostics go to stderr and bypass output buffers
+
+elephc --ini display_errors=0 --ini log_errors=0 app.php
+# default warning output is hidden; user error handlers still run
+```
+
+`stdout` and `stderr` are accepted display modes. Overrides are applied in order,
+with the last assignment winning. This startup surface currently controls
+ordinary warnings and `trigger_error()` output. Dynamic `ini_get()`/`ini_set()`
+reporting and mutation, fatal destinations and full PHP log formatting remain
+separate compatibility gaps. Without an override, Elephc retains its existing
+display and stderr-log destinations.

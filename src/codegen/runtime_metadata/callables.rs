@@ -1,5 +1,5 @@
 //! Purpose:
-//! Builds runtime-visible function signatures and intrinsic method wrappers.
+//! Builds runtime-visible user-function signatures and callable lookup metadata.
 //!
 //! Called from:
 //! - `super::super::finalize_user_asm()` and class metadata filtering.
@@ -108,93 +108,4 @@ pub(in crate::codegen) fn function_uses_dynamic_callable_lookup(function: &Funct
 /// Returns true for an EIR builtin instruction that calls PHP `is_callable()`.
 pub(in crate::codegen) fn is_dynamic_callable_lookup_builtin(inst: &crate::ir::Instruction) -> bool {
     typed_builtin_target(inst).is_some_and(|target| target.is_callable_lookup())
-}
-
-/// Emits method-symbol wrappers for runtime-backed intrinsic class methods.
-pub(in crate::codegen) fn emit_intrinsic_method_wrappers(module: &Module, emitter: &mut Emitter) {
-    for wrapper in intrinsic_method_wrapper_specs(module) {
-        let symbol = if wrapper.is_static {
-            static_method_symbol(&wrapper.class_name, &wrapper.method_key)
-        } else {
-            method_symbol(&wrapper.class_name, &wrapper.method_key)
-        };
-        emitter.label(&symbol);
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!("b {}", wrapper.helper));          // tail-call the runtime helper using the method ABI arguments
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!("jmp {}", wrapper.helper));        // tail-call the runtime helper using the method ABI arguments
-            }
-        }
-    }
-}
-
-/// Runtime-backed method wrapper that should be emitted as a PHP method symbol.
-pub(in crate::codegen) struct IntrinsicMethodWrapper {
-    pub(in crate::codegen) class_name: String,
-    pub(in crate::codegen) method_key: String,
-    helper: &'static str,
-    pub(in crate::codegen) is_static: bool,
-}
-
-/// Returns intrinsic instance/static methods that need method-symbol wrappers.
-pub(in crate::codegen) fn intrinsic_method_wrapper_specs(module: &Module) -> Vec<IntrinsicMethodWrapper> {
-    let eir_methods = eir_class_method_keys(module);
-    let mut wrappers = Vec::new();
-    for (class_name, class_info) in &module.class_infos {
-        for method_key in class_info.methods.keys() {
-            let impl_class = class_info
-                .method_impl_classes
-                .get(method_key)
-                .map(String::as_str)
-                .unwrap_or(class_name.as_str());
-            if eir_methods.contains(&(impl_class.to_string(), method_key.clone(), false)) {
-                continue;
-            }
-            if let Some(helper) = IntrinsicCall::instance_method(impl_class, method_key)
-                .and_then(|intrinsic| intrinsic.runtime_helper())
-            {
-                wrappers.push(IntrinsicMethodWrapper {
-                    class_name: impl_class.to_string(),
-                    method_key: method_key.clone(),
-                    helper,
-                    is_static: false,
-                });
-            }
-        }
-        for method_key in class_info.static_methods.keys() {
-            let impl_class = class_info
-                .static_method_impl_classes
-                .get(method_key)
-                .map(String::as_str)
-                .unwrap_or(class_name.as_str());
-            if eir_methods.contains(&(impl_class.to_string(), method_key.clone(), true)) {
-                continue;
-            }
-            if let Some(helper) = IntrinsicCall::static_method(impl_class, method_key)
-                .and_then(|intrinsic| intrinsic.runtime_helper())
-            {
-                wrappers.push(IntrinsicMethodWrapper {
-                    class_name: impl_class.to_string(),
-                    method_key: method_key.clone(),
-                    helper,
-                    is_static: true,
-                });
-            }
-        }
-    }
-    wrappers.sort_by(|left, right| {
-        (&left.class_name, &left.method_key, left.is_static).cmp(&(
-            &right.class_name,
-            &right.method_key,
-            right.is_static,
-        ))
-    });
-    wrappers.dedup_by(|left, right| {
-        left.class_name == right.class_name
-            && left.method_key == right.method_key
-            && left.is_static == right.is_static
-    });
-    wrappers
 }

@@ -48,10 +48,21 @@ fn test_consecutive_comments() {
 
 // --- Complex tokens ---
 
-/// Verifies missing `<?php` open tag produces a lex error.
+/// Verifies a source with no `<?php` at all is pure inline HTML: it is echoed verbatim, matching
+/// PHP, rather than rejected.
 #[test]
-fn test_missing_open_tag() {
-    assert!(tokenize("echo \"hi\";").is_err());
+fn test_source_without_open_tag_is_inline_html() {
+    let t = tokens("echo \"hi\";");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::StringLiteral("echo \"hi\";".to_string()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
 }
 
 /// Verifies an unterminated double-quoted string produces a lex error.
@@ -114,4 +125,60 @@ fn test_open_tag_with_comment_no_code() {
 fn test_open_tag_with_block_comment_no_code() {
     let t = tokens("<?php /* empty */");
     assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
+}
+
+/// Verifies `?>` closes PHP mode: it becomes a `Semicolon`, the single newline right after it is
+/// swallowed, and the following inline HTML is `Echo <string> Semicolon`.
+#[test]
+fn test_close_tag_swallows_one_newline_and_echoes_html() {
+    let t = tokens("<?php echo 1; ?>\ntext");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::IntLiteral(1),
+            Token::Semicolon,
+            Token::Semicolon, // the close tag
+            Token::Echo,
+            Token::StringLiteral("text".to_string()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies `<?=` is a short echo: `OpenTag` then a leading `Echo`.
+#[test]
+fn test_short_echo_tag_tokens() {
+    let t = tokens("<?= 1 ?>");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::IntLiteral(1),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies leading inline HTML (before the first open tag) is echoed before the program code.
+#[test]
+fn test_leading_inline_html_is_echoed_before_code() {
+    let t = tokens("A<?php echo 1;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::StringLiteral("A".to_string()),
+            Token::Semicolon,
+            Token::Echo,
+            Token::IntLiteral(1),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
 }

@@ -54,6 +54,11 @@ fn recursive_iterator_iterator_current_valid_expr() -> Expr {
     property_access(this_expr(), "currentValid")
 }
 
+/// Returns `$this->inIteration`, php's guard for the begin/end-iteration hooks.
+fn recursive_iterator_iterator_in_iteration_expr() -> Expr {
+    property_access(this_expr(), "inIteration")
+}
+
 /// Builds the AST expression for recursive iterator iterator valid.
 fn recursive_iterator_iterator_valid_expr() -> Expr {
     recursive_iterator_iterator_current_valid_expr()
@@ -96,7 +101,15 @@ fn recursive_iterator_iterator_slot_for_depth_expr(depth: Expr) -> Expr {
 /// Builds the synthetic method body for recursive iterator iterator construct.
 pub(super) fn recursive_iterator_iterator_construct_body() -> Vec<Stmt> {
     vec![
-        property_assign_stmt(this_expr(), "root", var_expr("iterator")),
+        property_assign_stmt(
+            this_expr(),
+            "root",
+            method_call(
+                this_expr(),
+                "__elephcAssumeRecursiveIterator",
+                vec![var_expr("iterator")],
+            ),
+        ),
         property_assign_stmt(this_expr(), "mode", var_expr("mode")),
         property_assign_stmt(this_expr(), "flags", var_expr("flags")),
         property_assign_stmt(this_expr(), "iterators", empty_array_expr()),
@@ -105,6 +118,7 @@ pub(super) fn recursive_iterator_iterator_construct_body() -> Vec<Stmt> {
         property_assign_stmt(this_expr(), "depth", int_expr(0)),
         property_assign_stmt(this_expr(), "slot", int_expr(0)),
         property_assign_stmt(this_expr(), "currentValid", bool_expr(false)),
+        property_assign_stmt(this_expr(), "inIteration", bool_expr(false)),
     ]
 }
 
@@ -128,16 +142,48 @@ pub(super) fn recursive_iterator_iterator_rewind_body() -> Vec<Stmt> {
                 property_array_push_stmt(this_expr(), "iterators", recursive_iterator_iterator_root_expr()),
                 property_array_push_stmt(this_expr(), "states", int_expr(0)),
                 property_array_push_stmt(this_expr(), "depths", int_expr(0)),
-                expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new())),
             ],
+            None,
+        ),
+        // php fires `beginIteration()` after the root frame exists but before the first advance,
+        // so a hook that calls `next()` really moves the loop on. `in_iteration` guards a nested
+        // rewind from re-firing it, and marks the run live for the first exhausted `valid()`.
+        if_stmt(
+            not_expr(recursive_iterator_iterator_in_iteration_expr()),
+            vec![expr_stmt(method_call(this_expr(), "beginIteration", Vec::new()))],
+            None,
+        ),
+        property_assign_stmt(this_expr(), "inIteration", bool_expr(true)),
+        if_stmt(
+            method_call(recursive_iterator_iterator_root_expr(), "valid", Vec::new()),
+            vec![expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new()))],
             None,
         ),
     ]
 }
 
 /// Builds the synthetic method body for recursive iterator iterator valid.
+///
+/// php fires the `endIteration()` hook from `valid()` the first time it reports an exhausted
+/// iterator, then clears the in-iteration flag so a later probe does not repeat it. The internal
+/// readers (`current`/`key`) test `currentValid` directly, so only the public method fires it.
 pub(super) fn recursive_iterator_iterator_valid_body() -> Vec<Stmt> {
-    return_body(recursive_iterator_iterator_valid_expr())
+    vec![
+        if_stmt(
+            recursive_iterator_iterator_valid_expr(),
+            return_body(bool_expr(true)),
+            None,
+        ),
+        if_stmt(
+            recursive_iterator_iterator_in_iteration_expr(),
+            vec![
+                property_assign_stmt(this_expr(), "inIteration", bool_expr(false)),
+                expr_stmt(method_call(this_expr(), "endIteration", Vec::new())),
+            ],
+            None,
+        ),
+        return_stmt(bool_expr(false)),
+    ]
 }
 
 /// Builds the synthetic method body for recursive iterator iterator current.
@@ -173,9 +219,17 @@ pub(super) fn recursive_iterator_iterator_key_body() -> Vec<Stmt> {
 }
 
 /// Builds the synthetic method body for recursive iterator iterator next.
+///
+/// php's `next()` always advances, even from a not-yet-started state: `beginIteration()` may call
+/// `$this->next()` to skip the first element, and that call has to move the loop on. The frame
+/// count guard only keeps a `next()` before any `rewind()` from reading a missing root frame.
 pub(super) fn recursive_iterator_iterator_next_body() -> Vec<Stmt> {
     vec![if_stmt(
-        recursive_iterator_iterator_valid_expr(),
+        binary_expr(
+            count_expr(recursive_iterator_iterator_iterators_expr()),
+            BinOp::Gt,
+            int_expr(0),
+        ),
         vec![expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new()))],
         None,
     )]
@@ -321,6 +375,10 @@ fn recursive_iterator_iterator_pop_invalid_frame_body() -> Vec<Stmt> {
                     TypeExpr::Int,
                     binary_expr(recursive_iterator_iterator_depth_expr(), BinOp::Sub, int_expr(1)),
                 ),
+                // Publish the frame as valid for the hook: php's `endChildren()` observes the
+                // depth of the level being left through `getDepth()`.
+                property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
+                expr_stmt(method_call(this_expr(), "endChildren", Vec::new())),
                 property_assign_stmt(
                     this_expr(),
                     "depth",
@@ -346,6 +404,7 @@ fn recursive_iterator_iterator_advance_self_first_body() -> Vec<Stmt> {
             vec![
                 property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(1)),
                 property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
+                expr_stmt(method_call(this_expr(), "nextElement", Vec::new())),
                 return_void_stmt(),
             ],
             None,
@@ -380,6 +439,7 @@ fn recursive_iterator_iterator_advance_children_first_or_leaves_body() -> Vec<St
             vec![
                 property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
                 property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
+                expr_stmt(method_call(this_expr(), "nextElement", Vec::new())),
                 return_void_stmt(),
             ],
             None,
@@ -402,6 +462,7 @@ fn recursive_iterator_iterator_advance_children_first_or_leaves_body() -> Vec<St
         ),
         property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
         property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
+        expr_stmt(method_call(this_expr(), "nextElement", Vec::new())),
         return_void_stmt(),
     ]
 }
@@ -461,6 +522,10 @@ fn recursive_iterator_iterator_descend_current_child_body(parent_state: Expr) ->
                 property_array_push_stmt(this_expr(), "depths", var_expr("nextDepth")),
                 property_assign_stmt(this_expr(), "depth", var_expr("nextDepth")),
                 property_assign_stmt(this_expr(), "slot", var_expr("nextSlot")),
+                // The child was just proven valid; publish it so `beginChildren()`'s
+                // `getDepth()` reports the new level instead of 0.
+                property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
+                expr_stmt(method_call(this_expr(), "beginChildren", Vec::new())),
                 expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new())),
                 return_void_stmt(),
             ],

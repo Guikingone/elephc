@@ -125,17 +125,45 @@ fn interface_self_return_conforms(
     required_return: &PhpType,
     actual_return: &PhpType,
 ) -> bool {
-    match (required_return, actual_return) {
-        (PhpType::Object(expected_name), PhpType::Object(actual_name)) => {
-            actual_name == &class.name
-                && (expected_name == interface_name
-                    || checker.interface_extends_interface(interface_name, expected_name)
-                    || class.implements.iter().any(|declared| {
-                        declared == expected_name
-                            || checker.interface_extends_interface(declared, expected_name)
-                    }))
-        }
-        _ => false,
+    if let PhpType::Union(members) = actual_return {
+        // Covariance constrains every possible result, not just the self/object arm.
+        return members.iter().all(|member| {
+            interface_self_return_conforms(checker, class, interface_name, required_return, member)
+        });
+    }
+    if declared_return_type_compatible(checker, required_return, actual_return) {
+        return true;
+    }
+    let PhpType::Object(actual_name) = actual_return else { return false; };
+    if actual_name != class.name.as_str() { return false; }
+    if class.extends.as_ref().is_some_and(|parent| {
+        declared_return_type_compatible(checker, required_return, &PhpType::Object(parent.clone()))
+    }) {
+        return true;
+    }
+    object_member_names(required_return).iter().any(|expected_name| {
+        *expected_name == class.name.as_str()
+            || *expected_name == interface_name
+            || checker.interface_extends_interface(interface_name, expected_name)
+            || class.implements.iter().any(|declared| {
+                declared == expected_name
+                    || checker.interface_extends_interface(declared, expected_name)
+            })
+    })
+}
+
+/// Returns the object class/interface names carried by `ty` (itself or its union members).
+fn object_member_names(ty: &PhpType) -> Vec<&str> {
+    match ty {
+        PhpType::Object(name) => vec![name.as_str()],
+        PhpType::Union(members) => members
+            .iter()
+            .filter_map(|member| match member {
+                PhpType::Object(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -305,7 +333,22 @@ fn validate_static_interface_method(
                     |owner| declaration_is_source(checker, owner),
                 ),
     )?;
-    if required_sig.declared_return && !actual_sig.declared_return {
+    let required_contract_owner = interface_info.static_method_declaring_interfaces
+        .get(method_name).map(String::as_str).unwrap_or(interface_name);
+    let implementation = actual_method.or_else(|| {
+        state.static_method_declaring_classes.get(method_name)
+            .and_then(|owner| checker.classes.get(owner))
+            .and_then(|info| info.method_decls.iter().find(|method| {
+                method.is_static == true && php_symbol_key(&method.name) == method_name
+            }))
+    });
+    let permits_return_change = !declaration_is_source(checker, required_contract_owner)
+        && elephc_builtin_contract::method_return_is_tentative(required_contract_owner, method_name)
+        && implementation.is_some_and(super::super::validation::has_return_type_will_change);
+    if required_sig.declared_return
+        && !actual_sig.declared_return
+        && !permits_return_change
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -366,7 +409,10 @@ fn validate_static_interface_method(
             &actual_sig.return_type,
         )
     });
-    if required_sig.declared_return && !return_compatible {
+    if required_sig.declared_return
+        && !return_compatible
+        && !permits_return_change
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -546,7 +592,21 @@ fn validate_interface_method(
                     |owner| declaration_is_source(checker, owner),
                 ),
     )?;
-    if required_sig.declared_return && !actual_sig.declared_return && !tentative_return {
+    let implementation = actual_method.or_else(|| {
+        state.method_declaring_classes.get(method_name)
+            .and_then(|owner| checker.classes.get(owner))
+            .and_then(|info| info.method_decls.iter().find(|method| {
+                method.is_static == false && php_symbol_key(&method.name) == method_name
+            }))
+    });
+    let permits_return_change = !declaration_is_source(checker, required_owner)
+        && elephc_builtin_contract::method_return_is_tentative(required_owner, method_name)
+        && implementation.is_some_and(super::super::validation::has_return_type_will_change);
+    if required_sig.declared_return
+        && !actual_sig.declared_return
+        && !tentative_return
+        && !permits_return_change
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -613,7 +673,11 @@ fn validate_interface_method(
                 &actual_sig.return_type,
             )
         });
-    if required_sig.declared_return && !return_compatible && !tentative_return {
+    if required_sig.declared_return
+        && !return_compatible
+        && !tentative_return
+        && !permits_return_change
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)

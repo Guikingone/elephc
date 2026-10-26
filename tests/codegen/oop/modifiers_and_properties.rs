@@ -1096,3 +1096,78 @@ fn test_example_asymmetric_visibility_compiles_and_runs() {
         "balance: 120\ninsufficient funds\nbalance: 120\ntransfer TX-1: 35\n"
     );
 }
+
+/// Verifies `unset()` of an untyped property whose default narrowed the slot to a concrete type.
+///
+/// php's `unset()` on an untyped property leaves the uninitialized marker whatever the default's
+/// inferred shape is, so `class test { public $one = 1; }` unsets exactly like one with no
+/// default, and the property can be re-created with any type afterwards.
+#[test]
+fn test_unset_untyped_property_with_concrete_default() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public $one = 1;
+    public $two = 2;
+}
+$b = new Box();
+unset($b->one);
+var_dump(isset($b->one));
+var_dump(isset($b->two));
+$b->one = 9;
+echo $b->one, "\n";
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\n9\n");
+}
+
+/// Verifies `unset()` through a `mixed` receiver reaches the runtime class's own slot.
+///
+/// The runtime-name removal ladder has to answer for every class the receiver could hold, and a
+/// class whose untyped property default narrowed its slot must not make the whole ladder fail to
+/// compile.
+#[test]
+fn test_unset_through_mixed_receiver_reaches_runtime_class_slot() {
+    let out = compile_and_run(
+        r#"<?php
+class Hello {
+    public $props;
+    public $name = "hi";
+}
+function drop(mixed $store, string $name) {
+    unset($store->$name);
+}
+$h = new Hello();
+$h->props = [1, 2];
+drop($h, "name");
+var_dump(isset($h->name));
+var_dump(isset($h->props));
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\n");
+}
+
+/// Verifies `unset($this->arrayProp[$key])` inside a class.
+///
+/// php reads the property, removes the element from the table it holds, and writes the unique
+/// table back, so the removal is observable through the property afterwards. This is the shape
+/// every user `ArrayAccess::offsetUnset()` implementation spells.
+#[test]
+fn test_unset_property_held_array_element() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder {
+    private $s = [];
+    public function put($key, $value) { $this->s[$key] = $value; }
+    public function drop($key) { unset($this->s[$key]); }
+    public function has($key) { return array_key_exists($key, $this->s); }
+}
+$h = new Holder();
+$h->put("a", 1);
+$h->put("b", 2);
+$h->drop("a");
+var_dump($h->has("a"), $h->has("b"));
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\n");
+}

@@ -26,6 +26,7 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     module.required_runtime_features.directory_resource |= features.directory_resource;
     module.required_runtime_features.handler_state |= features.handler_state;
     module.required_runtime_features.object_clone |= features.object_clone;
+    module.required_runtime_features.heap_scopes |= features.heap_scopes;
     // Not derived from the instruction stream like the rest: a Fiber object can only exist if the
     // builtin class was registered, and `types::checker::builtin_class_gate` has already decided
     // that from the program's own text. Reading the answer here is exact, where scanning EIR for
@@ -114,6 +115,12 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
         for (inst_index, inst) in function.instructions.iter().enumerate() {
             match inst.op {
                 Op::RuntimeCall => {
+                    features.heap_scopes |= matches!(inst.immediate,
+                        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::NativePropertyRestore | crate::ir::RuntimeCallTarget::NativePropertyReplace
+                            | crate::ir::RuntimeCallTarget::HeapScopeBegin
+                            | crate::ir::RuntimeCallTarget::HeapScopeRead
+                            | crate::ir::RuntimeCallTarget::HeapScopeRootWritten
+                            | crate::ir::RuntimeCallTarget::HeapScopeEnd | crate::ir::RuntimeCallTarget::HeapScopeReleaseRoot)));
                     // `opcache_compile_file()` is the ONE runtime-tier operation whose job is
                     // to CREATE a cache entry, so it is the one whose pay-for-use fold is a
                     // lie rather than a truth. `is_cached` and `discard` fold to `false` in a

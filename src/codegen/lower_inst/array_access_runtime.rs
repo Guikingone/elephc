@@ -196,6 +196,12 @@ pub(super) fn try_lower_array_access_runtime_call(
     };
     match dispatch {
         ArrayAccessRuntimeDispatch::Concrete(class_name) => {
+            // `$obj[] = v` is php's `offsetSet(null, v)`. `SplFixedArray` has no append slot and
+            // its `offsetSet()` refuses a null key, so php raises this catchable `Error` instead.
+            if method_name == "append" && class_name.trim_start_matches('\\') == "SplFixedArray" {
+                exceptions::emit_error(ctx, "[] operator not supported for SplFixedArray");
+                return Ok(Some(()));
+            }
             let concrete_method =
                 if method_name == "append" && is_spl_doubly_linked_list_family(&class_name) {
                     "push"
@@ -457,16 +463,27 @@ pub(super) fn lower_mixed_to_mixed_indexed_array(ctx: &mut FunctionContext<'_>) 
     Ok(())
 }
 
-/// Converts an untyped boxed Mixed payload into associative-array storage with Mixed values.
+/// Converts boxed array payloads into independently owned Mixed-valued hash storage.
+///
+/// Clone the cell before the shared promotion helper dispatches indexed/hash payloads and COW.
+/// Retain the promoted payload before releasing that private cell; the original cell is borrowed.
 pub(super) fn lower_mixed_to_mixed_assoc_array(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rsi, rdx");                                // pass the unboxed high payload in the retaining box helper's native register
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed associative-array payload to the Mixed conversion helper
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // save the private cell in an aligned stack slot across promotion
         }
-        Arch::X86_64 => {}
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve an aligned stack slot for the private cell
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save the private cell across payload promotion
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the private cell in the SysV promotion argument register
+        }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cell_promote_to_hash");
     abi::emit_incref_if_refcounted(
         ctx.emitter,
         &PhpType::AssocArray {
@@ -474,6 +491,28 @@ pub(super) fn lower_mixed_to_mixed_assoc_array(ctx: &mut FunctionContext<'_>) ->
             value: Box::new(PhpType::Mixed),
         },
     );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // preserve the independently retained hash across cell cleanup
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // reload the private cell whose payload is now independently owned
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve an aligned slot for the independently retained hash
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // preserve the hash across private-cell cleanup
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // reload the private cell for the native Mixed decref helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // recover the owned hash and release its result spill slot
+            ctx.emitter.instruction("add sp, sp, #16");                         // release the private-cell spill slot
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // recover the owned hash result after private-cell cleanup
+            ctx.emitter.instruction("add rsp, 32");                             // release both aligned spill slots
+        }
+    }
     Ok(())
 }
 

@@ -19,6 +19,7 @@ pub(super) fn emit_handler_state(emitter: &mut Emitter) {
         emit_release(emitter, kind);
         emit_pop(emitter, kind);
     }
+    super::objects::emit_handler_shutdown(emitter);
 }
 
 /// Returns handler fields in their ABI-defined linked-node order.

@@ -37,6 +37,7 @@ mod literal_defaults;
 mod literal_method_index;
 mod local_analysis;
 mod mbstring_configuration;
+mod diagnostic_configuration;
 pub(crate) mod lower_inst;
 mod lower_term;
 mod machine_peephole;
@@ -324,6 +325,8 @@ pub struct GeneratedUserAsm {
     pub handler_state: bool,
     /// Whether generated wrappers reference the native boxed object clone adapter.
     pub object_clone: bool,
+    /// Whether emitted native instructions require receiver-bound SPL root views.
+    pub heap_scopes: bool,
 }
 
 /// Generates user assembly while preserving dependencies discovered after module EIR lowering.
@@ -392,6 +395,8 @@ fn finalize_user_asm(
 ) -> Result<GeneratedUserAsm> {
     let eval_bridge = module.required_runtime_features.eval_bridge;
     mbstring_configuration::emit(module, &mut emitter, &mut data);
+    eval_property_helpers::emit_unserialize_property_helper(module, &mut emitter, &mut data);
+    eval_property_helpers::emit_restore_property_helper(module, &mut emitter, &mut data);
     let emit_eval_reflection_metadata =
         eval_bridge || module.required_runtime_features.eval_scope;
     if eval_bridge {
@@ -471,6 +476,9 @@ fn finalize_user_asm(
     )
     .map_err(CodegenIrError::invalid_module)?;
     emit_intrinsic_method_wrappers(module, &mut emitter);
+    let debug_info_data = emit_debug_info_metadata(
+        module, &runtime_classes, &allowed_class_names, &mut emitter, &mut data,
+    )?;
     if emit.is_library() {
         let mut sorted_exports: Vec<&ExportedFunction> = exported_functions.values().collect();
         sorted_exports.sort_by(|a, b| a.c_name.cmp(&b.c_name));
@@ -521,6 +529,7 @@ fn finalize_user_asm(
     }
     user_asm.push('\n');
     user_asm.push_str(&user_data);
+    user_asm.push_str(&debug_info_data);
     let mut exported: HashSet<String> = exported_functions
         .values()
         .map(|export| module.target.extern_symbol(&export.c_name))
@@ -565,6 +574,7 @@ fn finalize_user_asm(
         ),
         handler_state: generated_runtime_features.handler_state,
         object_clone: generated_runtime_features.object_clone,
+        heap_scopes: generated_runtime_features.heap_scopes,
     })
 }
 

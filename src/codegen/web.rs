@@ -77,6 +77,12 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // stack-backed borrow chain before any reset cleanup can run user destructors, so a
     // failed request never leaves them scanning an address in its retired native stack.
     abi::emit_store_zero_to_symbol(emitter, "_rt_unmanaged_ref_borrow_top", 0);
+    // Scope nodes borrow request receivers and payloads. An abandoned request's nodes must
+    // stop participating before reset destructors run; the final arena reset reclaims them.
+    abi::emit_store_zero_to_symbol(emitter, "_spl_heap_scope_head", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_native_property_scope_head", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_native_property_read_fn", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_spl_heap_scope_clone_fn", 0);
     // A normal or throwing `__set` call unlinks its stack-backed recursion node locally. The web
     // reset is the final backstop for non-Throwable request escapes, before the retired request
     // stack can be reused and before any reset destructor performs another property write.
@@ -164,6 +170,7 @@ fn emit_core_handler_reset(emitter: &mut Emitter) {
         crate::codegen::compile_php_version().error_reporting_mask(),
     );
     abi::emit_store_reg_to_symbol(emitter, abi::int_result_reg(emitter), "_php_error_reporting", 0);
+    super::diagnostic_configuration::emit(emitter, true);
 }
 
 /// Restores request-local cycle-collector controls and counters to process-start defaults.
@@ -199,6 +206,7 @@ fn emit_gc_state_reset(emitter: &mut Emitter) {
 /// lives outside `_heap_buf` and is unaffected.
 fn emit_heap_arena_reset(emitter: &mut Emitter) {
     emitter.comment("reset the PHP heap arena to pure-bump allocation for the next request");
+    abi::emit_call_label(emitter, "__rt_object_handles_reset");
     abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 0);
@@ -248,6 +256,8 @@ mod handler_reset_tests {
             emit_web_reset(&mut emitter, &Module::new(target), &DataSection::new());
             let asm = emitter.output();
             let borrowed_refs = asm.find("_rt_unmanaged_ref_borrow_top").unwrap();
+            let heap_scopes = asm.find("_spl_heap_scope_head").unwrap();
+            let heap_clone_hook = asm.find("_spl_heap_scope_clone_fn").unwrap();
             let magic_set_guards = asm.find("_magic_set_guard_head").unwrap();
             let saved_magic_set_guards = asm.find("_fiber_main_saved_magic_set_guard").unwrap();
             let inventory = asm.find("__rt_resource_inventory_reset").unwrap();
@@ -256,6 +266,8 @@ mod handler_reset_tests {
                 assert!(asm.find(symbol).unwrap() < inventory, "{target:?}: {symbol}");
             }
             assert!(borrowed_refs < inventory, "{target:?}: stale borrow state must clear first");
+            assert!(heap_scopes < inventory, "{target:?}: stale heap scopes must clear first");
+            assert!(heap_clone_hook < inventory, "{target:?}: stale clone hook must clear first");
             assert!(
                 magic_set_guards < inventory,
                 "{target:?}: stale magic-set guard state must clear first"

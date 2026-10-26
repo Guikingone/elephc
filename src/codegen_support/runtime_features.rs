@@ -108,6 +108,8 @@ pub struct RuntimeFeatures {
     /// True when lowered native code can clone an object. The boxed clone adapter is also
     /// required by the full eval bridge, which exposes the same operation to Magician.
     pub object_clone: bool,
+    /// Native logical root scopes used by generated SPL heap mutations and readers.
+    pub heap_scopes: bool,
 }
 
 impl RuntimeFeatures {
@@ -143,6 +145,7 @@ impl RuntimeFeatures {
             | ((self.object_clone as u64) << 13)
             | ((self.mbregex as u64) << 14)
             | ((self.mbstring_mime as u64) << 15)
+            | ((self.heap_scopes as u64) << 16)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
@@ -164,6 +167,7 @@ impl RuntimeFeatures {
             directory_resource: false,
             handler_state: false,
             object_clone: false,
+            heap_scopes: false,
         }
     }
 
@@ -187,6 +191,7 @@ impl RuntimeFeatures {
             directory_resource: true,
             handler_state: true,
             object_clone: true,
+            heap_scopes: true,
         }
     }
 }

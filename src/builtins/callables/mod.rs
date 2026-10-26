@@ -51,6 +51,10 @@ pub mod get_called_class;
 pub mod get_class_methods;
 pub mod get_class_vars;
 pub mod get_object_vars;
+pub mod __elephc_spl_object_append;
+pub mod __elephc_spl_object_vars_iter;
+pub mod __elephc_spl_object_vars_named;
+pub mod __elephc_spl_object_vars_raw;
 pub mod method_exists;
 pub mod preg_replace_callback;
 pub mod property_exists;
@@ -73,3 +77,5 @@ pub mod __elephc_object_prop_count;
 pub mod __elephc_object_prop_name;
 #[allow(non_snake_case)]
 pub mod __elephc_object_prop_value;
+
+pub mod __elephc_object_restore_property;

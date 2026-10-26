@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Runtime-managed payload rejection and Mixed boxing preserve ownership.
+//! - SPL list clones split native storage and reset their cursor before boxing.
 //! - The Mixed cell is built by hand so the allocator's single clone reference is
 //!   TRANSFERRED into it. Boxing through `__rt_mixed_from_value` would retain a second
 //!   owner that nothing releases, and compensating for that with a refcount decrement
@@ -39,6 +40,16 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x10]");                                      // load the number of emitted class descriptors
     emitter.instruction("cmp x11, x10");                                        // is this class id inside the descriptor table?
     emitter.instruction("b.hs __rt_object_clone_shallow_boxed_null");           // unknown class layouts cannot be cloned by the eval bridge
+    // -- an intrinsic container supplies its own clone adapter --
+    abi::emit_symbol_address(emitter, "x10", "_class_clone_adapter_ptrs");
+    emitter.instruction("lsl x12, x11, #3");                                    // scale class id to an 8-byte adapter pointer slot
+    emitter.instruction("ldr x2, [x10, x12]");                                  // load this class's clone adapter, or 0
+    emitter.instruction("cbz x2, __rt_object_clone_shallow_boxed_generic");     // no adapter: fall through to the generic property copy
+    emitter.instruction("ldr x0, [sp, #0]");                                    // pass the source payload to the adapter
+    emitter.instruction("blr x2");                                              // adapter returns the finished clone payload
+    emitter.instruction("str x0, [sp, #8]");                                    // save the clone payload for the shared boxing step
+    emitter.instruction("b __rt_object_clone_shallow_boxed_box");               // box the adapter's clone
+    emitter.label("__rt_object_clone_shallow_boxed_generic");
     abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_ptrs");
     emitter.instruction("lsl x12, x11, #3");                                    // scale class id to an 8-byte descriptor pointer slot
     emitter.instruction("ldr x10, [x10, x12]");                                 // load the class property-tag descriptor pointer
@@ -104,7 +115,7 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("cmp x14, #6");                                         // does the slot hold a retained object payload?
     emitter.instruction("b.eq __rt_object_clone_shallow_boxed_retain");         // retained object slots need an extra owner reference
     emitter.instruction("cmp x14, #7");                                         // does the slot hold a retained boxed Mixed payload?
-    emitter.instruction("b.eq __rt_object_clone_shallow_boxed_retain");         // retained Mixed slots need an extra owner reference
+    emitter.instruction("b.eq __rt_object_clone_shallow_boxed_mixed");          // acquire an active logical view before retaining a physical cell
     emitter.instruction("b __rt_object_clone_shallow_boxed_next");              // scalar slots are copied without ownership changes
     emitter.label("__rt_object_clone_shallow_boxed_reference");
     emitter.instruction("str x12, [sp, #32]");                                  // preserve the property index across reference-cell cloning
@@ -121,6 +132,7 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.label("__rt_object_clone_shallow_boxed_string");
     emitter.instruction("str x12, [sp, #32]");                                  // preserve property index across string persistence
     emitter.instruction("str x10, [sp, #40]");                                  // preserve the high-word slot offset across the helper
+    emitter.instruction("cbz x15, __rt_object_clone_shallow_boxed_next");       // a null string slot stays null on the clone instead of dereferencing null
     emitter.instruction("mov x1, x15");                                         // pass the source string pointer to the persistence helper
     emitter.instruction("ldr x2, [x9, x10]");                                   // pass the source string length to the persistence helper
     emitter.instruction("bl __rt_str_persist");                                 // duplicate the string payload for clone ownership
@@ -133,6 +145,26 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("ldr x12, [sp, #32]");                                  // restore property index after string persistence
     emitter.instruction("b __rt_object_clone_shallow_boxed_next");              // continue with the next declared property
 
+    emitter.label("__rt_object_clone_shallow_boxed_mixed");
+    emitter.instruction("str x12, [sp, #32]");                                  // preserve the property index across logical-view acquisition
+    emitter.instruction("str x10, [sp, #40]");                                  // preserve the current high-word property offset
+    abi::emit_load_symbol_to_reg(emitter, "x2", "_native_property_read_fn", 0);
+    emitter.instruction("cbz x2, __rt_object_clone_shallow_boxed_mixed_ordinary"); // ordinary clones retain their copied cell
+    emitter.instruction("ldr x0, [sp, #0]");                                    // supply the original receiver to logical-view lookup
+    emitter.instruction("sub x1, x10, #8");                                     // select the low-word property offset
+    emitter.instruction("blr x2");                                              // acquire the logical property value as an independent owner
+    emitter.instruction("ldr x12, [sp, #32]");                                  // restore the current property index
+    emitter.instruction("ldr x10, [sp, #40]");                                  // recover the high-word property offset
+    emitter.instruction("sub x10, x10, #8");                                    // address the clone's low-word value slot
+    emitter.instruction("ldr x11, [sp, #8]");                                   // recover the clone receiver after the callback
+    emitter.instruction("str x0, [x11, x10]");                                  // replace the unowned byte copy with the acquired logical value
+    emitter.instruction("b __rt_object_clone_shallow_boxed_next");              // continue after logical ownership is installed
+    emitter.label("__rt_object_clone_shallow_boxed_mixed_ordinary");
+    emitter.instruction("ldr x12, [sp, #32]");                                  // restore the index for the normal retain path
+    emitter.instruction("ldr x10, [sp, #40]");                                  // recover the high-word property offset
+    emitter.instruction("sub x10, x10, #8");                                    // address the copied low-word property
+    emitter.instruction("ldr x11, [sp, #8]");                                   // recover the clone receiver
+    emitter.instruction("ldr x15, [x11, x10]");                                 // reload the copied physical cell for ordinary retention
     emitter.label("__rt_object_clone_shallow_boxed_retain");
     emitter.instruction("str x12, [sp, #32]");                                  // preserve property index across the retain helper
     emitter.instruction("mov x0, x15");                                         // pass the copied heap payload to the retain helper
@@ -168,6 +200,13 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x11, x13]");                                 // clear the clone's dynamic-property hash slot
 
     emitter.label("__rt_object_clone_shallow_boxed_box");
+    abi::emit_load_symbol_to_reg(emitter, "x2", "_spl_heap_scope_clone_fn", 0);
+    emitter.instruction("cbz x2, __rt_heap_scope_clone_boxed_skip");            // ordinary clones have no active native heap view to materialize
+    emitter.instruction("ldr x0, [sp, #0]");                                    // supply the original receiver whose scope owns the logical view
+    emitter.instruction("ldr x1, [sp, #8]");                                    // finish the copied clone before any PHP clone hook can observe it
+    emitter.instruction("blr x2");                                              // materialize the active heap prefix through the optional native callback
+    emitter.label("__rt_heap_scope_clone_boxed_skip");
+    spl_list_clone::emit_aarch64(emitter);
     emitter.instruction("mov x0, #24");                                         // a Mixed cell stores a runtime tag and two payload words
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the Mixed cell that will own the fresh clone
     emitter.instruction("mov x9, #5");                                          // heap kind 5 marks Mixed cells for the ownership helpers

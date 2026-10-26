@@ -11,6 +11,39 @@
 
 use crate::support::*;
 
+/// Verifies `SplPriorityQueue::setExtractFlags()` rejects a selection with no extract bit set.
+///
+/// php treats the low two bits (`EXTR_DATA`/`EXTR_PRIORITY`) as the only meaningful ones, so
+/// `0` and `4` both raise the same `RuntimeException` rather than silently storing a mode that
+/// makes `extract()` and `current()` fall back to raw data.
+#[test]
+fn test_priority_queue_rejects_empty_extract_flags() {
+    let out = compile_and_run(
+        r#"<?php
+$queue = new SplPriorityQueue();
+foreach ([0, 4] as $flags) {
+    try {
+        $queue->setExtractFlags($flags);
+        echo "flags=$flags ok\n";
+    } catch (RuntimeException $e) {
+        echo "flags=$flags: ", $e->getMessage(), "\n";
+    }
+}
+echo $queue->setExtractFlags(SplPriorityQueue::EXTR_PRIORITY), "\n";
+echo $queue->setExtractFlags(SplPriorityQueue::EXTR_DATA), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "flags=0: Must specify at least one extract flag\n",
+            "flags=4: Must specify at least one extract flag\n",
+            "2\n",
+            "1\n",
+        )
+    );
+}
+
 /// Verifies that Phase 6 SPL classes are declared and implement their core interfaces.
 #[test]
 fn test_phase6_spl_classes_are_declared_and_typed() {
@@ -204,6 +237,26 @@ echo count($left);
 "#,
     );
     assert_eq!(out, "3:B:2:0");
+}
+
+/// Verifies `removeAll($storage)` clears everything even when the argument IS the storage itself.
+#[test]
+fn test_spl_object_storage_remove_all_self() {
+    let out = compile_and_run(
+        r#"<?php
+class Item {}
+$a = new Item();
+$b = new Item();
+$storage = new SplObjectStorage();
+$storage->attach($a, "a");
+$storage->attach($b, "b");
+echo count($storage);
+$storage->removeAll($storage);
+echo ":";
+echo count($storage);
+"#,
+    );
+    assert_eq!(out, "2:0");
 }
 
 /// Verifies Phase 6 containers clean their per-instance storage under heap-debug.

@@ -57,6 +57,7 @@ fn generate_project_asm(
     let mut runtime_features = ir_module.required_runtime_features;
     runtime_features.handler_state |= generated_user_asm.handler_state;
     runtime_features.object_clone |= generated_user_asm.object_clone;
+    runtime_features.heap_scopes |= generated_user_asm.heap_scopes;
     let user_asm = generated_user_asm.asm;
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);

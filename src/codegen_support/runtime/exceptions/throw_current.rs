@@ -82,6 +82,11 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address for the throw helper
     emitter.instruction("stp x19, x20, [sp, #16]");                             // preserve callee-saved registers that hold handler metadata
     emitter.instruction("add x29, sp, #32");                                    // install the throw helper's frame pointer
+    // Snapshot the frame-chain head for the uncaught report: the unwind this throw triggers
+    // pops every activation off the live chain before the report walks it, so the head must
+    // be captured here — where every record is still linked.
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_call_frame_top", 0);
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_uncaught_trace_snapshot", 0);
     emit_instr_throw_hook(emitter);
     abi::emit_load_symbol_to_reg(emitter, "x19", "_exc_handler_top", 0);
     emitter.instruction("cbz x19, __rt_throw_current_uncaught");                // fall back to a fatal uncaught-exception path when no handler exists
@@ -114,6 +119,9 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the x86_64 throw helper
     emitter.instruction("push r12");                                            // preserve the active handler record pointer across helper calls
     emitter.instruction("push r13");                                            // preserve the scratch callee-saved register used for the fatal path
+    // -- retain the active PHP frame chain before cleanup unlinks its activations --
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_uncaught_trace_snapshot", 0);
     emit_instr_throw_hook(emitter);
     abi::emit_load_symbol_to_reg(emitter, "r12", "_exc_handler_top", 0);
     emitter.instruction("test r12, r12");                                       // is there an active exception handler to receive this throw?

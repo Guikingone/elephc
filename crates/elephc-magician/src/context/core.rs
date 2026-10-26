@@ -105,7 +105,7 @@ pub struct ElephcEvalContext {
     pub(super) eval_reflection_attributes: HashMap<u64, EvalReflectionAttributeMetadata>,
     pub(super) eval_reflection_classes: HashMap<u64, String>,
     pub(super) eval_reflection_functions: HashMap<u64, String>,
-    pub(super) eval_reflection_function_closure_targets: HashMap<u64, EvalClosureObjectTarget>,
+    pub(super) eval_reflection_function_closure_targets: HashMap<u64, EvalReflectionClosureMetadata>,
     pub(super) eval_reflection_methods: HashMap<u64, (String, String)>,
     pub(super) eval_reflection_properties: HashMap<u64, (String, String)>,
     pub(super) eval_dynamic_reflection_properties: HashSet<u64>,

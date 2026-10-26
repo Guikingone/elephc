@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - SPL payload offsets are shared with object cleanup and allocation helpers.
+//! - List state follows three inherited 16-byte ClassInfo property slots.
 
 mod doubly_linked_list;
 mod fixed_array;
@@ -18,12 +19,12 @@ pub(crate) const SPL_DLL_STORAGE_OFFSET: usize = 8;
 
 /// Byte offset from the SPL doubly-linked-list object header to its iterator
 /// index field (i64). Zero-initialized; incremented by `__rt_spl_dll_next_prev`.
-pub(crate) const SPL_DLL_ITER_INDEX_OFFSET: usize = 16;
+pub(crate) const SPL_DLL_ITER_INDEX_OFFSET: usize = 24;
 
 /// Byte offset from the SPL doubly-linked-list object header to its iterator
 /// mode bits field (i64). Encodes LIFO/FIFO and DELETE flags; set by
 /// `setIteratorMode` and read by insert/iteration helpers.
-pub(crate) const SPL_DLL_ITER_MODE_OFFSET: usize = 24;
+pub(crate) const SPL_DLL_ITER_MODE_OFFSET: usize = 40;
 
 /// Byte offset from the SplFixedArray object header to its fixed-size
 /// `Mixed`-pointer storage array field.

@@ -687,6 +687,9 @@ fn validate_opcode_rules(
         ClosureNew => Ok(()),
         FirstClassCallableNew => check_count_at_most(inst_id, inst, 1, "0 or 1"),
         ObjectNew => Ok(()),
+        ObjectHandleReserve => check_count(inst_id, inst, 0, "0"),
+        // Operand 0 is the reserved handle; the rest are the constructor arguments.
+        ObjectNewReserved => check_count_at_least(inst_id, inst, 1, "at least 1"),
         EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
         | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
@@ -731,6 +734,7 @@ fn validate_opcode_rules(
         LoadLocal
         | LoadRefCell
         | LoadGlobal
+        | LoadDiagnosticLine
         | LoadStaticLocal
         | StaticLocalUninitialized
         | LoadStaticProperty
@@ -843,6 +847,17 @@ fn validate_opcode_rules(
             }
         }
         MixedArrayAppend | OffsetUnset => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(
+                function,
+                inst_id,
+                inst,
+                0,
+                IrType::Heap(IrHeapKind::Mixed),
+                "Heap(Mixed)",
+            )
+        }
+        MixedArrayUnset => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(
                 function,

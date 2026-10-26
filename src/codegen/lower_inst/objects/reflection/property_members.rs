@@ -87,7 +87,8 @@ pub(super) fn reflection_property_type_metadata(
     property_name: &str,
 ) -> Option<ReflectionParameterTypeMetadata> {
     if info.visible_property_is_declared(property_name) {
-        let (_, (_, property_type)) = info.visible_property(property_name)?;
+        let index = info.visible_property_index(property_name)?;
+        let property_type = info.property_slot_declared_type(index, property_name)?;
         return reflection_parameter_type_metadata(None, property_type);
     }
     if !info.declared_static_properties.contains(property_name) {

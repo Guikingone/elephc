@@ -289,7 +289,7 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.comment("--- runtime: print_r_value ---");
-    emitter.label_global("__rt_print_r_value");
+    emitter.label_global("__rt_print_r_value_impl");
 
     emitter.instruction("sub sp, sp, #48");                                     // allocate the value frame
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
@@ -314,6 +314,8 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_pr_val_hash");                               // recurse into the hash walker
     emitter.instruction("cmp x0, #6");                                          // tag 6 = object
     emitter.instruction("b.eq __rt_pr_val_obj");                                // recurse into the object walker
+    emitter.instruction("cmp x0, #9");                                          // tag 9 = resource
+    emitter.instruction("b.eq __rt_pr_val_resource");                           // preserve resource formatting in the shared renderer
     emitter.instruction("b __rt_pr_val_done");                                  // tag 8 null → render nothing
 
     emitter.label("__rt_pr_val_int");
@@ -367,6 +369,12 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_print_r_object");                              // recurse into the object walker
     emitter.instruction("b __rt_pr_val_done");                                  // value rendered
 
+    emitter.label("__rt_pr_val_resource");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // recover the native resource payload
+    emitter.instruction("bl __rt_resource_to_string");                          // format its PHP resource identifier
+    emitter.instruction("bl __rt_pr_write");                                    // append the complete resource display text
+    emitter.instruction("b __rt_pr_val_done");                                  // finish this resource value
+
     emitter.label("__rt_pr_val_mixed");
     emitter.instruction("ldr x0, [sp, #0]");                                    // boxed Mixed cell pointer
     emitter.instruction("bl __rt_mixed_unbox");                                 // x0=inner tag, x1=lo, x2=hi
@@ -383,7 +391,7 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
 fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_value ---");
-    emitter.label_global("__rt_print_r_value");
+    emitter.label_global("__rt_print_r_value_impl");
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the value frame pointer
@@ -409,6 +417,8 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_pr_val_hash_x86");                             // recurse into the hash walker
     emitter.instruction("cmp rax, 6");                                          // tag 6 = object
     emitter.instruction("je __rt_pr_val_obj_x86");                              // recurse into the object walker
+    emitter.instruction("cmp rax, 9");                                          // tag 9 = resource
+    emitter.instruction("je __rt_pr_val_resource_x86");                         // preserve resource formatting in the shared renderer
     emitter.instruction("jmp __rt_pr_val_done_x86");                            // tag 8 null → render nothing
 
     emitter.label("__rt_pr_val_int_x86");
@@ -465,6 +475,13 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // base = the nested paren indent
     emitter.instruction("call __rt_print_r_object");                            // recurse into the object walker
     emitter.instruction("jmp __rt_pr_val_done_x86");                            // value rendered
+
+    emitter.label("__rt_pr_val_resource_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // recover the native resource payload
+    emitter.instruction("call __rt_resource_to_string");                        // format its PHP resource identifier
+    emitter.instruction("mov rsi, rax");                                        // pass the formatted pointer to the print_r sink
+    emitter.instruction("call __rt_pr_write");                                  // append the complete resource display text
+    emitter.instruction("jmp __rt_pr_val_done_x86");                            // finish this resource value
 
     emitter.label("__rt_pr_val_mixed_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // boxed Mixed cell pointer → RAX

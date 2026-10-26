@@ -1,5 +1,5 @@
 //! Purpose:
-//! Lowers shallow object clones and runtime-managed SPL constructors.
+//! Lowers shallow object clones and runtime-managed SplFixedArray constructors.
 //!
 //! Called from:
 //! - The object lowering facade and sibling object support modules.
@@ -8,12 +8,6 @@
 //! - Dynamic hashes, callbacks, and runtime-managed payloads preserve ownership rules.
 
 use super::*;
-
-/// `SplDoublyLinkedList::IT_MODE_LIFO`: the LIFO/FIFO iterator-mode bit.
-const SPL_ITER_MODE_LIFO: i64 = 2;
-/// `SPL_DLLIST_IT_FIX`: the internal flag PHP sets on `SplStack`/`SplQueue`, which freezes the
-/// LIFO/FIFO bit and appears in `getIteratorMode()` (a fresh `SplStack` reports 6, `SplQueue` 4).
-const SPL_ITER_MODE_FIX: i64 = 4;
 
 /// Lowers PHP object cloning for fixed-class receivers.
 pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
@@ -37,6 +31,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
         allow_dynamic_properties,
         retained_offsets,
         owned_reference_property_offsets,
+        mixed_offsets,
     ) = {
         let class_info =
             ctx.module.class_infos.get(&class_name).ok_or_else(|| {
@@ -44,12 +39,17 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
             })?;
         let retained_offsets = cloned_property_retain_offsets(class_info);
         let owned_reference_property_offsets = owned_reference_property_offsets(class_info);
+        let mixed_offsets = class_info.properties.iter().enumerate()
+            .filter(|(index, (name, ty))| !class_info.property_slot_is_reference(*index, name)
+                && ty.codegen_repr() == PhpType::Mixed)
+            .map(|(index, _)| 8 + index * 16).collect::<Vec<_>>();
         (
             class_info.class_id,
             class_info.properties.len(),
             class_info.has_property_hash_storage(),
             retained_offsets,
             owned_reference_property_offsets,
+            mixed_offsets,
         )
     };
     let result = inst
@@ -57,6 +57,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
         .ok_or_else(|| CodegenIrError::invalid_module("object_clone_shallow missing result value"))?;
     let result_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(source, result_reg)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_push_reg(ctx.emitter, result_reg);
     emit_object_allocation(
         ctx,
@@ -82,7 +83,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
         abi::emit_store_to_address(ctx.emitter, result_reg, dest_reg, offset);
     }
     emit_clone_declared_property_slots(ctx, source_reg, dest_reg, property_count,
-        &retained_offsets, &owned_reference_property_offsets);
+        &retained_offsets, &owned_reference_property_offsets, &mixed_offsets);
     if allow_dynamic_properties {
         emit_clone_dynamic_property_hash(
             ctx,
@@ -91,6 +92,27 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
             dynamic_property_hash_offset(property_count),
         );
     }
+    // The extra saved source survives every property retain and dynamic-hash callback above.
+    // A compiler-private mutation scope may hold a different logical root from the physical slot.
+    ctx.load_value_to_result(result)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    let skip = ctx.next_label("heap_scope_clone_static_skip");
+    let callback = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, callback, "_spl_heap_scope_clone_fn", 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz {callback}, {skip}")), // ordinary clones require no logical heap materialization
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {callback}, {callback}"));   // test the optional native logical-view callback
+            ctx.emitter.instruction(&format!("jz {skip}"));                     // ordinary clones require no logical heap materialization
+        }
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 16);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 0);
+    abi::emit_call_reg(ctx.emitter, callback);
+    ctx.emitter.label(&skip);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    ctx.store_result_value(result)?;
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     Ok(())
 }
 
@@ -133,6 +155,25 @@ pub(super) fn is_spl_doubly_linked_list_family(class_name: &str) -> bool {
     matches!(class_name, "SplDoublyLinkedList" | "SplStack" | "SplQueue")
 }
 
+/// Returns true when `class_name` is, or descends from, `ancestor`.
+///
+/// A subclass inherits its ancestor's runtime-managed payload, so the specialized constructor
+/// must serve it too; the generic object path only knows the declared-property layout.
+pub(super) fn class_extends(ctx: &FunctionContext<'_>, class_name: &str, ancestor: &str) -> bool {
+    let mut current = Some(class_name.to_string());
+    while let Some(name) = current {
+        if name == ancestor {
+            return true;
+        }
+        current = ctx
+            .module
+            .class_infos
+            .get(&name)
+            .and_then(|info| info.parent.clone());
+    }
+    false
+}
+
 /// Returns true for object classes whose payload is not the generic declared-property layout.
 pub(super) fn is_runtime_managed_object_clone_class(class_name: &str) -> bool {
     let class_name = class_name.trim_start_matches('\\');
@@ -146,46 +187,13 @@ pub(super) fn is_runtime_managed_object_clone_class(class_name: &str) -> bool {
         || class_name == "SplFixedArray"
 }
 
-/// Lowers `new SplDoublyLinkedList`, `new SplStack`, and `new SplQueue`.
-pub(super) fn lower_spl_doubly_linked_list_new(
+/// Lowers `new SplFixedArray($size = 0)` and property-free subclasses through the runtime-backed
+/// payload allocator, stamping the concrete class id so subclass instances report their own class.
+pub(super) fn lower_spl_fixed_array_new(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     class_name: &str,
 ) -> Result<()> {
-    if !inst.operands.is_empty() {
-        return Err(CodegenIrError::unsupported(format!(
-            "{} constructor with {} EIR operands",
-            class_name,
-            inst.operands.len()
-        )));
-    }
-    let class_id = ctx
-        .module
-        .class_infos
-        .get(class_name)
-        .map(|info| info.class_id)
-        .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", class_name)))?;
-    let default_mode = match class_name {
-        "SplStack" => SPL_ITER_MODE_LIFO | SPL_ITER_MODE_FIX,
-        "SplQueue" => SPL_ITER_MODE_FIX,
-        _ => 0,
-    };
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        class_id as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        default_mode,
-    );
-    abi::emit_call_label(ctx.emitter, "__rt_spl_dll_new");
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `new SplFixedArray($size = 0)` through the runtime-backed payload allocator.
-pub(super) fn lower_spl_fixed_array_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() > 1 {
         return Err(CodegenIrError::unsupported(format!(
             "SplFixedArray constructor with {} EIR operands",
@@ -195,9 +203,11 @@ pub(super) fn lower_spl_fixed_array_new(ctx: &mut FunctionContext<'_>, inst: &In
     let class_id = ctx
         .module
         .class_infos
-        .get("SplFixedArray")
+        .get(class_name)
         .map(|info| info.class_id)
-        .ok_or_else(|| CodegenIrError::unsupported("unknown class SplFixedArray"))?;
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!("unknown class {class_name}"))
+        })?;
     if let Some(size) = inst.operands.first().copied() {
         ctx.load_value_to_result(size)?;
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
@@ -261,7 +271,7 @@ pub(super) fn lower_callback_filter_iterator_new(
             class_info.class_id,
             class_info.properties.len(),
             uninitialized_property_marker_offsets(class_info),
-            collect_property_defaults(class_info, inst)?,
+            collect_property_defaults(class_info, inst.op.name())?,
             class_info.property_offsets.get("callbackEnv").copied(),
         )
     };

@@ -25,7 +25,7 @@ use crate::codegen::{
 use crate::codegen_support::data_section::DataWord;
 use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_SLOT_SIZE};
 use crate::ir::{
-    CoreBuiltinOp, Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op,
+    Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op,
     RuntimeCallTarget, ValueDef, ValueId,
 };
 use crate::ir_passes::{allocate_registers, Allocation};
@@ -186,40 +186,6 @@ pub(super) fn layout_for_function(
     }
 }
 
-/// Returns whether any emitted EIR body can request a PHP Core backtrace.
-pub(super) fn module_uses_backtrace(module: &Module) -> bool {
-    if module.required_runtime_features.eval_bridge {
-        return true;
-    }
-    let functions = || {
-        module
-            .functions
-            .iter()
-            .chain(module.class_methods.iter())
-            .chain(module.closures.iter())
-            .chain(module.fiber_wrappers.iter())
-            .chain(module.callback_wrappers.iter())
-            .chain(module.extern_callback_trampolines.iter())
-            .chain(module.runtime_callable_invokers.iter())
-    };
-    if functions().any(function_keeps_backtrace_argument_snapshot) {
-        return true;
-    }
-    functions()
-        .flat_map(|function| function.instructions.iter())
-        .any(|inst| {
-            inst.op == Op::CoreBuiltin
-                && matches!(
-                    inst.immediate,
-                    Some(Immediate::I64(selector))
-                        if matches!(
-                            CoreBuiltinOp::from_i64(selector),
-                            Some(CoreBuiltinOp::DebugBacktrace | CoreBuiltinOp::DebugPrintBacktrace)
-                        )
-                )
-        })
-}
-
 /// Returns whether an emitted body can observe per-request GC timing metrics.
 fn module_uses_gc_timing(module: &Module) -> bool {
     if module.required_runtime_features.eval_bridge {
@@ -279,33 +245,6 @@ fn module_uses_resource_inventory_cleanup(module: &Module) -> bool {
             };
             id.produces_resource_inventory_entry()
         })
-}
-
-/// Returns true when the frontend retained one frame's arguments for a dynamic backtrace.
-///
-/// Descriptor-only calls to `debug_backtrace()` and `debug_print_backtrace()` do not leave a
-/// `CoreBuiltin` instruction in EIR. The argument-introspection pass marks their reachability by
-/// retaining a generated collector, count, or source-variadic snapshot in each PHP frame. The
-/// physical EIR parameters are authoritative because public signature metadata may omit generated
-/// ABI slots. Reading both shapes here keeps activation emission aligned with the frontend gate. A
-/// frame using the same storage for `func_get_args()` is an intentional conservative match: it
-/// costs an inactive reader slot but cannot change PHP behavior.
-fn function_keeps_backtrace_argument_snapshot(function: &Function) -> bool {
-    function.params.iter().any(|param| {
-        matches!(
-            param.name.as_str(),
-            crate::func_args::HIDDEN_ARGS_PARAM | crate::func_args::HIDDEN_ARGC_PARAM
-        )
-    }) || function.signature.as_ref().is_some_and(|signature| {
-        crate::func_args::sig_collects_surplus_args(signature)
-            || crate::func_args::sig_has_hidden_argc_param(signature)
-    }) || function.locals.iter().any(|local| {
-        matches!(
-            local.name.as_deref(),
-            Some(crate::func_args::SNAPSHOT_KEY_LOCAL)
-                | Some(crate::func_args::SNAPSHOT_VALUE_LOCAL)
-        )
-    })
 }
 
 /// Saves the callee-saved registers the allocator used into their reserved
@@ -427,6 +366,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     register_main_instr(ctx);
     emit_instr_init(ctx);
     emit_opcache_configuration(ctx);
+    super::diagnostic_configuration::emit(ctx.emitter, false);
     if ctx.heap_debug {
         ctx.emitter.comment("enable heap debug flag");
         abi::emit_enable_heap_debug_flag(ctx.emitter);
@@ -535,7 +475,15 @@ fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &s
         Arch::X86_64 => "rbp",
     };
     abi::store_at_offset(ctx.emitter, frame_pointer, offset - 16);
-    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    if ctx.backtrace_activation {
+        // ONE reader per function, published once in the prologue: the reader's body depends
+        // only on this function (its file, name, class, and parameter slots), and the
+        // per-site caller line arrives separately at offset - 32.
+        let reader = crate::codegen::lower_inst::core_builtins::backtrace::backtrace_reader_label(ctx);
+        abi::emit_symbol_address(ctx.emitter, scratch, &reader);
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    }
     abi::store_at_offset(ctx.emitter, scratch, offset - 24);
     if ctx.backtrace_activation {
         abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_php_backtrace_next_line", 0);
@@ -645,9 +593,23 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
         abi::emit_call_label(ctx.emitter, "__rt_pcntl_release_handlers");
     }
     emit_main_local_epilogue_cleanup(ctx);
-    emit_main_static_local_cleanup(ctx);
-    emit_main_global_epilogue_cleanup(ctx);
+    let handler_roots = ctx.module.required_runtime_features.handler_state
+        || ctx.module.required_runtime_features.eval_bridge;
+    if handler_roots {
+        emit_main_global_epilogue_cleanup(ctx);
+        abi::emit_call_label(ctx.emitter, "__rt_handlers_run_destructors");
+        emit_main_static_local_cleanup(ctx);
+    } else {
+        emit_main_static_local_cleanup(ctx);
+        emit_main_global_epilogue_cleanup(ctx);
+    }
     emit_main_static_property_cleanup(ctx);
+    if handler_roots {
+        abi::emit_call_label(ctx.emitter, "__rt_handlers_shutdown");
+    }
+    // Force collection after retiring all process owners, including when automatic GC is disabled.
+    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles_explicit");
+    emit_eval_context_epilogue_cleanup(ctx);
     if module_uses_resource_inventory_cleanup(ctx.module) {
         abi::emit_call_label(ctx.emitter, "__rt_resource_inventory_reset");
     }
@@ -658,6 +620,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     // output handlers above and object destructors from the cleanup paths. If
     // it exits earlier, those functions become disconnected graph roots and
     // their work no longer partitions `{main}`.
+    if ctx.module.required_runtime_features.heap_scopes {
+        abi::emit_call_label(ctx.emitter, "__rt_heap_scope_shutdown");
+    }
     emit_instr_exit(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
@@ -944,6 +909,9 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("web handler epilogue + ret");
     emit_main_local_epilogue_cleanup(ctx);
+    // Request-local cycles must not survive their owner frame; persistent roots remain visible.
+    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles_explicit");
+    emit_eval_context_epilogue_cleanup(ctx);
     // Per-request local teardown may run PHP destructors, so it belongs inside
     // the request's `{main}` frame just like process-exit teardown does.
     emit_instr_exit(ctx);
@@ -1073,7 +1041,6 @@ fn emit_main_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
         emit_owned_local_cleanup(ctx, slot, offset, &ty);
     }
     emit_eval_scope_epilogue_cleanup(ctx);
-    emit_eval_context_epilogue_cleanup(ctx);
 }
 
 /// Returns main local slots that receive owned refcounted values through `StoreLocal`.

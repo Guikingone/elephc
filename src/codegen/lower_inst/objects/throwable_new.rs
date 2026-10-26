@@ -189,10 +189,14 @@ pub(in crate::codegen::lower_inst) fn emit_throwable_creation_line_aarch64(
     creation_line: u32,
 ) {
     if creation_line == 0 {
-        ctx.emitter.instruction(&format!(                                       // initialize the creation line even when no source span is available
-            "str xzr, [{}, #{}]",
-            payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        ));                                                                     // no span on the allocating instruction: an unknown line reads back as zero
+        // No span on the allocating instruction — a throwable synthesized inside generated
+        // code, whose real location is the CALL SITE that entered the current frame. The
+        // diagnostic line published there is php's answer for an internal throw's location.
+        abi::emit_load_symbol_to_reg(ctx.emitter, scratch_reg, "_php_diagnostic_line", 0);
+        ctx.emitter.instruction(&format!(                                       // record the caller line while preserving the payload register
+            "str {}, [{}, #{}]",
+            scratch_reg, payload_reg, THROWABLE_CREATION_LINE_OFFSET
+        ));                                                                     // store the published diagnostic line in the fresh Throwable
         return;
     }
     abi::emit_load_int_immediate(ctx.emitter, scratch_reg, i64::from(creation_line));
@@ -211,6 +215,23 @@ pub(in crate::codegen::lower_inst) fn emit_throwable_creation_line_x86_64(
     payload_reg: &str,
     creation_line: u32,
 ) {
+    if creation_line == 0 {
+        // The AArch64 arm's call-site fallback: a synthesized throwable takes its location
+        // from the call site that entered the current frame.
+        // The fresh payload normally lives in rax. A diagnostic-line load must preserve it
+        // for this store and the caller's remaining Throwable initialization.
+        let scratch_reg = if payload_reg == abi::secondary_scratch_reg(ctx.emitter) {
+            abi::symbol_scratch_reg(ctx.emitter)
+        } else {
+            abi::secondary_scratch_reg(ctx.emitter)
+        };
+        abi::emit_load_symbol_to_reg(ctx.emitter, scratch_reg, "_php_diagnostic_line", 0);
+        ctx.emitter.instruction(&format!(                                       // record the caller line without replacing the object pointer
+            "mov QWORD PTR [{} + {}], {}",
+            payload_reg, THROWABLE_CREATION_LINE_OFFSET, scratch_reg
+        ));                                                                     // store the published diagnostic line in the fresh Throwable
+        return;
+    }
     ctx.emitter.instruction(&format!(                                           // record the source line associated with this allocation
         "mov QWORD PTR [{} + {}], {}",
         payload_reg, THROWABLE_CREATION_LINE_OFFSET, creation_line

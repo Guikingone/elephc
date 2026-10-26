@@ -21,19 +21,8 @@
 //!   `hash_init_context_consumes_no_handle_divergence`, was retired when `hash_init()`
 //!   grew a real `HashContext` object (`elephc::hash_prelude`) and became
 //!   `hash_context_draws_an_object_handle_in_creation_order`, a parity assertion.
-//! - THE DIVERGENCE PINS IN THIS FILE are
-//!   `computed_debug_info_is_ignored_and_declared_properties_print_instead`,
-//!   `reflection_owner_classes_render_no_properties_because_public_names_are_unmodelled`,
-//!   `reflection_subclass_hides_inherited_backing_slots`,
-//!   `reflection_subclass_debug_info_projection_drops_backing_slots`, and
-//!   `reflection_subclass_shadowed_backing_name_renders_once`. elephc honours
-//!   `__debugInfo()` only when its body is a static property projection (folded into
-//!   `_class_vd_desc_*` at compile time); a body that computes values falls back to the
-//!   declared-property list. And elephc models only the private `__*` backing slots of PHP's
-//!   builtin Reflection classes, not their public `name`, so those render as zero-property
-//!   objects; a `__debugInfo()` projection that READS such a slot drops the pair instead of
-//!   publishing the storage. All five tests assert elephc's ACTUAL output with PHP's
-//!   spelled out beside them, so they can never be mistaken for parity.
+//! - Computed `__debugInfo()` values now use the runtime hook protocol. The regression
+//!   `computed_debug_info_calls_hook_and_prints_returned_view` asserts PHP's returned view.
 //! - ENUM CASES ARE LAZY NOW, AND THAT CELL IS PARITY. Cases used to be created in
 //!   bulk in `main`'s prologue, which burnt one handle per case of every referenced
 //!   enum before user code ran; `enum_cases_are_eager_so_handles_shift_divergence`
@@ -1538,24 +1527,13 @@ fn debug_info_projection_may_rename_reorder_and_be_empty() {
     );
 }
 
-/// KNOWN DIVERGENCE — a `__debugInfo()` body that is NOT a property projection is
-/// IGNORED, and the declared properties are printed instead.
-///
-/// elephc folds `__debugInfo()` statically, so it can only honour bodies that reduce to
-/// "print these property slots under these names". A body that COMPUTES a value has no
-/// property slot to point at and falls back to the declared-property list — which is
-/// exactly what elephc did for every class before the projection support landed, so the
-/// fallback introduces no new failure and turns no compiling program into an error.
-///
-/// Reference PHP 8.5.6 prints `object(C)#1 (1) { ["n"]=> int(2) }` for this program.
-/// This assertion is elephc's ACTUAL output with PHP's spelled out beside it: it is a
-/// divergence pin, NOT parity, and it must never be read as one. Implementing it
-/// faithfully requires calling the method from `__rt_var_dump_object`, which is
-/// hand-written assembly on every target.
+/// Invokes a computed debug hook and prints its returned view instead of declared storage.
+/// The expected output is pinned to PHP 8.5.10.
+
 #[test]
-fn computed_debug_info_is_ignored_and_declared_properties_print_instead() {
+fn computed_debug_info_calls_hook_and_prints_returned_view() {
     let out = run_php(
-        "debuginfo_computed_divergence",
+        "debuginfo_computed_runtime",
         concat!(
             "<?php\n",
             "class C {\n",
@@ -1565,21 +1543,7 @@ fn computed_debug_info_is_ignored_and_declared_properties_print_instead() {
             "var_dump(new C());\n",
         ),
     );
-    // Reference PHP 8.5.6 prints:  object(C)#1 (1) { ["n"]=> int(2) }
-    assert_eq!(
-        out,
-        concat!(
-            "object(C)#1 (1) {\n",
-            "  [\"items\"]=>\n",
-            "  array(2) {\n",
-            "    [0]=>\n",
-            "    int(1)\n",
-            "    [1]=>\n",
-            "    int(2)\n",
-            "  }\n",
-            "}\n",
-        )
-    );
+    assert_eq!(out, "object(C)#1 (1) {\n  [\"n\"]=>\n  int(2)\n}\n");
 }
 
 // ---------------------------------------------------------------------------

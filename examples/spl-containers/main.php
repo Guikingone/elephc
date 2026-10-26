@@ -13,11 +13,14 @@ foreach ($list as $index => $value) {
 }
 
 $queue = new SplQueue();
-$queue->enqueue("first");
+$first = $argc === 1 ? "first" : 1;
+$queue->enqueue($first);
+unset($first);
 $queue->enqueue("second");
 echo "queue: ";
 echo $queue->dequeue();
 echo "\n";
+echo print_r($queue, true);
 
 $stack = new SplStack();
 $stack->push(10);
@@ -71,7 +74,7 @@ class Job {}
 $left = new Job();
 $right = new Job();
 $storage = new SplObjectStorage();
-$storage->attach($left, "left");
+$storage->offsetSet($left, "left");
 $storage[$right] = "right";
 
 echo "object storage: ";
@@ -80,4 +83,25 @@ foreach ($storage as $job) {
     echo " ";
 }
 echo count($storage);
+echo "\n";
+
+// A queue subclass keeps its native list state alongside application properties.
+class WorkQueue extends SplQueue {
+    public string $name = "mail";
+
+    public function __construct(string $first) {
+        $this->enqueue($first);
+    }
+}
+
+$work = new WorkQueue("welcome");
+echo $work->name;
+echo ": ";
+echo $work->dequeue();
+echo "\n";
+
+$submit = $work->enqueue(...);
+$submit("follow-up");
+echo "next: ";
+echo $work->dequeue();
 echo "\n";

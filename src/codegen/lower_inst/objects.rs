@@ -236,7 +236,7 @@ pub(super) use fiber_dynamic_entry::{
     lower_dynamic_object_new, lower_dynamic_object_new_mixed,
     lower_dynamic_object_new_without_constructor_mixed,
 };
-pub(super) use fixed_new::lower_object_new;
+pub(super) use fixed_new::{lower_object_new, lower_object_new_reserved, lower_object_handle_reserve};
 pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic};
 pub(super) use known_property_reads::{
     lower_load_prop_ref_cell, lower_load_prop_ref_cell_checked, lower_prop_get,
@@ -345,20 +345,23 @@ fn lower_dynamic_prop_unset(
 }
 
 /// Names the reason a resolved fixed property slot cannot represent PHP's "removed"
+/// Names the reason a resolved fixed property slot cannot represent PHP's "removed"
 /// state, or `None` when the uninitialized marker is a faithful encoding for it.
 ///
 /// Used only for the diagnostic text; the ordering matters because a slot can be both
 /// undeclared and by-reference, and the by-reference storage is the more specific
 /// obstacle to report.
+///
+/// The two distinct layouts are packed class fields and by-reference cells. Everything else —
+/// a typed slot's uninitialized-error state, and an untyped property's "removed" state, whether
+/// or not its default narrowed the slot to a concrete type — is the same two-word uninitialized
+/// marker, so the removal is faithful for all of them.
 fn unset_unsupported_slot_reason(slot: &PropertySlot) -> Option<&'static str> {
     if slot.is_packed {
         return Some("packed class field");
     }
     if slot.is_reference {
         return Some("by-reference property");
-    }
-    if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {
-        return Some("untyped property slot");
     }
     None
 }

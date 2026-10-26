@@ -88,6 +88,11 @@ impl EvalClosureCaptureBinding {
         &self.name
     }
 
+    /// Converts creation-time ownership into a view borrowed from runtime object edges.
+    pub(crate) fn borrow_value(&mut self) {
+        self.value = self.value.borrowed();
+    }
+
     /// Returns the runtime cell captured by the closure.
     pub const fn value(&self) -> RuntimeCellHandle {
         self.value
@@ -105,6 +110,7 @@ pub struct EvalClosure {
     pub(super) function: EvalFunction,
     pub(super) captures: Vec<EvalClosureCaptureBinding>,
     pub(super) is_static: bool,
+    pub(super) runtime_owners: usize,
 }
 
 impl EvalClosure {
@@ -118,6 +124,7 @@ impl EvalClosure {
             function,
             captures,
             is_static,
+            runtime_owners: 0,
         }
     }
 
@@ -135,4 +142,11 @@ impl EvalClosure {
     pub const fn is_static(&self) -> bool {
         self.is_static
     }
+}
+
+/// Callable metadata borrowing the original Closure from a Reflection object's native child edge.
+#[derive(Clone)]
+pub struct EvalReflectionClosureMetadata {
+    pub(super) target: EvalClosureObjectTarget,
+    pub(super) object: RuntimeCellHandle,
 }

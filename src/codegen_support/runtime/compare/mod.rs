@@ -26,6 +26,18 @@ pub use mixed_loose_eq::emit_mixed_loose_eq;
 pub use obj_loose_eq::emit_obj_loose_eq;
 pub use php_compare::emit_php_compare;
 
+/// How an internal object's native state participates in loose equality.
+#[derive(Clone, Copy)]
+#[repr(i64)]
+pub(crate) enum NativeObjectComparisonKind {
+    Standard = 0,
+    ObjectStorage = 1,
+    Uncomparable = 2,
+}
+
+/// Three words: native comparison kind, object-entry slot, and info-entry slot.
+pub(crate) const NATIVE_COMPARISON_DESC_BYTES: i64 = 24;
+
 /// Maximum nesting the loose-equality walkers follow before reporting "not equal".
 ///
 /// PHP raises `Fatal error: Nesting level too deep - recursive dependency?` when

@@ -33,6 +33,7 @@ impl Checker {
         let saved_null_probe_scope = self.null_probe_scope_is_top_level;
         self.null_probe_scope_is_top_level = true;
         self.pending_null_probe_roots.clear();
+        self.local_presence_probe_sites.clear();
         // Top level is a body like any other, and this pass runs TWICE. Without a reset the
         // second pass would start with the first pass's aliases and binding depths already in
         // place, so the same `unset` could be eligible in one pass and not the other.
@@ -91,8 +92,8 @@ impl Checker {
     /// `null` for the whole scope: binding it to `PhpType::Void` both matches PHP and gives EIR
     /// lowering a slot type it can answer `isset`/`empty`/`??` from without reading storage that
     /// no store ever initializes. A name that *is* bound was assigned somewhere in the same
-    /// scope, so its slot carries that assigned type and the probe would read it before the
-    /// store — the original `Undefined variable` diagnostic is restored for those.
+    /// scope. Bare local `isset` checks a separate presence flag before reading that slot;
+    /// other probe shapes retain the original diagnostic until their storage is representable.
     fn resolve_null_probe_roots(
         &mut self,
         probe_roots: Vec<(usize, String, Span)>,
@@ -111,6 +112,7 @@ impl Checker {
                     global_env.insert(name, PhpType::Void);
                 }
                 Some(PhpType::Void) => {}
+                Some(_) if self.local_presence_probe_sites.contains(&span) => {}
                 Some(_) => {
                     // One probe is visited by both the assignment-effect walk and expression
                     // inference, so the same (name, position) can arrive several times.

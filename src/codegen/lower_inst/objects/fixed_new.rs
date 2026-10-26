@@ -27,145 +27,100 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
     if class_name == "IteratorIterator" {
         return lower_iterator_iterator_new(ctx, inst);
     }
-    if is_spl_doubly_linked_list_family(&class_name) {
-        return lower_spl_doubly_linked_list_new(ctx, inst, &class_name);
-    }
-    if class_name == "SplFixedArray" {
-        return lower_spl_fixed_array_new(ctx, inst);
+    // A property-free SplFixedArray subclass reuses the runtime fixed-array payload; a subclass
+    // that declares properties would place them where the backing storage lives, so it stays on
+    // the generic path (and is reported) until that layout conflict is resolved.
+    if class_name == "SplFixedArray"
+        || (class_extends(ctx, &class_name, "SplFixedArray")
+            && ctx
+                .module
+                .class_infos
+                .get(&class_name)
+                .is_some_and(|info| info.properties.is_empty()))
+    {
+        return lower_spl_fixed_array_new(ctx, inst, &class_name);
     }
     if let Some(class_id) = throwable_payload_class_id(ctx, &class_name) {
         return lower_builtin_throwable_new(ctx, inst, &class_name, class_id);
     }
+    let layout = resolve_fixed_object_layout(ctx, &class_name, Some(inst.operands.len()))?;
+    reject_unmanaged_promoted_reference_args(ctx, inst, &layout.borrowed_reference_params, 0)?;
+    emit_generic_object_new(ctx, inst, &class_name, &layout, None)?;
+    Ok(())
+}
+
+/// Operand 0 is the reserved handle; operands 1.. are the constructor arguments. The emission
+/// is the generic path's, except the freshly allocated payload takes the reserved handle
+/// through `__rt_object_handle_bind` instead of acquiring its own — php numbers a `new`
+/// receiver's handle BEFORE evaluating the constructor arguments, and the lowering reserved
+/// this handle up front for exactly that order.
+pub(in crate::codegen::lower_inst) fn lower_object_new_reserved(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let class_name = class_name_immediate(ctx, inst)?.to_string();
+    let reserved_handle = *inst.operands.first().ok_or_else(|| {
+        CodegenIrError::invalid_module("object_new_reserved missing its reserved handle operand")
+    })?;
+    let layout = resolve_fixed_object_layout(ctx, &class_name, Some(inst.operands.len() - 1))?;
+    reject_unmanaged_promoted_reference_args(ctx, inst, &layout.borrowed_reference_params, 1)?;
+    emit_generic_object_new(ctx, inst, &class_name, &layout, Some(reserved_handle))?;
+    Ok(())
+}
+
+/// Emits the GENERIC fixed-class construction: allocation, defaults, and the constructor call.
+///
+/// `reserved_handle` selects php's numbering order: `None` acquires a fresh handle from the
+/// pool (the fused `Op::ObjectNew` order); `Some(handle)` binds the reserved handle to the
+/// freshly allocated payload instead (the php-ordered `Op::ObjectNewReserved` form).
+fn emit_generic_object_new(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+    layout: &FixedObjectLayout,
+    reserved_handle: Option<crate::ir::ValueId>,
+) -> Result<()> {
     let constructor_key = php_symbol_key("__construct");
-    let (
-        class_id,
-        property_count,
-        allow_dynamic_properties,
-        uninitialized_marker_offsets,
-        owned_reference_property_offsets,
-        property_defaults,
-        constructor_impl,
-        borrowed_reference_params,
-    ) = {
-        let class_info =
-            ctx.module.class_infos.get(&class_name).ok_or_else(|| {
-                CodegenIrError::unsupported(format!("unknown class {}", class_name))
-            })?;
-        if class_interfaces_require_missing_method_symbols(ctx, &class_name, class_info) {
-            return Err(CodegenIrError::unsupported(format!(
-                "object allocation requiring interface method symbols not emitted by EIR for {}",
-                class_name
-            )));
-        }
-        let property_defaults = collect_property_defaults(class_info, inst)?;
-        // A private constructor is not inherited, so a descendant of a class that declares one
-        // carries no `__construct` entry of its own. PHP still instantiates it through that
-        // ancestor, so resolve the owner; it is the class itself for every other constructor.
-        let constructor_owner =
-            crate::types::constructor_owner(&ctx.module.class_infos, &class_name);
-        let constructor_impl = if let Some((owner_name, constructor)) = constructor_owner
-            .and_then(|(name, info)| info.methods.get(&constructor_key).map(|sig| (name, sig)))
-        {
-            if constructor.params.len() != inst.operands.len() {
-                return Err(CodegenIrError::unsupported(format!(
-                    "constructor call to {}::__construct with {} args for {} params",
-                    class_name,
-                    inst.operands.len(),
-                    constructor.params.len()
-                )));
-            }
-            let impl_class = constructor_owner
-                .and_then(|(_, info)| info.method_impl_classes.get(&constructor_key).cloned())
-                .unwrap_or_else(|| owner_name.to_string());
-            if !class_method_already_emitted(ctx, &impl_class, &constructor_key, false) {
-                return Err(CodegenIrError::unsupported(format!(
-                    "constructor call to {}::__construct without an emitted EIR method body",
-                    impl_class
-                )));
-            }
-            let param_types = constructor
-                .params
-                .iter()
-                .map(|(_, ty)| ty.codegen_repr())
-                .collect::<Vec<_>>();
-            Some(ConstructorCallTarget {
-                impl_class,
-                param_types,
-                ref_params: constructor.ref_params.clone(),
-                sig: constructor.clone(),
-                padding_thunk: None,
-            })
-        } else if !inst.operands.is_empty() {
-            return Err(CodegenIrError::unsupported(format!(
-                "constructor arguments for class {} without __construct",
-                class_name
-            )));
-        } else {
-            None
-        };
-        let marker_offsets = uninitialized_property_marker_offsets(class_info);
-        let owned_ref_offsets = owned_reference_property_offsets(class_info);
-        let borrowed_reference_params = class_info
-            .constructor_param_to_prop
-            .iter()
-            .enumerate()
-            .filter_map(|(index, property)| {
-                let property = property.as_ref()?;
-                (class_info.reference_properties.contains(property)
-                    && !class_info.owned_reference_properties.contains(property))
-                    .then_some(index)
-            })
-            .collect::<Vec<_>>();
-        (
-            class_info.class_id,
-            class_info.properties.len(),
-            class_info.has_property_hash_storage(),
-            marker_offsets,
-            owned_ref_offsets,
-            property_defaults,
-            constructor_impl,
-            borrowed_reference_params,
-        )
-    };
-    reject_unmanaged_promoted_reference_args(ctx, inst, &borrowed_reference_params)?;
-    if let Some(constructor) = &constructor_impl {
+    let args_offset = usize::from(reserved_handle.is_some());
+    if let Some(constructor) = &layout.constructor {
         super::super::direct_calls::emit_literal_declared_parameter_guards(
             ctx,
-            &inst.operands,
+            &inst.operands[args_offset..],
             &constructor.sig.params,
             &format!("{}::__construct", constructor.impl_class),
         )?;
     }
-    emit_object_allocation(
+    emit_object_allocation_impl(
         ctx,
-        class_id,
-        property_count,
-        allow_dynamic_properties,
-        &uninitialized_marker_offsets,
-        &owned_reference_property_offsets,
+        layout.class_id,
+        layout.property_count,
+        layout.allow_dynamic_properties,
+        &layout.uninitialized_marker_offsets,
+        &layout.owned_reference_property_offsets,
+        reserved_handle,
     )?;
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("object_new missing result value"))?;
     ctx.store_result_value(result)?;
-    let construction_guard_bytes = if constructor_impl.is_some() {
+    let construction_guard_bytes = if layout.constructor.is_some() {
         ctx.load_value_to_result(result)?;
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         super::super::callable_guards::begin_unconstructed_object(ctx.emitter)
     } else {
         0
     };
-    emit_property_defaults(ctx, result, &property_defaults)?;
-    if super::super::is_throwable_like_class(ctx, &class_name) {
+    emit_property_defaults(ctx, result, &layout.property_defaults)?;
+    if super::super::is_throwable_like_class(ctx, class_name) {
         ctx.load_value_to_result(result)?;
-        emit_regular_throwable_creation_line(ctx, result, abi::int_result_reg(ctx.emitter), class_id);
+        emit_regular_throwable_creation_line(ctx, result, abi::int_result_reg(ctx.emitter), layout.class_id);
     }
-    if let Some(constructor) = constructor_impl {
+    if let Some(constructor) = &layout.constructor {
         emit_constructor_call(
             ctx,
             result,
-            &inst.operands,
-            &class_name,
+            &inst.operands[args_offset..],
+            class_name,
             &constructor.impl_class,
             &constructor_key,
             &constructor.param_types,
@@ -178,14 +133,132 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
     Ok(())
 }
 
+/// The lowered shape of one generic fixed-class construction site.
+struct FixedObjectLayout {
+    class_id: u64,
+    property_count: usize,
+    allow_dynamic_properties: bool,
+    uninitialized_marker_offsets: Vec<usize>,
+    owned_reference_property_offsets: Vec<(usize, PhpType, bool)>,
+    property_defaults: Vec<PropertyDefault>,
+    constructor: Option<ConstructorCallTarget>,
+    /// Constructor-parameter indices backed by a caller's by-reference slot.
+    borrowed_reference_params: Vec<usize>,
+}
+
+/// Resolves the lowered layout of one generic fixed-class construction site.
+///
+/// `constructor_operand_count` is `Some(n)` for a construction that carries its constructor
+/// arguments in the same op, validating the resolved constructor's parameter count against it.
+fn resolve_fixed_object_layout(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    constructor_operand_count: Option<usize>,
+) -> Result<FixedObjectLayout> {
+    let constructor_key = php_symbol_key("__construct");
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", class_name)))?;
+    if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
+        return Err(CodegenIrError::unsupported(format!(
+            "object allocation requiring interface method symbols not emitted by EIR for {}",
+            class_name
+        )));
+    }
+    let property_defaults = collect_property_defaults(class_info, "object construction")?;
+    // A private constructor is not inherited, so a descendant of a class that declares one
+    // carries no `__construct` entry of its own. PHP still instantiates it through that
+    // ancestor, so resolve the owner; it is the class itself for every other constructor.
+    let constructor_owner = crate::types::constructor_owner(&ctx.module.class_infos, class_name);
+    let constructor = if let Some((owner_name, constructor)) = constructor_owner
+        .and_then(|(name, info)| info.methods.get(&constructor_key).map(|sig| (name, sig)))
+    {
+        if let Some(operand_count) = constructor_operand_count {
+            if constructor.params.len() != operand_count {
+                return Err(CodegenIrError::unsupported(format!(
+                    "constructor call to {}::__construct with {} args for {} params",
+                    class_name, operand_count, constructor.params.len()
+                )));
+            }
+        }
+        let impl_class = constructor_owner
+            .and_then(|(_, info)| info.method_impl_classes.get(&constructor_key).cloned())
+            .unwrap_or_else(|| owner_name.to_string());
+        if !class_method_already_emitted(ctx, &impl_class, &constructor_key, false) {
+            return Err(CodegenIrError::unsupported(format!(
+                "constructor call to {}::__construct without an emitted EIR method body",
+                impl_class
+            )));
+        }
+        let param_types = constructor
+            .params
+            .iter()
+            .map(|(_, ty)| ty.codegen_repr())
+            .collect::<Vec<_>>();
+        Some(ConstructorCallTarget {
+            impl_class,
+            param_types,
+            ref_params: constructor.ref_params.clone(),
+            sig: constructor.clone(),
+            padding_thunk: None,
+        })
+    } else if constructor_operand_count.is_some_and(|count| count > 0) {
+        return Err(CodegenIrError::unsupported(format!(
+            "constructor arguments for class {} without __construct",
+            class_name
+        )));
+    } else {
+        None
+    };
+    let marker_offsets = uninitialized_property_marker_offsets(class_info);
+    let owned_ref_offsets = owned_reference_property_offsets(class_info);
+    let borrowed_reference_params = class_info
+        .constructor_param_to_prop
+        .iter()
+        .enumerate()
+        .filter_map(|(index, property)| {
+            let property = property.as_ref()?;
+            (class_info.reference_properties.contains(property)
+                && !class_info.owned_reference_properties.contains(property))
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    Ok(FixedObjectLayout {
+        class_id: class_info.class_id,
+        property_count: class_info.properties.len(),
+        allow_dynamic_properties: class_info.has_property_hash_storage(),
+        uninitialized_marker_offsets: marker_offsets,
+        owned_reference_property_offsets: owned_ref_offsets,
+        property_defaults,
+        constructor,
+        borrowed_reference_params,
+    })
+}
+
+/// Lowers `Op::ObjectHandleReserve`: mint or pop one handle WITHOUT binding it.
+///
+/// The php-ordered construction path reserves the receiver's handle BEFORE evaluating the
+/// constructor arguments, then binds it through the paired `Op::ObjectNewReserved` once the
+/// payload exists.
+pub(in crate::codegen::lower_inst) fn lower_object_handle_reserve(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    abi::emit_call_label(ctx.emitter, "__rt_object_handle_reserve");
+    store_if_result(ctx, inst)
+}
+
 /// Rejects borrowed boxed-walk cells before allocating an object that would retain them.
 fn reject_unmanaged_promoted_reference_args(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     param_indices: &[usize],
+    operand_offset: usize,
 ) -> Result<()> {
     for &index in param_indices {
-        let value = *inst.operands.get(index).ok_or_else(|| {
+        let value = *inst.operands.get(index + operand_offset).ok_or_else(|| {
             CodegenIrError::invalid_module("promoted reference parameter has no constructor operand")
         })?;
         let source = peel_argument_owner_aliases(ctx, value)?;

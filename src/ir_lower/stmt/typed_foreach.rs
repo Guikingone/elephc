@@ -211,6 +211,70 @@ pub(super) fn lower_foreach(
         receiver: source_receiver,
     } = lower_foreach_source(ctx, array, value_by_ref);
     if value_by_ref
+        && matches!(
+            ctx.builder.value_php_type(source.value).codegen_repr(),
+            PhpType::Object(_) | PhpType::Iterable
+        )
+    {
+        // php rejects by-reference iteration over an Iterator/IteratorAggregate object: an
+        // iterator hands back a copy, so there is no element storage to bind a reference to. The
+        // Error is catchable and raised before the loop body, exactly like php-src.
+        let message = ctx.intern_string("An iterator cannot be used with foreach by reference");
+        ctx.emit_void(
+            Op::ThrowError,
+            Vec::new(),
+            Some(Immediate::Data(message)),
+            Op::ThrowError.default_effects(),
+            Some(array.span),
+        );
+        ctx.builder.terminate(Terminator::Unreachable);
+        return;
+    }
+    if value_by_ref
+        && matches!(
+            ctx.builder.value_php_type(source.value).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+    {
+        // A `mixed` source may hold an array — by-reference iteration is legal — or an
+        // iterator, where php raises the SAME catchable Error the typed check above raises.
+        // The kind is only known at run time, so the guard branches on it: an object source
+        // throws, anything else iterates. This is the shape every untyped-argument foreach
+        // takes (the corpus's `p($iii)` with an `IteratorIterator` included).
+        let is_object = ctx.emit_value(
+            Op::TypePredicate,
+            vec![source.value],
+            Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)),
+            PhpType::Bool,
+            Op::TypePredicate.default_effects(),
+            Some(array.span),
+        );
+        let throw_block = ctx
+            .builder
+            .create_named_block("foreach.byref.iterator.throw", Vec::new());
+        let iterate_block = ctx
+            .builder
+            .create_named_block("foreach.byref.iterate", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: is_object.value,
+            then_target: throw_block,
+            then_args: Vec::new(),
+            else_target: iterate_block,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(throw_block);
+        let message = ctx.intern_string("An iterator cannot be used with foreach by reference");
+        ctx.emit_void(
+            Op::ThrowError,
+            Vec::new(),
+            Some(Immediate::Data(message)),
+            Op::ThrowError.default_effects(),
+            Some(array.span),
+        );
+        ctx.builder.terminate(Terminator::Unreachable);
+        ctx.builder.position_at_end(iterate_block);
+    }
+    if value_by_ref
         && by_ref_origin.is_none()
         && matches!(
             ctx.builder.value_php_type(source.value).codegen_repr(),
@@ -398,17 +462,6 @@ pub(super) fn lower_foreach(
         iterator_cleanup: by_ref_origin.map(|_| (iterator_state, array.span)),
         receiver_pin,
     });
-    if let Some(key_var) = key_var {
-        let key = ctx.emit_value(
-            Op::IterCurrentKey,
-            vec![iterator.value],
-            None,
-            PhpType::Mixed,
-            Op::IterCurrentKey.default_effects(),
-            Some(array.span),
-        );
-        ctx.store_local(key_var, key, PhpType::Mixed, Some(array.span));
-    }
     if value_by_ref {
         let slot = ctx.declare_local(value_var, foreach_ref_value_type(&source_ty));
         ctx.release_ref_cell_owner(value_var, Some(array.span));
@@ -432,6 +485,18 @@ pub(super) fn lower_foreach(
             Some(array.span),
         );
         ctx.store_local(value_var, value, value_ty, Some(array.span));
+    }
+    // php reads `current()` before `key()`; the order is observable through user iterators.
+    if let Some(key_var) = key_var {
+        let key = ctx.emit_value(
+            Op::IterCurrentKey,
+            vec![iterator.value],
+            None,
+            PhpType::Mixed,
+            Op::IterCurrentKey.default_effects(),
+            Some(array.span),
+        );
+        ctx.store_local(key_var, key, PhpType::Mixed, Some(array.span));
     }
     lower_block(ctx, body);
     ctx.loop_stack.pop();

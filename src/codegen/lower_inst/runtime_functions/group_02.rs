@@ -25,6 +25,18 @@ pub(super) fn lower(
         RuntimeFnId::GetClass => Some({
             crate::codegen::lower_inst::builtins::types::lower_class_name_lookup(ctx, inst, "get_class")
         }),
+        RuntimeFnId::ElephcSplObjectAppend => Some({
+            crate::codegen::lower_inst::builtins::spl_object_properties::lower_append(ctx, inst)
+        }),
+        RuntimeFnId::ElephcSplObjectVarsIter => Some({
+            crate::codegen::lower_inst::builtins::types::lower_spl_iterated_object_vars(ctx, inst)
+        }),
+        RuntimeFnId::ElephcSplObjectVarsNamed => Some({
+            crate::codegen::lower_inst::builtins::types::lower_spl_named_object_vars(ctx, inst)
+        }),
+        RuntimeFnId::ElephcSplObjectVarsRaw => Some({
+            crate::codegen::lower_inst::builtins::types::lower_spl_raw_object_vars(ctx, inst)
+        }),
         RuntimeFnId::GetObjectVars => Some({
             crate::codegen::lower_inst::builtins::types::lower_get_object_vars(ctx, inst)
         }),

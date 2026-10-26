@@ -11,9 +11,28 @@
 
 use crate::names::Name;
 use crate::parser::ast::{
-    BinOp, CastType, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind,
-    InstanceOfTarget, PropertyHooks, StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
+    Attribute, AttributeGroup, BinOp, CastType, ClassConst, ClassMethod, ClassProperty, Expr,
+    ExprKind, InstanceOfTarget, PropertyHooks, StaticReceiver, Stmt, StmtKind, TypeExpr,
+    Visibility,
 };
+use crate::span::Span;
+
+/// Builds elephc's internal `#[\ElephcDeprecatedDynamicProperties]` attribute group.
+///
+/// Builtin SPL containers grant the dynamic-property storage the attribute-driven path needs
+/// while still reporting php 8.5's `Creation of dynamic property C::$n is deprecated`, which is
+/// what php does for every class without `#[\AllowDynamicProperties]`. The marker is internal:
+/// user code never writes it.
+pub(super) fn deprecated_dynamic_properties_attribute() -> AttributeGroup {
+    AttributeGroup {
+        attributes: vec![Attribute {
+            name: Name::unqualified("ElephcDeprecatedDynamicProperties"),
+            args: Vec::new(),
+            span: Span::dummy(),
+        }],
+        span: Span::dummy(),
+    }
+}
 
 /// Provides the Method helper used by the common module.
 pub(super) fn method(
@@ -247,9 +266,17 @@ pub(super) fn array_type() -> TypeExpr {
     TypeExpr::Array(Box::new(mixed_type()))
 }
 
-/// Computes the type metadata for array<string>.
-pub(super) fn string_array_type() -> TypeExpr {
-    TypeExpr::Array(Box::new(TypeExpr::Str))
+/// Declares PHP's packed-or-hash array contract for a synthesized method body.
+/// A named array at a dummy source span retains the legacy raw packed-array ABI;
+/// this explicit contract resolves to `PhpType::php_array()` and uses boxed storage.
+pub(super) fn php_array_contract_type() -> TypeExpr {
+    TypeExpr::Union(vec![
+        array_type(),
+        TypeExpr::AssocArray {
+            key: Box::new(mixed_type()),
+            value: Box::new(mixed_type()),
+        },
+    ])
 }
 
 /// Computes the type metadata for named.

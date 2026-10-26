@@ -324,13 +324,42 @@ pub(in crate::types::checker) fn magic_set_reentry_property_is_readable(
     })
 }
 
+/// Records every class whose layout carries `property` as an instance slot for SLOT WIDENING.
+///
+/// A mixed-receiver write (`$o->name = v` with `$o` only known at run time) can store any value
+/// into any untyped slot any class declares under that name, and php accepts every value. The
+/// runtime ladder enumerates those classes on its own; this record only tells the reservation to
+/// widen their refined slots to boxed `Mixed`, so it deliberately covers PUBLIC and PROTECTED
+/// slots the hash-reservation record (which answers the strict-ancestor private-shadow case)
+/// leaves out.
+pub(in crate::types::checker) fn record_mixed_receiver_widen_targets(
+    checker: &mut Checker,
+    property: &str,
+) {
+    let targets = checker
+        .classes
+        .iter()
+        .filter(|(_, class_info)| {
+            class_info
+                .properties
+                .iter()
+                .any(|(name, _)| name == property)
+        })
+        .map(|(class_name, _)| class_name.clone())
+        .collect::<Vec<_>>();
+    for class_name in targets {
+        checker.scope_dynamic_widen_targets.insert(class_name);
+    }
+}
+
 /// Reserves the per-instance property hash on every class a recorded mutation can reach.
 ///
 /// Runs after every body has been checked, so the recorded set is complete and the class map has
 /// its final parent links for the subclass expansion.
 pub(in crate::types::checker) fn reserve_scope_dynamic_property_storage(checker: &mut Checker) {
     let targets = std::mem::take(&mut checker.scope_dynamic_mutation_targets);
-    if targets.is_empty() && !checker.program_contains_eval {
+    let widen_targets = std::mem::take(&mut checker.scope_dynamic_widen_targets);
+    if targets.is_empty() && widen_targets.is_empty() && !checker.program_contains_eval {
         return;
     }
     let mut classes = target_classes(checker, &targets)
@@ -339,8 +368,53 @@ pub(in crate::types::checker) fn reserve_scope_dynamic_property_storage(checker:
     if checker.program_contains_eval {
         classes.extend(checker.classes.keys().cloned());
     }
+    classes.extend(widen_targets);
     for class_name in classes {
         reserve_property_hash_storage(checker, &class_name);
+        widen_refined_untyped_property_slots(checker, &class_name);
+    }
+}
+
+/// Widens every refined UNTYPED property slot of a recorded runtime-mutation class to boxed
+/// `Mixed`.
+///
+/// A recorded mutation site — a runtime-name write (`$o->{$k} = v`) or a static-name write whose
+/// receiver is only known at run time — can store ANY value into ANY untyped property the class
+/// declares, and php's untyped properties accept every value. A slot whose storage was refined
+/// from its default (say a raw string or integer) cannot hold a boxed cell, so the backend's
+/// ladder used to refuse the whole write once the class arm matched. Widening the slot's storage
+/// to `Mixed` is php's answer: every existing load and store of that property reads and writes
+/// the boxed form instead, and the mutation stores whatever the runtime value carries.
+///
+/// Slots with a DECLARED type keep their concrete storage: php coerces or rejects by the declared
+/// type, which the ladder's typed-slot guard already models.
+fn widen_refined_untyped_property_slots(checker: &mut Checker, class_name: &str) {
+    let Some(class_info) = checker.classes.get_mut(class_name) else {
+        return;
+    };
+    let slots: Vec<(usize, String)> = class_info
+        .properties
+        .iter()
+        .enumerate()
+        .map(|(index, (name, _))| (index, name.clone()))
+        .collect();
+    for (index, name) in slots {
+        if class_info.property_slot_is_declared(index, &name) {
+            continue;
+        }
+        let refined = matches!(
+            class_info.properties[index].1.codegen_repr(),
+            PhpType::Int
+                | PhpType::Float
+                | PhpType::Str
+                | PhpType::Bool
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_)
+        );
+        if refined {
+            class_info.properties[index].1 = PhpType::Mixed;
+        }
     }
 }
 

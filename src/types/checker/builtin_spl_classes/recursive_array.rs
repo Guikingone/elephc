@@ -15,6 +15,7 @@ use crate::parser::ast::{BinOp, ClassMethod, Expr, Stmt, TypeExpr};
 use crate::types::traits::FlattenedClass;
 
 use super::common::*;
+use super::storage::storage_normalize_stmt;
 
 /// Inserts class into the supplied builtin metadata registry.
 pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
@@ -54,7 +55,8 @@ fn spl_recursive_array_iterator_methods() -> Vec<ClassMethod> {
         method_with_body(
             "getChildren",
             Vec::new(),
-            Some(TypeExpr::Nullable(Box::new(named_type("RecursiveIterator")))),
+            // php's tentative return type is the CONCRETE class (spl_array.stub.php).
+            Some(TypeExpr::Nullable(Box::new(named_type("RecursiveArrayIterator")))),
             recursive_array_get_children_body(),
         ),
         method_with_body(
@@ -69,19 +71,13 @@ fn spl_recursive_array_iterator_methods() -> Vec<ClassMethod> {
 /// Builds the synthetic method body for recursive array iterator construct.
 fn recursive_array_iterator_construct_body() -> Vec<Stmt> {
     vec![
-        property_assign_stmt(this_expr(), "keys", empty_array_expr()),
-        property_assign_stmt(this_expr(), "values", empty_array_expr()),
-        property_assign_stmt(this_expr(), "position", int_expr(0)),
-        property_assign_stmt(this_expr(), "flags", var_expr("flags")),
-        foreach_stmt(
-            var_expr("array"),
-            Some("key"),
-            "value",
-            vec![
-                property_array_push_stmt(this_expr(), "keys", var_expr("key")),
-                property_array_push_stmt(this_expr(), "values", var_expr("value")),
-            ],
-        ),
+        storage_normalize_stmt(&super::storage::object_backing_deprecation(
+            "ArrayIterator",
+            "__construct",
+        )),
+        property_assign_stmt(this_expr(), "storage", var_expr("array")),
+        property_assign_stmt(this_expr(), "__elephc_position", int_expr(0)),
+        property_assign_stmt(this_expr(), "__elephc_flags", var_expr("flags")),
     ]
 }
 

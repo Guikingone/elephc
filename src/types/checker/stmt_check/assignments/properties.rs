@@ -52,6 +52,7 @@ pub(super) fn check_property_assign(
     // miss helper, which dropped it with no diagnostic anywhere.
     if matches!(obj_ty.codegen_repr(), PhpType::Mixed) {
         scope_dynamic_storage::record_scope_dynamic_mixed_receiver_mutation(checker, property);
+        scope_dynamic_storage::record_mixed_receiver_widen_targets(checker, property);
     }
     if let PhpType::Pointer(Some(class_name)) = &obj_ty {
         check_pointer_property_write(checker, class_name, property, &val_ty, span)?;
@@ -356,8 +357,8 @@ fn check_object_property_write(
             ));
         }
         let expected_ty = class_info
-            .visible_property(property)
-            .map(|(_, (_, ty))| ty.clone())
+            .visible_property_index(property)
+            .map(|index| class_info.property_slot_write_type(index))
             .unwrap_or(PhpType::Int);
         let readonly_null_coalesce = class_info.readonly_properties.contains(property)
             && null_coalesce_property_targets_same_slot(object, property, value);
@@ -628,6 +629,7 @@ fn refine_object_property_type(
         let Some(slot) = class_info.visible_property_index(property) else {
             return;
         };
+        if class_info.native_property_contracts.contains_key(&slot) { return; }
         let Some(refined_ty) = refined_untyped_property_assignment_type(
             checker,
             &class_info.properties[slot].1,
@@ -662,6 +664,7 @@ fn update_inherited_property_slot_type(
     let Some(slot) = class_info.visible_property_index(property) else {
         return;
     };
+    if class_info.native_property_contracts.contains_key(&slot) { return; }
     let old_ty = class_info.properties[slot].1.clone();
     if old_ty == ty && !matches!(ty, PhpType::AssocArray { .. }) {
         return;
@@ -700,7 +703,9 @@ fn update_inherited_property_slot_type(
     };
     for name in inheritors {
         if let Some(info) = checker.classes.get_mut(&name) {
-            info.properties[slot].1 = shared_ty.clone();
+            if !info.native_property_contracts.contains_key(&slot) {
+                info.properties[slot].1 = shared_ty.clone();
+            }
         }
     }
 }
@@ -838,7 +843,7 @@ fn updated_array_property_push_type(
     val_ty: &PhpType,
     span: Span,
 ) -> Result<PhpType, CompileError> {
-    if prop_ty.is_php_array() {
+    if prop_ty.is_php_array() || native_boxed_array_property(checker, class_name, property, prop_ty) {
         return Ok(prop_ty.clone());
     }
     match prop_ty {
@@ -893,7 +898,7 @@ fn updated_array_property_assign_type(
     val_ty: &PhpType,
     span: Span,
 ) -> Result<PhpType, CompileError> {
-    if prop_ty.is_php_array() {
+    if prop_ty.is_php_array() || native_boxed_array_property(checker, class_name, property, prop_ty) {
         return Ok(prop_ty.clone());
     }
     match prop_ty {
@@ -1093,4 +1098,12 @@ fn resolve_pointer_field_type(
             &format!("{} requires an object or typed pointer", operation),
         ))
     }
+}
+
+/// Native-loaded user slots keep their runtime tag, so container writes validate it at execution.
+fn native_boxed_array_property(checker: &Checker, class: &str, property: &str, ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Mixed) && checker.classes.get(class).is_some_and(|info| {
+        info.visible_property_index(property)
+            .is_some_and(|index| info.native_property_contracts.contains_key(&index))
+    })
 }

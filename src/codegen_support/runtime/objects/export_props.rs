@@ -11,11 +11,13 @@
 //!   `crate::codegen::lower_inst::builtins::object_props`.
 //!
 //! Key details:
-//! - All three read `_class_prop_desc_ptrs[class_id]`, the SAME descriptor
+//! - Rendering accessors read `_class_prop_desc_ptrs[class_id]`, the SAME descriptor
 //!   `__rt_print_r_object` walks and the same rows `_class_vd_desc_*` carries, so
 //!   `var_export`, `print_r` and `var_dump` cannot disagree about an object's
 //!   shape. Row layout is 48 bytes:
 //!   `(print_r_key_ptr, print_r_key_len, byte_offset, value_tag, name_ptr, name_len)`.
+//! - Comparison count/value variants use `_class_cmp_prop_desc_ptrs` so debug
+//!   projections cannot alter object equality. They share the same owned-value ABI.
 //! - A null instance, an out-of-range index, and an uninitialized typed property
 //!   are all "no property here": the count is 0, the name is the empty string, and
 //!   the value is boxed PHP null. PHP omits uninitialized typed properties from
@@ -51,47 +53,53 @@ const PROP_DESC_ROW_BYTES: u64 = 48;
 /// Output: AArch64 x0 / x86_64 rax = descriptor rows plus dynamic-property entries,
 /// 0 when there is no descriptor.
 pub fn emit_obj_prop_count(emitter: &mut Emitter) {
+    emit_obj_prop_count_view(emitter, "__rt_obj_prop_count", "_class_prop_desc_ptrs");
+    emit_obj_prop_count_view(emitter, "__rt_obj_cmp_prop_count", "_class_cmp_prop_desc_ptrs");
+}
+
+/// Emits an indexed count for either rendering or physical comparison metadata.
+fn emit_obj_prop_count_view(emitter: &mut Emitter, symbol: &str, table: &str) {
     emitter.blank();
     emitter.comment("--- runtime: obj_prop_count ---");
-    emitter.label_global("__rt_obj_prop_count");
+    emitter.label_global(symbol);
 
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("cbz x0, __rt_obj_prop_count_none");            // a non-object value has no properties
+            emitter.instruction(&format!("cbz x0, {symbol}_none"));             // a non-object value has no properties
             emitter.instruction("ldr x9, [x0]");                                // load the runtime class id from the object header
             abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");   // resolve the class-id table extent
             emitter.instruction("ldr x10, [x10]");                              // load the number of registered class ids
             emitter.instruction("cmp x9, x10");                                 // is the class id within the descriptor table?
-            emitter.instruction("b.hs __rt_obj_prop_count_none");               // an unknown class renders no properties
-            abi::emit_symbol_address(emitter, "x11", "_class_prop_desc_ptrs");  // resolve the per-class descriptor pointer table
+            emitter.instruction(&format!("b.hs {symbol}_none"));                // an unknown class renders no properties
+            abi::emit_symbol_address(emitter, "x11", table);  // resolve the per-class descriptor pointer table
             emitter.instruction("ldr x11, [x11, x9, lsl #3]");                  // load this class's property descriptor
             emitter.instruction("ldr x12, [x11]");                              // the row count sits at descriptor offset 0
-            emit_load_dump_dyn_hash(emitter, "x0", "x9", "x13", "x10", "__rt_obj_prop_count_rows");
+            emit_load_dump_dyn_hash(emitter, "x0", "x9", "x13", "x10", &format!("{symbol}_rows"));
             emitter.instruction("ldr x13, [x13]");                              // load the dynamic-property hash entry count
             emitter.instruction("add x12, x12, x13");                           // dynamic properties follow the declared rows
-            emitter.label("__rt_obj_prop_count_rows");
+            emitter.label(&format!("{symbol}_rows"));
             emitter.instruction("mov x0, x12");                                 // return declared rows plus dynamic entries
             emitter.instruction("ret");                                         // return to caller
-            emitter.label("__rt_obj_prop_count_none");
+            emitter.label(&format!("{symbol}_none"));
             emitter.instruction("mov x0, #0");                                  // report zero renderable properties
             emitter.instruction("ret");                                         // return to caller
         }
         Arch::X86_64 => {
             emitter.instruction("test rdi, rdi");                               // a non-object value has no properties
-            emitter.instruction("jz __rt_obj_prop_count_none_x86");             // report zero renderable properties
+            emitter.instruction(&format!("jz {symbol}_none_x86"));              // report zero renderable properties
             emitter.instruction("mov r9, QWORD PTR [rdi]");                     // load the runtime class id from the object header
             abi::emit_symbol_address(emitter, "r10", "_class_gc_desc_count");   // resolve the class-id table extent
             emitter.instruction("mov r10, QWORD PTR [r10]");                    // load the number of registered class ids
             emitter.instruction("cmp r9, r10");                                 // is the class id within the descriptor table?
-            emitter.instruction("jae __rt_obj_prop_count_none_x86");            // an unknown class renders no properties
-            abi::emit_symbol_address(emitter, "r11", "_class_prop_desc_ptrs");  // resolve the per-class descriptor pointer table
+            emitter.instruction(&format!("jae {symbol}_none_x86"));             // an unknown class renders no properties
+            abi::emit_symbol_address(emitter, "r11", table);  // resolve the per-class descriptor pointer table
             emitter.instruction("mov r11, QWORD PTR [r11 + r9 * 8]");           // load this class's property descriptor
             emitter.instruction("mov rax, QWORD PTR [r11]");                    // the row count sits at descriptor offset 0
-            emit_load_dump_dyn_hash(emitter, "rdi", "r9", "r10", "r11", "__rt_obj_prop_count_rows_x86");
+            emit_load_dump_dyn_hash(emitter, "rdi", "r9", "r10", "r11", &format!("{symbol}_rows_x86"));
             emitter.instruction("add rax, QWORD PTR [r10]");                    // dynamic properties follow the declared rows
-            emitter.label("__rt_obj_prop_count_rows_x86");
+            emitter.label(&format!("{symbol}_rows_x86"));
             emitter.instruction("ret");                                         // return to caller
-            emitter.label("__rt_obj_prop_count_none_x86");
+            emitter.label(&format!("{symbol}_none_x86"));
             emitter.instruction("xor rax, rax");                                // report zero renderable properties
             emitter.instruction("ret");                                         // return to caller
         }
@@ -219,33 +227,39 @@ fn emit_uninit_sentinel_aarch64(emitter: &mut Emitter, reg: &str) {
 /// Output: AArch64 x0 / x86_64 rax = a FRESHLY allocated Mixed cell the caller
 /// owns. Anything that is not a readable property boxes canonical PHP null.
 pub fn emit_obj_prop_value(emitter: &mut Emitter) {
+    emit_obj_prop_value_view(emitter, "__rt_obj_prop_value", "_class_prop_desc_ptrs");
+    emit_obj_prop_value_view(emitter, "__rt_obj_cmp_prop_value", "_class_cmp_prop_desc_ptrs");
+}
+
+/// Emits an owned boxed read from the selected physical or rendering view.
+fn emit_obj_prop_value_view(emitter: &mut Emitter, symbol: &str, table: &str) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_obj_prop_value_linux_x86_64(emitter);
+        emit_obj_prop_value_linux_x86_64(emitter, symbol, table);
         return;
     }
 
     emitter.blank();
     emitter.comment("--- runtime: obj_prop_value ---");
-    emitter.label_global("__rt_obj_prop_value");
+    emitter.label_global(symbol);
 
     // Frame (32 bytes): [16] saved x29, [24] saved x30.
     emitter.instruction("sub sp, sp, #32");                                     // allocate the property-read frame
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // establish the property-read frame pointer
 
-    emitter.instruction("cbz x0, __rt_obj_prop_value_null");                    // a non-object value has no properties
+    emitter.instruction(&format!("cbz x0, {symbol}_null"));                     // a non-object value has no properties
     emitter.instruction("cmp x1, #0");                                          // reject a negative index before scaling it
-    emitter.instruction("b.lt __rt_obj_prop_value_null");                       // out-of-range indices box PHP null
+    emitter.instruction(&format!("b.lt {symbol}_null"));                        // out-of-range indices box PHP null
     emitter.instruction("ldr x9, [x0]");                                        // load the runtime class id from the object header
     abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");           // resolve the class-id table extent
     emitter.instruction("ldr x10, [x10]");                                      // load the number of registered class ids
     emitter.instruction("cmp x9, x10");                                         // is the class id within the descriptor table?
-    emitter.instruction("b.hs __rt_obj_prop_value_null");                       // an unknown class has no readable properties
-    abi::emit_symbol_address(emitter, "x11", "_class_prop_desc_ptrs");          // resolve the per-class descriptor pointer table
+    emitter.instruction(&format!("b.hs {symbol}_null"));                        // an unknown class has no readable properties
+    abi::emit_symbol_address(emitter, "x11", table);          // resolve the per-class descriptor pointer table
     emitter.instruction("ldr x11, [x11, x9, lsl #3]");                          // load this class's property descriptor
     emitter.instruction("ldr x12, [x11]");                                      // load the descriptor row count
     emitter.instruction("cmp x1, x12");                                         // is the requested index within the row count?
-    emitter.instruction("b.hs __rt_obj_prop_value_dyn");                        // past the declared rows → a dynamic property
+    emitter.instruction(&format!("b.hs {symbol}_dyn"));                         // past the declared rows → a dynamic property
     emitter.instruction(&format!("mov x13, #{}", PROP_DESC_ROW_BYTES));         // each descriptor row occupies 48 bytes
     emitter.instruction("mul x13, x1, x13");                                    // byte offset of this property's row
     emitter.instruction("add x13, x11, x13");                                   // advance into the descriptor
@@ -255,69 +269,69 @@ pub fn emit_obj_prop_value(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [x14, #8]");                                   // load the slot high word (payload high / init marker)
     emit_uninit_sentinel_aarch64(emitter, "x16");                               // materialize the uninitialized-property marker
     emitter.instruction("cmp x2, x16");                                         // is this property still uninitialized?
-    emitter.instruction("b.eq __rt_obj_prop_value_null");                       // PHP omits it, so report PHP null
+    emitter.instruction(&format!("b.eq {symbol}_null"));                        // PHP omits it, so report PHP null
     emitter.instruction("ldr x1, [x14]");                                       // load the slot low word (the payload)
     emitter.instruction("ldr x0, [x13, #24]");                                  // load the property's runtime value tag
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
 
-    emitter.label("__rt_obj_prop_value_tagged");
+    emitter.label(&format!("{symbol}_tagged"));
     emitter.instruction("cmp x0, #4");                                          // only pointer-shaped tags can carry a null payload
-    emitter.instruction("b.lt __rt_obj_prop_value_box");                        // scalar payloads box exactly as stored
-    emit_branch_if_null_container(emitter, "x1", "x9", "__rt_obj_prop_value_null"); // a zero/sentinel pointer is PHP null
+    emitter.instruction(&format!("b.lt {symbol}_box"));                         // scalar payloads box exactly as stored
+    emit_branch_if_null_container(emitter, "x1", "x9", &format!("{symbol}_null")); // a zero/sentinel pointer is PHP null
     emitter.instruction("cmp x0, #7");                                          // does the slot already hold a boxed Mixed cell?
-    emitter.instruction("b.ne __rt_obj_prop_value_box");                        // a direct payload boxes as-is
+    emitter.instruction(&format!("b.ne {symbol}_box"));                         // a direct payload boxes as-is
     emitter.instruction("mov x0, x1");                                          // pass the existing cell to the unboxer
     emitter.instruction("bl __rt_mixed_unbox");                                 // x0=inner tag, x1=lo, x2=hi — re-box for a fresh copy
 
-    emitter.label("__rt_obj_prop_value_box");
+    emitter.label(&format!("{symbol}_box"));
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = freshly owned Mixed cell
-    emitter.instruction("b __rt_obj_prop_value_done");                          // return the boxed property value
+    emitter.instruction(&format!("b {symbol}_done"));                           // return the boxed property value
 
-    emitter.label("__rt_obj_prop_value_dyn");
+    emitter.label(&format!("{symbol}_dyn"));
     emitter.instruction("sub x1, x1, x12");                                     // index past the declared rows = dynamic ordinal
     emitter.instruction("bl __rt_obj_dyn_prop_at");                             // x0=found x3=lo x4=hi x5=tag
-    emitter.instruction("cbz x0, __rt_obj_prop_value_null");                    // no such dynamic property → PHP null
+    emitter.instruction(&format!("cbz x0, {symbol}_null"));                     // no such dynamic property → PHP null
     emitter.instruction("mov x0, x5");                                          // dynamic value tag → boxing path
     emitter.instruction("mov x1, x3");                                          // dynamic value low word → boxing path
     emitter.instruction("mov x2, x4");                                          // dynamic value high word → boxing path
-    emitter.instruction("b __rt_obj_prop_value_tagged");                        // box a fresh copy exactly like a declared slot
+    emitter.instruction(&format!("b {symbol}_tagged"));                         // box a fresh copy exactly like a declared slot
 
-    emitter.label("__rt_obj_prop_value_null");
+    emitter.label(&format!("{symbol}_null"));
     emitter.instruction("mov x0, #8");                                          // runtime tag 8 = canonical PHP null
     abi::emit_load_int_immediate(emitter, "x1", NULL_SENTINEL);                 // null payload uses the shared in-band sentinel
     emitter.instruction("mov x2, #0");                                          // null carries no high payload word
     emitter.instruction("bl __rt_mixed_from_value");                            // box PHP null for the caller
 
-    emitter.label("__rt_obj_prop_value_done");
+    emitter.label(&format!("{symbol}_done"));
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the property-read frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
 /// Emits the Linux x86_64 boxed property reader.
-fn emit_obj_prop_value_linux_x86_64(emitter: &mut Emitter) {
+fn emit_obj_prop_value_linux_x86_64(emitter: &mut Emitter, symbol: &str, table: &str) {
     emitter.blank();
     emitter.comment("--- runtime: obj_prop_value ---");
-    emitter.label_global("__rt_obj_prop_value");
+    emitter.label_global(symbol);
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the property-read frame pointer
     emitter.instruction("sub rsp, 16");                                         // allocate the property-read frame
 
     emitter.instruction("test rdi, rdi");                                       // a non-object value has no properties
-    emitter.instruction("jz __rt_obj_prop_value_null_x86");                     // box PHP null
+    emitter.instruction(&format!("jz {symbol}_null_x86"));                      // box PHP null
     emitter.instruction("cmp rsi, 0");                                          // reject a negative index before scaling it
-    emitter.instruction("jl __rt_obj_prop_value_null_x86");                     // out-of-range indices box PHP null
+    emitter.instruction(&format!("jl {symbol}_null_x86"));                      // out-of-range indices box PHP null
     emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id from the object header
     abi::emit_symbol_address(emitter, "r10", "_class_gc_desc_count");           // resolve the class-id table extent
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of registered class ids
     emitter.instruction("cmp r9, r10");                                         // is the class id within the descriptor table?
-    emitter.instruction("jae __rt_obj_prop_value_null_x86");                    // an unknown class has no readable properties
-    abi::emit_symbol_address(emitter, "r11", "_class_prop_desc_ptrs");          // resolve the per-class descriptor pointer table
+    emitter.instruction(&format!("jae {symbol}_null_x86"));                     // an unknown class has no readable properties
+    abi::emit_symbol_address(emitter, "r11", table);          // resolve the per-class descriptor pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r9 * 8]");                   // load this class's property descriptor
     emitter.instruction("mov r10, QWORD PTR [r11]");                            // load the descriptor row count
     emitter.instruction("cmp rsi, r10");                                        // is the requested index within the row count?
-    emitter.instruction("jae __rt_obj_prop_value_dyn_x86");                     // past the declared rows → a dynamic property
+    emitter.instruction(&format!("jae {symbol}_dyn_x86"));                      // past the declared rows → a dynamic property
     emitter.instruction("mov rax, rsi");                                        // copy the index for row-offset scaling
     emitter.instruction(&format!("imul rax, rax, {}", PROP_DESC_ROW_BYTES));    // each descriptor row occupies 48 bytes
     emitter.instruction("add rax, r11");                                        // advance into the descriptor
@@ -327,42 +341,42 @@ fn emit_obj_prop_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // load the slot high word (payload high / init marker)
     emitter.instruction("movabs r8, 0x7ffffffffffffffd");                       // materialize the uninitialized-property marker
     emitter.instruction("cmp rsi, r8");                                         // is this property still uninitialized?
-    emitter.instruction("je __rt_obj_prop_value_null_x86");                     // PHP omits it, so report PHP null
+    emitter.instruction(&format!("je {symbol}_null_x86"));                      // PHP omits it, so report PHP null
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the slot low word (the payload)
     emitter.instruction("mov rax, QWORD PTR [rax + 24]");                       // load the property's runtime value tag
     emit_resolve_tagged_scalar_property_tag(emitter, "rax", "rsi");
 
-    emitter.label("__rt_obj_prop_value_tagged_x86");
+    emitter.label(&format!("{symbol}_tagged_x86"));
     emitter.instruction("cmp rax, 4");                                          // only pointer-shaped tags can carry a null payload
-    emitter.instruction("jl __rt_obj_prop_value_box_x86");                      // scalar payloads box exactly as stored
-    emit_branch_if_null_container(emitter, "rdi", "r9", "__rt_obj_prop_value_null_x86"); // a zero/sentinel pointer is PHP null
+    emitter.instruction(&format!("jl {symbol}_box_x86"));                       // scalar payloads box exactly as stored
+    emit_branch_if_null_container(emitter, "rdi", "r9", &format!("{symbol}_null_x86")); // a zero/sentinel pointer is PHP null
     emitter.instruction("cmp rax, 7");                                          // does the slot already hold a boxed Mixed cell?
-    emitter.instruction("jne __rt_obj_prop_value_box_x86");                     // a direct payload boxes as-is
+    emitter.instruction(&format!("jne {symbol}_box_x86"));                      // a direct payload boxes as-is
     emitter.instruction("mov rax, rdi");                                        // pass the existing cell to the unboxer
     emitter.instruction("call __rt_mixed_unbox");                               // rax=inner tag, rdi=lo, rdx=hi
     emitter.instruction("mov rsi, rdx");                                        // unbox reports the high word in rdx; boxing reads it from rsi
 
-    emitter.label("__rt_obj_prop_value_box_x86");
+    emitter.label(&format!("{symbol}_box_x86"));
     emitter.instruction("call __rt_mixed_from_value");                          // rax = freshly owned Mixed cell
-    emitter.instruction("jmp __rt_obj_prop_value_done_x86");                    // return the boxed property value
+    emitter.instruction(&format!("jmp {symbol}_done_x86"));                     // return the boxed property value
 
-    emitter.label("__rt_obj_prop_value_dyn_x86");
+    emitter.label(&format!("{symbol}_dyn_x86"));
     emitter.instruction("sub rsi, r10");                                        // index past the declared rows = dynamic ordinal
     emitter.instruction("call __rt_obj_dyn_prop_at");                           // rax=found rcx=lo r8=hi r9=tag
     emitter.instruction("test rax, rax");                                       // was the dynamic property found?
-    emitter.instruction("jz __rt_obj_prop_value_null_x86");                     // no such dynamic property → PHP null
+    emitter.instruction(&format!("jz {symbol}_null_x86"));                      // no such dynamic property → PHP null
     emitter.instruction("mov rax, r9");                                         // dynamic value tag → boxing path
     emitter.instruction("mov rdi, rcx");                                        // dynamic value low word → boxing path
     emitter.instruction("mov rsi, r8");                                         // dynamic value high word → boxing path
-    emitter.instruction("jmp __rt_obj_prop_value_tagged_x86");                  // box a fresh copy exactly like a declared slot
+    emitter.instruction(&format!("jmp {symbol}_tagged_x86"));                   // box a fresh copy exactly like a declared slot
 
-    emitter.label("__rt_obj_prop_value_null_x86");
+    emitter.label(&format!("{symbol}_null_x86"));
     emitter.instruction("mov rax, 8");                                          // runtime tag 8 = canonical PHP null
     abi::emit_load_int_immediate(emitter, "rdi", NULL_SENTINEL);                // null payload uses the shared in-band sentinel
     emitter.instruction("xor esi, esi");                                        // null carries no high payload word
     emitter.instruction("call __rt_mixed_from_value");                          // box PHP null for the caller
 
-    emitter.label("__rt_obj_prop_value_done_x86");
+    emitter.label(&format!("{symbol}_done_x86"));
     emitter.instruction("add rsp, 16");                                         // release the property-read frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller

@@ -247,7 +247,11 @@ pub(super) fn store_call_result(
             return Ok(());
         }
         if matches!(result_ty, PhpType::Mixed | PhpType::Union(_)) && return_ty != PhpType::Mixed {
-            emit_box_current_value_as_mixed(ctx.emitter, &return_ty);
+            // A concrete call result already carries the caller's reference. Transfer it into
+            // the box rather than retaining a second reference with no remaining owner.
+            crate::codegen_support::emit_box_current_owned_value_as_mixed(
+                ctx.emitter, &return_ty,
+            );
         }
         ctx.store_result_value(result)?;
     }

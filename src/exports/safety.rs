@@ -342,6 +342,10 @@ fn runtime_function_requires_proof(target: RuntimeFnId) -> bool {
         RuntimeFnId::Dirname
             | RuntimeFnId::ElephcPtrReadString
             | RuntimeFnId::GetObjectVars
+        | RuntimeFnId::ElephcSplObjectVarsRaw
+        | RuntimeFnId::ElephcSplObjectVarsNamed
+        | RuntimeFnId::ElephcSplObjectVarsIter
+        | RuntimeFnId::ElephcSplObjectAppend
             | RuntimeFnId::ObStart
             | RuntimeFnId::PhpUname
             | RuntimeFnId::Printf

@@ -314,6 +314,9 @@ pub(super) fn lower_instance_runtime_intrinsic(
             expected_args
         )));
     }
+    let consumes_mixed = !intrinsic.consumed_mixed_parameters().is_empty();
+    let impl_class = class_info.method_impl_classes.get(&method_key)
+        .cloned().unwrap_or_else(|| normalized.to_string());
     let return_ty = callee_sig.return_type.clone();
     let callee_params = callee_sig.params.clone();
     let callee_ref_params = callee_sig.ref_params.clone();
@@ -323,19 +326,29 @@ pub(super) fn lower_instance_runtime_intrinsic(
     let mut ref_params = Vec::with_capacity(callee_ref_params.len() + 1);
     ref_params.push(false);
     ref_params.extend(callee_ref_params.iter().copied());
-    let call_args =
-        materialize_direct_call_args_with_refs(ctx, &inst.operands, &param_types, &ref_params)?;
+    let call_args = materialize_direct_call_args_with_refs_and_options(
+        ctx, &inst.operands, &param_types, &ref_params, consumes_mixed,
+        RefArgCellLifetime::CallOnly,
+    )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_call_label(
-        ctx.emitter,
-        intrinsic
-            .runtime_helper()
-            .expect("runtime-backed instance intrinsic must have a helper"),
-    );
+    if consumes_mixed {
+        // PHP arguments stay borrowed even when the helper consumes its inputs.
+        // The generated method adapter acquires the helper's independent owners.
+        abi::emit_call_label(ctx.emitter, &method_symbol(&impl_class, &method_key));
+    } else {
+        abi::emit_call_label(
+            ctx.emitter,
+            intrinsic.runtime_helper()
+                .expect("runtime-backed instance intrinsic must have a helper"),
+        );
+    }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;
+    if consumes_mixed {
+        emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    }
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 

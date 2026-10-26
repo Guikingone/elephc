@@ -1,5 +1,6 @@
 //! Purpose:
-//! Integration or regression tests for diagnostic coverage of syntax, including missing open tag, unterminated string, and empty variable.
+//! Integration or regression tests for diagnostic coverage of syntax, including unterminated
+//! strings, invalid interpolation, and empty variables.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -9,11 +10,12 @@
 
 use super::*;
 
-/// Verifies the error diagnostic for missing open tag.
+/// Verifies a source with no open tag is treated as inline HTML rather than an error.
 #[test]
-fn test_error_missing_open_tag() {
-    // PHP code starting outside an open tag produces a "missing open tag" error.
-    expect_error("echo \"hi\";", "<?php");
+fn test_missing_open_tag_is_inline_html() {
+    // A file with no `<?php` is emitted as inline HTML, matching PHP's own behavior, so the
+    // frontend reports no diagnostic.
+    assert!(check_source("echo \"hi\";").is_ok());
 }
 
 /// Verifies the error diagnostic for unterminated string.

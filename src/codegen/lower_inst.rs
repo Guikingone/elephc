@@ -72,11 +72,12 @@ mod static_locals;
 mod static_properties;
 mod strings;
 mod array_access_runtime;
+mod array_access_dynamic;
 mod call_cleanup;
 mod call_operands;
 mod callable_descriptors;
 mod core_closures;
-mod core_builtins;
+pub(crate) mod core_builtins;
 mod core_includes;
 mod core_misc;
 mod descriptor_arguments;
@@ -94,6 +95,7 @@ mod method_call_types;
 mod method_dispatch;
 mod method_intrinsics;
 mod method_resolution;
+mod hash_keys_deferred;
 mod mixed_array_runtime;
 mod mixed_property_runtime;
 mod output_values;
@@ -103,6 +105,7 @@ mod static_method_calls;
 mod throwable_methods;
 
 use array_access_runtime::*;
+use array_access_dynamic::*;
 use call_cleanup::*;
 use call_operands::*;
 use callable_descriptors::*;
@@ -219,6 +222,11 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::PushCallOperandOwner => ownership::lower_push_call_operand_owner(ctx, &inst),
         Op::PopCallOperandOwner => ownership::lower_pop_call_operand_owner(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
+        Op::LoadDiagnosticLine => {
+            let result = abi::int_result_reg(ctx.emitter);
+            abi::emit_load_symbol_to_reg(ctx.emitter, result, "_php_diagnostic_line", 0);
+            store_if_result(ctx, &inst)
+        }
         Op::StoreGlobal => lower_store_global(ctx, &inst),
         Op::ExternGlobalLoad => lower_extern_global_load(ctx, &inst),
         Op::ExternGlobalStore => lower_extern_global_store(ctx, &inst),
@@ -328,6 +336,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
         Op::HashAppend => hashes::lower_hash_append(ctx, &inst),
         Op::OffsetUnset => offset_unset::lower_offset_unset(ctx, &inst),
+        Op::MixedArrayUnset => arrays::lower_mixed_array_unset(ctx, &inst),
         Op::HashUnion => hashes::lower_hash_union(ctx, &inst),
         Op::HashArrayUnion => hashes::lower_hash_array_union(ctx, &inst),
         Op::HashSpread => hashes::lower_hash_spread(ctx, &inst),
@@ -342,6 +351,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::BufferGet => buffers::lower_buffer_get(ctx, &inst),
         Op::BufferSet => buffers::lower_buffer_set(ctx, &inst),
         Op::ObjectNew => objects::lower_object_new(ctx, &inst),
+        Op::ObjectNewReserved => objects::lower_object_new_reserved(ctx, &inst),
+        Op::ObjectHandleReserve => objects::lower_object_handle_reserve(ctx, &inst),
         Op::ObjectCloneShallow => objects::lower_object_clone_shallow(ctx, &inst),
         Op::DynamicObjectNew => objects::lower_dynamic_object_new(ctx, &inst),
         Op::DynamicObjectNewMixed => objects::lower_dynamic_object_new_mixed(ctx, &inst),

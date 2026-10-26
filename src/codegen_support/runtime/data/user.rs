@@ -6,7 +6,10 @@
 //! - `crate::codegen_support::runtime::data::emit_runtime_data_user()`.
 //!
 //! Key details:
+//! - Reserved native slots remain in GC layouts but are omitted from PHP property views.
 //! - User data is program-specific and must match class ids, static property slots, and generated call sites.
+
+mod comparison_props;
 
 use std::collections::{HashMap, HashSet};
 
@@ -173,6 +176,12 @@ pub(crate) fn emit_runtime_data_user(
         .map(|class| source_static_vtable_entry(class, "__elephc_retire", classes))
         .transpose()?.unwrap_or_else(|| "0".to_string());
     out.push_str(&format!(".p2align 3\n.globl _weak_map_key_retire_fn\n_weak_map_key_retire_fn:\n    .quad {weak_map_retire}\n"));
+    super::object_projection::emit_projection_visibility(
+        &mut out, max_class_id, &class_info_by_id, &class_name_by_id, classes,
+    );
+    super::object_projection::emit_array_cast_hooks(
+        &mut out, max_class_id, &class_name_by_id, classes,
+    );
     emit_name_lookup_data(
         &mut out,
         "_interface_names_count",
@@ -307,9 +316,59 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Per-class var_dump adapter tables for intrinsic containers. A zero entry means the class
+    // is rendered by the generic property walker; a non-zero entry points at a helper pair that
+    // supplies the `object(C) (n)` count and renders the class's own payload layout instead.
+    for (symbol, fixed_adapter, dll_adapter) in [
+        (
+            "_class_vd_count_ptrs",
+            "__rt_vd_fixed_array_count",
+            "__rt_vd_dll_count",
+        ),
+        (
+            "_class_vd_body_ptrs",
+            "__rt_vd_fixed_array_body",
+            "__rt_vd_dll_body",
+        ),
+    ] {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n"));
+        if let Some(max_class_id) = max_class_id {
+            for class_id in 0..=max_class_id {
+                let adapter = match class_name_by_id.get(&class_id).map(|name| name.as_str()) {
+                    Some("SplFixedArray") => Some(fixed_adapter),
+                    Some("SplDoublyLinkedList" | "SplStack" | "SplQueue") => Some(dll_adapter),
+                    _ => None,
+                };
+                match adapter {
+                    Some(adapter) => out.push_str(&format!("    .quad {adapter}\n")),
+                    None => out.push_str("    .quad 0\n"),
+                }
+            }
+        }
+    }
+
+    // Per-class shallow-clone adapter table. A zero entry means the generic declared-property
+    // clone applies; a non-zero entry points at a helper that copies a runtime-managed payload
+    // (SplFixedArray) that the property walk cannot see. Lists use inherited property slots.
+    out.push_str(".globl _class_clone_adapter_ptrs\n_class_clone_adapter_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let adapter = match class_name_by_id.get(&class_id).map(|name| name.as_str()) {
+                Some("SplFixedArray") => Some("__rt_clone_spl_fixed"),
+                _ => None,
+            };
+            match adapter {
+                Some(adapter) => out.push_str(&format!("    .quad {adapter}\n")),
+                None => out.push_str("    .quad 0\n"),
+            }
+        }
+    }
+
     // Per-class print_r / var_export descriptor pointer table — read by
     // `__rt_print_r_object` and by the `__elephc_object_prop_*` prelude helpers.
     // Same rows as `_class_vd_desc_ptrs`, different key spellings.
+    comparison_props::emit_comparison_data(&mut out, classes);
+
     out.push_str(".globl _class_prop_desc_ptrs\n_class_prop_desc_ptrs:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
@@ -320,6 +379,20 @@ pub(crate) fn emit_runtime_data_user(
             }
         }
     }
+
+    // Render-only native debug classification; property/export descriptors stay unchanged.
+    out.push_str(".p2align 3\n.globl _class_print_r_native_kinds\n_class_print_r_native_kinds:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let native_dll = class_info_by_id.get(&class_id)
+                .and_then(|info| info.method_declaring_classes.get("__debuginfo"))
+                .is_some_and(|owner| owner == "SplDoublyLinkedList");
+            out.push_str(&format!("    .quad {}\n", u8::from(native_dll)));
+        }
+    }
+    out.push_str(".globl _pr_native_dll_flags_key\n_pr_native_dll_flags_key:\n    .ascii \"flags:SplDoublyLinkedList:private\"\n");
+    out.push_str(".globl _pr_native_dll_items_key\n_pr_native_dll_items_key:\n    .ascii \"dllist:SplDoublyLinkedList:private\"\n");
+    out.push_str(".p2align 3\n");
 
     // Per-class enum tables. `_class_enum_kinds` is 0 for an ordinary class and
     // 1/2/3 for a pure / int-backed / string-backed enum — `print_r` prints
@@ -614,6 +687,7 @@ pub(crate) fn emit_runtime_data_user(
         ("_class_count_ptrs", "Countable", "count", PhpType::Int),
         ("_class_offsetget_ptrs", "ArrayAccess", "offsetGet", PhpType::Mixed),
         ("_class_offsetset_ptrs", "ArrayAccess", "offsetSet", PhpType::Void),
+        ("_class_offsetunset_ptrs", "ArrayAccess", "offsetUnset", PhpType::Void),
     ] {
         out.push_str(&format!(".globl {table}\n{table}:\n"));
         if let Some(max_class_id) = max_class_id {
@@ -1202,6 +1276,8 @@ pub(crate) fn emit_runtime_data_user(
                     PhpType::AssocArray { .. } => 5,
                     PhpType::Object(_) => 6,
                     PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => 7,
+                    PhpType::Void
+                        if !class_info.property_slot_is_declared(*prop_index, prop_name) => 7,
                     PhpType::Resource(_) => 9,
                     PhpType::TaggedScalar => {
                         unreachable!("nullable scalar properties use the boxed Mixed representation")
@@ -1250,6 +1326,8 @@ pub(crate) fn emit_runtime_data_user(
                         PhpType::AssocArray { .. } => 5,
                         PhpType::Object(_) => 6,
                         PhpType::Mixed => 7,
+                        PhpType::Void
+                            if !class_info.property_slot_is_declared(i, prop_name) => 7,
                         PhpType::Union(_) => 7,
                         PhpType::Iterable => 7,
                         PhpType::Resource(_) => 9,
@@ -1273,7 +1351,11 @@ pub(crate) fn emit_runtime_data_user(
         // declaration order with the PHP-mangled serialize key bytes, the
         // property's byte offset within the object, and its runtime value tag.
         // __rt_serialize_object / __rt_unserialize_object walk this by class id.
-        for (prop_index, (prop_name, _)) in class_info.properties.iter().enumerate() {
+        // Reserved NUL names describe native storage, never PHP-visible declarations.
+        // Keep physical indices for offsets while omitting those rows from every PHP view.
+        let php_properties = class_info.properties.iter().enumerate()
+            .filter(|(_, (name, _))| !name.starts_with('\0'));
+        for (prop_index, (prop_name, _)) in php_properties.clone() {
             let (metadata, owner_name) = physical_property_slot_metadata(
                 classes, class_info, class_name, prop_index, prop_name,
             );
@@ -1296,8 +1378,8 @@ pub(crate) fn emit_runtime_data_user(
             ".globl _class_serprop_{}\n_class_serprop_{}:\n",
             class_info.class_id, class_info.class_id,
         ));
-        out.push_str(&format!("    .quad {}\n", class_info.properties.len()));
-        for (prop_index, (prop_name, prop_ty)) in class_info.properties.iter().enumerate() {
+        out.push_str(&format!("    .quad {}\n", php_properties.clone().count()));
+        for (prop_index, (prop_name, prop_ty)) in php_properties.clone() {
             let (metadata, owner_name) = physical_property_slot_metadata(
                 classes, class_info, class_name, prop_index, prop_name,
             );
@@ -1321,7 +1403,7 @@ pub(crate) fn emit_runtime_data_user(
             ".globl _class_serprop_declaring_{}\n_class_serprop_declaring_{}:\n",
             class_info.class_id, class_info.class_id,
         ));
-        for (prop_index, (prop_name, _)) in class_info.properties.iter().enumerate() {
+        for (prop_index, (prop_name, _)) in php_properties {
             let (metadata, owner_name) = physical_property_slot_metadata(
                 classes, class_info, class_name, prop_index, prop_name,
             );
@@ -1355,6 +1437,7 @@ pub(crate) fn emit_runtime_data_user(
                 // infers a storage type from the default, but PHP accepts any value there,
                 // so leave the pre-existing accept behavior untouched.
                 let declared = metadata.property_slot_is_declared(prop_index, prop_name);
+                let prop_ty = metadata.property_slot_declared_type(prop_index, prop_name).unwrap_or(prop_ty);
                 let declaring_class = metadata
                     .property_declaring_classes
                     .get(prop_name)
@@ -1449,6 +1532,10 @@ pub(crate) fn emit_runtime_data_user(
                 class_info.class_id, row_index
             ));
             out.push_str(&format!("    .quad {}\n", row.type_name.len())); // declared type-name byte length
+            out.push_str(&format!(
+                "    .quad {}\n",
+                u64::from(row.typed) // php hides an absent UNTYPED property from var_dump
+            ));
         }
 
         // print_r / var_export property table: the SAME rows (and therefore the
@@ -3570,6 +3657,11 @@ struct VarDumpRow {
     tag: u64,
     /// Declared type name `uninitialized(...)` prints.
     type_name: String,
+    /// Whether the property carries a DECLARED PHP type.
+    ///
+    /// php hides an absent UNTYPED property from `var_dump` entirely while an absent TYPED one
+    /// renders `uninitialized(TYPE)`, so the body walker needs this per row.
+    typed: bool,
 }
 
 /// Builds the `var_dump` rows for a class: the `__debugInfo()` projection when the
@@ -3583,6 +3675,7 @@ fn var_dump_descriptor_rows(
         return projection
             .into_iter()
             .filter_map(|(key, prop_name)| {
+                if prop_name.starts_with('\0') || is_hidden_debug_property(&prop_name) { return None; }
                 let layout_index = class_info.visible_property_index(&prop_name)?;
                 let (_, prop_ty) = class_info.properties.get(layout_index)?;
                 let (metadata, owner_name) = physical_property_slot_metadata(
@@ -3604,7 +3697,8 @@ fn var_dump_descriptor_rows(
                         .copied()
                         .unwrap_or(8 + layout_index * 16),
                     tag: prop_value_tag(metadata, &prop_name, prop_ty),
-                    type_name: var_dump_property_type_name(prop_ty),
+                    type_name: var_dump_property_type_name(metadata.property_slot_declared_type(layout_index, prop_name.as_str()).unwrap_or(prop_ty)),
+                    typed: metadata.property_slot_is_declared(layout_index, &prop_name),
                 })
             })
             .collect();
@@ -3614,6 +3708,7 @@ fn var_dump_descriptor_rows(
         .iter()
         .enumerate()
         .filter_map(|(layout_index, (prop_name, prop_ty))| {
+            if prop_name.starts_with('\0') || is_hidden_debug_property(&prop_name) { return None; }
             let (metadata, owner_name) = physical_property_slot_metadata(
                 classes, class_info, class_name, layout_index, prop_name,
             );
@@ -3630,7 +3725,8 @@ fn var_dump_descriptor_rows(
                     .copied()
                     .unwrap_or(8 + layout_index * 16),
                 tag: prop_value_tag(metadata, prop_name, prop_ty),
-                type_name: var_dump_property_type_name(prop_ty),
+                type_name: var_dump_property_type_name(metadata.property_slot_declared_type(layout_index, prop_name.as_str()).unwrap_or(prop_ty)),
+                typed: metadata.property_slot_is_declared(layout_index, prop_name),
             })
         })
         .collect()
@@ -3697,6 +3793,16 @@ fn physical_property_slot_metadata<'a>(
         metadata = parent_info;
         owner_name = parent;
     }
+}
+
+/// Returns true for a compiler-internal property that `var_dump`/`print_r`/`var_export` must not
+/// render.
+///
+/// Synthetic SPL containers keep their bookkeeping (flags, cursor, iterator class) in
+/// `__elephc`-prefixed slots so the one visible `storage` property prints exactly like PHP's real
+/// private container property.
+fn is_hidden_debug_property(prop_name: &str) -> bool {
+    prop_name.starts_with("__elephc")
 }
 
 /// Folds a class's `__debugInfo()` into the `(array key, property name)` pairs
@@ -3890,7 +3996,7 @@ fn var_dump_property_type_name(prop_ty: &PhpType) -> String {
 /// Unlike `var_dump_property_type_name`, which collapses unions to `mixed`, this keeps
 /// the nullable scalar spelling PHP uses (`?int`) and joins wider unions with `|`, so the
 /// message matches reference PHP for the shapes a typed property can declare.
-fn serprop_type_name(prop_ty: &PhpType) -> String {
+pub(crate) fn serprop_type_name(prop_ty: &PhpType) -> String {
     match prop_ty {
         PhpType::Union(members) => {
             let mut ranked: Vec<(u8, String)> = Vec::new();
@@ -3963,7 +4069,7 @@ fn serprop_type_rank(prop_ty: &PhpType) -> u8 {
 /// and a nullable member admits tag `8`. An untyped property is declared `Void` but
 /// stored boxed, so it (like `mixed`) accepts every tag; a `Void` that is a UNION member
 /// is the null type and admits only tag `8`.
-fn serprop_accepted_mask(prop_ty: &PhpType) -> u64 {
+pub(crate) fn serprop_accepted_mask(prop_ty: &PhpType) -> u64 {
     // An untyped property is declared `Void` but stored boxed and accepts any value,
     // exactly like `mixed`. A `Void` inside a union is the null member instead, so only
     // the standalone forms short-circuit here.
@@ -4011,7 +4117,7 @@ fn serprop_accepted_mask(prop_ty: &PhpType) -> u64 {
 /// member and no `int` member (`float`, `?float`, `float|string`, `bool|float`), but keeps the
 /// `int` when the type also declares `int` (`int|float`), so the accepted-tag mask alone cannot
 /// distinguish the two shapes.
-fn serprop_widens_int_to_float(prop_ty: &PhpType) -> bool {
+pub(crate) fn serprop_widens_int_to_float(prop_ty: &PhpType) -> bool {
     let members: Vec<&PhpType> = match prop_ty {
         PhpType::Union(members) => members.iter().collect(),
         other => vec![other],
@@ -4200,6 +4306,9 @@ mod boxed_result_mask_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod untyped_property_gc_tests;
 
 #[cfg(test)]
 mod tests {
@@ -4393,6 +4502,7 @@ mod tests {
             is_final: false,
             is_readonly_class: false,
             allow_dynamic_properties: false,
+            dynamic_property_creation_deprecated: false,
             eval_property_storage: false,
             clone_override_property_storage: false,
             scope_dynamic_property_storage: false,
@@ -4420,6 +4530,7 @@ mod tests {
             property_set_visibilities: HashMap::new(),
             declared_properties: HashSet::new(),
             property_declared_slots: Vec::new(),
+            native_property_contracts: HashMap::new(),
             final_properties: HashSet::new(),
             readonly_properties: HashSet::new(),
             reference_properties: HashSet::new(),

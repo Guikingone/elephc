@@ -586,6 +586,8 @@ pub enum CoreBuiltinOp {
     GetResources = 14,
     GetErrorHandler = 15,
     GetExceptionHandler = 16,
+    /// Compiler-owned PHP engine deprecation, distinct from public trigger_error validation.
+    InternalDeprecated = 17,
 }
 
 impl CoreBuiltinOp {
@@ -609,7 +611,8 @@ impl CoreBuiltinOp {
             | Self::ErrorReporting
             | Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
-            | Self::TriggerError => BuiltinResultOwnership::NonHeap,
+            | Self::TriggerError
+            | Self::InternalDeprecated => BuiltinResultOwnership::NonHeap,
         }
     }
 
@@ -638,6 +641,7 @@ impl CoreBuiltinOp {
             14 => Some(Self::GetResources),
             15 => Some(Self::GetErrorHandler),
             16 => Some(Self::GetExceptionHandler),
+            17 => Some(Self::InternalDeprecated),
             _ => None,
         }
     }
@@ -653,7 +657,7 @@ impl CoreBuiltinOp {
             | Self::GetResources => 1,
             Self::SetErrorHandler => 3,
             Self::SetExceptionHandler => 2,
-            Self::TriggerError => 4,
+            Self::TriggerError | Self::InternalDeprecated => 4,
             Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
             | Self::GetDefinedVars
@@ -684,7 +688,7 @@ impl CoreBuiltinOp {
                     | E::REFCOUNT_OP.bits()
                     | E::MAY_THROW.bits(),
             ),
-            Self::DebugPrintBacktrace | Self::TriggerError => E::all(),
+            Self::DebugPrintBacktrace | Self::TriggerError | Self::InternalDeprecated => E::all(),
             Self::ErrorReporting => {
                 Effects::from_bits_retain(E::READS_GLOBAL.bits() | E::WRITES_GLOBAL.bits())
             }
@@ -741,6 +745,8 @@ pub enum Op {
     PushCallOperandOwner,
     PopCallOperandOwner,
     LoadGlobal,
+    /// Reads the caller source line inherited by a synthetic PHP runtime body.
+    LoadDiagnosticLine,
     StoreGlobal,
     LoadStaticLocal,
     StoreStaticLocal,
@@ -922,6 +928,12 @@ pub enum Op {
     OffsetExists,
     /// Removes an offset from a detached boxed PHP array cell, preserving sparse keys and aliases.
     OffsetUnset,
+    /// Removes an offset from a boxed `Mixed` container the lowering cannot statically type.
+    ///
+    /// The runtime helper dispatches on the payload tag: arrays promote to sparse storage and
+    /// drop the key, `ArrayAccess` objects reach `offsetUnset()`, and every other shape answers
+    /// php's refusal. The container is mutated in place and the (unchanged) cell is the result.
+    MixedArrayUnset,
     ListUnpack,
     IterStart,
     IterCurrentKey,
@@ -932,6 +944,17 @@ pub enum Op {
     IteratorMethodCall,
     SplRuntimeCall,
     ObjectNew,
+    /// Reserves one PHP object handle WITHOUT binding it to a payload.
+    ///
+    /// php numbers a `new` receiver's handle BEFORE evaluating the constructor arguments,
+    /// so a nested `new ArrayObject(new ArrayObject($a))` numbers the outer object first.
+    /// The lowering reserves the handle first; the paired [`ObjectNewReserved`] binds it
+    /// once the payload exists.
+    ObjectHandleReserve,
+    /// Fixed-class object construction BINDING a previously reserved handle.
+    ///
+    /// Operand 0 is the reserved handle; operands 1.. are the constructor arguments.
+    ObjectNewReserved,
     EvalObjectNew,
     ObjectCloneShallow,
     DynamicObjectNew,
@@ -1217,6 +1240,7 @@ impl Op {
                 E::READS_LOCAL | E::READS_GLOBAL | E::WRITES_GLOBAL
             }
             LoadGlobal
+            | LoadDiagnosticLine
             | LoadStaticProperty
             | StaticPropInitialized
             | StaticLocalUninitialized
@@ -1252,6 +1276,7 @@ impl Op {
             }
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
+            | ObjectHandleReserve | ObjectNewReserved
             | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
             | GeneratorNew => {
                 E::ALLOC_HEAP
@@ -1276,8 +1301,12 @@ impl Op {
                     | E::REFCOUNT_OP | E::MAY_WARN | E::MAY_FATAL
             }
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
-            | HashCloneShallow | ObjectCloneShallow => {
+            | HashCloneShallow => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+            }
+            // Active SPL mutations can supply a logical root different from physical storage.
+            ObjectCloneShallow => {
+                E::READS_HEAP | E::READS_GLOBAL | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             ArrayLen | HashLen => E::READS_HEAP,
             ArrayKeyExists | OffsetExists | PropInitialized => E::READS_HEAP,
@@ -1341,6 +1370,12 @@ impl Op {
             // the hash removal can reallocate the table.
             HashUnset | PropUnset | DynamicPropUnset | OffsetUnset => E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
+            // `MixedArrayUnset` reaches the same consequences through the runtime dispatch: the
+            // array arm promotes to sparse storage and removes through the hash, the `ArrayAccess`
+            // arm calls a user-visible `offsetUnset()` that can throw or observe globals, and the
+            // refused shapes raise php's non-array fatal.
+            MixedArrayUnset => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP | E::WRITES_HEAP
+                | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_FATAL | E::REFCOUNT_OP,
             ArraySet | HashSet | DescriptorArgSet | ArrayPush | HashAppend
             | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
@@ -1537,6 +1572,7 @@ impl Op {
             PushCallOperandOwner => "push_call_operand_owner",
             PopCallOperandOwner => "pop_call_operand_owner",
             LoadGlobal => "load_global",
+            LoadDiagnosticLine => "load_diagnostic_line",
             StoreGlobal => "store_global",
             LoadStaticLocal => "load_static_local",
             StoreStaticLocal => "store_static_local",
@@ -1663,6 +1699,7 @@ impl Op {
             ArrayKeyExists => "array_key_exists",
             OffsetExists => "offset_exists",
             OffsetUnset => "offset_unset",
+            MixedArrayUnset => "mixed_array_unset",
             ListUnpack => "list_unpack",
             IterStart => "iter_start",
             IterCurrentKey => "iter_current_key",
@@ -1673,6 +1710,8 @@ impl Op {
             IteratorMethodCall => "iterator_method_call",
             SplRuntimeCall => "spl_runtime_call",
             ObjectNew => "object_new",
+            ObjectHandleReserve => "object_handle_reserve",
+            ObjectNewReserved => "object_new_reserved",
             EvalObjectNew => "eval_object_new",
             ObjectCloneShallow => "object_clone_shallow",
             DynamicObjectNew => "dynamic_object_new",

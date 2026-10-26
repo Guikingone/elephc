@@ -55,6 +55,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emit_from_array_aarch64(emitter);
     emit_unserialize_aarch64(emitter);
     emit_copy_from_array_aarch64(emitter);
+    emit_clone_adapter_aarch64(emitter);
 }
 
 /// Emits `__rt_spl_fixed_new` on aarch64: constructs an initialized SplFixedArray object.
@@ -383,9 +384,9 @@ fn emit_offset_prefix_aarch64(emitter: &mut Emitter, type_label: &str, range_lab
     emitter.instruction("str x0, [sp, #0]");                                    // save receiver
     emitter.instruction("str x1, [sp, #8]");                                    // save boxed offset
     emit_unbox_saved_offset_aarch64(emitter);
-    emitter.instruction("ldr x12, [sp, #24]");                                  // reload offset tag
-    emitter.instruction(&format!("cmp x12, #{}", INT_TAG));                     // fixed-array offsets must be integers
-    emitter.instruction(&format!("b.ne {}", type_label));                       // reject non-integer offsets
+    emitter.instruction("ldr x12, [sp, #24]");                                  // reload the canonical offset tag
+    emitter.instruction(&format!("cmp x12, #{}", INT_TAG));                     // canonical string keys now carry the integer tag
+    emitter.instruction(&format!("b.ne {}", type_label));                       // reject unconvertible offset types
     emitter.instruction("ldr x10, [sp, #32]");                                  // reload integer offset
     emitter.instruction("cmp x10, #0");                                         // reject negative offsets
     emitter.instruction(&format!("b.lt {}", range_label));                      // negative offsets are invalid
@@ -728,6 +729,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emit_from_array_x86_64(emitter);
     emit_unserialize_x86_64(emitter);
     emit_copy_from_array_x86_64(emitter);
+    emit_clone_adapter_x86_64(emitter);
 }
 
 /// Emits `__rt_spl_fixed_new` on x86_64: constructs an initialized SplFixedArray object.
@@ -1057,9 +1059,9 @@ fn emit_offset_prefix_x86_64(emitter: &mut Emitter, type_label: &str, range_labe
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save boxed offset
     emit_unbox_saved_offset_x86_64(emitter);
-    emitter.instruction("mov r12, QWORD PTR [rbp - 32]");                       // reload offset tag
-    emitter.instruction(&format!("cmp r12, {}", INT_TAG));                      // fixed-array offsets must be integers
-    emitter.instruction(&format!("jne {}", type_label));                        // reject non-integer offsets
+    emitter.instruction("mov r12, QWORD PTR [rbp - 32]");                       // reload the canonical offset tag
+    emitter.instruction(&format!("cmp r12, {}", INT_TAG));                      // canonical string keys now carry the integer tag
+    emitter.instruction(&format!("jne {}", type_label));                        // reject unconvertible offset types
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload integer offset
     emitter.instruction("cmp r10, 0");                                          // reject negative offsets
     emitter.instruction(&format!("jl {}", range_label));                        // negative offsets are invalid
@@ -1407,6 +1409,10 @@ fn emit_throw_exception_aarch64(
     emitter.instruction(&format!("mov x9, #{}", message_len));                  // load static exception message length
     emitter.instruction("str x9, [x0, #16]");                                   // store exception message length
     emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
+    // The creation line is php's call site: the diagnostic line published at the call site that
+    // entered this runtime helper is where php reports the throw.
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_php_diagnostic_line", 0);
+    emitter.instruction("str x9, [x0, #32]");                                   // store the call-site creation line
     emitter.instruction("str xzr, [x0, #40]");                                  // previous defaults to null
     abi::emit_symbol_address(emitter, "x9", "_exc_value");
     emitter.instruction("str x0, [x9]");                                        // publish the active exception object
@@ -1438,6 +1444,9 @@ fn emit_throw_exception_x86_64(
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store static exception message pointer
     emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store static exception message length
     emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
+    // The creation line is php's call site (see the AArch64 arm).
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_php_diagnostic_line", 0);
+    emitter.instruction("mov QWORD PTR [rax + 32], r9");                        // store the call-site creation line
     emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // publish the active exception object
     emitter.instruction("mov rsp, rbp");                                        // release helper frame before throwing
@@ -1445,13 +1454,75 @@ fn emit_throw_exception_x86_64(
     emitter.instruction("jmp __rt_throw_current");                              // enter the standard exception unwinder
 }
 
+/// Emits `__rt_clone_spl_fixed` on aarch64: x0 = source SplFixedArray payload.
+///
+/// Allocates a same-class payload and duplicates the fixed storage with
+/// `__rt_array_clone_shallow`, so shrinking or writing one array never reaches the other.
+/// Returns the clone payload in x0.
+fn emit_clone_adapter_aarch64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_clone_spl_fixed");
+    emitter.instruction("sub sp, sp, #32");                                     // reserve source and clone spill slots
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the clone-adapter frame
+    emitter.instruction("str x0, [sp, #0]");                                    // save the source payload
+    emitter.instruction(&format!("mov x0, #{}", SPL_FIXED_OBJECT_SIZE));        // request a same-size fixed-array object payload
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the clone payload
+    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the clone as an object instance
+    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the clone to its PHP object handle
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source payload
+    emitter.instruction("ldr x10, [x9]");                                       // load the source runtime class id
+    emitter.instruction("str x10, [x0]");                                       // copy the class id onto the clone
+    emitter.instruction("str x0, [sp, #8]");                                    // save the clone payload
+    emitter.instruction(&format!("ldr x0, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load the source fixed storage
+    emitter.instruction("bl __rt_array_clone_shallow");                         // duplicate the storage so the clone mutates independently
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the clone payload
+    emitter.instruction(&format!("str x0, [x10, #{}]", SPL_FIXED_STORAGE_OFFSET)); // install the cloned storage
+    emitter.instruction("mov x0, x10");                                         // return the clone payload
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the clone-adapter frame
+    emitter.instruction("ret");                                                 // return to the clone wrapper
+}
+
+/// Emits `__rt_clone_spl_fixed` on x86_64: rdi = source SplFixedArray payload.
+///
+/// Mirrors the aarch64 adapter: allocate a same-class payload and duplicate the fixed storage.
+fn emit_clone_adapter_x86_64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_clone_spl_fixed");
+    emitter.instruction("push rbp");                                            // save the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the clone-adapter frame
+    emitter.instruction("sub rsp, 16");                                         // reserve source and clone spill slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source payload
+    emitter.instruction(&format!("mov rax, {}", SPL_FIXED_OBJECT_SIZE));        // request a same-size fixed-array object payload
+    emitter.instruction("call __rt_heap_alloc");                                // allocate the clone payload
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize the object heap kind word
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the clone as an object instance
+    emitter.instruction("call __rt_object_handle_acquire");                     // bind the clone to its PHP object handle
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the source payload
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the source runtime class id
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // copy the class id onto the clone
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the clone payload
+    emitter.instruction(&format!("mov rdi, QWORD PTR [r9 + {}]", SPL_FIXED_STORAGE_OFFSET)); // load the source fixed storage
+    emitter.instruction("call __rt_array_clone_shallow");                       // duplicate the storage so the clone mutates independently
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the clone payload
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {}], rax", SPL_FIXED_STORAGE_OFFSET)); // install the cloned storage
+    emitter.instruction("mov rax, r10");                                        // return the clone payload
+    emitter.instruction("mov rsp, rbp");                                        // release the clone-adapter frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the clone wrapper
+}
+
 /// Branches to `__rt_spl_throw_offset_type` with SplFixedArray's message around the name row the
 /// caller left in `x2`: `TypeError("Cannot access offset of type <type> on SplFixedArray")`.
 fn emit_fixed_offset_type_throw_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x0", "_spl_fixed_offset_type_prefix");
-    emitter.instruction(&format!("mov x1, #{}", SPL_FIXED_OFFSET_TYPE_PREFIX_LEN)); // message prefix length
+    emitter.instruction(
+        &format!("mov x1, #{}", SPL_FIXED_OFFSET_TYPE_PREFIX_LEN),
+    );                                                                          // message prefix length
     abi::emit_symbol_address(emitter, "x3", "_spl_fixed_offset_type_suffix");
-    emitter.instruction(&format!("mov x4, #{}", SPL_FIXED_OFFSET_TYPE_SUFFIX_LEN)); // message suffix length
+    emitter.instruction(
+        &format!("mov x4, #{}", SPL_FIXED_OFFSET_TYPE_SUFFIX_LEN),
+    );                                                                          // message suffix length
     emitter.instruction("b __rt_spl_throw_offset_type");                        // raise the TypeError naming the offset's type
 }
 
@@ -1459,8 +1530,12 @@ fn emit_fixed_offset_type_throw_aarch64(emitter: &mut Emitter) {
 /// caller left in `rdx`: `TypeError("Cannot access offset of type <type> on SplFixedArray")`.
 fn emit_fixed_offset_type_throw_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdi, [rip + _spl_fixed_offset_type_prefix]");      // message prefix pointer
-    emitter.instruction(&format!("mov rsi, {}", SPL_FIXED_OFFSET_TYPE_PREFIX_LEN)); // message prefix length
+    emitter.instruction(
+        &format!("mov rsi, {}", SPL_FIXED_OFFSET_TYPE_PREFIX_LEN),
+    );                                                                          // message prefix length
     emitter.instruction("lea rcx, [rip + _spl_fixed_offset_type_suffix]");      // message suffix pointer
-    emitter.instruction(&format!("mov r8, {}", SPL_FIXED_OFFSET_TYPE_SUFFIX_LEN)); // message suffix length
+    emitter.instruction(
+        &format!("mov r8, {}", SPL_FIXED_OFFSET_TYPE_SUFFIX_LEN),
+    );                                                                          // message suffix length
     emitter.instruction("jmp __rt_spl_throw_offset_type");                      // raise the TypeError naming the offset's type
 }

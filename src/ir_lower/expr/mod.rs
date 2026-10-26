@@ -50,12 +50,14 @@ mod weak_map_places;
 mod static_property_updates;
 use static_property_updates::{finish_static_compound_receiver, guard_static_compound_property_read};
 mod function_calls;
+mod compiler_calls;
 mod eval_barriers;
 mod lazy_isset;
 mod native_isset;
 mod callable_probes;
 mod descriptor_invoke;
 mod call_operand_owners;
+mod array_write_owners;
 mod descriptor_args;
 mod descriptor_unpack;
 mod static_array_callbacks;
@@ -187,6 +189,7 @@ use merge_temps::*;
 pub(crate) use callable_resolution::{
     is_bound_closure_assignment_shape, lower_bound_closure_for_assignment,
 };
+pub(crate) use array_write_owners::{capture_array_write_key, root_borrowed_write_operand};
 pub(crate) use call_operand_owners::{
     pin_in_flight_owners, register_owned_call_operand, retire_owned_call_operand,
     root_owned_call_operand, unpin_in_flight_owners, unregister_owned_call_operand,

@@ -72,10 +72,14 @@ fn test_tagged_int_at_sentinel_isset_is_true() {
 }
 
 /// An out-of-bounds int-array read var_dumps as NULL, not as the sentinel integer.
+///
+/// php's missing-key warning reaches stdout like every diagnostic; the asserted
+/// remainder is the NULL the tagged sentinel must answer.
 #[test]
 fn test_tagged_array_miss_var_dumps_null() {
     let out = compile_and_run_tagged("<?php $a = [1, 2]; var_dump($a[5]);");
-    assert_eq!(out, "NULL\n");
+    assert!(out.contains("Warning: Undefined array key 5 in "), "output: {out}");
+    assert!(out.ends_with("\nNULL\n") || out.ends_with("NULL\n"), "output: {out}");
 }
 
 /// ?? falls back to the default for an out-of-bounds int-array read.

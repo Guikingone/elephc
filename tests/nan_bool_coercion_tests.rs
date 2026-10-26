@@ -42,6 +42,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[path = "support/php_display.rs"]
+mod php_display;
+
 /// The exact stderr line elephc emits for one NAN-to-bool coercion.
 ///
 /// php-src appends ` in <file> on line <n>`; elephc deliberately does not (see the module
@@ -147,7 +150,7 @@ fn assert_run_for_version(
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
+        php_display::strip_php_display_lines(&String::from_utf8_lossy(&output.stdout)),
         expected_stdout,
         "program stdout diverged"
     );

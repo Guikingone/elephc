@@ -14,14 +14,11 @@
 //!   subexpressions keep the ordinary `Undefined variable` diagnostic.
 //! - A tolerated root is typed `PhpType::Void` (elephc's `null`), which is exactly what PHP
 //!   reports for a never-declared variable.
-//! - Acceptance is **deferred, not immediate**, for top-level code. EIR lowering derives main's
-//!   local types from `CheckResult::global_env`, so a probed name can only be lowered correctly
-//!   when it stays `null` for the whole scope: `global_env` must end the pass without a binding
-//!   for it, so the slot is typed `Void` and codegen answers from the type instead of reading
-//!   uninitialized storage. A name that is *also* assigned at top level
-//!   (`if (!isset($cfg)) { $cfg = 3; }`) would instead get that assigned type on a slot the probe
-//!   reads before any store, so `check_top_level_program` re-raises the original diagnostic for
-//!   it. See `Checker::pending_null_probe_roots`.
+//! - Top-level acceptance is deferred against the final environment. Bare local `isset`
+//!   checks an explicit EIR presence flag before loading storage, so it supports a probe before
+//!   a later assignment. Other probe shapes still require a root that stays null throughout
+//!   the scope; their typed value slot alone cannot represent an absent binding.
+
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};

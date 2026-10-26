@@ -52,8 +52,14 @@ pub(super) fn prepare_call_site(
         abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
         abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
         abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
-        abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(inst.span.map_or(0, |span| span.line)));
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
+        let line = inst.span.map_or(0, |span| span.line);
+        if line != 0 {
+            // A zero-line instruction is a synthetic-body call (the span belongs to generated
+            // code, not to the user's source). Leaving the previously published line standing
+            // keeps the diagnostic pointing at the call site that entered this frame.
+            abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(line));
+            abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
+        }
     }
     if !ctx.backtrace_enabled || !instruction_may_enter_php_frame(inst) {
         return Ok(());
@@ -85,6 +91,16 @@ pub(super) fn prepare_call_site(
     Ok(())
 }
 
+/// The out-of-line frame reader label of the function being lowered.
+pub(crate) fn backtrace_reader_label(ctx: &FunctionContext<'_>) -> String {
+    format!(
+        "{}__btr",
+        ctx.epilogue_label
+            .clone()
+            .unwrap_or_else(|| format!("{}_epilogue", ctx.function.name))
+    )
+}
+
 /// Returns whether an instruction can synchronously enter another PHP-visible frame.
 fn instruction_may_enter_php_frame(inst: &Instruction) -> bool {
     matches!(
@@ -100,6 +116,7 @@ fn instruction_may_enter_php_frame(inst: &Instruction) -> bool {
             | Op::RuntimeCall
             | Op::ExternCall
             | Op::ObjectNew
+            | Op::ObjectNewReserved
             | Op::DynamicObjectNew
             | Op::DynamicObjectNewMixed
             | Op::DynamicObjectNewWithoutConstructorMixed
@@ -116,6 +133,22 @@ fn instruction_may_enter_php_frame(inst: &Instruction) -> bool {
             | Op::FiberRuntimeCall
             | Op::CoreBuiltin
     )
+}
+
+/// Emits the function's out-of-line frame reader at its deterministic label.
+///
+/// The reader body depends only on the owning function (its module file, name, class, and
+/// parameter slots); the per-site caller line arrives through the activation record. Called
+/// once per emitted function after its body, for every function whose frame publishes a
+/// backtrace activation.
+pub(crate) fn emit_function_backtrace_reader(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    if !ctx.backtrace_activation {
+        return Ok(());
+    }
+    let label = backtrace_reader_label(ctx);
+    ctx.emitter.label(&label);
+    emit_frame_reader_callback(ctx)?;
+    Ok(())
 }
 
 /// Builds the PHP backtrace array visible at the current AOT call site.

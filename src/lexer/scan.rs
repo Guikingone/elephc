@@ -44,15 +44,14 @@ pub(super) fn scan_tokens_in_source(
 
     let span = cursor.span();
     if mode.requires_open_tag() {
-        skip_whitespace_and_comments(&mut cursor);
-        let span = cursor.span();
-        if cursor.remaining().starts_with("<?php") {
-            for _ in 0..5 {
-                cursor.advance();
-            }
-            tokens.push(spanned(Token::OpenTag, span));
-        } else {
-            return Err(CompileError::new(span, "Expected '<?php' at start of file"));
+        // `OpenTag` is emitted first because the parser expects it at index 0. Any text before
+        // the first `<?php`/`<?=` is INLINE HTML and is echoed BEFORE the program's statements,
+        // which is the reference order (a leading BOM was already stripped above).
+        tokens.push(spanned(Token::OpenTag, span));
+        if !scan_leading_html(&mut cursor, &mut tokens) {
+            // No PHP open tag anywhere: the whole file is inline HTML.
+            tokens.push(spanned(Token::Eof, cursor.span()));
+            return Ok(tokens);
         }
     } else {
         tokens.push(spanned(Token::OpenTag, span));
@@ -75,6 +74,10 @@ pub(super) fn scan_tokens_in_source(
                 span,
                 "PHP opening and closing tags are not valid in .lfc source files",
             ));
+        } else if cursor.remaining().starts_with("?>") {
+            // A close tag ends PHP mode: emit `;`, swallow one newline, and echo the inline HTML
+            // up to the next open tag (see `scan_close_tag`).
+            scan_close_tag(&mut cursor, &mut tokens);
         } else if cursor.peek() == Some('"') {
             // Double-quoted strings may contain interpolation ($var)
             let string_tokens = literals::scan_double_string_interpolated(&mut cursor)?;
@@ -349,4 +352,100 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
             &format!("Unexpected character: '{}'", ch),
         )),
     }
+}
+
+/// Scans the inline HTML before the first PHP open tag, echoing it, and consumes the open tag.
+///
+/// Returns `false` when the source contains no `<?php`/`<?=` at all (a pure-HTML file).
+fn scan_leading_html(cursor: &mut Cursor, tokens: &mut Vec<SpannedToken>) -> bool {
+    scan_html_until_open_tag(cursor, tokens)
+}
+
+/// Consumes `?>`, the single newline it swallows, and the inline HTML up to the next open tag.
+///
+/// The grammar the parser already has is reused, exactly as the eval lexer does: the close tag
+/// is a `;`, the HTML is `echo "…";`, and `<?=` is a leading `echo`. This keeps a block that
+/// spans the tags working (`if (1) { ?>IN<?php }`).
+fn scan_close_tag(cursor: &mut Cursor, tokens: &mut Vec<SpannedToken>) {
+    let span = cursor.span();
+    cursor.advance(); // '?'
+    cursor.advance(); // '>'
+    // One newline right after `?>` is swallowed (`\n`, `\r\n` or `\r`), as Zend's scanner does.
+    match (cursor.peek(), peek_next(cursor)) {
+        (Some('\r'), Some('\n')) => {
+            cursor.advance();
+            cursor.advance();
+        }
+        (Some('\n' | '\r'), _) => {
+            cursor.advance();
+        }
+        _ => {}
+    }
+    tokens.push(spanned(Token::Semicolon, span));
+    scan_html_until_open_tag(cursor, tokens);
+}
+
+/// Scans inline HTML up to the next `<?php`/`<?=` (consuming it), emitting `echo "<html>";` and,
+/// for `<?=`, a leading `echo`. Returns whether an open tag was found.
+///
+/// `<?php` opens code only when followed by an ASCII separator or end of input, case-insensitively
+/// (`<?phpX` and `<?php` + U+00A0 stay HTML); the short `<?` tag is HTML (`short_open_tag` is off).
+fn scan_html_until_open_tag(cursor: &mut Cursor, tokens: &mut Vec<SpannedToken>) -> bool {
+    let mut html = String::new();
+    let mut short_echo = false;
+    let mut opened = false;
+    while let Some(ch) = cursor.peek() {
+        if ch == '<' && peek_next(cursor) == Some('?') {
+            if at_php_open_tag(cursor) {
+                for _ in 0.."<?php".len() {
+                    cursor.advance();
+                }
+                opened = true;
+                break;
+            }
+            if cursor.remaining().starts_with("<?=") {
+                for _ in 0.."<?=".len() {
+                    cursor.advance();
+                }
+                short_echo = true;
+                opened = true;
+                break;
+            }
+        }
+        crate::string_bytes::push_literal_char(ch, &mut html);
+        cursor.advance();
+    }
+    let span = cursor.span();
+    if !html.is_empty() {
+        tokens.push(spanned(Token::Echo, span));
+        tokens.push(spanned(Token::StringLiteral(html), span));
+        tokens.push(spanned(Token::Semicolon, span));
+    }
+    if short_echo {
+        tokens.push(spanned(Token::Echo, span));
+    }
+    opened
+}
+
+/// Returns the character after the current one without advancing the cursor.
+fn peek_next(cursor: &Cursor) -> Option<char> {
+    cursor.remaining().chars().nth(1)
+}
+
+/// Returns whether the cursor is at `<?php` followed by an ASCII separator or end of input,
+/// case-insensitively.
+fn at_php_open_tag(cursor: &Cursor) -> bool {
+    let bytes = cursor.remaining().as_bytes();
+    if bytes.len() < 5 || !bytes[..5].eq_ignore_ascii_case(b"<?php") {
+        return false;
+    }
+    match bytes.get(5) {
+        None => true,
+        Some(&b) => is_open_tag_separator(b),
+    }
+}
+
+/// Returns whether `b` is one of the characters Zend allows immediately after `<?php`.
+fn is_open_tag_separator(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\n' | b'\r')
 }

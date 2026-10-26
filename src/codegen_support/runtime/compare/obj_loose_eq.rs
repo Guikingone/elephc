@@ -1,7 +1,6 @@
 //! Purpose:
-//! Emits `__rt_obj_loose_eq`, the runtime implementation of PHP's `==` between two
-//! objects: the same instance, or the same class with every declared property
-//! loosely equal.
+//! Emits `__rt_obj_loose_eq`, applying identity and native object comparison
+//! policies before standard PHP property equality.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via
@@ -9,10 +8,9 @@
 //! - `__rt_mixed_loose_eq` once both operands unbox to the object tag.
 //!
 //! Key details:
-//! - Properties are read through `__rt_obj_prop_count` / `__rt_obj_prop_value`, the
-//!   same per-class descriptor `var_dump`, `print_r` and `var_export` walk, so the
-//!   set of compared properties is exactly the set elephc considers to exist.
-//! - `__rt_obj_prop_value` hands back an OWNED boxed cell per property, so both
+//! - PHP properties use comparison descriptors independent of debug projections.
+//! - Native comparison policy handles storage state without exposing backing slots.
+//! - `__rt_obj_cmp_prop_value` hands back an OWNED boxed cell per property, so both
 //!   sides are released after each comparison; the walker itself only borrows the
 //!   two receivers.
 //! - Enum cases are singletons, so the leading pointer-identity check gives PHP's
@@ -20,11 +18,14 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
+mod native_storage;
+
 /// Emits `__rt_obj_loose_eq` for the active target.
 ///
 /// Input: AArch64 `x0`/`x1` = the two object pointers, `x2` = recursion depth;
 /// x86_64 `rdi`/`rsi`/`rdx`. Output: `x0` / `rax` = 1 when loosely equal.
 pub fn emit_obj_loose_eq(emitter: &mut Emitter) {
+    native_storage::emit_native_object_comparison(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_obj_loose_eq_x86_64(emitter);
         return;
@@ -56,7 +57,11 @@ fn emit_obj_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x1]");                                       // load the right runtime class id
     emitter.instruction("cmp x9, x10");                                         // PHP requires the same class before comparing properties
     emitter.instruction("b.ne __rt_ole_false");                                 // different classes are never loosely equal
-    emitter.instruction("bl __rt_obj_prop_count");                              // count the left receiver's renderable properties
+    emitter.instruction("bl __rt_obj_native_loose_eq");                         // native handlers may override ordinary PHP property comparison
+    emitter.instruction("cmn x0, #1");                                          // minus one delegates to standard PHP properties
+    emitter.instruction("b.ne __rt_ole_done");                                  // return native equal/unequal without walking backing fields
+    emitter.instruction("ldr x0, [sp, #0]");                                    // restore the borrowed left receiver for standard comparison
+    emitter.instruction("bl __rt_obj_cmp_prop_count");                          // count the left receiver's physical properties
     emitter.instruction("str x0, [sp, #24]");                                   // save the property count
     emitter.instruction("mov x11, #0");                                         // start the property walk at index zero
     emitter.instruction("str x11, [sp, #32]");                                  // save the initial property index
@@ -68,11 +73,11 @@ fn emit_obj_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_ole_true");                                  // all properties matched loosely
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the left receiver
     emitter.instruction("mov x1, x11");                                         // pass the current property index
-    emitter.instruction("bl __rt_obj_prop_value");                              // read the left property as an owned boxed cell
+    emitter.instruction("bl __rt_obj_cmp_prop_value");                          // read the left property as an owned boxed cell
     emitter.instruction("str x0, [sp, #40]");                                   // save the owned left property cell
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the right receiver
     emitter.instruction("ldr x1, [sp, #32]");                                   // pass the same property index
-    emitter.instruction("bl __rt_obj_prop_value");                              // read the right property as an owned boxed cell
+    emitter.instruction("bl __rt_obj_cmp_prop_value");                          // read the right property as an owned boxed cell
     emitter.instruction("str x0, [sp, #48]");                                   // save the owned right property cell
     emitter.instruction("ldr x0, [sp, #40]");                                   // reload the left property cell
     emitter.instruction("ldr x1, [sp, #48]");                                   // reload the right property cell
@@ -130,7 +135,11 @@ fn emit_obj_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rsi]");                            // load the right runtime class id
     emitter.instruction("cmp r10, r11");                                        // PHP requires the same class before comparing properties
     emitter.instruction("jne __rt_ole_false");                                  // different classes are never loosely equal
-    abi::emit_call_label(emitter, "__rt_obj_prop_count"); // count the left receiver's renderable properties
+    abi::emit_call_label(emitter, "__rt_obj_native_loose_eq");
+    emitter.instruction("cmp rax, -1");                                         // minus one delegates to standard PHP properties
+    emitter.instruction("jne __rt_ole_done");                                   // return native equal/unequal without walking backing fields
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the borrowed left receiver for standard comparison
+    abi::emit_call_label(emitter, "__rt_obj_cmp_prop_count"); // count the left receiver's physical properties
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the property count
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // start the property walk at index zero
 
@@ -140,11 +149,11 @@ fn emit_obj_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_ole_true");                                   // all properties matched loosely
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the left receiver
     emitter.instruction("mov rsi, r10");                                        // pass the current property index
-    abi::emit_call_label(emitter, "__rt_obj_prop_value"); // read the left property as an owned boxed cell
+    abi::emit_call_label(emitter, "__rt_obj_cmp_prop_value"); // read the left property as an owned boxed cell
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the owned left property cell
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the right receiver
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the same property index
-    abi::emit_call_label(emitter, "__rt_obj_prop_value"); // read the right property as an owned boxed cell
+    abi::emit_call_label(emitter, "__rt_obj_cmp_prop_value"); // read the right property as an owned boxed cell
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the owned right property cell
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the left property cell
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // reload the right property cell

@@ -40,6 +40,9 @@ pub(super) fn lower(
         RuntimeFnId::ElephcObjectPropName => Some({
             crate::codegen::lower_inst::builtins::object_props::lower_object_prop_name(ctx, inst)
         }),
+        RuntimeFnId::ElephcObjectRestoreProperty => Some({
+            crate::codegen::lower_inst::builtins::object_props::lower_object_restore_property(ctx, inst)
+        }),
         RuntimeFnId::ElephcObjectPropValue => Some({
             crate::codegen::lower_inst::builtins::object_props::lower_object_prop_value(ctx, inst)
         }),

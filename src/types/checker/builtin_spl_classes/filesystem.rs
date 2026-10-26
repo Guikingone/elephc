@@ -19,6 +19,8 @@ use crate::types::traits::FlattenedClass;
 
 use super::common::*;
 
+mod debug_info;
+
 const SPL_FILE_DROP_NEW_LINE: i64 = 1;
 const SPL_FILE_READ_AHEAD: i64 = 2;
 const SPL_FILE_SKIP_EMPTY: i64 = 4;
@@ -227,6 +229,12 @@ fn spl_file_info_properties() -> Vec<ClassProperty> {
     ]
 }
 
+/// Sentinel default for the CSV `$escape` parameter.
+///
+/// A real escape character is at most one byte, so this multi-byte marker lets a synthetic body
+/// detect an omitted argument and emit php's deprecation before falling back to the real default.
+const CSV_CONTROL_UNSET: &str = "__elephc_csv_escape_unset__";
+
 /// Builds SplFileObject storage properties.
 fn spl_file_object_properties() -> Vec<ClassProperty> {
     vec![
@@ -238,6 +246,7 @@ fn spl_file_object_properties() -> Vec<ClassProperty> {
         protected_storage_property("delimiter", TypeExpr::Str),
         protected_storage_property("enclosure", TypeExpr::Str),
         protected_storage_property("escape", TypeExpr::Str),
+        protected_storage_property("__elephcCsvEscapeSet", TypeExpr::Bool),
         protected_storage_property("maxLineLen", TypeExpr::Int),
     ]
 }
@@ -277,6 +286,12 @@ fn recursive_caching_iterator_properties() -> Vec<ClassProperty> {
 fn spl_file_info_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
+            "__debugInfo",
+            Vec::new(),
+            Some(php_array_contract_type()),
+            debug_info::snapshot_body(),
+        ),
+        method_with_body(
             "__construct",
             vec![param("filename", TypeExpr::Str)],
             Some(TypeExpr::Void),
@@ -298,14 +313,14 @@ fn spl_file_info_methods() -> Vec<ClassMethod> {
             return_body(function_call("basename", vec![file_path_arg_expr(), var_expr("suffix")])),
         ),
         method_with_body("getPathname", Vec::new(), Some(TypeExpr::Str), return_body(file_path_expr())),
-        method_with_body("getPerms", Vec::new(), Some(mixed_type()), return_body(function_call("fileperms", vec![file_path_arg_expr()]))),
-        method_with_body("getInode", Vec::new(), Some(mixed_type()), return_body(function_call("fileinode", vec![file_path_arg_expr()]))),
-        method_with_body("getSize", Vec::new(), Some(TypeExpr::Int), return_body(function_call("filesize", vec![file_path_arg_expr()]))),
-        method_with_body("getOwner", Vec::new(), Some(mixed_type()), return_body(function_call("fileowner", vec![file_path_arg_expr()]))),
-        method_with_body("getGroup", Vec::new(), Some(mixed_type()), return_body(function_call("filegroup", vec![file_path_arg_expr()]))),
-        method_with_body("getATime", Vec::new(), Some(mixed_type()), return_body(function_call("fileatime", vec![file_path_arg_expr()]))),
-        method_with_body("getMTime", Vec::new(), Some(TypeExpr::Int), return_body(function_call("filemtime", vec![file_path_arg_expr()]))),
-        method_with_body("getCTime", Vec::new(), Some(mixed_type()), return_body(function_call("filectime", vec![file_path_arg_expr()]))),
+        method_with_body("getPerms", Vec::new(), Some(mixed_type()), stat_method_body("fileperms", "getPerms")),
+        method_with_body("getInode", Vec::new(), Some(mixed_type()), stat_method_body("fileinode", "getInode")),
+        method_with_body("getSize", Vec::new(), Some(TypeExpr::Int), stat_method_body("filesize", "getSize")),
+        method_with_body("getOwner", Vec::new(), Some(mixed_type()), stat_method_body("fileowner", "getOwner")),
+        method_with_body("getGroup", Vec::new(), Some(mixed_type()), stat_method_body("filegroup", "getGroup")),
+        method_with_body("getATime", Vec::new(), Some(mixed_type()), stat_method_body("fileatime", "getATime")),
+        method_with_body("getMTime", Vec::new(), Some(TypeExpr::Int), stat_method_body("filemtime", "getMTime")),
+        method_with_body("getCTime", Vec::new(), Some(mixed_type()), stat_method_body("filectime", "getCTime")),
         method_with_body("getType", Vec::new(), Some(mixed_type()), return_body(function_call("filetype", vec![file_path_arg_expr()]))),
         method_with_body("isWritable", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("is_writable", vec![file_path_arg_expr()]))),
         method_with_body("isWriteable", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("is_writeable", vec![file_path_arg_expr()]))),
@@ -394,7 +409,9 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
         method_with_body("valid", Vec::new(), Some(TypeExpr::Bool), spl_file_object_valid_body()),
         method_with_body("eof", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("feof", vec![file_stream_expr()]))),
         method_with_body("fgets", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()),
-        method_with_body("getCurrentLine", Vec::new(), Some(mixed_type()), return_body(file_current_line_expr())),
+        // `SplFileObject::getCurrentLine` is PHP's alias of `fgets`: it returns the current line and
+        // advances to the next one.
+        method_with_body("getCurrentLine", Vec::new(), Some(mixed_type()), spl_file_object_get_current_line_body()),
         method_with_body("fgetc", Vec::new(), Some(mixed_type()), return_body(function_call("fgetc", vec![file_stream_expr()]))),
         method_with_body(
             "fread",
@@ -402,7 +419,15 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Str),
             return_body(function_call("fread", vec![file_stream_expr(), var_expr("length")])),
         ),
-        method_with_body("fwrite", vec![param("data", TypeExpr::Str)], Some(TypeExpr::Int), spl_file_object_fwrite_body()),
+        method_with_body(
+            "fwrite",
+            vec![
+                param("data", TypeExpr::Str),
+                param_default("length", TypeExpr::Nullable(Box::new(TypeExpr::Int)), null_expr()),
+            ],
+            Some(TypeExpr::Int),
+            spl_file_object_fwrite_body(),
+        ),
         method_with_body("fflush", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("fflush", vec![file_stream_expr()]))),
         method_with_body("flock", vec![param("operation", TypeExpr::Int)], Some(TypeExpr::Bool), return_body(function_call("flock", vec![file_stream_expr(), var_expr("operation")]))),
         method_with_body("ftruncate", vec![param("size", TypeExpr::Int)], Some(TypeExpr::Bool), spl_file_object_ftruncate_body()),
@@ -417,17 +442,53 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Int),
             spl_file_object_fseek_body(),
         ),
-        method_with_body("seek", vec![param("line", TypeExpr::Int)], Some(TypeExpr::Void), vec![property_assign_stmt(this_expr(), "lineNumber", var_expr("line"))]),
+        method_with_body(
+            "seek",
+            vec![param("line", TypeExpr::Int)],
+            Some(TypeExpr::Void),
+            vec![
+                // php rejects a negative line before moving the cursor.
+                if_stmt(
+                    binary_expr(var_expr("line"), BinOp::Lt, int_expr(0)),
+                    vec![throw_stmt(new_object_expr(
+                        "ValueError",
+                        vec![string_expr(
+                            "SplFileObject::seek(): Argument #1 ($line) must be greater than or equal to 0",
+                        )],
+                    ))],
+                    None,
+                ),
+                property_assign_stmt(this_expr(), "lineNumber", var_expr("line")),
+            ],
+        ),
         method_with_body("getFlags", Vec::new(), Some(TypeExpr::Int), return_body(file_object_flags_expr())),
         method_with_body("setFlags", vec![param("flags", TypeExpr::Int)], Some(TypeExpr::Void), vec![property_assign_stmt(this_expr(), "flags", var_expr("flags"))]),
         method_with_body("getMaxLineLen", Vec::new(), Some(TypeExpr::Int), return_body(property_access(this_expr(), "maxLineLen"))),
-        method_with_body("setMaxLineLen", vec![param("maxLength", TypeExpr::Int)], Some(TypeExpr::Void), vec![property_assign_stmt(this_expr(), "maxLineLen", var_expr("maxLength"))]),
+        method_with_body(
+            "setMaxLineLen",
+            vec![param("maxLength", TypeExpr::Int)],
+            Some(TypeExpr::Void),
+            vec![
+                // php rejects a negative maximum line length before storing it.
+                if_stmt(
+                    binary_expr(var_expr("maxLength"), BinOp::Lt, int_expr(0)),
+                    vec![throw_stmt(new_object_expr(
+                        "ValueError",
+                        vec![string_expr(
+                            "SplFileObject::setMaxLineLen(): Argument #1 ($maxLength) must be greater than or equal to 0",
+                        )],
+                    ))],
+                    None,
+                ),
+                property_assign_stmt(this_expr(), "maxLineLen", var_expr("maxLength")),
+            ],
+        ),
         method_with_body(
             "setCsvControl",
             vec![
                 param_default("separator", TypeExpr::Str, string_expr(",")),
                 param_default("enclosure", TypeExpr::Str, string_expr("\"")),
-                param_default("escape", TypeExpr::Str, string_expr("\\")),
+                param_default("escape", TypeExpr::Str, string_expr(CSV_CONTROL_UNSET)),
             ],
             Some(TypeExpr::Void),
             spl_file_object_set_csv_control_body(),
@@ -436,9 +497,9 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
         method_with_body(
             "fgetcsv",
             vec![
-                param_default("separator", TypeExpr::Str, string_expr(",")),
-                param_default("enclosure", TypeExpr::Str, string_expr("\"")),
-                param_default("escape", TypeExpr::Str, string_expr("\\")),
+                param_default("separator", TypeExpr::Str, string_expr(CSV_CONTROL_UNSET)),
+                param_default("enclosure", TypeExpr::Str, string_expr(CSV_CONTROL_UNSET)),
+                param_default("escape", TypeExpr::Str, string_expr(CSV_CONTROL_UNSET)),
             ],
             Some(mixed_type()),
             spl_file_object_fgetcsv_body(),
@@ -446,7 +507,9 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
         method_with_body(
             "fputcsv",
             vec![
-                param("fields", string_array_type()),
+                // php coerces every field to a string, so a heterogeneous array of scalars is
+                // accepted; the body casts each element.
+                param("fields", mixed_type()),
                 param_default("separator", TypeExpr::Str, string_expr(",")),
                 param_default("enclosure", TypeExpr::Str, string_expr("\"")),
                 param_default("escape", TypeExpr::Str, string_expr("\\")),
@@ -483,7 +546,15 @@ fn spl_temp_file_object_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Str),
             spl_temp_file_object_fread_body(),
         ),
-        method_with_body("fwrite", vec![param("data", TypeExpr::Str)], Some(TypeExpr::Int), spl_temp_file_object_fwrite_body()),
+        method_with_body(
+            "fwrite",
+            vec![
+                param("data", TypeExpr::Str),
+                param_default("length", TypeExpr::Nullable(Box::new(TypeExpr::Int)), null_expr()),
+            ],
+            Some(TypeExpr::Int),
+            spl_temp_file_object_fwrite_body(),
+        ),
         method_with_body("fflush", Vec::new(), Some(TypeExpr::Bool), spl_temp_file_object_fflush_body()),
         method_with_body("ftruncate", vec![param("size", TypeExpr::Int)], Some(TypeExpr::Bool), spl_temp_file_object_ftruncate_body()),
         method_with_body("fstat", Vec::new(), Some(mixed_type()), spl_temp_file_object_fstat_body()),
@@ -514,7 +585,7 @@ fn directory_iterator_methods() -> Vec<ClassMethod> {
             "__construct",
             vec![param("directory", TypeExpr::Str)],
             Some(TypeExpr::Void),
-            directory_construct_body(var_expr("directory"), int_expr(0), false, false),
+            directory_construct_body(var_expr("directory"), int_expr(0), false, false, "DirectoryIterator"),
         ),
         method_with_body(
             "current",
@@ -543,7 +614,13 @@ fn filesystem_iterator_methods() -> Vec<ClassMethod> {
                 param_default("flags", TypeExpr::Int, int_expr(FS_SKIP_DOTS)),
             ],
             Some(TypeExpr::Void),
-            directory_construct_body(var_expr("directory"), var_expr("flags"), true, false),
+            directory_construct_body(
+                var_expr("directory"),
+                var_expr("flags"),
+                true,
+                false,
+                "FilesystemIterator",
+            ),
         ),
         method_with_body("current", Vec::new(), Some(mixed_type()), filesystem_current_body()),
         method_with_body("key", Vec::new(), Some(mixed_type()), filesystem_key_body()),
@@ -579,7 +656,13 @@ fn recursive_directory_iterator_methods() -> Vec<ClassMethod> {
                 param_default("flags", TypeExpr::Int, int_expr(FS_CURRENT_AS_FILEINFO)),
             ],
             Some(TypeExpr::Void),
-            directory_construct_body(var_expr("directory"), var_expr("flags"), true, false),
+            directory_construct_body(
+                var_expr("directory"),
+                var_expr("flags"),
+                true,
+                false,
+                "RecursiveDirectoryIterator",
+            ),
         ),
         method_with_body("hasChildren", Vec::new(), Some(TypeExpr::Bool), recursive_directory_has_children_body()),
         method_with_body(
@@ -607,7 +690,7 @@ fn recursive_caching_iterator_methods() -> Vec<ClassMethod> {
         method_with_body(
             "getChildren",
             Vec::new(),
-            Some(TypeExpr::Nullable(Box::new(named_type("RecursiveIterator")))),
+            Some(TypeExpr::Nullable(Box::new(named_type("RecursiveCachingIterator")))),
             recursive_caching_get_children_body(),
         ),
         method_with_body(
@@ -639,6 +722,36 @@ fn file_path_expr() -> Expr {
 /// Returns a copied `$this->path` for filesystem builtins that may consume string temporaries.
 fn file_path_arg_expr() -> Expr {
     string_copy_expr(file_path_expr())
+}
+
+/// Builds the body of one SplFileInfo stat accessor.
+///
+/// php runs the stat through the class and raises a catchable
+/// `RuntimeException: SplFileInfo::{method}(): stat failed for {path}` when it fails; the
+/// plain `file{...}` builtins answer `false` with a warning instead, so the synthetic body
+/// bridges the two. `method` is spelled in the message even when the receiver is a subclass
+/// (php names the declaring class) — which the corpus asserts verbatim.
+fn stat_method_body(builtin: &str, method: &str) -> Vec<Stmt> {
+    vec![
+        assign_stmt("result", function_call(builtin, vec![file_path_arg_expr()])),
+        if_stmt(
+            binary_expr(var_expr("result"), BinOp::StrictEq, bool_expr(false)),
+            vec![crate::synthetic_class::s_throw(crate::synthetic_class::e_new(
+                "RuntimeException",
+                vec![binary_expr(
+                    binary_expr(
+                        string_expr(&format!("SplFileInfo::{method}(): stat failed for ")),
+                        BinOp::Concat,
+                        file_path_expr(),
+                    ),
+                    BinOp::Concat,
+                    string_expr(""),
+                )],
+            ))],
+            None,
+        ),
+        return_stmt(var_expr("result")),
+    ]
 }
 
 /// Returns `$this->backingPath`.
@@ -818,6 +931,7 @@ fn spl_file_object_construct_body_with_backing(path: Expr, backing_path: Expr, m
         property_assign_stmt(this_expr(), "delimiter", string_expr(",")),
         property_assign_stmt(this_expr(), "enclosure", string_expr("\"")),
         property_assign_stmt(this_expr(), "escape", string_expr("\\")),
+        property_assign_stmt(this_expr(), "__elephcCsvEscapeSet", bool_expr(false)),
         property_assign_stmt(this_expr(), "maxLineLen", int_expr(0)),
     ];
     body.extend(file_object_load_lines_body(string_copy_expr(backing_path)));
@@ -859,6 +973,7 @@ fn spl_temp_file_object_construct_body() -> Vec<Stmt> {
         property_assign_stmt(this_expr(), "delimiter", string_expr(",")),
         property_assign_stmt(this_expr(), "enclosure", string_expr("\"")),
         property_assign_stmt(this_expr(), "escape", string_expr("\\")),
+        property_assign_stmt(this_expr(), "__elephcCsvEscapeSet", bool_expr(false)),
         property_assign_stmt(this_expr(), "maxLineLen", int_expr(0)),
         property_assign_stmt(this_expr(), "tempMaxMemory", var_expr("maxMemory")),
         property_assign_stmt(this_expr(), "tempBuffer", string_expr("")),
@@ -1000,6 +1115,7 @@ fn spl_temp_file_object_fread_body() -> Vec<Stmt> {
 /// Builds SplTempFileObject fwrite() with threshold-based spill to a temp file.
 fn spl_temp_file_object_fwrite_body() -> Vec<Stmt> {
     let mut body = vec![
+        fwrite_length_clamp_stmt(),
         if_stmt(
             temp_spilled_expr(),
             spl_temp_file_object_spilled_fwrite_body(),
@@ -1269,15 +1385,46 @@ fn spl_temp_file_object_reload_lines_from_buffer_body() -> Vec<Stmt> {
 /// Builds SplFileObject current() with lightweight READ_CSV support.
 fn spl_file_object_current_body() -> Vec<Stmt> {
     vec![
+        // An out-of-range seek leaves php's `current()` at `false` without reading the line.
+        if_stmt(
+            not_expr(file_object_valid_expr()),
+            return_body(bool_expr(false)),
+            None,
+        ),
         if_stmt(
             flag_enabled_expr(file_object_flags_expr(), SPL_FILE_READ_CSV),
-            return_body(function_call(
-                "explode",
-                vec![
-                    string_copy_expr(property_access(this_expr(), "delimiter")),
-                    string_copy_expr(file_current_line_expr()),
-                ],
-            )),
+            vec![
+                assign_stmt(
+                    "__fields",
+                    function_call(
+                        "explode",
+                        vec![
+                            string_copy_expr(property_access(this_expr(), "delimiter")),
+                            function_call(
+                                "rtrim",
+                                vec![string_copy_expr(file_current_line_expr()), string_expr("\r\n")],
+                            ),
+                        ],
+                    ),
+                ),
+                assign_stmt("__csv", empty_array_expr()),
+                foreach_stmt(
+                    var_expr("__fields"),
+                    None,
+                    "__field",
+                    vec![array_push_stmt(
+                        "__csv",
+                        function_call(
+                            "trim",
+                            vec![
+                                var_expr("__field"),
+                                string_copy_expr(property_access(this_expr(), "enclosure")),
+                            ],
+                        ),
+                    )],
+                ),
+                return_stmt(var_expr("__csv")),
+            ],
             None,
         ),
         return_stmt(file_current_line_expr()),
@@ -1323,14 +1470,67 @@ fn spl_file_object_fgets_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds SplFileObject getCurrentLine(): the current line, then advance to the next.
+fn spl_file_object_get_current_line_body() -> Vec<Stmt> {
+    vec![
+        assign_stmt("line", file_current_line_expr()),
+        // `setMaxLineLen()` caps the returned line when it is positive (0 means unlimited).
+        if_stmt(
+            binary_expr(
+                property_access(this_expr(), "maxLineLen"),
+                BinOp::Gt,
+                int_expr(0),
+            ),
+            vec![assign_stmt(
+                "line",
+                function_call(
+                    "substr",
+                    vec![
+                        var_expr("line"),
+                        int_expr(0),
+                        property_access(this_expr(), "maxLineLen"),
+                    ],
+                ),
+            )],
+            None,
+        ),
+        property_assign_stmt(
+            this_expr(),
+            "lineNumber",
+            binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
+        ),
+        return_stmt(var_expr("line")),
+    ]
+}
+
 /// Builds SplFileObject fwrite().
 fn spl_file_object_fwrite_body() -> Vec<Stmt> {
     let mut body = vec![
+        fwrite_length_clamp_stmt(),
         assign_stmt("bytes", function_call("fwrite", vec![file_stream_expr(), var_expr("data")])),
     ];
     body.extend(file_object_load_lines_body(file_backing_path_arg_expr()));
     body.push(return_stmt(var_expr("bytes")));
     body
+}
+
+/// Builds the `$length` clamp shared by both `fwrite()` implementations.
+///
+/// php's `?int $length` is null when omitted (write the whole string) and an explicit byte count
+/// otherwise, so a shorter request truncates `$data` before it is written: `0` writes nothing and
+/// an oversized request still writes everything (`substr()` caps at the string length).
+fn fwrite_length_clamp_stmt() -> Stmt {
+    if_stmt(
+        binary_expr(var_expr("length"), BinOp::StrictNotEq, null_expr()),
+        vec![assign_stmt(
+            "data",
+            function_call(
+                "substr",
+                vec![var_expr("data"), int_expr(0), var_expr("length")],
+            ),
+        )],
+        None,
+    )
 }
 
 /// Builds SplFileObject ftruncate().
@@ -1354,7 +1554,66 @@ fn spl_file_object_fseek_body() -> Vec<Stmt> {
 
 /// Builds SplFileObject setCsvControl().
 fn spl_file_object_set_csv_control_body() -> Vec<Stmt> {
+    let invalid = |message: &str| {
+        throw_stmt(new_object_expr("ValueError", vec![string_expr(message)]))
+    };
+    let strlen = |name: &str| function_call("strlen", vec![var_expr(name)]);
     vec![
+        // Detect an omitted `$escape` through the sentinel default, restore php's real default,
+        // then validate: php raises the control ValueError BEFORE the omission deprecation.
+        assign_stmt(
+            "__escapeOmitted",
+            binary_expr(
+                var_expr("escape"),
+                BinOp::StrictEq,
+                string_expr(CSV_CONTROL_UNSET),
+            ),
+        ),
+        if_stmt(
+            var_expr("__escapeOmitted"),
+            vec![assign_stmt("escape", string_expr("\\"))],
+            None,
+        ),
+        property_assign_stmt(
+            this_expr(),
+            "__elephcCsvEscapeSet",
+            not_expr(var_expr("__escapeOmitted")),
+        ),
+        // php validates the CSV controls before storing them.
+        if_stmt(
+            binary_expr(strlen("separator"), BinOp::StrictNotEq, int_expr(1)),
+            vec![invalid(
+                "SplFileObject::setCsvControl(): Argument #1 ($separator) must be a single character",
+            )],
+            None,
+        ),
+        if_stmt(
+            binary_expr(strlen("enclosure"), BinOp::StrictNotEq, int_expr(1)),
+            vec![invalid(
+                "SplFileObject::setCsvControl(): Argument #2 ($enclosure) must be a single character",
+            )],
+            None,
+        ),
+        if_stmt(
+            binary_expr(strlen("escape"), BinOp::Gt, int_expr(1)),
+            vec![invalid(
+                "SplFileObject::setCsvControl(): Argument #3 ($escape) must be empty or a single character",
+            )],
+            None,
+        ),
+        if_stmt(
+            var_expr("__escapeOmitted"),
+            vec![expr_stmt(function_call(
+                "trigger_error",
+                vec![
+                    string_expr(
+                        "SplFileObject::setCsvControl(): the $escape parameter must be provided as its default value will change",
+                    ),
+                    crate::synthetic_class::e_const("E_USER_DEPRECATED"),
+                ],
+            ))],
+            None,
+        ),
         property_assign_stmt(this_expr(), "delimiter", var_expr("separator")),
         property_assign_stmt(this_expr(), "enclosure", var_expr("enclosure")),
         property_assign_stmt(this_expr(), "escape", var_expr("escape")),
@@ -1371,42 +1630,458 @@ fn spl_file_object_get_csv_control_body() -> Vec<Stmt> {
 }
 
 /// Builds SplFileObject fgetcsv().
+///
+/// Parses the current line with the configured separator/enclosure/escape. The manual parser is
+/// what makes the escape meaningful: inside an enclosure, `escape` quotes the next byte verbatim
+/// (php's `"b""bb"` with escape `"` reads back as `b"bb`), while a doubled enclosure with an empty
+/// escape is a quoted quote.
 fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
-    vec![
+    let line_char = || {
+        function_call(
+            "substr",
+            vec![var_expr("line"), var_expr("i"), int_expr(1)],
+        )
+    };
+    // A physical line's trailing CR/LF is the record terminator, not field content, so it is
+    // stripped; a newline that ends up inside a quoted field is re-added explicitly.
+    let physical_line = || {
+        function_call(
+            "rtrim",
+            vec![string_copy_expr(file_current_line_expr()), string_expr("\r\n")],
+        )
+    };
+    let next_char = || {
+        function_call(
+            "substr",
+            vec![
+                var_expr("line"),
+                binary_expr(var_expr("i"), BinOp::Add, int_expr(1)),
+                int_expr(1),
+            ],
+        )
+    };
+    let append = |value: Expr| {
         assign_stmt(
-            "row",
-            function_call(
-                "fgetcsv",
-                vec![
-                    file_stream_expr(),
-                    var_expr("separator"),
-                    var_expr("enclosure"),
-                ],
+            "field",
+            binary_expr(var_expr("field"), BinOp::Concat, value),
+        )
+    };
+    let in_quotes = || var_expr("inquotes");
+    // Quoted context: a doubled enclosure is a literal enclosure, a lone enclosure closes the
+    // field, and (when distinct) the escape char captures the next byte verbatim.
+    let quoted_body = vec![if_stmt(
+        binary_expr(var_expr("c"), BinOp::StrictEq, var_expr("enclosure")),
+        vec![if_stmt(
+            binary_expr(next_char(), BinOp::StrictEq, var_expr("enclosure")),
+            vec![
+                append(var_expr("enclosure")),
+                assign_stmt("i", binary_expr(var_expr("i"), BinOp::Add, int_expr(2))),
+            ],
+            Some(vec![
+                assign_stmt("inquotes", bool_expr(false)),
+                increment_stmt("i"),
+            ]),
+        )],
+        Some(vec![if_stmt(
+            binary_expr(var_expr("c"), BinOp::StrictEq, var_expr("escape")),
+            vec![
+                // php keeps the escape character itself and copies the byte it captures.
+                append(var_expr("escape")),
+                increment_stmt("i"),
+                append(line_char()),
+                increment_stmt("i"),
+            ],
+            Some(vec![append(var_expr("c")), increment_stmt("i")]),
+        )]),
+    )];
+    // Unquoted context: separator splits, enclosure opens, anything else is literal.
+    let unquoted_body = vec![if_stmt(
+        binary_expr(var_expr("c"), BinOp::StrictEq, var_expr("separator")),
+        vec![
+            array_push_stmt("fields", var_expr("field")),
+            assign_stmt("field", string_expr("")),
+            increment_stmt("i"),
+        ],
+        Some(vec![if_stmt(
+            binary_expr(var_expr("c"), BinOp::StrictEq, var_expr("enclosure")),
+            vec![
+                assign_stmt("inquotes", bool_expr(true)),
+                increment_stmt("i"),
+            ],
+            Some(vec![append(var_expr("c")), increment_stmt("i")]),
+        )]),
+    )];
+    let strlen = |name: &str| function_call("strlen", vec![var_expr(name)]);
+    let invalid = |message: &str| {
+        throw_stmt(new_object_expr(
+            "ValueError",
+            vec![string_expr(message)],
+        ))
+    };
+    vec![
+        // An omitted control falls back to the object's CONFIGURED value (php semantics), detected
+        // through the sentinel defaults. The omission deprecation is emitted AFTER validation.
+        assign_stmt(
+            "__escapeOmitted",
+            binary_expr(
+                var_expr("escape"),
+                BinOp::StrictEq,
+                string_expr(CSV_CONTROL_UNSET),
             ),
         ),
+        if_stmt(
+            binary_expr(
+                var_expr("separator"),
+                BinOp::StrictEq,
+                string_expr(CSV_CONTROL_UNSET),
+            ),
+            vec![assign_stmt(
+                "separator",
+                property_access(this_expr(), "delimiter"),
+            )],
+            None,
+        ),
+        if_stmt(
+            binary_expr(
+                var_expr("enclosure"),
+                BinOp::StrictEq,
+                string_expr(CSV_CONTROL_UNSET),
+            ),
+            vec![assign_stmt(
+                "enclosure",
+                property_access(this_expr(), "enclosure"),
+            )],
+            None,
+        ),
+        if_stmt(
+            var_expr("__escapeOmitted"),
+            vec![assign_stmt(
+                "escape",
+                property_access(this_expr(), "escape"),
+            )],
+            None,
+        ),
+        // php validates the CSV controls before reading.
+        if_stmt(
+            binary_expr(strlen("separator"), BinOp::StrictNotEq, int_expr(1)),
+            vec![invalid(
+                "SplFileObject::fgetcsv(): Argument #1 ($separator) must be a single character",
+            )],
+            None,
+        ),
+        if_stmt(
+            binary_expr(strlen("enclosure"), BinOp::StrictNotEq, int_expr(1)),
+            vec![invalid(
+                "SplFileObject::fgetcsv(): Argument #2 ($enclosure) must be a single character",
+            )],
+            None,
+        ),
+        if_stmt(
+            binary_expr(strlen("escape"), BinOp::Gt, int_expr(1)),
+            vec![invalid(
+                "SplFileObject::fgetcsv(): Argument #3 ($escape) must be empty or a single character",
+            )],
+            None,
+        ),
+        if_stmt(
+            binary_expr(
+                var_expr("__escapeOmitted"),
+                BinOp::And,
+                not_expr(property_access(this_expr(), "__elephcCsvEscapeSet")),
+            ),
+            vec![expr_stmt(function_call(
+                "trigger_error",
+                vec![
+                    string_expr(
+                        "SplFileObject::fgetcsv(): the $escape parameter must be provided, as its default value will change, either explicitly or via SplFileObject::setCsvControl()",
+                    ),
+                    crate::synthetic_class::e_const("E_USER_DEPRECATED"),
+                ],
+            ))],
+            None,
+        ),
+        // `fgetcsv()` at end of file answers false.
+        if_stmt(
+            not_expr(file_object_valid_expr()),
+            return_body(bool_expr(false)),
+            None,
+        ),
+        assign_stmt("line", physical_line()),
         property_assign_stmt(
             this_expr(),
             "lineNumber",
             binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
         ),
-        return_stmt(var_expr("row")),
+        // An empty line answers `[null]`, matching php's `fgetcsv()`.
+        if_stmt(
+            binary_expr(
+                function_call("strlen", vec![var_expr("line")]),
+                BinOp::StrictEq,
+                int_expr(0),
+            ),
+            return_body(expr(ExprKind::ArrayLiteral(vec![null_expr()]))),
+            None,
+        ),
+        assign_stmt("fields", empty_array_expr()),
+        assign_stmt("field", string_expr("")),
+        assign_stmt("inquotes", bool_expr(false)),
+        assign_stmt("i", int_expr(0)),
+        assign_stmt("n", function_call("strlen", vec![var_expr("line")])),
+        // A quoted field may span several physical lines: while the current line is exhausted but
+        // the enclosure is still open, pull the next line (newline included) and keep scanning.
+        while_stmt(
+            binary_expr(
+                binary_expr(var_expr("i"), BinOp::Lt, var_expr("n")),
+                BinOp::Or,
+                var_expr("inquotes"),
+            ),
+            vec![
+                if_stmt(
+                    binary_expr(var_expr("i"), BinOp::GtEq, var_expr("n")),
+                    vec![
+                        if_stmt(
+                            not_expr(file_object_valid_expr()),
+                            vec![crate::synthetic_class::s_break(1)],
+                            None,
+                        ),
+                        assign_stmt(
+                            "line",
+                            binary_expr(
+                                binary_expr(var_expr("line"), BinOp::Concat, string_expr("\n")),
+                                BinOp::Concat,
+                                physical_line(),
+                            ),
+                        ),
+                        property_assign_stmt(
+                            this_expr(),
+                            "lineNumber",
+                            binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
+                        ),
+                        assign_stmt("n", function_call("strlen", vec![var_expr("line")])),
+                    ],
+                    None,
+                ),
+                assign_stmt("c", line_char()),
+                if_stmt(in_quotes(), quoted_body, Some(unquoted_body)),
+            ],
+        ),
+        array_push_stmt("fields", var_expr("field")),
+        return_stmt(var_expr("fields")),
     ]
 }
 
 /// Builds SplFileObject fputcsv().
+///
+/// Joins the fields with the configured separator/enclosure/eol, quoting a field that contains the
+/// separator, the enclosure, or a line break and doubling each enclosure inside it. The bytes go
+/// straight to the stream (the builtin uses a fixed comma/quote pair), and the line storage is
+/// reloaded so a later read sees the write.
 fn spl_file_object_fputcsv_body() -> Vec<Stmt> {
+    let contains = |needle: Expr| function_call("str_contains", vec![var_expr("s"), needle]);
+    // php quotes a field carrying the separator, the enclosure, the escape, or any whitespace.
+    let whitespace = || {
+        binary_expr(
+            contains(string_expr(" ")),
+            BinOp::Or,
+            binary_expr(
+                contains(string_expr("\t")),
+                BinOp::Or,
+                binary_expr(contains(string_expr("\n")), BinOp::Or, contains(string_expr("\r"))),
+            ),
+        )
+    };
+    let escape_set = binary_expr(
+        binary_expr(
+            function_call("strlen", vec![var_expr("escape")]),
+            BinOp::Gt,
+            int_expr(0),
+        ),
+        BinOp::And,
+        contains(var_expr("escape")),
+    );
+    let needs_quote = binary_expr(
+        contains(var_expr("separator")),
+        BinOp::Or,
+        binary_expr(
+            contains(var_expr("enclosure")),
+            BinOp::Or,
+            binary_expr(whitespace(), BinOp::Or, escape_set),
+        ),
+    );
+    let quoted = binary_expr(
+        var_expr("enclosure"),
+        BinOp::Concat,
+        binary_expr(var_expr("esc"), BinOp::Concat, var_expr("enclosure")),
+    );
+    let append_to = |target: &str, value: Expr| {
+        assign_stmt(
+            target,
+            binary_expr(var_expr(target), BinOp::Concat, value),
+        )
+    };
+    // php escapes a field byte by byte: the escape captures the next byte verbatim, and every
+    // other enclosure is doubled.
+    let escape_field = vec![
+        assign_stmt("esc", string_expr("")),
+        assign_stmt("j", int_expr(0)),
+        assign_stmt("m", function_call("strlen", vec![var_expr("s")])),
+        while_stmt(
+            binary_expr(var_expr("j"), BinOp::Lt, var_expr("m")),
+            vec![
+                assign_stmt(
+                    "ch",
+                    function_call(
+                        "substr",
+                        vec![var_expr("s"), var_expr("j"), int_expr(1)],
+                    ),
+                ),
+                if_stmt(
+                    binary_expr(
+                        binary_expr(
+                            function_call("strlen", vec![var_expr("escape")]),
+                            BinOp::Gt,
+                            int_expr(0),
+                        ),
+                        BinOp::And,
+                        binary_expr(
+                            binary_expr(var_expr("ch"), BinOp::StrictEq, var_expr("escape")),
+                            BinOp::And,
+                            binary_expr(
+                                binary_expr(
+                                    var_expr("j"),
+                                    BinOp::Add,
+                                    int_expr(1),
+                                ),
+                                BinOp::Lt,
+                                var_expr("m"),
+                            ),
+                        ),
+                    ),
+                    vec![
+                        append_to(
+                            "esc",
+                            binary_expr(
+                                var_expr("ch"),
+                                BinOp::Concat,
+                                function_call(
+                                    "substr",
+                                    vec![
+                                        var_expr("s"),
+                                        binary_expr(var_expr("j"), BinOp::Add, int_expr(1)),
+                                        int_expr(1),
+                                    ],
+                                ),
+                            ),
+                        ),
+                        assign_stmt("j", binary_expr(var_expr("j"), BinOp::Add, int_expr(2))),
+                    ],
+                    Some(vec![if_stmt(
+                        binary_expr(var_expr("ch"), BinOp::StrictEq, var_expr("enclosure")),
+                        vec![
+                            append_to(
+                                "esc",
+                                binary_expr(
+                                    var_expr("enclosure"),
+                                    BinOp::Concat,
+                                    var_expr("enclosure"),
+                                ),
+                            ),
+                            increment_stmt("j"),
+                        ],
+                        Some(vec![
+                            append_to("esc", var_expr("ch")),
+                            increment_stmt("j"),
+                        ]),
+                    )]),
+                ),
+            ],
+        ),
+        append_to("line", quoted),
+    ];
     let mut body = vec![
+        // php validates the CSV controls before writing.
+        if_stmt(
+            binary_expr(
+                function_call("strlen", vec![var_expr("separator")]),
+                BinOp::StrictNotEq,
+                int_expr(1),
+            ),
+            vec![throw_stmt(new_object_expr(
+                "ValueError",
+                vec![string_expr(
+                    "SplFileObject::fputcsv(): Argument #2 ($separator) must be a single character",
+                )],
+            ))],
+            None,
+        ),
+        if_stmt(
+            binary_expr(
+                function_call("strlen", vec![var_expr("enclosure")]),
+                BinOp::StrictNotEq,
+                int_expr(1),
+            ),
+            vec![throw_stmt(new_object_expr(
+                "ValueError",
+                vec![string_expr(
+                    "SplFileObject::fputcsv(): Argument #3 ($enclosure) must be a single character",
+                )],
+            ))],
+            None,
+        ),
+        if_stmt(
+            binary_expr(
+                function_call("strlen", vec![var_expr("escape")]),
+                BinOp::Gt,
+                int_expr(1),
+            ),
+            vec![throw_stmt(new_object_expr(
+                "ValueError",
+                vec![string_expr(
+                    "SplFileObject::fputcsv(): Argument #4 ($escape) must be empty or a single character",
+                )],
+            ))],
+            None,
+        ),
+        assign_stmt("line", string_expr("")),
+        assign_stmt("first", bool_expr(true)),
+        foreach_stmt(
+            var_expr("fields"),
+            None,
+            "field",
+            vec![
+                if_stmt(
+                    not_expr(var_expr("first")),
+                    vec![assign_stmt(
+                        "line",
+                        binary_expr(var_expr("line"), BinOp::Concat, var_expr("separator")),
+                    )],
+                    None,
+                ),
+                assign_stmt("first", bool_expr(false)),
+                assign_stmt(
+                    "s",
+                    crate::synthetic_class::e_cast(
+                        crate::parser::ast::CastType::String,
+                        var_expr("field"),
+                    ),
+                ),
+                if_stmt(
+                    needs_quote,
+                    escape_field,
+                    Some(vec![assign_stmt(
+                        "line",
+                        binary_expr(var_expr("line"), BinOp::Concat, var_expr("s")),
+                    )]),
+                ),
+            ],
+        ),
+        assign_stmt(
+            "line",
+            binary_expr(var_expr("line"), BinOp::Concat, var_expr("eol")),
+        ),
         assign_stmt(
             "bytes",
-            function_call(
-                "fputcsv",
-                vec![
-                    file_stream_expr(),
-                    var_expr("fields"),
-                    var_expr("separator"),
-                    var_expr("enclosure"),
-                ],
-            ),
+            function_call("fwrite", vec![file_stream_expr(), var_expr("line")]),
         ),
     ];
     body.extend(file_object_load_lines_body(file_backing_path_arg_expr()));
@@ -1415,8 +2090,26 @@ fn spl_file_object_fputcsv_body() -> Vec<Stmt> {
 }
 
 /// Builds a directory constructor body.
-fn directory_construct_body(directory: Expr, flags: Expr, filter_dots: bool, entries_are_paths: bool) -> Vec<Stmt> {
+fn directory_construct_body(
+    directory: Expr,
+    flags: Expr,
+    filter_dots: bool,
+    entries_are_paths: bool,
+    class_name: &str,
+) -> Vec<Stmt> {
     let mut body = vec![
+        // php rejects an empty directory path before touching the filesystem; the
+        // diagnostic names the concrete class the caller constructed.
+        if_stmt(
+            binary_expr(directory.clone(), BinOp::StrictEq, string_expr("")),
+            vec![throw_stmt(new_object_expr(
+                "ValueError",
+                vec![string_expr(&format!(
+                    "{class_name}::__construct(): Argument #1 ($directory) must not be empty"
+                ))],
+            ))],
+            None,
+        ),
         property_assign_stmt(this_expr(), "directory", string_copy_expr(directory.clone())),
         property_assign_stmt(this_expr(), "fsFlags", flags.clone()),
         property_assign_stmt(this_expr(), "entriesArePathnames", bool_expr(entries_are_paths)),
@@ -1424,6 +2117,11 @@ fn directory_construct_body(directory: Expr, flags: Expr, filter_dots: bool, ent
     body.extend(directory_rebuild_entries_body(directory, flags, filter_dots));
     body.extend(vec![
         property_assign_stmt(this_expr(), "position", int_expr(0)),
+        // DirectoryIterator overrides SplFileInfo::__construct, so the inherited backing-class
+        // strings are never seeded by the parent. php keeps them as the SplFileInfo defaults;
+        // leaving them null also makes a shallow `clone` dereference a null string.
+        property_assign_stmt(this_expr(), "fileClass", string_expr("SplFileObject")),
+        property_assign_stmt(this_expr(), "infoClass", string_expr("SplFileInfo")),
         expr_stmt(method_call(this_expr(), "__elephcRefreshPath", Vec::new())),
     ]);
     body
@@ -1570,6 +2268,17 @@ fn filesystem_set_flags_body() -> Vec<Stmt> {
 /// Builds GlobIterator constructor.
 fn glob_iterator_construct_body() -> Vec<Stmt> {
     vec![
+        // php rejects an empty pattern before expanding it.
+        if_stmt(
+            binary_expr(var_expr("pattern"), BinOp::StrictEq, string_expr("")),
+            vec![throw_stmt(new_object_expr(
+                "ValueError",
+                vec![string_expr(
+                    "GlobIterator::__construct(): Argument #1 ($pattern) must not be empty",
+                )],
+            ))],
+            None,
+        ),
         property_assign_stmt(this_expr(), "pattern", string_copy_expr(var_expr("pattern"))),
         property_assign_stmt(
             this_expr(),
@@ -1586,6 +2295,10 @@ fn glob_iterator_construct_body() -> Vec<Stmt> {
             vec![property_array_push_stmt(this_expr(), "entries", var_expr("entry"))],
         ),
         property_assign_stmt(this_expr(), "position", int_expr(0)),
+        // GlobIterator overrides SplFileInfo::__construct too, so seed the inherited
+        // backing-class strings before the clone-relevant path refresh runs.
+        property_assign_stmt(this_expr(), "fileClass", string_expr("SplFileObject")),
+        property_assign_stmt(this_expr(), "infoClass", string_expr("SplFileInfo")),
         expr_stmt(method_call(this_expr(), "__elephcRefreshPath", Vec::new())),
     ]
 }

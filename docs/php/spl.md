@@ -27,6 +27,11 @@ classes `SplFileInfo`, `SplFileObject`, `SplTempFileObject`,
 SPL names live in the global namespace, matching PHP. They are available
 without imports or runtime extensions.
 
+`SplFixedArray` offsets use PHP's canonical integer-key rules. For example,
+`$fixed["12"]` accesses index 12, while `"+12"`, `"01"`, `"-0"`, and strings
+outside the signed integer range raise `TypeError`. A canonical negative key
+or an index outside the array's size raises `OutOfBoundsException`.
+
 ## Interfaces
 
 The compiler injects these SPL-related interfaces:
@@ -62,8 +67,8 @@ matching follows PHP's normal class hierarchy rules.
 
 The Phase 4 SPL containers and Phase 5 storage/decorator iterators are built-in classes.
 `SplDoublyLinkedList`, `SplStack`, `SplQueue`, and `SplFixedArray` use dedicated
-runtime storage; `ArrayIterator` and `ArrayObject` use compiler-managed
-keys/values storage over boxed `mixed` cells; the iterator decorators forward to
+runtime storage; `ArrayIterator` and `ArrayObject` keep a single compiler-managed
+`storage` array over boxed `mixed` cells; the iterator decorators forward to
 one or more `Iterator` objects:
 
 | Class | Parent | Interfaces |
@@ -325,8 +330,8 @@ Supported methods:
 | Class | Methods |
 |---|---|
 | `EmptyIterator` | `current()`, `key()`, `next()`, `rewind()`, `valid()` |
-| `ArrayIterator` | `__construct(array $array = [], int $flags = 0)`, `current()`, `key()`, `next()`, `rewind()`, `valid()`, `seek(int $offset): void`, `count(): int`, `offsetExists()`, `offsetGet()`, `offsetSet()`, `offsetUnset()`, `append()`, `getArrayCopy()` |
-| `ArrayObject` | `__construct(array $array = [], int $flags = 0)`, `getIterator(): ArrayIterator`, `count(): int`, `offsetExists()`, `offsetGet()`, `offsetSet()`, `offsetUnset()`, `append()`, `getArrayCopy()` |
+| `ArrayIterator` | `__construct(array\|object $array = [], int $flags = 0)`, `current()`, `key()`, `next()`, `rewind()`, `valid()`, `seek(int $offset): void`, `count(): int`, `getFlags(): int`, `setFlags(int $flags): void`, `asort(int $flags = SORT_REGULAR): bool`, `ksort(int $flags = SORT_REGULAR): bool`, `uasort(callable $callback): bool`, `uksort(callable $callback): bool`, `offsetExists()`, `offsetGet()`, `offsetSet()`, `offsetUnset()`, `append()`, `getArrayCopy()` |
+| `ArrayObject` | `__construct(array\|object $array = [], int $flags = 0, string $iteratorClass = ArrayIterator::class)`, `getIterator(): ArrayIterator`, `count(): int`, `getFlags(): int`, `setFlags(int $flags): void`, `getIteratorClass(): string`, `setIteratorClass(string $iteratorClass): void`, `exchangeArray(array\|object $array): array`, `asort(int $flags = SORT_REGULAR): bool`, `ksort(int $flags = SORT_REGULAR): bool`, `uasort(callable $callback): bool`, `uksort(callable $callback): bool`, `offsetExists()`, `offsetGet()`, `offsetSet()`, `offsetUnset()`, `append()`, `getArrayCopy()` |
 | `IteratorIterator` | `__construct(Traversable $iterator, ?string $class = null)`, `current()`, `key()`, `next()`, `rewind()`, `valid()`, `getInnerIterator(): ?Iterator` |
 | `LimitIterator` | `__construct(Iterator $iterator, int $offset = 0, int $limit = -1)`, `rewind()`, `next()`, `valid()`, `seek(int $offset): void`, `getPosition(): int`, plus inherited forwarding methods |
 | `NoRewindIterator` | `__construct(Iterator $iterator)`, `rewind()` no-op, plus inherited forwarding methods |

@@ -18,6 +18,11 @@ mod throwable_previous;
 mod serialization;
 
 pub(crate) use serialization::SerializableReturnAbi;
+pub(crate) use user::{
+    serprop_accepted_mask as hydration_accepted_mask, serprop_type_name as hydration_type_name,
+    serprop_widens_int_to_float as hydration_widens_int_to_float,
+};
+mod object_projection;
 
 pub(crate) use fixed::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
@@ -269,6 +274,10 @@ pub(crate) const UNKNOWN_NAMED_PARAMETER_PREFIX: &str = "Unknown named parameter
 /// Nothing runtime-dependent appears in it, so the Throwable points straight at these bytes.
 pub(crate) const POSITIONAL_AFTER_NAMED_MSG: &str =
     "Cannot use positional argument after named argument";
+/// PHP's refusal of `unset($scalar['k'])` — the fatal the mixed-container unset raises.
+///
+/// Nothing runtime-dependent appears in it, so the Throwable points straight at these bytes.
+pub(crate) const CANNOT_UNSET_NON_ARRAY_MSG: &str = "Cannot unset offset in a non-array variable";
 /// Prefix for PHP's catchable object-to-string conversion Error in an allowed-class list.
 pub(crate) const UNSER_OBJECT_STRING_ERROR_PREFIX: &str = "Object of class ";
 /// Suffix for PHP's catchable object-to-string conversion Error in an allowed-class list.

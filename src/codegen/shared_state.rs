@@ -25,6 +25,7 @@ use crate::types::{FunctionSig, PhpType};
 pub(crate) struct GeneratedRuntimeFeatures {
     pub(crate) handler_state: bool,
     pub(crate) object_clone: bool,
+    pub(crate) heap_scopes: bool,
 }
 
 /// Module-wide artifacts emitted once and reused by every function lowering context.
@@ -115,6 +116,10 @@ impl SharedCodegenState {
         for inst in &function.instructions {
             match inst.op {
                 Op::RuntimeCall => {
+                    self.generated_runtime_features.heap_scopes |= matches!(inst.immediate,
+                        Some(Immediate::RuntimeCall(RuntimeCallTarget::HeapScopeBegin
+                            | RuntimeCallTarget::HeapScopeRead | RuntimeCallTarget::HeapScopeRootWritten
+                            | RuntimeCallTarget::HeapScopeEnd | RuntimeCallTarget::HeapScopeReleaseRoot)));
                     let target = match inst.immediate {
                         Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target)))
                         | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {

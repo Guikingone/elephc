@@ -161,6 +161,17 @@ pub(crate) fn matches_global_builtin_attribute(attr: &Attribute, builtin: &str) 
     attr.name.is_unqualified() && name.eq_ignore_ascii_case(builtin)
 }
 
+/// Returns `true` when the method carries `#[\ReturnTypeWillChange]`, php's escape hatch that
+/// suppresses the return-type requirement when overriding an internal method.
+pub(crate) fn has_return_type_will_change(method: &ClassMethod) -> bool {
+    method.attributes.iter().any(|group| {
+        group
+            .attributes
+            .iter()
+            .any(|attr| matches_global_builtin_attribute(attr, "ReturnTypeWillChange"))
+    })
+}
+
 /// Builds a mapping from constructor parameter index to property name for each parameter.
 /// For each parameter, searches constructor body for `PropertyAssign` statements where
 /// the right-hand side is a Variable with the same name as the parameter; if found,
@@ -375,11 +386,18 @@ pub(crate) fn validate_signature_compatibility(
         }
     }
 
-    if child.has_defaults != parent.has_defaults {
+    // PHP allows an override to ADD a default (making a required parameter optional) but not to
+    // REMOVE one, so only a parent-optional / child-required position is invalid.
+    if parent
+        .has_defaults
+        .iter()
+        .zip(&child.has_defaults)
+        .any(|(&parent_default, &child_default)| parent_default && !child_default)
+    {
         return Err(CompileError::new(
             span,
             &format!(
-                "Cannot change optional parameter layout when {} {}: {}::{}",
+                "Cannot remove the default of an inherited parameter when {} {}: {}::{}",
                 context, kind, owner_name, method_name
             ),
         ));
@@ -395,11 +413,13 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    if child.required_param_count() != parent.required_param_count() {
+    // The child may require FEWER parameters than the parent (it added defaults), never more;
+    // the default-removal check above already rejects the latter, so only a net increase is left.
+    if child.required_param_count() > parent.required_param_count() {
         return Err(CompileError::new(
             span,
             &format!(
-                "Cannot change required parameter count when {} {}: {}::{}",
+                "Cannot increase the required parameter count when {} {}: {}::{}",
                 context, kind, owner_name, method_name
             ),
         ));
@@ -512,7 +532,17 @@ pub(crate) fn validate_override_signature(
         "overriding",
         parent_declaration_is_source && method.span.line != 0,
     )?;
-    if parent_sig.declared_return && !child_sig.declared_return {
+    let parent_name = class.extends.as_deref().unwrap_or(class_name);
+    let method_key = php_symbol_key(&method.name);
+    let parent_contract_owner = checker.classes.get(parent_name).and_then(|parent| {
+        if is_static { parent.static_method_declaring_classes.get(&method_key) }
+        else { parent.method_declaring_classes.get(&method_key) }
+    }).map(String::as_str).unwrap_or(parent_name);
+    let permits_return_change = !parent_declaration_is_source
+        && elephc_builtin_contract::method_return_is_tentative(parent_contract_owner, &method.name)
+        && has_return_type_will_change(method);
+    if parent_sig.declared_return && !child_sig.declared_return && !permits_return_change
+    {
         return Err(CompileError::new(
             method.span,
             &format!(
@@ -547,7 +577,7 @@ pub(crate) fn validate_override_signature(
             &child_sig,
         )
     });
-    if parent_sig.declared_return && !return_compatible {
+    if parent_sig.declared_return && !return_compatible && !permits_return_change {
         return Err(CompileError::new(
             method.span,
             &format!(

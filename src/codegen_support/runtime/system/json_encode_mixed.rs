@@ -8,6 +8,7 @@
 //! Key details:
 //! - JSON encoders are emitted formatter state machines; escaping, type tags, and buffer growth are observable PHP behavior.
 //! - Nested wrappers and invoker markers borrow caller values without consuming their ownership.
+//! - Both zero pointers and encoded null values must be checked before reading a cell.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -17,8 +18,8 @@ use crate::codegen_support::sentinels::emit_branch_if_null_container;
 /// Emits the `__rt_json_encode_mixed` runtime helper, dispatching on the boxed `Mixed` value_tag.
 ///
 /// ## Inputs
-/// - ARM64: `x0` holds the pointer to the boxed `Mixed` cell; null pointers encode as JSON null.
-/// - x86_64: `rax` holds the pointer to the boxed `Mixed` cell; null pointers encode as JSON null.
+/// - ARM64: `x0` holds the pointer to the boxed `Mixed` cell; zero pointers and the in-band null sentinel encode as JSON null.
+/// - x86_64: `rax` holds the pointer to the boxed `Mixed` cell; zero pointers and the in-band null sentinel encode as JSON null.
 ///
 /// ## Dispatch
 /// Dispatches to the appropriate specialized encoder based on the value_tag:
@@ -43,7 +44,7 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
     emitter.comment("--- runtime: json_encode_mixed ---");
     emitter.label_global("__rt_json_encode_mixed");
 
-    emitter.instruction("cbz x0, __rt_json_encode_mixed_null");                 // null mixed pointers encode as JSON null
+    emit_branch_if_null_container(emitter, "x0", "x9", "__rt_json_encode_mixed_null");
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed runtime value_tag
     emitter.instruction("cmp x9, #7");                                          // nested Mixed wrappers expose their current referenced value
     emitter.instruction("b.eq __rt_json_encode_mixed_nested");                  // peel the wrapper without changing its ownership
@@ -144,7 +145,7 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
 /// x86_64-specific emission of `__rt_json_encode_mixed`, matching the ARM64 dispatcher above.
 ///
 /// ## Inputs
-/// - `rax` holds the pointer to the boxed `Mixed` cell; null pointers encode as JSON null.
+/// - `rax` holds the pointer to the boxed `Mixed` cell; zero pointers and the in-band null sentinel encode as JSON null.
 ///
 /// ## Dispatch
 /// Mirrors the ARM64 dispatch logic using System V AMD64 ABI register conventions:
@@ -164,8 +165,7 @@ fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: json_encode_mixed ---");
     emitter.label_global("__rt_json_encode_mixed");
 
-    emitter.instruction("test rax, rax");                                       // null mixed boxes encode as the JSON null literal immediately
-    emitter.instruction("jz __rt_json_encode_mixed_null");                      // branch to the shared null encoder when no mixed box exists
+    emit_branch_if_null_container(emitter, "rax", "r10", "__rt_json_encode_mixed_null");
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the boxed runtime value tag from the mixed cell header
     emitter.instruction("cmp r10, 7");                                          // nested Mixed wrappers expose their current referenced value
     emitter.instruction("je __rt_json_encode_mixed_nested");                    // peel the wrapper without changing its ownership

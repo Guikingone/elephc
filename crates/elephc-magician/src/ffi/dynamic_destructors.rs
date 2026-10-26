@@ -105,6 +105,16 @@ pub(crate) fn dynamic_object_owner_context(identity: u64) -> Option<*mut ElephcE
     Some(context as *mut ElephcEvalContext)
 }
 
+/// Invalidates callable capture views before releasing children while retaining foreign context leases.
+#[cfg(not(test))]
+pub(crate) fn retire_released_closure_metadata(identity: u64) -> Vec<crate::context::EvalClosureObjectTarget> {
+    let Some(context) = dynamic_object_owner_context(identity) else { return Vec::new(); };
+    // Context teardown unregisters every identity before its storage can disappear.
+    let Some(context) = (unsafe { context.as_mut() }) else { return Vec::new(); };
+    if context.abi_version() != ABI_VERSION { return Vec::new(); }
+    context.take_runtime_closure_metadata(identity)
+}
+
 /// Drops final object metadata after receiver release, preserving it during collector destructors.
 #[cfg(not(test))]
 pub(crate) fn forget_released_object(identity: u64) {

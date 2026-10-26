@@ -557,3 +557,73 @@ unset($n);
     assert_eq!(acyclic_allocs, cyclic_allocs);
     assert_eq!(acyclic_frees, cyclic_frees);
 }
+
+/// Main-return teardown collects detached cycles and invokes their PHP destructors at shutdown.
+#[test]
+fn test_gc_main_return_collects_cycle_and_runs_destructor() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ShutdownNode {
+    public mixed $peer = null;
+    public function __destruct() { echo "cycle\n"; }
+}
+$node = new ShutdownNode();
+$node->peer = $node;
+echo "body\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "body\ncycle\n");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "shutdown cycle leaked: {}",
+        out.stderr
+    );
+}
+
+/// Shutdown collects cycles after global/static roots retire, even with automatic GC disabled.
+#[test]
+fn test_gc_main_return_collects_disabled_gc_global_static_cycle() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+gc_disable();
+class ShutdownRootedNode {
+    public mixed $peer = null;
+    public static mixed $held = null;
+    public function __destruct() { echo "cycle\n"; }
+}
+$node = new ShutdownRootedNode();
+$node->peer = $node;
+ShutdownRootedNode::$held = $node;
+global $alias;
+$alias = $node;
+echo "body\n";
+return;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "body\ncycle\n");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "disabled shutdown GC leaked: {}",
+        out.stderr
+    );
+}
+
+/// A self-backed SPL object is collected when its final main-local owner leaves scope.
+#[test]
+fn test_gc_main_return_collects_self_backed_storage() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+error_reporting(0);
+class ShutdownStorage extends ArrayObject {
+    public function __construct() { parent::__construct($this); }
+}
+$owner = new ShutdownStorage();
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(out.stderr.contains("leak summary: clean"), "shutdown storage leaked: {}", out.stderr);
+}

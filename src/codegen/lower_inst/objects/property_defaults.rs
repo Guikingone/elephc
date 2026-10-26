@@ -12,7 +12,7 @@ use super::*;
 /// Collects literal defaults that can be copied directly into object property slots.
 pub(super) fn collect_property_defaults(
     class_info: &ClassInfo,
-    inst: &Instruction,
+    op_name: &str,
 ) -> Result<Vec<PropertyDefault>> {
     let mut defaults = Vec::new();
     for (index, (property, php_type)) in class_info.properties.iter().enumerate() {
@@ -34,7 +34,7 @@ pub(super) fn collect_property_defaults(
                 &format!("property ${}", property),
                 php_type,
                 &default_expr.kind,
-                inst.op.name(),
+                op_name,
             )?,
             is_reference: class_info.owned_reference_properties.contains(property),
         });

@@ -16,6 +16,12 @@ mod json_decode_owners;
 mod string_append;
 #[path = "runtime_gc/bcmath_number.rs"]
 mod bcmath_number;
+#[path = "runtime_gc/borrowed_value.rs"]
+mod borrowed_value;
+#[path = "runtime_gc/compiler_calls.rs"]
+mod compiler_calls;
+#[path = "runtime_gc/spl_heap_retirement.rs"]
+mod spl_heap_retirement;
 #[path = "runtime_gc/basics.rs"]
 mod basics;
 #[path = "runtime_gc/large_unary_string_results.rs"]
@@ -154,6 +160,13 @@ mod descriptor_unpack_keys;
 mod descriptor_variadic_container;
 mod class_name_owners;
 mod handler_registration_owners;
+mod constructor_owners;
+#[path = "runtime_gc/handler_shutdown.rs"]
+mod handler_shutdown;
+#[path = "runtime_gc/handler_callback_results.rs"]
+mod handler_callback_results;
+#[path = "runtime_gc/exception_handler_stack.rs"]
+mod exception_handler_stack;
 mod closure_reference_owners;
 mod boxed_array_call_results;
 mod mixed_parameters;
@@ -187,5 +200,87 @@ mod class_param_return;
 mod reflection_attribute_filter;
 #[path = "runtime_gc/tagged_scalar_boxing.rs"]
 mod tagged_scalar_boxing;
+
+#[path = "runtime_gc/mixed_method_results.rs"]
+mod mixed_method_results;
+#[path = "runtime_gc/container_write_local_owners.rs"]
+mod container_write_local_owners;
+#[path = "runtime_gc/array_write_key_owners.rs"]
+mod array_write_key_owners;
+#[path = "runtime_gc/cycle_scalar_leaves.rs"]
+mod cycle_scalar_leaves;
+#[path = "runtime_gc/reflection_metadata_owners.rs"]
+mod reflection_metadata_owners;
+
+#[path = "runtime_gc/spl_list_subclass_storage.rs"]
+mod spl_list_subclass_storage;
+#[path = "runtime_gc/eval_reflection_factory_owners.rs"]
+mod eval_reflection_factory_owners;
+
+#[path = "runtime_gc/spl_list_debug_view.rs"]
+mod spl_list_debug_view;
+
+mod array_access_mixed_keys;
+
+#[path = "runtime_gc/array_access_static_keys.rs"]
+mod array_access_static_keys;
+
+mod nonheap_method_argument_owners;
+
+mod nested_property_receiver_owners;
+
+mod unserialize_property_owners;
+
+mod untyped_property_gc_descriptors;
+
+mod spl_object_storage_serialization;
+
+mod object_comparison_properties;
+
+mod spl_object_storage_comparison;
+
+#[path = "runtime_gc/gc_cycle_scheduling.rs"]
+mod gc_cycle_scheduling;
+
+#[path = "runtime_gc/intrinsic_callback_owners.rs"]
+mod intrinsic_callback_owners;
+
+#[path = "runtime_gc/core_hash_results.rs"]
+mod core_hash_results;
+
+#[path = "runtime_gc/hash_destruction_order.rs"]
+mod hash_destruction_order;
+
+#[path = "runtime_gc/spl_storage_debug_info.rs"]
+mod spl_storage_debug_info;
+
+#[path = "runtime_gc/object_debug_info_rendering.rs"]
+mod object_debug_info_rendering;
 #[path = "runtime_gc/gc_incoming_cache.rs"]
 mod gc_incoming_cache;
+
+#[path = "runtime_gc/eval_closure_capture_owners.rs"]
+mod eval_closure_capture_owners;
+
+#[path = "runtime_gc/spl_array_debug_views.rs"]
+mod spl_array_debug_views;
+
+mod print_r_scope;
+
+mod print_r_magic_view;
+
+mod isset_presence;
+
+mod spl_heap_debug_views;
+
+mod method_receiver_unwind;
+
+mod borrowed_method_receiver;
+
+mod spl_heap_serialize;
+mod spl_heap_unserialize;
+
+mod native_heap_property_storage;
+
+mod native_property_views;
+mod native_property_restore;

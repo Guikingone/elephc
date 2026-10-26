@@ -143,6 +143,11 @@ pub(super) fn lower_method_call_with_receiver(
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
+    // Receiver temporaries are independent owners too. A method or a later argument can
+    // throw before the normal receiver release, so publish this owner after result staging
+    // and keep it visible through argument/intermediate cleanup.
+    let borrowed_receiver = root_borrowed_method_receiver(ctx, object, expr.span);
+    let receiver_pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
     begin_call_argument_evaluation(ctx);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
     let mut arg_values = arg_values;
@@ -179,7 +184,9 @@ pub(super) fn lower_method_call_with_receiver(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    unpin_in_flight_owners(ctx, receiver_pins, expr.span);
     release_owning_receiver_temporary(ctx, object, expr.span);
+    if let Some(slot) = borrowed_receiver { retire_owned_call_operand(ctx, slot, expr.span); }
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
     finish_reference_return_value(ctx, call, reference_staging, expr.span)
 }
@@ -459,6 +466,34 @@ pub(super) fn stabilize_borrowed_result_and_release_receiver(
     };
     crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span));
     result
+}
+
+/// Acquires a borrowed receiver through arguments, invocation and operand cleanup.
+///
+/// Callbacks may overwrite its source binding. The separate reference joins the unwind ledger
+/// and retires at the call boundary; independent receiver temporaries already own their lease.
+pub(super) fn root_borrowed_method_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    span: Span,
+) -> Option<crate::ir::LocalSlotId> {
+    let source_is_load = matches!(ctx.builder.value_defining_op(receiver.value),
+        Some(Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell | Op::LoadGlobal));
+    if ctx.value_is_owning_temporary(receiver)
+        && !source_is_load && !ctx.value_is_owned_unboxed_local_load(receiver.value)
+    {
+        return None;
+    }
+    let ty = ctx.builder.value_php_type(receiver.value);
+    if !Ownership::php_type_needs_lifetime_tracking(&ty) { return None; }
+    let pinned = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(
+        ctx, receiver, Some(span),
+    );
+    let temp = ctx.declare_owned_hidden_temp(ty.clone());
+    ctx.store_local(&temp, pinned, ty, Some(span));
+    let slot = ctx.local_slots[&temp];
+    register_owned_call_operand(ctx, slot, span);
+    Some(slot)
 }
 
 /// Releases the receiver of a method call when it was an owning temporary.

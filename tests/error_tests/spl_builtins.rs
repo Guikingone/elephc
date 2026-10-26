@@ -240,27 +240,33 @@ fn test_error_phar_file_info_cannot_be_redeclared() {
 /// Verifies that `Phar::addFromString()` enforces its two required arguments.
 #[test]
 fn test_error_phar_add_from_string_wrong_args() {
-    expect_error(
+    // php defers an internal class's argument-count error to a runtime catchable
+    // `ArgumentCountError`; the check accepts the program (the runtime message is
+    // pinned by the codegen suite).
+    expect_error_accepts(
         "<?php $p = new Phar(\"x.phar\"); $p->addFromString(\"entry.txt\");",
-        "expects 2 arguments, got 1",
     );
 }
 
 /// Verifies that `Phar::compressFiles()` requires a compression constant.
 #[test]
 fn test_error_phar_compress_files_wrong_args() {
-    expect_error(
+    // php defers an internal class's argument-count error to a runtime catchable
+    // `ArgumentCountError`; the check accepts the program (the runtime message is
+    // pinned by the codegen suite).
+    expect_error_accepts(
         "<?php $p = new Phar(\"x.phar\"); $p->compressFiles();",
-        "expects 1 arguments, got 0",
     );
 }
 
 /// Verifies that `Phar::setMetadata()` requires a metadata value.
 #[test]
 fn test_error_phar_set_metadata_wrong_args() {
-    expect_error(
+    // php defers an internal class's argument-count error to a runtime catchable
+    // `ArgumentCountError`; the check accepts the program (the runtime message is
+    // pinned by the codegen suite).
+    expect_error_accepts(
         "<?php $p = new Phar(\"x.phar\"); $p->setMetadata();",
-        "expects 1 arguments, got 0",
     );
 }
 
@@ -447,12 +453,13 @@ fn test_error_recursive_callback_filter_iterator_requires_callable() {
     );
 }
 
-/// Verifies that error recursive iterator iterator requires recursive iterator.
+/// Verifies that RecursiveIteratorIterator rejects a non-Traversable argument.
 #[test]
-fn test_error_recursive_iterator_iterator_requires_recursive_iterator() {
+fn test_error_recursive_iterator_iterator_requires_traversable() {
+    // PHP declares the parameter as `Traversable`; a non-Traversable argument is still rejected.
     expect_error(
-        "<?php $it = new RecursiveIteratorIterator(new ArrayIterator([]));",
-        "Constructor 'RecursiveIteratorIterator::__construct' parameter $iterator expects RecursiveIterator, got ArrayIterator",
+        "<?php $it = new RecursiveIteratorIterator(123);",
+        "Constructor 'RecursiveIteratorIterator::__construct' parameter $iterator expects Traversable, got int",
     );
 }
 

@@ -40,6 +40,7 @@
 //! - Pending append mode preserves a payload-only survivor selected before a diagnostic
 //!   callback. Ordinary nested writes retain the normal cell and payload COW boundaries.
 
+use crate::codegen_support::deferred_array_keys::emit_array_key_guard;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -232,6 +233,7 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
 
     // Indexed array payload: integer keys mutate slots, string keys promote.
     emitter.label("__rt_mixed_array_gfw_indexed");
+    emit_array_key_guard(emitter, "__rt_mixed_array_gfw_indexed_key_valid", false);
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the indexed-array pointer from the cell payload
     emit_branch_if_null_container(
         emitter,
@@ -339,6 +341,7 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
 
     // Associative array payload: hash lookup with write-context semantics.
     emitter.label("__rt_mixed_array_gfw_assoc");
+    emit_array_key_guard(emitter, "__rt_mixed_array_gfw_assoc_key_valid", false);
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the hash pointer from the cell payload
     emit_branch_if_null_container(
         emitter,
@@ -458,7 +461,9 @@ fn emit_mixed_new_empty_array_cell_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the fresh array across the cell allocation
     emitter.instruction("mov rax, 24");                                         // mixed cells store tag plus two payload words
     emitter.instruction("call __rt_heap_alloc");                                // allocate the mixed cell storage (refcount 1)
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the mixed-cell heap kind word with the x86_64 marker
+    emitter.instruction(
+        &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5)),
+    );                                                                          // materialize the mixed-cell heap kind word with the x86_64 marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // install the mixed-cell heap kind in the uniform header
     emitter.instruction("mov QWORD PTR [rax], 4");                              // store the indexed-array tag at mixed[0]
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the fresh empty array
@@ -596,6 +601,7 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_array_get");                            // delegate non-container receivers to the plain reader
 
     emitter.label("__rt_mixed_array_gfw_indexed");
+    emit_array_key_guard(emitter, "__rt_mixed_array_gfw_indexed_key_valid", false);
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the indexed-array pointer from the cell payload
     emit_branch_if_null_container(
         emitter,
@@ -704,6 +710,7 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_array_gfw_assoc");                      // continue with the associative write-context lookup
 
     emitter.label("__rt_mixed_array_gfw_assoc");
+    emit_array_key_guard(emitter, "__rt_mixed_array_gfw_assoc_key_valid", false);
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the hash pointer from the cell payload
     emit_branch_if_null_container(
         emitter,

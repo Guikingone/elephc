@@ -264,8 +264,8 @@ impl Checker {
             {
                 return Ok(ty);
             }
-            if let Some((_, (_, ty))) = class_info.visible_property(property) {
-                return Ok(ty.clone());
+            if let Some(index) = class_info.visible_property_index(property) {
+                return Ok(class_info.property_slot_value_type(index));
             }
             if super::super::super::scope_dynamic_storage::magic_set_reentry_property_is_readable(
                 self, class_name, property,

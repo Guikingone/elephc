@@ -12,11 +12,15 @@
 use crate::names::php_symbol_key;
 use crate::types::PhpType;
 
-use super::common::null_expr;
+use super::common::{int_expr, null_expr};
+use super::containers::{DLL_MODE_PROPERTY, DLL_STORAGE_PROPERTY};
 use super::super::Checker;
 
 /// Patches builtin SPL storage signatures in the compiler metadata registry.
 pub(super) fn patch_builtin_spl_storage_signatures(checker: &mut Checker) {
+    patch_dll_storage(checker);
+    patch_object_storage_serialization(checker);
+    super::native_property_storage::box_heap_user_property_storage(checker);
     let return_type = PhpType::AssocArray {
         key: Box::new(PhpType::Mixed),
         value: Box::new(PhpType::Mixed),
@@ -139,6 +143,56 @@ pub(super) fn patch_builtin_spl_storage_signatures(checker: &mut Checker) {
                     key: Box::new(PhpType::Mixed),
                     value: Box::new(PhpType::Mixed),
                 };
+            }
+        }
+    }
+}
+
+/// Keeps inherited native list slots boxed and seeds each concrete family's iterator mode.
+fn patch_dll_storage(checker: &mut Checker) {
+    let classes: Vec<_> = checker.classes.keys().filter_map(|name| {
+        let info = checker.classes.get(name)?;
+        if !info.properties.iter().any(|(property, _)| property == DLL_STORAGE_PROPERTY) {
+            return None;
+        }
+        let mode = if name == "SplStack" || checker.is_subclass_of(name, "SplStack") {
+            6
+        } else if name == "SplQueue" || checker.is_subclass_of(name, "SplQueue") {
+            4
+        } else {
+            0
+        };
+        Some((name.clone(), mode))
+    }).collect();
+    for (name, mode) in classes {
+        let info = checker.classes.get_mut(&name).expect("existing list class");
+        for (index, (property, ty)) in info.properties.iter_mut().enumerate() {
+            if property == DLL_STORAGE_PROPERTY {
+                *ty = PhpType::Array(Box::new(PhpType::Mixed));
+            } else if property == DLL_MODE_PROPERTY {
+                info.defaults[index] = Some(int_expr(mode));
+            }
+        }
+    }
+}
+
+
+/// Uses the PHP packed-or-hash contract on both sides of the native magic-hook ABI.
+fn patch_object_storage_serialization(checker: &mut Checker) {
+    for (name, info) in &mut checker.classes {
+        if !info.properties.iter().any(|(property, _)| property == super::object_storage::OBJECTS_PROPERTY) {
+            continue;
+        }
+        for method in ["__serialize", "__unserialize"] {
+            let key = php_symbol_key(method);
+            let declaring = info.method_declaring_classes.get(&key).map(String::as_str)
+                .unwrap_or(name.as_str());
+            if declaring != "SplObjectStorage" { continue; }
+            let Some(sig) = info.methods.get_mut(&key) else { continue; };
+            if method == "__serialize" {
+                sig.return_type = PhpType::php_array();
+            } else if let Some((_, ty)) = sig.params.first_mut() {
+                *ty = PhpType::php_array();
             }
         }
     }

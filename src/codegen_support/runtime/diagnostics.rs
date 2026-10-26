@@ -32,7 +32,7 @@ pub(crate) fn emit_diagnostics(emitter: &mut Emitter, features: RuntimeFeatures)
     if features.handler_state || features.eval_bridge || features.web {
         super::handler_state::emit_handler_state(emitter);
     }
-    super::error_handlers::emit_error_handler_invoke(emitter);
+    super::error_handlers::emit_error_handler_invoke(emitter, features);
     super::warning_dispatch::emit_warning_dispatch(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_diagnostics_linux_x86_64(emitter);
@@ -62,10 +62,29 @@ pub(crate) fn emit_diagnostics(emitter: &mut Emitter, features: RuntimeFeatures)
     abi::emit_symbol_address(emitter, "x9", "_rt_diag_suppression");
     emitter.instruction("ldr x10, [x9]");                                       // load suppression depth before deciding whether to emit the warning
     emitter.instruction("cbnz x10, __rt_diag_warning_done");                    // suppress the warning while inside an active @ scope
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_php_log_errors", 0);
+    emitter.instruction("cbz x10, __rt_diag_warning_done");                     // log_errors=0 suppresses the stderr log copy
     emitter.instruction("mov x0, #2");                                          // fd = stderr for runtime warning diagnostics
     emitter.syscall(4);
     emitter.label("__rt_diag_warning_done");
     emitter.instruction("ret");                                                 // return after either writing or suppressing the warning
+
+    emitter.label_global("__rt_diag_write_both");
+    abi::emit_symbol_address(emitter, "x9", "_rt_diag_suppression");
+    emitter.instruction("ldr x10, [x9]");                                       // load suppression depth before deciding whether to emit the warning
+    emitter.instruction("cbnz x10, __rt_diag_write_both_done");                 // suppress the warning while inside an active @ scope
+    emitter.instruction("sub sp, sp, #32");                                     // reserve a slot pair for the buffer pointer and length
+    abi::emit_store_to_sp(emitter, "x1", 0);                                    // preserve the buffer pointer across the stderr write
+    abi::emit_store_to_sp(emitter, "x2", 8);                                    // preserve the byte length across the stderr write
+    emitter.instruction("str x30, [sp, #16]");                                  // preserve the caller link across output capture
+    emitter.instruction("bl __rt_diag_write");                                  // apply log_errors and suppression to the log copy
+    abi::emit_load_temporary_stack_slot(emitter, "x0", 0);                    // reload the display-copy pointer
+    abi::emit_load_temporary_stack_slot(emitter, "x1", 8);                    // reload the display-copy length
+    emitter.instruction("bl __rt_diag_write_stdout");                           // append the display copy to buffers or the web response
+    emitter.instruction("ldr x30, [sp, #16]");                                  // restore the original diagnostic caller link
+    emitter.instruction("add sp, sp, #32");                                     // release byte spills and caller linkage
+    emitter.label("__rt_diag_write_both_done");
+    emitter.instruction("ret");                                                 // return after writing the display and log copies
 }
 
 /// Emits x86_64 Linux-specific diagnostic helpers for suppression depth and warning output.
@@ -105,6 +124,9 @@ fn emit_diagnostics_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);    // load suppression depth before deciding whether to emit the warning
     emitter.instruction("test r10, r10");                                       // is runtime warning output currently suppressed?
     emitter.instruction("jnz __rt_diag_warning_done_linux_x86_64");             // suppress the warning while inside an active @ scope
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_php_log_errors", 0);
+    emitter.instruction("test r10, r10");                                       // log_errors=0 suppresses the stderr log copy
+    emitter.instruction("jz __rt_diag_warning_done_linux_x86_64");              // leave the warning producer's display path independent
     emitter.instruction("mov rdx, rsi");                                        // move warning length into the Linux write length register
     emitter.instruction("mov rsi, rdi");                                        // move warning pointer into the Linux write buffer register
     emitter.instruction("mov edi, 2");                                          // fd = stderr for runtime warning diagnostics
@@ -112,4 +134,19 @@ fn emit_diagnostics_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("syscall");                                             // emit the runtime warning diagnostic to stderr
     emitter.label("__rt_diag_warning_done_linux_x86_64");
     emitter.instruction("ret");                                                 // return after either writing or suppressing the warning
+
+    emitter.label_global("__rt_diag_write_both");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);    // load suppression depth before deciding whether to emit the warning
+    emitter.instruction("test r10, r10");                                       // is runtime warning output currently suppressed?
+    emitter.instruction("jnz __rt_diag_write_both_done_linux_x86_64");          // suppress the warning while inside an active @ scope
+    emitter.instruction("sub rsp, 24");                                         // reserve a slot pair for the buffer pointer and length
+    emitter.instruction("mov QWORD PTR [rsp], rdi");                            // preserve the buffer pointer across the stderr write
+    emitter.instruction("mov QWORD PTR [rsp + 8], rsi");                        // preserve the byte length across the stderr write
+    emitter.instruction("call __rt_diag_write");                                // apply log_errors and suppression to the log copy
+    emitter.instruction("mov rdi, QWORD PTR [rsp]");                            // reload the display-copy pointer
+    emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                        // reload the display-copy length
+    emitter.instruction("call __rt_diag_write_stdout");                         // append the display copy to buffers or the web response
+    emitter.instruction("add rsp, 24");                                         // release byte spills and call-alignment padding
+    emitter.label("__rt_diag_write_both_done_linux_x86_64");
+    emitter.instruction("ret");                                                 // return after writing the display and log copies
 }

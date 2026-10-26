@@ -118,6 +118,7 @@ mod reflection_class_flags;
 mod aarch64_clone;
 mod x86_64_clone;
 mod clone_rejections;
+mod spl_list_clone;
 mod runtime_builtin_dispatch;
 mod resources;
 mod backtrace;

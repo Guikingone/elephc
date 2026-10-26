@@ -136,7 +136,7 @@ echo "\n";
 
 $csv = new SplFileObject("docs/a.txt");
 $csv->setFlags(SplFileObject::READ_CSV);
-$csv->setCsvControl("n");
+$csv->setCsvControl("n", '"', "");
 $row = $csv->current();
 echo count($row);
 echo ":";
@@ -161,6 +161,183 @@ rmdir("docs");
         out,
         "a.txt|txt|a|docs|file|8\n0:one;1:two;\ntwo|one|1\n2:o:e\ntemp|line\n"
     );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies SplFileObject::setCsvControl validates its CSV controls like php, and that a READ_CSV
+/// row does not retain the trailing newline of the physical line.
+#[test]
+fn test_spl_file_object_set_csv_control_validation_and_read_csv_trim() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("data.csv", "aa|bb|10\n");
+$file = new SplFileObject("data.csv");
+try {
+    $file->setCsvControl("too long");
+} catch (\ValueError $e) {
+    echo $e->getMessage(), "|";
+}
+try {
+    $file->setCsvControl("|", "two");
+} catch (\ValueError $e) {
+    echo $e->getMessage(), "|";
+}
+try {
+    $file->setCsvControl("|", "'", "esc");
+} catch (\ValueError $e) {
+    echo $e->getMessage(), "|";
+}
+$file->setCsvControl("|", "'", "");
+$file->setFlags(SplFileObject::READ_CSV);
+$file->rewind();
+$row = $file->current();
+echo $row[2];
+unlink("data.csv");
+"#,
+    );
+    let expected = concat!(
+        "SplFileObject::setCsvControl(): Argument #1 ($separator) must be a single character|",
+        "SplFileObject::setCsvControl(): Argument #2 ($enclosure) must be a single character|",
+        "SplFileObject::setCsvControl(): Argument #3 ($escape) must be empty or a single character|",
+        "10"
+    );
+    assert_eq!(out, expected);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the inherited SplFileObject accessors (getCsvControl/getFlags) are emitted for both
+/// SplFileObject and SplTempFileObject, so a call never dispatches through a null vtable slot.
+#[test]
+fn test_spl_file_object_csv_control_accessors() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$file = new SplFileObject("data.txt", "w");
+$file->setCsvControl(";", "'", "");
+$c = $file->getCsvControl();
+echo $c[0], $c[1], strlen($c[2]), "|", $file->getFlags(), "\n";
+$tmp = new SplTempFileObject();
+$tmp->setCsvControl("|", '"', "\\");
+$t = $tmp->getCsvControl();
+echo $t[0], "|", $t[2], "\n";
+unlink("data.txt");
+"#,
+    );
+    assert_eq!(out, ";'0|0\n||\\\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies SplFileObject::fgetcsv joins a quoted field that spans several physical lines.
+#[test]
+fn test_spl_file_object_fgetcsv_multiline_quoted_field() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("multi.csv", "\"a\",\"b\"\n\"line1\nline2\"\n");
+$file = new SplFileObject("multi.csv");
+$file->setCsvControl(",", '"', "");
+$first = $file->fgetcsv();
+echo count($first), ":", $first[0], $first[1], "\n";
+$second = $file->fgetcsv();
+echo count($second), ":", str_replace("\n", "|", $second[0]), "\n";
+unlink("multi.csv");
+"#,
+    );
+    assert_eq!(out, "2:ab\n1:line1|line2\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies SplFileObject::fgetcsv keeps the escape character it consumes inside a quoted field.
+#[test]
+fn test_spl_file_object_fgetcsv_keeps_escape_character() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("esc.csv", "\"aa\\\"\",\"bb\"" . "\n");
+$file = new SplFileObject("esc.csv");
+$row = $file->fgetcsv(",", '"', "\\");
+echo count($row), ":", strlen($row[0]), ":", strlen($row[1]), ":", $row[1], "\n";
+unlink("esc.csv");
+"#,
+    );
+    assert_eq!(out, "2:4:2:bb\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies SplFileObject::seek rejects a negative line with php's ValueError.
+#[test]
+fn test_spl_file_object_seek_rejects_negative_line() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("seek.txt", "a\nb\n");
+$file = new SplFileObject("seek.txt");
+try {
+    $file->seek(-1);
+} catch (\ValueError $e) {
+    echo $e->getMessage();
+}
+unlink("seek.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "SplFileObject::seek(): Argument #1 ($line) must be greater than or equal to 0"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies an omitted CSV `$escape` is deprecated like php, that `fgetcsv()` falls back to the
+/// CONFIGURED controls, and that an explicit `setCsvControl()` escape suppresses the later
+/// `fgetcsv()` deprecation.
+#[test]
+fn test_spl_file_object_csv_escape_omission_deprecation() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("dep.csv", "a;b\n");
+$file = new SplFileObject("dep.csv");
+$file->setCsvControl(";");
+$row = $file->fgetcsv();
+echo count($row), "\n";
+$fresh = new SplFileObject("dep.csv");
+$fresh->fgetcsv();
+$configured = new SplFileObject("dep.csv");
+$configured->setCsvControl(";", '"', "\\");
+$configured->fgetcsv();
+unlink("dep.csv");
+"#,
+    );
+    assert_eq!(
+        out
+            .matches("Deprecated: SplFileObject::setCsvControl(): the $escape parameter must be provided")
+            .count(),
+        1,
+        "expected exactly one setCsvControl omission deprecation: {out}"
+    );
+    // The two objects whose escape was never configured deprecate; the configured one does not.
+    assert_eq!(
+        out.matches("Deprecated: SplFileObject::fgetcsv(): the $escape parameter must be provided")
+            .count(),
+        2,
+        "expected exactly two fgetcsv omission deprecations: {out}"
+    );
+    // fgetcsv() used the configured ';' separator, so "a;b" splits into two fields.
+    assert!(out.contains("2\n"), "expected two CSV fields: {out}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies SplFileObject::getCurrentLine honors a positive setMaxLineLen() cap.
+#[test]
+fn test_spl_file_object_get_current_line_max_line_len() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("long.txt", "abcdef\nghijkl\n");
+$file = new SplFileObject("long.txt");
+$file->setMaxLineLen(3);
+echo $file->getCurrentLine();
+echo "|";
+$file->setMaxLineLen(0);
+echo trim($file->getCurrentLine());
+unlink("long.txt");
+"#,
+    );
+    assert_eq!(out, "abc|ghijkl");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -308,6 +485,34 @@ unlink("stream.txt");
 "#,
     );
     assert_eq!(out, "abc|3|ef|XYcdef|XYcd");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `SplFileObject::fwrite()` honours php's optional `$length` byte cap.
+///
+/// php writes at most `$length` bytes: an omitted/null length writes the whole string, a shorter
+/// one truncates, an oversized one still writes everything, and an explicit `0` writes nothing.
+#[test]
+fn test_spl_file_object_fwrite_honours_length() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$path = "fwlen.txt";
+$f = new SplFileObject($path, "w");
+$f->fwrite("test_write", 4);
+echo file_get_contents($path), "|";
+$f2 = new SplFileObject($path, "w");
+$f2->fwrite("test_write", 12);
+echo file_get_contents($path), "|";
+$f3 = new SplFileObject($path, "w");
+$f3->fwrite("test_write");
+echo file_get_contents($path), "|";
+$f4 = new SplFileObject($path, "w");
+$f4->fwrite("test_write", 0);
+echo file_get_contents($path);
+unlink($path);
+"#,
+    );
+    assert_eq!(out, "test|test_write|test_write|");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -553,5 +758,98 @@ rmdir("root");
 "#,
     );
     assert_eq!(out, "child:wrapped:leaf.txt=root/child/leaf.txt\nhas|leaf=7\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `fputcsv` accepts an array mixing strings and numbers, casting each element.
+///
+/// A literal such as `['field1', 'field2', 5]` is `Array(Mixed)`, which the lowering used to
+/// reject. The runtime now renders each boxed element through `__rt_mixed_cast_string`, so the
+/// number is written as its string form and read back by `SplFileObject::fgetcsv`.
+#[test]
+fn test_fputcsv_mixed_fields_cast_to_strings() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("csv.txt", "");
+$fp = fopen("csv.txt", "w+");
+fputcsv($fp, ["field1", "field2", 5], escape: "");
+fclose($fp);
+$fo = new SplFileObject("csv.txt");
+$fo->setCsvControl(escape: "");
+var_dump($fo->fgetcsv());
+unlink("csv.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "array(3) {\n",
+            "  [0]=>\n",
+            "  string(6) \"field1\"\n",
+            "  [1]=>\n",
+            "  string(6) \"field2\"\n",
+            "  [2]=>\n",
+            "  string(1) \"5\"\n",
+            "}\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the directory and glob iterators reject an empty path with php's `ValueError`.
+///
+/// Each concrete class names itself and its parameter in the message, so the shared directory
+/// constructor has to carry the constructed class rather than a fixed `DirectoryIterator`.
+#[test]
+fn test_directory_and_glob_iterators_reject_empty_path() {
+    let out = compile_and_run(
+        r#"<?php
+try { new DirectoryIterator(''); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+try { new FilesystemIterator(''); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+try { new RecursiveDirectoryIterator(''); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+try { new GlobIterator(''); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "DirectoryIterator::__construct(): Argument #1 ($directory) must not be empty\n",
+            "FilesystemIterator::__construct(): Argument #1 ($directory) must not be empty\n",
+            "RecursiveDirectoryIterator::__construct(): Argument #1 ($directory) must not be empty\n",
+            "GlobIterator::__construct(): Argument #1 ($pattern) must not be empty\n",
+        )
+    );
+}
+
+/// Verifies a shallow `clone` of a directory iterator copies its inherited state.
+///
+/// `DirectoryIterator` extends `SplFileInfo`, so its layout carries the parent's `path`,
+/// `fileClass`, and `infoClass` string slots. The overriding constructor must seed the
+/// backing-class defaults; otherwise the clone adapter dereferenced a null string and the
+/// process died with SIGSEGV instead of producing an equal iterator.
+#[test]
+fn test_directory_iterator_clone_copies_state() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("cldir");
+file_put_contents("cldir/a.txt", "x");
+file_put_contents("cldir/b.txt", "y");
+
+$a = new DirectoryIterator("cldir");
+$b = clone $a;
+var_dump((string)$b === (string)$a);
+var_dump($a->key(), $b->key());
+$a->next();
+$a->next();
+$c = clone $a;
+var_dump((string)$c === (string)$a);
+var_dump($a->key(), $c->key());
+
+unlink("cldir/a.txt");
+unlink("cldir/b.txt");
+rmdir("cldir");
+"#,
+    );
+    assert_eq!(out, "bool(true)\nint(0)\nint(0)\nbool(true)\nint(2)\nint(2)\n");
     let _ = fs::remove_dir_all(&dir);
 }

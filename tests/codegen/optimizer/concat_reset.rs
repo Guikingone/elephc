@@ -12,6 +12,7 @@
 //! Key details:
 //! - Compares `--ir-opt=on` and `--ir-opt=off` on both textual EIR (`--emit-ir`)
 //!   and native execution output using runtime-dependent inputs (`$argc`).
+//! - Sends displayed diagnostics to stderr explicitly and checks both optimizer modes retain them.
 
 use super::*;
 
@@ -47,15 +48,15 @@ impl Fixture {
         output
     }
 
-    /// Runs the compiled fixture with optional command-line arguments.
-    fn run(&self, args: &[&str]) -> String {
+    /// Captures both output streams from the compiled fixture with optional arguments.
+    fn run(&self, args: &[&str]) -> std::process::Output {
         let output = run_binary_with_args(&self.0.join("main"), &self.0, args);
         assert!(
             output.status.success(),
             "run failed:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        String::from_utf8(output.stdout).expect("UTF-8 output")
+        output
     }
 
     /// Returns the textual EIR for the named function under the given optimizer mode.
@@ -74,12 +75,26 @@ impl Fixture {
     /// Compiles and runs the fixture with `--ir-opt=on` and `--ir-opt=off`,
     /// asserting identical stdout against `expected`.
     fn assert_equiv(&self, args: &[&str], expected: &str) {
-        self.compile(false, &[]);
+        self.assert_equiv_with_diagnostics(args, expected, &[]);
+    }
+
+    /// Keeps diagnostic execution observable without mixing it into the program's stdout.
+    fn assert_equiv_with_diagnostics(&self, args: &[&str], expected: &str, diagnostics: &[&str]) {
+        self.compile(false, &["--ini", "display_errors=stderr"]);
         let plain = self.run(args);
-        self.compile(true, &[]);
+        self.compile(true, &["--ini", "display_errors=stderr"]);
         let optimized = self.run(args);
-        assert_eq!(optimized, plain, "optimizer changed observable output");
-        assert_eq!(optimized, expected, "output did not match expected PHP output");
+        assert_eq!(optimized.stdout, plain.stdout, "optimizer changed observable output");
+        assert_eq!(optimized.stderr, plain.stderr, "optimizer changed diagnostics");
+        assert_eq!(
+            String::from_utf8(optimized.stdout).expect("UTF-8 output"),
+            expected,
+            "output did not match expected PHP output",
+        );
+        let stderr = String::from_utf8(optimized.stderr).expect("UTF-8 diagnostics");
+        for diagnostic in diagnostics {
+            assert!(stderr.contains(diagnostic), "missing {diagnostic:?}: {stderr}");
+        }
     }
 }
 
@@ -319,7 +334,10 @@ echo warn_after_near_full_scratch($argc, $pad), "\n";
         count_ir_concat_resets(&opt_ir) >= 3,
         "expected concat_reset before FToI(FloatKeyDiagnostic), before ArrayGet, and at merge to survive:\n{opt_ir}"
     );
-    fixture.assert_equiv(&[], "65536:20:-1:done:1\n");
+    fixture.assert_equiv_with_diagnostics(
+        &[], "65536:20:-1:done:1\n",
+        &["Implicit conversion from float 1.5 to int loses precision", "Undefined array key 100"],
+    );
 }
 
 /// Releasing an array constructed via `Op::HashSpread` (`[...$src]`) whose elements
@@ -367,5 +385,5 @@ echo run_hash_spread_dtor($argc, $pad), "\n";
         count_ir_concat_resets(&opt_ir) >= 4,
         "expected concat_reset after unset($copy) to survive in optimized IR:\n{opt_ir}"
     );
-    fixture.assert_equiv(&[], "Z:101:-1\n");
+    fixture.assert_equiv_with_diagnostics(&[], "Z:101:-1\n", &["Undefined array key 101"]);
 }

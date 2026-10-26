@@ -136,6 +136,28 @@ extra hash requires a registered eval object. Declared native properties retain
 their usual visibility checks. Hash entries own retained boxed cells, and writes
 publish COW replacements through the owning hash slot.
 
+### Receivers and SPL heap mutation views
+
+A method invocation keeps a separate lifetime reference when its receiver comes from a
+borrowed local, global or reference cell. A callback can replace that binding during argument
+evaluation or inside the method. The reference lives in the call operand cleanup ledger,
+after result staging and before arguments, so normal completion and exceptions release it
+at the same boundary. Independent receiver temporaries retain their existing owner.
+
+SPL heap root removal also needs a logical view while the physical root owner is retiring.
+Compiler-generated calls use typed internal annotations that source text cannot construct;
+they do not add PHP methods or builtin names. A receiver-bound native scope captures the root
+cell's tag and payload without retaining destructor-bearing values. Strings alone get an
+inert lifetime reference. The allocator invalidates captured payloads before storage reuse.
+
+Root removal publishes the writable backing array and its empty root slot before releasing
+the old cell. Destructors observe the old count; comparisons run after the count changes.
+Completed paired root writes end the old-root view. Cloning an active receiver materializes
+its logical elements while preserving the mutation lock. Scope retirement unlinks the exact
+record, including when Fibers complete in a different order. The runtime feature and cache
+identity include these helpers. Web reset clears scope and clone-hook pointers before reset
+callbacks and the final request arena reset.
+
 ### Null representations
 
 elephc has two representations for PHP `null` in scalar slots, selected per compilation by
@@ -1192,6 +1214,19 @@ later arguments run. Those roots retire on success, parser exceptions, and
 exceptions raised while evaluating a later argument. A decoded alias remains
 alive through its own reference; releasing the parser's construction references
 does not bypass normal copy-on-write or final-owner destruction.
+
+### Associative-array child destruction
+
+When the final owner releases a hash, `__rt_hash_free_deep` follows the insertion-order
+chain from the header's head slot. Physical bucket order does not define PHP destructor
+order: replacing a value keeps its position, while deleting and reinserting a key moves
+it to the tail. Rehashing preserves that chain.
+
+Both architecture emitters save each entry's successor before releasing its children.
+The existing protected cleanup frame keeps nested collection suppressed and accumulates
+throwing destructors until the remaining keys, values, entry storage and header have
+been released. Reference cells and shared nested rows retain their own ownership; an
+escaped alias can therefore defer its object's destructor beyond the container release.
 
 ### Unboxing a Mixed hands back a reference
 

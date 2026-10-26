@@ -16,6 +16,15 @@ use crate::types::traits::FlattenedClass;
 
 use super::common::*;
 
+mod serialization;
+use serialization::{serialize_array_body, unserialize_array_body};
+
+pub(super) use crate::types::spl_storage_layout::{
+    INFOS_PROPERTY, OBJECTS_PROPERTY, POSITION_PROPERTY,
+};
+mod debug_info;
+use debug_info::debug_info_body;
+
 /// Inserts `SplObjectStorage` into the builtin class registry.
 pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
     class_map.insert(
@@ -45,9 +54,9 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
 /// Returns hidden storage properties for objects, attached info values, and cursor position.
 fn spl_object_storage_properties() -> Vec<ClassProperty> {
     vec![
-        protected_storage_property("objects", array_type()),
-        protected_storage_property("infos", array_type()),
-        protected_storage_property("position", TypeExpr::Int),
+        storage_property_default(OBJECTS_PROPERTY, array_type(), empty_array_expr()),
+        storage_property_default(INFOS_PROPERTY, array_type(), empty_array_expr()),
+        storage_property_default(POSITION_PROPERTY, TypeExpr::Int, int_expr(0)),
     ]
 }
 
@@ -84,7 +93,12 @@ fn spl_object_storage_methods() -> Vec<ClassMethod> {
         method_with_body("offsetGet", vec![param("object", mixed_type())], Some(mixed_type()), offset_get_body()),
         method_with_body(
             "offsetSet",
-            vec![param("object", mixed_type()), param("info", mixed_type())],
+            vec![
+                param("object", mixed_type()),
+                // PHP allows the concrete implementation to make ArrayAccess's required `$value`
+                // optional; omit `$info` to attach without info.
+                param_default("info", mixed_type(), null_expr()),
+            ],
             Some(TypeExpr::Void),
             offset_set_body(),
         ),
@@ -92,9 +106,9 @@ fn spl_object_storage_methods() -> Vec<ClassMethod> {
         method_with_body("getHash", vec![param("object", mixed_type())], Some(TypeExpr::Str), get_hash_body()),
         method_with_body("serialize", Vec::new(), Some(TypeExpr::Str), return_body(string_expr(""))),
         method_with_body("unserialize", vec![param("data", TypeExpr::Str)], Some(TypeExpr::Void), construct_body()),
-        method_with_body("__serialize", Vec::new(), Some(array_type()), serialize_array_body()),
-        method_with_body("__unserialize", vec![param("data", array_type())], Some(TypeExpr::Void), construct_body()),
-        method_with_body("__debugInfo", Vec::new(), Some(array_type()), debug_info_body()),
+        method_with_body("__serialize", Vec::new(), Some(named_type("array")), serialize_array_body()),
+        method_with_body("__unserialize", vec![param("data", named_type("array"))], Some(TypeExpr::Void), unserialize_array_body()),
+        method_with_body("__debugInfo", Vec::new(), Some(php_array_contract_type()), debug_info_body()),
         protected_method_with_body(
             "__elephcIndexOf",
             vec![param("object", mixed_type())],
@@ -118,17 +132,17 @@ fn protected_method_with_body(
 
 /// Returns `$this->objects`.
 fn objects_expr() -> Expr {
-    property_access(this_expr(), "objects")
+    property_access(this_expr(), OBJECTS_PROPERTY)
 }
 
 /// Returns `$this->infos`.
 fn infos_expr() -> Expr {
-    property_access(this_expr(), "infos")
+    property_access(this_expr(), INFOS_PROPERTY)
 }
 
 /// Returns `$this->position`.
 fn position_expr() -> Expr {
-    property_access(this_expr(), "position")
+    property_access(this_expr(), POSITION_PROPERTY)
 }
 
 /// Returns `$this->objects[$index]`.
@@ -149,9 +163,9 @@ fn index_of_expr(object: Expr) -> Expr {
 /// Initializes the storage arrays and iterator position.
 fn construct_body() -> Vec<Stmt> {
     vec![
-        property_assign_stmt(this_expr(), "objects", empty_array_expr()),
-        property_assign_stmt(this_expr(), "infos", empty_array_expr()),
-        property_assign_stmt(this_expr(), "position", int_expr(0)),
+        property_assign_stmt(this_expr(), OBJECTS_PROPERTY, empty_array_expr()),
+        property_assign_stmt(this_expr(), INFOS_PROPERTY, empty_array_expr()),
+        property_assign_stmt(this_expr(), POSITION_PROPERTY, int_expr(0)),
     ]
 }
 
@@ -162,13 +176,13 @@ fn attach_body() -> Vec<Stmt> {
         if_stmt(
             binary_expr(var_expr("index"), BinOp::GtEq, int_expr(0)),
             vec![
-                property_array_assign_stmt(this_expr(), "infos", var_expr("index"), var_expr("info")),
+                property_array_assign_stmt(this_expr(), INFOS_PROPERTY, var_expr("index"), var_expr("info")),
                 return_void_stmt(),
             ],
             None,
         ),
-        property_array_push_stmt(this_expr(), "objects", var_expr("object")),
-        property_array_push_stmt(this_expr(), "infos", var_expr("info")),
+        property_array_push_stmt(this_expr(), OBJECTS_PROPERTY, var_expr("object")),
+        property_array_push_stmt(this_expr(), INFOS_PROPERTY, var_expr("info")),
     ]
 }
 
@@ -195,8 +209,8 @@ fn detach_body() -> Vec<Stmt> {
                 increment_stmt("i"),
             ],
         ),
-        property_assign_stmt(this_expr(), "objects", var_expr("newObjects")),
-        property_assign_stmt(this_expr(), "infos", var_expr("newInfos")),
+        property_assign_stmt(this_expr(), OBJECTS_PROPERTY, var_expr("newObjects")),
+        property_assign_stmt(this_expr(), INFOS_PROPERTY, var_expr("newInfos")),
     ]
 }
 
@@ -221,12 +235,27 @@ fn add_all_body() -> Vec<Stmt> {
 
 /// Detaches every object found in another storage instance.
 fn remove_all_body() -> Vec<Stmt> {
-    vec![foreach_stmt(
-        var_expr("storage"),
-        None,
-        "object",
-        vec![expr_stmt(method_call(this_expr(), "detach", vec![var_expr("object")]))],
-    )]
+    // Snapshot the source first: `removeAll($this)` detaches while iterating the SAME storage,
+    // which would skip every other element.
+    vec![
+        typed_assign_stmt("objects", array_type(), empty_array_expr()),
+        foreach_stmt(
+            var_expr("storage"),
+            None,
+            "object",
+            vec![array_push_stmt("objects", var_expr("object"))],
+        ),
+        foreach_stmt(
+            var_expr("objects"),
+            None,
+            "object",
+            vec![expr_stmt(method_call(
+                this_expr(),
+                "detach",
+                vec![var_expr("object")],
+            ))],
+        ),
+    ]
 }
 
 /// Keeps only objects that are also present in another storage instance.
@@ -252,8 +281,8 @@ fn remove_all_except_body() -> Vec<Stmt> {
                 increment_stmt("i"),
             ],
         ),
-        property_assign_stmt(this_expr(), "objects", var_expr("newObjects")),
-        property_assign_stmt(this_expr(), "infos", var_expr("newInfos")),
+        property_assign_stmt(this_expr(), OBJECTS_PROPERTY, var_expr("newObjects")),
+        property_assign_stmt(this_expr(), INFOS_PROPERTY, var_expr("newInfos")),
     ]
 }
 
@@ -273,7 +302,7 @@ fn get_info_body() -> Vec<Stmt> {
 fn set_info_body() -> Vec<Stmt> {
     vec![if_stmt(
         method_call(this_expr(), "valid", Vec::new()),
-        vec![property_array_assign_stmt(this_expr(), "infos", position_expr(), var_expr("info"))],
+        vec![property_array_assign_stmt(this_expr(), INFOS_PROPERTY, position_expr(), var_expr("info"))],
         None,
     )]
 }
@@ -285,7 +314,7 @@ fn count_body() -> Vec<Stmt> {
 
 /// Resets iteration to the first storage entry.
 fn rewind_body() -> Vec<Stmt> {
-    vec![property_assign_stmt(this_expr(), "position", int_expr(0))]
+    vec![property_assign_stmt(this_expr(), POSITION_PROPERTY, int_expr(0))]
 }
 
 /// Returns true when the current iterator position points at a stored object.
@@ -301,15 +330,21 @@ fn key_body() -> Vec<Stmt> {
     ]
 }
 
-/// Returns the current object or null when invalid.
+/// Returns the current object, rejecting a read on an exhausted iterator.
+///
+/// php raises `RuntimeException: Called current() on invalid iterator` rather than returning
+/// null, unlike `key()` which answers null.
 fn current_body() -> Vec<Stmt> {
     vec![
         if_stmt(
-            method_call(this_expr(), "valid", Vec::new()),
-            return_body(object_at(position_expr())),
+            not_expr(method_call(this_expr(), "valid", Vec::new())),
+            vec![throw_stmt(new_object_expr(
+                "RuntimeException",
+                vec![string_expr("Called current() on invalid iterator")],
+            ))],
             None,
         ),
-        return_stmt(null_expr()),
+        return_stmt(object_at(position_expr())),
     ]
 }
 
@@ -317,26 +352,57 @@ fn current_body() -> Vec<Stmt> {
 fn next_body() -> Vec<Stmt> {
     vec![property_assign_stmt(
         this_expr(),
-        "position",
+        POSITION_PROPERTY,
         binary_expr(position_expr(), BinOp::Add, int_expr(1)),
     )]
 }
 
-/// Moves the iterator position to a requested offset.
+/// Moves the iterator position to a requested offset, rejecting an out-of-range one.
+///
+/// php raises `OutOfBoundsException: Seek position N is out of range` for a negative offset or one
+/// at/past the storage length, leaving the current position untouched.
 fn seek_body() -> Vec<Stmt> {
-    vec![property_assign_stmt(this_expr(), "position", var_expr("offset"))]
+    vec![
+        if_stmt(
+            binary_expr(
+                binary_expr(var_expr("offset"), BinOp::Lt, int_expr(0)),
+                BinOp::Or,
+                binary_expr(var_expr("offset"), BinOp::GtEq, count_expr(objects_expr())),
+            ),
+            vec![throw_stmt(new_object_expr(
+                "OutOfBoundsException",
+                vec![binary_expr(
+                    binary_expr(
+                        string_expr("Seek position "),
+                        BinOp::Concat,
+                        var_expr("offset"),
+                    ),
+                    BinOp::Concat,
+                    string_expr(" is out of range"),
+                )],
+            ))],
+            None,
+        ),
+        property_assign_stmt(this_expr(), POSITION_PROPERTY, var_expr("offset")),
+    ]
 }
 
-/// Returns info attached to a specific object or null when absent.
+/// Returns info attached to a specific object, rejecting an object that is not stored.
+///
+/// php-src's `SplObjectStorage::offsetGet()` raises
+/// `UnexpectedValueException: Object not found` for a missing object rather than
+/// returning null, unlike the iterator-facing `getInfo()` accessor.
 fn offset_get_body() -> Vec<Stmt> {
     vec![
         assign_stmt("index", index_of_expr(var_expr("object"))),
         if_stmt(
             binary_expr(var_expr("index"), BinOp::GtEq, int_expr(0)),
             return_body(info_at(var_expr("index"))),
-            None,
+            Some(vec![throw_stmt(new_object_expr(
+                "UnexpectedValueException",
+                vec![string_expr("Object not found")],
+            ))]),
         ),
-        return_stmt(null_expr()),
     ]
 }
 
@@ -360,19 +426,6 @@ fn get_hash_body() -> Vec<Stmt> {
         ),
         return_stmt(string_expr("")),
     ]
-}
-
-/// Returns an array snapshot suitable for `__serialize()`.
-fn serialize_array_body() -> Vec<Stmt> {
-    return_body(expr(crate::parser::ast::ExprKind::ArrayLiteralAssoc(vec![
-        (string_expr("objects"), objects_expr()),
-        (string_expr("infos"), infos_expr()),
-    ])))
-}
-
-/// Returns a small debug array exposing stored objects and info values.
-fn debug_info_body() -> Vec<Stmt> {
-    serialize_array_body()
 }
 
 /// Finds the index of an object by strict object identity, or `-1` when absent.

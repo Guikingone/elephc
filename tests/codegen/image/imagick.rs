@@ -511,3 +511,27 @@ echo $im->getImageFormat() . ";" . count(Imagick::queryFormats());
     );
     assert_eq!(out, "JPEG;5");
 }
+
+/// Verifies that an internal class's argument-count error is a RUNTIME catchable
+/// `ArgumentCountError` with php's wording — `Imagick::blurImage()` requires two floats.
+#[test]
+fn test_imagick_blur_image_arity_is_a_runtime_argument_count_error() {
+    let out = compile_and_run(
+        r#"<?php
+$im = new Imagick();
+try {
+    $im->blurImage();
+} catch (ArgumentCountError $e) {
+    echo $e->getMessage(), "\n";
+}
+echo "done\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Imagick::blurImage() expects exactly 2 arguments, 0 given\n",
+            "done\n",
+        )
+    );
+}

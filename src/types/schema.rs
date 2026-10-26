@@ -287,6 +287,12 @@ pub struct ClassInfo {
     /// Codegen routes undeclared property storage through a per-object
     /// side-table when this flag is set.
     pub allow_dynamic_properties: bool,
+    /// `true` when creating a dynamic property on this class is reported by php rather than free.
+    ///
+    /// Builtin SPL containers grant the dynamic-property storage the attribute-driven path needs
+    /// while still reporting php 8.5's `Creation of dynamic property C::$n is deprecated`, which
+    /// is what php does for every class without `#[\AllowDynamicProperties]`.
+    pub dynamic_property_creation_deprecated: bool,
     /// EIR reserves a GC-visible property hash for subclasses declared by opaque eval.
     /// This is a storage capability, not PHP's permission to create dynamic properties.
     pub eval_property_storage: bool,
@@ -368,6 +374,9 @@ pub struct ClassInfo {
     /// so hidden private parent slots keep their typed-property initialization
     /// metadata when a child declares a same-named property.
     pub property_declared_slots: Vec<bool>,
+    /// Original PHP contracts for slots boxed because native SPL loading can replace their tag.
+    /// A present `None` is an untyped user slot; compiler-private backing slots remain unchanged.
+    pub native_property_contracts: HashMap<usize, Option<PhpType>>,
     pub final_properties: HashSet<String>,
     pub readonly_properties: HashSet<String>,
     pub reference_properties: HashSet<String>,
@@ -721,13 +730,15 @@ impl ClassInfo {
 
     /// Returns whether CREATING a dynamic property on an instance is deprecated rather than free.
     ///
-    /// The clone-override hash is reserved by the compiler, not requested by the program, so php
-    /// 8.5 still reports `Creation of dynamic property C::$n is deprecated` for every class that
-    /// carries neither `#[\AllowDynamicProperties]` nor stdClass's engine exemption. Eval's own
-    /// reserved storage keeps its established behavior and is deliberately not consulted here.
+    /// Builtin SPL containers carry elephc's own marker and always report, and the clone-override
+    /// hash is reserved by the compiler rather than requested by the program, so php 8.5 reports
+    /// `Creation of dynamic property C::$n is deprecated` for every class that carries neither
+    /// `#[\AllowDynamicProperties]` nor stdClass's engine exemption. Eval's own reserved storage
+    /// keeps its established behavior and is deliberately not consulted here.
     pub fn dynamic_property_creation_is_deprecated(&self) -> bool {
-        (self.clone_override_property_storage || self.scope_dynamic_property_storage)
-            && !self.allow_dynamic_properties
+        self.dynamic_property_creation_deprecated
+            || ((self.clone_override_property_storage || self.scope_dynamic_property_storage)
+                && !self.allow_dynamic_properties)
     }
 
     /// Returns whether an UNDECLARED property name addresses this class's hash directly.
@@ -785,6 +796,33 @@ impl ClassInfo {
     pub fn visible_property_is_declared(&self, property: &str) -> bool {
         self.visible_property(property)
             .is_some_and(|(index, (name, _))| self.property_slot_is_declared(index, name))
+    }
+
+    /// Returns the declared PHP contract independently from native-load storage widening.
+    pub fn property_slot_declared_type(&self, index: usize, property: &str) -> Option<&PhpType> {
+        if let Some(contract) = self.native_property_contracts.get(&index) {
+            return contract.as_ref();
+        }
+        self.property_slot_is_declared(index, property)
+            .then(|| self.properties.get(index).map(|(_, ty)| ty)).flatten()
+    }
+
+    /// Returns the ordinary assignment contract while native loaders retain their separate authority.
+    pub fn property_slot_write_type(&self, index: usize) -> PhpType {
+        match self.native_property_contracts.get(&index) {
+            Some(Some(contract)) => contract.clone(),
+            Some(None) => PhpType::Mixed,
+            None => self.properties[index].1.clone(),
+        }
+    }
+
+    /// Native-loadable slots expose their actual runtime payload rather than a source-only promise.
+    pub fn property_slot_value_type(&self, index: usize) -> PhpType {
+        if self.native_property_contracts.contains_key(&index) {
+            PhpType::Mixed
+        } else {
+            self.properties[index].1.clone()
+        }
     }
 
     /// Returns whether one physical property slot stores a by-reference cell.

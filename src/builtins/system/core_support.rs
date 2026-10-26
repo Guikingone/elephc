@@ -148,7 +148,8 @@ pub fn lower_core_builtin(
         }
         CoreBuiltinOp::SetErrorHandler => lower_handler_operands(ctx, call, true)?,
         CoreBuiltinOp::SetExceptionHandler => lower_handler_operands(ctx, call, false)?,
-        CoreBuiltinOp::TriggerError => lower_trigger_operands(ctx, call)?,
+        CoreBuiltinOp::TriggerError => lower_trigger_operands(ctx, call, 1_024)?,
+        CoreBuiltinOp::InternalDeprecated => lower_trigger_operands(ctx, call, 8_192)?,
         CoreBuiltinOp::GetDefinedConstants => {
             vec![operand_or_const_bool(ctx, call, 0, false)]
         }
@@ -305,6 +306,7 @@ fn lower_handler_operands(
 fn lower_trigger_operands(
     ctx: &mut dyn BuiltinLoweringContext,
     call: &NormalizedBuiltinCall<'_>,
+    default_level: i64,
 ) -> Result<Vec<crate::ir::ValueId>, BuiltinLoweringError> {
     let file = ctx.source_path().unwrap_or("unknown").to_string();
     let file_data = ctx.intern_string(&file);
@@ -316,17 +318,22 @@ fn lower_trigger_operands(
         Op::ConstStr.default_effects(),
         Some(call.span),
     );
+    // Synthetic SPL bodies have no source line of their own. Read the context published by
+    // their caller so both the default diagnostic and a user error handler receive it.
+    let line_op = if call.span.line == 0 { Op::LoadDiagnosticLine } else { Op::ConstI64 };
+    let line_immediate = (call.span.line != 0)
+        .then_some(Immediate::I64(i64::from(call.span.line)));
     let line = ctx.emit_value(
-        Op::ConstI64,
+        line_op,
         Vec::new(),
-        Some(Immediate::I64(i64::from(call.span.line))),
+        line_immediate,
         PhpType::Int,
-        Op::ConstI64.default_effects(),
+        line_op.default_effects(),
         Some(call.span),
     );
     Ok(vec![
         call.operand(0)?,
-        operand_or_const_int(ctx, call, 1, 1_024),
+        operand_or_const_int(ctx, call, 1, default_level),
         file.value,
         line.value,
     ])

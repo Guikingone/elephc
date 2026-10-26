@@ -20,7 +20,7 @@
 //!   `*RECURSION*` guard all come from `codegen_support::runtime::io::
 //!   var_dump_object`. An ENUM case is intercepted inside that shared renderer
 //!   and printed as `enum(E::C)`, so this file needs no enum-specific arm.
-//! - `print_r` of an object works the same way: `__rt_print_r_object` in
+//! - `print_r` uses an owned capture boundary and the object walker: `__rt_print_r_object` in
 //!   `codegen_support::runtime::objects::print_r_object` owns the header, the
 //!   parenthesized body and the recursion guard, and is reached both from here
 //!   (base indent 0) and from the tag-6 branch of `__rt_print_r_value`.
@@ -30,163 +30,15 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
-use crate::ir::{Instruction, ValueId};
+use crate::ir::Instruction;
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
 
-/// Lowers `print_r(value, $return = false)` for concrete scalar/resource values
-/// and array/hash shells.
-///
-/// Dispatch follows the call's static result type, which the checker
-/// (`src/builtins/io/print_r.rs`) and the EIR return-type override
-/// (`print_r_builtin_return_type_for_args`) derive from the `$return` flag:
-/// - `Str` (literal `true`): render into the capture buffer and return the owned
-///   string finalized by `__rt_pr_finish`.
-/// - `Bool` (flag absent or literal `false`): render to stdout and return `true`.
-/// - `Mixed` (runtime flag): select the mode at runtime; see
-///   `lower_print_r_runtime_flag`.
-pub(crate) fn lower_print_r(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    if inst.operands.is_empty() || inst.operands.len() > 2 {
-        return Err(CodegenIrError::unsupported(
-            "print_r() takes 1 or 2 arguments",
-        ));
-    }
-    let value = expect_operand(inst, 0)?;
-    match inst.result_php_type.codegen_repr() {
-        PhpType::Str => {
-            ctx.emitter.blank();
-            ctx.emitter.comment("print_r(value, true) — return mode");
-            // -- reset the capture offset and enable buffer mode --
-            let zero_reg = abi::int_result_reg(ctx.emitter);
-            abi::emit_load_int_immediate(ctx.emitter, zero_reg, 0);
-            abi::emit_store_reg_to_symbol(ctx.emitter, zero_reg, "_print_r_off", 0);
-            abi::emit_load_int_immediate(ctx.emitter, zero_reg, 1);
-            abi::emit_store_reg_to_symbol(ctx.emitter, zero_reg, "_print_r_mode", 0);
-            // -- load the value into result regs and render it into the buffer --
-            let ty = loaded_php_semantic_type(ctx, value)?;
-            emit_print_r_loaded_value(ctx, &ty)?;
-            // -- finalize the captured bytes into an owned heap string --
-            abi::emit_call_label(ctx.emitter, "__rt_pr_finish");
-            // -- result is in the platform string result regs (x1/x2 or rax/rdx) --
-            store_if_result(ctx, inst)
-        }
-        PhpType::Bool => {
-            ctx.emitter.blank();
-            ctx.emitter.comment("print_r()");
-            let ty = loaded_php_semantic_type(ctx, value)?;
-            emit_print_r_loaded_value(ctx, &ty)?;
-            // PHP `print_r` echo mode always returns true, regardless of the bytes
-            // written. The rendering above leaves the syscall/byte-count in the
-            // integer result register, so materialize a literal 1 before storing.
-            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
-            store_if_result(ctx, inst)
-        }
-        _ => lower_print_r_runtime_flag(ctx, inst, value),
-    }
-}
+mod print_r;
 
-/// Lowers `print_r(value, $flag)` when the `$return` flag is only known at runtime.
-///
-/// The flag (0/1) is stored into `_print_r_mode` before rendering, so the shared
-/// write indirection (`__rt_pr_write` / `__rt_stdout_write`) routes every rendered
-/// byte to stdout (echo mode) or the capture buffer (return mode) on its own. A
-/// final branch on the stored mode boxes the result as `Mixed`: the finalized
-/// capture string (tag 1) in return mode, or PHP's `true` (tag 3) in echo mode —
-/// the call's static result type is `Mixed` because the value shape depends on the
-/// runtime flag. A missing flag operand (first-class-callable wrappers lower the
-/// one-argument form with a `Mixed` result type) defaults to echo mode, matching
-/// PHP's `$return = false`. `__rt_pr_finish` resets the mode and offset; the echo
-/// branch leaves them untouched (the stored flag was zero).
-///
-/// OWNERSHIP: the capture string from `__rt_pr_finish` is owned solely by this lowering.
-/// `__rt_mixed_from_value` copies it into the box instead of adopting it, and the EIR
-/// `release` for the call site frees the Mixed cell rather than the intermediate, so the
-/// return-mode branch frees the capture string itself once the box holds its own copy.
-fn lower_print_r_runtime_flag(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    value: ValueId,
-) -> Result<()> {
-    ctx.emitter.blank();
-    ctx.emitter.comment("print_r(value, $flag) — runtime-selected mode");
-    // -- reset the capture offset, then store the flag as the capture mode --
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
-    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_print_r_off", 0);
-    match inst.operands.get(1).copied() {
-        Some(flag) => {
-            let flag_ty = ctx.load_value_to_reg(flag, result_reg)?;
-            if !matches!(flag_ty.codegen_repr(), PhpType::Bool | PhpType::Int) {
-                return Err(CodegenIrError::unsupported(format!(
-                    "print_r $return flag for PHP type {:?}",
-                    flag_ty
-                )));
-            }
-        }
-        None => abi::emit_load_int_immediate(ctx.emitter, result_reg, 0),
-    }
-    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_print_r_mode", 0);
-    // -- render the value; the write indirection consults the mode per write --
-    let ty = loaded_php_semantic_type(ctx, value)?;
-    emit_print_r_loaded_value(ctx, &ty)?;
-    // -- branch on the stored mode: finalize the capture or materialize `true` --
-    let echo_label = ctx.next_label("print_r_runtime_echo");
-    let done_label = ctx.next_label("print_r_runtime_done");
-    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_print_r_mode", 0);
-    emit_compare_reg_zero(ctx, result_reg);
-    emit_branch_if_eq(ctx, &echo_label);
-    abi::emit_call_label(ctx.emitter, "__rt_pr_finish");
-    // `__rt_pr_finish` hands back a freshly allocated heap string, and the string arm of
-    // `__rt_mixed_from_value` persists (copies) that payload into the box's own storage rather
-    // than adopting it. The capture string therefore has exactly one owner — this lowering — and
-    // nothing downstream can free it, because the EIR `release` for this call site targets the
-    // Mixed cell, not the intermediate. Free it here, once the box owns its copy, or every
-    // runtime-flag `print_r($v, $flag)` leaks one block per call.
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("str x1, [sp, #-16]!");                     // spill the capture string pointer across the boxing call
-            ctx.emitter.instruction("mov x0, #1");                              // runtime tag 1 = string for the captured bytes
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.instruction("ldr x1, [sp]");                            // reload the capture string pointer
-            ctx.emitter.instruction("str x0, [sp]");                            // park the boxed Mixed result across the free helper
-            ctx.emitter.instruction("mov x0, x1");                              // pass the capture string to the validating heap-free helper
-            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-            ctx.emitter.instruction("ldr x0, [sp], #16");                       // restore the boxed Mixed result and drop the spill slot
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, rax");                            // captured string pointer → Mixed low payload word
-            ctx.emitter.instruction("mov rsi, rdx");                            // captured string length → Mixed high payload word
-            ctx.emitter.instruction("sub rsp, 16");                             // reserve an aligned spill slot pair
-            ctx.emitter.instruction("mov QWORD PTR [rsp], rdi");                // spill the capture string pointer across the boxing call
-            ctx.emitter.instruction("mov eax, 1");                              // runtime tag 1 = string for the captured bytes
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.instruction("mov QWORD PTR [rsp+8], rax");              // park the boxed Mixed result across the free helper
-            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // pass the capture string to the validating heap-free helper
-            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-            ctx.emitter.instruction("mov rax, QWORD PTR [rsp+8]");              // restore the boxed Mixed result
-            ctx.emitter.instruction("add rsp, 16");                             // release the spill slot pair
-        }
-    }
-    abi::emit_jump(ctx.emitter, &done_label);
-    ctx.emitter.label(&echo_label);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x1, #1");                              // PHP echo mode always returns true
-            ctx.emitter.instruction("mov x2, #0");                              // bool Mixed payloads do not use a high word
-            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 1");                              // PHP echo mode always returns true
-            ctx.emitter.instruction("xor esi, esi");                            // bool Mixed payloads do not use a high word
-            ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 = boolean
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-    ctx.emitter.label(&done_label);
-    store_if_result(ctx, inst)
-}
+pub(crate) use print_r::lower_print_r;
 
 /// Lowers `var_dump(value, ...values)` for concrete scalar/resource values and for
 /// arrays/hashes, which are dumped recursively (nested containers included).
@@ -244,156 +96,6 @@ fn loaded_php_semantic_type(
     } else {
         Ok(loaded_ty)
     }
-}
-
-/// Emits `print_r` output for the value currently loaded in result register(s).
-fn emit_print_r_loaded_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()> {
-    match ty {
-        PhpType::Void | PhpType::Never => Ok(()),
-        PhpType::Bool => {
-            let skip_label = ctx.next_label("print_r_skip_false");
-            abi::emit_branch_if_int_result_zero(ctx.emitter, &skip_label);
-            abi::emit_write_stdout(ctx.emitter, ty);
-            ctx.emitter.label(&skip_label);
-            Ok(())
-        }
-        PhpType::Array(_) => emit_print_r_array(ctx, "__rt_print_r_indexed"),
-        PhpType::AssocArray { .. } => emit_print_r_array(ctx, "__rt_print_r_hash"),
-        PhpType::Iterable => {
-            // Iterable's runtime representation is ambiguous (a direct indexed
-            // array or a hash), so render only the `Array\n` header rather than
-            // risk walking the wrong layout.
-            emit_write_literal(ctx, b"Array\n");
-            Ok(())
-        }
-        PhpType::Object(_) => {
-            emit_print_r_object(ctx);
-            Ok(())
-        }
-        PhpType::Mixed | PhpType::Union(_) => {
-            emit_print_r_mixed(ctx);
-            Ok(())
-        }
-        PhpType::TaggedScalar => emit_print_r_tagged_scalar(ctx),
-        PhpType::Int
-        | PhpType::Float
-        | PhpType::Str
-        | PhpType::Resource(_)
-        | PhpType::Pointer(_)
-        | PhpType::Buffer(_)
-        | PhpType::Packed(_) => {
-            abi::emit_write_stdout(ctx.emitter, ty);
-            Ok(())
-        }
-        other => Err(CodegenIrError::unsupported(format!(
-            "print_r for PHP type {:?}",
-            other
-        ))),
-    }
-}
-
-/// Emits `print_r` output for a tagged scalar, matching PHP's empty output for null.
-fn emit_print_r_tagged_scalar(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    let skip_label = ctx.next_label("print_r_skip_tagged_null");
-    crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(ctx.emitter, &skip_label);
-    abi::emit_write_stdout(ctx.emitter, &PhpType::Int);
-    ctx.emitter.label(&skip_label);
-    Ok(())
-}
-
-/// Emits `print_r` output for an array/hash: the `Array\n` header followed by
-/// the recursive `(\n ... )\n` body emitted by the runtime `walker`. The array
-/// pointer is preserved across the header write (the write syscall clobbers the
-/// integer result register), then passed with a base indent of 0.
-///
-/// Both null container shapes — the zero pointer and the in-band null-container
-/// sentinel a missed element read materializes — skip the whole rendering (issue
-/// #647). This lowering previously had no null branch at all, so `Array` was
-/// written and the sentinel was then handed to the walker as a live container.
-/// The guard jumps PAST the header write as well as the walk: PHP renders null as
-/// EMPTY output here, unlike `var_dump`, which prints `NULL`. Skipping every write
-/// is what makes all three modes correct at once — echo mode prints nothing and
-/// still returns `true`, and the capture modes leave the buffer empty so
-/// `print_r($null, true)` finalizes to `""`.
-fn emit_print_r_array(ctx: &mut FunctionContext<'_>, walker: &str) -> Result<()> {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    let skip_label = ctx.next_label("print_r_skip_null_array");
-    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
-    crate::codegen::sentinels::emit_branch_if_null_container(
-        ctx.emitter,
-        result_reg,
-        scratch_reg,
-        &skip_label,
-    );
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    emit_write_literal(ctx, b"Array\n");
-    abi::emit_pop_reg(ctx.emitter, result_reg);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x1, #0");                              // base indent = 0 for the top-level array
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, rax");                            // array pointer → SysV first argument register
-            ctx.emitter.instruction("mov esi, 0");                              // base indent = 0 for the top-level array
-        }
-    }
-    abi::emit_call_label(ctx.emitter, walker);
-    ctx.emitter.label(&skip_label);
-    Ok(())
-}
-
-/// Emits `print_r` output for a boxed Mixed payload by delegating to the runtime
-/// `__rt_print_r_value` single-value renderer with tag 7 (Mixed cell) and a base
-/// indent of 0, so a held array prints its full body and a held scalar prints
-/// raw (PHP `print_r` semantics: no type wrapper, `1`/empty for bool, empty for null).
-fn emit_print_r_mixed(ctx: &mut FunctionContext<'_>) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x1, x0");                              // boxed Mixed cell pointer → value low argument
-            ctx.emitter.instruction("mov x0, #7");                              // tag 7 = boxed Mixed cell
-            ctx.emitter.instruction("mov x2, #0");                              // high word unused for the cell pointer
-            ctx.emitter.instruction("mov x3, #0");                              // nested base indent = 0
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rsi, rax");                            // boxed Mixed cell pointer → value low argument
-            ctx.emitter.instruction("mov edi, 7");                              // tag 7 = boxed Mixed cell
-            ctx.emitter.instruction("mov edx, 0");                              // high word unused for the cell pointer
-            ctx.emitter.instruction("mov ecx, 0");                              // nested base indent = 0
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_print_r_value");
-}
-
-/// Emits `print_r` output for an object pointer in the integer result register.
-///
-/// Hands the instance to `__rt_print_r_object` with a base indent of 0 — the SAME
-/// entry point a nested object reaches from the array, hash and object walkers, so
-/// a top-level render and a render at depth cannot drift apart. That helper owns
-/// the whole layout: the `ClassName Object` header (or PHP's `ClassName Enum[:t]`
-/// for an enum case), the `(` / `)` lines, the per-property body and the
-/// `*RECURSION*` guard. A zero pointer or the in-band null-container sentinel from
-/// a missed object read skips the walker entirely, matching `print_r(null)`.
-fn emit_print_r_object(ctx: &mut FunctionContext<'_>) {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    let skip_label = ctx.next_label("print_r_skip_null_object");
-    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
-    crate::codegen::sentinels::emit_branch_if_null_container(
-        ctx.emitter,
-        result_reg,
-        scratch_reg,
-        &skip_label,
-    );
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x1, #0");                              // base indent = 0 for the top-level object
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, rax");                            // object pointer → SysV first argument register
-            ctx.emitter.instruction("mov esi, 0");                              // base indent = 0 for the top-level object
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_print_r_object");
-    ctx.emitter.label(&skip_label);
 }
 
 /// Emits `var_dump` output for a boxed Mixed payload in the integer result register.
@@ -896,17 +598,6 @@ fn emit_branch_if_ne(ctx: &mut FunctionContext<'_>, label: &str) {
     }
 }
 
-/// Emits a branch when the previous comparison found equal values.
-fn emit_branch_if_eq(ctx: &mut FunctionContext<'_>, label: &str) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("b.eq {}", label));                // branch when the compared register payloads are equal
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("je {}", label));                  // branch when the compared register payloads are equal
-        }
-    }
-}
 
 #[cfg(test)]
 mod var_dump_resource_line_tests {

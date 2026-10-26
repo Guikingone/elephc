@@ -291,7 +291,7 @@ fn emit_user_function(
         emitter.target,
         regalloc_linear,
         true,
-        frame::module_uses_backtrace(module) && !function.flags.is_synthetic,
+        true,
     );
     let epilogue_label = user_function_epilogue_symbol(function);
     let mut ctx = FunctionContext::new(
@@ -311,6 +311,7 @@ fn emit_user_function(
     frame::emit_function_epilogue(&mut ctx);
     emit_endfn_marker(ctx.emitter, &function.name);
     frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
+    crate::codegen::lower_inst::core_builtins::backtrace::emit_function_backtrace_reader(&mut ctx)?;
     Ok(())
 }
 
@@ -329,7 +330,7 @@ pub(super) fn emit_synthetic_function_with_label(
         emitter.target,
         regalloc_linear,
         true,
-        false,
+        true,
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
@@ -348,6 +349,7 @@ pub(super) fn emit_synthetic_function_with_label(
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
     frame::emit_exception_cleanup_callback(&mut ctx, entry_label);
+    crate::codegen::lower_inst::core_builtins::backtrace::emit_function_backtrace_reader(&mut ctx)?;
     Ok(())
 }
 
@@ -457,7 +459,7 @@ fn emit_class_method(
         emitter.target,
         regalloc_linear,
         true,
-        frame::module_uses_backtrace(module) && !function.flags.is_synthetic,
+        true,
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
@@ -477,6 +479,7 @@ fn emit_class_method(
     frame::emit_function_epilogue(&mut ctx);
     emit_endfn_marker(ctx.emitter, &function.name);
     frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
+    crate::codegen::lower_inst::core_builtins::backtrace::emit_function_backtrace_reader(&mut ctx)?;
     Ok(())
 }
 
@@ -769,7 +772,7 @@ fn emit_generator_body(
         emitter.target,
         regalloc_linear,
         true,
-        frame::module_uses_backtrace(module) && !function.flags.is_synthetic,
+        true,
     );
     let epilogue_label = format!("{}_epilogue", body_label);
     let mut ctx = FunctionContext::new(
@@ -789,6 +792,7 @@ fn emit_generator_body(
     frame::emit_function_epilogue(&mut ctx);
     emit_endfn_marker(ctx.emitter, &function.name);
     frame::emit_exception_cleanup_callback(&mut ctx, body_label);
+    crate::codegen::lower_inst::core_builtins::backtrace::emit_function_backtrace_reader(&mut ctx)?;
     Ok(())
 }
 

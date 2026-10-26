@@ -1,23 +1,31 @@
 //! Purpose:
-//! Proves when an EIR callable already transfers a stable owned string result.
+//! Proves when a callable already transfers a stable owned string result.
 //!
 //! Called from:
 //! - Descriptor construction for native functions and closures.
 //!
 //! Key details:
 //! - Borrowed parameters, literals and unknown producers retain the copying invoker path.
-//! - Every return must establish ownership; one owned branch cannot justify another branch.
+//! - Source returns must all establish ownership; native intrinsics use their shared contract.
 
 use crate::ir::{Function, Op, Terminator, ValueDef, ValueId};
 use crate::types::PhpType;
 
-/// Proves ownership for the exact EIR method implementation selected by a descriptor wrapper.
+/// Proves ownership for the exact source or native method selected by a descriptor wrapper.
 pub(in crate::codegen) fn method_returns_owned_string(
     module: &crate::ir::Module,
     impl_class: &str,
     method_key: &str,
     is_static: bool,
 ) -> bool {
+    let intrinsic = if is_static {
+        crate::intrinsics::IntrinsicCall::static_method(impl_class, method_key)
+    } else {
+        crate::intrinsics::IntrinsicCall::instance_method(impl_class, method_key)
+    };
+    if let Some(intrinsic) = intrinsic {
+        return intrinsic.returns_owned_string();
+    }
     module.class_methods.iter().find(|function| {
         function.flags.is_static == is_static
             && function.name.rsplit_once("::").is_some_and(|(class, method)| {

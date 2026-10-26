@@ -233,6 +233,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     };
     runtime_features.handler_state |= generated_user_asm.handler_state;
     runtime_features.object_clone |= generated_user_asm.object_clone;
+    runtime_features.heap_scopes |= generated_user_asm.heap_scopes;
     let user_asm = if emit_debug_info {
         debug_info::inject_line_directives(&generated_user_asm.asm, filename, target.platform)
     } else {

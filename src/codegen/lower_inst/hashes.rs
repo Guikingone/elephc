@@ -23,6 +23,7 @@ use crate::codegen::{
 };
 use crate::codegen::platform::Arch;
 use crate::codegen::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
+use crate::codegen_support::deferred_array_keys::DEFERRED_KEY_TAG_BIAS;
 use crate::ir::{Immediate, Instruction, ValueId};
 use crate::types::PhpType;
 
@@ -908,7 +909,7 @@ pub(super) fn materialize_hash_key_aarch64_with(
             Ok(())
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            materialize_mixed_hash_key_aarch64(ctx, key, normalization)
+            materialize_mixed_hash_key_aarch64(ctx, key, normalization, false)
         }
         other => Err(CodegenIrError::unsupported(format!(
             "hash key PHP type {:?}",
@@ -980,7 +981,7 @@ pub(super) fn materialize_hash_key_x86_64_with(
             Ok(())
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            materialize_mixed_hash_key_x86_64(ctx, key, normalization)
+            materialize_mixed_hash_key_x86_64(ctx, key, normalization, false)
         }
         other => Err(CodegenIrError::unsupported(format!(
             "hash key PHP type {:?}",
@@ -1030,10 +1031,11 @@ pub(super) fn emit_undefined_hash_key_warning_x86_64(
 }
 
 /// Materializes a boxed Mixed key as the AArch64 hash key pair `x1`/`x2`.
-fn materialize_mixed_hash_key_aarch64(
+pub(super) fn materialize_mixed_hash_key_aarch64(
     ctx: &mut FunctionContext<'_>,
     key: ValueId,
     normalization: HashKeyNormalization,
+    defer_invalid: bool,
 ) -> Result<()> {
     let string_key = ctx.next_label("mixed_hash_key_string");
     let null_key = ctx.next_label("mixed_hash_key_null");
@@ -1052,8 +1054,23 @@ fn materialize_mixed_hash_key_aarch64(
     ctx.emitter.instruction(&format!("b.eq {}", scalar_key));                   // keep boolean keys as integer hash keys
     ctx.emitter.instruction("cmp x0, #2");                                      // float mixed keys truncate toward zero, exactly like PHP
     ctx.emitter.instruction(&format!("b.eq {}", float_key));                    // route float keys through the truncating conversion
+    let invalid_key = ctx.next_label("mixed_hash_key_deferred");
+    if defer_invalid {
+        for tag in [4, 5, 6, 10] {
+            ctx.emitter.instruction(&format!("cmp x0, #{tag}"));                // retain key types whose PHP rules depend on the receiver
+            ctx.emitter.instruction(&format!("b.eq {invalid_key}"));            // ArrayAccess accepts the original offset while real arrays reject it
+        }
+    }
     ctx.emitter.instruction("mov x1, #0");                                      // unsupported mixed key tags fall back to integer key zero
     ctx.emitter.instruction(&format!("b {}", scalar_key));                      // the float arm sits between here and the scalar path
+    if defer_invalid {
+        ctx.emitter.label(&invalid_key);
+        ctx.emitter.instruction("neg x2, x0");                                  // encode the original tag without allocating a temporary box
+        ctx.emitter.instruction(
+            &format!("sub x2, x2, #{DEFERRED_KEY_TAG_BIAS}")
+        );                                                                      // values below minus one cannot be ordinary PHP key lengths
+        ctx.emitter.instruction(&format!("b {done}"));                          // return the borrowed original payload in x1
+    }
     ctx.emitter.label(&float_key);
     ctx.emitter.instruction("fmov d0, x1");                                     // move the raw IEEE-754 payload bits into an FP register
     if normalization == HashKeyNormalization::PhpAlreadyDiagnosed {
@@ -1078,10 +1095,11 @@ fn materialize_mixed_hash_key_aarch64(
 }
 
 /// Materializes a boxed Mixed key as the x86_64 hash key pair `rsi`/`rdx`.
-fn materialize_mixed_hash_key_x86_64(
+pub(super) fn materialize_mixed_hash_key_x86_64(
     ctx: &mut FunctionContext<'_>,
     key: ValueId,
     normalization: HashKeyNormalization,
+    defer_invalid: bool,
 ) -> Result<()> {
     let string_key = ctx.next_label("mixed_hash_key_string");
     let null_key = ctx.next_label("mixed_hash_key_null");
@@ -1100,9 +1118,26 @@ fn materialize_mixed_hash_key_x86_64(
     ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep boolean keys as integer hash keys
     ctx.emitter.instruction("cmp rax, 2");                                      // float mixed keys truncate toward zero, exactly like PHP
     ctx.emitter.instruction(&format!("je {}", float_key));                      // route float keys through the truncating conversion
+    let invalid_key = ctx.next_label("mixed_hash_key_deferred");
+    if defer_invalid {
+        for tag in [4, 5, 6, 10] {
+            ctx.emitter.instruction(&format!("cmp rax, {tag}"));                // retain key types whose PHP rules depend on the receiver
+            ctx.emitter.instruction(&format!("je {invalid_key}"));              // ArrayAccess accepts the original offset while real arrays reject it
+        }
+    }
     ctx.emitter.instruction("xor esi, esi");                                    // unsupported mixed key tags fall back to integer key zero
     ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks fallback mixed keys as integers
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after fallback selection
+    if defer_invalid {
+        ctx.emitter.label(&invalid_key);
+        ctx.emitter.instruction("mov rsi, rdi");                                // preserve the borrowed original key payload
+        ctx.emitter.instruction("mov rdx, rax");                                // start encoding its runtime tag
+        ctx.emitter.instruction("neg rdx");                                     // use the invalid high-word domain
+        ctx.emitter.instruction(
+            &format!("sub rdx, {DEFERRED_KEY_TAG_BIAS}")
+        );                                                                      // ordinary integer keys retain their minus-one sentinel
+        ctx.emitter.instruction(&format!("jmp {done}"));                        // defer the receiver-specific key decision
+    }
     ctx.emitter.label(&float_key);
     ctx.emitter.instruction("movq xmm0, rdi");                                  // move the raw IEEE-754 payload bits into an FP register
     if normalization == HashKeyNormalization::PhpAlreadyDiagnosed {

@@ -138,15 +138,3 @@ pub(super) fn require_int_or_bool(ty: PhpType, name: &str) -> Result<()> {
         ty
     )))
 }
-
-/// Verifies that a CSV fields argument has the supported indexed string-array layout.
-pub(super) fn require_string_array(ty: PhpType, name: &str) -> Result<()> {
-    match ty {
-        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => Ok(()),
-        other => Err(CodegenIrError::unsupported(format!(
-            "{} for PHP type {:?}",
-            name,
-            other
-        ))),
-    }
-}

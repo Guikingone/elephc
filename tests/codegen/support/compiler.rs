@@ -290,7 +290,8 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     elephc::codegen::set_null_repr(null_repr);
     elephc::codegen::set_compile_profile(php_version, false);
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
-    let ast = elephc::parser::parse(&tokens).expect("parse failed");
+    let mut ast = elephc::parser::parse(&tokens).expect("parse failed");
+    transform_fixture_ast(&mut ast);
     let synthetic_main = dir.join("test.php");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
     // Mirrors `source::finalize_physical_program`: generic doc-comment annotations are applied
@@ -435,6 +436,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     if let Ok(output) = &generated_user_asm {
         runtime_features.handler_state |= output.handler_state;
         runtime_features.object_clone |= output.object_clone;
+    runtime_features.heap_scopes |= output.heap_scopes;
     }
     let user_asm = generated_user_asm.map(|output| output.asm);
     let runtime_asm =
@@ -942,7 +944,7 @@ fn compile_and_run_with_heap_size_and_optional_regex(
         );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
 
-    let elephc_out = assemble_and_run(
+    let elephc_raw = assemble_and_run(
         &user_asm,
         &runtime_obj,
         &dir,
@@ -958,10 +960,10 @@ fn compile_and_run_with_heap_size_and_optional_regex(
         if let Ok(php_output) = Command::new("php").arg(&php_path).output() {
             if php_output.status.success() {
                 let php_out = String::from_utf8_lossy(&php_output.stdout);
-                if elephc_out != php_out.as_ref() {
+                if elephc_raw != php_out.as_ref() {
                     eprintln!(
                         "PHP compat note: output differs for test.\n  elephc: {:?}\n  php:    {:?}",
-                        elephc_out, php_out
+                        elephc_raw, php_out
                     );
                 }
             }
@@ -969,7 +971,7 @@ fn compile_and_run_with_heap_size_and_optional_regex(
     }
 
     let _ = fs::remove_dir_all(&dir);
-    elephc_out
+    strip_php_display_lines(&elephc_raw)
 }
 
 // Convenience wrapper that calls `compile_and_run_with_heap_size` with the default

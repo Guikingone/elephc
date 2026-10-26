@@ -1085,7 +1085,7 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.comment("--- runtime: var_dump_value ---");
-    emitter.label_global("__rt_var_dump_value");
+    emitter.label_global("__rt_var_dump_value_impl");
 
     // Frame (48 bytes): [0]lo [8]hi [32]x29 [40]x30.
     emitter.instruction("sub sp, sp, #48");                                     // allocate the value frame
@@ -1093,6 +1093,7 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // establish the value frame pointer
     emitter.instruction("str x1, [sp, #0]");                                    // save the value low word
     emitter.instruction("str x2, [sp, #8]");                                    // save the value high word
+    emitter.instruction("str x3, [sp, #16]");                                   // save the owning value-scope context
 
     emitter.instruction("cmp x0, #7");                                          // boxed Mixed cell?
     emitter.instruction("b.eq __rt_vd_val_mixed");                              // unbox then redispatch
@@ -1174,13 +1175,9 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_vd_val_recursion");                      // PHP renders a revisited object as *RECURSION*
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_vd_seen_push");                                // mark the object as being walked
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
-    emitter.instruction("bl __rt_var_dump_open_object");                        // write `<indent>object(NAME) (N) {\n`
-    emitter.instruction("bl __rt_vd_indent_push");                              // properties sit one level deeper
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
-    emitter.instruction("bl __rt_var_dump_object");                             // recurse into the property walker
-    emitter.instruction("bl __rt_vd_indent_pop");                               // back to the value-line indent
-    emitter.instruction("bl __rt_var_dump_close_container");                    // write `<indent>}\n`
+    emitter.instruction("ldr x0, [sp, #0]");                                    // pass the receiver protected by the enclosing value scope
+    emitter.instruction("ldr x1, [sp, #16]");                                   // pass its ownership and formatting context
+    emitter.instruction("bl __rt_var_dump_object_view");                        // render the computed snapshot or ordinary declared properties
     emitter.instruction("bl __rt_vd_seen_pop");                                 // the object is no longer on the walk stack
     emitter.instruction("b __rt_vd_val_done");                                  // value rendered
 
@@ -1213,7 +1210,7 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
 fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_value ---");
-    emitter.label_global("__rt_var_dump_value");
+    emitter.label_global("__rt_var_dump_value_impl");
 
     // rbp-relative frame: [-8]lo [-16]hi.
     emitter.instruction("push rbp");                                            // save caller frame pointer
@@ -1221,6 +1218,7 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // allocate the value frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the value low word
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the value high word
+    emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save the owning value-scope context
     emitter.instruction("mov rax, rdi");                                        // tag → dispatch register
 
     emitter.instruction("cmp rax, 7");                                          // boxed Mixed cell?
@@ -1307,13 +1305,9 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_vd_val_recursion_x86");                       // PHP renders a revisited object as *RECURSION*
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_vd_seen_push");                              // mark the object as being walked
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
-    emitter.instruction("call __rt_var_dump_open_object");                      // write `<indent>object(NAME) (N) {\n`
-    emitter.instruction("call __rt_vd_indent_push");                            // properties sit one level deeper
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
-    emitter.instruction("call __rt_var_dump_object");                           // recurse into the property walker
-    emitter.instruction("call __rt_vd_indent_pop");                             // back to the value-line indent
-    emitter.instruction("call __rt_var_dump_close_container");                  // write `<indent>}\n`
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the receiver protected by the enclosing value scope
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass its ownership and formatting context
+    emitter.instruction("call __rt_var_dump_object_view");                      // render the computed snapshot or ordinary declared properties
     emitter.instruction("call __rt_vd_seen_pop");                               // the object is no longer on the walk stack
     emitter.instruction("jmp __rt_vd_val_done_x86");                            // value rendered
 
@@ -1671,6 +1665,12 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_hash ---");
     emitter.label_global("__rt_var_dump_hash");
+    emitter.instruction("mov x1, #0");                                          // ordinary arrays keep literal string keys
+    abi::emit_jump(emitter, "__rt_var_dump_hash_enter");
+    emitter.label_global("__rt_var_dump_debug_hash");
+    emitter.instruction("mov x1, #1");                                          // object debug views decode PHP property visibility
+    abi::emit_jump(emitter, "__rt_var_dump_hash_enter");
+    emitter.label_global("__rt_var_dump_hash_enter");
 
     // Frame (96 bytes): [0]=hash ptr, [8]=cursor, [16]=count, [24]=items,
     //   [32]=key_ptr, [40]=key_len, [48]=val_lo, [56]=val_hi, [64]=val_tag,
@@ -1679,6 +1679,7 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #80");                                    // establish runtime frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the hash table pointer
+    emitter.instruction("str x1, [sp, #72]");                                   // preserve the object-key rendering mode
     emitter.instruction("bl __rt_hash_count");                                  // x0 = number of entries
     emitter.instruction("str x0, [sp, #16]");                                   // save the entry count
     emitter.instruction("str xzr, [sp, #8]");                                   // iterator cursor = 0
@@ -1706,7 +1707,12 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_vd_hash_int_key");                           // format integer keys as [N]
     emitter.instruction("ldr x1, [sp, #32]");                                   // reload key ptr
     emitter.instruction("ldr x2, [sp, #40]");                                   // reload key len
-    emitter.instruction("bl __rt_var_dump_emit_string_key");                    // emit `<indent>["KEY"]=>\n`
+    emitter.instruction("ldr x0, [sp, #72]");                                   // recover whether these are object debug properties
+    emitter.instruction("cbz x0, __rt_vd_hash_public_key");                     // ordinary array strings remain unchanged
+    emitter.instruction("bl __rt_var_dump_emit_debug_key");                     // decode private and protected property names
+    emitter.instruction("b __rt_vd_hash_after_key");                            // continue with this property's value
+    emitter.label("__rt_vd_hash_public_key");
+    emitter.instruction("bl __rt_var_dump_emit_string_key");                    // emit the original literal key
     emitter.instruction("b __rt_vd_hash_after_key");                            // continue to the value line
     emitter.label("__rt_vd_hash_int_key");
     emitter.instruction("ldr x11, [sp, #32]");                                  // integer key payload → indexed-key helper's x11 input
@@ -1737,6 +1743,12 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_hash ---");
     emitter.label_global("__rt_var_dump_hash");
+    emitter.instruction("xor esi, esi");                                        // ordinary arrays keep literal string keys
+    abi::emit_jump(emitter, "__rt_var_dump_hash_enter");
+    emitter.label_global("__rt_var_dump_debug_hash");
+    emitter.instruction("mov esi, 1");                                          // object debug views decode PHP property visibility
+    abi::emit_jump(emitter, "__rt_var_dump_hash_enter");
+    emitter.label_global("__rt_var_dump_hash_enter");
 
     // rbp-relative frame: [-8]=hash ptr, [-16]=cursor, [-24]=count, [-32]=items,
     //   [-40]=key_ptr, [-48]=key_len, [-56]=val_lo, [-64]=val_hi, [-72]=val_tag.
@@ -1744,6 +1756,7 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
     emitter.instruction("sub rsp, 96");                                         // allocate the hash-walk frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash table pointer
+    emitter.instruction("mov QWORD PTR [rbp - 80], rsi");                       // preserve the object-key rendering mode
     emitter.instruction("call __rt_hash_count");                                // rax = number of entries (hash ptr already in rdi)
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the entry count
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // iterator cursor = 0
@@ -1770,7 +1783,12 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_vd_hash_int_key_x86");                         // format integer keys as [N]
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload key ptr → string-key helper's rdi
     emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // reload key len → string-key helper's rsi
-    emitter.instruction("call __rt_var_dump_emit_string_key");                  // emit `<indent>["KEY"]=>\n`
+    emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // recover whether these are object debug properties
+    emitter.instruction("je __rt_vd_hash_public_key_x86");                      // ordinary array strings remain unchanged
+    emitter.instruction("call __rt_var_dump_emit_debug_key");                   // decode private and protected property names
+    emitter.instruction("jmp __rt_vd_hash_after_key_x86");                      // continue with this property's value
+    emitter.label("__rt_vd_hash_public_key_x86");
+    emitter.instruction("call __rt_var_dump_emit_string_key");                  // emit the original literal key
     emitter.instruction("jmp __rt_vd_hash_after_key_x86");                      // continue to the value line
     emitter.label("__rt_vd_hash_int_key_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // integer key payload → indexed-key helper's rdi

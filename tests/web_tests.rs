@@ -2848,3 +2848,29 @@ echo count($c6), "|", implode(",", array_keys($_GET)), "\n";
     assert!(r1.ends_with(expected), "first response body: {:?}", r1);
     assert!(r2.ends_with(expected), "second response body: {:?}", r2);
 }
+
+/// Request teardown invokes detached cycle destructors before each response returns to the bridge.
+#[test]
+fn web_request_teardown_collects_cycles_with_gc_disabled() {
+    let dir = make_test_dir("web_shutdown_cycles");
+    let source = r#"<?php
+gc_disable();
+class RequestCycle {
+    public mixed $peer = null;
+    public function __destruct() { echo "cycle\n"; }
+}
+$node = new RequestCycle();
+$node->peer = $node;
+echo "body\n";
+"#;
+    let bin = compile_web(&dir, source, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut server = spawn_server(&bin, &addr, "1");
+    let first = http_request(&addr, "GET", "/", &[], "");
+    let second = http_request(&addr, "GET", "/", &[], "");
+    let _ = server.kill();
+    let _ = server.wait();
+    assert!(first.ends_with("body\ncycle\n"), "first response: {first:?}");
+    assert!(second.ends_with("body\ncycle\n"), "second response: {second:?}");
+}

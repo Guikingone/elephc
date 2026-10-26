@@ -70,13 +70,16 @@ $db->options(MYSQLI_OPT_CONNECT_TIMEOUT, 1);
 /// `mysqli::query()` without arguments is an arity error at compile time.
 #[test]
 fn query_requires_the_query_argument() {
-    expect_mysqli_error(
+    // php defers an internal class's arity error to a runtime catchable
+    // `ArgumentCountError`; the check accepts the program (the runtime message is
+    // pinned by the codegen suite).
+    check_mysqli(
         r#"<?php
 $db = new mysqli();
 $db->query();
 "#,
-        "query",
-    );
+    )
+    .expect("an internal class's arity error is deferred to run time");
 }
 
 /// The constructor rejects more arguments than its six connection parameters.
@@ -105,13 +108,16 @@ echo mysqli_connect_errno($db);
 /// `mysqli_stmt::bind_param` requires the type string.
 #[test]
 fn bind_param_requires_the_types_argument() {
-    expect_mysqli_error(
+    // php defers an internal class's arity error to a runtime catchable
+    // `ArgumentCountError`; the check accepts the program (the runtime message is
+    // pinned by the codegen suite).
+    check_mysqli(
         r#"<?php
 $stmt = new mysqli_stmt();
 $stmt->bind_param();
 "#,
-        "bind_param",
-    );
+    )
+    .expect("an internal class's arity error is deferred to run time");
 }
 
 /// `mysqli_stmt::bind_param` preserves PHP's by-ref variadic lvalue requirement.
@@ -129,13 +135,16 @@ $stmt->bind_param("i", 42);
 /// `mysqli_select_db` requires the database argument.
 #[test]
 fn select_db_requires_database_argument() {
-    expect_mysqli_error(
+    // php defers an internal class's arity error to a runtime catchable
+    // `ArgumentCountError`; the check accepts the program (the runtime message is
+    // pinned by the codegen suite).
+    check_mysqli(
         r#"<?php
 $db = new mysqli();
 $db->select_db();
 "#,
-        "select_db",
-    );
+    )
+    .expect("an internal class's arity error is deferred to run time");
 }
 
 /// The internal static factory `mysqli_stmt::__elephcInit` is private (the

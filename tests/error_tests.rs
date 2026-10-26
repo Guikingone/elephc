@@ -148,6 +148,15 @@ fn resolve_files_error(
 }
 
 /// Verifies expect error.
+/// Asserts that `src` type-checks cleanly because php defers the violation to run time.
+///
+/// php raises an INTERNAL call's argument-count error as a catchable `ArgumentCountError` at
+/// run time; the checker therefore accepts the program and the runtime message is pinned by
+/// the codegen suites.
+pub(crate) fn expect_error_accepts(src: &str) {
+    let _ = check_source(src).expect("php defers an internal class's arity error to run time");
+}
+
 fn expect_error(src: &str, expected_substr: &str) {
     match check_source(src) {
         Ok(_) => panic!(
@@ -322,6 +331,8 @@ mod callables;
 mod never;
 #[path = "error_tests/spl_builtins.rs"]
 mod spl_builtins;
+#[path = "error_tests/spl_return_contracts.rs"]
+mod spl_return_contracts;
 #[path = "error_tests/misc.rs"]
 mod misc;
 #[path = "error_tests/narrowing.rs"]

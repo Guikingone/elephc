@@ -9,6 +9,8 @@
 
 use super::*;
 
+use crate::ir_lower::stmt::load_array_local_for_write;
+
 /// Lowers supported `unset(...)` targets without evaluating them as ordinary call args.
 pub(super) fn lower_unset_locals(
     ctx: &mut LoweringContext<'_, '_>,
@@ -48,6 +50,9 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
         ExprKind::ArrayAccess { array, .. } => {
             unset_array_access_has_object_receiver(ctx, array)
                 || unset_array_access_has_local_array_receiver(ctx, array)
+                || unset_array_access_has_property_array_receiver(ctx, array)
+                || unset_array_access_has_mixed_receiver(ctx, array)
+                || crate::ir_lower::stmt::is_live_storage_access(ctx, array)
         }
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
@@ -158,6 +163,41 @@ pub(super) fn lower_unset_array_access(
             _ => {}
         }
     }
+    if let ExprKind::PropertyAccess { object, property }
+    | ExprKind::NullsafePropertyAccess { object, property } = &array.kind
+    {
+        let lowered_object = lower_expr(ctx, object);
+        if let Some(cell) = crate::ir_lower::stmt::live_storage_cell(ctx, lowered_object, property, expr.span) {
+            let index = lower_expr(ctx, index);
+            ctx.emit_void(Op::OffsetUnset, vec![cell.value, index.value], None,
+                Op::OffsetUnset.default_effects(), Some(expr.span));
+            if ctx.value_is_owning_temporary(index) {
+                crate::ir_lower::ownership::release_if_owned(ctx, index, Some(expr.span));
+            }
+            crate::ir_lower::stmt::release_live_storage_cell(ctx, cell, expr.span);
+            return;
+        }
+        let property_ty =
+            object_property_type(ctx, lowered_object.value, property)
+                .filter(|ty| ty.is_php_array() || matches!(ty, PhpType::AssocArray { .. }));
+        if let Some(property_ty) = property_ty {
+            lower_unset_property_array_element(
+                ctx,
+                &lowered_object,
+                property,
+                &property_ty,
+                index,
+                expr,
+            );
+            return;
+        }
+    }
+    if let ExprKind::Variable(name) = &array.kind {
+        if unset_array_access_has_mixed_receiver(ctx, array) {
+            lower_unset_mixed_local_element(ctx, name, array.span, index, expr);
+            return;
+        }
+    }
     let synthetic = Expr::new(
         ExprKind::MethodCall {
             object: Box::new(array.clone()),
@@ -167,6 +207,58 @@ pub(super) fn lower_unset_array_access(
         expr.span,
     );
     lower_expr(ctx, &synthetic);
+}
+
+/// Returns true when an array-access unset receiver is a `mixed`/union LOCAL the lowering cannot
+/// statically type.
+///
+/// php defers the shape to run time: the receiver may be an array or an `ArrayAccess` object. The
+/// lowering routes the removal through `Op::MixedArrayUnset`, whose runtime helper dispatches on
+/// the payload tag, so a by-reference binding is excluded (its slot is the caller's storage and
+/// the mixed ladder would republish a copy).
+pub(super) fn unset_array_access_has_mixed_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> bool {
+    let ExprKind::Variable(name) = &array.kind else {
+        return false;
+    };
+    if ctx.is_ref_bound_local(name) {
+        return false;
+    }
+    matches!(
+        ctx.local_type(name).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    )
+}
+
+/// Removes `$mixed[$key]` through the runtime container dispatch, then stores the mutated
+/// container back into the local.
+///
+/// The key is rooted across the removal the way the array-element path roots it, because the
+/// `ArrayAccess` arm can call a user-visible `offsetUnset()` that outlives the key temp.
+fn lower_unset_mixed_local_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    array_span: Span,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let index_value = lower_expr(ctx, index);
+    let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
+    let array_value = load_array_local_for_write(ctx, name, array_span);
+    let result = ctx.emit_value(
+        Op::MixedArrayUnset,
+        vec![array_value.value, index_value.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedArrayUnset.default_effects(),
+        Some(expr.span),
+    );
+    ctx.store_mutated_local(name, result, PhpType::Mixed, Some(expr.span));
+    if let Some(slot) = key_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
 }
 
 /// Detaches the declared array cell before sparse removal and roots an owned key across callbacks.
@@ -193,6 +285,96 @@ fn lower_unset_boxed_array_element(
     if let Some(slot) = key_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }
+}
+
+/// Returns true when an array-access unset receiver is a property-held PHP or associative array
+/// the property array write path already knows how to load, mutate and store back.
+pub(super) fn unset_array_access_has_property_array_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> bool {
+    let (ExprKind::PropertyAccess { object, property }
+    | ExprKind::NullsafePropertyAccess { object, property }) = &array.kind
+    else {
+        return false;
+    };
+    let object_ty = match &object.kind {
+        ExprKind::Variable(name) => ctx.local_types.get(name).cloned(),
+        ExprKind::This => ctx.current_class.clone().map(PhpType::Object),
+        _ => None,
+    };
+    let Some(PhpType::Object(class_name)) = object_ty else {
+        return false;
+    };
+    let Some(class_info) = ctx.classes.get(class_name.trim_start_matches('\\')) else {
+        return false;
+    };
+    class_info
+        .visible_property(property)
+        .map(|(_, (_, ty))| ty.is_php_array() || matches!(ty, PhpType::AssocArray { .. }))
+        .unwrap_or(false)
+}
+
+/// Resolves the declared lowering type of `$object->$property` the way statement lowering does.
+///
+/// Mirrors `crate::ir_lower::stmt::object_property_type`, which is `pub(super)` to the statement
+/// module and therefore not reachable from here.
+fn object_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> Option<PhpType> {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object) else {
+        return None;
+    };
+    ctx.classes
+        .get(class_name.trim_start_matches('\\'))?
+        .visible_property(property)
+        .map(|(_, (_, property_ty))| property_ty.clone())
+}
+
+/// Lowers `unset($object->arrayProp[$key])` for a property-held PHP or associative array.
+///
+/// php reads the property, removes the element from the table it holds, and writes the unique
+/// table back, so this mirrors the property array WRITE's shape: `PropGet` (acquired), the
+/// removal, then `PropSet`. The backend copy-on-write splits the table before detaching, so the
+/// property's other readers never observe a shared mutation.
+fn lower_unset_property_array_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &LoweredValue,
+    property: &str,
+    property_ty: &PhpType,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let data = ctx.intern_string(property);
+    let object_value = object.clone();
+    let property_value = ctx.emit_value(
+        Op::PropGet,
+        vec![object_value.value],
+        Some(Immediate::Data(data)),
+        property_ty.clone(),
+        Op::PropGet.default_effects(),
+        Some(expr.span),
+    );
+    let property_value =
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(expr.span));
+    let index_value = lower_expr(ctx, index);
+    ctx.emit_void(
+        Op::HashUnset,
+        vec![property_value.value, index_value.value],
+        None,
+        Op::HashUnset.default_effects(),
+        Some(expr.span),
+    );
+    ctx.emit_void(
+        Op::PropSet,
+        vec![object_value.value, property_value.value],
+        Some(Immediate::Data(data)),
+        Op::PropSet.default_effects(),
+        Some(expr.span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, property_value, Some(expr.span));
 }
 
 /// Lowers `unset($hash[$key])` for an associative-array local as a `HashUnset` instruction.
@@ -262,6 +444,7 @@ pub(super) fn unset_property_access_has_direct_lowering(
                 | UnsetPropertyAction::Noop
                 | UnsetPropertyAction::ClearSlot
                 | UnsetPropertyAction::RemoveDynamic
+                | UnsetPropertyAction::RemoveDynamicRuntime
         )
     )
 }
@@ -302,6 +485,13 @@ pub(super) fn lower_unset_property_access(
                     Some(expr.span),
                 );
             });
+        }
+        // The receiver's runtime class is only known at run time, so the removal goes through the
+        // runtime-name ladder with the static name carried as a value. The guard adds nothing: a
+        // runtime subclass can still declare `__unset`, and the ladder answers for it.
+        Some(UnsetPropertyAction::RemoveDynamicRuntime) => {
+            let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
+            lower_unset_dynamic_property_access(ctx, object, &name, expr);
         }
         Some(UnsetPropertyAction::Fallback) | None => {}
     }
@@ -471,6 +661,10 @@ pub(super) enum UnsetPropertyAction {
     /// undeclared name on an `#[AllowDynamicProperties]` class), where PHP's `unset()`
     /// really is a key removal.
     RemoveDynamic,
+    /// The receiver's runtime class is only known at run time (a `mixed`/union receiver), so the
+    /// backend's runtime ladder unboxes it, keeps non-objects out, and dispatches on the runtime
+    /// class id. The static property name still travels as a value.
+    RemoveDynamicRuntime,
 }
 
 /// Selects the PHP-visible `unset()` behavior for a statically known object property operand.
@@ -479,7 +673,20 @@ pub(super) fn property_unset_action(
     object: &Expr,
     property: &str,
 ) -> Option<UnsetPropertyAction> {
-    let (class_name, _) = isset_object_expr_class(ctx, object)?;
+    let (class_name, _) = match isset_object_expr_class(ctx, object) {
+        Some(resolved) => resolved,
+        None => {
+            // php's answer for a receiver whose runtime class is only known at run time is the
+            // same dynamic-property removal the runtime-name form takes: unbox, keep non-objects
+            // out, then ask the RUNTIME class. Only a boxed `Mixed`/union receiver can, so a
+            // statically non-object receiver keeps the shared unsupported diagnostic.
+            return matches!(
+                unset_operand_type(ctx, object).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            )
+            .then_some(UnsetPropertyAction::RemoveDynamicRuntime);
+        }
+    };
     // Every `stdClass` property is a hash entry, so `unset()` is a plain key removal and
     // `stdClass` declares no magic methods that could intercept it.
     if is_builtin_stdclass_name(&class_name) {

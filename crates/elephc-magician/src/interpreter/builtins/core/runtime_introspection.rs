@@ -69,6 +69,7 @@ fn eval_runtime_introspection_result(
         "get_error_handler" => eval_get_error_handler(args, context, values),
         "get_exception_handler" => eval_get_exception_handler(args, context, values),
         "trigger_error" | "user_error" => eval_trigger_error(args, context, values),
+        "__elephc_deprecated" => eval_internal_deprecation(args, context, values),
         "get_defined_constants" => eval_get_defined_constants(args, context, values),
         "get_defined_functions" => eval_get_defined_functions(args, context, values),
         "get_defined_vars" => eval_get_defined_vars(args, context, scope, values),
@@ -309,6 +310,19 @@ fn eval_trigger_error(
     if !handled && level == E_USER_ERROR {
         return Err(EvalStatus::UserFatal);
     }
+    values.bool_value(true)
+}
+
+/// Emits an engine-owned deprecation without accepting engine levels in public trigger_error.
+fn eval_internal_deprecation(
+    args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [message] = args else { return Err(EvalStatus::RuntimeFatal); };
+    let message = String::from_utf8(values.string_bytes(*message)?)
+        .map_err(|_| EvalStatus::RuntimeFatal)?;
+    eval_dispatch_php_error(&message, E_DEPRECATED, context, values)?;
     values.bool_value(true)
 }
 

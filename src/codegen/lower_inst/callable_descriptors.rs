@@ -192,7 +192,16 @@ pub(super) fn emit_instance_method_first_class_callable(
         .get(&method_key)
         .cloned()
         .unwrap_or_else(|| normalized_class.clone());
-    if !class_method_body_exists(ctx, &impl_class, &method_key) {
+    // Native SPL containers expose the same method-symbol adapters as ordinary
+    // source calls. Their consuming parameters are normalized by that adapter.
+    let native_container = crate::intrinsics::IntrinsicCall::instance_method(&impl_class, &method_key)
+        .is_some_and(|intrinsic| matches!(intrinsic.class_name(),
+            "SplDoublyLinkedList" | "SplStack" | "SplQueue" | "SplFixedArray"));
+    let native_wrapper = native_container
+        && crate::codegen::runtime_metadata::intrinsic_method_wrapper_specs(ctx.module)
+            .iter().any(|wrapper| !wrapper.is_static
+                && wrapper.class_name == impl_class && wrapper.method_key == method_key);
+    if !class_method_body_exists(ctx, &impl_class, &method_key) && !native_wrapper {
         return Err(CodegenIrError::unsupported(format!(
             "instance first-class callable '{}' without emitted method body",
             target

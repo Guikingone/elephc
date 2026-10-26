@@ -2350,3 +2350,14 @@ This specification closes the first EIR roadmap item because it defines:
 - textual format requirements and examples
 - an exhaustive current `ExprKind`, `BinOp`, and `StmtKind` lowering catalogue
 - validator requirements sufficient for Phase 02
+
+## Synthetic diagnostic source lines
+
+`LoadDiagnosticLine` reads the active PHP diagnostic line into an `I64` value.
+It has no operands and carries `READS_GLOBAL`, so it remains ordered with calls
+that publish source context. Builtin lowering uses it for `trigger_error()` and
+`user_error()` inside synthetic bodies whose AST span has line zero. Ordinary
+source calls continue to lower their own constant line number. This gives the
+default diagnostic and a user error handler the same captured caller line.
+`ObjectNewReserved` publishes its constructor call site after argument calls,
+just like the ordinary `ObjectNew` operation.

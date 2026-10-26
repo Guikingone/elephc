@@ -15,6 +15,7 @@ mod class_metadata;
 mod classes_aliases;
 mod classlike_objects;
 mod closure_metadata;
+mod closure_owners;
 mod core;
 mod functions;
 mod generics;

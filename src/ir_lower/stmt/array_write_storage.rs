@@ -37,6 +37,21 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
     let receiver = Expr::new(ExprKind::Variable(array.into()), span);
     if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &receiver, value, span) { return; }
+    if matches!(ctx.local_type(array).codegen_repr(), PhpType::Object(ref class_name)
+        if !matches!(class_name.trim_start_matches('\\'),
+            "SplFixedArray" | "SplDoublyLinkedList" | "SplStack" | "SplQueue"))
+    {
+        // Object dimensions invoke a user-visible method. Share ordinary method argument
+        // evaluation, unwind roots and cleanup instead of an unrooted runtime-call shortcut.
+        let call = Expr::new(ExprKind::MethodCall {
+            object: Box::new(Expr::new(ExprKind::Variable(array.into()), span)),
+            method: "offsetSet".into(),
+            args: vec![Expr::new(ExprKind::Null, span), value.clone()],
+        }, span);
+        let result = lower_expr(ctx, &call);
+        crate::ir_lower::ownership::release_if_owned(ctx, result, Some(span));
+        return;
+    }
     let array_value = load_array_local_for_write(ctx, array, span);
     let value = lower_expr(ctx, value);
     let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[array_value.value, value.value], span);
@@ -79,13 +94,22 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, span);
         return;
     }
-    ctx.emit_void(
-        op,
-        vec![array_value.value, value.value],
-        None,
-        op.default_effects(),
-        Some(span),
-    );
+    let object_offset_set = op == Op::RuntimeCall
+        && matches!(
+            ctx.builder.value_php_type(array_value.value).codegen_repr(),
+            PhpType::Object(ref class_name)
+                if !matches!(class_name.trim_start_matches('\\'),
+                    "SplFixedArray" | "SplDoublyLinkedList" | "SplStack" | "SplQueue")
+        );
+    let operands = if object_offset_set {
+        // An append dimension is offsetSet(null, value), so a public append override is irrelevant.
+        // Dedicated native SPL storage families retain their existing append diagnostics/helpers.
+        let null_offset = ctx.builder.emit_const_null();
+        vec![array_value.value, null_offset, value.value]
+    } else {
+        vec![array_value.value, value.value]
+    };
+    ctx.emit_void(op, operands, None, op.default_effects(), Some(span));
     release_persisted_string_operand(ctx, value, span);
 }
 

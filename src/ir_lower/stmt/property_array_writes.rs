@@ -43,7 +43,14 @@ pub(super) fn lower_property_array_push(
 fn lower_property_array_push_value(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, value: LoweredValue, span: Span,
 ) {
-    if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
+    if let Some(cell) = super::spl_storage_writes::live_storage_cell(ctx, object, property, span) {
+        ctx.emit_void(Op::MixedArrayAppend, vec![cell.value, value.value], None,
+            Op::MixedArrayAppend.default_effects(), Some(span));
+        super::spl_storage_writes::release_live_storage_cell(ctx, cell, span);
+        return;
+    }
+    if object_property_type(ctx, object.value, property)
+        .is_some_and(|ty| ty.is_php_array() || ty.codegen_repr() == PhpType::Mixed) {
         lower_php_array_property_write(ctx, object, property, None, value, span, false);
         return;
     }
@@ -233,7 +240,15 @@ fn lower_property_array_assign_value(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, index: LoweredValue,
     value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
-    if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
+    if let Some(cell) = super::spl_storage_writes::live_storage_cell(ctx, object, property, span) {
+        ctx.emit_void(Op::RuntimeCall, vec![cell.value, index.value, value.value],
+            key_already_diagnosed.then_some(Immediate::Bool(true)),
+            effects_lookup::runtime_effects(), Some(span));
+        super::spl_storage_writes::release_live_storage_cell(ctx, cell, span);
+        return;
+    }
+    if object_property_type(ctx, object.value, property)
+        .is_some_and(|ty| ty.is_php_array() || ty.codegen_repr() == PhpType::Mixed) {
         lower_php_array_property_write(
             ctx,
             object,

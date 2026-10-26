@@ -1,6 +1,6 @@
 //! Purpose:
 //! Emits object-to-associative-array projection for `get_object_vars()` and
-//! explicit PHP object casts.
+//! explicit PHP object casts and raw SPL property-table copies.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()`.
@@ -12,6 +12,7 @@
 //!   slots never escape; its modeled public `name` property is still projected.
 //! - Protected filtering uses each descriptor row's declaring class, and copied
 //!   dynamic-property names are normalized with PHP array-key semantics.
+//! - Raw SPL mode preserves integer and string key kinds in the dynamic tail.
 //! - A declared slot tagged Mixed (7) whose cell pointer is zero or the null sentinel (an
 //!   untyped property that is null) projects canonical null instead of boxing a dangling cell.
 //! - Incomplete objects use class id `-2` and own their original class name at
@@ -45,7 +46,17 @@ pub(crate) fn emit_object_to_hash(emitter: &mut Emitter) {
 fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: object_to_hash ---");
+    emitter.label_global("__rt_object_iterated_properties");
+    emitter.instruction("mov x1, #4");                                          // retain public properties with raw key kinds for SPL iteration
+    emitter.instruction("b __rt_object_to_hash_entry");                         // share declared visibility filtering and independent value copies
+    emitter.label_global("__rt_object_named_properties");
+    emitter.instruction("mov x1, #3");                                          // project named properties for SPL offset lookup
+    emitter.instruction("b __rt_object_to_hash_entry");                         // share visibility-mangled declared property projection
+    emitter.label_global("__rt_object_raw_properties");
+    emitter.instruction("mov x1, #2");                                          // select raw SPL keys with visibility-mangled declared properties
+    emitter.instruction("b __rt_object_to_hash_entry");                         // share descriptor projection and value ownership
     emitter.label_global("__rt_object_to_hash");
+    emitter.label_shared("__rt_object_to_hash_entry");
 
     // Frame slots: object, mode, result, descriptor, index, count, scope,
     // key pointer/length, slot offset, tag, low/high payload, fp/lr.
@@ -84,6 +95,12 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #40]");                                  // load the declared-property count slot for `ldr x10, [sp, #40]`
     emitter.instruction("cmp x9, x10");                                         // evaluate `cmp x9, x10` before selecting the projection branch
     emitter.instruction("b.ge __rt_object_to_hash_dynamic");                    // continue at `__rt_object_to_hash_dynamic` after declared rows are exhausted
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the object before selecting its property projection policy
+    emitter.instruction("ldr x10, [x10]");                                      // load the runtime class id for the projection policy table
+    abi::emit_symbol_address(emitter, "x11", "_class_property_projection_ptrs");
+    emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // select visibility flags for this class's physical property slots
+    emitter.instruction("ldr x10, [x11, x9, lsl #3]");                          // inspect whether this slot is a PHP property declaration
+    emitter.instruction("cbz x10, __rt_object_to_hash_next");                   // omit compiler-only SPL storage without touching its owner
     emitter.instruction("ldr x11, [sp, #24]");                                  // load the descriptor-pointer slot for `ldr x11, [sp, #24]`
     emitter.instruction("lsl x12, x9, #5");                                     // derive the current descriptor/property offset with `lsl x12, x9, #5`
     emitter.instruction("add x11, x11, #8");                                    // derive the current descriptor/property offset with `add x11, x11, #8`
@@ -93,6 +110,8 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x15, [x11, #16]");                                 // load the current object/descriptor operand for `ldr x15, [x11, #16]`
     emitter.instruction("ldr x16, [x11, #24]");                                 // load the current object/descriptor operand for `ldr x16, [x11, #24]`
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload cast mode before selecting the property projection policy
+    emitter.instruction("cmp x9, #4");                                          // iteration exposes only public properties
+    emitter.instruction("b.eq __rt_object_to_hash_visibility");                 // apply global lexical visibility to the iteration projection
     emitter.instruction("cbz x9, __rt_object_to_hash_visibility");              // get_object_vars keeps lexical PHP visibility
     emitter.instruction("ldr x9, [sp, #104]");                                  // check for ReflectionParameter's public-only cast view
     emitter.instruction("cbz x9, __rt_object_to_hash_row_ready");               // ordinary casts retain PHP-mangled private properties
@@ -216,7 +235,7 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x9, x11]");                                   // load the current object/descriptor operand for `ldr x1, [x9, x11]`
     emitter.instruction("cbz x1, __rt_object_to_hash_done");                    // finish the projection through `__rt_object_to_hash_done`
     emitter.instruction("ldr x0, [sp, #16]");                                   // load the result-hash slot for `ldr x0, [sp, #16]`
-    emitter.instruction("bl __rt_hash_project_spread");                         // copy dynamic properties while normalizing PHP array keys
+    emit_property_hash_copy(emitter, "dynamic"); // select normalized public views or raw SPL key preservation
     emitter.instruction("str x0, [sp, #16]");                                   // save the result-hash slot across nested runtime calls
     emitter.instruction("b __rt_object_to_hash_done");                          // finish the projection through `__rt_object_to_hash_done`
 
@@ -244,7 +263,7 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #16]");                                   // save the result-hash slot across nested runtime calls
     emitter.instruction("ldr x1, [sp, #0]");                                    // load the object pointer slot for `ldr x1, [sp, #0]`
     emitter.instruction("ldr x1, [x1, #24]");                                   // load the current object/descriptor operand for `ldr x1, [x1, #24]`
-    emitter.instruction("bl __rt_hash_project_spread");                         // copy retained incomplete-object properties with PHP array keys
+    emit_property_hash_copy(emitter, "incomplete"); // select normalized public views or raw SPL key preservation
     emitter.instruction("str x0, [sp, #16]");                                   // save the result-hash slot across nested runtime calls
     emitter.instruction("b __rt_object_to_hash_done");                          // finish the projection through `__rt_object_to_hash_done`
 
@@ -264,7 +283,17 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
 fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: object_to_hash ---");
+    emitter.label_global("__rt_object_iterated_properties");
+    emitter.instruction("mov rdx, 4");                                          // retain public properties with raw key kinds for SPL iteration
+    emitter.instruction("jmp __rt_object_to_hash_entry_x");                     // share declared visibility filtering and independent value copies
+    emitter.label_global("__rt_object_named_properties");
+    emitter.instruction("mov rdx, 3");                                          // project named properties for SPL offset lookup
+    emitter.instruction("jmp __rt_object_to_hash_entry_x");                     // share visibility-mangled declared property projection
+    emitter.label_global("__rt_object_raw_properties");
+    emitter.instruction("mov rdx, 2");                                          // select raw SPL keys with visibility-mangled declared properties
+    emitter.instruction("jmp __rt_object_to_hash_entry_x");                     // share descriptor projection and value ownership
     emitter.label_global("__rt_object_to_hash");
+    emitter.label_shared("__rt_object_to_hash_entry_x");
     emitter.instruction("push rbp");                                            // preserve the caller frame before nested runtime calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame for projection spill slots
     emitter.instruction("sub rsp, 128");                                        // reserve the object-projection helper frame
@@ -283,7 +312,7 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rip + _class_gc_desc_count]");     // load the current object/descriptor operand for `mov r10, QWORD PTR [rip + _class_gc_desc_count]`
     emitter.instruction("cmp r9, r10");                                         // evaluate `cmp r9, r10` before selecting the projection branch
     emitter.instruction("jae __rt_object_to_hash_empty_x");                     // use `__rt_object_to_hash_empty_x` when the object or metadata is absent
-    emitter.instruction("lea r10, [rip + _class_reflection_parameter_cast_public_flags]"); // materialize the ReflectionParameter cast-policy table
+    emitter.instruction("lea r10, [rip + _class_reflection_parameter_cast_public_flags]");// materialize the ReflectionParameter cast-policy table
     emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // select the ReflectionParameter cast projection policy
     emitter.instruction("mov QWORD PTR [rbp - 128], r10");                      // retain the cast projection flag across property iteration
     emitter.instruction("lea r10, [rip + _class_serprop_ptrs]");                // materialize the metadata symbol used by `lea r10, [rip + _class_serprop_ptrs]`
@@ -301,6 +330,12 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // load the descriptor-row index slot for `mov r9, QWORD PTR [rbp - 40]`
     emitter.instruction("cmp r9, QWORD PTR [rbp - 48]");                        // evaluate `cmp r9, QWORD PTR [rbp - 48]` before selecting the projection branch
     emitter.instruction("jge __rt_object_to_hash_dynamic_x");                   // continue at `__rt_object_to_hash_dynamic_x` after declared rows are exhausted
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the object before selecting its property projection policy
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the runtime class id for the projection policy table
+    emitter.instruction("lea r11, [rip + _class_property_projection_ptrs]");    // materialize the PHP property projection policy table
+    emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // select visibility flags for this class's physical property slots
+    emitter.instruction("cmp QWORD PTR [r11 + r9 * 8], 0");                     // inspect whether this slot is a PHP property declaration
+    emitter.instruction("je __rt_object_to_hash_next_x");                       // omit compiler-only SPL storage without touching its owner
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // load the descriptor-pointer slot for `mov r10, QWORD PTR [rbp - 32]`
     emitter.instruction("mov r11, r9");                                         // prepare the projection argument or result with `mov r11, r9`
     emitter.instruction("shl r11, 5");                                          // derive the current descriptor/property offset with `shl r11, 5`
@@ -310,6 +345,8 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r13, QWORD PTR [r10 + 8]");                        // load the current object/descriptor operand for `mov r13, QWORD PTR [r10 + 8]`
     emitter.instruction("mov r14, QWORD PTR [r10 + 16]");                       // load the current object/descriptor operand for `mov r14, QWORD PTR [r10 + 16]`
     emitter.instruction("mov r15, QWORD PTR [r10 + 24]");                       // load the current object/descriptor operand for `mov r15, QWORD PTR [r10 + 24]`
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 4");                         // iteration exposes only public properties
+    emitter.instruction("je __rt_object_to_hash_visibility_x");                 // apply global lexical visibility to the iteration projection
     emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // choose cast policy or get_object_vars visibility
     emitter.instruction("je __rt_object_to_hash_visibility_x");                 // get_object_vars keeps lexical PHP visibility
     emitter.instruction("cmp QWORD PTR [rbp - 128], 0");                        // check for ReflectionParameter's public-only cast view
@@ -431,7 +468,7 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rsi, rsi");                                       // evaluate `test rsi, rsi` before selecting the projection branch
     emitter.instruction("jz __rt_object_to_hash_done_x");                       // finish the projection through `__rt_object_to_hash_done_x`
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // load the result-hash slot for `mov rdi, QWORD PTR [rbp - 24]`
-    emitter.instruction("call __rt_hash_project_spread");                       // copy dynamic properties while normalizing PHP array keys
+    emit_property_hash_copy(emitter, "dynamic"); // select normalized public views or raw SPL key preservation
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the result-hash slot across nested runtime calls
     emitter.instruction("jmp __rt_object_to_hash_done_x");                      // finish the projection through `__rt_object_to_hash_done_x`
 
@@ -460,7 +497,7 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // load the object pointer slot for `mov r10, QWORD PTR [rbp - 8]`
     emitter.instruction("mov rsi, QWORD PTR [r10 + 24]");                       // load the current object/descriptor operand for `mov rsi, QWORD PTR [r10 + 24]`
     emitter.instruction("mov rdi, rax");                                        // prepare the projection argument or result with `mov rdi, rax`
-    emitter.instruction("call __rt_hash_project_spread");                       // copy retained incomplete-object properties with PHP array keys
+    emit_property_hash_copy(emitter, "incomplete"); // select normalized public views or raw SPL key preservation
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the result-hash slot across nested runtime calls
     emitter.instruction("jmp __rt_object_to_hash_done_x");                      // finish the projection through `__rt_object_to_hash_done_x`
 
@@ -518,4 +555,42 @@ mod tests {
             assert!(guard.rfind(if suffix.is_empty() { "cmp x0, #7" } else { "cmp rax, 7" }).is_some(), "{name}");
         }
     }
+}
+
+/// Copies the dynamic tail using the current projection mode without changing public views.
+fn emit_property_hash_copy(emitter: &mut Emitter, scope: &str) {
+    let raw = format!("__rt_object_props_copy_{scope}_raw");
+    let named = format!("__rt_object_props_copy_{scope}_named");
+    let done = format!("__rt_object_props_copy_{scope}_done");
+    if emitter.target.arch == Arch::AArch64 {
+        emitter.instruction("ldr x9, [sp, #8]");                                // reload the enclosing property projection mode
+        emitter.instruction("cmp x9, #2");                                      // raw snapshots preserve every property bucket
+        emitter.instruction(&format!("b.eq {raw}"));                            // select the complete raw-key copy
+        emitter.instruction("cmp x9, #4");                                      // iteration keeps raw key kinds after public visibility filtering
+        emitter.instruction(&format!("b.eq {raw}"));                            // choose complete raw-key copying
+        emitter.instruction("cmp x9, #3");                                      // named lookup ignores integer property buckets
+        emitter.instruction(&format!("b.eq {named}"));                          // choose the named property view
+        emitter.instruction("bl __rt_hash_project_spread");                     // public views normalize all property keys
+        emitter.instruction(&format!("b {done}"));                              // join with the independently retained result
+        emitter.label(&raw);
+        emitter.instruction("bl __rt_hash_raw_project_spread");                 // retain values and preserve both key kinds
+        emitter.instruction(&format!("b {done}"));                              // join after the complete raw copy
+        emitter.label(&named);
+        emitter.instruction("bl __rt_hash_named_project_spread");               // retain only named properties for SPL lookup
+    } else {
+        emitter.instruction("cmp QWORD PTR [rbp - 16], 2");                     // raw snapshots preserve every property bucket
+        emitter.instruction(&format!("je {raw}"));                              // select the complete raw-key copy
+        emitter.instruction("cmp QWORD PTR [rbp - 16], 4");                     // iteration keeps raw key kinds after public visibility filtering
+        emitter.instruction(&format!("je {raw}"));                              // choose complete raw-key copying
+        emitter.instruction("cmp QWORD PTR [rbp - 16], 3");                     // named lookup ignores integer property buckets
+        emitter.instruction(&format!("je {named}"));                            // choose the named property view
+        emitter.instruction("call __rt_hash_project_spread");                   // public views normalize all property keys
+        emitter.instruction(&format!("jmp {done}"));                            // join with the independently retained result
+        emitter.label(&raw);
+        emitter.instruction("call __rt_hash_raw_project_spread");               // retain values and preserve both key kinds
+        emitter.instruction(&format!("jmp {done}"));                            // join after the complete raw copy
+        emitter.label(&named);
+        emitter.instruction("call __rt_hash_named_project_spread");             // retain only named properties for SPL lookup
+    }
+    emitter.label(&done);
 }

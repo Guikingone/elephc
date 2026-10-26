@@ -65,6 +65,28 @@ pub enum RuntimeArgumentLayout {
 /// Typed runtime operation selected by backend-neutral EIR lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeCallTarget {
+    /// Replaces a compiler-validated native user slot after its destructor, returning Throwable/null.
+    NativePropertyReplace,
+    /// Restores a native user property by its serialized name, returning Throwable/null.
+    NativePropertyRestore,
+    /// Opens a receiver-bound logical root view before a destructive next operation.
+    HeapScopeBegin,
+    /// Reads a live logical root or a normal packed Mixed element.
+    HeapScopeRead,
+    /// Publishes the first completed root replacement during a sift.
+    HeapScopeRootWritten,
+    /// Unlinks and frees a complete receiver-bound mutation scope.
+    HeapScopeEnd,
+    /// Publishes a native array root hole before releasing the previous payload.
+    HeapScopeReleaseRoot,
+    /// Chains a boxed pending Throwable behind a new raw exception without consuming the box.
+    ExceptionChainMixed,
+    /// Captures logical value bits without retaining the payload; returns scoped raw scratch.
+    BorrowedValueSnapshot,
+    /// Acquires an owned Mixed value while a captured payload is still live.
+    BorrowedValueRead,
+    /// Retires a scoped snapshot allocation without releasing its borrowed payload.
+    BorrowedValueFree,
     /// Returns an owned string naming the currently running executable.
     ExecutablePath,
     /// Returns the unique live weak wrapper for an object, acquiring its returned owner.
@@ -151,6 +173,44 @@ impl RuntimeCallTarget {
     /// Returns the logical signature shared by EIR validation and backend lowering.
     pub fn signature(self) -> Option<RuntimeCallSignature> {
         match self {
+            RuntimeCallTarget::HeapScopeReleaseRoot => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object), IrType::I64], result: IrType::Void,
+            }),
+            RuntimeCallTarget::ExceptionChainMixed => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Heap(IrHeapKind::Mixed)],
+                result: IrType::Void,
+            }),
+            RuntimeCallTarget::NativePropertyRestore => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Str, IrType::Heap(IrHeapKind::Mixed)],
+                result: IrType::Heap(IrHeapKind::Mixed),
+            }),
+            RuntimeCallTarget::NativePropertyReplace => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object), IrType::I64, IrType::Heap(IrHeapKind::Mixed)],
+                result: IrType::Heap(IrHeapKind::Mixed),
+            }),
+            RuntimeCallTarget::HeapScopeBegin => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Heap(IrHeapKind::Array),
+                    IrType::Heap(IrHeapKind::Array), IrType::I64], result: IrType::I64,
+            }),
+            RuntimeCallTarget::HeapScopeRead => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Heap(IrHeapKind::Array),
+                    IrType::I64, IrType::I64], result: IrType::Heap(IrHeapKind::Mixed),
+            }),
+            RuntimeCallTarget::HeapScopeRootWritten => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object)], result: IrType::Void,
+            }),
+            RuntimeCallTarget::HeapScopeEnd => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::I64], result: IrType::Void,
+            }),
+            RuntimeCallTarget::BorrowedValueSnapshot => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Mixed)], result: IrType::I64,
+            }),
+            RuntimeCallTarget::BorrowedValueRead => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::I64], result: IrType::Heap(IrHeapKind::Mixed),
+            }),
+            RuntimeCallTarget::BorrowedValueFree => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::I64], result: IrType::Void,
+            }),
             RuntimeCallTarget::WeakObjectId => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::I64,
@@ -252,6 +312,17 @@ impl RuntimeCallTarget {
     /// Returns the stable backend-neutral spelling used by textual EIR.
     pub fn as_eir(self) -> &'static str {
         match self {
+            RuntimeCallTarget::NativePropertyReplace => "object.native_property_replace",
+            RuntimeCallTarget::NativePropertyRestore => "object.native_property_restore",
+            RuntimeCallTarget::HeapScopeReleaseRoot => "spl.heap_scope_release_root",
+            RuntimeCallTarget::ExceptionChainMixed => "object.exception_chain_mixed",
+            RuntimeCallTarget::HeapScopeBegin => "spl.heap_scope_begin",
+            RuntimeCallTarget::HeapScopeRead => "spl.heap_scope_read",
+            RuntimeCallTarget::HeapScopeRootWritten => "spl.heap_scope_root_written",
+            RuntimeCallTarget::HeapScopeEnd => "spl.heap_scope_end",
+            RuntimeCallTarget::BorrowedValueSnapshot => "spl.heap_borrow_snapshot",
+            RuntimeCallTarget::BorrowedValueRead => "spl.heap_borrow_read",
+            RuntimeCallTarget::BorrowedValueFree => "spl.heap_borrow_free",
             RuntimeCallTarget::WeakObjectId => "object.weak_identity",
             RuntimeCallTarget::WeakReferenceCreate => "object.weak_reference_create",
             RuntimeCallTarget::WeakReferenceGet => "object.weak_reference_get",

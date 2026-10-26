@@ -27,6 +27,8 @@ use super::constants::resolve_lexical_class_constant_value;
 #[derive(Default)]
 pub(super) struct ClassBuildState {
     pub(super) allow_dynamic_properties: bool,
+    /// Set for builtin SPL containers whose dynamic property creation php reports as deprecated.
+    pub(super) dynamic_property_creation_deprecated: bool,
     pub(super) prop_types: Vec<(String, PhpType)>,
     pub(super) property_offsets: HashMap<String, usize>,
     pub(super) property_declaring_classes: HashMap<String, String>,
@@ -91,6 +93,9 @@ impl ClassBuildState {
             state.inherit_static_methods(parent);
             state.interfaces = parent.interfaces.clone();
             state.allow_dynamic_properties = parent.allow_dynamic_properties;
+            // A subclass of a container that deprecates dynamic property creation reports the
+            // same deprecation php reports for the parent.
+            state.dynamic_property_creation_deprecated = parent.dynamic_property_creation_deprecated;
             state.property_hooks = parent.property_hooks.clone();
         }
         state
@@ -140,7 +145,9 @@ impl ClassBuildState {
             is_final: class.is_final,
             is_readonly_class: class.is_readonly_class,
             allow_dynamic_properties: self.allow_dynamic_properties
-                || class_has_allow_dynamic_properties(class),
+                || class_has_allow_dynamic_properties(class)
+                || class_has_deprecated_dynamic_properties(class),
+            dynamic_property_creation_deprecated: class_has_deprecated_dynamic_properties(class),
             eval_property_storage: false,
             clone_override_property_storage: false,
             scope_dynamic_property_storage: false,
@@ -204,6 +211,7 @@ impl ClassBuildState {
             property_set_visibilities: self.property_set_visibilities,
             declared_properties: self.declared_properties,
             property_declared_slots: self.property_declared_slots,
+            native_property_contracts: HashMap::new(),
             final_properties: self.final_properties,
             readonly_properties: self.readonly_properties,
             reference_properties: self.reference_properties,
@@ -283,6 +291,24 @@ pub(super) fn class_has_allow_dynamic_properties(class: &FlattenedClass) -> bool
             super::super::validation::matches_global_builtin_attribute(
                 attr,
                 "AllowDynamicProperties",
+            )
+        })
+    })
+}
+
+/// Returns `true` if the class declaration carries elephc's internal
+/// `#[\ElephcDeprecatedDynamicProperties]` marker attribute.
+///
+/// Builtin SPL containers (`ArrayObject`, `ArrayIterator`) accept dynamic property creation the
+/// way every php class does — with php 8.5's `Creation of dynamic property C::$n is deprecated`
+/// report — while still reserving the per-object hash the attribute-driven storage path needs.
+/// The marker is elephc-internal: a user class never writes it.
+pub(super) fn class_has_deprecated_dynamic_properties(class: &FlattenedClass) -> bool {
+    class.attributes.iter().any(|group| {
+        group.attributes.iter().any(|attr| {
+            super::super::validation::matches_global_builtin_attribute(
+                attr,
+                "ElephcDeprecatedDynamicProperties",
             )
         })
     })

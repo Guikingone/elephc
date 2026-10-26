@@ -121,6 +121,30 @@ echo ($empty === false ? "e" : "!");
     assert_eq!(out.stderr, "");
 }
 
+/// Verifies the exclusive-create fopen() mode ("x"): it creates a new file, then fails on a
+/// second call because the file already exists, while "x+" also refuses an existing file.
+#[test]
+fn test_fopen_exclusive_create_mode() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("excl.txt", "x");
+echo $f === false ? "false" : "created";
+fwrite($f, "abc");
+fclose($f);
+$again = @fopen("excl.txt", "x");
+echo "|";
+echo $again === false ? "false" : "opened";
+$rw = @fopen("excl.txt", "x+");
+echo "|";
+echo $rw === false ? "false" : "opened";
+echo "|" . file_get_contents("excl.txt");
+unlink("excl.txt");
+"#,
+    );
+    assert_eq!(out, "created|false|false|abc");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a stream resource passed through a mixed-type parameter preserves its resource type.
 #[test]
 fn test_mixed_file_handle_preserves_resource_type() {
@@ -461,6 +485,92 @@ unlink("out.csv");
     );
     assert_eq!(out, "hello,world");
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies fputcsv() writes with the configured separator instead of php's default comma.
+#[test]
+fn test_fputcsv_honours_separator() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("sep.csv", "w");
+fputcsv($f, ["a", "b"], separator: "|", escape: "");
+fclose($f);
+echo file_get_contents("sep.csv");
+unlink("sep.csv");
+"#,
+    );
+    assert_eq!(out, "a|b\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies fputcsv() wraps a field in the configured enclosure and escapes it by doubling.
+#[test]
+fn test_fputcsv_honours_enclosure() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("enc.csv", "w");
+fputcsv($f, ["a|b"], separator: "|", enclosure: "'", escape: "");
+fclose($f);
+echo file_get_contents("enc.csv");
+unlink("enc.csv");
+"#,
+    );
+    assert_eq!(out, "'a|b'\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies fputcsv() quotes a field that contains the configured separator.
+#[test]
+fn test_fputcsv_quotes_field_containing_separator() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("q.csv", "w");
+fputcsv($f, ["a|b"], separator: "|", escape: "");
+fputcsv($f, ["a,b"], escape: "");
+fclose($f);
+echo file_get_contents("q.csv");
+unlink("q.csv");
+"#,
+    );
+    assert_eq!(out, "\"a|b\"\n\"a,b\"\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the fputcsv()/fgetcsv() round trip with a pipe separator, the shape php-src's
+/// `SplFileObject_fgetcsv_delimiter_basic` exercise.
+#[test]
+fn test_fputcsv_fgetcsv_pipe_separator_roundtrip() {
+    let out = compile_and_run(
+        r#"<?php
+$fp = fopen("round.csv", "w+");
+fputcsv(
+    $fp,
+    ["field1", "field2", "field3", 5],
+    separator: "|",
+    escape: "",
+);
+rewind($fp);
+$fo = new SplFileObject("round.csv");
+$fo->setCsvControl(escape: "");
+var_dump($fo->fgetcsv("|"));
+unlink("round.csv");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "array(4) {\n",
+            "  [0]=>\n",
+            "  string(6) \"field1\"\n",
+            "  [1]=>\n",
+            "  string(6) \"field2\"\n",
+            "  [2]=>\n",
+            "  string(6) \"field3\"\n",
+            "  [3]=>\n",
+            "  string(1) \"5\"\n",
+            "}\n"
+        )
+    );
 }
 
 /// Verifies rewind() resets the read position to the start and data can be re-read.

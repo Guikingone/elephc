@@ -1283,6 +1283,53 @@ fn lower_array_get_runtime_mixed(
     store_if_result(ctx, inst)
 }
 
+/// Removes a key from a boxed `Mixed` container the lowering cannot statically type.
+///
+/// `__rt_mixed_array_unset` dispatches on the payload tag at run time: arrays promote to sparse
+/// storage and drop the key, `ArrayAccess` objects reach `offsetUnset()`, and the refused shapes
+/// raise php's refusal. The container mutates in place, so the op's result is the same cell.
+pub(super) fn lower_mixed_array_unset(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let key_ty = ctx.value_php_type(key)?.codegen_repr();
+    if !matches!(
+        key_ty,
+        PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Str
+            | PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::TaggedScalar
+            | PhpType::Void
+            | PhpType::Never
+    ) {
+        return Err(CodegenIrError::unsupported(format!(
+            "mixed_array_unset key PHP type {:?}",
+            key_ty
+        )));
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            super::hashes::materialize_hash_key_aarch64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        }
+        Arch::X86_64 => {
+            super::hashes::materialize_hash_key_x86_64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.load_value_to_reg(array, "rdi")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_unset");
+    store_if_result(ctx, inst)
+}
+
 /// Boxes or retains a value, then stores it into a `Mixed`-keyed indexed array on AArch64.
 fn lower_array_set_mixed_key_aarch64(
     ctx: &mut FunctionContext<'_>,
@@ -1371,6 +1418,9 @@ fn mixed_key_storeback_retires_source(
 pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
+    if let Some(slot) = source_load_local_slot(ctx, array)? {
+        ctx.release_mutated_source_local_owner(slot, array)?;
+    }
     lower_array_push_value(ctx, inst, array, value)
 }
 

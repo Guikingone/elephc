@@ -63,9 +63,10 @@ impl ElephcEvalContext {
         &mut self,
         identity: u64,
         target: EvalClosureObjectTarget,
+        object: RuntimeCellHandle,
     ) {
-        self.eval_reflection_function_closure_targets
-            .insert(identity, target);
+        self.eval_reflection_function_closure_targets.insert(identity,
+            EvalReflectionClosureMetadata { target, object: object.borrowed() });
     }
 
     /// Returns the callable target retained for a reflected `Closure` object.
@@ -73,8 +74,12 @@ impl ElephcEvalContext {
         &self,
         identity: u64,
     ) -> Option<&EvalClosureObjectTarget> {
-        self.eval_reflection_function_closure_targets
-            .get(&identity)
+        self.eval_reflection_function_closure_targets.get(&identity).map(|metadata| &metadata.target)
+    }
+
+    /// Borrows the original Closure identity kept alive by the Reflection object's native edge.
+    pub(crate) fn eval_reflection_function_closure_object(&self, identity: u64) -> Option<RuntimeCellHandle> {
+        self.eval_reflection_function_closure_targets.get(&identity).map(|metadata| metadata.object)
     }
 
     /// Records reflected method metadata for one synthetic ReflectionMethod object.

@@ -67,6 +67,15 @@ pub(in crate::ir_lower) fn indexed_array_write_element_type(
     }
 }
 
+/// Describes who retires the value after the write operation.
+#[derive(Clone, Copy)]
+pub(super) enum WriteValuePolicy {
+    /// The opcode-specific writer already manages the value's lease.
+    ManagedByWriter,
+    /// The callee borrows the value; this scope retires temporary arguments.
+    Borrowed,
+}
+
 /// Lowers the key and the value of an element write in PHP's evaluation order.
 ///
 /// PHP freezes an index *expression* into a temporary before the right-hand side runs, so
@@ -75,17 +84,39 @@ pub(in crate::ir_lower) fn indexed_array_write_element_type(
 /// after the right-hand side, so `$i = 0; $a[$i] = ($i = 1);` writes index 1, not index 0.
 /// Only the read moves — the index expression keeps its place so side-effect order is
 /// unchanged, which for a bare variable is no order at all.
-pub(super) fn lower_write_key_and_value(
+/// Managed keys remain protected through evaluation and mutation.
+pub(super) fn with_write_key_and_value(
     ctx: &mut LoweringContext<'_, '_>,
     index: &Expr,
     value: &Expr,
-) -> (LoweredValue, LoweredValue) {
-    if matches!(index.kind, ExprKind::Variable(_)) {
-        let value_value = lower_expr(ctx, value);
-        return (lower_expr(ctx, index), value_value);
+    value_policy: WriteValuePolicy,
+    write: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue, LoweredValue),
+) {
+    let span = index.span;
+    let mut roots = Vec::new();
+    let mut lower_operand = |ctx: &mut LoweringContext<'_, '_>, expr: &Expr, key: bool| {
+        let value = lower_expr(ctx, expr);
+        let (value, root) = if key {
+            crate::ir_lower::expr::capture_array_write_key(ctx, value, expr.span)
+        } else if matches!(value_policy, WriteValuePolicy::Borrowed) {
+            crate::ir_lower::expr::root_borrowed_write_operand(ctx, value, expr.span)
+        } else {
+            (value, None)
+        };
+        roots.extend(root);
+        value
+    };
+    let (index, value) = if matches!(index.kind, ExprKind::Variable(_)) {
+        let value = lower_operand(ctx, value, false);
+        (lower_operand(ctx, index, true), value)
+    } else {
+        let index = lower_operand(ctx, index, true);
+        (index, lower_operand(ctx, value, false))
+    };
+    write(ctx, index, value);
+    for root in roots.into_iter().rev() {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
     }
-    let index_value = lower_expr(ctx, index);
-    (index_value, lower_expr(ctx, value))
 }
 
 /// Lowers an indexed array assignment.
@@ -176,7 +207,17 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
         lower_boxed_array_set(ctx, array_value, index, value, span, key_already_diagnosed);
         return;
     }
-    let (mut index_value, mut value_value) = lower_write_key_and_value(ctx, index, value);
+    // Preserve the receiver lease when a concrete view comes from widened Mixed storage.
+    // The argument scope retires first so cleanup remains in reverse publication order.
+    let object_write = op == Op::RuntimeCall
+        && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(), PhpType::Object(_));
+    let (array_value, receiver_owner) = if object_write {
+        crate::ir_lower::expr::root_owned_call_operand(ctx, array_value, span)
+    } else {
+        (array_value, None)
+    };
+    let policy = if op == Op::RuntimeCall { WriteValuePolicy::Borrowed } else { WriteValuePolicy::ManagedByWriter };
+    with_write_key_and_value(ctx, index, value, policy, |ctx, mut index_value, mut value_value| {
     // Concrete string keys normally select associative storage. Ref-bound Mixed-slot
     // arrays instead use the shared writer, preserving invoker markers and keeping numeric
     // strings indexed. A boxed Mixed/Union index may hold either
@@ -275,6 +316,10 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
     );
     release_persisted_string_operand(ctx, index_value, span);
     release_persisted_string_operand(ctx, value_value, span);
+    });
+    if let Some(owner) = receiver_owner {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
+    }
 }
 
 /// Roots and retires operands borrowed by the boxed writer, including on same-frame catches.
@@ -289,32 +334,18 @@ pub(super) fn lower_boxed_array_set(
     span: Span,
     key_already_diagnosed: bool,
 ) {
-    let mut roots = Vec::new();
     let (array, receiver_owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, array, span);
-    if let Some(owner) = receiver_owner { roots.push(owner); }
-    let mut lower_operand = |ctx: &mut LoweringContext<'_, '_>, expr: &Expr| {
-        let value = lower_expr(ctx, expr);
-        let (value, root) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, expr.span);
-        if let Some(root) = root { roots.push(root); }
-        value
-    };
-    // Preserve the existing PHP ordering for bare variable keys versus computed keys.
-    let (index, value) = if matches!(index.kind, ExprKind::Variable(_)) {
-        let value = lower_operand(ctx, value);
-        (lower_operand(ctx, index), value)
-    } else {
-        let index = lower_operand(ctx, index);
-        (index, lower_operand(ctx, value))
-    };
-    ctx.emit_void(
-        Op::RuntimeCall,
-        vec![array.value, index.value, value.value],
-        key_already_diagnosed.then_some(Immediate::Bool(true)),
-        Op::RuntimeCall.default_effects(),
-        Some(span),
-    );
-    for root in roots.into_iter().rev() {
-        crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
+    with_write_key_and_value(ctx, index, value, WriteValuePolicy::Borrowed, |ctx, index, value| {
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![array.value, index.value, value.value],
+            key_already_diagnosed.then_some(Immediate::Bool(true)),
+            Op::RuntimeCall.default_effects(),
+            Some(span),
+        );
+    });
+    if let Some(owner) = receiver_owner {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
     }
 }
 

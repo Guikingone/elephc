@@ -384,25 +384,15 @@ echo print_r([1, 2], $flag);
     assert_eq!(out, "Array\n(\n    [0] => 1\n    [1] => 2\n)\n");
 }
 
-/// Verifies `print_r($value, true)` clamps the capture at the 64 KiB buffer size
-/// instead of overflowing into adjacent runtime data. PHP would return all 70000
-/// bytes; elephc truncates at 65536 (documented safety cap of the fixed buffer).
-/// The prefix must survive intact — a corrupted capture or clobbered BSS would
-/// change the rendered bytes or crash the binary.
+/// PHP returns every captured byte, including the suffix beyond the former fixed limit.
 #[test]
-fn test_print_r_return_clamps_at_buffer_capacity() {
-    let out = compile_and_run(
-        r#"<?php
-$s = str_repeat("x", 70000);
+fn test_print_r_return_preserves_complete_large_output() {
+    let out = compile_and_run(r#"<?php
+$s = str_repeat("x", 69997) . "end";
 $r = print_r($s, true);
-echo strlen($r);
-echo "|";
-echo substr($r, 0, 3);
-echo "|";
-echo substr($r, 65533, 3);
-"#,
-    );
-    assert_eq!(out, "65536|xxx|xxx");
+echo $r;
+"#);
+    assert_eq!(out, format!("{}end", "x".repeat(69997)));
 }
 
 /// Verifies `var_dump` formats each argument independently with correct type tags and a trailing newline per call, in source order.
@@ -695,94 +685,16 @@ echo "done\n";
     assert_eq!(out.stderr, "");
 }
 
-/// Regression for issue #647: the null-container sentinel must be recognized before the
-/// `Array` header write and the walker call, on every supported target. The lowering had no
-/// null branch at all, so the assertion is on ordering: the sentinel comparison has to
-/// precede the walker call inside the guarded body. Run under `ELEPHC_TEST_TARGET` to cover
-/// the non-host architectures.
+/// Missing container reads render no bytes and leave later captures and output intact.
 #[test]
-fn test_print_r_array_emits_null_container_guard_before_walker_call() {
-    let dir = make_cli_test_dir("elephc_print_r_null_container_guard");
-    let (user_asm, _runtime_asm, _libs) = compile_source_to_asm_with_options(
-        r#"<?php
-$a = [['x', 'y']];
-$arr = $a[7];
-print_r($arr);
-"#,
-        &dir,
-        8_388_608,
-        false,
-        false,
-    );
-
-    // The zero check branches to the skip label first, so the label's first mention opens
-    // the guarded body and its definition closes it; the header write and walk sit between.
-    let body_start = user_asm
-        .find("print_r_skip_null_array")
-        .expect("missing print_r null-container skip branch");
-    let body_end = user_asm
-        .match_indices("print_r_skip_null_array")
-        .map(|(pos, _)| pos)
-        .find(|pos| user_asm[*pos..].lines().next().is_some_and(|l| l.ends_with(':')))
-        .expect("missing print_r null-container skip label definition");
-    let body = &user_asm[body_start..body_end];
-
-    let (sentinel_cmp, walker_call) = match target().arch {
-        Arch::AArch64 => ("cmp x0, x10", "bl __rt_print_r_indexed"),
-        Arch::X86_64 => ("cmp rax, r10", "call __rt_print_r_indexed"),
-    };
-    let cmp_pos = body
-        .find(sentinel_cmp)
-        .unwrap_or_else(|| panic!("missing sentinel comparison `{sentinel_cmp}` in:\n{body}"));
-    let call_pos = body
-        .find(walker_call)
-        .unwrap_or_else(|| panic!("missing walker call `{walker_call}` in:\n{body}"));
-    assert!(
-        cmp_pos < call_pos,
-        "sentinel comparison must precede the print_r walker call, got:\n{body}"
-    );
+fn test_print_r_missing_array_preserves_capture_and_following_output() {
+    let output = compile_and_run(r#"<?php error_reporting(0);$a=[['x','y']];$value=$a[7];echo 'begin|',print_r($value,true),'|';var_dump(print_r($value));print_r([['ok']]);echo 'end';"#);
+    assert_eq!(output, "begin||bool(true)\nArray\n(\n    [0] => Array\n        (\n            [0] => ok\n        )\n\n)\nend");
 }
 
-/// Verifies the object path added by the merged `main` also branches around its runtime
-/// walker for both null-container representations on every supported architecture.
+/// Missing container reads render no bytes and leave later captures and output intact.
 #[test]
-fn test_print_r_object_emits_null_container_guard_before_walker_call() {
-    let dir = make_cli_test_dir("elephc_print_r_null_object_guard");
-    let (user_asm, _runtime_asm, _libs) = compile_source_to_asm_with_options(
-        r#"<?php
-class PrintRGuardObject {}
-$a = [new PrintRGuardObject()];
-$value = $a[7];
-print_r($value);
-"#,
-        &dir,
-        8_388_608,
-        false,
-        false,
-    );
-
-    let body_start = user_asm
-        .find("print_r_skip_null_object")
-        .expect("missing print_r null-object skip branch");
-    let body_end = user_asm
-        .match_indices("print_r_skip_null_object")
-        .map(|(pos, _)| pos)
-        .find(|pos| user_asm[*pos..].lines().next().is_some_and(|l| l.ends_with(':')))
-        .expect("missing print_r null-object skip label definition");
-    let body = &user_asm[body_start..body_end];
-
-    let (sentinel_cmp, walker_call) = match target().arch {
-        Arch::AArch64 => ("cmp x0, x10", "bl __rt_print_r_object"),
-        Arch::X86_64 => ("cmp rax, r10", "call __rt_print_r_object"),
-    };
-    let cmp_pos = body
-        .find(sentinel_cmp)
-        .unwrap_or_else(|| panic!("missing sentinel comparison `{sentinel_cmp}` in:\n{body}"));
-    let call_pos = body
-        .find(walker_call)
-        .unwrap_or_else(|| panic!("missing object walker call `{walker_call}` in:\n{body}"));
-    assert!(
-        cmp_pos < call_pos,
-        "sentinel comparison must precede the print_r object walker call, got:\n{body}"
-    );
+fn test_print_r_missing_object_preserves_both_result_modes() {
+    let output = compile_and_run(r#"<?php error_reporting(0);class PrintRGuardObject {public int $x=9;}$a=[new PrintRGuardObject()];$value=$a[7];var_dump(print_r($value,true));var_dump(print_r($value,false));echo '|';print_r(new PrintRGuardObject());"#);
+    assert_eq!(output, "string(0) \"\"\nbool(true)\n|PrintRGuardObject Object\n(\n    [x] => 9\n)\n");
 }

@@ -5,6 +5,7 @@
 //! - `crate::codegen::lower_inst::objects::reflection`.
 //!
 //! Key details:
+//! - Reserved NUL storage names are absent from PHP Reflection declarations.
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
 
 use super::*;
@@ -40,6 +41,7 @@ pub(super) fn reflection_class_property_names(
         push_unique_property_name("name", &mut names, &mut seen);
     }
     for (name, _) in &info.properties {
+        if name.starts_with('\0') { continue; }
         if reflection_property_visible_from_class(info, class_name, name, false) {
             push_unique_property_name(name, &mut names, &mut seen);
         }

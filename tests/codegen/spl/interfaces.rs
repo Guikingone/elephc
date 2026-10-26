@@ -25,6 +25,37 @@ echo $c->count();
     assert_eq!(out, "7");
 }
 
+/// Verifies `#[\ReturnTypeWillChange]` lets a class implement an internal interface method without
+/// repeating the return type, matching php's escape hatch for internal contracts.
+#[test]
+fn test_return_type_will_change_suppresses_return_type_requirement() {
+    let out = compile_and_run(
+        r#"<?php
+class Legacy implements Countable {
+    #[\ReturnTypeWillChange]
+    public function count() { return 5; }
+}
+$c = new Legacy();
+echo $c->count(), "|", count($c);
+"#,
+    );
+    assert_eq!(out, "5|5");
+}
+
+/// Verifies a nullable COVARIANT self return satisfies an interface contract (php covariance).
+#[test]
+fn test_nullable_self_return_covariance_against_interface() {
+    let out = compile_and_run(
+        r#"<?php
+interface MyI { public function get(): ?MyI; }
+class MyC implements MyI { public function get(): ?MyC { return null; } }
+$c = new MyC();
+var_dump($c->get());
+"#,
+    );
+    assert_eq!(out, "NULL\n");
+}
+
 /// Verifies `count()` and `[]` reach a PHP `Countable`/`ArrayAccess` held in a MIXED slot.
 ///
 /// Both operators go through a runtime helper when the static type is `mixed`, and each helper
@@ -635,7 +666,10 @@ $c = new MaybeBox();
 echo ($c["k"] ??= 3);
 "#,
     );
-    assert_eq!(out, "=S5|GS17|GS3");
+    // `??=` on `ArrayAccess` probes `offsetExists()` first: a false answer assigns through
+    // `offsetSet()` without ever reading `offsetGet()`, so the trailing `MaybeBox` case echoes
+    // only `S` (verified against reference PHP: `=S5|GS17|S3`).
+    assert_eq!(out, "=S5|GS17|S3");
 }
 
 /// Verifies subscript read on a union type (`LeftBox|RightBox`) dispatches to the

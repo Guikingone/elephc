@@ -23,6 +23,10 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         match &expr.kind {
             ExprKind::FunctionCall { name, args } => {
+                if let Some(operation) = name.compiler_runtime() {
+                    for arg in args { self.infer_type(arg, env)?; }
+                    return Ok(operation.result_type());
+                }
                 let name = name.as_str().to_string();
                 let args = args.clone();
                 let call_key = crate::names::php_symbol_key(name.trim_start_matches('\\'));

@@ -13,6 +13,8 @@
 //!   persisted, refcounted payloads are retained, and scalars are copied as-is.
 //! - `__rt_hash_project_spread` preserves integer keys and normalizes numeric
 //!   string property names to the integer keys produced by PHP array casts.
+//! - `__rt_hash_raw_project_spread` preserves both key kinds for SPL property-table copies.
+//! - Named SPL lookup projection ignores integer buckets and normalizes string names.
 
 use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
@@ -48,6 +50,12 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.label_global("__rt_hash_spread");
     emitter.instruction("mov x2, #0");                                          // select PHP array-spread key semantics
     emitter.instruction("b __rt_hash_spread_entry");                            // share the ownership-preserving hash copy implementation
+    emitter.label_global("__rt_hash_named_project_spread");
+    emitter.instruction("mov x2, #3");                                          // select named property lookup while ignoring integer buckets
+    emitter.instruction("b __rt_hash_spread_entry");                            // share independent value ownership and property-key normalization
+    emitter.label_global("__rt_hash_raw_project_spread");
+    emitter.instruction("mov x2, #2");                                          // preserve raw integer and string property keys
+    emitter.instruction("b __rt_hash_spread_entry");                            // share value retention without changing key kinds
     emitter.label_global("__rt_hash_project_spread");
     emitter.instruction("mov x2, #1");                                          // select object-projection key normalization semantics
     emitter.label_shared("__rt_hash_spread_entry");
@@ -63,7 +71,7 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     //   [sp, #48] = borrowed source value low word
     //   [sp, #56] = borrowed source value high word
     //   [sp, #64] = borrowed source value runtime tag
-    //   [sp, #72] = key mode (0 = array spread, 1 = object projection)
+    //   [sp, #72] = key mode (0 = array spread, 1 = normalized projection, 2 = raw copy, 3 = named lookup)
     //   [sp, #80] = saved x29
     //   [sp, #88] = saved x30
     emitter.instruction("sub sp, sp, #96");                                     // reserve spill slots for the spread walk state
@@ -123,6 +131,13 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #56]");                                   // save the borrowed source value high word
     emitter.instruction("str x5, [sp, #64]");                                   // save the borrowed source value runtime tag
 
+    emitter.instruction("ldr x9, [sp, #72]");                                   // inspect the selected source-property view
+    emitter.instruction("cmp x9, #3");                                          // only named lookup excludes raw integer buckets
+    emitter.instruction("b.ne __rt_hash_spread_retain_value");                  // complete copies and PHP spreads keep integer entries
+    emitter.instruction("cmn x2, #1");                                          // distinguish integer buckets from named properties
+    emitter.instruction("b.eq __rt_hash_spread_loop");                          // skip without acquiring any value owner
+    emitter.label("__rt_hash_spread_retain_value");
+
     // -- retain the source value so the destination owns an independent copy --
     emitter.instruction("ldr x5, [sp, #64]");                                   // reload the source value runtime tag
     emitter.instruction("cmp x5, #1");                                          // is the source value a string payload?
@@ -166,7 +181,7 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_spread_int_key");                       // integer source keys are reindexed to the running counter
     emitter.instruction("ldr x1, [sp, #32]");                                   // reload the borrowed source string key pointer
     emitter.instruction("ldr x9, [sp, #72]");                                   // reload the key transformation mode
-    emitter.instruction("cbz x9, __rt_hash_spread_set");                        // array spread preserves string keys verbatim
+    emitter.instruction("tbz x9, #0, __rt_hash_spread_set");                    // spread/raw modes preserve strings; normalized/named modes rewrite numeric names
     emitter.instruction("bl __rt_hash_normalize_key");                          // normalize numeric property names to PHP integer array keys
     emitter.instruction("ldr x3, [sp, #48]");                                   // restore the retained value low word after key normalization
     emitter.instruction("ldr x4, [sp, #56]");                                   // restore the retained value high word after key normalization
@@ -219,6 +234,12 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_hash_spread");
     emitter.instruction("xor edx, edx");                                        // select PHP array-spread key semantics
     emitter.instruction("jmp __rt_hash_spread_x86_entry");                      // share the ownership-preserving hash copy implementation
+    emitter.label_global("__rt_hash_named_project_spread");
+    emitter.instruction("mov rdx, 3");                                          // select named property lookup while ignoring integer buckets
+    emitter.instruction("jmp __rt_hash_spread_x86_entry");                      // share independent value ownership and property-key normalization
+    emitter.label_global("__rt_hash_raw_project_spread");
+    emitter.instruction("mov rdx, 2");                                          // preserve raw integer and string property keys
+    emitter.instruction("jmp __rt_hash_spread_x86_entry");                      // share value retention without changing key kinds
     emitter.label_global("__rt_hash_project_spread");
     emitter.instruction("mov rdx, 1");                                          // select object-projection key normalization semantics
     emitter.label("__rt_hash_spread_x86_entry");
@@ -234,7 +255,7 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp - 56]  = borrowed source value low word
     //   [rbp - 64]  = borrowed source value high word
     //   [rbp - 72]  = borrowed source value runtime tag
-    //   [rbp - 80]  = key mode (0 = array spread, 1 = object projection)
+    //   [rbp - 80]  = key mode (0 = array spread, 1 = normalized projection, 2 = raw copy, 3 = named lookup)
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving spread spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the spread walk state
     emitter.instruction("sub rsp, 96");                                         // reserve aligned spill space while keeping nested calls ABI-aligned
@@ -291,6 +312,12 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the borrowed source value high word
     emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // save the borrowed source value runtime tag
 
+    emitter.instruction("cmp QWORD PTR [rbp - 80], 3");                         // only named lookup excludes raw integer buckets
+    emitter.instruction("jne __rt_hash_spread_x86_retain_value");               // complete copies and PHP spreads keep integer entries
+    emitter.instruction("cmp QWORD PTR [rbp - 48], -1");                        // distinguish integer buckets from named properties
+    emitter.instruction("je __rt_hash_spread_x86_loop");                        // skip without acquiring any value owner
+    emitter.label("__rt_hash_spread_x86_retain_value");
+
     // -- retain the source value so the destination owns an independent copy --
     emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the source value runtime tag
     emitter.instruction("cmp r9, 1");                                           // is the source value a string payload?
@@ -333,8 +360,8 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdx, -1");                                         // is this an inline integer source key?
     emitter.instruction("je __rt_hash_spread_x86_int_key");                     // integer source keys are reindexed to the running counter
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // reload the borrowed source string key pointer
-    emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // check whether object-projection key normalization is enabled
-    emitter.instruction("je __rt_hash_spread_x86_set");                         // array spread preserves string keys verbatim
+    emitter.instruction("test BYTE PTR [rbp - 80], 1");                         // normalized and named property views rewrite numeric names
+    emitter.instruction("jz __rt_hash_spread_x86_set");                         // spread and raw copy preserve string key kinds
     emitter.instruction("mov rax, rsi");                                        // move the string key pointer into the normalizer input register
     emitter.instruction("call __rt_hash_normalize_key");                        // normalize numeric property names to PHP integer array keys
     emitter.instruction("mov rsi, rax");                                        // move the normalized key payload into the hash-set ABI register

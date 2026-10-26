@@ -508,7 +508,7 @@ pub(crate) fn lower_get_object_vars(
     super::ensure_arg_count(inst, "get_object_vars", 1)?;
     let value = expect_operand(inst, 0)?;
     let scope_class_id = lexical_object_vars_scope_class_id(ctx);
-    emit_object_hash_projection(ctx, value, false, scope_class_id)?;
+    emit_object_hash_projection(ctx, value, false, scope_class_id, ObjectPropertyKeys::Normalized)?;
     store_if_result(ctx, inst)
 }
 
@@ -518,16 +518,64 @@ pub(crate) fn lower_object_array_cast(
     inst: &Instruction,
 ) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    emit_object_hash_projection(ctx, value, true, -1)?;
+    emit_object_hash_projection(
+        ctx, value, true, -1, ObjectPropertyKeys::ArrayCast,
+    )?;
     store_if_result(ctx, inst)
 }
 
-/// Materializes an object pointer and invokes the shared target-aware projection helper.
+/// Copies the complete raw SPL property table, retaining visibility-mangled declared keys.
+pub(crate) fn lower_spl_raw_object_vars(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_spl_object_vars_raw", 1)?;
+    emit_object_hash_projection(
+        ctx, expect_operand(inst, 0)?, true, -1, ObjectPropertyKeys::Raw,
+    )?;
+    store_if_result(ctx, inst)
+}
+
+/// Copies only named SPL backing properties for PHP offset lookup.
+pub(crate) fn lower_spl_named_object_vars(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_spl_object_vars_named", 1)?;
+    emit_object_hash_projection(
+        ctx, expect_operand(inst, 0)?, true, -1, ObjectPropertyKeys::Named,
+    )?;
+    store_if_result(ctx, inst)
+}
+
+/// Projects only public properties while preserving raw key kinds for SPL iteration.
+pub(crate) fn lower_spl_iterated_object_vars(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_spl_object_vars_iter", 1)?;
+    emit_object_hash_projection(
+        ctx, expect_operand(inst, 0)?, false, -1, ObjectPropertyKeys::PublicRaw,
+    )?;
+    store_if_result(ctx, inst)
+}
+
+/// Key policy used by the shared target-aware property projection path.
+enum ObjectPropertyKeys {
+    ArrayCast,
+    Normalized,
+    Raw,
+    Named,
+    PublicRaw,
+}
+
+/// Materializes a borrowed object pointer and invokes the selected property projection.
 fn emit_object_hash_projection(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     cast_mode: bool,
     scope_class_id: i64,
+    key_policy: ObjectPropertyKeys,
 ) -> Result<()> {
     let source_ty = ctx.raw_value_php_type(value)?.codegen_repr();
     ctx.load_value_to_result(value)?;
@@ -573,7 +621,14 @@ fn emit_object_hash_projection(
             abi::emit_load_int_immediate(ctx.emitter, "rcx", scope_class_id);
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_object_to_hash");
+    let runtime_label = match key_policy {
+        ObjectPropertyKeys::ArrayCast => "__rt_object_array_cast",
+        ObjectPropertyKeys::Normalized => "__rt_object_to_hash",
+        ObjectPropertyKeys::Raw => "__rt_object_raw_properties",
+        ObjectPropertyKeys::Named => "__rt_object_named_properties",
+        ObjectPropertyKeys::PublicRaw => "__rt_object_iterated_properties",
+    };
+    abi::emit_call_label(ctx.emitter, runtime_label);
     Ok(())
 }
 
@@ -583,7 +638,9 @@ pub(crate) fn emit_mangled_object_vars(
     inst: &Instruction,
 ) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    emit_object_hash_projection(ctx, value, true, -1)?;
+    emit_object_hash_projection(
+        ctx, value, true, -1, ObjectPropertyKeys::Normalized,
+    )?;
     Ok(())
 }
 

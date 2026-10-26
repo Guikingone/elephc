@@ -191,7 +191,7 @@ pub(super) fn dynamic_new_candidate(
     } else {
         return Ok(None);
     };
-    let property_defaults = collect_property_defaults(class_info, inst)?;
+    let property_defaults = collect_property_defaults(class_info, inst.op.name())?;
     Ok(Some(DynamicNewCandidate {
         class_name: class_name.to_string(),
         class_id: class_info.class_id,
@@ -217,13 +217,13 @@ pub(super) fn dynamic_new_without_constructor_candidate(
     if class_name != "stdClass" && known_dynamic_new_builtin_class_names().contains(&class_name) {
         return Ok(None);
     }
-    if class_name == "SplFixedArray" || is_spl_doubly_linked_list_family(class_name) {
+    if class_name == "SplFixedArray" {
         return Ok(None);
     }
     if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
         return Ok(None);
     }
-    let property_defaults = collect_property_defaults(class_info, inst)?;
+    let property_defaults = collect_property_defaults(class_info, inst.op.name())?;
     Ok(Some(DynamicNewCandidate {
         class_name: class_name.to_string(),
         class_id: class_info.class_id,
@@ -244,10 +244,6 @@ pub(super) fn spl_runtime_storage_dynamic_new_candidate(
 ) -> Option<DynamicNewCandidate> {
     if class_name == "SplFixedArray" {
         if arg_count > 1 {
-            return None;
-        }
-    } else if is_spl_doubly_linked_list_family(class_name) {
-        if arg_count != 0 {
             return None;
         }
     } else {

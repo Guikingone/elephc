@@ -252,7 +252,7 @@ impl ElephcEvalContext {
     /// Removes one dynamic object identity and all per-object eval metadata.
     pub fn forget_dynamic_object(&mut self, identity: u64) {
         self.dynamic_objects.remove(&identity);
-        self.closure_objects.remove(&identity);
+        drop(self.take_runtime_closure_metadata(identity));
         self.dynamic_destructing_objects.remove(&identity);
         self.dynamic_destructed_objects.remove(&identity);
         self.dynamic_property_aliases

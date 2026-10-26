@@ -23,26 +23,51 @@ pub(super) fn lower_method_call(
     // but the receiver expression must still be evaluated first.
     let throw_access_message = if op == Op::MethodCall {
         ctx.throw_access_sites.get(&expr.span).and_then(|info| {
-            if let ThrowAccessKind::PrivateMethod {
-                visibility,
-                class_name,
-                method: m,
-            } = &info.kind
-            {
-                Some(format!(
+            match &info.kind {
+                ThrowAccessKind::PrivateMethod {
+                    visibility,
+                    class_name,
+                    method: m,
+                } => Some(format!(
                     "Call to {} method {}::{}() from global scope",
                     visibility, class_name, m
-                ))
-            } else {
-                None
+                )),
+                // An internal class's argument-count error carries php's verbatim message and
+                // is an ArgumentCountError — a subclass a `catch (ArgumentCountError)` matches.
+                ThrowAccessKind::ArgumentCount { message } => Some(message.clone()),
+                _ => None,
             }
         })
     } else {
         None
     };
+    let mut throw_access_class: Option<&str> = None;
+    if op == Op::MethodCall {
+        throw_access_class = ctx
+            .throw_access_sites
+            .get(&expr.span)
+            .and_then(|info| match &info.kind {
+                ThrowAccessKind::ArgumentCount { .. } => Some("ArgumentCountError"),
+                _ => None,
+            });
+    }
     let object_expr = object;
     let object = lower_expr(ctx, object_expr);
     if let Some(message) = throw_access_message {
+        if throw_access_class == Some("ArgumentCountError") {
+            // Keep the receiver and every argument alive until evaluation finishes. Existing
+            // call-owner roots retire them if a later argument or the arity check throws.
+            let _receiver_root = root_owned_call_operand(ctx, object, expr.span);
+            begin_call_argument_evaluation(ctx);
+            let mut operands = lower_args_with_signature(ctx, None, args);
+            let _intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+            let _roots = root_user_call_operands(
+                ctx, &mut operands, None, &ReturnArgAlias::None, &PhpType::Void, expr.span,
+            );
+            return crate::ir_lower::stmt::lower_throw_access_error_of_class(
+                ctx, "ArgumentCountError", &message, expr.span,
+            );
+        }
         release_owning_receiver_temporary(ctx, object, expr.span);
         return crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, expr.span);
     }
@@ -150,12 +175,11 @@ pub(super) fn lower_method_call(
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
-    // Internal value-class methods can reject a scalar after their temporary receiver exists.
-    let receiver_pins = if crate::types::object_operators::operator_class(
-        &ctx.builder.value_php_type(object.value),
-    ).is_some() {
-        pin_in_flight_owners(ctx, &[object.value], object_expr.span)
-    } else { Vec::new() };
+    // Receiver temporaries are independent owners too. A method or a later argument can
+    // throw before the normal receiver release, so publish this owner after result staging
+    // and keep it visible through argument/intermediate cleanup.
+    let borrowed_receiver = root_borrowed_method_receiver(ctx, object, expr.span);
+    let receiver_pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
     begin_call_argument_evaluation(ctx);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
     let mut arg_values = arg_values;
@@ -193,8 +217,9 @@ pub(super) fn lower_method_call(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    unpin_in_flight_owners(ctx, receiver_pins, object_expr.span);
+    unpin_in_flight_owners(ctx, receiver_pins, expr.span);
     release_owning_receiver_temporary(ctx, object, expr.span);
+    if let Some(slot) = borrowed_receiver { retire_owned_call_operand(ctx, slot, expr.span); }
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
     finish_reference_return_value(ctx, call, reference_staging, expr.span)
 }

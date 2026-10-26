@@ -15,6 +15,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[path = "support/php_display.rs"]
+mod php_display;
+
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// Creates an isolated temp dir unique across parallel test threads/processes.
@@ -104,7 +107,7 @@ fn run_binary(bin: &Path) -> String {
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8_lossy(&output.stdout).into_owned()
+    php_display::strip_php_display_lines(&String::from_utf8_lossy(&output.stdout))
 }
 
 /// Compiles `source`, runs it, and asserts stdout equals `expected`.
@@ -133,7 +136,7 @@ fn assert_program_output_warnings_and_clean_heap(
     let output = Command::new(&bin)
         .output()
         .expect("failed to run compiled binary");
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stdout = php_display::strip_php_display_lines(&String::from_utf8_lossy(&output.stdout));
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(
         output.status.success(),

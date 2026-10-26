@@ -393,7 +393,7 @@ fn referenced_builtin_datetime_methods(module: &Module) -> Vec<(String, String)>
     {
         for inst in &function.instructions {
             match inst.op {
-                Op::ObjectNew => {
+                Op::ObjectNew | Op::ObjectNewReserved => {
                     if let Some(class_name) = datetime_class_data_name(module, inst) {
                         push_constructor_and_interface_methods(&mut methods, module, class_name);
                     }

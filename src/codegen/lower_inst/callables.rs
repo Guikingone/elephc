@@ -3119,15 +3119,6 @@ fn move_reg_to_arg(ctx: &mut FunctionContext<'_>, source_reg: &str, arg_index: u
     }
 }
 
-/// Releases the temporary invoker argument while preserving the Mixed call result.
-pub(super) fn release_invoker_arg_preserving_result(ctx: &mut FunctionContext<'_>) {
-    abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
-    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
-}
-
 /// Stores the Mixed descriptor-invoker result using the EIR result type.
 fn store_descriptor_invoker_result(
     ctx: &mut FunctionContext<'_>,

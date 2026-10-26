@@ -8,6 +8,7 @@
 //! Key details:
 //! - Runtime-backed methods stay bodyless so codegen intrinsics own their behavior.
 //! - Small serialization/debug helpers are synthetic PHP-like method bodies.
+//! - List state occupies inherited physical slots before user-declared properties.
 
 use std::collections::HashMap;
 
@@ -17,6 +18,10 @@ use crate::parser::ast::{
 use crate::types::traits::FlattenedClass;
 
 use super::common::*;
+
+pub(super) const DLL_STORAGE_PROPERTY: &str = "\0elephc_spl_dll_storage";
+pub(super) const DLL_INDEX_PROPERTY: &str = "\0elephc_spl_dll_index";
+pub(super) const DLL_MODE_PROPERTY: &str = "\0elephc_spl_dll_mode";
 
 /// Inserts classes into the supplied builtin metadata registry.
 pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
@@ -34,7 +39,11 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             is_abstract: false,
             is_final: false,
             is_readonly_class: false,
-            properties: Vec::new(),
+            properties: vec![
+                storage_property_default(DLL_STORAGE_PROPERTY, array_type(), empty_array_expr()),
+                storage_property_default(DLL_INDEX_PROPERTY, TypeExpr::Int, int_expr(0)),
+                storage_property_default(DLL_MODE_PROPERTY, TypeExpr::Int, int_expr(0)),
+            ],
             methods: spl_doubly_linked_list_methods(),
             attributes: Vec::new(),
             constants: spl_doubly_linked_list_constants(),

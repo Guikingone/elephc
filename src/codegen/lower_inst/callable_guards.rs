@@ -4,12 +4,13 @@
 //! Called from:
 //! - Callable lowering after normalizing and saving the argument container.
 //! - Dynamic constructor argument materialization after creating caller-owned conversions.
+//! - Fixed and dynamic object construction while the receiver remains incomplete.
 //!
 //! Key details:
 //! - The argument box and optional descriptor already have one caller-owned reference.
 //! - Stack records transfer those references only during exceptional unwinding.
 //! - Conversion guards are published immediately so a later argument conversion may throw safely.
-//! - Failed dynamic construction marks the raw object as destructor-suppressed before release.
+//! - Failed construction marks the raw object as destructor-suppressed before release.
 
 use super::*;
 use crate::codegen_support::emit::Emitter;
@@ -25,7 +26,7 @@ pub(super) fn unguard_saved_owner(emitter: &mut Emitter, guard_offset: usize) {
     abi::emit_call_label(emitter, "__rt_exception_unguard_owned");
 }
 
-/// Guards a raw object until its dynamic constructor completes successfully.
+/// Guards a raw object until its PHP constructor completes successfully.
 pub(super) fn begin_unconstructed_object(emitter: &mut Emitter) -> usize {
     let bytes = EXCEPTION_GUARD_SLOT_SIZE;
     abi::emit_reserve_temporary_stack(emitter, bytes);

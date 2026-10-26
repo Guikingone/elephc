@@ -25,7 +25,9 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.comment("--- runtime: unserialize_mixed (serialize() wire -> boxed Mixed) ---");
     emitter.label_global("__rt_unserialize_mixed");
     emitter.instruction(&format!("sub sp, sp, #{}", boundary_bytes));           // reserve a complete handler record plus input/result spills
-    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_link_offset)); // preserve the caller frame and return address across setjmp
+    emitter.instruction(
+                &format!("stp x29, x30, [sp, #{}]", frame_link_offset)
+            );                                                                  // preserve the caller frame and return address across setjmp
     emitter.instruction(&format!("add x29, sp, #{}", frame_link_offset));       // establish the protected unserialize wrapper frame
     emitter.instruction(&format!("str x1, [sp, #{}]", source_offset));          // preserve source pointer across setjmp
     emitter.instruction(&format!("str x2, [sp, #{}]", source_len_offset));      // preserve source length across setjmp
@@ -36,10 +38,14 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
     emitter.instruction("str x10, [sp, #8]");                                   // preserve the activation frame that survives this boundary
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!("str x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // snapshot diagnostic suppression across longjmp
+    emitter.instruction(
+                &format!("str x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)
+            );                                                                  // snapshot diagnostic suppression across longjmp
     emitter.instruction("mov x10, sp");                                         // compute this wrapper's exception-handler record address
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!("add x0, sp, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // pass this boundary's opaque jmp_buf to setjmp
+    emitter.instruction(
+                &format!("add x0, sp, #{}", TRY_HANDLER_JMP_BUF_OFFSET)
+            );                                                                  // pass this boundary's opaque jmp_buf to setjmp
     emitter.bl_c("setjmp"); // catch Throwable control flow escaping hydration hooks
     emitter.instruction("cbnz x0, __rt_unserialize_mixed_throw");               // longjmp resumes here so runtime state can be cleaned first
     emitter.instruction(&format!("ldr x0, [sp, #{}]", source_offset));          // base = preserved source string pointer
@@ -61,10 +67,14 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x0, [sp, #{}]", source_offset));          // preserve the parsed box while popping the boundary
     emitter.instruction("ldr x10, [sp]");                                       // reload the previous exception-handler head
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // reload diagnostic suppression after the protected parse
+    emitter.instruction(
+                &format!("ldr x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)
+            );                                                                  // reload diagnostic suppression after the protected parse
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
     emitter.instruction(&format!("ldr x0, [sp, #{}]", source_offset));          // recover the parsed Mixed result
-    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_link_offset)); // restore the caller frame and return address
+    emitter.instruction(
+                &format!("ldp x29, x30, [sp, #{}]", frame_link_offset)
+            );                                                                  // restore the caller frame and return address
     emitter.instruction(&format!("add sp, sp, #{}", boundary_bytes));           // release the exception boundary frame
     emitter.instruction("ret");                                                 // return the parsed box to the lowering's normal end path
     emitter.label("__rt_unserialize_mixed_throw");
@@ -72,11 +82,15 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_unser_legacy_active", 0);
     emitter.instruction("ldr x10, [sp]");                                       // reload the handler preceding this internal boundary
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
+    emitter.instruction(
+                &format!("ldr x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)
+            );                                                                  // restore diagnostic suppression skipped by longjmp
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
     emitter.instruction("mov x0, #0");                                          // end cleanup ignores the placeholder parse result on throw
     emitter.instruction("bl __rt_unserialize_end");                             // release policy/context state before propagating the Throwable
-    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_link_offset)); // restore the caller frame before rethrowing
+    emitter.instruction(
+                &format!("ldp x29, x30, [sp, #{}]", frame_link_offset)
+            );                                                                  // restore the caller frame before rethrowing
     emitter.instruction(&format!("add sp, sp, #{}", boundary_bytes));           // discard the protected parser stack through its boundary
     emitter.instruction("b __rt_throw_current");                                // resume propagation at the caller's exception handler
 }
@@ -451,6 +465,9 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_unser_values");
     emitter.instruction("str x0, [x10, x9, lsl #3]");                           // publish before parsing so r: can resolve self-references
     emitter.label("__rt_unser_obj_registered");
+    emitter.instruction("ldr x0, [sp, #96]");                                   // publish the construction owner before decoding user-controlled properties
+    emitter.instruction("bl __rt_unserialize_defer_data");                      // context owns partial objects even when hydration throws
+
     emitter.instruction("ldr x12, [sp, #64]");                                  // reload the class-name end
     emitter.instruction("add x12, x12, #2");                                    // skip closing '\"' and ':' to the property count
     emitter.instruction("mov x11, #0");                                         // property-count accumulator
@@ -557,8 +574,15 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #56]");                                   // key length
     emitter.instruction("ldr x9, [sp, #80]");                                   // blocked objects keep their wire properties opaque
     emitter.instruction("cbz x9, __rt_unser_obj_store_opaque_prop");            // blocked objects retain the parsed property semantically
+    crate::codegen_support::abi::emit_push_reg(emitter, "x3");
+    emitter.instruction("mov x0, x3");                                          // transfer the parsed producer to the active context
+    emitter.instruction("bl __rt_unserialize_defer_data");                      // keep wire back-references alive through the complete parse
+    crate::codegen_support::abi::emit_pop_reg(emitter, "x3");
+    emitter.instruction("ldr x0, [sp, #24]");                                   // borrow the target object after context allocation
+    emitter.instruction("ldr x1, [sp, #48]");                                   // restore the serialized property name
+    emitter.instruction("ldr x2, [sp, #56]");                                   // restore the name byte length
     emitter.instruction("bl __rt_obj_store_prop");                              // store the value into the matching property slot
-    emitter.instruction("b __rt_unser_obj_skip_prop_store");                    // transferred value now belongs to the hydrated object
+    emitter.instruction("b __rt_unser_obj_skip_prop_store");                    // stored values own independent references; the context retires parsed producers
     emitter.label("__rt_unser_obj_store_opaque_prop");
     emitter.instruction("ldr x0, [sp, #24]");                                   // incomplete-object payload
     emitter.instruction("ldr x0, [x0, #24]");                                   // opaque property hash
@@ -589,6 +613,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_invoke_wakeup");
     emitter.label("__rt_unser_at_obj_box");
     emitter.instruction("ldr x0, [sp, #96]");                                   // return the stable box published before body parsing
+    emitter.instruction("bl __rt_incref");                                      // return an independent lease while the context owns construction
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload position (at the closing '}')
     emitter.instruction("add x1, x1, #1");                                      // newpos skips the '}'
     emitter.instruction("b __rt_unser_at_ret");                                 // return the box and new position
@@ -606,9 +631,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_unser_values");
     emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // remove the failed object from future reference lookup
     emitter.label("__rt_unser_obj_fail_noreg");
-    emitter.instruction("ldr x0, [sp, #96]");                                   // partially hydrated object's owning Mixed box
-    emitter.instruction("str xzr, [sp, #96]");                                  // detach the owner before explicit cleanup can throw
-    emitter.instruction("bl __rt_decref_mixed");                                // release the box and its object ownership
+    // The active context retires the failed construction owner.
     emitter.instruction("mov x0, #0");                                          // report parse failure
     emitter.instruction("ldr x1, [sp, #8]");                                    // preserve the child decoder's current cursor
     emitter.instruction("b __rt_unser_at_ret");                                 // only the shared return decrements parser depth

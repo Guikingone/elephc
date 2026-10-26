@@ -25,6 +25,8 @@ const RESULT: usize = 752;
 const HANDLED: usize = 760;
 const COMPLETE: usize = 768;
 const ACTIVATION: usize = 800;
+/// Scratch window for the 21-byte decimal rendering of `_php_diagnostic_line`.
+const ITOA: usize = 880;
 
 /// Selects one instruction while keeping all control-flow and ownership steps shared.
 fn ins(e: &mut Emitter, arm: &str, x86: &str) {
@@ -173,7 +175,7 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     ins(e, "b.ne __rt_warning_handled", "jne __rt_warning_handled");
     ins(e, "ldr x10, [x0, #8]", "mov r10, QWORD PTR [rax + 8]");
     ins(e, "cbz x10, __rt_warning_unpublish", "test r10, r10");
-    if !arm { e.instruction("jz __rt_warning_unpublish"); } // boolean false falls through to default output
+    if !arm { e.instruction("jz __rt_warning_unpublish"); }                     // boolean false falls through to default output
     e.label("__rt_warning_handled");
     abi::emit_load_int_immediate(e, result, 1);
     save(e, HANDLED);
@@ -187,6 +189,9 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     abi::emit_load_temporary_stack_slot(e, scratch, LEVEL);
     ins(e, "and x0, x0, x10", "and rax, r10");
     abi::emit_branch_if_int_result_zero(e, "__rt_warning_release");
+    // PHP's `display_errors` line goes to stdout with a ` in <file> on line <N>` suffix; the legacy
+    // stderr message is kept so existing diagnostics expectations stay valid.
+    emit_php_display_line(e);
     if arm {
         arg(e, 1, BUFFER);
         arg(e, 2, LENGTH);
@@ -214,6 +219,122 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     abi::emit_jump(e, "__rt_heap_allocation_failed");
     emit_cleanup(e);
     emit_reset(e);
+    emit_stdout_write_helper(e);
+}
+
+/// Routes displayed diagnostics through output capture or the selected stderr destination.
+///
+/// Arguments use the ordinary stdout helper's C ABI: pointer first, then byte length.
+fn emit_stdout_write_helper(e: &mut Emitter) {
+    e.label_global("__rt_diag_write_stdout");
+    if e.target.arch == Arch::AArch64 {
+        abi::emit_load_symbol_to_reg(e, "x9", "_php_display_errors", 0);
+        e.instruction("cbz x9, __rt_diag_display_done");                        // display_errors=0 hides display fragments
+        e.instruction("cmp x9, #2");                                            // stderr display bypasses PHP output buffers
+        e.instruction("b.eq __rt_diag_display_stderr");                         // select the requested display descriptor
+        e.instruction("b __rt_stdout_write");                                   // stdout display follows buffers and web response capture
+        e.label("__rt_diag_display_stderr");
+        e.instruction("mov x2, x1");                                            // move display length before replacing the buffer register
+        e.instruction("mov x1, x0");                                            // materialize the display buffer for write
+        e.instruction("mov x0, #2");                                            // display_errors=stderr selects descriptor two
+        e.syscall(4);
+    } else {
+        abi::emit_load_symbol_to_reg(e, "r10", "_php_display_errors", 0);
+        e.instruction("test r10, r10");                                         // display_errors=0 hides display fragments
+        e.instruction("jz __rt_diag_display_done");                             // return without invoking a buffer handler
+        e.instruction("cmp r10, 2");                                            // stderr display bypasses PHP output buffers
+        e.instruction("je __rt_diag_display_stderr");                           // select the requested display descriptor
+        e.instruction("jmp __rt_stdout_write");                                 // stdout display follows buffers and web response capture
+        e.label("__rt_diag_display_stderr");
+        e.instruction("mov rdx, rsi");                                          // materialize the display byte count
+        e.instruction("mov rsi, rdi");                                          // materialize the display buffer for write
+        e.instruction("mov edi, 2");                                            // display_errors=stderr selects descriptor two
+        e.instruction("mov eax, 1");                                            // invoke Linux write through the syscall ABI
+        e.instruction("syscall");                                               // send the displayed diagnostic to stderr
+    }
+    e.label("__rt_diag_display_done");
+    e.instruction("ret");                                                       // return to the warning formatter
+}
+
+
+/// Emits PHP's display diagnostic line: `<message> in <file> on line <N>\n` on stdout.
+///
+/// The producer's message already carries the `Warning: `/`Notice: `/`Deprecated: ` prefix and a
+/// trailing newline; this strips the newline, then writes the message, the location infix, the
+/// file, ` on line `, the decimal line number, and a final newline as separate stdout fragments.
+fn emit_php_display_line(e: &mut Emitter) {
+    let arm = e.target.arch == Arch::AArch64;
+    let a0 = abi::int_arg_reg_name(e.target, 0).to_string();
+    let a1 = abi::int_arg_reg_name(e.target, 1).to_string();
+    let write_label = "__rt_diag_write_stdout";
+
+    // Match the stderr write's suppression: an active `@` scope must hide the display line too.
+    abi::emit_load_symbol_to_reg(e, abi::int_result_reg(e), "_rt_diag_suppression", 0);
+    abi::emit_branch_if_int_result_nonzero(e, "__rt_php_display_done");
+    // A startup diagnostic has no source context (empty file); php renders those differently, so
+    // the source-location display line is skipped rather than emitting ` in  on line 0`.
+    abi::emit_load_symbol_to_reg(e, abi::int_result_reg(e), "_php_diagnostic_file_len", 0);
+    abi::emit_branch_if_int_result_zero(e, "__rt_php_display_done");
+
+    // php always prefixes the display line with a newline so it starts on a fresh line.
+    abi::emit_symbol_address(e, &a0, "_rt_php_loc_newline");
+    abi::emit_load_int_immediate(e, &a1, 1);
+    abi::emit_call_label(e, write_label);
+
+    // Message without its trailing newline, written next.
+    abi::emit_load_temporary_stack_slot(e, &a0, BUFFER);
+    abi::emit_load_temporary_stack_slot(e, &a1, LENGTH);
+    let no_newline = "__rt_php_display_no_newline";
+    if arm {
+        e.instruction(&format!("cbz {a1}, {no_newline}"));                      // an empty message has no terminal byte to strip
+        e.instruction(&format!("add x11, {a0}, {a1}"));                         // address one past the message end
+        e.instruction("ldrb w10, [x11, #-1]");                                  // load the message's final byte
+        e.instruction("cmp w10, #10");                                          // is it a newline?
+        e.instruction(&format!("b.ne {no_newline}"));                           // non-newline terminals are written verbatim
+        e.instruction(&format!("sub {a1}, {a1}, #1"));                          // drop the newline before appending the suffix
+    } else {
+        e.instruction(&format!("test {a1}, {a1}"));
+        e.instruction(&format!("jz {no_newline}"));                             // an empty message has no terminal byte to strip
+        e.instruction(&format!("lea r11, [{a0} + {a1}]"));                      // address one past the message end
+        e.instruction("movzx r10d, BYTE PTR [r11 - 1]");                        // load the message's final byte
+        e.instruction("cmp r10d, 10");                                          // is it a newline?
+        e.instruction(&format!("jne {no_newline}"));                            // non-newline terminals are written verbatim
+        e.instruction(&format!("sub {a1}, 1"));                                 // drop the newline before appending the suffix
+    }
+    e.label(no_newline);
+    abi::emit_call_label(e, write_label);
+
+    // " in "
+    abi::emit_symbol_address(e, &a0, "_rt_php_loc_infix");
+    abi::emit_load_int_immediate(e, &a1, 4);
+    abi::emit_call_label(e, write_label);
+
+    // file name
+    abi::emit_load_symbol_to_reg(e, &a0, "_php_diagnostic_file", 0);
+    abi::emit_load_symbol_to_reg(e, &a1, "_php_diagnostic_file_len", 0);
+    abi::emit_call_label(e, write_label);
+
+    // " on line "
+    abi::emit_symbol_address(e, &a0, "_rt_php_loc_on_line");
+    abi::emit_load_int_immediate(e, &a1, 9);
+    abi::emit_call_label(e, write_label);
+
+    // decimal line number
+    abi::emit_load_symbol_to_reg(e, &a0, "_php_diagnostic_line", 0);
+    abi::emit_temporary_stack_address(e, &a1, ITOA);
+    abi::emit_call_label(e, "__rt_itoa_into");
+    if !arm {
+        // `__rt_itoa_into` returns (rax = ptr, rdx = len); move them into the write helper's args.
+        abi::emit_reg_move(e, abi::int_arg_reg_name(e.target, 0), "rax");
+        abi::emit_reg_move(e, abi::int_arg_reg_name(e.target, 1), "rdx");
+    }
+    abi::emit_call_label(e, write_label);
+
+    // trailing newline
+    abi::emit_symbol_address(e, &a0, "_rt_php_loc_newline");
+    abi::emit_load_int_immediate(e, &a1, 1);
+    abi::emit_call_label(e, write_label);
+    e.label("__rt_php_display_done");
 }
 
 /// Builds the four handler arguments with copied strings and owned boxed cells.

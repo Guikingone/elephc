@@ -191,6 +191,8 @@ mod iterable_write_stdout;
 mod mixed_abs;
 mod mixed_cast_array;
 mod mixed_clone;
+mod borrowed_value;
+mod heap_scopes;
 mod mixed_reference;
 mod mixed_cast_bool;
 mod mixed_cast_float;
@@ -503,7 +505,7 @@ pub use heap_debug_validate_free_list::emit_heap_debug_validate_free_list;
 /// Emit heap free list validation helper.
 pub use heap_kind::emit_heap_kind;
 /// Emit heap kind check helper.
-pub use heap_free::emit_heap_free;
+pub use heap_free::{emit_heap_free, emit_heap_free_scoped};
 /// Emit heap free helper.
 pub use in_array_mixed_int::emit_in_array_mixed_int;
 /// Emit integer membership over boxed-Mixed indexed arrays.
@@ -530,6 +532,10 @@ pub use mixed_abs::emit_mixed_abs;
 pub use mixed_cast_array::emit_mixed_cast_array;
 /// Emit a resource-aware owned Mixed value read.
 pub use mixed_clone::emit_mixed_clone;
+/// Emit compiler-private, non-owning value snapshot helpers.
+pub use borrowed_value::emit_borrowed_value;
+/// Emit receiver-bound logical heap mutation views.
+pub use heap_scopes::emit_heap_scopes;
 pub use mixed_reference::emit_mixed_reference;
 /// Emit Mixed from value conversion helper.
 pub use mixed_from_value::emit_mixed_from_value;

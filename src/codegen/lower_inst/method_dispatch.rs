@@ -9,6 +9,31 @@
 
 use super::*;
 
+/// Returns true when php's `disable_functions` ini names this method on an INTERNAL class.
+///
+/// php consults the ini at the call and only for functions and methods that are internal — a user
+/// class's method of the same name is unaffected. elephc resolves the ini at compile time from the
+/// `--ini` overrides, which is exactly the surface a compiled program can observe.
+fn method_is_disabled(ctx: &FunctionContext<'_>, class_name: &str, method_name: &str) -> bool {
+    let disabled = crate::codegen_support::ini_overrides()
+        .into_iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("disable_functions"))
+        .any(|(_, value)| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+                .any(|entry| entry.eq_ignore_ascii_case(method_name))
+        });
+    if !disabled {
+        return false;
+    }
+    ctx.module
+        .class_infos
+        .get(class_name.trim_start_matches('\\'))
+        .is_some_and(|info| info.is_internal)
+}
+
 /// Lowers a direct instance-method call on a statically known object receiver.
 ///
 /// Overridable methods check literal `false` and `null` parameters on the runtime
@@ -16,6 +41,24 @@ use super::*;
 pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let method_name = method_name_data(ctx, inst)?.to_string();
+    let object_ty = ctx.value_php_type(object)?.codegen_repr();
+    if let PhpType::Object(class_name) = &object_ty {
+        if method_is_disabled(ctx, class_name, &method_name) {
+            // php consults `disable_functions` at the call, so a disabled internal method raises a
+            // catchable `Error` naming the method twice, exactly as php-src does.
+            let location = inst
+                .span
+                .and_then(|span| ctx.module.source_path.clone().map(|file| (file, span.line)));
+            exceptions::emit_error_at(
+                ctx,
+                &format!(
+                    "Cannot call method {method_name} when function {method_name} is disabled"
+                ),
+                location,
+            );
+            return Ok(());
+        }
+    }
     if let Some((class_name, true)) = objects::nullable_object_receiver_class(ctx, object)? {
         if !class_name.is_empty() {
             return lower_nullable_receiver_method_call(ctx, inst, object, &class_name, &method_name);

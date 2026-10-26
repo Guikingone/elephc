@@ -39,7 +39,7 @@ pub(in crate::codegen::lower_inst) fn lower_nullsafe_prop_get(
         PropertyReadMissingResult::Instruction(inst),
     )?;
     emit_property_load(ctx, &slot, base_reg)?;
-    materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+    materialize_loaded_property_result(ctx, inst, &slot)?;
     if let Some(read_done) = read_done {
         ctx.emitter.label(&read_done);
     }
@@ -224,7 +224,7 @@ pub(super) fn lower_const_dynamic_prop_get(
         PropertyReadMissingResult::Instruction(inst),
     )?;
     emit_property_load(ctx, &slot, base_reg)?;
-    materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+    materialize_loaded_property_result(ctx, inst, &slot)?;
     if let Some(read_done) = read_done {
         ctx.emitter.label(&read_done);
     }
@@ -348,7 +348,7 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
             PropertyReadMissingResult::Instruction(inst),
         )?;
         emit_property_load(ctx, slot, base_reg)?;
-        materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+        materialize_loaded_property_result(ctx, inst, &slot)?;
         if let Some(read_done) = read_done {
             ctx.emitter.label(&read_done);
         }

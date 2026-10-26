@@ -148,7 +148,17 @@ pub(super) fn class_method_return_arg_alias(
     class_name: &str,
     method_key: &str,
 ) -> Option<ReturnArgAlias> {
-    class_method_signature(ctx, class_name, method_key)?;
+    let signature = class_method_signature(ctx, class_name, method_key)?;
+    // A scalar/void result cannot carry an argument's heap owner, even when an
+    // injected builtin body has no AST alias summary. Reference returns transfer
+    // a cell lease; pointer/resource and reference returns keep their existing contract.
+    if !signature.by_ref_return
+        && matches!(&signature.return_type,
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
+                | PhpType::Void | PhpType::Never | PhpType::TaggedScalar)
+    {
+        return Some(ReturnArgAlias::None);
+    }
     let class_info = ctx.classes.get(class_name)?;
     let impl_class = class_info
         .method_impl_classes

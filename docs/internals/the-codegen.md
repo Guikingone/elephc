@@ -496,6 +496,22 @@ x86_64. `substr_count()` copies the tag to `x7` or `r11` only after conversion
 calls have finished, then restores the subject, needle, and offset ABI
 registers before window validation.
 
+## ArrayAccess Offsets on Runtime-Typed Receivers
+
+Boxed reads and writes in `src/codegen/lower_inst/mixed_array_runtime.rs`
+probe object callbacks through `array_access_dynamic.rs` before applying PHP
+array-key conversion. An `ArrayAccess` implementation receives the original
+boxed offset, including object identity, arrays, booleans, floats and null.
+The shared call argument materializer retains temporary cells through the
+callback and releases them after the owned result has been saved.
+
+The probe checks the class id against the dense callback table bound. Declared
+PHP array receivers use the ordinary array path directly; missing callback
+entries retain the established array or native SPL runtime adapter. Reference
+return mismatches in source interface adapters remain a separately diagnosed
+limitation. `examples/arrayaccess-object-labels/main.php` demonstrates generic
+collection code reading metadata attached to an object key.
+
 ## Property Writes Through a Runtime-Typed Receiver
 
 A property write resolves its slot at compile time from the receiver's class. When the receiver is
@@ -543,8 +559,74 @@ source owns a reference is not a property of its type. A backend release gated o
 destroyed the property's own reference for a *borrowed* source, which reads back as a pointer and
 trips `heap debug detected bad refcount`.
 
+## Method Argument Owners and Native Adapters
+
+`src/ir_lower/expr/method_metadata.rs` uses scalar and `void` return contracts
+to infer that a method result cannot carry a heap argument's owner, including
+injected builtin methods that have no AST alias summary. The ordinary call
+argument scope can then retire temporary arguments after a normal return or an
+exception. Pointer, resource and reference returns preserve their separate
+ownership contracts.
+
+Generated native method adapters borrow PHP arguments. The intrinsic catalog's
+`consumed_mixed_parameters()` identifies inputs that need an independent owner
+before the adapter tail-calls a consuming helper. Register staging and owner
+acquisition live in `src/codegen/runtime_metadata/intrinsic_wrappers.rs` and use
+the shared target ABI helpers.
+
+### Receiver lifetime during property writes
+
+`lower_property_assign` publishes an owning receiver in the shared call-operand
+scope before evaluating the right-hand side. The scope remains active through
+ordinary stores, property hooks and magic setters, including guarded subclass
+branches. It retires the receiver once after successful completion and makes
+the same lease reachable during exception cleanup. Property-chain reads and
+function-returned receivers follow this rule; borrowed local receivers require
+no extra owner. See `examples/nested-property-receivers/main.php`.
+
+## Ordinary Object Hydration Owners
+
+The recursive `unserialize` decoder publishes each ordinary property's parsed
+value in the current parser context before invoking `__rt_obj_store_prop`.
+Wire back-references can keep using those cells until context completion.
+
+The store entry is emitted into user assembly by
+`src/codegen/eval_property_helpers/hydrate.rs`, where concrete class metadata
+is available. Mangled keys select physical private/protected slots. Shared
+typed slot writers borrow the parsed cell, acquire the new storage owner and
+release the overwritten default. Completing the parser context then retires
+the parsed producer independently. The cached runtime retains key parsing and
+hash conversion; programs without a parsing capability define an inactive
+store entry to keep the shared runtime's symbols resolvable.
+
+The parser context also owns each object under construction before its body is
+parsed. A successful return acquires a separate result lease; exceptions release
+partial objects at the parser boundary. Nullable integer slots reject serialized
+strings, floats, booleans, arrays and objects with PHP's property `TypeError`.
+This guard does not establish complete typed-property validation: other declared
+types, readonly restrictions and malformed property keys remain separate gates.
+
+`examples/property-hydration/main.php` shows typed fields and a shared object
+reference surviving a round trip. Untyped properties without defaults or with
+an untyped null default can keep a logical `Void` type while their physical
+slot contains `Mixed`. The GC and JSON descriptors therefore use tag 7,
+matching serialization and rendering; this also lets collection visit a
+restored self-reference. The JSON mixed dispatcher checks zero pointers and
+the encoded null sentinel before reading a cell. See
+`examples/hydrated-untyped-properties/main.php` for a cached payload consumer.
+
 ## Backend Contract
 
 - PHP-visible behavior belongs in `src/ir_lower/` and `src/codegen/`.
 - Shared runtime, ABI, platform, and metadata helpers belong in
   `src/codegen_support/`.
+
+### Object equality metadata
+
+Object equality reads PHP property descriptors independently of debug projections.
+Compiler-private NUL-prefixed slots remain in ownership metadata and are excluded
+from standard property equality. Native comparison policy handles exact
+`SplObjectStorage` instances by object-key identity and loosely equal info values,
+independently of insertion order and cursor position. Distinct storage subclasses
+are uncomparable, as in php-src. `SplDoublyLinkedList` compares its ordinary PHP
+properties; its internal entries and iterator state do not participate.

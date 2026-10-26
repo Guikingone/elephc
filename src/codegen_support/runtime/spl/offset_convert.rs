@@ -165,14 +165,18 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.instruction("fcmp d0, d1");                                         // was the conversion exact?
     emitter.instruction("b.eq __rt_spl_offset_convert_string_exact");           // "1.0" converts silently
     abi::emit_symbol_address(emitter, "x1", "_spl_float_string_prefix");
-    emitter.instruction(&format!("mov x2, #{}", SPL_FLOAT_STRING_PREFIX.len())); // deprecation prefix length
+    emitter.instruction(
+        &format!("mov x2, #{}", SPL_FLOAT_STRING_PREFIX.len()),
+    );                                                                          // deprecation prefix length
     emitter.instruction("bl __rt_diag_warning_fragment");                       // start the float-string deprecation
     emitter.instruction("ldp x1, x2, [sp, #24]");                               // the string as written, still borrowed from the box
     emitter.instruction("bl __rt_diag_warning_fragment");                       // quote it in the deprecation
     emitter.instruction("ldr x0, [sp]");                                        // the owned boxed offset
     emitter.instruction("bl __rt_decref_mixed");                                // release it before the handler can run
     abi::emit_symbol_address(emitter, "x1", "_spl_float_string_suffix");
-    emitter.instruction(&format!("mov x2, #{}", SPL_FLOAT_STRING_SUFFIX.len())); // deprecation suffix length
+    emitter.instruction(
+        &format!("mov x2, #{}", SPL_FLOAT_STRING_SUFFIX.len()),
+    );                                                                          // deprecation suffix length
     emitter.instruction("bl __rt_diag_warning");                                // finish the deprecation, which may run the handler
     emitter.instruction("ldr x1, [sp, #40]");                                   // the converted index
     emitter.instruction(&format!("mov x0, #{}", SPL_OFFSET_STATUS_INT));        // status: converted
@@ -217,7 +221,9 @@ fn emit_convert_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the mode
     emitter.instruction(&format!("cmp x9, #{}", SPL_OFFSET_MODE_LIST));         // a linked-list index reads null as 0
     emitter.instruction("b.eq __rt_spl_offset_convert_null_zero");              // use index 0
-    emitter.instruction(&format!("cmp x9, #{}", SPL_OFFSET_MODE_LIST_NULLABLE)); // offsetSet() gives null its own meaning
+    emitter.instruction(
+        &format!("cmp x9, #{}", SPL_OFFSET_MODE_LIST_NULLABLE),
+    );                                                                          // offsetSet() gives null its own meaning
     emitter.instruction("b.eq __rt_spl_offset_convert_null_status");            // report the null
     emitter.instruction(&format!("mov x10, #{}", ROW_NULL));                    // SplFixedArray rejects null
     emitter.instruction("b __rt_spl_offset_convert_named");                     // report "null"
@@ -368,12 +374,16 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_offset_convert_int_x");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // the integer payload
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // is the index
-    emitter.instruction(&format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_INT)); // status: converted
+    emitter.instruction(
+        &format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_INT),
+    );                                                                          // status: converted
     emitter.instruction("jmp __rt_spl_offset_convert_release_x");               // release the box and return
 
     // -- apply the container-specific integer-string policy --
     emitter.label("__rt_spl_offset_convert_string_x");
-    emitter.instruction(&format!("cmp QWORD PTR [rbp - 16], {}", SPL_OFFSET_MODE_FIXED)); // SplFixedArray takes canonical integer strings only
+    emitter.instruction(
+        &format!("cmp QWORD PTR [rbp - 16], {}", SPL_OFFSET_MODE_FIXED),
+    );                                                                          // SplFixedArray takes canonical integer strings only
     emitter.instruction("jne __rt_spl_offset_convert_string_coerce_x");         // the linked lists coerce any numeric string
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // borrow the string pointer from the live box
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // and its length
@@ -381,7 +391,9 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdx, -1");                                         // did it produce an integer key?
     emitter.instruction("jne __rt_spl_offset_convert_string_rejected_x");       // a non-canonical string is a type error
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // the integer is the index
-    emitter.instruction(&format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_INT)); // status: converted
+    emitter.instruction(
+        &format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_INT),
+    );                                                                          // status: converted
     emitter.instruction("jmp __rt_spl_offset_convert_release_x");               // release the box and return
     // -- coerce numeric strings for linked-list offsets --
     emitter.label("__rt_spl_offset_convert_string_coerce_x");
@@ -403,7 +415,9 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ucomisd xmm0, xmm1");                                  // was the conversion exact?
     emitter.instruction("je __rt_spl_offset_convert_string_exact_x");           // "1.0" converts silently
     emitter.instruction("lea rdi, [rip + _spl_float_string_prefix]");           // deprecation prefix
-    emitter.instruction(&format!("mov rsi, {}", SPL_FLOAT_STRING_PREFIX.len())); // deprecation prefix length
+    emitter.instruction(
+        &format!("mov rsi, {}", SPL_FLOAT_STRING_PREFIX.len()),
+    );                                                                          // deprecation prefix length
     emitter.instruction("call __rt_diag_warning_fragment");                     // start the float-string deprecation
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the string as written, still borrowed from the box
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // and its length
@@ -411,17 +425,23 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the owned boxed offset
     emitter.instruction("call __rt_decref_mixed");                              // release it before the handler can run
     emitter.instruction("lea rdi, [rip + _spl_float_string_suffix]");           // deprecation suffix
-    emitter.instruction(&format!("mov rsi, {}", SPL_FLOAT_STRING_SUFFIX.len())); // deprecation suffix length
+    emitter.instruction(
+        &format!("mov rsi, {}", SPL_FLOAT_STRING_SUFFIX.len()),
+    );                                                                          // deprecation suffix length
     emitter.instruction("call __rt_diag_warning");                              // finish the deprecation, which may run the handler
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // the converted index
     emitter.instruction(&format!("mov rax, {}", SPL_OFFSET_STATUS_INT));        // status: converted
     emitter.instruction("jmp __rt_spl_offset_convert_return_x");                // the box is already released
     emitter.label("__rt_spl_offset_convert_string_exact_x");
-    emitter.instruction(&format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_INT)); // status: converted
+    emitter.instruction(
+        &format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_INT),
+    );                                                                          // status: converted
     emitter.instruction("jmp __rt_spl_offset_convert_release_x");               // release the box and return
     emitter.label("__rt_spl_offset_convert_string_int_x");
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // the integer is the index
-    emitter.instruction(&format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_INT)); // status: converted
+    emitter.instruction(
+        &format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_INT),
+    );                                                                          // status: converted
     emitter.instruction("jmp __rt_spl_offset_convert_release_x");               // release the box and return
     emitter.label("__rt_spl_offset_convert_string_rejected_x");
     emitter.instruction(&format!("mov r10, {}", ROW_STRING));                   // report "string"
@@ -432,7 +452,9 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the owned box holds nothing the float needs
     emitter.instruction("call __rt_decref_mixed");                              // release it before a diagnostic can run user code
     emitter.instruction("movq xmm0, QWORD PTR [rbp - 32]");                     // pass the float
-    emitter.instruction(&format!("cmp QWORD PTR [rbp - 16], {}", SPL_OFFSET_MODE_FIXED)); // SplFixedArray converts any float like an array key
+    emitter.instruction(
+        &format!("cmp QWORD PTR [rbp - 16], {}", SPL_OFFSET_MODE_FIXED),
+    );                                                                          // SplFixedArray converts any float like an array key
     emitter.instruction("je __rt_spl_offset_convert_float_convert_x");          // with the array-key diagnostics
     emit_int_range_check_x86_64(emitter, "__rt_spl_offset_convert_float_rejected_x");
     emitter.label("__rt_spl_offset_convert_float_convert_x");
@@ -449,19 +471,27 @@ fn emit_convert_x86_64(emitter: &mut Emitter) {
 
     // -- preserve the different fixed-array and linked-list null rules --
     emitter.label("__rt_spl_offset_convert_null_x");
-    emitter.instruction(&format!("cmp QWORD PTR [rbp - 16], {}", SPL_OFFSET_MODE_LIST)); // a linked-list index reads null as 0
+    emitter.instruction(
+        &format!("cmp QWORD PTR [rbp - 16], {}", SPL_OFFSET_MODE_LIST),
+    );                                                                          // a linked-list index reads null as 0
     emitter.instruction("je __rt_spl_offset_convert_null_zero_x");              // use index 0
-    emitter.instruction(&format!("cmp QWORD PTR [rbp - 16], {}", SPL_OFFSET_MODE_LIST_NULLABLE)); // offsetSet() gives null its own meaning
+    emitter.instruction(
+        &format!("cmp QWORD PTR [rbp - 16], {}", SPL_OFFSET_MODE_LIST_NULLABLE),
+    );                                                                          // offsetSet() gives null its own meaning
     emitter.instruction("je __rt_spl_offset_convert_null_status_x");            // report the null
     emitter.instruction(&format!("mov r10, {}", ROW_NULL));                     // SplFixedArray rejects null
     emitter.instruction("jmp __rt_spl_offset_convert_named_x");                 // report "null"
     emitter.label("__rt_spl_offset_convert_null_zero_x");
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // index 0
-    emitter.instruction(&format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_INT)); // status: converted
+    emitter.instruction(
+        &format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_INT),
+    );                                                                          // status: converted
     emitter.instruction("jmp __rt_spl_offset_convert_release_x");               // release the box and return
     emitter.label("__rt_spl_offset_convert_null_status_x");
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // no index
-    emitter.instruction(&format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_NULL)); // status: null
+    emitter.instruction(
+        &format!("mov QWORD PTR [rbp - 24], {}", SPL_OFFSET_STATUS_NULL),
+    );                                                                          // status: null
     emitter.instruction("jmp __rt_spl_offset_convert_release_x");               // release the box and return
 
     // -- look up the rejected object class name --

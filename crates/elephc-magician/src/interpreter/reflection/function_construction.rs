@@ -50,6 +50,7 @@ pub(super) fn eval_reflection_function_new(
             eval_reflection_attach_function_closure_target(
                 object,
                 closure_target,
+                args[0],
                 context,
                 values,
             )
@@ -83,6 +84,7 @@ pub(super) fn eval_reflection_function_new(
             eval_reflection_attach_function_closure_target(
                 object,
                 closure_target,
+                args[0],
                 context,
                 values,
             )
@@ -105,6 +107,7 @@ pub(super) fn eval_reflection_function_new(
             eval_reflection_attach_function_closure_target(
                 object,
                 closure_target,
+                args[0],
                 context,
                 values,
             )
@@ -141,6 +144,7 @@ pub(super) fn eval_reflection_function_new(
             eval_reflection_attach_function_closure_target(
                 object,
                 closure_target,
+                args[0],
                 context,
                 values,
             )
@@ -181,14 +185,28 @@ pub(super) fn eval_reflection_function_closure_target_name(target: &EvalClosureO
 pub(super) fn eval_reflection_attach_function_closure_target(
     object: RuntimeCellHandle,
     closure_target: Option<EvalClosureObjectTarget>,
+    closure_object: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some(closure_target) = closure_target else {
         return Ok(object);
     };
-    let identity = values.object_identity(object)?;
-    context.register_eval_reflection_function_closure_target(identity, closure_target);
+    let attached = values.object_identity(object).and_then(|identity| {
+        // Reflection retains the original Closure identity, including its captures and receiver.
+        values.retain_object_children(object, &[closure_object])?;
+        context.retain_closure_target_metadata(&closure_target);
+        Ok(identity)
+    });
+    let identity = match attached {
+        Ok(identity) => identity,
+        Err(status) => {
+            let _ = eval_release_value(context, values, object);
+            return Err(status);
+        }
+    };
+    context.register_eval_reflection_function_closure_target(identity, closure_target, closure_object);
+    crate::ffi::dynamic_destructors::register_dynamic_object_context(identity, context);
     Ok(object)
 }
 

@@ -133,11 +133,19 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_var_dump_array_bool(emitter);
     io::emit_var_dump_array_float(emitter);
     io::emit_var_dump_indexed(emitter);
+    io::emit_vd_container_adapters(emitter);
+    io::emit_vd_dll_adapters(emitter);
     io::emit_var_dump_value(emitter);
+    io::emit_var_dump_value_scope(emitter);
     io::emit_var_dump_open_container(emitter);
     io::emit_var_dump_close_container(emitter);
     io::emit_var_dump_open_object(emitter);
+    io::emit_var_dump_open_object_info(emitter);
     io::emit_var_dump_object(emitter);
+    io::emit_object_debug_info(emitter);
+    io::emit_var_dump_object_view(emitter);
+    io::emit_debug_info_diagnostics(emitter);
+    io::emit_var_dump_debug_key(emitter);
     io::emit_var_dump_emit_object_key(emitter);
     io::emit_var_dump_emit_uninit_line(emitter);
     io::emit_var_dump_emit_recursion_line(emitter);
@@ -168,6 +176,11 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_pr_append(emitter);
     io::emit_pr_write(emitter);
     io::emit_pr_finish(emitter);
+    io::emit_print_r_scope(emitter);
+    io::emit_print_r_php_call(emitter);
+    io::emit_print_r_value_scope(emitter);
+    io::emit_print_r_magic_view(emitter);
+    io::emit_print_r_debug_key(emitter);
     // Output-buffering (ob_*) stack helpers. Always emitted: __rt_stdout_write,
     // __rt_pr_write, and the process-exit paths reference them unconditionally.
     io::emit_var_dump_write(emitter);

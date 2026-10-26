@@ -11,12 +11,14 @@
 //! - Reflection owner objects store private metadata slots such as `__attrs`,
 //!   `__name`, `__parameters`, and the ReflectionClass metadata-name arrays.
 //! - The helper retains supplied array payloads for object ownership.
+//! - The result box adopts the fresh owner allocation rather than leaking a producer reference.
 
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::ir::Module;
-use crate::types::ClassInfo;
+use crate::types::{ClassInfo, PhpType};
+use crate::codegen::emit_box_current_owned_value_as_mixed;
 
 
 /// Fixed object layout for one synthetic Reflection owner class.
@@ -623,10 +625,8 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
         box_label,
     );
     emitter.label(box_label);
-    emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object
-    emitter.instruction("ldr x1, [sp, #32]");                                   // move the Reflection owner object pointer into the Mixed payload
-    emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the Reflection owner object for eval
+    emitter.instruction("ldr x0, [sp, #32]");                                   // recover the fresh Reflection owner allocation
+    emit_box_current_owned_value_as_mixed(emitter, &PhpType::Object(String::new()));
     emitter.instruction(&format!("b {}", done_label));                          // skip the fail-closed return path after boxing
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
@@ -828,10 +828,8 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
         box_label,
     );
     emitter.label(box_label);
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // move the Reflection owner object pointer into the Mixed payload
-    emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
-    emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
-    emitter.instruction("call __rt_mixed_from_value");                          // box the Reflection owner object for eval
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // recover the fresh Reflection owner allocation
+    emit_box_current_owned_value_as_mixed(emitter, &PhpType::Object(String::new()));
     emitter.instruction(&format!("jmp {}", done_label));                        // skip the fail-closed return path after boxing
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure

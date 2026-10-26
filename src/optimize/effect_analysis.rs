@@ -8,6 +8,7 @@
 //! - Summaries remain conservative around dynamic eval, trait dispatch, visibility, and never-returning bodies.
 
 use super::*;
+use crate::types::PhpType;
 
 /// Computes the effect for every function, static method, and concrete instance method in the
 /// program. Uses a fixed-point iteration: effects start as PURE and are refined by examining
@@ -69,9 +70,13 @@ pub(super) fn compute_program_callable_effects(
                             let mut instance_method_updates = Vec::new();
 
                             for (name, function) in &function_bodies {
-                                let effect = never_declared_effect(
-                                    function.declared_never,
-                                    parameter_guard_effect(function.parameter_guard_may_throw, block_effect(&function.body)),
+                                let effect = declared_return_coverage_effect(
+                                    function.declared_return_type.as_ref(),
+                                    function.body,
+                                    never_declared_effect(
+                                        function.declared_never,
+                                        parameter_guard_effect(function.parameter_guard_may_throw, block_effect(&function.body)),
+                                    ),
                                 );
                                 if function_effects.get(name).copied() != Some(effect) {
                                     function_updates.push((name.clone(), effect));
@@ -83,8 +88,12 @@ pub(super) fn compute_program_callable_effects(
                                     Some(method.context.clone()),
                                     || block_effect(&method.body),
                                 );
-                                let effect = never_declared_effect(method.declared_never,
-                                    parameter_guard_effect(method.parameter_guard_may_throw, effect));
+                                let effect = declared_return_coverage_effect(
+                                    method.declared_return_type.as_ref(),
+                                    method.body,
+                                    never_declared_effect(method.declared_never,
+                                        parameter_guard_effect(method.parameter_guard_may_throw, effect)),
+                                );
                                 if static_method_effects.get(name).copied() != Some(effect) {
                                     static_method_updates.push((name.clone(), effect));
                                 }
@@ -95,8 +104,12 @@ pub(super) fn compute_program_callable_effects(
                                     Some(method.context.clone()),
                                     || block_effect(&method.body),
                                 );
-                                let effect = never_declared_effect(method.declared_never,
-                                    parameter_guard_effect(method.parameter_guard_may_throw, effect));
+                                let effect = declared_return_coverage_effect(
+                                    method.declared_return_type.as_ref(),
+                                    method.body,
+                                    never_declared_effect(method.declared_never,
+                                        parameter_guard_effect(method.parameter_guard_may_throw, effect)),
+                                );
                                 if instance_method_effects.get(name).copied() != Some(effect) {
                                     instance_method_updates.push((name.clone(), effect));
                                 }
@@ -164,6 +177,9 @@ fn collect_program_function_bodies<'a>(
                         body,
                         declared_never: is_never_return_type(return_type),
                         parameter_guard_may_throw: params.iter().any(|(_, ty, _, _)| matches!(ty, Some(TypeExpr::False))),
+                        declared_return_type: return_type
+                            .as_ref()
+                            .map(crate::ir_lower::type_expr_to_php_type),
                     },
                 );
             }
@@ -199,6 +215,10 @@ fn collect_program_static_method_bodies<'a>(
                                 body: &method.body,
                                 declared_never: is_never_return_type(&method.return_type),
                                 parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| matches!(ty, Some(TypeExpr::False))),
+                                declared_return_type: method
+                                    .return_type
+                                    .as_ref()
+                                    .map(crate::ir_lower::type_expr_to_php_type),
                             },
                         );
                     }
@@ -236,6 +256,10 @@ fn collect_program_instance_method_bodies<'a>(
                                 body: &method.body,
                                 declared_never: is_never_return_type(&method.return_type),
                                 parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| matches!(ty, Some(TypeExpr::False))),
+                                declared_return_type: method
+                                    .return_type
+                                    .as_ref()
+                                    .map(crate::ir_lower::type_expr_to_php_type),
                             },
                         );
                     }
@@ -368,4 +392,29 @@ fn parameter_guard_effect(may_throw: bool, effect: Effect) -> Effect {
     } else {
         effect
     }
+}
+
+/// Adds the throw a return-coverage gap can raise to a callable's effect summary.
+///
+/// php COMPILES a body that does not return a value on every path and raises a catchable
+/// `TypeError: X(): Return value must be of type Y, none returned` at run time when a path
+/// completes without one. The body itself can be pure — an empty `function f(): int {}` reads
+/// and writes nothing — so without this the summary would call the call PURE and a discarded
+/// result would let a pass delete the call, and with it the TypeError the program must raise.
+/// Nullable and mixed declarations require an explicit value return as well.
+fn declared_return_coverage_effect(
+    declared: Option<&PhpType>,
+    body: &[Stmt],
+    effect: Effect,
+) -> Effect {
+    let Some(declared) = declared else {
+        return effect;
+    };
+    if matches!(declared, PhpType::Void | PhpType::Never) {
+        return effect;
+    }
+    if crate::termination::block_guarantees_function_exit_with_divergence(body, &|_| false) {
+        return effect;
+    }
+    effect.with_may_throw()
 }

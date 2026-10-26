@@ -223,11 +223,11 @@ pub(super) fn collect_eval_native_instance_property_types(
     class_info: &ClassInfo,
     registrations: &mut Vec<EvalNativePropertyTypeRegistration>,
 ) {
-    for (slot, (property_name, php_type)) in class_info.properties.iter().enumerate() {
-        if !class_info.property_slot_is_declared(slot, property_name) {
+    for (slot, (property_name, _)) in class_info.properties.iter().enumerate() {
+        let Some(declared_type) = class_info.property_slot_declared_type(slot, property_name) else {
             continue;
-        }
-        let Some(type_spec) = eval_native_php_type_spec(php_type, false) else {
+        };
+        let Some(type_spec) = eval_native_php_type_spec(declared_type, false) else {
             continue;
         };
         registrations.push(EvalNativePropertyTypeRegistration {

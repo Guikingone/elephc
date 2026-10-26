@@ -26,6 +26,9 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
 mod dynamic_properties;
+mod hydrate;
+mod restore;
+mod native_restore;
 mod private_shadow;
 mod replacement;
 mod unset;
@@ -47,6 +50,8 @@ struct EvalPropertySlot {
     visibility: Visibility,
     offset: usize,
     ty: PhpType,
+    /// Original checker contract before bridge storage erases literal/union distinctions.
+    declared_type: Option<PhpType>,
     is_declared: bool,
     is_reference: bool,
     is_hidden_shadow: bool,
@@ -93,6 +98,23 @@ pub(super) fn emit_eval_property_helpers(
     unset::emit_property_unset_helper(module, emitter, data, &slots);
     emit_property_hash_slot_helper(module, emitter);
     emit_dynamic_property_exists_helper(module, emitter);
+}
+
+/// Emits the native hydration writer independently of optional eval support.
+pub(super) fn emit_restore_property_helper(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    restore::emit(module, emitter, data);
+    native_restore::emit(module, emitter, data);
+}
+
+/// Emits the native ordinary-object hydration writer independently of optional eval support.
+pub(super) fn emit_unserialize_property_helper(
+    module: &Module, emitter: &mut Emitter, data: &mut DataSection,
+) {
+    hydrate::emit(module, emitter, data);
 }
 
 /// Returns whether this binary links the eval bridge, and therefore needs these helpers.
@@ -168,6 +190,7 @@ fn collect_class_property_slots(
             visibility,
             offset: 8 + index * 16,
             ty: super::eval_argument_helpers::bridge_storage_type(ty),
+            declared_type: class_info.property_slot_declared_type(index, property).cloned(),
             is_declared: class_info.property_slot_is_declared(index, property),
             is_reference: class_info.property_slot_is_reference(index, property),
             is_hidden_shadow,
@@ -694,7 +717,10 @@ fn emit_aarch64_property_name_compare(
     emitter.instruction("bl __rt_str_eq");                                      // compare requested property name with this declared property
     let target_label = slot_body_label(module, slot, mode);
     if matches!(slot.visibility, Visibility::Public) {
-        emitter.instruction(&format!("cbnz x0, {}", target_label));             // dispatch to the property body when the names match
+        let miss_label = slot_access_miss_label(module, slot, mode);
+        emitter.instruction(&format!("cbz x0, {}", miss_label));                // skip the distant body through a nearby conditional target
+        emitter.instruction(&format!("b {}", target_label));                    // use the full branch range for a generated property body
+        emitter.label(&miss_label);
         return;
     }
     let miss_label = slot_access_miss_label(module, slot, mode);
@@ -1205,7 +1231,7 @@ fn emit_aarch64_store_property_slot(
             emitter.instruction("bl __rt_mixed_cast_string");                   // coerce the eval value to a PHP string pair
             emit_owned_slot_replacement(emitter, slot);
         }
-        PhpType::TaggedScalar => emit_aarch64_store_tagged_scalar_property(emitter, slot),
+        PhpType::TaggedScalar => emit_aarch64_store_tagged_scalar_property(emitter, slot, fail_label),
         PhpType::Array(_) => emit_aarch64_store_heap_property_slot(emitter, slot, 4, fail_label),
         PhpType::AssocArray { .. } => {
             emit_aarch64_store_heap_property_slot(emitter, slot, 5, fail_label);
@@ -1263,7 +1289,7 @@ fn emit_x86_64_store_property_slot(
             emitter.instruction("call __rt_mixed_cast_string");                 // coerce the eval value to a PHP string pair
             emit_owned_slot_replacement(emitter, slot);
         }
-        PhpType::TaggedScalar => emit_x86_64_store_tagged_scalar_property(emitter, slot),
+        PhpType::TaggedScalar => emit_x86_64_store_tagged_scalar_property(emitter, slot, fail_label),
         PhpType::Array(_) => emit_x86_64_store_heap_property_slot(emitter, slot, 4, fail_label),
         PhpType::AssocArray { .. } => {
             emit_x86_64_store_heap_property_slot(emitter, slot, 5, fail_label);
@@ -1312,14 +1338,19 @@ fn emit_aarch64_clear_scalar_property_marker(emitter: &mut Emitter, slot: &EvalP
 }
 
 /// Stores a boxed eval value into an ARM64 nullable-int tagged-scalar property slot.
-fn emit_aarch64_store_tagged_scalar_property(emitter: &mut Emitter, slot: &EvalPropertySlot) {
+fn emit_aarch64_store_tagged_scalar_property(
+    emitter: &mut Emitter,
+    slot: &EvalPropertySlot,
+    writer_label: &str,
+) {
+    let label_prefix = format!("{}_{}", slot_body_label_raw(slot, "set"), writer_label);
     let null_label = format!(
         "{}_tagged_scalar_null",
-        slot_body_label_raw(slot, "set")
+        label_prefix
     );
     let done_label = format!(
         "{}_tagged_scalar_done",
-        slot_body_label_raw(slot, "set")
+        label_prefix
     );
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed eval value for nullable-int inspection
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the assigned value tag and payload words
@@ -1442,14 +1473,19 @@ fn emit_x86_64_store_object_property_slot(
 }
 
 /// Stores a boxed eval value into an x86_64 nullable-int tagged-scalar property slot.
-fn emit_x86_64_store_tagged_scalar_property(emitter: &mut Emitter, slot: &EvalPropertySlot) {
+fn emit_x86_64_store_tagged_scalar_property(
+    emitter: &mut Emitter,
+    slot: &EvalPropertySlot,
+    writer_label: &str,
+) {
+    let label_prefix = format!("{}_{}", slot_body_label_raw(slot, "set"), writer_label);
     let null_label = format!(
         "{}_tagged_scalar_null_x",
-        slot_body_label_raw(slot, "set")
+        label_prefix
     );
     let done_label = format!(
         "{}_tagged_scalar_done_x",
-        slot_body_label_raw(slot, "set")
+        label_prefix
     );
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed eval value for nullable-int inspection
     emitter.instruction("call __rt_mixed_unbox");                               // expose the assigned value tag and payload words
@@ -1463,7 +1499,7 @@ fn emit_x86_64_store_tagged_scalar_property(emitter: &mut Emitter, slot: &EvalPr
     crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
     emitter.label(&done_label);
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the store
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset));//store the nullable integer payload into the property slot
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset)); // store the nullable integer payload into the property slot
     emitter.instruction(                                                        // store the nullable integer tag into the property slot
         &format!("mov QWORD PTR [r11 + {}], rdx", slot.offset + 8)
     );

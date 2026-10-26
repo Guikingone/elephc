@@ -5,7 +5,7 @@
 //! - `crate::ir_lower::program`.
 //!
 //! Key details:
-//! - Keeps program metadata deterministic and EIR lowering behavior unchanged.
+//! - Keeps program metadata deterministic and retains indirectly invoked hydration hooks.
 
 use super::*;
 
@@ -81,7 +81,20 @@ pub(super) fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, St
                         );
                     }
                 }
-                Op::ObjectNew => {
+                Op::RuntimeCall if matches!(inst.immediate,
+                    Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                        crate::ir::RuntimeFnId::Serialize | crate::ir::RuntimeFnId::Unserialize)))) => {
+                    // A wire name can select any declared class. Keep supported SPL
+                    // hydration bodies even when source code never calls them directly.
+                    for class_name in module.class_infos.keys() {
+                        for method in ["__serialize", "__unserialize", "__sleep", "__wakeup"] {
+                            push_supported_builtin_spl_method_for_receiver(
+                                &mut methods, module, class_name, method,
+                            );
+                        }
+                    }
+                }
+                Op::ObjectNew | Op::ObjectNewReserved => {
                     if let Some(class_name) = class_data_name(module, inst) {
                         let construct_key = php_method_key("__construct");
                         push_supported_builtin_spl_method_for_receiver(
@@ -175,6 +188,34 @@ pub(super) fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, St
                             }
                         }
                         _ => {}
+                    }
+                }
+                Op::IterStart => {
+                    // A `foreach` over an `IteratorAggregate` object lowers an implicit
+                    // `getIterator()` call in the backend, but that call is not an EIR
+                    // `MethodCall`, so the scan above never sees it. Register the aggregate's
+                    // iterator factory (and the class's metadata methods) here; otherwise the
+                    // call site references a `_method_<class>_getiterator` symbol that is never
+                    // emitted and the program fails to link.
+                    let Some(source) = inst.operands.first().copied() else {
+                        continue;
+                    };
+                    let Some(source_ty) = function
+                        .value(source)
+                        .map(|value| value.php_type.codegen_repr())
+                    else {
+                        continue;
+                    };
+                    if let PhpType::Object(class_name) = source_ty {
+                        let normalized = class_name.trim_start_matches('\\');
+                        let get_iterator = php_method_key("getIterator");
+                        push_supported_builtin_spl_method_for_receiver(
+                            &mut methods,
+                            module,
+                            normalized,
+                            &get_iterator,
+                        );
+                        push_builtin_spl_metadata_methods(&mut methods, module, normalized);
                     }
                 }
                 _ => {}

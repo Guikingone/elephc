@@ -92,7 +92,7 @@ fn spl_recursive_filter_iterator_methods() -> Vec<ClassMethod> {
         method_with_body(
             "getChildren",
             Vec::new(),
-            Some(TypeExpr::Nullable(Box::new(named_type("RecursiveIterator")))),
+            Some(TypeExpr::Nullable(Box::new(named_type("RecursiveFilterIterator")))),
             recursive_filter_get_children_body(),
         ),
         method_with_body(
@@ -145,7 +145,7 @@ fn spl_parent_iterator_methods() -> Vec<ClassMethod> {
         method_with_body(
             "getChildren",
             Vec::new(),
-            Some(TypeExpr::Nullable(Box::new(named_type("RecursiveIterator")))),
+            Some(TypeExpr::Nullable(Box::new(named_type("RecursiveFilterIterator")))),
             parent_iterator_get_children_body(),
         ),
         method_with_body(

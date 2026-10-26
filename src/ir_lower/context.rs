@@ -12,6 +12,7 @@
 //!   to synthesize block-parameter phis for every PHP variable yet.
 
 mod string_append;
+mod local_presence;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -171,6 +172,9 @@ pub(crate) struct LoweringSnapshot {
     local_kinds: HashMap<String, LocalKind>,
     local_types: TypeEnv,
     initialized_slots: HashSet<LocalSlotId>,
+    presence_flags: HashMap<LocalSlotId, LocalSlotId>,
+    presence_flag_seeds: Vec<crate::ir::InstId>,
+    presence_probe_loads: Vec<(ValueId, LocalSlotId)>,
     constants: HashMap<String, (ExprKind, PhpType)>,
     loop_stack: Vec<LoopFrame>,
     finally_stack: Vec<FinallyFrame>,
@@ -279,6 +283,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     pub(crate) append_update_cell_aliases: HashSet<String>,
     initialized_slots: HashSet<LocalSlotId>,
+    presence_flags: HashMap<LocalSlotId, LocalSlotId>,
+    presence_flag_seeds: Vec<crate::ir::InstId>,
+    presence_probe_loads: Vec<(ValueId, LocalSlotId)>,
     pub functions: &'m HashMap<String, FunctionSig>,
     pub extern_functions: &'m HashMap<String, ExternFunctionSig>,
     pub extern_globals: &'m HashMap<String, PhpType>,
@@ -513,6 +520,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             local_kinds: HashMap::new(),
             local_types: env,
             initialized_slots: HashSet::new(),
+            presence_flags: HashMap::new(),
+            presence_flag_seeds: Vec::new(),
+            presence_probe_loads: Vec::new(),
             functions,
             extern_functions,
             extern_globals,
@@ -605,6 +615,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             local_kinds: self.local_kinds.clone(),
             local_types: self.local_types.clone(),
             initialized_slots: self.initialized_slots.clone(),
+            presence_flags: self.presence_flags.clone(),
+            presence_flag_seeds: self.presence_flag_seeds.clone(),
+            presence_probe_loads: self.presence_probe_loads.clone(),
             constants: self.constants.clone(),
             loop_stack: self.loop_stack.clone(),
             finally_stack: self.finally_stack.clone(),
@@ -683,6 +696,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.local_kinds = snapshot.local_kinds;
         self.local_types = snapshot.local_types;
         self.initialized_slots = snapshot.initialized_slots;
+        self.presence_flags = snapshot.presence_flags;
+        self.presence_flag_seeds = snapshot.presence_flag_seeds;
+        self.presence_probe_loads = snapshot.presence_probe_loads;
         self.constants = snapshot.constants;
         self.loop_stack = snapshot.loop_stack;
         self.finally_stack = snapshot.finally_stack;
@@ -1020,8 +1036,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         kind: LocalKind,
     ) -> LocalSlotId {
-        if let Some(slot) = self.local_slots.get(name) {
-            return *slot;
+        if let Some(slot) = self.local_slots.get(name).copied() {
+            self.specialize_unstored_presence_slot(slot, &php_type);
+            return slot;
         }
         let boxed_php_type = if kind == LocalKind::PhpLocal {
             self.boxed_incdec_storage_type(name, php_type.clone())
@@ -3121,10 +3138,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if target == source {
             return;
         }
-        // An existing reference can point into an object property whose payload remains raw.
-        // Reboxing that shared cell here would make property reads treat a box as an object.
+        // A new object or null reference needs a boxed payload: null's raw fallback has no
+        // surviving runtime type after an alias changes it to an ordinary zero value.
+        // Existing references can point into raw object properties, so never rebox them here.
         if !self.is_ref_bound_local(source)
-            && matches!(self.local_type(source).codegen_repr(), PhpType::Object(_))
+            && matches!(self.local_type(source).codegen_repr(), PhpType::Object(_) | PhpType::Void)
         {
             self.promote_local_mixed_ref_cell(source, span);
         }
@@ -3437,6 +3455,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::HashArrayUnion
                     | Op::ArrayToHash
                     | Op::ObjectNew
+                    | Op::ObjectHandleReserve
+                    | Op::ObjectNewReserved
                     | Op::ObjectCloneShallow
                     | Op::DynamicObjectNew
                     | Op::DynamicObjectNewMixed
@@ -4908,6 +4928,8 @@ pub(super) fn opcode_has_opaque_user_code_target(op: Op, immediate: Option<&Imme
             | Op::EvalFunctionCall
             | Op::EvalFunctionCallArray
             | Op::ObjectNew
+            | Op::ObjectHandleReserve
+            | Op::ObjectNewReserved
             | Op::EvalObjectNew
             | Op::IteratorMethodCall
             | Op::IterStart
@@ -4969,8 +4991,10 @@ pub(super) fn opcode_has_opaque_user_code_target(op: Op, immediate: Option<&Imme
             ))),
         ) => true,
         (Op::CoreBuiltin, Some(Immediate::I64(selector))) => {
-            crate::ir::CoreBuiltinOp::from_i64(*selector)
-                == Some(crate::ir::CoreBuiltinOp::TriggerError)
+            matches!(
+                crate::ir::CoreBuiltinOp::from_i64(*selector),
+                Some(crate::ir::CoreBuiltinOp::TriggerError | crate::ir::CoreBuiltinOp::InternalDeprecated)
+            )
         }
         _ => false,
     }

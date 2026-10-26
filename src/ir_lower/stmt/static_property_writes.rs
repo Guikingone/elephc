@@ -300,7 +300,8 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
     key_already_diagnosed: bool,
 ) {
     let key_marker = key_already_diagnosed.then_some(Immediate::Bool(true));
-    let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
+    array_write_core::with_write_key_and_value(ctx, index, value,
+        array_write_core::WriteValuePolicy::Borrowed, |ctx, index, value| {
     if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
         ctx.emit_void(
             Op::RuntimeCall,
@@ -369,6 +370,7 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
         effects_lookup::runtime_effects(),
         Some(span),
     );
+    });
 }
 
 /// Publishes a detached boxed PHP array before a static-property element mutation.

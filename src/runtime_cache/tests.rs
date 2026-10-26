@@ -87,6 +87,7 @@ use super::*;
             RuntimeFeatures { directory_resource: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { handler_state: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { object_clone: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { heap_scopes: true, ..RuntimeFeatures::none() },
         ];
 
         let mut keys = std::collections::HashSet::from([baseline]);

@@ -5,6 +5,7 @@
 //! - `crate::ir_lower::expr`.
 //!
 //! Key details:
+//! - Reserved NUL native storage names do not contribute Reflection properties.
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
@@ -110,6 +111,7 @@ pub(super) fn reflection_class_property_names_for_filter(
             .iter()
             .chain(class_info.static_properties.iter())
             .map(|(name, _)| name)
+            .filter(|name| !name.starts_with('\0'))
             .filter(|name| reflection_property_matches_filter(class_info, name, filter))
             .cloned()
             .collect(),

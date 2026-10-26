@@ -12,6 +12,9 @@
 //!   is ambiguous because mangled fragments contain `_`, which silently merged unrelated PHP
 //!   declarations onto one storage cell.
 
+mod compiler_calls;
+pub use compiler_calls::CompilerCall;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// Kind of PHP name based on how it was written in source.
 ///
@@ -37,9 +40,27 @@ pub struct Name {
     /// Explicitly qualified names and imported function aliases never carry this fallback.
     /// Keep this flag in the existing alignment padding: names are embedded in large AST builders.
     function_fallback: bool,
+    /// Typed compiler identity; source names and dynamic PHP strings always carry None.
+    compiler_runtime: Option<CompilerCall>,
 }
 
 impl Name {
+    /// Constructs a compiler-generated call target without declaring a PHP function.
+    ///
+    /// The diagnostic spelling is intentionally not a PHP identifier. Reconstructing a
+    /// source name from that text does not grant the compiler identity.
+    pub fn compiler_call(operation: CompilerCall) -> Self {
+        let mut name = Self::unqualified(format!("__compiler@{operation:?}"));
+        name.kind = NameKind::FullyQualified;
+        name.compiler_runtime = Some(operation);
+        name
+    }
+
+    /// Returns the typed target attached by a compiler AST builder.
+    pub(crate) fn compiler_runtime(&self) -> Option<CompilerCall> {
+        self.compiler_runtime
+    }
+
     /// Constructs an unqualified name from a single identifier.
     ///
     /// Sets `kind` to `NameKind::Unqualified` and `parts` to a single-element vector.
@@ -49,6 +70,7 @@ impl Name {
             parts: vec![name.into()],
             text: String::new(),
             function_fallback: false,
+            compiler_runtime: None,
         }
         .with_text()
     }
@@ -67,6 +89,7 @@ impl Name {
             parts,
             text: String::new(),
             function_fallback: false,
+            compiler_runtime: None,
         }
         .with_text()
     }
@@ -85,6 +108,7 @@ impl Name {
             parts,
             text: String::new(),
             function_fallback: false,
+            compiler_runtime: None,
         }
         .with_text()
     }
@@ -114,6 +138,7 @@ impl Name {
             parts,
             text: String::new(),
             function_fallback: self.function_fallback,
+            compiler_runtime: self.compiler_runtime,
         }
         .with_text()
     }

@@ -279,7 +279,7 @@ const INTRINSICS: &[IntrinsicSpec] = &[
     spl_instance_spec("splstack", "SplStack", "bottom", IntrinsicCallKind::SplDllBottom, "__rt_spl_dll_bottom"),
     spl_instance_spec("splstack", "SplStack", "count", IntrinsicCallKind::SplDllCount, "__rt_spl_dll_count"),
     spl_instance_spec("splstack", "SplStack", "isempty", IntrinsicCallKind::SplDllIsEmpty, "__rt_spl_dll_is_empty"),
-    spl_instance_spec("splstack", "SplStack", "setiteratormode", IntrinsicCallKind::SplDllSetIteratorMode, "__rt_spl_dll_set_iterator_mode"),
+    spl_instance_spec("splstack", "SplStack", "setiteratormode", IntrinsicCallKind::SplDllSetIteratorMode, "__rt_spl_stack_set_iterator_mode"),
     spl_instance_spec("splstack", "SplStack", "getiteratormode", IntrinsicCallKind::SplDllGetIteratorMode, "__rt_spl_dll_get_iterator_mode"),
     spl_instance_spec("splstack", "SplStack", "serialize", IntrinsicCallKind::SplDllSerialize, "__rt_spl_dll_serialize"),
     spl_instance_spec("splstack", "SplStack", "unserialize", IntrinsicCallKind::SplDllUnserialize, "__rt_spl_dll_unserialize"),
@@ -303,7 +303,7 @@ const INTRINSICS: &[IntrinsicSpec] = &[
     spl_instance_spec("splqueue", "SplQueue", "bottom", IntrinsicCallKind::SplDllBottom, "__rt_spl_dll_bottom"),
     spl_instance_spec("splqueue", "SplQueue", "count", IntrinsicCallKind::SplDllCount, "__rt_spl_dll_count"),
     spl_instance_spec("splqueue", "SplQueue", "isempty", IntrinsicCallKind::SplDllIsEmpty, "__rt_spl_dll_is_empty"),
-    spl_instance_spec("splqueue", "SplQueue", "setiteratormode", IntrinsicCallKind::SplDllSetIteratorMode, "__rt_spl_dll_set_iterator_mode"),
+    spl_instance_spec("splqueue", "SplQueue", "setiteratormode", IntrinsicCallKind::SplDllSetIteratorMode, "__rt_spl_queue_set_iterator_mode"),
     spl_instance_spec("splqueue", "SplQueue", "getiteratormode", IntrinsicCallKind::SplDllGetIteratorMode, "__rt_spl_dll_get_iterator_mode"),
     spl_instance_spec("splqueue", "SplQueue", "serialize", IntrinsicCallKind::SplDllSerialize, "__rt_spl_dll_serialize"),
     spl_instance_spec("splqueue", "SplQueue", "unserialize", IntrinsicCallKind::SplDllUnserialize, "__rt_spl_dll_unserialize"),
@@ -480,6 +480,11 @@ impl IntrinsicCall {
     /// or None if the intrinsic has no separate helper (shouldn't happen in practice).
     pub fn runtime_helper(self) -> Option<&'static str> {
         INTRINSICS[self.spec_index].runtime_helper
+    }
+
+    /// Reports helpers whose string result transfers a fresh owned reference.
+    pub fn returns_owned_string(self) -> bool {
+        matches!(self.kind(), IntrinsicCallKind::SplDllSerialize)
     }
 
     /// Lists visible boxed argument positions whose owners the SPL helper consumes.

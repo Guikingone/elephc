@@ -189,6 +189,23 @@ pub(super) fn lower_trigger_error(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    lower_diagnostic(ctx, inst, false)
+}
+
+/// Emits an engine-owned deprecation without relaxing public trigger_error level validation.
+pub(super) fn lower_internal_deprecation(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_diagnostic(ctx, inst, true)
+}
+
+/// Shares handler invocation and source-location publication for user and engine diagnostics.
+fn lower_diagnostic(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    internal_deprecation: bool,
+) -> Result<()> {
     let message = expect_operand(inst, 0)?;
     let level = expect_operand(inst, 1)?;
     let file = expect_operand(inst, 2)?;
@@ -196,7 +213,9 @@ pub(super) fn lower_trigger_error(
     let default_label = ctx.next_label("trigger_error_default");
     let done_label = ctx.next_label("trigger_error_done");
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
-    emit_validate_trigger_error_level(ctx, level)?;
+    if !internal_deprecation {
+        emit_validate_trigger_error_level(ctx, level)?;
+    }
     abi::emit_load_symbol_to_reg(
         ctx.emitter,
         descriptor_reg,
@@ -214,18 +233,18 @@ pub(super) fn lower_trigger_error(
         &default_label,
     );
     super::super::callables::emit_invoker_arg_mixed(ctx, &[level, message, file, line])?;
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_reg_move(ctx.emitter, arg1, abi::int_result_reg(ctx.emitter));
     abi::emit_load_symbol_to_reg(ctx.emitter, arg0, "_php_error_handler_callable", 0);
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg1, 0);
-    abi::emit_call_label(ctx.emitter, "__rt_error_handler_invoke");
-    super::super::callables::release_invoker_arg_preserving_result(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_error_handler_invoke_owned_args");
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     emit_release_handler_result_and_branch_on_false(ctx, &default_label);
     emit_bool_result(ctx, true);
     ctx.emitter.instruction(&branch_instruction(ctx, &done_label));             // skip PHP's default diagnostic after handler suppression
     ctx.emitter.label(&default_label);
-    emit_default_user_error(ctx, message, level, file, line)?;
+    emit_default_user_error(ctx, message, level, file, line, internal_deprecation)?;
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -431,6 +450,7 @@ fn emit_default_user_error(
     level: ValueId,
     file: ValueId,
     line: ValueId,
+    internal_deprecation: bool,
 ) -> Result<()> {
     let skip_output = ctx.next_label("trigger_error_skip_output");
     load_integer_operand(ctx, level)?;
@@ -439,18 +459,24 @@ fn emit_default_user_error(
     let mask_reg = abi::secondary_scratch_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, mask_reg, "_php_error_reporting", 0);
     emit_branch_if_no_mask_overlap(ctx, mask_reg, level_reg, &skip_output);
-    emit_user_error_category(ctx, level_reg);
+    // php prefixes the display line with a newline so it never glues to prior output.
+    emit_user_error_fragment(ctx, b"\n");
+    if internal_deprecation {
+        emit_user_error_fragment(ctx, b"Deprecated: ");
+    } else {
+        emit_user_error_category(ctx, level_reg);
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.load_string_value_to_regs(message, "x1", "x2")?,
         Arch::X86_64 => ctx.load_string_value_to_regs(message, "rdi", "rsi")?,
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_write");
+    abi::emit_call_label(ctx.emitter, "__rt_diag_write_both");
     emit_user_error_fragment(ctx, b" in ");
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.load_string_value_to_regs(file, "x1", "x2")?,
         Arch::X86_64 => ctx.load_string_value_to_regs(file, "rdi", "rsi")?,
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_write");
+    abi::emit_call_label(ctx.emitter, "__rt_diag_write_both");
     emit_user_error_fragment(ctx, b" on line ");
     load_integer_operand(ctx, line)?;
     abi::emit_call_label(ctx.emitter, "__rt_itoa");
@@ -461,7 +487,7 @@ fn emit_default_user_error(
             ctx.emitter.instruction("mov rsi, rdx");                            // pass the formatted line-number length to the diagnostic helper
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_write");
+    abi::emit_call_label(ctx.emitter, "__rt_diag_write_both");
     emit_user_error_fragment(ctx, b"\n");
     ctx.emitter.label(&skip_output);
     load_integer_operand(ctx, level)?;
@@ -539,7 +565,7 @@ fn emit_user_error_fragment(ctx: &mut FunctionContext<'_>, bytes: &[u8]) {
             abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_write");
+    abi::emit_call_label(ctx.emitter, "__rt_diag_write_both");
 }
 
 /// Exits with PHP's fatal status when the unhandled level is E_USER_ERROR.

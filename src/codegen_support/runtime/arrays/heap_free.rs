@@ -30,8 +30,18 @@ use crate::codegen_support::platform::Arch;
 ///
 /// ABI: `x0` is callee-saved where needed; all other registers are scratch.
 pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) {
+    emit_heap_free_impl(emitter, eval_bridge, mbstring, false);
+}
+
+/// Emits allocation retirement with native SPL borrowed-root observation enabled.
+pub fn emit_heap_free_scoped(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) {
+    emit_heap_free_impl(emitter, eval_bridge, mbstring, true);
+}
+
+/// Selects the target allocator while keeping plain-runtime emission unchanged.
+fn emit_heap_free_impl(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool, heap_scopes: bool) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_heap_free_linux_x86_64(emitter, eval_bridge, mbstring);
+        emit_heap_free_linux_x86_64(emitter, eval_bridge, mbstring, heap_scopes);
         return;
     }
 
@@ -61,6 +71,8 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     emitter.instruction("add x12, x0, x11");                                    // compute the candidate payload end address
     emitter.instruction("cmp x12, x17");                                        // would the candidate payload overrun the live heap?
     emitter.instruction("b.hi __rt_heap_free_done");                            // yes — reject the invalid block before free-list insertion
+
+    if heap_scopes { super::heap_scopes::emit_free_observer(emitter); }
 
     // -- return this block's PHP object handle to the pool before the storage goes --
     // Probe the authoritative side table inline. Most blocks are strings, arrays,
@@ -335,7 +347,7 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
 ///
 /// Input: `rax` = user pointer
 /// Output: `rax` preserved through the free path; all other scratch registers are clobbered.
-fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) {
+fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool, heap_scopes: bool) {
     let double_free_msg = "Fatal error: heap debug detected double free\n";
 
     emitter.blank();
@@ -377,6 +389,8 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used to distinguish owned heap payloads from foreign pointers
     emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
     emitter.instruction("jne __rt_heap_free_done");                             // silently ignore foreign/static pointers so callers can safely pass literals or concat-buffer storage
+
+    if heap_scopes { super::heap_scopes::emit_free_observer(emitter); }
 
     // -- return this block's PHP object handle to the pool before the storage goes --
     // Probe the authoritative side table inline so ordinary non-object frees do not

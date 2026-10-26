@@ -51,6 +51,8 @@ pub(crate) mod signatures;
 pub(crate) mod iconv_constants;
 /// The compiler's view over the shared builtin class catalog.
 pub(crate) mod builtin_classes;
+/// Compiler-private physical slots shared by SPL declarations and runtime metadata.
+pub(crate) mod spl_storage_layout;
 /// The compiler's view over the shared global-constant catalog.
 pub(crate) mod predefined_constants;
 /// `defined('Class::CONST')` existence lookup over class/interface/enum metadata.
@@ -124,3 +126,6 @@ pub fn check_with_options(
 pub(crate) fn nested_loop_storage_scope(parent: &str, span: crate::span::Span) -> String {
     format!("{}::closure@{}:{}", parent, span.line, span.col)
 }
+
+/// Compiler-owned SPL heap slot contract shared with native scope helpers.
+pub(crate) mod spl_heap_layout;

@@ -958,3 +958,9 @@ as `LINUX_AARCH64`. All three tool overrides are required for a non-host target.
 The variables in this table are read by the **compiler**. A separate family,
 `ELEPHC_INI_<directive>`, is read by the **compiled binary** at run time — see
 [Runtime overrides](#runtime-overrides-elephc_ini_).
+
+Startup `--ini display_errors=0|1|stdout|stderr` and `--ini log_errors=0|1`
+select warning destinations. They also apply to user diagnostics from
+`trigger_error()`; suppressing default output leaves registered error handlers
+active. See [Startup warning destinations](output-and-diagnostics.md#startup-warning-destinations)
+for scope and examples.

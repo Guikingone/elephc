@@ -461,6 +461,7 @@ pub(super) fn check_types_impl(
         return Err(CompileError::from_many(errors));
     }
 
+    super::builtin_spl_classes::native_property_storage::box_heap_user_property_storage(&mut checker);
     Ok((checker, final_global_env))
 }
 

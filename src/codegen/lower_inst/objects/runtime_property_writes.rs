@@ -1846,6 +1846,15 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_unset_runtime(
 ) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let property_value = expect_operand(inst, 1)?;
+    // A receiver whose runtime class is only known at run time always takes the runtime ladder,
+    // even for a name that folded to a constant: the class may declare the name in a slot, keep it
+    // in its hash, or answer through `__unset`, and only the ladder asks the RUNTIME class.
+    if matches!(
+        ctx.value_php_type(object)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return lower_runtime_mixed_prop_unset(ctx, object, property_value, inst);
+    }
     if let Some(property) = const_string_operand(ctx, property_value)? {
         let property = property.to_string();
         return lower_named_prop_unset(ctx, object, &property, inst);

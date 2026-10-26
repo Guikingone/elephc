@@ -32,7 +32,7 @@ unset($source);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Eval-created ReflectionParameter public names add no retained string beyond eval metadata.
+/// Eval-created ReflectionParameter objects retire their entire native owner graph.
 #[test]
 fn test_eval_reflection_parameter_public_name_releases_string_owner() {
     let baseline = compile_and_run_with_heap_debug(r#"<?php
@@ -54,14 +54,17 @@ echo 'done';
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "done");
-    // Eval retains four metadata blocks and three boxed array owners beyond the AOT object;
-    // the public-name slot must not retain another string allocation after the object is unset.
+    // The eval factory transfers its fresh object reference to the result box.
+    // Its parameter, declaring-function and type graphs must all disappear at unset.
+    // The older baseline-plus-seven floor masked producer-reference leaks.
     assert_eq!(
         eval_operand_owner_live_blocks(&out.stderr),
-        baseline_live_blocks + 7,
-        "discarded ReflectionParameter objects must release their public-name string: {}",
+        0,
+        "discarded eval ReflectionParameter objects must release their metadata graph; \
+         AOT control retained {baseline_live_blocks} blocks: {}",
         out.stderr,
     );
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
 }
 
 /// Extracts the runtime heap's retained allocation count, accepting eval-registered class and reflection metadata in the baseline.

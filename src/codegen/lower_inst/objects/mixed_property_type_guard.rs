@@ -109,6 +109,8 @@ enum TagAction {
         require_numeric_string: bool,
         fallback: Option<PhpType>,
     },
+    /// A literal false contract accepts only a false boolean payload.
+    FalseOnly,
     /// PHP raises `TypeError` for this source type.
     Reject,
 }
@@ -260,6 +262,13 @@ pub(super) fn emit_mixed_property_type_guard(
         ctx.emitter.label(label);
         match action {
             TagAction::Accept => abi::emit_jump(ctx.emitter, &accept_label),
+            TagAction::FalseOnly => {
+                let payload = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+                let result = abi::int_result_reg(ctx.emitter);
+                abi::emit_reg_move(ctx.emitter, result, payload);
+                abi::emit_branch_if_int_result_zero(ctx.emitter, &accept_label);
+                emit_property_type_error(ctx, slot, "true");
+            }
             // An object is refused BY CLASS even when no class could have satisfied the
             // declared type: php-src always prints the runtime class here, so `int $n = new T()`
             // reports `T`, never the word `object`.
@@ -768,7 +777,7 @@ fn emit_property_type_error(ctx: &mut FunctionContext<'_>, slot: &PropertySlot, 
     } else {
         format!(
             "Cannot assign {} to property {}::${} of type {}",
-            source, slot.class_name, slot.property, php_type_name(&slot.php_type),
+            source, slot.class_name, slot.property, php_type_name(&property_assignment_contract(ctx, slot)),
         )
     };
     super::super::exceptions::emit_type_error(ctx, &message);
@@ -809,7 +818,7 @@ fn emit_object_property_type_error(ctx: &mut FunctionContext<'_>, slot: &Propert
             String::from(" given")
         } else {
             format!(" to property {}::${} of type {}",
-                slot.class_name, slot.property, php_type_name(&slot.php_type))
+                slot.class_name, slot.property, php_type_name(&property_assignment_contract(ctx, slot)))
         },
     );
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
@@ -914,7 +923,8 @@ fn plan_tag_actions(
     if !slot.is_declared || slot.is_packed {
         return Ok(None);
     }
-    Ok(match &slot.php_type {
+    let contract = property_assignment_contract(ctx, slot);
+    let mut actions = match &contract {
         // A `mixed` property holds every PHP value. It still has to answer here, because the
         // runtime-class dispatch drops a class the guard cannot speak for: answering `None`
         // silently lost the write instead of accepting it.
@@ -922,7 +932,8 @@ fn plan_tag_actions(
         PhpType::Int => Some(int_actions()),
         PhpType::Float => Some(float_actions()),
         PhpType::Str => Some(string_actions(ctx)?),
-        PhpType::Bool | PhpType::False => Some(bool_actions()),
+        PhpType::Bool => Some(bool_actions()),
+        PhpType::False => Some(actions_for(|tag| if tag == BOOL_TAG { TagAction::FalseOnly } else { TagAction::Reject })),
         PhpType::Void | PhpType::Never => Some(null_actions()),
         PhpType::Array(_) | PhpType::AssocArray { .. } => Some(array_actions()),
         PhpType::Iterable => Some(iterable_actions(ctx)),
@@ -930,9 +941,49 @@ fn plan_tag_actions(
         PhpType::Object(class_name) => {
             Some(object_actions(ctx, std::slice::from_ref(class_name)))
         }
-        PhpType::Union(members) => union_actions(ctx, members, &slot.php_type)?,
+        PhpType::Union(members) => union_actions(ctx, members, &contract)?,
         _ => None,
-    })
+    };
+    // Physical Mixed slots no longer perform the scalar cast after the guard. Preserve
+    // ordinary PHP typing by boxing the declared scalar's coerced value in these arms.
+    if slot.php_type.codegen_repr() == PhpType::Mixed {
+        if let Some(target) = match &contract {
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str => Some(&contract),
+            _ => None,
+        } {
+            let matching_tag = match target {
+                PhpType::Int => 0, PhpType::Float => 2, PhpType::Bool => 3, PhpType::Str => 1,
+                _ => unreachable!(),
+            };
+            if let Some(actions) = actions.as_mut() {
+                for ((tag, _), action) in RUNTIME_TAGS.iter().zip(actions.iter_mut()) {
+                    let numeric = matches!(action, TagAction::NumericString);
+                    if (matches!(action, TagAction::Accept) && *tag != matching_tag)
+                        || matches!(action, TagAction::AcceptIntoInt | TagAction::NumericString)
+                    {
+                        *action = TagAction::CoerceScalar {
+                            target: target.clone(), require_numeric_string: numeric, fallback: None,
+                        };
+                    }
+                }
+            }
+        }
+    }
+    Ok(actions)
+}
+
+/// Reads the source contract independently from the physical slot's boxed representation.
+fn property_assignment_contract(ctx: &FunctionContext<'_>, slot: &PropertySlot) -> PhpType {
+    if !slot.is_packed {
+        if let Some(index) = slot.offset.checked_sub(8).filter(|offset| offset % 16 == 0).map(|offset| offset / 16) {
+            if let Some(Some(contract)) = ctx.module.class_infos.get(&slot.class_name)
+                .and_then(|info| info.native_property_contracts.get(&index))
+            {
+                return contract.clone();
+            }
+        }
+    }
+    slot.php_type.clone()
 }
 
 /// Builds an action list from one closure over the runtime tag table.

@@ -13,11 +13,20 @@ use super::*;
 ///
 /// Type checking widens only reachable untyped slots to boxed `Mixed`. Packed fields and
 /// reference-cell slots keep their distinct layouts and must never be interpreted this way.
+///
+/// An UNTYPED slot is one php cannot distinguish a never-set value from an unset one: its
+/// "removed" state is exactly the uninitialized marker, and its read answers the undefined
+/// property warning plus boxed null. `is_declared` here means "has a declared PHP type", so an
+/// untyped property — with no default, or with the implicit `= null` php gives it — is
+/// `is_declared == false` with a slot type of Mixed or the implicit-null `Void`.
 pub(super) fn slot_supports_untyped_unset_marker(slot: &PropertySlot) -> bool {
     !slot.is_declared
         && !slot.is_packed
         && !slot.is_reference
-        && slot.php_type.codegen_repr() == PhpType::Mixed
+        && matches!(
+            slot.php_type.codegen_repr(),
+            PhpType::Mixed | PhpType::Void
+        )
 }
 
 /// Result representation one guarded property read must materialize on an absent slot.

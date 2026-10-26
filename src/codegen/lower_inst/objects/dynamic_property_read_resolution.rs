@@ -326,12 +326,21 @@ pub(super) fn ensure_dynamic_property_miss_supported(inst: &Instruction) -> Resu
 pub(super) fn materialize_loaded_property_result(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
-    source_ty: &PhpType,
+    slot: &PropertySlot,
 ) -> Result<()> {
-    let source_ty = source_ty.codegen_repr();
+    let source_ty = slot.php_type.codegen_repr();
     match inst.result_php_type.codegen_repr() {
         PhpType::Mixed if source_ty == PhpType::Mixed => {
-            abi::emit_incref_if_refcounted(ctx.emitter, &source_ty);
+            let native = slot.offset.checked_sub(8).filter(|offset| offset % 16 == 0)
+                .map(|offset| offset / 16).is_some_and(|index| {
+                    ctx.module.class_infos.get(&slot.class_name)
+                        .is_some_and(|info| info.native_property_contracts.contains_key(&index))
+                });
+            if native {
+                emit_native_property_owned_read(ctx, inst, slot)?;
+            } else {
+                abi::emit_incref_if_refcounted(ctx.emitter, &source_ty);
+            }
             Ok(())
         }
         PhpType::Mixed => {
@@ -344,6 +353,48 @@ pub(super) fn materialize_loaded_property_result(
         }
         _ => Ok(()),
     }
+}
+
+/// Reads an active borrowed native view without acquiring the retiring physical Mixed box.
+fn emit_native_property_owned_read(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction, slot: &PropertySlot,
+) -> Result<()> {
+    let fallback = ctx.next_label("native_property_read_ordinary");
+    let done = ctx.next_label("native_property_read_owned");
+    let function = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, function, "_native_property_read_fn", 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {function}, {fallback}"));    // ordinary reads keep their existing Mixed-cell owner path
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {function}, {function}"));   // inspect the optional native-view callback without changing the loaded field
+            ctx.emitter.instruction(&format!("jz {fallback}"));                 // ordinary reads keep their existing Mixed-cell owner path
+        }
+    }
+    let object = expect_operand(inst, 0)?;
+    ctx.load_value_to_result(object)?;
+    let result = abi::int_result_reg(ctx.emitter);
+    if ctx.value_php_type(object)?.codegen_repr() == PhpType::Mixed {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        abi::emit_reg_move(ctx.emitter, result, crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target));
+    }
+    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), result);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), slot.offset as i64);
+    abi::emit_load_symbol_to_reg(ctx.emitter, function, "_native_property_read_fn", 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("blr {function}"));                // acquire the logical value through the active native property scope
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("call {function}"));               // acquire the logical value through the active native property scope
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fallback);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Emits a PHP null value for a dynamic property lookup that matched no declared slot.
@@ -376,7 +427,7 @@ pub(super) fn emit_branch_if_dynamic_name_matches(
             abi::emit_load_int_immediate(ctx.emitter, "x4", len as i64);
             ctx.emitter.instruction("bl __rt_str_eq");                          // compare the runtime property name against this declared property
             ctx.emitter
-                .instruction(&format!("cbnz x0, {}", target_label)); // dispatch to the declared property slot when the names match
+                .instruction(&format!("cbnz x0, {}", target_label));            // dispatch to the declared property slot when the names match
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);

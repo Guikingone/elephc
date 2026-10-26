@@ -15,6 +15,7 @@
 mod aot_profile;
 mod callback_parameters;
 mod class_spec;
+mod method_returns;
 mod constant_spec;
 mod catalog_classes;
 mod catalog_constants;
@@ -52,6 +53,7 @@ pub use eval_profile::{
     eval_signature, eval_signature_profile, EvalSignatureOverrideReason, EvalSignatureProfile,
 };
 pub use class_spec::{ClassContract, ClassKind, ClassRoute};
+pub use method_returns::method_return_is_tentative;
 pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
 pub use id::BuiltinId;
 pub use core_functions::CORE_FUNCTION_NAMES;

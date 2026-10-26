@@ -305,6 +305,23 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             inst.operands.len()
         )));
     }
+    // `implode(array, string)` is the reversed PHP 7 argument order, removed in PHP 8.0: php
+    // raises `implode(): Argument #1 ($separator) must be of type string, array given` rather
+    // than accepting it. Emitting that same TypeError keeps a body that still spells the old
+    // order compiling, with the diagnostic raised only when that path actually runs.
+    if inst.operands.len() == 2 {
+        let first = expect_operand(inst, 0)?;
+        if matches!(
+            ctx.value_php_type(first)?.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        ) {
+            crate::codegen::lower_inst::exceptions::emit_type_error(
+                ctx,
+                "implode(): Argument #1 ($separator) must be of type string, array given",
+            );
+            return store_if_result(ctx, inst);
+        }
+    }
     let array_index = inst.operands.len() - 1;
     let array = expect_operand(inst, array_index)?;
     if matches!(

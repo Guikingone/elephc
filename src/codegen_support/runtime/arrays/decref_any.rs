@@ -6,7 +6,8 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
 //!
 //! Key details:
-//! - Decrement helpers are release paths for refcounted values and must balance recursive frees with GC cycle collection.
+//! - Decrement helpers balance recursive frees with cycle collection.
+//! - Sweep suppression applies only to independently swept graph nodes; scalar array leaves still release.
 
 use crate::codegen_support::{abi, emit::Emitter};
 use crate::codegen_support::platform::Arch;
@@ -53,6 +54,14 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("and x13, x11, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x13, #2");                                         // is this a refcounted indexed array?
     emitter.instruction("b.lo __rt_decref_any_dispatch");                       // strings should still be freed immediately
+    emitter.instruction("b.ne __rt_decref_any_check_graph_kind");               // only indexed arrays need an element-kind eligibility check
+    emitter.instruction("lsr x14, x11, #8");                                    // decode the indexed array's actual element representation
+    emitter.instruction("and x14, x14, #0x7f");                                 // exclude the persistent COW bit from the element kind
+    emitter.instruction("cmp x14, #4");                                         // only array/hash/object/Mixed payloads are independently swept
+    emitter.instruction("b.lo __rt_decref_any_dispatch");                       // scalar and string leaves still need their owner's decrement
+    emitter.instruction("cmp x14, #7");                                         // match the collector's upper element-kind bound
+    emitter.instruction("b.hi __rt_decref_any_dispatch");                       // other array representations are not reclaimed by the sweep
+    emitter.label("__rt_decref_any_check_graph_kind");
     emitter.instruction(&format!("cmp x13, #{REFERENCE_CELL_HEAP_KIND}"));      // owned reference cells are collector graph nodes
     emitter.instruction("b.eq __rt_decref_any_graph_child");                    // apply sweep suppression to reference cells
     emitter.instruction("cmp x13, #6");                                         // is this within the refcounted array/hash/object/mixed/throwable range?
@@ -132,7 +141,7 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
     emitter.instruction("mov r11, r10");                                        // preserve the full heap kind word before isolating the ownership marker
     emitter.instruction("shr r11, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
-    emitter.instruction(&format!("cmp r11d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that the payload belongs to the x86_64 heap wrapper before dispatching a release helper
+    emitter.instruction(&format!("cmp r11d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32));// verify that the payload belongs to the x86_64 heap wrapper before dispatching a release helper
     emitter.instruction("jne __rt_decref_any_done");                            // foreign/static pointers must be ignored by the uniform x86_64 release dispatcher
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_gc_freeing_unreachable");
     emitter.instruction("cmp QWORD PTR [r11], 0");                              // destructor callbacks use ordinary balanced reference counts
@@ -143,6 +152,15 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("and r11d, 0xff");                                      // inspect the concrete heap kind
     emitter.instruction("cmp r11d, 2");                                         // strings and raw allocations are not swept graph nodes
     emitter.instruction("jb __rt_decref_any_dispatch");                         // release non-graph children through their ordinary helper
+    emitter.instruction("jne __rt_decref_any_check_graph_kind");                // only indexed arrays need an element-kind eligibility check
+    emitter.instruction("mov edx, r10d");                                       // preserve the full header while decoding its element representation
+    emitter.instruction("shr edx, 8");                                          // move the packed array element kind into the low bits
+    emitter.instruction("and edx, 0x7f");                                       // exclude the persistent COW bit from the element kind
+    emitter.instruction("cmp edx, 4");                                          // only array/hash/object/Mixed payloads are independently swept
+    emitter.instruction("jb __rt_decref_any_dispatch");                         // scalar and string leaves still need their owner's decrement
+    emitter.instruction("cmp edx, 7");                                          // match the collector's upper element-kind bound
+    emitter.instruction("ja __rt_decref_any_dispatch");                         // other array representations are not reclaimed by the sweep
+    emitter.label("__rt_decref_any_check_graph_kind");
     emitter.instruction("cmp r11d, 5");                                         // the collector directly reclaims array, hash, object, and Mixed nodes
     emitter.instruction("jbe __rt_decref_any_done");                            // never decrement already reclaimed or independently pinned doomed nodes
     emitter.instruction(&format!("cmp r11d, {REFERENCE_CELL_HEAP_KIND}"));      // owned reference cells are independently swept graph nodes

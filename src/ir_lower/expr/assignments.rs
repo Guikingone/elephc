@@ -79,6 +79,11 @@ pub(super) fn lower_assignment_expr(
             );
         }
     }
+    if let ExprKind::DynamicPropertyAccess { object, property } = &target.kind {
+        // This write owns its RHS evaluation. Returning that same evaluation avoids an orphaned
+        // first RHS whose cleanup would otherwise sit after a second, potentially throwing store.
+        return lower_dynamic_property_assignment_value(ctx, object, property, value, expr.span);
+    }
     let static_callable = assigned_name.and_then(|_| static_callable_binding_for_expr(ctx, value));
     let reflected_class = assigned_name.and_then(|_| reflection_class_binding_for_expr(ctx, value));
     let reflected_function =
@@ -455,6 +460,18 @@ pub(super) fn lower_dynamic_property_assign(
     value: &Expr,
     span: Span,
 ) {
+    let result = lower_dynamic_property_assignment_value(ctx, object, property, value, span);
+    crate::ir_lower::ownership::release_if_owned(ctx, result, Some(span));
+}
+
+/// Evaluates a dynamic assignment with main's receiver lease and an independent RHS result.
+fn lower_dynamic_property_assignment_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &Expr,
+    value: &Expr,
+    span: Span,
+) -> LoweredValue {
     let (mut receiver, property, value) = if is_static_property_write_chain(object) {
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
@@ -480,6 +497,7 @@ pub(super) fn lower_dynamic_property_assign(
         unpin_in_flight_owners(ctx, property_pins, span);
         (receiver, property, ctx.borrow_write_operand_if_needed(value, span))
     };
+    let result = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
     receiver.narrow_for_dynamic_assignment(ctx, property, value, span);
     let object = receiver.value;
     // The NAME is only known at run time, so a statically known receiver can still land this
@@ -502,7 +520,7 @@ pub(super) fn lower_dynamic_property_assign(
     // exactly once, which is the contract call lowering already applies.
     let pins = crate::ir_lower::expr::pin_in_flight_owners(
         ctx,
-        &[property.value, value.value],
+        &[result.value, property.value, value.value],
         span,
     );
     // Runtime names can select either a consuming Mixed slot or a scalar slot that only reads
@@ -527,6 +545,7 @@ pub(super) fn lower_dynamic_property_assign(
         crate::ir_lower::ownership::release_if_owned(ctx, property, Some(span));
     }
     receiver.finish(ctx, span);
+    result
 }
 
 /// Returns whether a runtime-name write needs a boxed value for a reachable fixed slot.

@@ -16,6 +16,8 @@ use crate::types::traits::FlattenedClass;
 
 use super::common::*;
 
+mod debug_info;
+
 /// Inserts class into the supplied builtin metadata registry.
 pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
     class_map.insert(
@@ -99,7 +101,7 @@ fn spl_multiple_iterator_methods() -> Vec<ClassMethod> {
         method_with_body("key", Vec::new(), Some(array_type()), multiple_output_body("key")),
         method_with_body("current", Vec::new(), Some(array_type()), multiple_output_body("current")),
         method_with_body("next", Vec::new(), Some(TypeExpr::Void), multiple_next_body()),
-        method_with_body("__debugInfo", Vec::new(), Some(array_type()), multiple_debug_info_body()),
+        method_with_body("__debugInfo", Vec::new(), Some(php_array_contract_type()), debug_info::body()),
     ]
 }
 
@@ -383,13 +385,4 @@ fn multiple_output_body(method: &str) -> Vec<Stmt> {
         ),
         return_stmt(var_expr("out")),
     ]
-}
-
-/// Builds the synthetic method body for multiple debug info.
-fn multiple_debug_info_body() -> Vec<Stmt> {
-    return_body(expr(ExprKind::ArrayLiteralAssoc(vec![
-        (string_expr("\0MultipleIterator\0iterators"), multiple_iterators_expr()),
-        (string_expr("\0MultipleIterator\0infos"), multiple_infos_expr()),
-        (string_expr("\0MultipleIterator\0flags"), multiple_flags_expr()),
-    ])))
 }

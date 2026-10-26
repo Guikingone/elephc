@@ -184,6 +184,24 @@ echo $list->getIteratorMode();
     assert_eq!(out, "0:a;1:b;2:c;\n2:c;1:b;0:a;\n2");
 }
 
+/// Verifies `prev()` before the first element exhausts the iterator (`current()` is null), like php.
+#[test]
+fn test_phase4_spl_doubly_linked_list_prev_before_start() {
+    let out = compile_and_run(
+        r#"<?php
+$list = new SplDoublyLinkedList();
+$list->push(1);
+$list->push(2);
+$list->rewind();
+$list->prev();
+var_dump($list->current());
+$list->rewind();
+var_dump($list->current());
+"#,
+    );
+    assert_eq!(out, "NULL\nint(1)\n");
+}
+
 // Tests IT_MODE_DELETE combined with IT_MODE_FIFO and IT_MODE_LIFO: verifies that foreach
 // consumes elements during iteration and that count reaches zero after FIFO traversal but
 // preserves order for LIFO.
@@ -656,6 +674,77 @@ var_dump($it->valid());
     );
 }
 
+/// Verifies a `foreach` over an `SplFixedArray` produced by the static factory still links.
+///
+/// The factory (`SplFixedArray::fromArray`) is not an `ObjectNew`, and the implicit
+/// `getIterator()` call the backend emits for the loop is not an EIR `MethodCall`, so the
+/// reachability scan has to register the aggregate's iterator factory from `IterStart` itself;
+/// otherwise the call site references a `_method_SplFixedArray_getiterator` symbol that is never
+/// emitted and the program fails to link.
+#[test]
+fn test_spl_fixed_array_factory_nested_foreach_links_and_iterates() {
+    let out = compile_and_run(
+        r#"<?php
+$array = SplFixedArray::fromArray([0, 1]);
+foreach ($array as $value1) {
+    foreach ($array as $value2) {
+        echo "$value1 $value2\n";
+    }
+}
+"#,
+    );
+    assert_eq!(out, "0 0\n0 1\n1 0\n1 1\n");
+}
+
+/// Verifies `$fixed[] = v` raises php's catchable `[] operator not supported for SplFixedArray`.
+///
+/// `$obj[] = v` is php's `offsetSet(null, v)`, and `SplFixedArray::offsetSet()` refuses a null
+/// key, so the append slot has to raise the `Error` rather than call a missing `append()`.
+#[test]
+fn test_spl_fixed_array_append_raises_phps_error() {
+    let out = compile_and_run(
+        r#"<?php
+$fixed = new SplFixedArray(10);
+try {
+    $fixed[] = 1;
+} catch (Error $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "[] operator not supported for SplFixedArray\n");
+}
+
+/// Verifies `SplFixedArray` offsets coerce a numeric string the way php does.
+///
+/// php converts `"4"` to the integer offset 4 for every ArrayAccess operation, so a string key
+/// reaches the same slot as the number. A negative numeric string reaches the range check, which
+/// php rejects with `OutOfBoundsException: Index invalid or out of range`.
+#[test]
+fn test_spl_fixed_array_numeric_string_offsets_coerce() {
+    let out = compile_and_run(
+        r#"<?php
+$fixed = new SplFixedArray(5);
+for ($i = 0; $i < 5; $i++) {
+    $fixed[$i] = "v$i";
+}
+$fixed->offsetUnset("4");
+var_dump($fixed[4]);
+var_dump($fixed["3"]);
+var_dump(isset($fixed["2"]));
+try {
+    $fixed["-1"];
+} catch (OutOfBoundsException $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "NULL\nstring(2) \"v3\"\nbool(true)\nIndex invalid or out of range\n"
+    );
+}
+
 // Tests that an SplFixedArray size whose `size * 8` storage payload wraps the machine word is
 // rejected by the shared `__rt_array_new` guard instead of allocating a tiny block behind a header
 // that advertises 2^61 slots. PHP reports the same class of failure as
@@ -678,6 +767,274 @@ echo $fixed->getSize();
 
 // Positive control for the SplFixedArray storage-size guard: an ordinary fixed array still
 // allocates, zero-initializes, and round-trips element writes.
+/// Verifies SplStack/SplQueue freeze their LIFO/FIFO iterator mode while the base list does not.
+///
+/// php fixes the mode bit on the two subclasses: `SplStack` refuses FIFO and `SplQueue` refuses
+/// LIFO with the same `RuntimeException`, while `SplDoublyLinkedList` still switches freely.
+#[test]
+fn test_spl_stack_and_queue_freeze_iterator_mode() {
+    let out = compile_and_run(
+        r#"<?php
+$stack = new SplStack();
+try { $stack->setIteratorMode(SplDoublyLinkedList::IT_MODE_FIFO); }
+catch (RuntimeException $e) { echo "stack: ", $e->getMessage(), "\n"; }
+$stack->setIteratorMode(SplDoublyLinkedList::IT_MODE_LIFO);
+echo "stack lifo ok\n";
+$queue = new SplQueue();
+try { $queue->setIteratorMode(SplDoublyLinkedList::IT_MODE_LIFO); }
+catch (RuntimeException $e) { echo "queue: ", $e->getMessage(), "\n"; }
+$queue->setIteratorMode(SplDoublyLinkedList::IT_MODE_FIFO);
+echo "queue fifo ok\n";
+$dll = new SplDoublyLinkedList();
+$dll->setIteratorMode(SplDoublyLinkedList::IT_MODE_FIFO);
+echo "dll fifo ok\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "stack: Iterators' LIFO/FIFO modes for SplStack/SplQueue objects are frozen\n",
+            "stack lifo ok\n",
+            "queue: Iterators' LIFO/FIFO modes for SplStack/SplQueue objects are frozen\n",
+            "queue fifo ok\n",
+            "dll fifo ok\n",
+        )
+    );
+}
+
+/// Verifies `var_dump` renders an `SplFixedArray` as an indexed array of its backing storage.
+///
+/// The class stores its payload outside the declared-property layout, so without a per-class
+/// var_dump adapter it rendered as `object(SplFixedArray)#1 (0) {}`. PHP prints the element count
+/// in the header and one `[N]=>` line per slot, with unset slots as `NULL`.
+#[test]
+fn test_spl_fixed_array_var_dump_renders_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$a = new SplFixedArray(2);
+$a[0] = "foo";
+var_dump($a);
+$b = SplFixedArray::fromArray([1, "2", false]);
+var_dump($b);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(SplFixedArray)#1 (2) {\n",
+            "  [0]=>\n",
+            "  string(3) \"foo\"\n",
+            "  [1]=>\n",
+            "  NULL\n",
+            "}\n",
+            "object(SplFixedArray)#2 (3) {\n",
+            "  [0]=>\n",
+            "  int(1)\n",
+            "  [1]=>\n",
+            "  string(1) \"2\"\n",
+            "  [2]=>\n",
+            "  bool(false)\n",
+            "}\n",
+        )
+    );
+}
+
+/// Verifies `clone` copies the runtime-managed payload of the SPL containers.
+///
+/// These classes keep their elements outside the declared-property layout, so the generic
+/// shallow-clone adapter could not copy them and the operation was rejected. The per-class
+/// adapters duplicate the backing storage, so mutating the clone never reaches the original.
+#[test]
+fn test_spl_container_clone_isolates_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$dll = new SplDoublyLinkedList();
+$dll->push(1);
+$dll->push(2);
+$clone = clone $dll;
+$clone->pop();
+echo count($dll), "|", count($clone), "\n";
+
+$fixed = new SplFixedArray(3);
+$fixed[0] = "a";
+$fixedClone = clone $fixed;
+$fixedClone->setSize(1);
+echo $fixed->getSize(), "|", $fixedClone->getSize(), "\n";
+
+$stack = new SplStack();
+$stack->push("x");
+$stackClone = clone $stack;
+$stackClone->pop();
+echo count($stack), "|", count($stackClone), "\n";
+"#,
+    );
+    assert_eq!(out, "2|1\n3|1\n1|0\n");
+}
+
+/// Verifies the per-class default iterator mode and traversal direction.
+///
+/// php seeds SplStack with LIFO (`getIteratorMode()` 6) and SplQueue with FIFO (4), while the
+/// base SplDoublyLinkedList starts at 0. elephc started every list at 0, so an SplStack iterated
+/// forwards and reported the wrong mode.
+#[test]
+fn test_spl_list_default_iterator_modes() {
+    let out = compile_and_run(
+        r#"<?php
+$stack = new SplStack();
+echo $stack->getIteratorMode(), "\n";
+$queue = new SplQueue();
+echo $queue->getIteratorMode(), "\n";
+$dll = new SplDoublyLinkedList();
+echo $dll->getIteratorMode(), "\n";
+$stack->push(1);
+$stack->push(2);
+foreach ($stack as $v) {
+    echo $v;
+}
+echo "\n";
+$queue->enqueue(1);
+$queue->enqueue(2);
+foreach ($queue as $v) {
+    echo $v;
+}
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "6\n4\n0\n21\n12\n");
+}
+
+/// Verifies `var_dump` renders the SplDoublyLinkedList family's two internal fields.
+///
+/// php prints the list's private `flags` (iterator mode) and `dllist` (element storage) fields;
+/// without a var_dump adapter the class rendered as an empty `(0) {}` object.
+#[test]
+fn test_spl_doubly_linked_list_var_dump_renders_fields() {
+    let out = compile_and_run(
+        r#"<?php
+$dll = new SplDoublyLinkedList();
+$dll->push("hai");
+$dll->push("thar");
+var_dump($dll);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(SplDoublyLinkedList)#1 (2) {\n",
+            "  [\"flags\":\"SplDoublyLinkedList\":private]=>\n",
+            "  int(0)\n",
+            "  [\"dllist\":\"SplDoublyLinkedList\":private]=>\n",
+            "  array(2) {\n",
+            "    [0]=>\n",
+            "    string(3) \"hai\"\n",
+            "    [1]=>\n",
+            "    string(4) \"thar\"\n",
+            "  }\n",
+            "}\n",
+        )
+    );
+}
+
+/// Verifies a by-reference `foreach` over an iterator raises php's catchable `Error`.
+///
+/// php refuses to bind a reference to an iterator's element, which is a copy. The loop is now
+/// accepted by the checker and the diagnostic is raised at run time, matching php-src.
+#[test]
+fn test_by_reference_foreach_over_iterator_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$dll = new SplDoublyLinkedList();
+$dll->push(1);
+try {
+    foreach ($dll as &$v) {
+        echo "unreachable";
+    }
+} catch (Error $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "An iterator cannot be used with foreach by reference\n");
+}
+
+/// Verifies an uncaught by-reference `foreach` reports php's source location and stack trace.
+///
+/// php follows the `Fatal error:` line with ` in <file>:<line>`, `Stack trace:`, `#0 {main}` and
+/// `  thrown in <file> on line <line>`. The guard now stamps the `foreach` statement's span on
+/// the throwable, so both the report and `getLine()` name that statement.
+#[test]
+fn test_by_reference_foreach_over_iterator_uncaught_reports_location_and_trace() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+$it = new SplDoublyLinkedList();
+$it->push(1);
+foreach ($it as &$v) {
+    echo "unreachable";
+}
+"#,
+    );
+    assert!(
+        err.contains(
+            "Fatal error: Uncaught Error: An iterator cannot be used with foreach by reference in "
+        ),
+        "{err}"
+    );
+    assert!(
+        err.contains("Stack trace:\n#0 {main}\n  thrown in "),
+        "{err}"
+    );
+}
+
+/// Verifies `SplObjectStorage::current()` rejects a read on an exhausted iterator.
+///
+/// php raises `RuntimeException: Called current() on invalid iterator` rather than returning null
+/// (which is what `key()` does), so a loop that reads past the end gets the same error as php-src.
+#[test]
+fn test_spl_object_storage_current_on_invalid_iterator_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$s = new SplObjectStorage();
+var_dump($s->valid());
+try {
+    var_dump($s->current());
+} catch (RuntimeException $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "bool(false)\nCalled current() on invalid iterator\n");
+}
+
+/// Verifies `SplObjectStorage::seek()` rejects an out-of-range position.
+///
+/// php raises `OutOfBoundsException: Seek position N is out of range` for a negative offset or one
+/// at/past the storage length, and leaves the current position untouched.
+#[test]
+fn test_spl_object_storage_seek_out_of_range_throws() {
+    let out = compile_and_run(
+        r#"<?php
+$s = new SplObjectStorage();
+$s[new stdClass()] = 1;
+try {
+    $s->seek(1);
+} catch (OutOfBoundsException $e) {
+    echo $e->getMessage(), "\n";
+}
+try {
+    $s->seek(-1);
+} catch (OutOfBoundsException $e) {
+    echo $e->getMessage(), "\n";
+}
+$s->seek(0);
+var_dump($s->key());
+"#,
+    );
+    assert_eq!(
+        out,
+        "Seek position 1 is out of range\nSeek position -1 is out of range\nint(0)\n"
+    );
+}
+
 /// Verifies that ordinary SplFixedArray allocation is unaffected by the storage-size guard.
 #[test]
 fn test_spl_fixed_array_normal_size_still_works() {

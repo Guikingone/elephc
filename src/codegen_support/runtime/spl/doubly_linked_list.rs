@@ -8,6 +8,7 @@
 //! Key details:
 //! - The object stores a class id, an owned mixed-cell indexed array, iterator index, and iterator mode.
 //! - Mutating methods take ownership of boxed `Mixed` arguments prepared by call lowering.
+//! - Native slots match the inherited ClassInfo layout used by ordinary object GC.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -16,7 +17,7 @@ use crate::codegen_support::platform::Arch;
 use super::offset_convert::{SPL_OFFSET_MODE_LIST, SPL_OFFSET_MODE_LIST_NULLABLE};
 use super::{SPL_DLL_ITER_INDEX_OFFSET, SPL_DLL_ITER_MODE_OFFSET, SPL_DLL_STORAGE_OFFSET};
 
-const SPL_DLL_OBJECT_SIZE: i64 = 32;
+const SPL_DLL_OBJECT_SIZE: i64 = 8 + 3 * 16;
 const SPL_DLL_INITIAL_CAPACITY: i64 = 4;
 const NULL_TAG: i64 = 8;
 const INT_TAG: i64 = 0;
@@ -69,6 +70,9 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emit_top_aarch64(emitter);
     emit_bottom_aarch64(emitter);
     emit_iterator_mode_aarch64(emitter);
+    emit_stack_iterator_mode_aarch64(emitter);
+    emit_queue_iterator_mode_aarch64(emitter);
+    emit_clone_adapter_aarch64(emitter);
     emit_serialize_aarch64(emitter);
     emit_unserialize_aarch64(emitter);
     emit_serialize_array_aarch64(emitter);
@@ -99,6 +103,9 @@ fn emit_new_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp the allocation as an object instance
     emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
+    for offset in [16, 32, 48] {
+        abi::emit_store_zero_to_address(emitter, "x0", offset);
+    }
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the concrete SPL class id
     emitter.instruction("str x9, [x0]");                                        // store the class id at the object header
     emitter.instruction("str x0, [sp, #8]");                                    // save the object pointer while allocating storage
@@ -377,6 +384,77 @@ fn emit_iterator_mode_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return integer mode
 }
 
+/// Emits `__rt_spl_stack_set_iterator_mode` on ARM64: receiver in x0, mode bits in x1.
+///
+/// `SplStack` fixes the LIFO/FIFO mode bit to LIFO, so a request that clears it raises
+/// PHP's `RuntimeException`; the remaining mode bits (DELETE/KEEP) stay writable.
+fn emit_stack_iterator_mode_aarch64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_spl_stack_set_iterator_mode");
+    emitter.instruction("tst x1, #2");                                          // is the frozen LIFO bit still set?
+    emitter.instruction("b.eq __rt_spl_stack_mode_frozen");                     // clearing LIFO on SplStack is rejected
+    emitter.instruction("b __rt_spl_dll_set_iterator_mode");                    // preserve FIX and mask request bits through the shared setter
+    emitter.label("__rt_spl_stack_mode_frozen");
+    emit_throw_exception_aarch64(
+        emitter,
+        "_spl_runtime_exception_class_id",
+        "_spl_dll_frozen_mode_msg",
+        SPL_DLL_FROZEN_MODE_MSG_LEN,
+    );
+}
+
+/// Emits `__rt_spl_queue_set_iterator_mode` on ARM64: receiver in x0, mode bits in x1.
+///
+/// `SplQueue` fixes the LIFO/FIFO mode bit to FIFO, so a request that sets LIFO raises
+/// PHP's `RuntimeException`; the remaining mode bits (DELETE/KEEP) stay writable.
+fn emit_queue_iterator_mode_aarch64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_spl_queue_set_iterator_mode");
+    emitter.instruction("tst x1, #2");                                          // is the frozen LIFO bit still clear?
+    emitter.instruction("b.ne __rt_spl_queue_mode_frozen");                     // setting LIFO on SplQueue is rejected
+    emitter.instruction("b __rt_spl_dll_set_iterator_mode");                    // preserve FIX and mask request bits through the shared setter
+    emitter.label("__rt_spl_queue_mode_frozen");
+    emit_throw_exception_aarch64(
+        emitter,
+        "_spl_runtime_exception_class_id",
+        "_spl_dll_frozen_mode_msg",
+        SPL_DLL_FROZEN_MODE_MSG_LEN,
+    );
+}
+
+/// Emits `__rt_clone_spl_dll` on ARM64: x0 = source SplDoublyLinkedList-family payload.
+///
+/// Allocates a same-class object payload, duplicates the internal storage with
+/// `__rt_array_clone_shallow` (so mutating one list never reaches the other), and copies the
+/// iterator index and mode. Returns the clone payload in x0.
+fn emit_clone_adapter_aarch64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_clone_spl_dll");
+    emitter.instruction("sub sp, sp, #32");                                     // reserve source and clone spill slots
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the clone-adapter frame
+    emitter.instruction("str x0, [sp, #0]");                                    // save the source payload
+    emitter.instruction(&format!("mov x0, #{}", SPL_DLL_OBJECT_SIZE));          // request a same-size list object payload
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the clone payload
+    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the clone as an object instance
+    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the clone to its PHP object handle
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source payload
+    emitter.instruction("ldr x10, [x9]");                                       // load the source runtime class id
+    emitter.instruction("str x10, [x0]");                                       // copy the class id onto the clone
+    emitter.instruction("str x0, [sp, #8]");                                    // save the clone payload
+    emitter.instruction(&format!("ldr x0, [x9, #{}]", SPL_DLL_STORAGE_OFFSET)); // load the source internal storage
+    emitter.instruction("bl __rt_array_clone_shallow");                         // duplicate the storage so the clone mutates independently
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source payload
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the clone payload
+    emitter.instruction(&format!("str x0, [x10, #{}]", SPL_DLL_STORAGE_OFFSET)); // install the cloned storage
+    emitter.instruction(&format!("ldr x11, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // load the source iterator index
+    emitter.instruction(&format!("str x11, [x10, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // copy the iterator index onto the clone
+    emitter.instruction(&format!("ldr x11, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // load the source iterator mode
+    emitter.instruction(&format!("str x11, [x10, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // copy the iterator mode onto the clone
+    emitter.instruction("mov x0, x10");                                         // return the clone payload
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the clone-adapter frame
+    emitter.instruction("ret");                                                 // return to the clone wrapper
+}
+
 /// Emits `__rt_spl_dll_serialize_array` on ARM64: receiver in x0. Copies internal storage
 /// items into a new array with retained Mixed cells, boxes iterator flags and both arrays,
 /// and returns a boxed Mixed array (tag 4) containing [boxed flags, boxed items array,
@@ -423,6 +501,8 @@ fn emit_serialize_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x2, xzr");                                         // array mixed payload uses one word
     emitter.instruction("bl __rt_mixed_from_value");                            // box serialized items array
     emitter.instruction("str x0, [sp, #40]");                                   // save boxed dllist value
+    emitter.instruction("ldr x0, [sp, #24]");                                   // retire the items producer after its box retained the array
+    emitter.instruction("bl __rt_decref_array");                                // leave the result box as the sole container owner
     emitter.instruction("mov x0, #0");                                          // empty properties array capacity
     emitter.instruction("mov x1, #8");                                          // properties array stores boxed Mixed slots
     emitter.instruction("bl __rt_array_new");                                   // allocate empty serialized properties array
@@ -434,6 +514,8 @@ fn emit_serialize_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x2, xzr");                                         // array mixed payload uses one word
     emitter.instruction("bl __rt_mixed_from_value");                            // box empty properties array
     emitter.instruction("str x0, [sp, #48]");                                   // save boxed properties value
+    emitter.instruction("ldr x0, [x0, #8]");                                    // recover the fresh properties array adopted by the saved box
+    emitter.instruction("bl __rt_decref_array");                                // retire its original producer reference
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver for iterator flags
     emitter.instruction(&format!("ldr x1, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode flags
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
@@ -901,6 +983,10 @@ fn emit_iterator_step_aarch64(emitter: &mut Emitter, forward: bool) {
         "__rt_spl_dll_prev_done"
     };
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // load current iterator index
+    emitter.instruction(&format!("ldr x10, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // read length before advancing the current node
+    emitter.instruction("ldr x10, [x10]");                                      // load the current storage length
+    emitter.instruction("cmp x9, x10");                                        // an exhausted position has no node to advance
+    emitter.instruction(&format!("b.hs {}", done_label));                        // preserve its signed key on subsequent next/prev calls
     emitter.instruction(&format!("ldr x10, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode bits
     if forward {
         emitter.instruction(&format!("tst x10, #{}", ITER_MODE_DELETE));        // does next() need to delete the current element?
@@ -909,14 +995,8 @@ fn emit_iterator_step_aarch64(emitter: &mut Emitter, forward: bool) {
     emitter.instruction(&format!("tst x10, #{}", ITER_MODE_LIFO));              // is traversal currently LIFO?
     emitter.instruction(&format!("b.eq {}", fifo_label));                       // FIFO and LIFO move in opposite directions
     if forward {
-        emitter.instruction("cbz x9, __rt_spl_dll_next_lifo_exhaust");          // moving forward in LIFO from zero exhausts the iterator
         emitter.instruction("sub x9, x9, #1");                                  // otherwise move to the previous numeric index
         emitter.instruction(&format!("str x9, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // persist decremented LIFO iterator index
-        emitter.instruction("ret");                                             // return void
-        emitter.label("__rt_spl_dll_next_lifo_exhaust");
-        emitter.instruction(&format!("ldr x10, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load storage to compute exhausted sentinel
-        emitter.instruction("ldr x10, [x10]");                                  // storage length is the invalid sentinel
-        emitter.instruction(&format!("str x10, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // store exhausted LIFO sentinel
         emitter.instruction("ret");                                             // return void
     } else {
         emitter.instruction("add x9, x9, #1");                                  // moving prev in LIFO increases the numeric index
@@ -927,14 +1007,10 @@ fn emit_iterator_step_aarch64(emitter: &mut Emitter, forward: bool) {
     if forward {
         emitter.instruction("add x9, x9, #1");                                  // moving forward in FIFO increases the index
     } else {
-        emitter.instruction("cbz x9, __rt_spl_dll_prev_fifo_done");             // moving before zero leaves the iterator exhausted at zero
         emitter.instruction("sub x9, x9, #1");                                  // otherwise move one FIFO slot backward
     }
     emitter.instruction(&format!("str x9, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // persist updated FIFO iterator index
     emitter.label(done_label);
-    if !forward {
-        emitter.label("__rt_spl_dll_prev_fifo_done");
-    }
     emitter.instruction("ret");                                                 // return void
     if forward {
         emit_iterator_delete_step_aarch64(emitter, delete_label);
@@ -944,7 +1020,7 @@ fn emit_iterator_step_aarch64(emitter: &mut Emitter, forward: bool) {
 /// Emits the delete-mode iterator step helper on ARM64, called from `emit_iterator_step_aarch64`
 /// when ITER_MODE_DELETE is set. If LIFO mode: calls `__rt_spl_dll_pop`, releases the cell, and
 /// sets index to the new tail. If FIFO mode: calls `__rt_spl_dll_shift`, releases the cell, and
-/// resets index to zero. Empty storage after deletion rewinds to index zero.
+/// resets index to zero. LIFO exhaustion retains the signed key -1.
 fn emit_iterator_delete_step_aarch64(emitter: &mut Emitter, delete_label: &str) {
     emitter.label(delete_label);
     emitter.instruction("sub sp, sp, #32");                                     // reserve delete-mode iterator frame
@@ -964,12 +1040,8 @@ fn emit_iterator_delete_step_aarch64(emitter: &mut Emitter, delete_label: &str) 
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver after deletion
     emitter.instruction(&format!("ldr x10, [x9, #{}]", SPL_DLL_STORAGE_OFFSET)); // load storage to find the new tail
     emitter.instruction("ldr x10, [x10]");                                      // read storage length after deletion
-    emitter.instruction("cbz x10, __rt_spl_dll_next_delete_empty");             // empty storage rewinds to index zero
     emitter.instruction("sub x10, x10, #1");                                    // new LIFO current index is the new tail
     emitter.instruction(&format!("str x10, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // persist new LIFO delete cursor
-    emitter.instruction("b __rt_spl_dll_next_delete_done");                     // finish non-empty LIFO delete
-    emitter.label("__rt_spl_dll_next_delete_empty");
-    emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // reset exhausted delete-mode iterator to zero
     emitter.label("__rt_spl_dll_next_delete_done");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release delete-mode iterator frame
@@ -1013,21 +1085,14 @@ fn emit_current_aarch64(emitter: &mut Emitter) {
     emit_tail_boxed_null_aarch64(emitter);
 }
 
-/// Emits `__rt_spl_dll_key` on ARM64: receiver in x0. Reads the iterator index as the
-/// integer key, boxes it as a tagged Mixed (INT_TAG), and returns it. Returns a boxed null
-/// (via `emit_tail_boxed_null_aarch64`) when the index is out of range.
+/// Emits `__rt_spl_dll_key` on ARM64. Reports the signed physical traversal
+/// position even when there is no current node, matching PHP's key() contract.
 fn emit_key_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_key");
-    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
-    emitter.instruction("ldr x9, [x9]");                                        // read storage length
-    emitter.instruction(&format!("ldr x1, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // read iterator index as integer key payload
-    emitter.instruction("cmp x1, x9");                                          // is iterator index valid?
-    emitter.instruction("b.hs __rt_spl_dll_key_null");                          // invalid key() returns null
+    emitter.instruction(&format!("ldr x1, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // key reports the traversal position even when valid() is false
     emitter.instruction(&format!("mov x0, #{}", INT_TAG));                      // runtime tag 0 = int key
     emitter.instruction("mov x2, xzr");                                         // integer keys do not use a high payload word
     emitter.instruction("b __rt_mixed_from_value");                             // box and return the integer key
-    emitter.label("__rt_spl_dll_key_null");
-    emit_tail_boxed_null_aarch64(emitter);
 }
 
 /// Emits `__rt_spl_dll_offset_exists` on ARM64: receiver in x0, boxed offset in x1.
@@ -1152,7 +1217,9 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #16]");                                   // the owned value, guarded while the offset converts
     super::super::exceptions::guards::guard(emitter, 64, 96);
     emitter.instruction("ldr x0, [sp, #8]");                                    // pass the owned boxed offset to the converter
-    emitter.instruction(&format!("mov x1, #{}", SPL_OFFSET_MODE_LIST_NULLABLE)); // the list's rules, reporting a null to append
+    emitter.instruction(
+        &format!("mov x1, #{}", SPL_OFFSET_MODE_LIST_NULLABLE),
+    );                                                                          // the list's rules, reporting a null to append
     emitter.instruction("bl __rt_spl_offset_convert");                          // convert the offset and release its box
     emitter.instruction("stp x0, x1, [sp, #24]");                               // keep the status and index across the unguard
     super::super::exceptions::guards::unguard(emitter, 64, 96);
@@ -1297,6 +1364,9 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emit_top_x86_64(emitter);
     emit_bottom_x86_64(emitter);
     emit_iterator_mode_x86_64(emitter);
+    emit_stack_iterator_mode_x86_64(emitter);
+    emit_queue_iterator_mode_x86_64(emitter);
+    emit_clone_adapter_x86_64(emitter);
     emit_serialize_x86_64(emitter);
     emit_unserialize_x86_64(emitter);
     emit_serialize_array_x86_64(emitter);
@@ -1327,6 +1397,9 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize object heap kind with x86 marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp allocation as an object instance
     emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
+    for offset in [16, 32, 48] {
+        abi::emit_store_zero_to_address(emitter, "rax", offset);
+    }
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload concrete SPL class id
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at object header
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save object pointer while allocating storage
@@ -1606,6 +1679,76 @@ fn emit_iterator_mode_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return integer mode
 }
 
+/// Emits `__rt_spl_stack_set_iterator_mode` on x86_64: receiver in rdi, mode bits in rsi.
+///
+/// Mirrors the AArch64 helper: `SplStack`'s frozen LIFO bit makes a request that clears
+/// it raise PHP's `RuntimeException`.
+fn emit_stack_iterator_mode_x86_64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_spl_stack_set_iterator_mode");
+    emitter.instruction("test rsi, 2");                                         // is the frozen LIFO bit still set?
+    emitter.instruction("jz __rt_spl_stack_mode_frozen_x86");                   // clearing LIFO on SplStack is rejected
+    emitter.instruction("jmp __rt_spl_dll_set_iterator_mode");                  // preserve FIX and mask request bits through the shared setter
+    emitter.label("__rt_spl_stack_mode_frozen_x86");
+    emit_throw_exception_x86_64(
+        emitter,
+        "_spl_runtime_exception_class_id",
+        "_spl_dll_frozen_mode_msg",
+        SPL_DLL_FROZEN_MODE_MSG_LEN,
+    );
+}
+
+/// Emits `__rt_spl_queue_set_iterator_mode` on x86_64: receiver in rdi, mode bits in rsi.
+///
+/// Mirrors the AArch64 helper: `SplQueue`'s frozen FIFO bit makes a request that sets
+/// LIFO raise PHP's `RuntimeException`.
+fn emit_queue_iterator_mode_x86_64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_spl_queue_set_iterator_mode");
+    emitter.instruction("test rsi, 2");                                         // is the frozen LIFO bit still clear?
+    emitter.instruction("jnz __rt_spl_queue_mode_frozen_x86");                  // setting LIFO on SplQueue is rejected
+    emitter.instruction("jmp __rt_spl_dll_set_iterator_mode");                  // preserve FIX and mask request bits through the shared setter
+    emitter.label("__rt_spl_queue_mode_frozen_x86");
+    emit_throw_exception_x86_64(
+        emitter,
+        "_spl_runtime_exception_class_id",
+        "_spl_dll_frozen_mode_msg",
+        SPL_DLL_FROZEN_MODE_MSG_LEN,
+    );
+}
+
+/// Emits `__rt_clone_spl_dll` on x86_64: rdi = source SplDoublyLinkedList-family payload.
+///
+/// Mirrors the AArch64 adapter: allocate a same-class payload, duplicate the internal storage
+/// with `__rt_array_clone_shallow`, and copy the iterator index and mode.
+fn emit_clone_adapter_x86_64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_clone_spl_dll");
+    emitter.instruction("push rbp");                                            // save the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the clone-adapter frame
+    emitter.instruction("sub rsp, 16");                                         // reserve source and clone spill slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source payload
+    emitter.instruction(&format!("mov rax, {}", SPL_DLL_OBJECT_SIZE));          // request a same-size list object payload
+    emitter.instruction("call __rt_heap_alloc");                                // allocate the clone payload
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize the object heap kind word
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the clone as an object instance
+    emitter.instruction("call __rt_object_handle_acquire");                     // bind the clone to its PHP object handle
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the source payload
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the source runtime class id
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // copy the class id onto the clone
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the clone payload
+    emitter.instruction(&format!("mov rdi, QWORD PTR [r9 + {}]", SPL_DLL_STORAGE_OFFSET)); // load the source internal storage
+    emitter.instruction("call __rt_array_clone_shallow");                       // duplicate the storage so the clone mutates independently
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the source payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the clone payload
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {}], rax", SPL_DLL_STORAGE_OFFSET)); // install the cloned storage
+    emitter.instruction(&format!("mov r11, QWORD PTR [r9 + {}]", SPL_DLL_ITER_INDEX_OFFSET)); // load the source iterator index
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", SPL_DLL_ITER_INDEX_OFFSET)); // copy the iterator index onto the clone
+    emitter.instruction(&format!("mov r11, QWORD PTR [r9 + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load the source iterator mode
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", SPL_DLL_ITER_MODE_OFFSET)); // copy the iterator mode onto the clone
+    emitter.instruction("mov rax, r10");                                        // return the clone payload
+    emitter.instruction("mov rsp, rbp");                                        // release the clone-adapter frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the clone wrapper
+}
+
 /// Emits `__rt_spl_dll_serialize_array` on x86_64: receiver in rdi. Copies internal storage
 /// items into a new array with retained Mixed cells, boxes iterator flags and both arrays,
 /// and returns a boxed Mixed array (tag 4) containing [boxed flags, boxed items array,
@@ -1649,6 +1792,8 @@ fn emit_serialize_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor rsi, rsi");                                        // array mixed payload uses one word
     emitter.instruction("call __rt_mixed_from_value");                          // box serialized items array
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save boxed dllist value
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // retire the items producer after its box retained the array
+    emitter.instruction("call __rt_decref_array");                              // leave the result box as the sole container owner
     emitter.instruction("xor edi, edi");                                        // empty properties array capacity
     emitter.instruction("mov rsi, 8");                                          // properties array stores boxed Mixed slots
     emitter.instruction("call __rt_array_new");                                 // allocate empty serialized properties array
@@ -1660,6 +1805,8 @@ fn emit_serialize_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor rsi, rsi");                                        // array mixed payload uses one word
     emitter.instruction("call __rt_mixed_from_value");                          // box empty properties array
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save boxed properties value
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                       // recover the fresh properties array adopted by the saved box
+    emitter.instruction("call __rt_decref_array");                              // retire its original producer reference
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver for iterator flags
     emitter.instruction(&format!("mov rdi, QWORD PTR [r9 + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode flags
     emitter.instruction("xor esi, esi");                                        // integer mixed payload uses one word
@@ -2125,6 +2272,10 @@ fn emit_iterator_step_x86_64(emitter: &mut Emitter, forward: bool) {
         "__rt_spl_dll_prev_done"
     };
     emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_ITER_INDEX_OFFSET)); // load current iterator index
+    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // read length before advancing the current node
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the current storage length
+    emitter.instruction("cmp r9, r10");                                        // an exhausted position has no node to advance
+    emitter.instruction(&format!("jae {}", done_label));                         // preserve its signed key on subsequent next/prev calls
     emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode bits
     if forward {
         emitter.instruction(&format!("test r10, {}", ITER_MODE_DELETE));        // does next() need to delete the current element?
@@ -2133,15 +2284,8 @@ fn emit_iterator_step_x86_64(emitter: &mut Emitter, forward: bool) {
     emitter.instruction(&format!("test r10, {}", ITER_MODE_LIFO));              // is traversal currently LIFO?
     emitter.instruction(&format!("jz {}", fifo_label));                         // FIFO and LIFO move in opposite directions
     if forward {
-        emitter.instruction("test r9, r9");                                     // is LIFO traversal at numeric index zero?
-        emitter.instruction("jz __rt_spl_dll_next_lifo_exhaust");               // moving forward from zero exhausts the iterator
         emitter.instruction("sub r9, 1");                                       // otherwise move to previous numeric index
         emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r9", SPL_DLL_ITER_INDEX_OFFSET)); // persist decremented LIFO iterator index
-        emitter.instruction("ret");                                             // return void
-        emitter.label("__rt_spl_dll_next_lifo_exhaust");
-        emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load storage to compute exhausted sentinel
-        emitter.instruction("mov r10, QWORD PTR [r10]");                        // storage length is the invalid sentinel
-        emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r10", SPL_DLL_ITER_INDEX_OFFSET)); // store exhausted LIFO sentinel
         emitter.instruction("ret");                                             // return void
     } else {
         emitter.instruction("add r9, 1");                                       // moving prev in LIFO increases numeric index
@@ -2152,15 +2296,10 @@ fn emit_iterator_step_x86_64(emitter: &mut Emitter, forward: bool) {
     if forward {
         emitter.instruction("add r9, 1");                                       // moving forward in FIFO increases index
     } else {
-        emitter.instruction("test r9, r9");                                     // is FIFO traversal already at zero?
-        emitter.instruction("jz __rt_spl_dll_prev_fifo_done");                  // moving before zero leaves iterator at zero
         emitter.instruction("sub r9, 1");                                       // otherwise move one FIFO slot backward
     }
     emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r9", SPL_DLL_ITER_INDEX_OFFSET)); // persist updated FIFO iterator index
     emitter.label(done_label);
-    if !forward {
-        emitter.label("__rt_spl_dll_prev_fifo_done");
-    }
     emitter.instruction("ret");                                                 // return void
     if forward {
         emit_iterator_delete_step_x86_64(emitter, delete_label);
@@ -2170,7 +2309,7 @@ fn emit_iterator_step_x86_64(emitter: &mut Emitter, forward: bool) {
 /// Emits the delete-mode iterator step helper on x86_64, called from `emit_iterator_step_x86_64`
 /// when ITER_MODE_DELETE is set. If LIFO mode: calls `__rt_spl_dll_pop`, releases the cell, and
 /// sets index to the new tail. If FIFO mode: calls `__rt_spl_dll_shift`, releases the cell, and
-/// resets index to zero. Empty storage after deletion rewinds to index zero.
+/// resets index to zero. LIFO exhaustion retains the signed key -1.
 fn emit_iterator_delete_step_x86_64(emitter: &mut Emitter, delete_label: &str) {
     emitter.label(delete_label);
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for delete-mode next()
@@ -2190,13 +2329,8 @@ fn emit_iterator_delete_step_x86_64(emitter: &mut Emitter, delete_label: &str) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver after deletion
     emitter.instruction(&format!("mov r10, QWORD PTR [r9 + {}]", SPL_DLL_STORAGE_OFFSET)); // load storage to find the new tail
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // read storage length after deletion
-    emitter.instruction("test r10, r10");                                       // did deletion empty the storage?
-    emitter.instruction("jz __rt_spl_dll_next_delete_empty");                   // empty storage rewinds to index zero
     emitter.instruction("sub r10, 1");                                          // new LIFO current index is the new tail
     emitter.instruction(&format!("mov QWORD PTR [r9 + {}], r10", SPL_DLL_ITER_INDEX_OFFSET)); // persist new LIFO delete cursor
-    emitter.instruction("jmp __rt_spl_dll_next_delete_done");                   // finish non-empty LIFO delete
-    emitter.label("__rt_spl_dll_next_delete_empty");
-    emitter.instruction(&format!("mov QWORD PTR [r9 + {}], 0", SPL_DLL_ITER_INDEX_OFFSET)); // reset exhausted delete-mode iterator to zero
     emitter.label("__rt_spl_dll_next_delete_done");
     emitter.instruction("add rsp, 16");                                         // release receiver spill slot
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -2234,21 +2368,14 @@ fn emit_current_x86_64(emitter: &mut Emitter) {
     emit_tail_boxed_null_x86_64(emitter);
 }
 
-/// Emits `__rt_spl_dll_key` on x86_64: receiver in rdi. Reads the iterator index as the
-/// integer key, boxes it as a tagged Mixed (INT_TAG), and returns it. Returns a boxed null
-/// (via `emit_tail_boxed_null_x86_64`) when the index is out of range.
+/// Emits `__rt_spl_dll_key` on x86_64. Reports the signed physical traversal
+/// position even when there is no current node, matching PHP's key() contract.
 fn emit_key_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_key");
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
-    emitter.instruction("mov r9, QWORD PTR [r9]");                              // read storage length
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rdi + {}]", SPL_DLL_ITER_INDEX_OFFSET)); // read iterator index as integer key payload
-    emitter.instruction("cmp rdi, r9");                                         // is iterator index valid?
-    emitter.instruction("jae __rt_spl_dll_key_null");                           // invalid key returns null
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rdi + {}]", SPL_DLL_ITER_INDEX_OFFSET)); // key reports the traversal position even when valid() is false
     emitter.instruction(&format!("mov rax, {}", INT_TAG));                      // runtime tag 0 = int key
     emitter.instruction("xor rsi, rsi");                                        // integer keys do not use a high payload word
     emitter.instruction("jmp __rt_mixed_from_value");                           // box and return the integer key
-    emitter.label("__rt_spl_dll_key_null");
-    emit_tail_boxed_null_x86_64(emitter);
 }
 
 /// Emits `__rt_spl_dll_offset_exists` on x86_64: receiver in rdi, boxed offset in rsi.
@@ -2375,7 +2502,9 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // the owned value, guarded while the offset converts
     super::super::exceptions::guards::guard(emitter, 64, 96);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // pass the owned boxed offset to the converter
-    emitter.instruction(&format!("mov rsi, {}", SPL_OFFSET_MODE_LIST_NULLABLE)); // the list's rules, reporting a null to append
+    emitter.instruction(
+        &format!("mov rsi, {}", SPL_OFFSET_MODE_LIST_NULLABLE),
+    );                                                                          // the list's rules, reporting a null to append
     emitter.instruction("call __rt_spl_offset_convert");                        // convert the offset and release its box
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // keep the status across the unguard
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // keep the index or name row across the unguard
@@ -2531,6 +2660,10 @@ fn emit_throw_exception_aarch64(
     emitter.instruction(&format!("mov x9, #{}", message_len));                  // load static exception message length
     emitter.instruction("str x9, [x0, #16]");                                   // store exception message length
     emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
+    // The creation line is php's call site: the diagnostic line published at the call site that
+    // entered this runtime helper is where php reports the throw.
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_php_diagnostic_line", 0);
+    emitter.instruction("str x9, [x0, #32]");                                   // store the call-site creation line
     emitter.instruction("str xzr, [x0, #40]");                                  // previous defaults to null
     abi::emit_symbol_address(emitter, "x9", "_exc_value");
     emitter.instruction("str x0, [x9]");                                        // publish the active exception object
@@ -2562,6 +2695,9 @@ fn emit_throw_exception_x86_64(
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store static exception message pointer
     emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store static exception message length
     emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
+    // The creation line is php's call site (see the AArch64 arm).
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_php_diagnostic_line", 0);
+    emitter.instruction("mov QWORD PTR [rax + 32], r9");                        // store the call-site creation line
     emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // publish the active exception object
     emitter.instruction("mov rsp, rbp");                                        // release helper frame before throwing
@@ -2593,7 +2729,9 @@ fn emit_dll_offset_type_throw_aarch64(emitter: &mut Emitter, method: &str) {
     abi::emit_symbol_address(emitter, "x0", &prefix_symbol);
     emitter.instruction(&format!("mov x1, #{}", prefix_len));                   // message prefix length
     abi::emit_symbol_address(emitter, "x3", "_unser_type_given_suffix");
-    emitter.instruction(&format!("mov x4, #{}", SPL_DLL_OFFSET_TYPE_GIVEN_SUFFIX_LEN)); // message suffix length
+    emitter.instruction(
+        &format!("mov x4, #{}", SPL_DLL_OFFSET_TYPE_GIVEN_SUFFIX_LEN),
+    );                                                                          // message suffix length
     emitter.instruction("b __rt_spl_throw_offset_type");                        // raise the TypeError naming the offset's type
 }
 
@@ -2604,6 +2742,8 @@ fn emit_dll_offset_type_throw_x86_64(emitter: &mut Emitter, method: &str) {
     emitter.instruction(&format!("lea rdi, [rip + {}]", prefix_symbol));        // message prefix pointer
     emitter.instruction(&format!("mov rsi, {}", prefix_len));                   // message prefix length
     emitter.instruction("lea rcx, [rip + _unser_type_given_suffix]");           // message suffix pointer
-    emitter.instruction(&format!("mov r8, {}", SPL_DLL_OFFSET_TYPE_GIVEN_SUFFIX_LEN)); // message suffix length
+    emitter.instruction(
+        &format!("mov r8, {}", SPL_DLL_OFFSET_TYPE_GIVEN_SUFFIX_LEN),
+    );                                                                          // message suffix length
     emitter.instruction("jmp __rt_spl_throw_offset_type");                      // raise the TypeError naming the offset's type
 }
