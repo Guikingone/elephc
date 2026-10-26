@@ -26154,6 +26154,45 @@ if ($attribute instanceof ReflectionAttribute) { inspectEvalReflectionAttributeU
     );
 }
 
+/// Eval mirrors reject direct writes after RHS effects but permit compound writes and unset.
+#[test]
+fn test_eval_reflection_public_mirror_write_rules() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalMirrorWriteTarget {
+    public function action(string $value): void {}
+}
+class EvalMirrorWriteSubclass extends ReflectionClass {
+    public string $class = '';
+}
+$fromAot = new EvalMirrorWriteSubclass(EvalMirrorWriteTarget::class);
+$code = $argc > 1 ? $argv[1] : <<<'PHP'
+function evalMirrorWriteRhs(): string { echo 'rhs|'; return 'changed'; }
+try { $fromAot->name = evalMirrorWriteRhs(); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+try { $fromAot->class = 'changed'; }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+$fromAot->name .= '!';
+echo $fromAot->name, '|', $fromAot->getName(), '|';
+$created = new ReflectionMethod('EvalMirrorWriteTarget', 'action');
+try { $created->class = evalMirrorWriteRhs(); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+$created->name .= '?';
+echo $created->name, '|';
+$property = 'name';
+try { $created->{$property} = 'changed'; }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+echo $created->name, '|';
+unset($created->name);
+echo $created->getName(), '|', $created->getDeclaringClass()->getName();
+PHP;
+eval($code);
+"#,
+    );
+    assert_eq!(out,
+        "rhs|Cannot set read-only property EvalMirrorWriteSubclass::$name|Cannot set read-only property EvalMirrorWriteSubclass::$class|EvalMirrorWriteTarget!|EvalMirrorWriteTarget|rhs|Cannot set read-only property ReflectionMethod::$class|action?|Cannot set read-only property ReflectionMethod::$name|action?|action|EvalMirrorWriteTarget");
+}
+
 /// Verifies eval ReflectionFunction preserves rich eval-declared function signatures.
 #[test]
 fn test_eval_reflection_function_reports_signature_metadata() {

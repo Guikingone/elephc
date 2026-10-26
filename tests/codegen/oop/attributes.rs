@@ -4848,6 +4848,34 @@ echo $method->getName(), '|', $method->getDeclaringClass()->getName();
     );
 }
 
+/// Compound expressions and incdec stay mutable while plain expression assignments throw.
+#[test]
+fn test_reflection_public_mirror_compound_expressions_remain_mutable() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionExpressionMirrorTarget {
+    public function action(string $value): void {}
+}
+class ReflectionExpressionMirrorCounter extends ReflectionClass {
+    public int $class = 4;
+}
+$method = new ReflectionMethod(ReflectionExpressionMirrorTarget::class, 'action');
+echo $method->name .= '!', '|';
+$class = ($method->class .= '?');
+echo $class, '|';
+$parameter = $method->getParameters()[0];
+echo $parameter->name .= '*', '|';
+try { echo ($method->name = $method->name . 'changed'); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+$counter = new ReflectionExpressionMirrorCounter(ReflectionExpressionMirrorTarget::class);
+echo $counter->class++, '|', ++$counter->class, '|';
+echo $method->getName(), '|', $parameter->getName();
+"#,
+    );
+    assert_eq!(out,
+        "action!|ReflectionExpressionMirrorTarget?|value*|Cannot set read-only property ReflectionMethod::$name|4|6|action|value");
+}
+
 /// Direct mirror writes use Reflection ancestry and report the receiver's runtime subclass.
 #[test]
 fn test_reflection_public_mirror_direct_write_names_runtime_subclass() {

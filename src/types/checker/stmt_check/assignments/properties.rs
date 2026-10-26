@@ -32,18 +32,19 @@ pub(super) fn check_property_assign(
     value: &Expr,
     span: Span,
     env: &mut TypeEnv,
+    compound_property_update: bool,
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     if let PhpType::Object(class_name) = &obj_ty {
-        check_object_property_write(checker, object, class_name, property, value, &val_ty, span)?;
+        check_object_property_write(checker, object, class_name, property, value, &val_ty, span, compound_property_update)?;
         refine_object_property_type(checker, class_name, property, &val_ty);
     } else if let Some(class_name) = checker.union_single_object_class(&obj_ty) {
         // A factory-style `Object|false` receiver still targets the one object
         // class when the runtime value is an object. Validate writes against that
         // class so readonly/visibility/type rules are not silently bypassed merely
         // because the success value has not yet been narrowed with instanceof.
-        check_object_property_write(checker, object, &class_name, property, value, &val_ty, span)?;
+        check_object_property_write(checker, object, &class_name, property, value, &val_ty, span, compound_property_update)?;
         refine_object_property_type(checker, &class_name, property, &val_ty);
     }
     // A boxed `Mixed` receiver names no class, so the reservation is recorded for every class
@@ -304,6 +305,7 @@ fn check_object_property_write(
     value: &Expr,
     val_ty: &PhpType,
     span: Span,
+    compound_property_update: bool,
 ) -> Result<(), CompileError> {
     if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
         return Ok(());
@@ -392,7 +394,8 @@ fn check_object_property_write(
             checker, class_name, property, !(readonly_null_coalesce || readonly_write_guard), span,
         )?;
         if reflection_public_mirror_property(checker, class_name, property)
-            && !is_compound_property_assignment_self_read(value, object, property, span)
+            && !compound_property_update
+            && !is_compound_property_assignment_self_read(value, object, property, span, &[])
         {
             crate::types::checker::record_throw_access_site(
                 &mut checker.throw_access_sites,

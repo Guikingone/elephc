@@ -222,7 +222,14 @@ fn lower_reflection_property_write_exception(
         ),
     );
     crate::ir_lower::expr::retire_owned_call_operand(ctx, class_slot, span);
-    terminate_throw(ctx, exception.value);
+    // Assignment expressions still lower their unreachable result reads after this operation.
+    ctx.emit_void(
+        Op::ThrowException,
+        vec![exception.value],
+        None,
+        Op::ThrowException.default_effects(),
+        Some(span),
+    );
 }
 
 /// Fuses the parser's readonly coalesce receiver temporary into a scoped EIR owner.
