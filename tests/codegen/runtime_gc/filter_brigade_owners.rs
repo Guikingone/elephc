@@ -13,7 +13,7 @@ use crate::support::*;
 /// Native brigade graphs retire on return and throw, including retained property getters.
 #[test]
 fn test_fileinfo_user_filter_brigade_owners() {
-    let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+    let source = r#"<?php
 class FileinfoRawBrigade extends php_user_filter {
     public function filter($in, $out, &$consumed, bool $closing): int {
         while ($bucket = stream_bucket_make_writeable($in)) {
@@ -53,9 +53,22 @@ class FileinfoThrowingBrigade extends php_user_filter {
         return PSFS_PASS_ON;
     }
 }
+class FileinfoPassBrigade extends php_user_filter {
+    public function filter($in, $out, &$consumed, bool $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $consumed += $bucket->datalen;
+            stream_bucket_append($out, $bucket);
+        }
+        return PSFS_PASS_ON;
+    }
+}
 stream_filter_register("fileinfo.brigade.raw", "FileinfoRawBrigade");
 stream_filter_register("fileinfo.brigade.boxed", "FileinfoBoxedBrigade");
 stream_filter_register("fileinfo.brigade.throw", "FileinfoThrowingBrigade");
+$stream = fopen("php://temp", "w+b");
+$bucket = stream_bucket_new($stream, str_repeat("new", 7));
+echo $bucket->data, ":", $bucket->datalen, "\n";
+unset($bucket); fclose($stream);
 for ($i = 0; $i < 4; $i++) {
     foreach (["raw", "boxed"] as $name) {
         $stream = fopen("php://temp", "w+b"); fwrite($stream, "seed"); rewind($stream);
@@ -70,8 +83,26 @@ for ($i = 0; $i < 4; $i++) {
     fclose($stream); unset($filter);
 }
 unset($stream, $e, $name);
-"#);
+"#;
+    let (out, _) = compile_and_run_with_heap_debug_and_asm(source);
+    if !out.success || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+        let declarations = source.split("\nstream_filter_register(").next().unwrap();
+        for class in ["FileinfoPassBrigade", "FileinfoRawBrigade", "FileinfoBoxedBrigade", "FileinfoThrowingBrigade"] {
+            let tail = format!(r#"stream_filter_register("fileinfo.brigade.control", "{class}"); $stream = fopen("php://temp", "w+b"); fwrite($stream, "seed"); rewind($stream); $filter = stream_filter_append($stream, "fileinfo.brigade.control", STREAM_FILTER_READ); try {{ $data = stream_get_contents($stream, 100000); echo strlen($data); }} catch (Error $error) {{ echo $error->getMessage(); }} fclose($stream); unset($stream, $filter, $data, $error);"#);
+            let (control, asm) = compile_and_run_with_heap_debug_and_asm(&format!("{declarations}\n{tail}"));
+            eprintln!("brigade ownership control {class}: {}\n{}", control.stdout, control.stderr);
+            if !control.stderr.contains("HEAP DEBUG: leak summary: clean") {
+                let mut selected = false;
+                for line in asm.lines().filter(|line| {
+                    if line.contains("@fn ") && line.contains(class) && line.contains("filter") { selected = true; }
+                    let include = selected;
+                    if line.contains("@endfn ") { selected = false; }
+                    include
+                }).take(1800) { eprintln!("{class}: {line}"); }
+            }
+        }
+    }
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "70000:x\n70001:y\nfilter error\n".repeat(4), "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{}:21\n{}", "new".repeat(7), "70000:x\n70001:y\nfilter error\n".repeat(4)), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

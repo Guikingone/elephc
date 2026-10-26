@@ -42,6 +42,11 @@ pub(super) fn lower_stream_bucket_new_aarch64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("mov x2, #0");                                      // object Mixed payloads do not use the high word
     ctx.emitter.instruction("mov x0, #6");                                      // runtime tag 6 = object
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+    // -- boxing retained the bucket; retire the constructor's original object owner --
+    abi::emit_push_reg(ctx.emitter, "x0");
+    abi::emit_load_from_address(ctx.emitter, "x0", "x0", 8);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_object");
+    abi::emit_pop_reg(ctx.emitter, "x0");
 }
 
 /// Emits the x86_64 body for `stream_bucket_new`.
@@ -77,6 +82,11 @@ pub(super) fn lower_stream_bucket_new_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("xor esi, esi");                                    // object Mixed payloads do not use the high word
     ctx.emitter.instruction("mov rax, 6");                                      // runtime tag 6 = object
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+    // -- boxing retained the bucket; retire the constructor's original object owner --
+    abi::emit_push_reg(ctx.emitter, "rax");
+    abi::emit_load_from_address(ctx.emitter, "rax", "rax", 8);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_object");
+    abi::emit_pop_reg(ctx.emitter, "rax");
 }
 
 /// Emits the AArch64 body for stream bucket insertion at the requested end.

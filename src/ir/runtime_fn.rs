@@ -2310,6 +2310,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::Ord
                 // Raw-memory writes return only the byte count, never the borrowed input string.
                 | RuntimeFnId::PtrWriteString
+                // Brigade insertion mutates its inputs and returns no owning value.
+                | RuntimeFnId::StreamBucketAppend
+                | RuntimeFnId::StreamBucketPrepend
                 | RuntimeFnId::ElephcPtrWriteString
                 | RuntimeFnId::TokenizerErrorLocation
                 // Both array mutators answer the resulting element count. The returned
@@ -2465,6 +2468,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayMerge
                 | RuntimeFnId::ArrayPad
                 | RuntimeFnId::ArrayPop
+                // Bucket construction and brigade extraction transfer an independent boxed owner.
+                | RuntimeFnId::StreamBucketNew
+                | RuntimeFnId::StreamBucketMakeWriteable
                 // `key()`/`current()` and the seek family all hand back a cell built by
                 // `__rt_mixed_from_value`, which persists strings and increfs containers, so
                 // the box is independently owned and never aliases the receiving array.
