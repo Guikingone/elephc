@@ -1781,6 +1781,7 @@ fn lower_body_into_function(
     ctx.this_storage_stays_concrete = {
         let flags = &ctx.builder.function().flags;
         flags.is_method && !flags.is_static && !flags.is_closure
+            && property_initializers.is_none() && !body.is_empty()
             && !crate::ir_lower::body_contains_eval_call(body)
     };
     ctx.by_ref_return = function_by_ref_return;
