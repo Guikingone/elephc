@@ -195,8 +195,8 @@ remaining operands. Truthiness conversion also releases any owned operand before
 branching. These conditions need no boolean merge slot or associated stores and
 reloads, even with `--no-ir-opt`, on every supported target.
 Whole logical trees allocate operand blocks in source order, including mixed
-operators and negation, so intermediate continuations can fall through instead
-of jumping backward between operands.
+operators and negation. Continuations between operands without internal control
+flow can fall through instead of jumping backward between operands.
 
 When the logical result is itself returned, assigned, or passed to a function,
 ordinary expression lowering still materializes its boolean value. The short
@@ -266,7 +266,7 @@ branch over `b` (`cbz x0, 1f; b L; 1:`). The peephole folds that into one
 `cbnz x0, L` / `b.cond L` when `L` is a label of the same function and the
 function is provably smaller than the conditional reach. The text peepholes run
 on functions that are small (up to 8 KiB of assembly text, typically the callees
-of hot loops) or a retreating CFG edge (an edge to the same or an earlier block
+of hot loops) or contain a retreating CFG edge (an edge to the same or an earlier block
 in the block table), up to 256 KiB. Larger bodies without such an edge and very
 large bodies (generated helpers and dispatch code such as an eval-heavy
 program's top level) skip them to keep
