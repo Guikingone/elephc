@@ -586,7 +586,10 @@ fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &s
     abi::store_at_offset(ctx.emitter, frame_pointer, offset - 16);
     abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
     abi::store_at_offset(ctx.emitter, scratch, offset - 24);
-    if ctx.backtrace_activation {
+    // Synthetic cleanup frames still retain their incoming source coordinate. Their
+    // reader stays absent, so PHP backtraces omit them while generated diagnostics can
+    // recover a direct top-level call even though main has no activation of its own.
+    if ctx.backtrace_enabled {
         abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_php_backtrace_next_line", 0);
     }
     abi::store_at_offset(ctx.emitter, scratch, offset - 32);

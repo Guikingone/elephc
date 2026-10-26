@@ -133,6 +133,7 @@ mod tempnam;
 mod path_is_wrapper;
 mod readfile_wrapper;
 mod user_filter;
+mod user_filter_lifecycle;
 mod user_filter_brigade;
 mod stash_connect_host;
 mod touch_meta_array;
@@ -258,9 +259,9 @@ pub(crate) use tempnam::emit_tempnam;
 pub(crate) use user_filter::{
     emit_apply_user_stream_filter, emit_resolve_user_filter_id,
     emit_stream_filter_attach_user, emit_stream_filter_register,
-    emit_user_filter_release_fd,
 };
 pub(crate) use user_filter_brigade::emit_user_filter_brigade_invoke;
+pub(crate) use user_filter_lifecycle::emit_user_filter_release_fd;
 pub(crate) use user_wrapper::{
     emit_box_wrapper_stat_result, emit_user_wrapper_fclose, emit_user_wrapper_feof,
     emit_user_wrapper_fflush, emit_user_wrapper_flock, emit_user_wrapper_fread,

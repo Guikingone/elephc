@@ -258,6 +258,8 @@ jobs:
           cargo test -p elephc --test codegen_tests test_fileinfo_boxed_string_returns_release_raw_argument_temporaries
           cargo test -p elephc --test codegen_tests test_fileinfo_static_property_returns_keep_independent_owners
           cargo test -p elephc --test codegen_tests test_fileinfo_stream_registration_owners
+          cargo test -p elephc --test codegen_tests test_fileinfo_pointer_read_string_alias_owners
+          cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_lifecycle_owners
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2
           cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments
           cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array
@@ -449,6 +451,8 @@ jobs:
           cargo test -p elephc --test codegen_tests test_fileinfo_boxed_string_returns_release_raw_argument_temporaries
           cargo test -p elephc --test codegen_tests test_fileinfo_static_property_returns_keep_independent_owners
           cargo test -p elephc --test codegen_tests test_fileinfo_stream_registration_owners
+          cargo test -p elephc --test codegen_tests test_fileinfo_pointer_read_string_alias_owners
+          cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_lifecycle_owners
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2
           cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments
           cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array
@@ -632,6 +636,8 @@ jobs:
           cargo test -p elephc --test codegen_tests test_fileinfo_boxed_string_returns_release_raw_argument_temporaries
           cargo test -p elephc --test codegen_tests test_fileinfo_static_property_returns_keep_independent_owners
           cargo test -p elephc --test codegen_tests test_fileinfo_stream_registration_owners
+          cargo test -p elephc --test codegen_tests test_fileinfo_pointer_read_string_alias_owners
+          cargo test -p elephc --test codegen_tests test_fileinfo_user_filter_lifecycle_owners
           cargo test -p elephc --test codegen_tests 'codegen::fileinfo' -- --test-threads=2
           cargo test -p elephc --test codegen_tests test_ffi_extern_copied_string_return_releases_arguments
           cargo test -p elephc --test codegen_tests test_core_error_handler_throw_releases_argument_array

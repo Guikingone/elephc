@@ -36,6 +36,8 @@ mod ini_lookup_arguments;
 mod mixed_string_cast_return;
 #[path = "runtime_gc/stream_registry.rs"]
 mod stream_registry;
+#[path = "runtime_gc/pointer_read_owners.rs"]
+mod pointer_read_owners;
 #[path = "runtime_gc/object_cast.rs"]
 mod object_cast;
 #[path = "runtime_gc/array_cast.rs"]

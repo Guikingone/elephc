@@ -26,6 +26,63 @@ class FileinfoRegistryWrapper {
     public function stream_eof(): bool { return $this->position >= 5; }
     public function __destruct() { FileinfoRegistryWrapper::$dropped++; }
 }
+
+/// Filter objects release params and properties when creation or close succeeds, refuses or throws.
+#[test]
+fn test_fileinfo_user_filter_lifecycle_owners() {
+    let (out, _) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+class FileinfoFilterOwner extends php_user_filter {
+    public static int $dropped = 0;
+    public static int $closed = 0;
+    private string $payload = "";
+    public function onCreate(): bool { $this->payload = str_repeat("x", 41); return true; }
+    public function onClose(): void { FileinfoFilterOwner::$closed++; }
+    public function filter($in, $out, &$consumed, $closing): int { return PSFS_PASS_ON; }
+    public function __destruct() { FileinfoFilterOwner::$dropped++; }
+}
+class FileinfoFilterRefuses extends FileinfoFilterOwner {
+    public function onCreate(): bool { return false; }
+}
+class FileinfoFilterCreateThrows extends FileinfoFilterOwner {
+    public function onCreate(): bool { throw new Exception("create"); }
+}
+class FileinfoFilterCloseThrows extends FileinfoFilterOwner {
+    public function onClose(): void { FileinfoFilterOwner::$closed++; throw new Exception("close"); }
+}
+stream_filter_register("fileinfo.owner", "FileinfoFilterOwner");
+stream_filter_register("fileinfo.refuses", "FileinfoFilterRefuses");
+stream_filter_register("fileinfo.create.throws", "FileinfoFilterCreateThrows");
+stream_filter_register("fileinfo.close.throws", "FileinfoFilterCloseThrows");
+for ($i = 0; $i < 8; $i++) {
+    foreach ([STREAM_FILTER_READ, STREAM_FILTER_WRITE] as $mode) {
+        $stream = fopen("php://temp", "w+b");
+        $filter = stream_filter_append($stream, "fileinfo.owner", $mode, ["payload" => str_repeat("p", 33)]);
+        fclose($stream); unset($filter);
+    }
+    $stream = fopen("php://temp", "w+b");
+    $filter = @stream_filter_append($stream, "fileinfo.refuses", STREAM_FILTER_READ, ["payload" => str_repeat("r", 35)]);
+    if ($filter !== false) { echo "refusal failed\n"; }
+    fclose($stream); unset($filter);
+    $stream = fopen("php://temp", "w+b");
+    try { stream_filter_append($stream, "fileinfo.create.throws", STREAM_FILTER_READ, ["payload" => str_repeat("t", 37)]); }
+    catch (Exception $e) { if ($e->getMessage() !== "create") { echo "wrong create error\n"; } }
+    fclose($stream);
+    $stream = fopen("php://temp", "w+b");
+    $filter = stream_filter_append($stream, "fileinfo.close.throws", STREAM_FILTER_READ, ["payload" => str_repeat("c", 39)]);
+    try { fclose($stream); } catch (Exception $e) { if ($e->getMessage() !== "close") { echo "wrong close error\n"; } }
+    unset($filter);
+}
+echo FileinfoFilterOwner::$dropped, ":", FileinfoFilterOwner::$closed, "\n";
+$stream = fopen("php://temp", "w+b");
+$filter = stream_filter_append($stream, "fileinfo.owner", STREAM_FILTER_ALL, ["payload" => str_repeat("a", 43)]);
+fclose($stream); unset($filter);
+echo "all\n";
+unset($stream, $e);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "40:32\nall\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
 class FileinfoRegistryClosing extends FileinfoRegistryWrapper {
     public function stream_close(): void { FileinfoRegistryWrapper::$closed++; }
 }

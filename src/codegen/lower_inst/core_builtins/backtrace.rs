@@ -53,6 +53,9 @@ pub(super) fn lower_diagnostic_caller_line(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&scan);
     ctx.emitter.instruction(&if arm { format!("cmp {cursor}, #0") } else { format!("test {cursor}, {cursor}") }); // detect the end of the activation chain
     ctx.emitter.instruction(&format!("{} {empty}", if arm { "b.eq" } else { "jz" })); // fall back when no source caller remains
+    abi::emit_load_from_address(ctx.emitter, result, cursor, 16);
+    ctx.emitter.instruction(&format!("cmp {result}, {cursor}"));                // ownership guards are 32-byte records without a source-line field
+    ctx.emitter.instruction(&format!("{} {next}", if arm { "b.eq" } else { "je" })); // skip guards before reading the larger PHP activation layout
     abi::emit_load_from_address(ctx.emitter, result, cursor, 32);
     ctx.emitter.instruction(&if arm { format!("cmp {result}, #0") } else { format!("test {result}, {result}") }); // skip frames with no source coordinate
     ctx.emitter.instruction(&format!("{} {next}", if arm { "b.eq" } else { "jz" })); // continue past generated frame entries
