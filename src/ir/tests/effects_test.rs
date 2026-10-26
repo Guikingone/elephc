@@ -264,3 +264,15 @@ fn array_flip_effects_preserve_warning_handlers() {
         assert!(effects.contains(required));
     }
 }
+
+/// Heap metric reads observe allocations and reset writes cannot disappear as unused calls.
+#[test]
+fn memory_metrics_effects_observe_heap_and_peak_resets() {
+    for target in [RuntimeFnId::MemoryGetUsage, RuntimeFnId::MemoryGetPeakUsage,
+        RuntimeFnId::MemoryGetAllocations, RuntimeFnId::MemoryGetFrees] {
+        assert!(target.effects().contains(Effects::READS_GLOBAL | Effects::READS_HEAP));
+        assert!(!target.effects().contains(Effects::ALLOC_HEAP));
+        assert_eq!(target.result_ownership(), crate::builtins::semantics::BuiltinResultOwnership::NonHeap);
+    }
+    assert!(RuntimeFnId::MemoryResetPeakUsage.effects().contains(Effects::WRITES_GLOBAL));
+}

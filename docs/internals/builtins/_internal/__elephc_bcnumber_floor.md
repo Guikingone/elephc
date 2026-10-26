@@ -2,7 +2,7 @@
 title: "__elephc_bcnumber_floor() - internals"
 description: "Compiler internals for __elephc_bcnumber_floor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1083
+  order: 1088
 ---
 
 ## `__elephc_bcnumber_floor()` - internals

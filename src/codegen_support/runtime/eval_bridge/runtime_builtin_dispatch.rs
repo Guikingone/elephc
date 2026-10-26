@@ -64,6 +64,8 @@ pub(super) fn emit_aarch64_runtime_builtin_dispatch(emitter: &mut Emitter, featu
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean");
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush");
 
+    super::memory::emit_cases(emitter);
+
     if features.mbstring || features.eval_bridge {
         super::mbstring::emit_aarch64_mbstring(emitter, features.mbregex);
     }
@@ -142,6 +144,8 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter, featur
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean");
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush");
 
+    super::memory::emit_cases(emitter);
+
     if features.mbstring || features.eval_bridge {
         super::mbstring::emit_x86_64_mbstring(emitter, features.mbregex);
     }
@@ -195,6 +199,8 @@ fn runtime_dispatch_labels() -> Vec<(RuntimeBuiltinId, String)> {
         (RuntimeBuiltinId::ObEndFlush, "__elephc_runtime_builtin_v1_ob_end_flush"),
     ];
     let mut labels: Vec<_> = labels.into_iter().map(|(id, label)| (id, label.to_owned())).collect();
+    labels.extend(super::memory::OPERATIONS.iter().map(|(id, name)|
+        (*id, format!("__elephc_runtime_builtin_v1_{name}"))));
     labels.extend(crate::builtins::registry::eval_runtime_builtin_ids().filter(|id| id.is_mbstring()).map(|id|
         (id, format!("__elephc_runtime_builtin_v1_mbstring_{}", id.as_u32()))));
     for &(runtime_id, _) in &labels {

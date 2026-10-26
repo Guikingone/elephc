@@ -121,6 +121,7 @@ mod aarch64_clone;
 mod x86_64_clone;
 mod clone_rejections;
 mod runtime_builtin_dispatch;
+mod memory;
 mod resources;
 mod backtrace;
 mod gc_boundary;

@@ -2,7 +2,7 @@
 title: "__elephc_bcnumber_powmod() - internals"
 description: "Compiler internals for __elephc_bcnumber_powmod(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1087
+  order: 1092
 ---
 
 ## `__elephc_bcnumber_powmod()` - internals
