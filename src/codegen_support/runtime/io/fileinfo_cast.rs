@@ -25,6 +25,7 @@ pub(super) fn emit_fileinfo_cast(emitter: &mut Emitter) {
     };
     let name = emitter.target.extern_symbol("elephc_runtime_fileinfo_cast");
     emitter.label_global(&name);
+    // -- reserve callback state and preserve the native caller linkage --
     if arm {
         emitter.instruction("sub sp, sp, #144");                                // reserve callback values and an aligned caller frame
         emitter.instruction("stp x29, x30, [sp, #128]");                        // preserve the caller frame and return address
@@ -65,6 +66,7 @@ pub(super) fn emit_fileinfo_cast(emitter: &mut Emitter) {
     emitter.instruction(if arm { "ldr x0, [x10, x9, lsl #3]" } else { "mov rdi, QWORD PTR [r10 + r9 * 8]" }); // borrow the live wrapper object
     emitter.instruction(if arm { "cmp x0, #0" } else { "test rdi, rdi" });      // detect a retired wrapper handle
     emitter.instruction(if arm { "b.eq __rt_finfo_cast_done" } else { "jz __rt_finfo_cast_done" }); // ignore closed handles
+    // -- resolve the wrapper's typed stream-cast method and return representation --
     emitter.instruction(if arm { "ldr x12, [x0]" } else { "mov r9, QWORD PTR [rdi]" }); // preserve the class ID across symbol-load scratch use
     abi::emit_load_symbol_to_reg(emitter, b, "_class_name_count", 0);
     emitter.instruction(if arm { "cmp x12, x10" } else { "cmp r9, r10" });      // validate the dense class ID
@@ -78,6 +80,7 @@ pub(super) fn emit_fileinfo_cast(emitter: &mut Emitter) {
     abi::emit_load_from_address(emitter, c, b, 80);
     emitter.instruction(if arm { "cmp x11, #0" } else { "test r11, r11" });     // vtable slot ten is stream_cast
     emitter.instruction(if arm { "b.eq __rt_finfo_cast_missing" } else { "jz __rt_finfo_cast_missing" }); // let PHP issue the missing-method warning
+    // -- invoke the callback once and retain its exact native return registers --
     emitter.instruction(if arm { "mov x1, #0" } else { "xor esi, esi" });       // userspace casts receive PHP_STREAM_AS_STDIO
     emitter.instruction(if arm { "blr x11" } else { "call r11" });              // invoke the callback through its declared method ABI
     abi::emit_store_to_address(emitter, ret, frame, 16);
@@ -99,6 +102,7 @@ pub(super) fn emit_fileinfo_cast(emitter: &mut Emitter) {
     }
     emitter.instruction(if arm { "b __rt_finfo_cast_classify" } else { "jmp __rt_finfo_cast_classify" }); // classify the borrowed boxed payload
     emitter.label("__rt_finfo_cast_string");
+    // -- normalize declared strings and floats into the common truthiness slots --
     let (string, length) = abi::string_result_regs(emitter);
     abi::emit_store_to_address(emitter, string, frame, 16);
     abi::emit_store_to_address(emitter, length, frame, 24);
@@ -111,6 +115,7 @@ pub(super) fn emit_fileinfo_cast(emitter: &mut Emitter) {
     emitter.instruction(if arm { "fmov x9, d0" } else { "movq r9, xmm0" });     // retain the scalar floating-point result as bits
     abi::emit_store_to_address(emitter, a, frame, 40);
     emitter.label("__rt_finfo_cast_classify");
+    // -- distinguish falsy values, valid resources and invalid truthy cast results --
     abi::emit_load_from_address(emitter, a, frame, 32);
     emitter.instruction(if arm { "cmp x9, #9" } else { "cmp r9, 9" });          // only an actual resource tag may identify another stream
     emitter.instruction(if arm { "b.eq __rt_finfo_cast_resource" } else { "je __rt_finfo_cast_resource" }); // validate resource identity separately
@@ -154,6 +159,7 @@ pub(super) fn emit_fileinfo_cast(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, a, 1);
     abi::emit_store_to_address(emitter, a, frame, 56);
     emitter.label("__rt_finfo_cast_done");
+    // -- transfer the callback owner into its record before restoring the caller --
     emit_pack_result(emitter);
     if arm {
         emitter.instruction("ldp x29, x30, [sp, #128]");                        // restore the caller frame and return address
@@ -170,6 +176,7 @@ pub(super) fn emit_fileinfo_cast(emitter: &mut Emitter) {
 fn emit_pack_result(emitter: &mut Emitter) {
     let arm = emitter.target.arch == Arch::AArch64;
     let (ret, frame, scratch, callback) = if arm { ("x0", "sp", "x9", "x14") } else { ("rax", "rsp", "r9", "r11") };
+    // -- guard the transferred callback owner before allocating its opaque record --
     abi::emit_store_zero_to_address(emitter, frame, 64 + EXCEPTION_GUARD_OWNER_OFFSET);
     abi::emit_symbol_address(emitter, callback, "__rt_exception_release_owned");
     abi::emit_store_to_address(emitter, callback, frame, 72);
@@ -194,6 +201,7 @@ fn emit_pack_result(emitter: &mut Emitter) {
     emitter.instruction(if arm { "mov x1, #0" } else { "xor esi, esi" });       // publish this owner as a new unwind group
     emitter.instruction(if arm { "bl __rt_exception_guard_owned" } else { "call __rt_exception_guard_owned" }); // protect the return if allocation invokes throwing GC cleanup
     abi::emit_load_int_immediate(emitter, ret, 32);
+    // -- move the owned result into a record and consume its temporary unwind guard --
     emitter.instruction(if arm { "bl __rt_heap_alloc" } else { "call __rt_heap_alloc" }); // allocate the opaque owner record using ordinary heap failure handling
     for (source, destination) in [(56, 0), (8, 8), (16, 16), (24, 24)] {
         abi::emit_load_from_address(emitter, scratch, frame, source);
@@ -210,11 +218,13 @@ fn emit_result_accessors(emitter: &mut Emitter) {
     let arm = emitter.target.arch == Arch::AArch64;
     let (arg, ret, frame, scratch) = if arm { ("x0", "x0", "sp", "x9") } else { ("rdi", "rax", "rsp", "r9") };
     let name = emitter.target.extern_symbol("elephc_runtime_fileinfo_cast_status");
+    // -- borrow the status without consuming the callback's result owner --
     emitter.label_global(&name);
     abi::emit_load_from_address(emitter, ret, arg, 0);
     emitter.instruction("ret");                                                 // borrow the result status without consuming its owner
     let name = emitter.target.extern_symbol("elephc_runtime_fileinfo_cast_release");
     emitter.label_global(&name);
+    // -- retain the typed value while retiring its opaque record before callbacks --
     if arm {
         emitter.instruction("sub sp, sp, #48");                                 // reserve the transferred value and caller linkage
         emitter.instruction("stp x29, x30, [sp, #32]");                         // preserve the caller frame and return address
@@ -230,6 +240,7 @@ fn emit_result_accessors(emitter: &mut Emitter) {
     abi::emit_store_zero_to_address(emitter, arg, 16);
     if !arm { emitter.instruction("mov rax, rdi"); }                            // pass the consumed record through the native heap ABI
     emitter.instruction(if arm { "bl __rt_heap_free_safe" } else { "call __rt_heap_free_safe" }); // retire the record before any PHP destructor can reenter
+    // -- dispatch the transferred owner to its declared representation's release path --
     abi::emit_load_from_address(emitter, scratch, frame, 0);
     emitter.instruction(if arm { "cmp x9, #1" } else { "cmp r9, 1" });          // raw strings use the validated allocation release helper
     emitter.instruction(if arm { "b.eq __rt_finfo_result_string" } else { "je __rt_finfo_result_string" }); // release the transferred string allocation
@@ -250,6 +261,7 @@ fn emit_result_accessors(emitter: &mut Emitter) {
     abi::emit_load_from_address(emitter, ret, frame, 8);
     emitter.instruction(if arm { "bl __rt_callable_descriptor_release" } else { "call __rt_callable_descriptor_release" }); // release captured callable owners through their descriptor
     emitter.label("__rt_finfo_result_done");
+    // -- restore the caller after the complete typed result release --
     if arm {
         emitter.instruction("ldp x29, x30, [sp, #32]");                         // restore the caller linkage after result destruction
         emitter.instruction("add sp, sp, #48");                                 // release the complete aligned release frame

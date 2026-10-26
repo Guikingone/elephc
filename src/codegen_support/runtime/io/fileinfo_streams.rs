@@ -95,6 +95,7 @@ pub(super) fn capture_socket_error(emitter: &mut Emitter) {
 fn emit_wrapper_query(emitter: &mut Emitter) {
     let name = emitter.target.extern_symbol("elephc_runtime_stream_has_wrapper");
     emitter.label_global(&name);
+    // -- scan owned wrapper registration names through the target's C ABI --
     match emitter.target.arch {
         Arch::AArch64 => {
             // -- retain the C string and its length across registry comparisons --

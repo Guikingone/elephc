@@ -25,6 +25,7 @@ pub(super) fn emit_fileinfo_stat(emitter: &mut Emitter) {
         }
     }
     for (name, offset) in [("elephc_runtime_stream_stat_name", 0), ("elephc_runtime_stream_stat_name_length", 8)] {
+        // -- expose immutable class-name metadata through leaf C ABI accessors --
         let symbol = emitter.target.extern_symbol(name);
         emitter.label_global(&symbol);
         match emitter.target.arch {
@@ -41,6 +42,7 @@ fn emit_exception_warning(emitter: &mut Emitter) {
     let (arg, ret, frame, scratch) = if arm { ("x0", "x0", "sp", "x14") } else { ("rdi", "rax", "rsp", "r11") };
     let name = emitter.target.extern_symbol("elephc_runtime_stream_exception_warning");
     emitter.label_global(&name);
+    // -- select default reporting only when no matching PHP handler suppresses it --
     abi::emit_load_symbol_to_reg(emitter, scratch, "_php_error_handler_callable", 0);
     emitter.instruction(if arm { "cmp x14, #0" } else { "test r11, r11" });     // a registered handler cannot run with a pending exception
     emitter.instruction(if arm { "b.eq __rt_finfo_exception_warning_report" } else { "jz __rt_finfo_exception_warning_report" }); // no handler means ordinary default reporting
@@ -48,6 +50,7 @@ fn emit_exception_warning(emitter: &mut Emitter) {
     emitter.instruction(if arm { "tst x14, #2" } else { "test r11, 2" });       // only a matching E_WARNING handler suppresses the exception-time diagnostic
     emitter.instruction(if arm { "b.ne __rt_finfo_exception_warning_done" } else { "jnz __rt_finfo_exception_warning_done" }); // PHP cannot enter the matching handler while an exception is pending
     emitter.label("__rt_finfo_exception_warning_report");
+    // -- emit the default warning while preserving the original pending exception --
     if arm {
         emitter.instruction("sub sp, sp, #48");                                 // reserve the warning inputs and caller linkage
         emitter.instruction("stp x29, x30, [sp, #32]");                         // preserve the caller frame and return address
@@ -78,6 +81,7 @@ fn emit_exception_warning(emitter: &mut Emitter) {
 fn emit_close_mode(emitter: &mut Emitter) {
     let name = emitter.target.extern_symbol("elephc_runtime_stream_close_mode");
     emitter.label_global(&name);
+    // -- query or replace the close mode without losing its previous value --
     match emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_symbol_to_reg(emitter, "x14", "_stream_close_silent", 0);
@@ -113,6 +117,7 @@ fn emit_aarch64_probe(emitter: &mut Emitter, missing_stat: bool) {
     emitter.instruction("add x11, x11, #1");                                    // inspect the next resource-ID slot
     emitter.instruction(&format!("b __rt_finfo_{suffix}_scan"));                // continue the bounded scan
     emitter.label(&format!("__rt_finfo_{suffix}_found"));
+    // -- map the native wrapper descriptor to a live object and validated class --
     emitter.instruction("ldr x12, [x10, x11, lsl #3]");                         // load the native resource payload
     emitter.instruction("mov x13, #0x4000");                                    // materialize the high word of the synthetic wrapper base
     emitter.instruction("lsl x13, x13, #16");                                   // form the wrapper descriptor base 0x40000000
@@ -138,6 +143,7 @@ fn emit_aarch64_probe(emitter: &mut Emitter, missing_stat: bool) {
     emitter.instruction("add x0, x13, x12");                                    // return the immutable class-name metadata row
     emitter.instruction("ret");                                                 // leave the class-name span available until program exit
     emitter.label(&format!("__rt_finfo_{suffix}_empty"));
+    // -- return no class metadata when the resource has no matching wrapper --
     emitter.instruction("mov x0, #0");                                          // no missing stream_stat method was found
     emitter.instruction("ret");                                                 // return a null metadata pointer
 }
