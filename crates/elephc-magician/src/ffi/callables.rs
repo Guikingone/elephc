@@ -135,6 +135,58 @@ pub unsafe extern "C" fn __elephc_eval_register_spl_autoload(
     .unwrap_or(0)
 }
 
+/// Returns the request's registered SPL autoload callables as a boxed indexed array.
+///
+/// `ctx` mirrors [`__elephc_eval_register_spl_autoload`]: generated callers pass null so a
+/// request-scoped context can be created just to reach the value operations, while interpreted
+/// callers pass their own. The returned cell is OWNED by the caller; a null answer means the
+/// interpreter could not build the array.
+///
+/// # Safety
+/// `ctx` must be null or a valid bridge context. The returned pointer must be released exactly
+/// once by the caller.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_spl_autoload_functions(
+    ctx: *mut ElephcEvalContext,
+) -> *mut RuntimeCell {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_spl_autoload_functions");
+    std::panic::catch_unwind(|| unsafe {
+        let (context, created_context) = if let Some(context) = ctx.as_mut() {
+            (context, false)
+        } else {
+            let context = crate::ffi::context::__elephc_eval_context_new();
+            let Some(context) = context.as_mut() else {
+                return std::ptr::null_mut();
+            };
+            (context, true)
+        };
+        if context.abi_version() != ABI_VERSION {
+            return std::ptr::null_mut();
+        }
+        let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+        let result = crate::interpreter::registered_spl_autoload_functions(context, &mut values);
+        drop(values);
+        let answer = match result {
+            Ok(cell) => cell.as_ptr(),
+            Err(status) => {
+                if crate::eval_trace::enabled() {
+                    eprintln!("[elephc-eval-trace] phase=aot_autoload_functions stage=failed status={status:?}");
+                }
+                std::ptr::null_mut()
+            }
+        };
+        if created_context {
+            let context_ptr = context as *mut ElephcEvalContext;
+            if context.request_retained_context_free() {
+                crate::ffi::context::finalize_eval_context_free(context_ptr);
+            }
+        }
+        answer
+    })
+    .unwrap_or(std::ptr::null_mut())
+}
+
 /// Removes an AOT callback from the persistent SPL autoload table that retains it.
 ///
 /// Returns 1 when a callback was removed and 0 otherwise, which is PHP's
@@ -215,6 +267,72 @@ pub unsafe extern "C" fn __elephc_eval_callable_call_array(
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
+/// Rebinds `$this` on an eval `Closure` object for the generated `Closure::bind` runtime.
+///
+/// Returns one with an owned boxed `Closure` in `out`, or zero when the value is not an eval
+/// closure or the binding failed. Installed into the generated runtime through
+/// `__elephc_eval_install_closure_bind_hook_v1`, so a callback-adapter descriptor reaching
+/// `__rt_closure_bind` can be rebound instead of aborting as an unsupported capture shape.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `closure` must point at the boxed callback cell
+/// the adapter descriptor captured; it stays borrowed. `new_this` must be a live raw elephc
+/// object pointer. `out` must point at a writable cell-pointer slot.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_closure_bind_this(
+    ctx: *mut ElephcEvalContext,
+    closure: *mut RuntimeCell,
+    new_this: *mut RuntimeCell,
+    out: *mut *mut RuntimeCell,
+) -> u64 {
+    std::panic::catch_unwind(|| unsafe { eval_closure_bind_this_inner(ctx, closure, new_this, out) })
+        .unwrap_or(0)
+}
+
+/// Runs the closure rebinding ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_closure_bind_this`.
+#[cfg(not(test))]
+unsafe fn eval_closure_bind_this_inner(
+    ctx: *mut ElephcEvalContext,
+    closure: *mut RuntimeCell,
+    new_this: *mut RuntimeCell,
+    out: *mut *mut RuntimeCell,
+) -> u64 {
+    if out.is_null() {
+        return 0;
+    }
+    unsafe { *out = std::ptr::null_mut(); }
+    let Some(context) = (unsafe { ctx.as_mut() }) else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION || closure.is_null() || new_this.is_null() {
+        return 0;
+    }
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    let Ok(receiver) = ElephcRuntimeOps::object_from_raw(new_this) else {
+        return 0;
+    };
+    let bound = interpreter::execute_context_closure_bind_this(
+        context,
+        RuntimeCellHandle::from_raw(closure).borrowed(),
+        receiver,
+        &mut values,
+    );
+    // The bound closure retains the receiver as its own child, so this bridge's boxed owner
+    // must not outlive the call; keeping it pinned the receiver and the closure's metadata.
+    let released = values.release(receiver);
+    match (bound, released) {
+        (Ok(bound), Ok(())) => {
+            unsafe { *out = bound.as_ptr(); }
+            1
+        }
+        _ => 0,
+    }
+}
+
 /// Runs the eval callable-probe ABI body after installing a panic boundary.
 ///
 /// # Safety
@@ -233,7 +351,7 @@ unsafe fn eval_is_callable_inner(
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_is_callable(
         context,
-        RuntimeCellHandle::from_raw(callback),
+        RuntimeCellHandle::from_raw(callback).borrowed(),
         &mut values,
     ) {
         Ok(callable) => i32::from(callable),
@@ -382,8 +500,8 @@ unsafe fn eval_callable_call_array_inner(
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     let status = match interpreter::execute_context_callable_call_array_outcome(
         context,
-        callback,
-        RuntimeCellHandle::from_raw(arg_array),
+        callback.borrowed(),
+        RuntimeCellHandle::from_raw(arg_array).borrowed(),
         &mut values,
     ) {
         Ok(outcome) => write_outcome(outcome, out).code(),

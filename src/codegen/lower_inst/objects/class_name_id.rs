@@ -1,6 +1,6 @@
 //! Purpose:
 //! Lowers a runtime class-string lookup to the closed-world class-id registry.
-//! Supports concrete string values, boxed `mixed` strings and boxed `mixed` objects.
+//! Supports concrete string values, concrete objects, boxed `mixed` strings and boxed `mixed` objects.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::lower_instruction()` for `Op::ClassNameToId`.
@@ -27,6 +27,8 @@ pub(in crate::codegen::lower_inst) fn lower_class_name_to_id(
     match ctx.value_php_type(class_name)?.codegen_repr() {
         PhpType::Str => lower_string_class_name_to_id(ctx, class_name)?,
         PhpType::Mixed | PhpType::Union(_) => lower_mixed_class_name_to_id(ctx, class_name)?,
+        // `Closure::bind($f, $t, $object)` names its scope by an instance: the object's own class.
+        PhpType::Object(_) => emit_class_id_of_value(ctx, class_name)?,
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "class_name_to_id for PHP type {:?}",

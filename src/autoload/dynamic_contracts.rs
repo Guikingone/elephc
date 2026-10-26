@@ -31,10 +31,120 @@ pub(super) fn candidates(program: &Program) -> Vec<String> {
         }
         candidates.extend(property_mapped_dynamic_new_candidates(&classes, &root));
     }
+    candidates.extend(late_static_class_string_candidates(&classes));
 
     let mut candidates = candidates.into_iter().collect::<Vec<_>>();
     candidates.sort();
     candidates
+}
+
+/// Returns the class strings an inherited method derives from `static::class` for each concrete
+/// class of the program.
+///
+/// symfony/dependency-injection's `Extension::getConfiguration()` does
+/// `$class = substr_replace(static::class, '\\Configuration', strrpos(static::class, '\\'));` and
+/// hands the result to the container's reflection: every bundle extension finds its
+/// `Configuration` class by that name, and nothing else in the program names TwigBundle's. Each
+/// assignment whose value mentions `static::class` is evaluated once per concrete class that
+/// inherits it, with `static::class` bound to that class; a value that is not a class name the
+/// autoload index can resolve costs nothing, since only resolvable names are ever loaded.
+fn late_static_class_string_candidates(classes: &ClassIndex<'_>) -> HashSet<String> {
+    let mut candidates = HashSet::new();
+    for class in classes.classes.values().filter(|class| !class.is_abstract) {
+        let mut current = Some(class.name.clone());
+        let mut seen = HashSet::new();
+        while let Some(owner_name) = current {
+            let key = crate::names::php_symbol_key(&owner_name);
+            if !seen.insert(key.clone()) {
+                break;
+            }
+            let Some(owner) = classes.classes.get(&key) else {
+                break;
+            };
+            for method in owner.methods {
+                // In source order, so `$class = static::class; $class = substr_replace($class, ..)`
+                // sees the first value in the second. A local is "derived" once its value came
+                // from `static::class` or from another derived local; only derived values are
+                // candidates, so ordinary string locals never widen the world.
+                let mut locals: HashMap<String, Value> = HashMap::new();
+                let mut derived: HashSet<String> = HashSet::new();
+                crate::parser::ast::visit::walk_stmts(&method.body, &mut |stmt| {
+                    let StmtKind::Assign { name, value } = &stmt.kind else {
+                        return;
+                    };
+                    let is_derived = mentions_static_class(value)
+                        || reads_any_local(value, &derived);
+                    let result = evaluate_expr(
+                        classes,
+                        &class.name,
+                        &owner.name,
+                        value,
+                        &mut locals,
+                        &mut HashSet::new(),
+                    );
+                    match result {
+                        Some(result) => {
+                            if is_derived {
+                                derived.insert(name.clone());
+                                if let Value::String(candidate) = &result {
+                                    if candidate.contains('\\') && !candidate.contains(char::is_whitespace) {
+                                        candidates.insert(candidate.trim_start_matches('\\').to_string());
+                                    }
+                                }
+                            } else {
+                                derived.remove(name);
+                            }
+                            locals.insert(name.clone(), result);
+                        }
+                        None => {
+                            locals.remove(name);
+                            derived.remove(name);
+                        }
+                    }
+                });
+            }
+            current = owner.parent.clone();
+        }
+    }
+    candidates
+}
+
+/// Whether `expr` reads one of `locals`.
+fn reads_any_local(expr: &Expr, locals: &HashSet<String>) -> bool {
+    if locals.is_empty() {
+        return false;
+    }
+    let mut found = false;
+    crate::parser::ast::visit::walk_nodes(
+        std::slice::from_ref(&Stmt::new(StmtKind::ExprStmt(expr.clone()), expr.span)),
+        &mut |node| {
+            if let crate::parser::ast::visit::Node::Expr(inner) = node {
+                if matches!(&inner.kind, ExprKind::Variable(name) if locals.contains(name)) {
+                    found = true;
+                }
+            }
+        },
+    );
+    found
+}
+
+/// Whether `expr` reads `static::class` anywhere.
+fn mentions_static_class(expr: &Expr) -> bool {
+    let mut found = false;
+    crate::parser::ast::visit::walk_nodes(
+        std::slice::from_ref(&Stmt::new(StmtKind::ExprStmt(expr.clone()), expr.span)),
+        &mut |node| {
+            if let crate::parser::ast::visit::Node::Expr(inner) = node {
+                if matches!(
+                    inner.kind,
+                    ExprKind::ClassConstant { receiver: StaticReceiver::Static }
+                ) {
+                    found = true;
+                }
+            }
+        },
+    );
+    found
 }
 
 /// Returns literal class strings stored in a constructed class's property map when it dynamically constructs values.
@@ -272,6 +382,7 @@ struct ClassInfo<'a> {
     name: String,
     parent: Option<String>,
     methods: &'a [ClassMethod],
+    is_abstract: bool,
 }
 
 /// Class declarations currently in the expanded program, keyed by PHP's case-insensitive symbol key.
@@ -318,6 +429,7 @@ fn collect_class_declarations<'a>(body: &'a [Stmt], classes: &mut HashMap<String
                 name,
                 extends,
                 methods,
+                is_abstract,
                 ..
             } => {
                 let name = name.trim_start_matches('\\').to_string();
@@ -329,6 +441,7 @@ fn collect_class_declarations<'a>(body: &'a [Stmt], classes: &mut HashMap<String
                             .as_ref()
                             .map(|parent| parent.as_canonical().trim_start_matches('\\').to_string()),
                         methods,
+                        is_abstract: *is_abstract,
                     },
                 );
             }
@@ -864,6 +977,7 @@ fn evaluate_expr(
                 "strrpos" => evaluate_strrpos(classes, root, owner, args, locals, active),
                 "substr" => evaluate_substr(classes, root, owner, args, locals, active),
                 "preg_replace" => evaluate_preg_replace(classes, root, owner, args, locals, active),
+                "substr_replace" => evaluate_substr_replace(classes, root, owner, args, locals, active),
                 _ => None,
             }
         }
@@ -890,6 +1004,45 @@ fn evaluate_strrpos(
         return None;
     };
     haystack.rfind(&needle).map(|index| Value::Int(index as i64))
+}
+
+/// Evaluates `substr_replace()` for a non-negative offset and an omitted or non-negative length.
+fn evaluate_substr_replace(
+    classes: &ClassIndex<'_>,
+    root: &str,
+    owner: &str,
+    args: &[Expr],
+    locals: &mut HashMap<String, Value>,
+    active: &mut HashSet<String>,
+) -> Option<Value> {
+    let [subject, replacement, offset, rest @ ..] = args else {
+        return None;
+    };
+    let Value::String(subject) = evaluate_expr(classes, root, owner, subject, locals, active)? else {
+        return None;
+    };
+    let Value::String(replacement) = evaluate_expr(classes, root, owner, replacement, locals, active)? else {
+        return None;
+    };
+    let Value::Int(offset) = evaluate_expr(classes, root, owner, offset, locals, active)? else {
+        return None;
+    };
+    let start = usize::try_from(offset).ok()?.min(subject.len());
+    let end = match rest.first() {
+        Some(length) => {
+            let Value::Int(length) = evaluate_expr(classes, root, owner, length, locals, active)? else {
+                return None;
+            };
+            start.checked_add(usize::try_from(length).ok()?)?.min(subject.len())
+        }
+        None => subject.len(),
+    };
+    Some(Value::String(format!(
+        "{}{}{}",
+        subject.get(..start)?,
+        replacement,
+        subject.get(end..)?
+    )))
 }
 
 /// Evaluates `substr()` for non-negative byte offsets in static class strings.

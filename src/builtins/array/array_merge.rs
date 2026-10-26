@@ -12,6 +12,8 @@
 //!   when the first operand is an empty array (element type `Void`), the result adopts
 //!   the second operand's element type if it is a scalar-merge type.
 //! - Zero arguments produce an empty `array<void>` result.
+//! - A PHP array declaration keeps a boxed result that accepts packed and associative source
+//!   layouts without specializing to one caller; concrete operands retain their inference.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -32,22 +34,40 @@ builtin! {
 /// are accumulated from left to right.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let mut result = None;
+    let mut dynamic_layout = false;
     for (index, arg) in cx.args.iter().enumerate() {
         let ty = cx.checker.infer_type(arg, cx.env)?;
-        if !crate::types::checker::builtins::array_arg_is_gradually_acceptable(&ty) {
+        if !ty.is_php_array() && !crate::types::checker::builtins::array_arg_is_gradually_acceptable(&ty) {
             return Err(CompileError::new(
                 cx.span,
                 &format!("array_merge() argument #{} must be array", index + 1),
             ));
         }
+        dynamic_layout |= ty.is_php_array();
         result = Some(match result {
             None => ty,
             Some(previous) => array_merge_return_type(previous, ty),
         });
     }
+    if dynamic_layout {
+        return Ok(PhpType::php_array());
+    }
     Ok(result.unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Void))))
 }
 
+/// Folds concrete indexed operand types into the result the checker would give a direct call.
+///
+/// A call resolved only by lowering (`$f = 'array_merge'; $f([1, 2], [3], [5])`, or
+/// `call_user_func_array('array_merge', ...)`) has no checked call-site type, so the backend-neutral
+/// fallback must name the same layout the packed merge helpers produce. The declared `mixed` made
+/// the caller read the raw indexed-array pointer as a boxed cell and crash.
+pub(crate) fn indexed_operands_result_type(operands: &[PhpType]) -> Option<PhpType> {
+    let (first, rest) = operands.split_first()?;
+    if !operands.iter().all(|ty| matches!(ty, PhpType::Array(_))) {
+        return None;
+    }
+    Some(rest.iter().cloned().fold(first.clone(), array_merge_return_type))
+}
 
 /// Infers the return type for `array_merge(first, second)`.
 ///

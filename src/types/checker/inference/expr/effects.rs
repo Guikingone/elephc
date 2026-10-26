@@ -15,7 +15,8 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::null_probe;
 use super::super::super::Checker;
-use super::{merge_match_arm_result_type, merge_null_coalesce_checked_result_type};
+use super::merge_match_arm_result_type;
+use super::null_coalesce::{null_coalesce_result_type, operand_is_never_null};
 
 impl Checker {
     /// Installs assignment effects that are guaranteed when a short-circuit condition is true.
@@ -146,6 +147,33 @@ impl Checker {
         }
     }
 
+    /// Ends the branch-local `isset()` root facts a truthy condition installed.
+    ///
+    /// `install_truthy_isset_root_facts` binds a never-declared probe root to `Mixed` for the
+    /// guarded branch only. Leaving it there let the branch exit join (`if`, `?:`, `&&`) publish
+    /// the name as a `Mixed` local AFTER the construct, which is not PHP: `if (isset($x)) {}` does
+    /// not define `$x`. At top level the published binding also defeated the deferred null-probe
+    /// check, so `unset($a); echo isset($a) ? 1 : 0;` was refused with `Undefined variable: $a`.
+    /// A root the branch itself assigned no longer holds the installed `Mixed` and is kept.
+    pub(crate) fn drop_truthy_isset_root_facts(
+        condition: &Expr,
+        before: &TypeEnv,
+        branch_env: &mut TypeEnv,
+    ) {
+        for root in Self::truthy_isset_fact_roots(condition, before) {
+            if branch_env.get(&root) == Some(&PhpType::Mixed) {
+                branch_env.remove(&root);
+            }
+        }
+    }
+
+    /// The never-declared `isset()` roots a truthy `condition` binds for its branch only.
+    pub(crate) fn truthy_isset_fact_roots(condition: &Expr, before: &TypeEnv) -> Vec<String> {
+        let mut roots = Vec::new();
+        collect_truthy_isset_roots(condition, before, &mut roots);
+        roots
+    }
+
     /// Infers the type of an expression while tracking assignment effects through the environment.
     ///
     /// Handles expression forms where variable assignments within sub-expressions must be
@@ -174,10 +202,17 @@ impl Checker {
         expr: &Expr,
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        match &expr.kind {
+        let result = match &expr.kind {
             ExprKind::Variable(name) if self.eval_barrier_active && !env.contains_key(name) => {
                 env.insert(name.clone(), PhpType::Mixed);
                 Ok(PhpType::Mixed)
+            }
+            // `yield from self::passthruStream($response = $r->response, ...)` (Symfony's
+            // `AsyncResponse::stream()`) defines `$response` for the statements after it: the
+            // operand's assignments take effect first, then the yield is typed as usual.
+            ExprKind::YieldFrom(inner) => {
+                self.infer_type_with_assignment_effects(inner, env)?;
+                self.infer_type(expr, env)
             }
             ExprKind::Assignment {
                 target,
@@ -206,6 +241,20 @@ impl Checker {
                     _ => {}
                 }
                 Ok(ty)
+            }
+            // `yield (($tmp = f()) && $tmp instanceof M ? ... : $tmp)` -- what every compiled Twig
+            // template writes for a filtered value -- assigns inside the yielded operand and reads
+            // the result in the same expression. The plain inference of the operand saw the read
+            // before any assignment ("Undefined variable: $tmp"); the operand's effects belong to
+            // the enclosing statement like any other expression's.
+            ExprKind::Yield { key, value } => {
+                if let Some(key) = key {
+                    self.infer_type_with_assignment_effects(key, env)?;
+                }
+                if let Some(value) = value {
+                    self.infer_type_with_assignment_effects(value, env)?;
+                }
+                Ok(PhpType::Mixed)
             }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
                 let old_ty = env.get(name).cloned();
@@ -246,7 +295,13 @@ impl Checker {
                             },
                         );
                     }
-                    self.infer_type_with_assignment_effects(right, &mut right_env)?;
+                    self.local_conditional_depth += 1;
+                    let right_result = self.infer_type_with_assignment_effects(right, &mut right_env);
+                    self.local_conditional_depth -= 1;
+                    right_result?;
+                    if *op == BinOp::And {
+                        Self::drop_truthy_isset_root_facts(left, env, &mut right_env);
+                    }
                     merge_conditional_storage_effects(env, &right_env);
                     Ok(PhpType::Bool)
                 } else {
@@ -261,23 +316,23 @@ impl Checker {
                 let value_ty = self.infer_null_probe_operand_with_effects(value, env);
                 null_probe::end_null_probe_root(probe, env);
                 let value_ty = value_ty?;
+                let value_is_never_null = operand_is_never_null(self, value, &value_ty, env);
                 let default_ty = if value_ty == PhpType::Void {
                     self.infer_type_with_assignment_effects(default, env)?
                 } else {
                     let mut default_env = env.clone();
+                    self.local_conditional_depth += 1;
                     let default_ty =
-                        self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                        self.infer_type_with_assignment_effects(default, &mut default_env);
+                    self.local_conditional_depth -= 1;
+                    let default_ty = default_ty?;
                     merge_conditional_storage_effects(env, &default_env);
                     default_ty
                 };
-                let non_null_value = if Self::union_contains_void(&value_ty) {
-                    self.strip_void_from_union(&value_ty)
-                } else {
-                    value_ty
-                };
-                Ok(merge_null_coalesce_checked_result_type(
+                Ok(null_coalesce_result_type(
                     self,
-                    non_null_value,
+                    value_is_never_null,
+                    value_ty,
                     default_ty,
                 ))
             }
@@ -287,7 +342,11 @@ impl Checker {
                     self.infer_type_with_assignment_effects(default, env)?;
                 } else {
                     let mut default_env = env.clone();
-                    self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    self.local_conditional_depth += 1;
+                    let default_result =
+                        self.infer_type_with_assignment_effects(default, &mut default_env);
+                    self.local_conditional_depth -= 1;
+                    default_result?;
                     merge_conditional_storage_effects(env, &default_env);
                 }
                 // Result type comes from the Mixed-aware short-ternary merge in `infer_type`.
@@ -311,15 +370,24 @@ impl Checker {
                     then_env.insert(guard.var.clone(), guard.then_ty);
                     else_env.insert(guard.var, guard.else_ty);
                 }
-                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
+                // Neither branch is certain to run, so a store in one is no straight-line retype
+                // (`Checker::local_binding_is_killable`), exactly as for an `if` statement.
+                self.local_conditional_depth += 1;
+                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env);
+                self.local_conditional_depth -= 1;
+                let then_ty = then_ty?;
                 let then_ty = if matches!(then_expr.kind, ExprKind::Throw(_)) {
                     PhpType::Never
                 } else {
                     then_ty
                 };
+                Self::drop_truthy_isset_root_facts(condition, env, &mut then_env);
                 merge_conditional_storage_effects(env, &then_env);
                 merge_conditional_storage_effects(&mut else_env, &then_env);
-                let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
+                self.local_conditional_depth += 1;
+                let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env);
+                self.local_conditional_depth -= 1;
+                let else_ty = else_ty?;
                 let else_ty = if matches!(else_expr.kind, ExprKind::Throw(_)) {
                     PhpType::Never
                 } else {
@@ -338,6 +406,14 @@ impl Checker {
                 for (key, value) in pairs {
                     self.infer_type_with_assignment_effects(key, env)?;
                     self.infer_type_with_assignment_effects(value, env)?;
+                }
+                self.infer_type(expr, env)
+            }
+            ExprKind::ArrayLiteralMixed(entries) => {
+                for entry in entries {
+                    for inner in entry.exprs() {
+                        self.infer_type_with_assignment_effects(inner, env)?;
+                    }
                 }
                 self.infer_type(expr, env)
             }
@@ -443,6 +519,13 @@ impl Checker {
                     });
                     if internal_callable {
                         self.widen_hash_splice_receiver(builtin_name, args, env);
+                        self.box_iterable_by_ref_builtin_args(&signature, args, env);
+                        // `exec()` is lowered to a prelude helper with ordinary by-reference
+                        // parameters, so a property passed as `$output` / `$result_code` must be
+                        // promoted to a reference cell exactly as for a user callee.
+                        if builtin_name.eq_ignore_ascii_case("exec") {
+                            self.promote_by_ref_property_args(&signature, args, env);
+                        }
                     }
                     self.prepare_by_ref_variable_storage(
                         &signature,
@@ -459,16 +542,28 @@ impl Checker {
                 // an undeclared property routed to `__isset`/`__unset`, which must
                 // not be inferred as a bare property access here. The call's own
                 // inference handles the operands (with magic routing).
+                // `empty()` too: its operand is a silent probe like `isset()`'s (an inaccessible
+                // property answers through `__isset`/`__get` or `true`), and the eager read below
+                // refused `empty($o->private)` from outside the class at compile time.
                 if matches!(
                     php_symbol_key(builtin_name).as_str(),
-                    "isset" | "unset"
+                    "isset" | "unset" | "empty"
                 ) {
                     // `isset($never)` / `unset($never)` are exactly the constructs PHP provides
                     // for probing storage that may never have been declared, so a never-declared
                     // chain root reads as `null` for the operand.
+                    // The operand is a silent probe for this walk too: `isset(self::$p)` on a
+                    // class without `$p` is php's `false`, not an undefined-property refusal.
+                    let probing = php_symbol_key(builtin_name) != "unset";
                     for arg in &expanded_args {
                         let probe = null_probe::begin_null_probe_root(self, arg, env);
+                        if probing {
+                            self.null_probe_depth += 1;
+                        }
                         let effects = self.infer_non_reading_arg_assignment_effects(arg, env);
+                        if probing {
+                            self.null_probe_depth -= 1;
+                        }
                         null_probe::end_null_probe_root(probe, env);
                         effects?;
                     }
@@ -510,6 +605,14 @@ impl Checker {
                         if contextual_callbacks.contains(&param_idx) {
                             continue;
                         }
+                        if crate::builtins::mbstring::is_capture_output_argument(builtin_name, arg, idx) {
+                            // Forming the output reference requires dynamic storage before later
+                            // source arguments can pass that same variable to a mutating call.
+                            if let Some(name) = output_variable(arg) {
+                                env.insert(name.clone(), PhpType::Mixed);
+                            }
+                            continue;
+                        }
                         if ((builtin_name.eq_ignore_ascii_case("preg_match")
                             || builtin_name.eq_ignore_ascii_case("preg_match_all"))
                             && idx == 2)
@@ -527,7 +630,14 @@ impl Checker {
                             effects?;
                             continue;
                         }
-                        self.infer_call_argument_with_assignment_effects(arg, env)?;
+                        if php_symbol_key(builtin_name) == "call_user_func"
+                            && idx > 0
+                            && matches!(arg.kind, ExprKind::Spread(_))
+                        {
+                            self.infer_spread_source_assignment_effects(arg, env)?;
+                        } else {
+                            self.infer_call_argument_with_assignment_effects(arg, env)?;
+                        }
                     }
                 }
                 let ty = self.infer_type(expr, env)?;
@@ -576,6 +686,11 @@ impl Checker {
                     }
                 }
                 for (idx, arg) in expanded_args.iter().enumerate() {
+                    if crate::builtins::mbstring::is_capture_output_argument(builtin_name, arg, idx) {
+                        if let Some(name) = output_variable(arg) {
+                            env.insert(name.clone(), PhpType::Mixed);
+                        }
+                    }
                     if let Some(output_ty) = pcntl_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), output_ty);
@@ -621,6 +736,28 @@ impl Checker {
                             let ExprKind::Variable(var) = &arg.kind else {
                                 continue;
                             };
+                            // `unset($var)` ends this binding even when escaped-reference
+                            // conservatism keeps the name in `ref_aliased_locals`. A later `=&`
+                            // assignment must establish fresh cell provenance for the new binding.
+                            self.invalidate_boxed_ref_alias_binding(var);
+                            // Detaching a promoted reference is separate from killing its type
+                            // binding: escaped aliases still prohibit incompatible reassignments.
+                            if arg.span.identifies_a_node() {
+                                if env.contains_key(var) && self.local_reference_is_detachable(var) {
+                                    self.local_ref_detach_sites.entry(arg.span).or_default()
+                                        .insert(var.clone());
+                                    self.active_ref_params.remove(var);
+                                    self.active_external_ref_bindings.remove(var);
+                                    self.ref_aliased_locals.remove(var);
+                                } else if let Some(names) = self.local_ref_detach_sites.get_mut(&arg.span) {
+                                    if names.remove(var.as_str()) {
+                                        self.retired_ref_detach_sites.insert((arg.span, var.clone()));
+                                    }
+                                    if names.is_empty() {
+                                        self.local_ref_detach_sites.remove(&arg.span);
+                                    }
+                                }
+                            }
                             // A top-level name some other body declares `global` is NOT killable
                             // however eligible it otherwise looks: `global $a;` in a function binds
                             // the very cell this slot holds, so dropping the name here leaves the
@@ -684,7 +821,26 @@ impl Checker {
                 }
                 Ok(ty)
             }
-            ExprKind::NewObject { args, .. } => {
+            ExprKind::NewObject { class_name, args } => {
+                let constructor = self
+                    .classes
+                    .get(class_name.as_str().trim_start_matches('\\'))
+                    .and_then(|info| info.methods.get("__construct"))
+                    .cloned();
+                if let Some(constructor) = constructor {
+                    if constructor.ref_params.iter().any(|by_ref| *by_ref) {
+                        let callee_scope = self.method_body_scope(
+                            class_name.as_str().trim_start_matches('\\'),
+                            "__construct",
+                        );
+                        self.promote_by_ref_property_args(&constructor, args, env);
+                        self.record_property_bound_promotion_sites(
+                            &constructor,
+                            args,
+                            callee_scope.as_deref(),
+                        );
+                    }
+                }
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 for arg in &expanded_args {
                     self.infer_call_argument_with_assignment_effects(arg, env)?;
@@ -752,11 +908,17 @@ impl Checker {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 let skip_contextual_callback =
                     self.variable_targets_preg_replace_callback(var.as_str());
+                let descriptor_args = self.callable_param_names.contains(var)
+                    || self.callable_array_targets.contains_key(var);
                 for (idx, arg) in expanded_args.iter().enumerate() {
                     if skip_contextual_callback && idx == 1 {
                         continue;
                     }
-                    self.infer_call_argument_with_assignment_effects(arg, env)?;
+                    if descriptor_args && matches!(arg.kind, ExprKind::Spread(_)) {
+                        self.infer_spread_source_assignment_effects(arg, env)?;
+                    } else {
+                        self.infer_call_argument_with_assignment_effects(arg, env)?;
+                    }
                 }
                 let ty = self.infer_type(expr, env)?;
                 Self::purge_property_narrowings(env);
@@ -781,7 +943,11 @@ impl Checker {
                     if skip_contextual_callback && idx == 1 {
                         continue;
                     }
-                    self.infer_call_argument_with_assignment_effects(arg, env)?;
+                    if matches!(arg.kind, ExprKind::Spread(_)) {
+                        self.infer_spread_source_assignment_effects(arg, env)?;
+                    } else {
+                        self.infer_call_argument_with_assignment_effects(arg, env)?;
+                    }
                 }
                 let ty = self.infer_type(expr, env)?;
                 Self::purge_property_narrowings(env);
@@ -887,7 +1053,29 @@ impl Checker {
                 Ok(ty)
             }
             _ => self.infer_type(expr, env),
+        };
+        if result.is_ok() {
+            self.apply_boxed_reference_outputs(expr.span, env);
         }
+        result
+    }
+
+    /// Visits a call-unpack source for assignment effects without choosing its container policy.
+    ///
+    /// The enclosing call checker decides whether this spread is an array-only direct call or a
+    /// descriptor invocation that may walk Traversable. This preliminary effects walk must still
+    /// observe assignments inside the source, but must not reject a source before that decision.
+    fn infer_spread_source_assignment_effects(
+        &mut self,
+        arg: &Expr,
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        let ExprKind::Spread(source) = &arg.kind else {
+            self.infer_type_with_assignment_effects(arg, env)?;
+            return Ok(());
+        };
+        self.infer_type_with_assignment_effects(source, env)?;
+        Ok(())
     }
 
     /// Infers one call argument while preserving assignment effects in a gradual spread source.
@@ -1021,6 +1209,7 @@ impl Checker {
                 .collect(),
             variadic: declaration.variadic.clone(),
             deprecation: None,
+            is_generator: false,
         })
     }
 
@@ -1176,6 +1365,38 @@ impl Checker {
             .cloned()
     }
 
+    /// Boxes an `iterable` local handed to a builtin's by-reference parameter
+    /// (`array_unshift($providers, ...)`, `array_push`, `sort`).
+    ///
+    /// `iterable` storage is a bare heap pointer the mutator would write an array back through as
+    /// if it were one, and the array checks refused it outright -- which, in an untyped function's
+    /// first pass, left its return type at the `int` placeholder (`return implode(...)` came back
+    /// `0`). Boxed, the builtin takes its run-time-checked `Mixed` path: an array is mutated, a
+    /// `Traversable` raises php's `TypeError`.
+    fn box_iterable_by_ref_builtin_args(
+        &mut self,
+        signature: &crate::types::FunctionSig,
+        args: &[Expr],
+        env: &mut TypeEnv,
+    ) {
+        for (index, arg) in args.iter().enumerate() {
+            if !signature.ref_params.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            let ExprKind::Variable(name) = &arg.kind else {
+                continue;
+            };
+            if env.get(name).map(PhpType::codegen_repr) != Some(PhpType::Iterable) {
+                continue;
+            }
+            self.by_ref_local_storage_types.insert(
+                (self.current_loop_storage_scope.clone(), name.clone()),
+                PhpType::Mixed,
+            );
+            env.insert(name.clone(), PhpType::Mixed);
+        }
+    }
+
     /// Gives a hash local spliced by `array_splice()` the boxed gradual storage the splice needs.
     ///
     /// The native splice rewrites a dense slot array, so a hash receiver is spliced by the prelude
@@ -1212,6 +1433,113 @@ impl Checker {
     /// body widens it (`Checker::scan_widened_ref_params`) hands the caller the boxed storage its
     /// cell really has. `None` — a closure, a runtime callable, a builtin — leaves the decision
     /// exactly where it was.
+    /// Promotes every declared property a USER callee binds to a by-reference parameter.
+    ///
+    /// php binds the parameter to the property's own slot: `new Svc($this->p)` with
+    /// `__construct(array &$p) { $this->p = &$p; }` leaves both objects sharing one array. The
+    /// lowering hands the callee the property's reference cell, which exists only for a promoted
+    /// property, exactly as `$x = &$obj->p` promotes it. Without it the argument was a copy:
+    /// Symfony's `ServicesConfigurator` kept a reference to a temporary, read back `null`, and
+    /// every container-building console command died on "Cannot assign null to property
+    /// ServiceConfigurator::$instanceof".
+    ///
+    /// Builtins keep their copy-in/write-back lowering (their mutators take the array value), so
+    /// only user callees reach this. A receiver whose class is not statically one class is left
+    /// alone, as `$x = &$obj->p` leaves it.
+    fn promote_by_ref_property_args(
+        &mut self,
+        signature: &crate::types::FunctionSig,
+        args: &[Expr],
+        env: &mut TypeEnv,
+    ) {
+        let regular_param_count = crate::types::call_args::regular_param_count(signature);
+        for (index, arg) in args.iter().enumerate() {
+            let (param_index, place) = match &arg.kind {
+                ExprKind::Spread(_) => return,
+                ExprKind::NamedArg { name, value } => {
+                    match signature.params.iter().position(|(param, _)| param == name) {
+                        Some(position) => (position, value.as_ref()),
+                        None => continue,
+                    }
+                }
+                _ => (index, arg),
+            };
+            if param_index >= regular_param_count
+                || !signature.ref_params.get(param_index).copied().unwrap_or(false)
+            {
+                continue;
+            }
+            // An ELEMENT of the property binds the element's cell, which lives in the property's
+            // storage, so the property needs its cell too: `MockArraySessionStorage::loadSession()`
+            // passes `$this->data[$key]` to `AttributeBag::initialize(array &$a)`, which keeps it.
+            let mut place = place;
+            while let ExprKind::ArrayAccess { array, .. } = &place.kind {
+                place = array.as_ref();
+            }
+            let ExprKind::PropertyAccess { object, property } = &place.kind else {
+                continue;
+            };
+            // A closure's `$this` may be rebound to any receiver; see the `return &$this->p` rule.
+            if self.closure_depth > 0 && matches!(object.kind, ExprKind::This) {
+                continue;
+            }
+            let Ok(object_ty) = self.infer_type(object, env) else {
+                continue;
+            };
+            let Some(class) = crate::types::checker::single_object_class_name(&object_ty) else {
+                continue;
+            };
+            let declares = self
+                .classes
+                .get(&class)
+                .is_some_and(|info| info.properties.iter().any(|(name, _)| name == property));
+            if declares && !self.is_native_throwable_payload_property(&class, property) {
+                self.reference_property_promotions
+                    .insert((class, property.clone()));
+            }
+        }
+    }
+
+    /// Records each local passed to a by-reference parameter its user callee binds a property to
+    /// (`Checker::property_bound_promotion_sites`): lowering gives that local a managed cell the
+    /// property can keep (`bind_property_to_param_ref_cell`). An unresolved callee answers for
+    /// every user callee with such a parameter of that name; promoting a local only changes
+    /// where its value lives, never what it means.
+    fn record_property_bound_promotion_sites(
+        &mut self,
+        signature: &crate::types::FunctionSig,
+        args: &[Expr],
+        callee_scope: Option<&str>,
+    ) {
+        let regular_param_count = crate::types::call_args::regular_param_count(signature);
+        for (index, arg) in args.iter().enumerate() {
+            let (param_index, place) = match &arg.kind {
+                ExprKind::Spread(_) => return,
+                ExprKind::NamedArg { name, value } => {
+                    match signature.params.iter().position(|(param, _)| param == name) {
+                        Some(position) => (position, value.as_ref()),
+                        None => continue,
+                    }
+                }
+                _ => (index, arg),
+            };
+            if param_index >= regular_param_count
+                || !signature.ref_params.get(param_index).copied().unwrap_or(false)
+                || !matches!(place.kind, ExprKind::Variable(_))
+                || !place.span.identifies_a_node()
+            {
+                continue;
+            }
+            let Some((param, _)) = signature.params.get(param_index) else {
+                continue;
+            };
+            if self.ref_param_is_property_bound(callee_scope, param) {
+                self.property_bound_promotion_sites
+                    .insert((self.current_loop_storage_scope.clone(), place.span));
+            }
+        }
+    }
+
     fn prepare_by_ref_variable_storage(
         &mut self,
         signature: &crate::types::FunctionSig,
@@ -1221,6 +1549,17 @@ impl Checker {
         internal_callable: bool,
         callee_scope: Option<&str>,
     ) -> Result<(), CompileError> {
+        // Nothing to prepare without a by-reference parameter, and planning the arguments here
+        // can only fail: `call_user_func($callback, b: 3)` forwards `b` to the CALLBACK, which
+        // the builtin's own signature does not name, and the call was refused with "call has no
+        // parameter $b". The argument checks proper run on the call itself.
+        if !signature.ref_params.iter().any(|by_ref| *by_ref) {
+            return Ok(());
+        }
+        if !internal_callable {
+            self.promote_by_ref_property_args(signature, args, env);
+            self.record_property_bound_promotion_sites(signature, args, callee_scope);
+        }
         let normalized = if internal_callable {
             self.plan_builtin_call_args(signature, args, span, "call", env)?
                 .normalized_args()
@@ -1344,10 +1683,19 @@ impl Checker {
                         } else {
                             expected.clone()
                         };
-                        self.by_ref_local_storage_types.insert(
-                            (self.current_loop_storage_scope.clone(), name.clone()),
-                            required_storage,
-                        );
+                        // A by-reference PARAMETER of this body is not this call site's to
+                        // re-store: its cell is the CALLER's slot, whose representation the
+                        // declaration (or `scan_widened_ref_params`) fixed for every caller.
+                        // `function g(int &$c) { $c = $c + 1; h($c); }` saw `$c` as gradual after
+                        // the addition and boxed the parameter's slot, so the body read the
+                        // caller's raw int as a Mixed pointer and crashed (Symfony's
+                        // `FlattenException::flattenArgs(…, int &$count)` on every error page).
+                        if !self.active_ref_params.contains(name) {
+                            self.by_ref_local_storage_types.insert(
+                                (self.current_loop_storage_scope.clone(), name.clone()),
+                                required_storage,
+                            );
+                        }
                         Some(expected.clone())
                     } else if !declared || *expected == PhpType::Mixed {
                         Some(PhpType::Mixed)
@@ -1370,6 +1718,7 @@ impl Checker {
                     };
                     if let Some(storage) = storage {
                         if (!internal_callable || is_variadic_binding)
+                            && !self.active_ref_params.contains(name)
                             && storage.codegen_repr() == PhpType::Mixed
                             && current
                                 .as_ref()
@@ -1406,11 +1755,47 @@ impl Checker {
                         };
                         env.insert(name.clone(), storage);
                     }
+                } else if let ExprKind::PropertyAccess { object, property } = &argument.kind {
+                    // A property lent to an untyped (or `mixed`) reference parameter: the callee
+                    // may store anything through it.
+                    let declared = signature
+                        .declared_params
+                        .get(binding_index)
+                        .copied()
+                        .unwrap_or(false);
+                    let gradual = !declared
+                        || signature
+                            .params
+                            .get(binding_index)
+                            .is_some_and(|(_, ty)| *ty == PhpType::Mixed);
+                    if gradual {
+                        self.widen_null_property_for_ref_argument(object, property, env);
+                    }
                 }
             }
             param_index += 1;
         }
         Ok(())
+    }
+
+    /// Retypes a null-initialised untyped property passed to a gradual by-reference parameter.
+    ///
+    /// Resolves the receiver's single class, then defers to
+    /// `Checker::widen_null_property_bound_to_untyped_ref`. A receiver whose class is not
+    /// statically one class is left alone, as `promote_by_ref_property_args` leaves it.
+    fn widen_null_property_for_ref_argument(
+        &mut self,
+        object: &Expr,
+        property: &str,
+        env: &mut TypeEnv,
+    ) {
+        let Ok(object_ty) = self.infer_type(object, env) else {
+            return;
+        };
+        let Some(class) = crate::types::checker::single_object_class_name(&object_ty) else {
+            return;
+        };
+        self.widen_null_property_bound_to_untyped_ref(&class, property);
     }
 
     /// Infers effects for a language-construct operand without treating properties as reads.
@@ -1517,6 +1902,33 @@ fn registry_builtin_call_preserves_property_narrowings(name: &str) -> bool {
         crate::builtins::semantics::BuiltinArgumentLowering::ArrayInternalPointer(op)
             if op.seek_mode().is_none()
     )
+}
+
+/// Collects the never-declared `isset()` roots a truthy `condition` binds for its branch.
+///
+/// Mirrors `infer_short_circuit_outcome_effects` on its truthy side: an `isset()` call, possibly
+/// inside a successful `&&` chain, whose chain root is absent from `env`.
+fn collect_truthy_isset_roots(condition: &Expr, env: &TypeEnv, roots: &mut Vec<String>) {
+    match &condition.kind {
+        ExprKind::BinaryOp {
+            left,
+            op: BinOp::And,
+            right,
+        } => {
+            collect_truthy_isset_roots(left, env, roots);
+            collect_truthy_isset_roots(right, env, roots);
+        }
+        ExprKind::FunctionCall { name, args }
+            if php_symbol_key(name.trim_start_matches('\\')) == "isset" =>
+        {
+            for arg in args {
+                if let Some(root) = null_probe::undefined_probe_root_variable(arg, env) {
+                    roots.push(root.to_string());
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Merges storage effects from an expression arm that may not execute into its outer environment.

@@ -5,7 +5,8 @@
 //! - `cargo test -p elephc-magician` through Rust's test harness.
 //!
 //! Key details:
-//! - Attribute literal metadata and legacy modifier compatibility are covered.
+//! - Attribute literal and constant-expression metadata and legacy modifier compatibility are
+//!   covered.
 
 use super::super::support::*;
 
@@ -51,6 +52,38 @@ class DynEvalAttributed {}"#,
             ])
         )]
     );
+}
+
+/// Retains non-UTF-8 attribute literals as bytes instead of changing them or rejecting the metadata.
+#[test]
+fn string_literal_bytes_survive_attribute_metadata() {
+    let program = parse_fragment(br#"#[Tag("\xFF")] class BinaryTag {}"#).unwrap();
+    assert_eq!(program.statements(), &[EvalStmt::ClassDecl(std::sync::Arc::new(EvalClass::new("BinaryTag", Vec::new(), Vec::new())
+        .with_attributes(vec![EvalAttribute::new("Tag", Some(vec![EvalAttributeArg::Bytes(vec![0xff])]))])))]);
+}
+
+/// Keeps a constant-expression attribute argument as an expression for reflection to evaluate,
+/// while a non-constant one (a variable) still leaves the attribute's arguments unsupported.
+#[test]
+fn parse_fragment_keeps_constant_expression_attribute_args() {
+    let program = parse_fragment(
+        br#"#[Route("/x", requirements: ["page" => Requirement::POSITIVE_INT])]
+#[Tag($dynamic)]
+class ConstExprAttributed {}"#,
+    )
+    .expect("fragment should parse");
+    let [EvalStmt::ClassDecl(class)] = program.statements() else {
+        panic!("expected one class declaration");
+    };
+    let attributes = class.attributes();
+    let route_args = attributes[0].args().expect("route args are supported");
+    assert_eq!(route_args[0], EvalAttributeArg::String("/x".to_string()));
+    let EvalAttributeArg::Named { name, value } = &route_args[1] else {
+        panic!("expected a named argument");
+    };
+    assert_eq!(name, "requirements");
+    assert!(matches!(value.as_ref(), EvalAttributeArg::Expr(_)));
+    assert!(attributes[1].args().is_none());
 }
 
 /// Verifies class-like declaration attributes attach to interfaces, traits, and enums.

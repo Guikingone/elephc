@@ -25,7 +25,17 @@ pub(in crate::interpreter) fn eval_copy_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_builtin_binary_path_bool("copy", args, context, scope, values)
+    // The optional stream `$context` is evaluated for its side effects and ignored: local
+    // copies have no context to apply.
+    match args {
+        [from, to, stream_context] => {
+            let from = eval_expr(from, context, scope, values)?;
+            let to = eval_expr(to, context, scope, values)?;
+            let _ = eval_expr(stream_context, context, scope, values)?;
+            eval_binary_path_bool_result("copy", from, to, context, values)
+        }
+        _ => eval_builtin_binary_path_bool("copy", args, context, scope, values),
+    }
 }
 
 /// Dispatches evaluated-argument calls for the `copy` filesystem builtin through the area dispatcher.
@@ -35,7 +45,9 @@ pub(in crate::interpreter) fn eval_copy_declared_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
-        [from, to] => eval_binary_path_bool_result("copy", *from, *to, context, values),
+        [from, to] | [from, to, _] => {
+            eval_binary_path_bool_result("copy", *from, *to, context, values)
+        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }

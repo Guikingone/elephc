@@ -234,11 +234,13 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 |---|---|---|---|
 | `<source-file>` | path | — | Required. A tagged `.php` or tagless `.lfc` file to compile. Other suffixes retain tagged-PHP behavior. |
 | `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`), `staticlib` (`static`, `lib`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library; `staticlib` builds a C-ABI archive. `lib` is an alias of `staticlib`, not `cdylib`. |
-| `--emit-asm` | — | off | Write generated assembly instead of a binary. |
+| `--emit-asm` | — | off | Write generated assembly and stop before runtime-object preparation, native assembly, or linking; no target assembler is required. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run checks and write nothing; exported code also receives EIR cdylib call-graph safety validation. |
 | `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
 | `--strict-locals` | — | off | Make an incompatible local retype (e.g. int then string) a compile error instead of a warning. See [Strict locals mode](#strict-locals-mode). |
+| `--lint` | — | off | Print elephc's PHP-divergent lints: unused variables, unreachable code, and the permissive local-retype notice. php compiles all three silently, so the default build stays quiet. See [Lint mode](#lint-mode). |
+| `--closed-world` | — | off (or `ELEPHC_CLOSED_WORLD=1`) | Link no interpreter. A non-literal `eval()` raises `Error: eval() is not available in a closed-world build`; a runtime `include`/`require` is answered from the table of compiled sources (a compiled unit runs, a declaration file runs nothing, `_once` answers `true` for an included file, an unknown path gives php's two failed-open warnings and `false`, or the `Error` for `require`). Anything that still needs the interpreter fails the build with the list of reasons (the first four sites of each; `ELEPHC_CLOSED_WORLD_ALL_SITES=1` lists them all). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
 | `--keep-symbols` | — | off | Keep the symbol table in the linked executable. It is stripped by default; `--debug-info` also implies keeping it. See [Symbol stripping](#symbol-stripping). |
@@ -388,12 +390,12 @@ runtime arguments (not elephc compiler flags):
 |---|---|---|---|
 | `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
 | `--workers N` | No | CPU count | Number of prefork worker processes. Minimum 1. |
-| `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes (`0` = unlimited); oversized bodies get `413`. |
+| `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes; oversized bodies get `413`. `0` removes the cap in `worker` only — `pool` and `request` still refuse a body over the 64 MiB the broker protocol carries to the handler process. |
 | `--max-requests N` | No | `0` (never) | Recycle each worker after N completed requests; stop accepting, drain active HTTP connections, then respawn it. |
 | `--max-execution-time N` | No | `0` (no limit) | Kill/respawn the web worker in `worker`; kill only the handler process in `pool`/`request`. |
 | `--handler-concurrency N` | No | `1` | Handler processes per web worker; `pool`/`request` only. |
 | `--max-handler-requests N` | No | `1000` | Replace a persistent handler after N requests (`0` = never); `pool` only. |
-| `--body-read-timeout N` | No | `30` | Request-body receive deadline in seconds (`0` = unlimited); `pool`/`request` only. |
+| `--body-read-timeout N` | No | `30` | Request-body receive deadline in seconds (`0` = unlimited). Enforced in every isolation mode. |
 | `--response-write-timeout N` | No | `30` | Client-backpressure deadline in seconds (`0` = unlimited); `pool`/`request` only. |
 | `--gzip` | No | off | Compress responses when the client sends `Accept-Encoding: gzip`. |
 | `--access-log` | No | off | Log one line per request to stderr. |
@@ -453,7 +455,7 @@ See [Optimization and codegen controls](optimization.md).
 | `--link LIB` / `-l LIB` / `-lLIB` | library name | — | Link an extra native library (repeatable). |
 | `--link-path DIR` / `-L DIR` / `-LDIR` | directory | — | Add a library search path (repeatable). |
 | `--framework NAME` | framework name | — | Link a macOS framework (repeatable). |
-| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `iconv`, `phar`, `tz`, `image`, `pcntl`, `xml`, `eval`, `regex`, `curl`, `mysqli`, `web` | — | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic when static detection cannot see a call. `--with-iconv` and `--with-pcntl` force-link their native support when static detection cannot see a call. `--with-xml` force-links the XML bridge and injects the `XMLParser`/`XMLWriter` prelude; the bridge's parser is the managed `libxml2` package, so the project must declare it (`elephc native add libxml2`), exactly as auto-detected xml use does. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-web` is an alias for `--web`. An unknown name is an error. Run `elephc --print-capabilities` for the list a given binary actually accepts. |
+| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `mbstring`, `iconv`, `phar`, `tz`, `image`, `pcntl`, `proc`, `xml`, `eval`, `regex`, `curl`, `mysqli`, `web` | - | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic when static detection cannot see a call. `--with-mbstring`, `--with-iconv`, and `--with-pcntl` force-link their native support when static detection cannot see a call. `--with-xml` force-links the XML bridge and injects the `XMLParser`/`XMLWriter` prelude; the parser uses the managed `libxml2` package, so the project must declare it (`elephc native add libxml2`), exactly as auto-detected XML use does. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-web` is an alias for `--web`. An unknown name is an error. Run `elephc --print-capabilities` for the list a given binary actually accepts. |
 
 See [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md).
 
@@ -461,7 +463,7 @@ See [Linking, heap, and conditional compilation](linking-and-conditional-compila
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--heap-size=BYTES` | integer ≥ 65536 | `8388608` (8 MB) | Size of the program's runtime heap. |
+| `--heap-size=BYTES` | integer ≥ 65536 | `134217728` (128 MB, php's default `memory_limit`) | Size of the program's runtime heap. It is reserved, not committed: pages are used only as the program allocates. |
 | `--define SYMBOL` / `--define=SYMBOL` | symbol name | — | Define a compile-time symbol for `ifdef` (repeatable). |
 
 ## Strict PHP mode
@@ -514,11 +516,27 @@ Strict mode guarantees that the *constructs* used are PHP-compatible; it does
 not change elephc's static-subset semantics. A strict-valid program can still be
 rejected by the type checker in places where the PHP interpreter would run it.
 
+## Lint mode
+
+| Flag | Values | Default | Description |
+|---|---|---|---|
+| `--lint` | — | off | Print the PHP-divergent lints: unused variables, unreachable code, and the permissive local-retype notice. |
+
+php compiles `$x = 1; $x = 's';`, an assigned-but-never-read `$y`, and statements after
+`return` without a diagnostic. elephc can report all three, but they are diagnostics
+about *your* code rather than PHP semantics, so they are opt-in: a default `elephc build`
+is as silent as php, and `--lint` turns them on. `--strict-locals` remains the hard-error
+switch for the incompatible retype; it implies neither the lint notices nor their absence.
+
 ## Strict locals mode
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
 | `--strict-locals` | — | off | Make an incompatible local retype (e.g. int then string) a compile error instead of a warning. |
+
+The retype warning described below is a **lint notice**: a default build re-binds the
+local silently, exactly as php does, and prints nothing. Pass `--lint` to see it (see
+[Lint mode](#lint-mode)).
 
 By default (permissive mode) an **untyped** local variable is allowed to
 change type during its lifetime in three shapes that would otherwise be a
@@ -578,9 +596,11 @@ None of the three applies to a name whose storage this body does not own: a name
 this body binds with `global`, a `static` name, or a superglobal or seeded name
 (`$argc`, `$argv`, and the extern C globals, seeded into the top-level scope).
 A **declared type** always stays strict in both modes: a typed local
-(`int $x = 5;`), a type-hinted parameter, and a class property never retype or
-box to `Mixed` — reassigning one incompatibly is a compile error exactly as
-before.
+(`int $x = 5;`) and a class property never retype or box to `Mixed` —
+reassigning one incompatibly is a compile error exactly as before. A
+**parameter type hint** is not such a declaration: it constrains the incoming
+argument, not the local, so a type-hinted parameter is exactly as eligible as an
+untyped one (a by-REFERENCE parameter stays excluded, by the rule above).
 
 Beyond those shared exclusions the shapes are gated differently:
 
@@ -705,22 +725,91 @@ for the full mechanism, including which files implement each shape.
 ## INI directives
 
 An AOT binary has no `php.ini` to read at startup: its INI surface is compiled
-in. elephc therefore splits PHP's `-d` into two mechanisms — one at compile time
-and one at run time.
+in. elephc provides compile-time overrides through `--ini` and OPcache runtime
+overrides through environment variables.
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--ini KEY=VALUE` / `--ini=KEY=VALUE` | any `opcache.*` directive | — | Compile-time override of one INI directive. Repeatable; last wins for a repeated key. Splits on the FIRST `=`, so a value may itself contain `=`. An unknown key is accepted and ignored. |
+| `--ini KEY=VALUE` / `--ini=KEY=VALUE` | OPcache settings, mbstring startup settings, core encoding and query defaults | none | Compile-time override of one INI directive. Repeatable; last wins for a repeated key. Splits on the first `=`, so a value may itself contain `=`. An unknown key is accepted and ignored. |
 | `--strict-opcache` | — | off | Throw a `RuntimeException` when `opcache_invalidate($file, true)` targets code compiled into this binary, instead of reporting the success reference PHP reports. Off, the default is byte-identical to reference PHP. See [`--strict-opcache`](../php/opcache.md#--strict-opcache). |
 
 ```bash
 elephc --ini opcache.enable_cli=1 --ini opcache.jit=tracing app.php
 ```
 
-`--ini` is the exact analogue of `php -d`: it moves both `ini_get()` (the raw
+For OPcache, `--ini` moves both `ini_get()` (the raw
 INI string, reported verbatim) and `opcache_get_configuration()['directives']`
 (the normalized typed value), and a value that does not parse for the
 directive's type is ignored, leaving the compiled-in default.
+
+Programs using mbstring, including opaque eval, also apply `mbstring.*` startup
+settings through the shared engine. `default_charset`, `internal_encoding`,
+`input_encoding`, and `output_encoding` supply its inherited encoding defaults.
+Empty individual encodings inherit `default_charset`; an empty charset falls
+back to UTF-8. Each web request starts from the compiled configuration, so PHP
+setting-function calls in one request do not change the next request's defaults.
+
+```bash
+elephc native add pcre2
+elephc --ini default_charset=8bit --ini mbstring.strict_detection=1 app.php
+```
+
+The contract-owned default mbstring MIME expression needs no native package.
+Custom MIME expressions inside opaque eval require `--with-mbstring` and the
+managed PCRE2 package. This dependency does not enable `preg_*` in opaque eval.
+Programs without mbstring or eval do not acquire this dependency from an unused
+override. Startup diagnostics currently use the runtime stderr path.
+
+Configured static and shared libraries install mbstring settings through
+`elephc_init()` or lazily before their first exported PHP call. Repeated
+initialization preserves subsequent PHP setting changes. Initialization failures
+return `ELEPHC_STATUS_RUNTIME_FAILURE` through the library status API; scalar
+exports return zero and owned-string exports leave their outputs null/zero.
+The host can inspect `elephc_last_error()` and remains running.
+
+Public `ini_get`, `ini_set`, `ini_restore`, and `ini_get_all` route mbstring
+settings through the shared engine in AOT and eval. Startup also retains
+`arg_separator.input`, `max_input_vars`, `max_input_nesting_level`, and
+`display_errors` for `mb_parse_str`; public INI calls expose these values and
+respect each directive's access policy. Invalid negative input limits or an
+empty separator fall back to their defaults; quantity syntax warnings retain
+PHP's parsed fallback value. Runtime mutation of Core response defaults and raw
+encoding inheritance remains incomplete. The environment overrides below remain
+specific to the documented OPcache keys.
+
+### In the project file
+
+A project can state its directives once, in the `[ini]` table of its
+`elephc.toml`, instead of on every compile:
+
+```toml
+[ini]
+"opcache.enable_cli" = true
+"opcache.jit" = "tracing"
+"opcache.memory_consumption" = 256
+```
+
+elephc reads the nearest `elephc.toml` above the compiled PHP file, the same
+file [native dependencies](native-dependencies.md#project-discovery-and-files)
+use, on every compile. Each entry becomes one `--ini KEY=VALUE`, with the value
+spelled as a `php.ini` line would give it: a string as written, a number in
+decimal, `true` as `1` and `false` as the empty string. A TOML number is taken
+for its value, not its spelling (`0x10` becomes `16`, `1.0` becomes `1`); quote
+a value to hand the directive exact text. A dotted name may be quoted, written
+bare (`opcache.enable_cli = true`), or split into a sub-table
+(`[ini.opcache]` then `enable_cli = true`); all three name the same directive.
+
+These fail the compile, with a message naming the file:
+
+- a directive named twice in the file, under any two spellings;
+- a value with no INI equivalent: an array, a date, `inf` or `nan`;
+- a file that is not valid TOML, whatever section is broken;
+- a file the project search refuses, such as a symlinked `elephc.toml`.
+
+A `--ini` on the command line wins over the file for the same directive. String
+values are passed through unchanged, so a relative path means what it means
+with `--ini`. `examples/project-ini` is a program compiled this way; it prints
+what PHP prints with the same values given as `-d` flags.
 
 ### Runtime overrides: `ELEPHC_INI_*`
 
@@ -759,8 +848,8 @@ for one set to nothing — but the override reads its value through a string cas
 and both arrive as `""` on the other side of it.
 
 **Which directives are overridable at run time.** Only the ones elephc merely
-*reports*. Ten `opcache.*` directives are consumed at compile time to bake code
-or baked constants, and honoring them on the reporting surface alone would
+*reports*. Seventeen `opcache.*` directives are consumed at compile time to bake
+code or baked constants, and honoring them on the reporting surface alone would
 produce a binary that contradicts itself (`ini_get('opcache.enable_cli') === '1'`
 next to an `opcache_get_status()` that still returns `false`). Their environment
 variables are ignored; use `--ini` for them instead:
@@ -768,9 +857,19 @@ variables are ignored; use `--ini` for them instead:
 `opcache.enable`, `opcache.enable_cli`, `opcache.memory_consumption`,
 `opcache.interned_strings_buffer`, `opcache.max_accelerated_files`,
 `opcache.revalidate_freq`, `opcache.jit`, `opcache.jit_buffer_size`,
-`opcache.restrict_api`, `opcache.preload`.
+`opcache.restrict_api`, `opcache.preload`, `opcache.validate_timestamps`,
+`opcache.max_file_size`, `opcache.file_update_protection`,
+`opcache.blacklist_filename`, `opcache.file_cache`,
+`opcache.file_cache_read_only` (8.5 only), `opcache.log_verbosity_level`,
+`opcache.error_log`.
 
-The other 44 directives of the PHP 8.5 set are runtime-overridable.
+The last eight govern the
+[runtime script cache](../php/opcache.md#the-runtime-script-cache), the
+[blacklist](../php/opcache.md#opcacheblacklist_filename) it consults, and the
+[`opcache.file_cache` startup validation](../php/opcache.md#opcachefile_cache),
+which can refuse to run — so they bake behavior, not just a report.
+
+The other 36 directives of the PHP 8.5 set are runtime-overridable.
 
 > **Not PHP parity — an elephc extension.** Reference PHP has *no*
 > per-directive environment override. Its only environment mechanisms are
@@ -793,7 +892,7 @@ The other 44 directives of the PHP 8.5 set are runtime-overridable.
 | `--heap-debug` | — | off | Enable runtime heap verification (double-free, bad refcount, free-list corruption). |
 | `--help` / `-h` | — | off | Print the compiler help, including the current elephc version, and exit successfully. |
 | `--version` / `-V` | — | off | Print the elephc compiler version and exit successfully. |
-| `--print-capabilities` | — | off | List the optional capabilities **this** binary accepts and the bridge archives each one needs, then exit successfully. One tab-separated line per capability: `<kind>\t<name>[\t<archive>...]`, where `kind` is `bridge` for a capability backed by one archive of its own and `capability` for one that is not — because it needs no archive (`regex`, whose provider is a managed native package) or because it is built out of several (`monitoring`). Every field is derived from the compiler's own bridge table, so this is the authoritative answer for the binary you are holding, not for the version the documentation was written against. A bridge archive is resolved from the directory the binary lives in or its sibling `lib/`, so `scripts/verify-release-artifact.sh` uses this to check a packaged tarball actually carries everything the compiler inside it advertises. |
+| `--print-capabilities` | — | off | List the optional capabilities **this** binary accepts and the bridge archives each one needs, then exit successfully. One tab-separated line per capability: `<kind>\t<name>[\t<archive>...]`, where `kind` is `bridge` for a capability backed by one archive of its own and `capability` for one that is not — because it needs no archive (`regex`, whose provider is a managed native package) or because it is built out of several (`monitoring`). Every field is derived from the compiler's own bridge table, so this is the authoritative answer for the binary you are holding, not for the version the documentation was written against. A bridge archive is resolved from the directory the binary lives in, its sibling `lib/`, `$CARGO_TARGET_DIR/{debug,release}` when that variable is set, and `target/{debug,release}` relative to the current directory, with a per-bridge `ELEPHC_<NAME>_LIB_DIR` override that REPLACES all four when it is set — see [Where bridge archives are found](linking-and-conditional-compilation.md#where-bridge-archives-are-found) for the full order and what a relocated binary reports when one is missing. `scripts/verify-release-artifact.sh` uses this flag to check a packaged tarball actually carries everything the compiler inside it advertises. |
 | `--mascotte` | — | off | Print the embedded ASCII mascot and a randomly selected quote before normal output. |
 
 Exact monitoring rows also append inclusive/exclusive network operations and

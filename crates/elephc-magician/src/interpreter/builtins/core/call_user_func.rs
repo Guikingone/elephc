@@ -11,10 +11,12 @@
 
 use super::super::super::*;
 use super::super::registry::eval_call_user_func_with_values_from_scope;
+use super::func_args::eval_literal_func_args_callback;
 
 eval_builtin! {
     contract: "call_user_func",
     area: Core,
+    source_arguments: true,
     direct: Core,
     values: Core,
 }
@@ -29,27 +31,32 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func(
     if args.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let release_callback = eval_call_user_func_callback_expr_is_temporary(&args[0]);
-    let mut evaluated_args = Vec::with_capacity(args.len());
-    for (index, arg) in args.iter().enumerate() {
-        let value = match eval_expr(arg, context, scope, values) {
-            Ok(value) => value,
-            Err(status) => {
-                if index > 0 && release_callback {
-                    values.release(evaluated_args[0])?;
-                }
-                return Err(status);
-            }
+    if let Some(name) = eval_literal_func_args_callback(&args[0]) {
+        return match name {
+            "func_get_arg" => eval_builtin_func_get_arg(&args[1..], context, scope, values),
+            "func_get_args" => eval_builtin_func_get_args(&args[1..], context, scope, values),
+            "func_num_args" => eval_builtin_func_num_args(&args[1..], context, values),
+            _ => unreachable!("literal func-args callback was canonicalized"),
         };
-        evaluated_args.push(value);
     }
-    let callback = evaluated_args[0];
-    let result =
-        eval_call_user_func_with_values_from_scope(evaluated_args, Some(scope), context, values);
-    if release_callback {
-        values.release(callback)?;
+    let callback = eval_owned_expr(&args[0], context, scope, values)?;
+    if let Some(name) = eval_callable_named_target(callback, context, scope, values) {
+        if eval_builtin_uses_owned_arguments(&name) {
+            let arguments = args[1..].iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
+            let result = eval_builtin_call_by_value(&name, &arguments, context, scope, values);
+            return finish_eval_argument_values(result, [callback], context, values);
+        }
     }
-    result
+    let mut operands = vec![callback];
+    for argument in &args[1..] {
+        match eval_owned_expr(argument, context, scope, values) {
+            Ok(value) => operands.push(value),
+            Err(status) => return finish_eval_argument_values(Err(status), operands, context, values),
+        }
+    }
+    let borrowed = operands.iter().copied().map(RuntimeCellHandle::borrowed).collect();
+    let result = eval_call_user_func_with_values_from_scope(borrowed, Some(scope), context, values);
+    finish_eval_argument_values(result, operands, context, values)
 }
 
 /// Dispatches `call_user_func` after its callback and arguments are already evaluated.
@@ -59,11 +66,4 @@ pub(in crate::interpreter) fn eval_call_user_func_with_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     eval_call_user_func_with_values_from_scope(evaluated_args, None, context, values)
-}
-
-/// Returns whether a `call_user_func*` callback expression allocates a temporary cell.
-pub(in crate::interpreter) fn eval_call_user_func_callback_expr_is_temporary(
-    callback: &EvalExpr,
-) -> bool {
-    matches!(callback, EvalExpr::Const(_))
 }

@@ -58,9 +58,26 @@ pub(super) fn branch_merge_result_type(
 ) -> PhpType {
     let then_ty = materialized_expr_type_for_merge(ctx, then_expr);
     let else_ty = materialized_expr_type_for_merge(ctx, else_expr);
+    // Two resources merge into a resource, not into the `int` their storage erases to: the stream
+    // builtins accept a resource handle only, so `fwrite($type === 'out' ? STDOUT : STDERR, $line)`
+    // (illuminate/console `Scheduling\Event::execute()`) was refused "fwrite stream argument PHP
+    // type Int".
+    if let (PhpType::Resource(left), PhpType::Resource(right)) = (&then_ty, &else_ty) {
+        return PhpType::Resource(if left == right { left.clone() } else { None });
+    }
     let then_repr = then_ty.codegen_repr();
     let else_repr = else_ty.codegen_repr();
     if then_repr == else_repr {
+        // An element read of a container answers `null` when the key is missing. A packed list
+        // slot carries that as its canonical-null sentinel, but a HASH slot has no null:
+        // `$c ? $rows[5] : ["a" => 1]` merged as a hash and handed the missed read's null
+        // pointer to the next hash operation. Box such a merge instead.
+        if matches!(then_repr, PhpType::AssocArray { .. })
+            && (container_element_read_may_miss(ctx, then_expr)
+                || container_element_read_may_miss(ctx, else_expr))
+        {
+            return PhpType::Mixed;
+        }
         return then_repr;
     }
     let branch_ty = nullable_aware_branch_merge_type(&then_ty, &else_ty);
@@ -69,6 +86,24 @@ pub(super) fn branch_merge_result_type(
     }
     let fallback_ty = fallback_expr_type(expr).codegen_repr();
     wider_type_for_merge(&fallback_ty, &branch_ty.codegen_repr())
+}
+
+/// Whether `expr` reads an element of an array container, which yields `null` on a missing key.
+fn container_element_read_may_miss(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
+    let ExprKind::ArrayAccess { array, .. } = &expr.kind else {
+        return false;
+    };
+    let container = match &array.kind {
+        ExprKind::Variable(name) => ctx.local_types.get(name).cloned(),
+        _ => None,
+    };
+    match container.map(|ty| ty.codegen_repr()) {
+        Some(PhpType::Array(_) | PhpType::AssocArray { .. }) => true,
+        // An unknown container shape: only an element read of a nested element is known to be
+        // an array read here.
+        None => matches!(array.kind, ExprKind::ArrayAccess { .. }),
+        Some(_) => false,
+    }
 }
 
 /// Chooses a match hidden-temp type by merging every arm result type, so
@@ -100,14 +135,28 @@ pub(super) fn match_merge_result_type(
 
 /// Chooses a short-ternary hidden-temp type without reintroducing the
 /// scalar-biased syntactic join used by the parser-only fallback inference.
+///
+/// A null default keeps the merge nullable, as the full ternary does: `$cond ?: null` merged as
+/// `bool`, so the null branch stored the null sentinel into a bool temp and the result read back
+/// as `false`-typed garbage -- `sprintf($format ??= ...)` printed `9223372036854775806` for
+/// Symfony's `resolveEnvPlaceholders($config, $resolveEnvs ?: null)`.
 pub(super) fn short_ternary_merge_result_type(
     ctx: &LoweringContext<'_, '_>,
     value: &Expr,
     default: &Expr,
 ) -> PhpType {
-    let value_ty = materialized_expr_type_for_merge(ctx, value).codegen_repr();
-    let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
-    wider_type_for_merge(&value_ty, &default_ty)
+    let value_ty = materialized_expr_type_for_merge(ctx, value);
+    let default_ty = materialized_expr_type_for_merge(ctx, default);
+    let value_repr = value_ty.codegen_repr();
+    let default_repr = default_ty.codegen_repr();
+    if value_repr == default_repr {
+        return value_repr;
+    }
+    let merged = nullable_aware_branch_merge_type(&value_ty, &default_ty);
+    if php_type_allows_null(&merged) {
+        return merged;
+    }
+    wider_type_for_merge(&value_repr, &default_repr)
 }
 
 /// Chooses a ternary branch merge type without erasing PHP null branches.
@@ -159,8 +208,27 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::ShortTernary { value, default } => {
             short_ternary_merge_result_type(ctx, value, default)
         }
-        ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
-            .unwrap_or_else(|| fallback_expr_type(expr)),
+        // `??` yields its value or its default, so it merges like a two-arm branch. The syntactic
+        // fallback answered `int`: `$c ? $all[$k] ?? null : null` materialized a `?int` temp, and
+        // the string the coalesce produced was stored through it as "". Symfony's
+        // `ParameterBagUtils::getRequestParameterValue()` reads the login form's CSRF token
+        // exactly this way, so every login on the demo failed "Invalid double-submit CSRF token".
+        ExprKind::NullCoalesce { value, default } => {
+            let value_ty = materialized_expr_type_for_merge(ctx, value);
+            let default_ty = materialized_expr_type_for_merge(ctx, default);
+            if value_ty.codegen_repr() == default_ty.codegen_repr() {
+                value_ty
+            } else {
+                nullable_aware_branch_merge_type(&value_ty, &default_ty)
+            }
+        }
+        // An element of a container this cannot type -- a call's result, most often -- merges as
+        // boxed Mixed, like the call arms below. The syntactic fallback answered `int`, so
+        // Laravel's `head($a)` (`empty($a) ? false : array_values($a)[0]`, or `reset()`)
+        // returned `int(0)` for a string element, and `--env=staging` detected environment 0.
+        ExprKind::ArrayAccess { array, .. } => {
+            array_access_expr_value_type_for_ir(ctx, array).unwrap_or(PhpType::Mixed)
+        }
         // A property the receiver's static class cannot type -- an untyped receiver, or a name
         // only a subclass, a dynamic property or `__get()` supplies -- is read as a boxed Mixed
         // value. The syntactic fallback answered `int` for it, so `$ok ? $o->items : 0` and
@@ -179,24 +247,6 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_result_type(ctx, receiver, property, expr)
         }
-        ExprKind::FunctionCall { name, .. } => call_return_type(ctx, name.as_str(), &[]),
-        ExprKind::MethodCall { object, method, .. } => {
-            method_call_expr_type_for_ir(ctx, object, method)
-                .unwrap_or_else(|| fallback_expr_type(expr))
-        }
-        ExprKind::NullsafeMethodCall { object, method, .. } => {
-            nullsafe_method_call_expr_type_for_ir(ctx, object, method)
-                .unwrap_or_else(|| fallback_expr_type(expr))
-        }
-        // A variable/expression callable can return any PHP value when its target signature is
-        // only known at runtime. The descriptor invoker materializes that result in a boxed
-        // Mixed cell, so a ternary/match temp must retain the same representation instead of
-        // falling back to the parser's scalar-biased syntactic inference.
-        ExprKind::ClosureCall { .. } | ExprKind::ExprCall { .. } => PhpType::Mixed,
-        ExprKind::StaticMethodCall {
-            receiver, method, ..
-        } => static_method_call_expr_type_for_ir(ctx, receiver, method)
-            .unwrap_or_else(|| fallback_expr_type(expr)),
         // `!` and `instanceof` produce a bool in every PHP program, whatever their operand is.
         // Without these arms they reached the scalar-biased syntactic fallback, which answers
         // `int` for an expression it cannot type — and `wider_type_for_merge` then widened a
@@ -204,6 +254,18 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         // a `bool` property refused the store. Symfony's `DebugHandlersListener::__construct`
         // writes exactly that.
         ExprKind::Not(_) | ExprKind::InstanceOf { .. } => PhpType::Bool,
+        // `STDOUT` / `STDERR` are stream resources; the syntactic fallback answers `int`, which the
+        // stream builtins then refuse (see `branch_merge_result_type`).
+        ExprKind::ConstRef(name)
+            if matches!(
+                ctx.constant_value(name.as_str()),
+                Some((_, PhpType::Resource(_)))
+            ) =>
+        {
+            ctx.constant_value(name.as_str())
+                .map(|(_, ty)| ty)
+                .unwrap_or(PhpType::Mixed)
+        }
         // A literal is typed from its items, the same way its own lowering will type it. The
         // syntactic fallback answered `array<int>` for `[$class, $name]`, and a ternary whose arms
         // were two such literals re-read every string and object as a heap address:
@@ -229,8 +291,105 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
                 .map(|ty| normalize_value_php_type(ty.codegen_repr()))
                 .unwrap_or(PhpType::Mixed)
         }
+        // Calls are typed from the return metadata their own lowering uses. The syntactic
+        // fallback answers `int` for every call outside its builtin allowlist, and a merge temp
+        // typed from that guess coerced a string, array or object branch into an integer slot or,
+        // beside a `null` branch, into a tagged `?int` scalar the backend cannot store an array
+        // in (issue #1364). A call whose result cannot be named here merges as boxed `mixed`,
+        // which holds whatever the call returns.
+        ExprKind::FunctionCall { name, .. } => function_call_type_for_merge(ctx, name.as_str(), expr),
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method).unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            nullsafe_method_call_expr_type_for_ir(ctx, object, method).unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::StaticMethodCall { receiver, method, .. } => {
+            static_method_call_expr_type_for_ir(ctx, receiver, method).unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::ClosureCall { var, .. } => closure_call_type_for_merge(ctx, var),
+        ExprKind::ExprCall { .. } => PhpType::Mixed,
+        // An assignment yields the value it stored: a typed property's own type (the value is
+        // coerced into it), otherwise the assigned value's. The syntactic fallback answered `int`,
+        // so a `match` whose arms assign an int property in one arm and a string property in
+        // another merged into a `?int` temp the string arm could not be stored in -- Laravel
+        // Prompts' `TypedValue::trackTypedValue()` key handler, which left the whole prompt
+        // family to the runtime autoloader.
+        ExprKind::Assignment { target, value, .. } => match &target.kind {
+            ExprKind::PropertyAccess { object, property } => {
+                property_access_expr_type_for_ir(ctx, object, property)
+                    .map(|ty| normalize_value_php_type(ty.codegen_repr()))
+                    .unwrap_or_else(|| materialized_expr_type_for_merge(ctx, value))
+            }
+            _ => materialized_expr_type_for_merge(ctx, value),
+        },
         _ => fallback_expr_type(expr),
     }
+}
+
+/// Returns the merge type of a named function call before it is lowered.
+///
+/// A user or extern function answers the return type `lower_function_call` stamps on the call.
+/// A pop or shift uses its shared EIR result contract, which is boxed `Mixed` even when
+/// the checker sees a scalar array element: removing from an empty array returns null.
+/// Other builtins keep the syntactic answer when that names a type, and otherwise consult
+/// the checker's result type for this very call (`int`, `bool`, `float` and `string` stay
+/// scalar, anything else is boxed), because syntactic `int` is only a default outside its
+/// allowlist.
+fn function_call_type_for_merge(ctx: &LoweringContext<'_, '_>, canonical: &str, expr: &Expr) -> PhpType {
+    if !source_prefers_extension_builtin(canonical) {
+        if let Some(signature) = ctx.functions.get(canonical) {
+            return normalize_value_php_type(eir_user_function_return_type(signature));
+        }
+    }
+    if let Some(signature) = ctx.extern_functions.get(canonical) {
+        return normalize_value_php_type(signature.return_type.clone());
+    }
+    if let Some(def) = crate::builtins::registry::lookup(canonical.trim_start_matches('\\')) {
+        if matches!(
+            def.spec.semantics.lowering,
+            crate::builtins::semantics::BuiltinLowering::Runtime(
+                crate::ir::RuntimeCallTarget::Function(
+                    crate::ir::RuntimeFnId::ArrayPop | crate::ir::RuntimeFnId::ArrayShift
+                )
+            )
+        ) {
+            return resolve_registry_builtin_result_type(
+                ctx,
+                def.name,
+                &[],
+                &[],
+                expr.span,
+                None,
+            )
+            .expect("registered pop/shift builtin must resolve its result type");
+        }
+    }
+    let syntactic = fallback_expr_type(expr);
+    if syntactic != PhpType::Int {
+        return syntactic;
+    }
+    builtin_call_result_type_for_ir(ctx, expr.span).unwrap_or(syntactic)
+}
+
+/// Returns the merge type of a `$callable(...)` call through a local variable.
+///
+/// Mirrors `lower_closure_call`: a statically known closure or user function answers its
+/// signature's return type and a typed callable parameter its descriptor signature's.
+/// Everything else (builtin names, methods, invokable objects, unknown callables) merges as
+/// boxed `mixed`.
+fn closure_call_type_for_merge(ctx: &LoweringContext<'_, '_>, var: &str) -> PhpType {
+    match ctx.static_callable_local(var) {
+        Some(target @ StaticCallableBinding::Closure { .. })
+        | Some(target @ StaticCallableBinding::UserFunction(_)) => {
+            return static_callable_return_type(ctx, &target);
+        }
+        Some(_) => return PhpType::Mixed,
+        None => {}
+    }
+    ctx.callable_param_signature(var)
+        .map(|signature| descriptor_invoker_result_type(Some(signature)))
+        .unwrap_or(PhpType::Mixed)
 }
 
 /// Coerces branch values to the hidden temp storage type before storing them.

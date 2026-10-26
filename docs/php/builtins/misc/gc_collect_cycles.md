@@ -1,8 +1,8 @@
 ---
 title: "gc_collect_cycles()"
-description: "Forces collection of any existing garbage cycles and returns how many were collected."
+description: "Forces collection of any existing garbage cycles."
 sidebar:
-  order: 624
+  order: 632
 ---
 
 ## gc_collect_cycles()
@@ -11,7 +11,7 @@ sidebar:
 function gc_collect_cycles(): int
 ```
 
-Forces collection of any existing garbage cycles and returns how many were collected.
+Forces collection of any existing garbage cycles.
 
 **Parameters**: none.
 
@@ -20,9 +20,9 @@ Forces collection of any existing garbage cycles and returns how many were colle
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/gc.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/gc.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/gc_collect_cycles.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/gc_collect_cycles.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

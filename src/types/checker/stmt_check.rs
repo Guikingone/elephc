@@ -13,6 +13,10 @@ mod assignments;
 mod control_flow;
 mod narrowing;
 
+pub(super) use control_flow::widen_property_for_element_reference;
+
+use std::collections::HashSet;
+
 use crate::errors::CompileError;
 use crate::parser::ast::{ExprKind, Stmt, StmtKind};
 use crate::types::TypeEnv;
@@ -123,6 +127,15 @@ impl Checker {
                 Ok(())
             }
             StmtKind::PackedClassDecl { .. } => Ok(()),
+            // An included file's `return`, rewritten into a `break` to the include's wrapper,
+            // may leave a `finally` as the `return` could. Its depth still has to hold.
+            StmtKind::Break(levels) if stmt.is_include_return_break() => {
+                if *levels > self.break_continue_depth {
+                    self.check_loop_exit(stmt.span, "break", *levels)?;
+                }
+                self.record_break_env(*levels, env);
+                Ok(())
+            }
             StmtKind::Break(levels) => {
                 self.check_loop_exit(stmt.span, "break", *levels)?;
                 self.record_break_env(*levels, env);
@@ -150,6 +163,16 @@ impl Checker {
                 let result = self.infer_type_with_assignment_effects(expr, env);
                 self.statement_position_expr = saved_statement_position;
                 result?;
+                // elephc's `assert()` always runs and throws `AssertionError` on a false
+                // assertion, so the statements after it see the asserted class, exactly as after
+                // `if (!$x instanceof C) { throw ...; }`. Doctrine's `Parser::getAST()` reads
+                // `$AST->selectClause` after `assert($AST instanceof AST\SelectStatement)`, on a
+                // union with `DeleteStatement`. Lowering applies the same narrowing.
+                if let Some(condition) = crate::types::asserted_instanceof_condition(expr) {
+                    if let Some(narrowing) = self.guard_narrowing(condition, env)? {
+                        env.insert(narrowing.var, narrowing.then_ty);
+                    }
+                }
                 Ok(())
             }
             StmtKind::FunctionDecl { .. } => Ok(()),
@@ -172,17 +195,34 @@ impl Checker {
                     if self.current_by_ref_return {
                         if let ExprKind::PropertyAccess { object, property } = &e.kind {
                             let object_ty = self.infer_type(object, env)?;
-                            if let Some(class) =
+                            // A CLOSURE's `$this` is never settled by the scope it was written
+                            // in: `Closure::bind`/`bindTo` can hand it any receiver, and the
+                            // enclosing class is only the default. Inferring it as that class
+                            // and promoting only there left a bound receiver of another class
+                            // with an ordinary (non-cell) slot, which the runtime class dispatch
+                            // then could not match at all.
+                            let rebindable_this =
+                                self.closure_depth > 0 && matches!(object.kind, ExprKind::This);
+                            // `Closure::bind($closure, $object)` with an object of one known class
+                            // settles the receiver of a literal closure for good.
+                            let bound_class = rebindable_this
+                                .then(|| self.closure_bound_this_class.clone())
+                                .flatten();
+                            let declared_class = if bound_class.is_some() {
+                                bound_class
+                            } else if rebindable_this {
+                                None
+                            } else {
                                 crate::types::checker::single_object_class_name(&object_ty)
-                            {
+                            };
+                            if let Some(class) = declared_class {
                                 self.reference_property_promotions
                                     .insert((class, property.clone()));
                             } else {
-                                // A by-reference closure returning `$this->prop` whose `$this`
-                                // is bound dynamically (`Closure::bind`) has a Mixed receiver, so
-                                // the class is unknown here. Promote the property on every class
-                                // that declares it so the reference resolves at runtime through
-                                // class-id dispatch.
+                                // A by-reference closure returning `$this->prop` has a receiver
+                                // that is only known at run time, so the class is unknown here.
+                                // Promote the property on every class that declares it so the
+                                // reference resolves at runtime through class-id dispatch.
                                 let owners: Vec<String> = self
                                     .classes
                                     .iter()
@@ -231,9 +271,20 @@ impl Checker {
     where
         F: FnOnce(&mut Self, &mut TypeEnv) -> Result<(), CompileError>,
     {
+        let mut boxed_ref_aliased = self.boxed_ref_aliased_locals.clone();
+        self.conditional_boxed_ref_invalidations.push(HashSet::new());
         self.local_conditional_depth += 1;
         let result = f(self, env);
         self.local_conditional_depth -= 1;
+        // Provenance is an affirmative storage proof for the current binding. A conditional
+        // body may not execute, so new facts cannot escape. Conversely, invalidating an entry
+        // fact on any path makes it unsafe at the join, even when another path preserves it.
+        let invalidated = self
+            .conditional_boxed_ref_invalidations
+            .pop()
+            .expect("conditional provenance scope must be balanced");
+        boxed_ref_aliased.retain(|name| !invalidated.contains(name));
+        self.boxed_ref_aliased_locals = boxed_ref_aliased;
         result
     }
 

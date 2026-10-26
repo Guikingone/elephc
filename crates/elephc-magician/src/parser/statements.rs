@@ -393,7 +393,11 @@ impl Parser {
         Ok(attributes)
     }
 
-    /// Parses one attribute name and optional literal positional/named arguments.
+    /// Parses one attribute name and optional positional/named arguments.
+    ///
+    /// Literals are folded here; any other constant expression is kept for reflection to
+    /// evaluate. An argument unpacking (`...$args`) or a non-constant expression (a variable, a
+    /// call) leaves the arguments unsupported.
     pub(super) fn parse_attribute(&mut self) -> Result<EvalAttribute, EvalParseError> {
         let name = self.parse_qualified_name()?;
         let name = self.resolve_class_name(name);
@@ -406,7 +410,18 @@ impl Parser {
                     if supported {
                         if call_arg.is_spread() {
                             supported = false;
-                        } else if let Some(arg) = eval_attribute_arg_from_expr(call_arg.value()) {
+                        } else if let Some(arg) =
+                            eval_attribute_arg_from_expr(call_arg.value()).or_else(|| {
+                                // A constant expression the parser cannot fold (a class constant,
+                                // a global constant) is kept as an expression for reflection to
+                                // evaluate, instead of dropping every argument of the attribute:
+                                // Symfony's `#[Route(requirements: ['page' =>
+                                // Requirement::POSITIVE_INT])]` made reflecting the controller
+                                // method fatal.
+                                eval_attribute_expr_is_constant(call_arg.value())
+                                    .then(|| EvalAttributeArg::Expr(Box::new(call_arg.value().clone())))
+                            })
+                        {
                             args.push(match call_arg.name() {
                                 Some(name) => EvalAttributeArg::Named {
                                     name: name.to_string(),

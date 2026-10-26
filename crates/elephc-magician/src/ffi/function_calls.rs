@@ -125,7 +125,7 @@ unsafe fn call_eval_function_inner(
     } else {
         slice::from_raw_parts(args, arg_count)
             .iter()
-            .map(|arg| RuntimeCellHandle::from_raw(*arg))
+            .map(|arg| RuntimeCellHandle::from_raw(*arg).borrowed())
             .collect()
     };
     clear_result(out);
@@ -169,7 +169,7 @@ unsafe fn call_eval_function_array_inner(
     match execute_context_function_array_with_namespace_fallback(
         context,
         &name,
-        RuntimeCellHandle::from_raw(arg_array),
+        RuntimeCellHandle::from_raw(arg_array).borrowed(),
         &mut values,
     ) {
         Ok(outcome) => write_outcome(outcome, out).code(),

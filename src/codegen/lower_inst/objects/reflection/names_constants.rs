@@ -19,6 +19,38 @@ pub(super) fn reflection_constructor_member(
         .cloned()
 }
 
+/// Returns the `__construct` member a class inherits from an ancestor that declares it PRIVATE.
+///
+/// A private method is not inherited, so the descendant's own method list — which is what
+/// `getMethods()` and `method_exists()` answer from, and which PHP also reports as empty here —
+/// carries no `__construct`. PHP's `getConstructor()` nevertheless returns a `ReflectionMethod`
+/// on the DECLARING class, and `isInstantiable()` is `false` because that constructor is not
+/// public. Both were wrong without this fallback: `getConstructor()` answered `null` and
+/// `isInstantiable()` answered `true` (issue #869).
+///
+/// Built from the OWNER's `ClassInfo`, so the member's declaring class, visibility flags,
+/// parameters and source lines are the ancestor's, exactly as PHP reports them. Returns `None`
+/// for a class with no constructor anywhere in its chain, and for one whose own list already
+/// carried the entry — that caller checks first.
+pub(super) fn inherited_private_constructor_member(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> Result<Option<ReflectionListedMember>> {
+    let Some((owner_name, owner_info)) =
+        crate::types::constructor_owner(&ctx.module.class_infos, class_name)
+    else {
+        return Ok(None);
+    };
+    if php_symbol_key(owner_name) == php_symbol_key(class_name) {
+        return Ok(None);
+    }
+    // The failure is PROPAGATED, not swallowed into `None`. Building a member resolves the
+    // owner's prototype and parameter defaults, and either can fail; answering "no constructor"
+    // instead would turn a real metadata error into a silently wrong `isInstantiable() == true`,
+    // where the ordinary method-member path reports it. `?` here matches that path.
+    reflection_class_method_member(ctx, owner_name, owner_info, "__construct")
+}
+
 /// Builds common ReflectionMethod/ReflectionProperty predicate flags.
 pub(super) fn reflection_member_flags(
     is_static: bool,
@@ -54,8 +86,23 @@ pub(super) fn reflection_interface_method_names(
     };
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    push_unique_method_names(info.methods.keys(), &mut names, &mut seen);
-    push_unique_method_names(info.static_methods.keys(), &mut names, &mut seen);
+    // The interface's own declarations in source order, then what it inherits, sorted: the maps'
+    // order changes from run to run and these names become data strings, so iterating them
+    // directly made two builds of one program differ (Twig's `ExtensionInterface`).
+    let declared: Vec<String> = info
+        .method_decls
+        .iter()
+        .map(|method| php_symbol_key(&method.name))
+        .filter(|key| info.methods.contains_key(key) || info.static_methods.contains_key(key))
+        .collect();
+    push_unique_method_names(declared.iter(), &mut names, &mut seen);
+    let mut inherited: Vec<&String> = info
+        .methods
+        .keys()
+        .chain(info.static_methods.keys())
+        .collect();
+    inherited.sort();
+    push_unique_method_names(inherited.into_iter(), &mut names, &mut seen);
     names
 }
 
@@ -91,7 +138,7 @@ pub(super) fn reflection_interface_constant_names(
     };
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for constant in info.constants.keys() {
+    for constant in declared_then_remaining(&info.constant_order, info.constants.keys()) {
         push_unique_constant_name(constant, &mut names, &mut seen);
     }
     names
@@ -246,11 +293,26 @@ pub(super) fn reflection_constant_value(
             let entries = entries
                 .iter()
                 .map(|(key, value)| {
-                    let key = reflection_default_array_key(key).ok_or_else(|| {
-                        CodegenIrError::unsupported(
-                            "ReflectionClass constant metadata associative-array key",
-                        )
-                    })?;
+                    let key = match reflection_default_array_key(key) {
+                        Some(key) => key,
+                        // A key written as a constant (`self::A => 1`, `Foo::class => 2`).
+                        None => match reflection_constant_value(
+                            ctx,
+                            current_class,
+                            current_info,
+                            key,
+                            depth + 1,
+                        )? {
+                            ReflectionConstantValue::Int(number) => ReflectionDefaultArrayKey::Int(number),
+                            ReflectionConstantValue::Str(text) => ReflectionDefaultArrayKey::Str(text),
+                            ReflectionConstantValue::Bool(flag) => ReflectionDefaultArrayKey::Int(i64::from(flag)),
+                            _ => {
+                                return Err(CodegenIrError::unsupported(
+                                    "ReflectionClass constant metadata associative-array key",
+                                ))
+                            }
+                        },
+                    };
                     let value = reflection_constant_value(
                         ctx,
                         current_class,
@@ -428,6 +490,30 @@ pub(super) fn reflection_scoped_constant_value(
             {
                 return reflection_constant_value(ctx, interface_name, None, &value_expr, depth);
             }
+        }
+        // An inherited default (`protected string $sep = self::SEP` declared on an ancestor) is
+        // evaluated in the descendant's scope: look the constant up through the ancestors.
+        let mut ancestor = info.parent.clone();
+        let mut hops = 0;
+        while let Some(parent_name) = ancestor {
+            hops += 1;
+            if hops > 64 {
+                break;
+            }
+            let Some((resolved_parent, parent_info)) = resolve_reflection_class(ctx, &parent_name)
+            else {
+                break;
+            };
+            if let Some(value_expr) = parent_info.constants.get(constant_name) {
+                return reflection_constant_value(
+                    ctx,
+                    resolved_parent,
+                    Some(parent_info),
+                    value_expr,
+                    depth,
+                );
+            }
+            ancestor = parent_info.parent.clone();
         }
     }
     if let Some(interface_name) = resolve_reflection_interface(ctx, &class_name) {

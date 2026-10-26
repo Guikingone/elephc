@@ -1,11 +1,11 @@
 ---
-title: "password_get_info() — internals"
+title: "password_get_info() - internals"
 description: "Compiler internals for password_get_info(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 852
+  order: 945
 ---
 
-## `password_get_info()` — internals
+## `password_get_info()` - internals
 
 ## Where it lives
 

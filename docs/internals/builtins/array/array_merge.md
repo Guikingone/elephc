@@ -1,16 +1,16 @@
 ---
-title: "array_merge() — internals"
+title: "array_merge() - internals"
 description: "Compiler internals for array_merge(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 32
 ---
 
-## `array_merge()` — internals
+## `array_merge()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_merge.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_merge.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -26,9 +26,9 @@ sidebar:
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
 - **Result ownership**: `fresh`
-- **Effects**: `static (0 declared effects)`
+- **Effects**: `static (5 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary

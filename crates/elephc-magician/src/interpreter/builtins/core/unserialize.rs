@@ -18,8 +18,16 @@
 //!   exact shape is the literal content of a Symfony cache-freshness payload, so a wrong binding
 //!   here is a wrong cache decision with no crash, not a test failure anyone would notice by
 //!   running the app.
+//! - `r:N;` / `R:N;` back-references resolve against the values parsed so far, numbered the way
+//!   php numbers them: every value except an `R:` takes the next 1-based index, an `r:` takes one
+//!   too (it aliases its target), and array/object KEYS take none. `r:` needs an object target and
+//!   shares its identity; `R:` copies the target (an object keeps its identity), because the
+//!   interpreter cannot bind two slots to one PHP reference here. A target still being built (an
+//!   object naming itself from inside its own properties, an enclosing array) is not yet
+//!   resolvable and fails the parse like an out-of-range index. The registry is only kept when
+//!   the payload contains an `r:`/`R:` marker at all.
 //! - NOT implemented (measured absent from the real 404 payloads; each is a separate, larger
-//!   ticket): `r:`/`R:` reference back-edges, `E:` enum payloads, `C:` `Serializable` payloads,
+//!   ticket): `E:` enum payloads, `C:` `Serializable` payloads,
 //!   `unserialize_callback_func` (the ini key still round-trips through `ini_get`/`ini_set`
 //!   independently of this file), and `max_depth`/`unserialize_max_depth` (no depth guard at
 //!   all -- a malicious/corrupt deeply-nested payload can blow the Rust stack, matching php's own
@@ -148,7 +156,13 @@ fn eval_unserialize_call(
     }
 
     let mut cursor = EvalUnserializeCursor { data: &bytes, pos: 0 };
-    match eval_unserialize_parse_value(&mut cursor, &allowed_classes, context, values) {
+    let mut refs = EvalUnserializeRefs {
+        enabled: bytes.windows(2).any(|pair| pair == b"r:" || pair == b"R:"),
+        slots: Vec::new(),
+    };
+    let parsed = eval_unserialize_parse_value(&mut cursor, &allowed_classes, &mut refs, context, values);
+    refs.release_all(values);
+    match parsed {
         Ok(value) => {
             if cursor.pos < bytes.len() {
                 values.warning(&format!(
@@ -222,6 +236,53 @@ enum EvalUnserializeFailure {
     Generic,
 }
 
+/// The values parsed so far, indexed the way php numbers them for `r:`/`R:` back-references.
+///
+/// A slot is reserved when a value starts and filled when it completes, so a container's own
+/// index stays reserved (and unresolvable) while its children parse. Entries are owned retains
+/// released by `release_all` once the call ends. A disabled registry (no marker in the payload,
+/// or an array/object key) reserves and stores nothing.
+struct EvalUnserializeRefs {
+    enabled: bool,
+    slots: Vec<Option<RuntimeCellHandle>>,
+}
+
+impl EvalUnserializeRefs {
+    /// A registry that records nothing, for payloads without back-references and for keys.
+    fn off() -> Self {
+        EvalUnserializeRefs { enabled: false, slots: Vec::new() }
+    }
+
+    /// Reserves the next index for a value that is starting to parse.
+    fn reserve(&mut self) -> Option<usize> {
+        if !self.enabled {
+            return None;
+        }
+        self.slots.push(None);
+        Some(self.slots.len() - 1)
+    }
+
+    /// Publishes a completed value under its reserved index.
+    fn publish(
+        &mut self,
+        slot: Option<usize>,
+        value: RuntimeCellHandle,
+        values: &mut impl RuntimeValueOps,
+    ) -> Result<(), EvalStatus> {
+        if let Some(slot) = slot {
+            self.slots[slot] = Some(values.retain(value)?);
+        }
+        Ok(())
+    }
+
+    /// Releases every retained entry.
+    fn release_all(&mut self, values: &mut impl RuntimeValueOps) {
+        for entry in self.slots.drain(..).flatten() {
+            let _ = values.release(entry);
+        }
+    }
+}
+
 /// A byte-position cursor over the serialized payload.
 struct EvalUnserializeCursor<'a> {
     data: &'a [u8],
@@ -267,10 +328,63 @@ impl<'a> EvalUnserializeCursor<'a> {
     }
 }
 
-/// Parses one serialized value at the cursor's current position.
+/// Parses one serialized value at the cursor's current position, numbering it for `r:`/`R:`.
 fn eval_unserialize_parse_value(
     cursor: &mut EvalUnserializeCursor<'_>,
     allowed_classes: &EvalUnserializeAllowedClasses,
+    refs: &mut EvalUnserializeRefs,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalUnserializeFailure> {
+    if matches!(cursor.peek(), Some(b'r' | b'R')) {
+        return eval_unserialize_parse_back_reference(cursor, refs, values);
+    }
+    let slot = refs.reserve();
+    let value = eval_unserialize_parse_plain_value(cursor, allowed_classes, refs, context, values)?;
+    refs.publish(slot, value, values).map_err(|_| EvalUnserializeFailure::Generic)?;
+    Ok(value)
+}
+
+/// Resolves `r:<n>;` (object identity) or `R:<n>;` (php reference) against the values parsed so
+/// far.
+///
+/// `r:` takes an index of its own that aliases its target; `R:` takes none. Only an object can be
+/// an `r:` target. `R:` hands back a copy of a non-object target (php would bind both slots to
+/// one reference) and the same object for an object target.
+fn eval_unserialize_parse_back_reference(
+    cursor: &mut EvalUnserializeCursor<'_>,
+    refs: &mut EvalUnserializeRefs,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalUnserializeFailure> {
+    let marker = cursor.peek().ok_or(EvalUnserializeFailure::Generic)?;
+    cursor.pos += 1;
+    cursor.take_byte(b':')?;
+    let digits = cursor.take_until(b';')?;
+    let index: usize = std::str::from_utf8(digits)
+        .ok()
+        .and_then(|text| text.parse().ok())
+        .ok_or(EvalUnserializeFailure::Generic)?;
+    let target = index
+        .checked_sub(1)
+        .and_then(|slot| refs.slots.get(slot).copied().flatten())
+        .ok_or(EvalUnserializeFailure::Generic)?;
+    let is_object = values.type_tag(target).map_err(|_| EvalUnserializeFailure::Generic)? == EVAL_TAG_OBJECT;
+    if marker == b'r' && !is_object {
+        return Err(EvalUnserializeFailure::Generic);
+    }
+    let result = if is_object { values.retain(target) } else { values.copy_value(target) }
+        .map_err(|_| EvalUnserializeFailure::Generic)?;
+    if marker == b'r' {
+        refs.slots.push(Some(values.retain(result).map_err(|_| EvalUnserializeFailure::Generic)?));
+    }
+    Ok(result)
+}
+
+/// Parses one non-back-reference serialized value at the cursor's current position.
+fn eval_unserialize_parse_plain_value(
+    cursor: &mut EvalUnserializeCursor<'_>,
+    allowed_classes: &EvalUnserializeAllowedClasses,
+    refs: &mut EvalUnserializeRefs,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalUnserializeFailure> {
@@ -332,8 +446,8 @@ fn eval_unserialize_parse_value(
                 .string_bytes_value(&bytes)
                 .map_err(|_| EvalUnserializeFailure::Generic)
         }
-        Some(b'a') => eval_unserialize_parse_array(cursor, allowed_classes, context, values),
-        Some(b'O') => eval_unserialize_parse_object(cursor, allowed_classes, context, values),
+        Some(b'a') => eval_unserialize_parse_array(cursor, allowed_classes, refs, context, values),
+        Some(b'O') => eval_unserialize_parse_object(cursor, allowed_classes, refs, context, values),
         _ => Err(EvalUnserializeFailure::Generic),
     }
 }
@@ -392,6 +506,7 @@ fn eval_unserialize_payload_array(
 fn eval_unserialize_parse_array(
     cursor: &mut EvalUnserializeCursor<'_>,
     allowed_classes: &EvalUnserializeAllowedClasses,
+    refs: &mut EvalUnserializeRefs,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalUnserializeFailure> {
@@ -411,14 +526,21 @@ fn eval_unserialize_parse_array(
                 .map_err(|_| EvalUnserializeFailure::Generic)?;
             return Err(EvalUnserializeFailure::AlreadyWarned);
         }
-        let key = eval_unserialize_parse_value(cursor, allowed_classes, context, values)?;
+        // Keys are written straight onto the wire by php and take no back-reference index.
+        let key = eval_unserialize_parse_value(
+            cursor,
+            allowed_classes,
+            &mut EvalUnserializeRefs::off(),
+            context,
+            values,
+        )?;
         if cursor.peek().is_none() {
             values
                 .warning("unserialize(): Unexpected end of serialized data")
                 .map_err(|_| EvalUnserializeFailure::Generic)?;
             return Err(EvalUnserializeFailure::AlreadyWarned);
         }
-        let element = eval_unserialize_parse_value(cursor, allowed_classes, context, values)?;
+        let element = eval_unserialize_parse_value(cursor, allowed_classes, refs, context, values)?;
         result = values
             .array_set(result, key, element)
             .map_err(|_| EvalUnserializeFailure::Generic)?;
@@ -466,6 +588,7 @@ fn eval_unserialize_retag_as_list_if_packed(
 fn eval_unserialize_parse_object(
     cursor: &mut EvalUnserializeCursor<'_>,
     allowed_classes: &EvalUnserializeAllowedClasses,
+    refs: &mut EvalUnserializeRefs,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalUnserializeFailure> {
@@ -511,7 +634,7 @@ fn eval_unserialize_parse_object(
                 .map_err(|_| EvalUnserializeFailure::Generic)?;
             return Err(EvalUnserializeFailure::AlreadyWarned);
         }
-        let value = eval_unserialize_parse_value(cursor, allowed_classes, context, values)?;
+        let value = eval_unserialize_parse_value(cursor, allowed_classes, refs, context, values)?;
         payload.push((key, value));
     }
     cursor.take_byte(b'}')?;
@@ -617,7 +740,6 @@ fn eval_unserialize_hydrate_object(
                     name: None,
                     value: payload_array,
                     ref_target: None,
-                    owned: true,
                 }],
                 context,
                 values,
@@ -675,7 +797,13 @@ fn eval_unserialize_hydrate_object(
         return Ok(object);
     }
     for (name, value) in payload {
-        let _ = values.property_set(object, &name, value);
+        // A payload written by PHP mangles a private/protected property as
+        // `"\0Class\0name"` / `"\0*\0name"`. The interpreter's ordinary `property_set` applies
+        // the CALLING scope's visibility, so a protected key became a dynamic property and the
+        // typed slot stayed uninitialized: Symfony's `ContainerBuilder::$parameterBag` came back
+        // uninitialized once AOT code had touched the class. Hydration takes the declared-slot
+        // path instead, the same matcher the compiled decoder uses.
+        values.hydrate_declared_property(object, &name, value)?;
     }
     Ok(object)
 }

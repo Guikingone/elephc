@@ -1,16 +1,16 @@
 ---
-title: "fileinode() — internals"
+title: "fileinode() - internals"
 description: "Compiler internals for fileinode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 280
+  order: 281
 ---
 
-## `fileinode()` — internals
+## `fileinode()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fileinode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fileinode.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

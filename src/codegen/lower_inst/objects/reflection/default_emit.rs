@@ -28,13 +28,18 @@ pub(super) fn emit_reflection_constant_value_as_mixed(
         ReflectionConstantValue::EnumCase {
             enum_name,
             case_name,
-        } => {
-            // Reading a case through Reflection is an access like any other, so it
-            // materializes the case if this is its first evaluation.
-            crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
-            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(enum_name.clone()));
-        }
+        } => emit_reflection_enum_case_as_mixed(ctx, enum_name, case_name),
     }
+}
+
+/// Reads the existing enum singleton and boxes it for scalar or nested reflected values.
+fn emit_reflection_enum_case_as_mixed(
+    ctx: &mut FunctionContext<'_>,
+    enum_name: &str,
+    case_name: &str,
+) {
+    crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(enum_name.to_string()));
 }
 
 /// Materializes one Reflection default-property value as a boxed Mixed cell.
@@ -56,6 +61,9 @@ pub(super) fn emit_reflection_default_value_as_mixed(
             emit_boxed_string_literal_default_to_result(ctx, value)
         }
         ReflectionParameterDefaultValue::Null => emit_boxed_null_literal_to_result(ctx),
+        ReflectionParameterDefaultValue::EnumCase { enum_name, case_name } => {
+            emit_reflection_enum_case_as_mixed(ctx, enum_name, case_name)
+        }
         ReflectionParameterDefaultValue::Object { args, .. } if args.is_empty() => {
             emit_boxed_null_literal_to_result(ctx)
         }

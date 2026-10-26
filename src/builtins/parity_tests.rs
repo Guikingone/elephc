@@ -15,6 +15,18 @@ use elephc_builtin_contract::{
     BuiltinContract, DefaultSpec, TypeSpec,
 };
 
+/// Keeps variadic passing modes in the AOT signature aligned with the shared contract.
+#[test]
+fn builtin_variadic_reference_modes_match_contracts() {
+    for name in registry::names() {
+        let def = registry::lookup(name).expect("registered builtin");
+        if let Some(variadic) = def.spec.variadic {
+            assert_eq!(def.ref_params.last().copied(), Some(variadic.is_by_reference()),
+                "{name} variadic passing mode");
+        }
+    }
+}
+
 /// Returns the PHP-visible extension builtins a prelude must never call directly.
 fn php_visible_extension_builtins() -> Vec<String> {
     let mut names: Vec<String> = vec!["buffer_new".to_string()];
@@ -93,6 +105,24 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ),
         ("web_prelude(wrap)", vec![crate::web_prelude::web_wrap_stmt()]),
         ("addcslashes_prelude", crate::addcslashes_prelude::declarations()),
+        ("strtok_prelude", crate::strtok_prelude::declarations()),
+        (
+            "proc_prelude",
+            crate::proc_prelude::declarations(crate::proc_prelude::FUNCTIONS),
+        ),
+        ("csv_prelude", crate::csv_prelude::declarations()),
+        ("exec_prelude", crate::exec_prelude::declarations()),
+        ("stream_select_prelude", crate::stream_select_prelude::declarations()),
+        ("min_max_prelude", crate::min_max_prelude::declarations()),
+        ("count_recursive_prelude", crate::count_recursive_prelude::declarations()),
+        (
+            "numeric_string_arg_prelude",
+            crate::numeric_string_arg_prelude::declarations(),
+        ),
+        (
+            "array_fill_keys_prelude",
+            crate::array_fill_keys_prelude::declarations(),
+        ),
         (
             "version_compare_prelude",
             crate::version_compare_prelude::declarations(),
@@ -100,18 +130,15 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("hash_pbkdf2_prelude", crate::hash_pbkdf2_prelude::declarations()),
         ("parse_str_prelude", crate::parse_str_prelude::declarations()),
         // Built from the program's classes; an empty program still declares the entry points.
-        ("class_vars_prelude", crate::class_vars_prelude::declarations(&Vec::new())),
         ("implode_prelude", crate::implode_prelude::declarations()),
         ("array_sum_prelude", crate::array_sum_prelude::declarations()),
-        (
-            "mbstring_prelude",
-            crate::mbstring_prelude::declarations(crate::mbstring_prelude::FUNCTIONS),
-        ),
+        ("array_pad_prelude", crate::array_pad_prelude::declarations()),
         ("dynamic_define_prelude", crate::dynamic_define_prelude::declarations()),
         ("preg_array_prelude", crate::preg_array_prelude::declarations()),
         ("sodium_prelude", crate::sodium_prelude::declarations(true, true)),
         ("password_prelude", crate::password_prelude::declarations()),
         ("array_edge_prelude", crate::array_edge_prelude::declarations()),
+        ("array_gradual_prelude", crate::array_gradual_prelude::declarations()),
         ("array_ucompare_prelude", crate::array_ucompare_prelude::declarations()),
     ];
     // The mysqli prelude is a second bridge surface built as Rust AST like the others; the
@@ -237,29 +264,14 @@ const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[
          eval() can already call it. Consequence, accepted: the PHP comparison page counts \
          the curl module 34/35 rather than 35/35.",
     ),
-    ("mb_substr", MBSTRING_PRELUDE_REASON),
-    ("mb_strpos", MBSTRING_PRELUDE_REASON),
-    ("mb_stripos", MBSTRING_PRELUDE_REASON),
-    ("mb_strrpos", MBSTRING_PRELUDE_REASON),
-    ("mb_strripos", MBSTRING_PRELUDE_REASON),
-    ("mb_str_split", MBSTRING_PRELUDE_REASON),
-    ("mb_substr_count", MBSTRING_PRELUDE_REASON),
-    ("mb_strstr", MBSTRING_PRELUDE_REASON),
-    ("mb_stristr", MBSTRING_PRELUDE_REASON),
-    ("mb_strrchr", MBSTRING_PRELUDE_REASON),
-    ("mb_internal_encoding", MBSTRING_PRELUDE_REASON),
-    ("mb_check_encoding", MBSTRING_PRELUDE_REASON),
-    ("mb_str_pad", MBSTRING_PRELUDE_REASON),
-    ("mb_ucfirst", MBSTRING_PRELUDE_REASON),
-    ("mb_lcfirst", MBSTRING_PRELUDE_REASON),
+    (
+        "request_parse_body",
+        "a --web-only function (php 8.4): the web prelude implements it over the worker's \
+         request state, which only exists in a --web build, so there is no CLI builtin for a \
+         contract to describe and no eval binding. A contract would publish it to programs that \
+         cannot call it.",
+    ),
 ];
-
-/// Why the mbstring prelude's functions carry no shared contract yet.
-const MBSTRING_PRELUDE_REASON: &str =
-    "UTF-8-only fallbacks in crate::mbstring_prelude, injected only when a program calls one and \
-     declares no function of that name (so a polyfill keeps its own). A contract would publish \
-     the full mbstring signature (every encoding) and demand an eval() binding that the \
-     interpreter does not have; `extension_loaded('mbstring')` deliberately stays false.";
 
 /// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
 ///
@@ -307,7 +319,8 @@ fn shared_php_visible_extension_contracts(
             matches!(
                 aot_support(contract),
                 BackendSupport::Implemented(
-                    BackendImplementation::Registry | BackendImplementation::DedicatedSyntax
+                    BackendImplementation::Registry
+                        | BackendImplementation::DedicatedSyntax
                 )
             )
         })
@@ -606,8 +619,8 @@ fn parse_prelude_param(raw: &str, function: &str) -> PreludeParam {
 
 /// Returns whether a prelude's declared PHP type is the contract's neutral type.
 ///
-/// `TypeSpec` spells the scalars, `array`, `callable`, `ptr` and `?T` exactly, so each of
-/// those must match the declaration; it has no object or union vocabulary, so a class-typed
+/// `TypeSpec` spells scalars, `object`, `array`, `callable`, `ptr` and `?T` exactly, so each of
+/// those must match the declaration; it has no class-specific or union vocabulary, so a class-typed
 /// or union surface is `Mixed` in the catalog and the prelude is free to declare
 /// `CurlHandle`, `mixed` or a union for it. The check is therefore compatibility, not
 /// equality — but it is not vacuous either: a `Mixed` contract must NOT be declared with a
@@ -624,6 +637,7 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
         TypeSpec::Float => "float",
         TypeSpec::Str => "string",
         TypeSpec::Bool => "bool",
+        TypeSpec::Object => "object",
         TypeSpec::Void => "void",
         // Neither is a PHP scalar, and neither is `Mixed`'s open surface: `Ptr` is elephc's
         // own `ptr` type and `Callable` is the owned descriptor `callable` lowers to. Both
@@ -632,12 +646,22 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
         TypeSpec::Ptr => "ptr",
         TypeSpec::Callable => "callable",
         TypeSpec::Array => "array",
+        TypeSpec::False => "false",
+        TypeSpec::Null => "null",
+        TypeSpec::Union(members) => {
+            let declared_members = declared.split('|').map(str::trim).collect::<Vec<_>>();
+            return declared_members.len() == members.len()
+                && declared_members.iter().all(|part|
+                    members.iter().any(|member| php_type_matches(*member, part)))
+                && members.iter().all(|member|
+                    declared_members.iter().any(|part| php_type_matches(*member, part)));
+        }
         // `declared` already had its `?` stripped above, so compare the inner type.
         TypeSpec::Nullable(inner) => return php_type_matches(*inner, declared),
         TypeSpec::Mixed => {
             return !matches!(
                 declared,
-                "int" | "float" | "string" | "bool" | "ptr" | "callable" | "array"
+                "int" | "float" | "string" | "bool" | "object" | "ptr" | "callable" | "array"
             );
         }
     };
@@ -661,6 +685,7 @@ fn default_matches(expected: &DefaultSpec, declared: &str) -> bool {
         }
         // A built prelude carries the folded literal; PHP text spells the constant.
         DefaultSpec::IntMax => declared == "PHP_INT_MAX" || declared.parse::<i64>() == Ok(i64::MAX),
+        DefaultSpec::ErrorAll => declared == "E_ALL",
         DefaultSpec::EmptyArray => declared == "[]" || declared.replace(' ', "") == "array()",
         DefaultSpec::Constant(name) => declared == *name,
         DefaultSpec::Expr(source) => {
@@ -687,6 +712,7 @@ fn default_text(default: &DefaultSpec) -> String {
         DefaultSpec::Float(value) => format!("{value:?}"),
         DefaultSpec::Str(value) => format!("\"{value}\""),
         DefaultSpec::IntMax => "PHP_INT_MAX".to_string(),
+        DefaultSpec::ErrorAll => "E_ALL".to_string(),
         DefaultSpec::EmptyArray => "[]".to_string(),
         DefaultSpec::Constant(name) => (*name).to_string(),
         DefaultSpec::Expr(source) => (*source).to_string(),
@@ -856,6 +882,7 @@ fn prelude_parameters_parse_every_php_passing_form() {
     assert!(!default_matches(&DefaultSpec::Float(1.0), "5.0"));
     assert!(default_matches(&DefaultSpec::Null, "NULL"));
     assert!(!default_matches(&DefaultSpec::Bool(false), "true"));
+    assert!(default_matches(&DefaultSpec::ErrorAll, "E_ALL"));
 }
 
 /// Returns the PHP-visible function names one prelude source declares at top level.
@@ -887,6 +914,7 @@ fn dump_prelude_contract_seed_on_request() {
     };
     use crate::parser::ast::{Expr, Stmt, StmtKind, TypeExpr};
 
+    /// Serializes a parsed PHP type into the seed catalog spelling.
     fn type_text(ty: &TypeExpr) -> String {
         match ty {
             TypeExpr::Int => "int".to_string(),
@@ -908,9 +936,11 @@ fn dump_prelude_contract_seed_on_request() {
             }
         }
     }
+    /// Serializes one parsed default expression for the catalog seed.
     fn default_text(expr: &Expr) -> String {
         crate::synthetic_class::print::print_expr(expr)
     }
+    /// Collects function signatures recursively from the injected prelude statements.
     fn collect(stmts: &[Stmt], prelude: &str, out: &mut Vec<serde_json::Value>) {
         for stmt in stmts {
             match &stmt.kind {

@@ -344,6 +344,7 @@ fn emit_json_encode_loaded_value(ctx: &mut FunctionContext<'_>, value_ty: &PhpTy
         PhpType::Mixed | PhpType::Union(_) => {
             abi::emit_call_label(ctx.emitter, "__rt_json_encode_mixed");
         }
+        PhpType::TaggedScalar => emit_json_encode_tagged_scalar(ctx),
         _ => {
             abi::emit_call_label(ctx.emitter, "__rt_json_encode_null");
         }
@@ -383,6 +384,29 @@ fn emit_json_encode_array_by_heap_kind(ctx: &mut FunctionContext<'_>, indexed_en
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_call_label(ctx.emitter, "__rt_json_encode_assoc");
 
+    ctx.emitter.label(&done);
+}
+
+/// Emits the tag test a tagged nullable int needs, choosing between the null and int encoders.
+///
+/// `int|null` is the one union `codegen_repr()` does not map to `Mixed`: it stays an unboxed
+/// two-word `{payload, tag}` pair. It therefore reached the `_` arm above and encoded as `null`
+/// for every value, silently (#1121).
+///
+/// The tag decides, and nothing is boxed. Boxing would allocate on every call, and it changes
+/// what the runtime hands back — the failure #1121 records for `abs`, where the result type comes
+/// from a hook that reads the argument. Here the two encoders already exist and the value is an
+/// int or a null with no third case.
+fn emit_json_encode_tagged_scalar(ctx: &mut FunctionContext<'_>) {
+    let null_case = ctx.next_label("json_encode_tagged_null");
+    let done = ctx.next_label("json_encode_tagged_done");
+
+    crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(ctx.emitter, &null_case);
+    crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+    abi::emit_call_label(ctx.emitter, "__rt_itoa");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&null_case);
+    abi::emit_call_label(ctx.emitter, "__rt_json_encode_null");
     ctx.emitter.label(&done);
 }
 

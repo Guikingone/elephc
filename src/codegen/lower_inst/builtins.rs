@@ -28,7 +28,7 @@ use super::{
     class_implements_interface, exceptions, expect_data, expect_operand,
     instruction_strict_php_profile, load_value_to_first_int_arg,
     lower_instance_runtime_intrinsic, lower_narrowed_interface_method_call_or_type_error,
-    lower_runtime_object_method_call, predicates,
+    lower_runtime_object_method_call, object_name_satisfies_interface, predicates,
     runtime_backed_instance_intrinsic, store_if_result,
 };
 use crate::codegen::{CodegenIrError, Result};
@@ -39,10 +39,16 @@ pub(crate) mod bcmath;
 pub(crate) mod buffers;
 pub(crate) mod class_relations;
 pub(crate) mod get_class_methods;
+pub(crate) mod clone_with;
 pub(crate) mod ctype;
 pub(crate) mod curl;
+pub(crate) mod internal_warning;
 pub(crate) mod debug;
 pub(crate) mod eval;
+/// Installing the compiled OPcache configuration is a STARTUP concern rather than an eval
+/// one, so `crate::codegen::frame` reaches it from the prologue. Re-exported here because
+/// `frame` sits a level above this module's parent, which `pub(super)` does not reach.
+pub(crate) use eval::configure_eval_opcache;
 mod eval_facade;
 mod filter;
 pub(crate) mod iconv;
@@ -59,6 +65,7 @@ pub(crate) mod is_numeric;
 pub(crate) mod json;
 pub(crate) mod math;
 pub(crate) mod object_props;
+pub(crate) mod opcache_runtime;
 pub(crate) mod openssl;
 pub(crate) mod output_buffering;
 pub(crate) mod pcntl;
@@ -81,7 +88,7 @@ pub(in crate::codegen::lower_inst) use eval_facade::*;
 pub(crate) use function_queries::*;
 pub(crate) use member_queries::*;
 pub(crate) use scalar_metadata::*;
-use shared::*;
+pub(in crate::codegen::lower_inst) use shared::*;
 pub(crate) use type_predicates::*;
 
 const DEFINE_ALREADY_DEFINED_WARNING: &str =

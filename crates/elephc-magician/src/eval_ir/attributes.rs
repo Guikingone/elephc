@@ -1,16 +1,20 @@
 //! Purpose:
-//! Defines eval attribute declarations and literal argument metadata.
+//! Defines eval attribute declarations and their argument metadata.
 //!
 //! Called from:
 //! - Class-like/callable parsing, validation, context registration, and Reflection.
 //!
 //! Key details:
 //! - Attribute arguments remain syntax values until explicitly materialized by the interpreter.
+//! - An argument the parser cannot fold to a literal (a class constant, a concatenation) is kept
+//!   as `EvalAttributeArg::Expr`; Reflection evaluates it to a literal before using it.
 
 /// Literal attribute argument metadata retained by eval declarations.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalAttributeArg {
     String(String),
+    /// A PHP string attribute argument containing non-UTF-8 bytes.
+    Bytes(Vec<u8>),
     Int(i64),
     Float(u64),
     Bool(bool),
@@ -24,6 +28,10 @@ pub enum EvalAttributeArg {
         key: i64,
         value: Box<EvalAttributeArg>,
     },
+    /// A constant expression the parser cannot fold (`Requirement::POSITIVE_INT`, a global
+    /// constant, a concatenation). Reflection evaluates it when it materializes the attribute and
+    /// continues with the literal it produced; nothing past that point sees this variant.
+    Expr(Box<crate::eval_ir::EvalExpr>),
 }
 
 impl EvalAttributeArg {
@@ -55,7 +63,7 @@ impl EvalAttributeArg {
 }
 
 /// Attribute metadata retained for eval class-like declarations.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalAttribute {
     name: String,
     args: Option<Vec<EvalAttributeArg>>,
@@ -136,6 +144,10 @@ fn render_attribute_arg_value(value: &EvalAttributeArg, out: &mut String) {
         // `{:?}` is the spelling that keeps PHP's trailing `.0` on a whole float (`1.0`, not `1`).
         EvalAttributeArg::Float(bits) => out.push_str(&format!("{:?}", f64::from_bits(*bits))),
         EvalAttributeArg::String(s) => render_attribute_arg_string(s, out),
+        // Non-UTF-8 bytes print as their lossy text: the export is a diagnostic string.
+        EvalAttributeArg::Bytes(bytes) => {
+            render_attribute_arg_string(&String::from_utf8_lossy(bytes), out)
+        }
         EvalAttributeArg::Array(elements) => {
             out.push('[');
             for (index, element) in elements.iter().enumerate() {
@@ -158,6 +170,9 @@ fn render_attribute_arg_value(value: &EvalAttributeArg, out: &mut String) {
         EvalAttributeArg::Named { value, .. } | EvalAttributeArg::IntKeyed { value, .. } => {
             render_attribute_arg_value(value, out)
         }
+        // Reflection resolves expressions to literals before rendering; an unresolved one has no
+        // value to print, which php would never show either.
+        EvalAttributeArg::Expr(_) => out.push('?'),
     }
 }
 

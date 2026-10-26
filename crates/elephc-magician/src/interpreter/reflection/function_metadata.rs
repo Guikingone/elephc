@@ -49,18 +49,31 @@ pub(super) fn eval_reflection_function_method_target(
                 closure_captures: closure.captures().to_vec(),
                 parameters,
                 source_location,
+                source_file: closure.declaring_call_site().and_then(|site| site.3.clone()),
                 closure_target,
                 is_variadic,
                 is_static: closure.is_static(),
                 is_closure: true,
                 is_deprecated,
+                // Eval's grammar has no `function &()`, so an eval closure never returns by
+                // reference.
+                returns_reference: false,
                 return_type_metadata,
             }));
         }
+        // A first-class callable built from a METHOD reflects that method, never a global
+        // function that happens to share its bare name: `$this->dump(...)` in Symfony's
+        // `YamlExtension` sits next to var-dumper's global `dump(...$vars)`, and letting the
+        // name lookup run first made `(new \ReflectionMethod($closure, '__invoke'))->getParameters()`
+        // answer with the global function's single variadic instead of the method's three
+        // parameters (Symfony's `debug:twig` printed `yaml_dump` without its arguments).
+        let method_target =
+            eval_reflection_closure_target_method(closure_target.as_ref(), context, values);
         let lookup_name = closure_target
             .as_ref()
             .and_then(eval_reflection_closure_target_lookup_name)
             .unwrap_or_else(|| name.to_ascii_lowercase());
+        if method_target.is_none() {
         if let Some(function) = context.function(&lookup_name) {
             let is_variadic = function
                 .parameter_is_variadic()
@@ -91,11 +104,14 @@ pub(super) fn eval_reflection_function_method_target(
                 closure_captures: Vec::new(),
                 parameters,
                 source_location,
+                source_file: None,
                 closure_target: closure_target.clone(),
                 is_variadic,
                 is_static: eval_reflection_closure_target_is_static(closure_target.as_ref()),
                 is_closure: closure_target.is_some(),
                 is_deprecated,
+                // Eval's grammar has no `function &name()` either.
+                returns_reference: false,
                 return_type_metadata,
             }));
         }
@@ -112,14 +128,17 @@ pub(super) fn eval_reflection_function_method_target(
                 static_variables: Vec::new(),
                 closure_captures: Vec::new(),
                 parameters,
-                source_location: None,
+                source_location: function.source_location(),
+                source_file: function.source_file().map(str::to_string),
                 closure_target: closure_target.clone(),
                 is_variadic,
                 is_static: eval_reflection_closure_target_is_static(closure_target.as_ref()),
                 is_closure: closure_target.is_some(),
                 is_deprecated: false,
+                returns_reference: function.returns_reference(),
                 return_type_metadata,
             }));
+        }
         }
         // A first-class callable built from a METHOD -- `$obj(...)`, `$obj->m(...)`,
         // `Cls::m(...)` -- is a Closure that PHP still reflects with the method's own
@@ -131,9 +150,7 @@ pub(super) fn eval_reflection_function_method_target(
         // `(new \ReflectionFunction($controller(...)))->getParameters()` -- resolve zero
         // arguments for an invokable-object controller, and the controller call then bound
         // nothing to a required parameter.
-        if let Some((declaring_class, method_name)) =
-            eval_reflection_closure_target_method(closure_target.as_ref(), context, values)
-        {
+        if let Some((declaring_class, method_name)) = method_target {
             let method_metadata = match eval_reflection_method_metadata(
                 &declaring_class,
                 &method_name,
@@ -171,12 +188,14 @@ pub(super) fn eval_reflection_function_method_target(
                     closure_captures: Vec::new(),
                     parameters: method.parameters,
                     source_location: method.source_location,
+                    source_file: method.source_file.clone(),
                     closure_target: closure_target.clone(),
                     is_variadic,
                     is_static: method.is_static,
                     is_closure: true,
                     is_deprecated,
                     return_type_metadata: method.return_type_metadata,
+                    returns_reference: false,
                 }));
             }
         }
@@ -187,11 +206,13 @@ pub(super) fn eval_reflection_function_method_target(
             closure_captures: Vec::new(),
             parameters: Vec::new(),
             source_location: None,
+            source_file: None,
             closure_target: closure_target.clone(),
             is_variadic: false,
             is_static: eval_reflection_closure_target_is_static(closure_target.as_ref()),
             is_closure: closure_target.is_some(),
             is_deprecated: false,
+            returns_reference: false,
             return_type_metadata: None,
         }));
     }
@@ -257,6 +278,28 @@ pub(super) fn eval_reflection_function_method_target(
     };
     let static_method =
         eval_reflection_eval_method_static_target(declaring_class, method_name, context);
+    // An eval method answers from its declaration, where only an `&get` hook (stored under its
+    // synthetic name) can return by reference, and an abstract or interface `&get` contract,
+    // which has no accessor, from the property declaring it; a generated AOT method from the
+    // flag its metadata row carries.
+    let eval_method_name = eval_reflection_property_hook_synthetic_method_name(method_name)
+        .unwrap_or_else(|| method_name.to_string());
+    let returns_reference =
+        match eval_reflection_eval_method_static_target(declaring_class, &eval_method_name, context)
+        {
+            Some((_, method)) => method.returns_by_ref(),
+            None if eval_reflection_get_contract_returns_reference(
+                declaring_class,
+                method_name,
+                context,
+            ) =>
+            {
+                true
+            }
+            None => values
+                .reflection_method_flags(declaring_class, method_name)?
+                .is_some_and(|flags| flags & EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE != 0),
+        };
     let declaring_class = static_method
         .as_ref()
         .map(|(declaring_class, _)| declaring_class.clone());
@@ -281,6 +324,7 @@ pub(super) fn eval_reflection_function_method_target(
         is_final,
         is_abstract,
         is_deprecated,
+        returns_reference,
         return_type_metadata,
     }))
 }
@@ -349,7 +393,11 @@ pub(super) fn eval_reflection_eval_method_static_target(
     context: &ElephcEvalContext,
 ) -> Option<(String, EvalClassMethod)> {
     if context.has_class(declaring_class) || context.has_enum(declaring_class) {
-        return context.class_method(declaring_class, method_name);
+        // Owned on purpose: the trait arm below has no shared class to borrow from, and this
+        // reflection path runs once per static-variable inspection, not per dispatch.
+        return context
+            .class_method(declaring_class, method_name)
+            .map(|(declaring_class, method)| (declaring_class, (*method).clone()));
     }
     let trait_decl = context.trait_decl(declaring_class)?;
     trait_decl
@@ -545,8 +593,10 @@ pub(super) fn eval_reflection_function_method_source_location<'a>(
 ) -> (Option<&'a str>, Option<EvalSourceLocation>) {
     match target {
         EvalReflectionFunctionMethodTarget::Function {
-            source_location, ..
-        } => (None, *source_location),
+            source_file,
+            source_location,
+            ..
+        } => (source_file.as_deref(), *source_location),
         EvalReflectionFunctionMethodTarget::Method {
             source_file,
             source_location,
@@ -831,6 +881,20 @@ pub(super) fn eval_reflection_function_closure_class_object_result(
         return values.null();
     };
     eval_reflection_full_class_object_result(&class_name, context, values)
+}
+
+/// Returns whether a reflected function or method is declared to return by reference.
+pub(super) fn eval_reflection_function_method_returns_reference(
+    target: &EvalReflectionFunctionMethodTarget,
+) -> bool {
+    match target {
+        EvalReflectionFunctionMethodTarget::Function {
+            returns_reference, ..
+        }
+        | EvalReflectionFunctionMethodTarget::Method {
+            returns_reference, ..
+        } => *returns_reference,
+    }
 }
 
 /// Returns the retained return type metadata for a reflected function or method.

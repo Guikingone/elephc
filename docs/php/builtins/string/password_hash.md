@@ -2,7 +2,7 @@
 title: "password_hash()"
 description: "Creates a bcrypt password hash with a random salt."
 sidebar:
-  order: 853
+  order: 946
 ---
 
 ## password_hash()
@@ -23,9 +23,9 @@ Creates a bcrypt password hash with a random salt.
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected password prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/password_hash.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/password_hash.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/password_hash.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/password_hash.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -70,6 +70,51 @@ pub(in crate::interpreter) fn eval_curl_given_type_name(
     Ok(eval_gettype_name(tag).to_string())
 }
 
+/// Coerces one `curl_*()` STRING parameter the way php-src's typed parameter does, throwing a
+/// catchable `\TypeError` for a value that cannot become a string.
+///
+/// `values.cast_string()` alone is what this replaces, and it is a silent-wrong-value hole: it
+/// turns an object or an array into `""` and lets the call succeed, where php-src throws
+/// (issue #872). `curl_escape($ch, new stdClass())` reported an escaped empty string; PHP
+/// reports `curl_escape(): Argument #2 ($string) must be of type string, stdClass given`.
+///
+/// PHP's COERCIVE typing is preserved for everything that really does convert: `int`, `float`,
+/// `bool` and `null` all reach `cast_string`, and an object WITH `__toString()` is converted
+/// through it — `curl_escape($ch, new Stringable())` is accepted by php-src and returns the
+/// escaped result, so rejecting every object would trade one divergence for another.
+///
+/// `type_label` is the parameter's declared type as PHP spells it in the message: `"string"`
+/// for `curl_escape`/`curl_unescape`'s `$string`, `"?string"` for `curl_init`'s nullable
+/// `$url`. The "given" name comes from [`eval_curl_given_type_name`], the same one every other
+/// guard in this family uses, so the wording stays consistent across the whole curl surface.
+pub(in crate::interpreter) fn eval_curl_string_argument(
+    function: &str,
+    position: u32,
+    parameter: &str,
+    type_label: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    let is_object = tag == EVAL_TAG_OBJECT;
+    let convertible_object = is_object && eval_object_has_to_string(value, context, values)?;
+    if eval_curl_is_php_array(value, values)? || (is_object && !convertible_object) {
+        let given = eval_curl_given_type_name(value, context, values)?;
+        return eval_throw_type_error(
+            &format!(
+                "{function}(): Argument #{position} (${parameter}) must be of type {type_label}, {given} given"
+            ),
+            context,
+            values,
+        );
+    }
+    if convertible_object {
+        return eval_string_context_value(value, context, values);
+    }
+    values.cast_string(value)
+}
+
 /// Resolves a `curl_*()` call's `$handle` argument to its EVAL TABLE KEY and bridge raw id,
 /// throwing PHP's own `\TypeError` when the cell is not a live curl easy handle this same
 /// `ElephcEvalContext` created (not a foreign resource cell, and not a resource at all).

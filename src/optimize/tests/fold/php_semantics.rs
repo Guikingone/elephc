@@ -267,15 +267,31 @@ fn test_fold_nan_comparisons_match_php() {
     );
 }
 
-/// Verifies a float against a non-numeric string is left for the runtime.
+/// Verifies a float against a non-numeric string folds only when php's string form is certain.
 ///
 /// PHP stringifies the float through `zend_double_to_str` and compares bytes, so `INF ==
-/// "INF"` is `true`; the fold refuses to guess that formatting and keeps the operation.
+/// "INF"` is `true`; the fold refuses to guess that formatting and keeps the operation. A plain
+/// short decimal is written the same at any sane precision, which decides version guards such as
+/// `PHP_VERSION < 8.2`.
 #[test]
-fn test_float_versus_non_numeric_string_declines_fold() {
-    let expr = Expr::binop(Expr::float_lit(1.5), BinOp::Eq, Expr::string_lit("abc"));
+fn test_float_versus_non_numeric_string_folds_only_plain_decimals() {
+    let expr = Expr::binop(Expr::float_lit(f64::INFINITY), BinOp::Eq, Expr::string_lit("INF"));
     let folded = fold_constants(vec![Stmt::echo(expr.clone())]);
     assert_eq!(folded, vec![Stmt::echo(expr)]);
+
+    // php -n -r 'var_dump(1.5 == "abc", 8.2 < "8.5.6", "8.5.0" < 8.2);'
+    assert_eq!(
+        fold_binop(Expr::float_lit(1.5), BinOp::Eq, Expr::string_lit("abc")),
+        ExprKind::BoolLiteral(false)
+    );
+    assert_eq!(
+        fold_binop(Expr::float_lit(8.2), BinOp::Lt, Expr::string_lit("8.5.6")),
+        ExprKind::BoolLiteral(true)
+    );
+    assert_eq!(
+        fold_binop(Expr::string_lit("8.5.0"), BinOp::Lt, Expr::float_lit(8.2)),
+        ExprKind::BoolLiteral(false)
+    );
 }
 
 /// Verifies integer arithmetic folds match PHP, including every overflow boundary.
@@ -725,4 +741,62 @@ fn test_identical_float_ternary_arms_still_merge() {
         panic!("expected echo statement");
     };
     assert_eq!(expr.kind, ExprKind::FloatLiteral(2.5));
+}
+
+/// Verifies an associative literal access does not fold through a spread entry.
+///
+/// PHP merges the spread source in source order, so `['a' => 1, ...$extra]['a']` is whatever
+/// `$extra` last wrote for key `a`, not the literal `1` the entry carries. The literal is an
+/// `ExprKind::ArrayLiteralMixed`, which the fold must not answer from.
+#[test]
+fn test_fold_declines_assoc_array_access_through_spread() {
+    let spread = Expr::new(
+        ExprKind::Spread(Box::new(Expr::var("extra"))),
+        Span::dummy(),
+    );
+    let program = vec![Stmt::echo(Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(
+                ExprKind::ArrayLiteralMixed(vec![
+                    crate::parser::ast::ArrayEntry::Keyed(Expr::string_lit("a"), Expr::int_lit(1)),
+                    crate::parser::ast::ArrayEntry::Spread(spread),
+                ]),
+                Span::dummy(),
+            )),
+            index: Box::new(Expr::string_lit("a")),
+        },
+        Span::dummy(),
+    ))];
+
+    let folded = fold_constants(program);
+
+    let StmtKind::Echo(expr) = &folded[0].kind else {
+        panic!("expected echo statement");
+    };
+    assert!(
+        matches!(expr.kind, ExprKind::ArrayAccess { .. }),
+        "{expr:?}",
+    );
+}
+
+/// Verifies the same access without a spread still folds, so the guard is not over-broad.
+#[test]
+fn test_fold_assoc_array_access_without_spread_still_folds() {
+    let program = vec![Stmt::echo(Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(
+                ExprKind::ArrayLiteralAssoc(vec![(Expr::string_lit("a"), Expr::int_lit(1))]),
+                Span::dummy(),
+            )),
+            index: Box::new(Expr::string_lit("a")),
+        },
+        Span::dummy(),
+    ))];
+
+    let folded = fold_constants(program);
+
+    let StmtKind::Echo(expr) = &folded[0].kind else {
+        panic!("expected echo statement");
+    };
+    assert_eq!(expr.kind, ExprKind::IntLiteral(1));
 }

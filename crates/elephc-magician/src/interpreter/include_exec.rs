@@ -9,10 +9,15 @@
 //! Key details:
 //! - Included code runs against the current eval context and materialized scope.
 //! - Missing include emits a warning and returns false; missing require is fatal.
+//! - An include's file is loaded through `crate::script_cache`, which returns the whole
+//!   file already parsed as one program (`segments::parse_script`), from the cache when
+//!   the OPcache cache is enabled. Inline HTML is part of that program as `echo`
+//!   statements, so the replay below only runs it.
 
 use crate::context::EvalCallFrame;
 use super::*;
 use crate::parse_cache::{parse_fragment_cached, parse_source_file_at_path, parse_source_file_cached};
+use crate::script_cache::{load_script, ScriptSegment};
 
 
 #[cfg(all(test, unix))]
@@ -35,7 +40,7 @@ mod source_identity_tests {
     }
 }
 
-/// Evaluates nested `eval(...)` calls against the current materialized scope.
+/// Copies and releases the source operand before parsing nested eval in the current scope.
 pub(super) fn eval_nested_eval(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
@@ -45,8 +50,10 @@ pub(super) fn eval_nested_eval(
     let [code] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let code = eval_expr(code, context, scope, values)?;
-    let code = values.string_bytes(code)?;
+    let source = eval_owned_expr(code, context, scope, values)?;
+    let code = values.string_bytes(source);
+    let released = eval_release_value(context, values, source);
+    let code = code.and_then(|code| released.map(|()| code))?;
     let program = parse_fragment_cached(&code).map_err(|diagnostic| {
         let (file, _, line, _) = context.call_site();
         report_fatal_diagnostic(&diagnostic.eval_message(&file, line));
@@ -58,6 +65,7 @@ pub(super) fn eval_nested_eval(
     // from the declaring-file question a class declared inside it has to answer.
     let frame = EvalCallFrame::function("eval", None, context);
     context.push_call_frame(frame);
+    context.push_eval_backtrace_boundary();
     context.push_include_execution(false);
     // Code inside `eval()` is not IN the file that called it, and php spells that:
     // `FILE(LINE) : eval()'d code`. `eval_file_magic()` builds exactly that string, but only
@@ -67,9 +75,12 @@ pub(super) fn eval_nested_eval(
     // after, because the including file's own `__FILE__` is still its path.
     let previous_file_magic = context.call_site().3;
     context.set_file_magic_override(None);
+    let previous_site = context.enter_eval_code_site();
     let result = execute_program_with_context(context, program.as_ref(), scope, values);
+    context.leave_eval_code_site(previous_site);
     context.set_file_magic_override(previous_file_magic);
     context.pop_include_execution();
+    context.pop_eval_backtrace_boundary();
     context.pop_call_frame();
     result
 }
@@ -266,6 +277,51 @@ fn eval_resolved_include(
     // this is the difference between reading 76 files per request and stat-ing them. A cached
     // PARSE ERROR deliberately falls through to the read below, so the diagnostic still carries
     // the offending bytes.
+    // With the OPcache runtime cache ENABLED, `load_script` below owns caching and its
+    // `validate_timestamps` / blacklist semantics, so this shortcut is for the cache-off build.
+    // php describes an include as a frame of its own, named after the construct as written and
+    // positioned at the caller: `require_once('/…/autoload_runtime.php')` at `index.php:5`. The
+    // frame stays live for the WHOLE included program, and autoload_runtime.php runs the entire
+    // request inside its include, so every dev error page lists it. The argument is the path the
+    // construct evaluated to.
+    let construct = match (required, once) {
+        (true, true) => "require_once",
+        (true, false) => "require",
+        (false, true) => "include_once",
+        (false, false) => "include",
+    };
+    let frame_argument = values.string(path)?;
+    let frame = EvalCallFrame::function(construct, Some(vec![frame_argument]), context);
+    context.push_call_frame(frame);
+    let outcome = eval_resolved_include_body(
+        path,
+        resolved_path,
+        include_key,
+        required,
+        context,
+        scope,
+        values,
+    );
+    context.pop_call_frame();
+    let released = values.release(frame_argument);
+    match (outcome, released) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(status), _) => Err(status),
+        (Ok(_), Err(status)) => Err(status),
+    }
+}
+
+/// Runs the included program once its construct frame is on the stack.
+fn eval_resolved_include_body(
+    path: &str,
+    resolved_path: &std::path::Path,
+    include_key: std::path::PathBuf,
+    required: bool,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !crate::script_cache::config().enabled {
     if let Some(Ok(program)) = parse_source_file_at_path(resolved_path) {
         context.mark_included_file(include_key);
         trace_cached_include(resolved_path, context);
@@ -275,12 +331,13 @@ fn eval_resolved_include(
             values,
         );
     }
-    let bytes = match std::fs::read(resolved_path) {
-        Ok(bytes) => bytes,
+    }
+    let segments = match load_script(resolved_path) {
+        Ok(segments) => segments,
         Err(_) => return eval_include_missing_file(path, required, values),
     };
     context.mark_included_file(include_key);
-    eval_execute_include_bytes(&bytes, resolved_path, context, scope, values)
+    eval_replay_include_segments(&segments, resolved_path, context, scope, values)
 }
 
 /// Emits the opt-in trace for an include the compiled program already performed.
@@ -479,6 +536,43 @@ fn eval_include_key(path: &std::path::Path) -> std::path::PathBuf {
     crate::realpath_cache::canonicalize_cached(path)
 }
 
+/// Replays an included file's cached segments: the whole file, parsed as one program, whose
+/// inline HTML is `echo` statements (`crate::script_cache::segments`).
+///
+/// A file that does not parse fails here, before any of it runs, as a script php-src could
+/// not compile does. The uniform `int(1)` is the value of an include that did not `return`.
+fn eval_replay_include_segments(
+    segments: &[ScriptSegment],
+    path: &std::path::Path,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    for segment in segments {
+        let program = match segment {
+            // php prints the parse error on standard output before the 255 exit; the read-and-
+            // parse path (`eval_execute_include_code`) does, and this cached replay must too, or a
+            // broken include ended the program with no diagnostic at all. The segment keeps only
+            // the error kind (its on-disk format has no room for the line and token), so the file
+            // is parsed once more for them; this runs only on the way to a fatal.
+            ScriptSegment::ParseError(error) => {
+                if let Ok(code) = std::fs::read(path) {
+                    if let Err(diagnostic) = parse_source_file_cached(&code) {
+                        report_fatal_diagnostic(&diagnostic.include_message(&path.to_string_lossy()));
+                    }
+                }
+                return Err(error.clone().status());
+            }
+            ScriptSegment::Code(program) => program.clone(),
+        };
+        match eval_execute_include_program(program, path, context, scope, values)? {
+            EvalControl::None => {}
+            control => return eval_include_control_value(control, context, values),
+        }
+    }
+    values.int(1)
+}
+
 /// Executes a local include file as one program covering its inline HTML and every PHP block.
 ///
 /// PHP compiles an included file in one pass: the text outside the tags is `T_INLINE_HTML` and
@@ -546,15 +640,25 @@ fn eval_execute_include_program(
     // unrestored it made one strict vendor file turn the whole rest of the program strict, which
     // is most of Symfony's vendor tree.
     let previous_strict_types = context.strict_types();
-    let file = path.to_string_lossy().into_owned();
-    let dir = path
+    // PHP reports the INCLUDED FILE's resolved path in `__FILE__`/`__DIR__`, not the spelling the
+    // include expression used. A runtime include of `__DIR__.'/../b/two.php'` therefore answers
+    // `<root>/b`, while this file used to answer `<root>/a/../b`; composer's autoloader and
+    // Symfony's generated container include through paths containing `..`, and their service
+    // factories compute `dirname(__DIR__, 4)` from it (the dev error page's frame paths lost the
+    // app segment because of that). Resolve the path the way php does, with the uncanonicalized
+    // path as the fallback for stream wrappers and other non-filesystem include targets.
+    let canonical_path = std::fs::canonicalize(path).ok();
+    let resolved = canonical_path.as_deref().unwrap_or(path);
+    let file = resolved.to_string_lossy().into_owned();
+    let dir = resolved
         .parent()
         .map(|parent| parent.to_string_lossy().into_owned())
         .unwrap_or_default();
     context.set_call_site(file.clone(), dir, 1);
     context.set_file_magic_override(Some(file));
     context.push_include_execution(true);
-    let result = execute_statements(program.statements(), context, scope, values);
+    let result = seed_named_cli_superglobals(program.as_ref(), context, scope, values)
+        .and_then(|()| execute_statements(program.statements(), context, scope, values));
     if let Err(ref status) = result {
         if crate::eval_trace::enabled() {
             eprintln!(

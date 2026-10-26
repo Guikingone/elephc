@@ -226,6 +226,17 @@ pub(crate) fn compile_source_expect_backend_error(source: &str) -> String {
 
 /// Runs the codegen-fixture pipeline and hands back the backend's `Result` instead of
 /// unwrapping it, so callers can assert on either outcome.
+///
+/// The run happens inside `with_compiler_stack` because this function IS the embedder: it
+/// drives the crate's phases by hand the way an external consumer would, off a libtest worker
+/// thread whose stack is whatever `RUST_MIN_STACK` says.
+///
+/// Each PHASE carries its own budget, so this wrapper is not what makes the phases survive
+/// `MAX_COMPILER_NESTING`; `tests/embedder_stack_tests.rs` proves that separately by calling
+/// them one at a time on a 256 KiB thread. What it covers is everything a driver does BETWEEN
+/// the phases with an AST that deep -- moving it, cloning it, dropping it -- which recurses
+/// through derived `Clone` and `Drop` code no guard can be put inside. Removing this wrapper
+/// aborts the 1024-level fixture in `ExprKind::clone` (issue #686).
 #[allow(clippy::too_many_arguments)]
 fn try_compile_source_to_asm_with_defines_repr(
     source: &str,
@@ -243,7 +254,42 @@ fn try_compile_source_to_asm_with_defines_repr(
     String,
     TestLinkRequirements,
 ) {
+    elephc::compiler_stack::with_compiler_stack(|| {
+        try_compile_source_to_asm_with_defines_repr_inner(
+            source,
+            dir,
+            defines,
+            heap_size,
+            gc_stats,
+            counters,
+            heap_debug,
+            null_repr,
+            with_regex,
+            php_version,
+        )
+    })
+}
+
+/// The pipeline behind the stack budget of `try_compile_source_to_asm_with_defines_repr`.
+#[allow(clippy::too_many_arguments)]
+fn try_compile_source_to_asm_with_defines_repr_inner(
+    source: &str,
+    dir: &Path,
+    defines: &HashSet<String>,
+    heap_size: usize,
+    gc_stats: bool,
+    counters: bool,
+    heap_debug: bool,
+    null_repr: elephc::codegen::NullRepr,
+    with_regex: bool,
+    php_version: elephc::php_version::PhpVersion,
+) -> (
+    std::result::Result<String, elephc::codegen::CodegenIrError>,
+    String,
+    TestLinkRequirements,
+) {
     elephc::codegen::set_null_repr(null_repr);
+    elephc::codegen::set_compile_profile(php_version, false);
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let synthetic_main = dir.join("test.php");
@@ -293,6 +339,7 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved = elephc::sodium_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::password_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_edge_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::array_gradual_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved =
         elephc::dom_html_prelude::inject_if_used(resolved, php_version, false, &mut prelude_inventory);
     let resolved = elephc::array_ucompare_prelude::inject_if_used(resolved, &mut prelude_inventory);
@@ -317,17 +364,18 @@ fn try_compile_source_to_asm_with_defines_repr(
         )
         .expect("autoload failed");
     let resolved = elephc::assert_prelude::inject_if_used(resolved);
+    let resolved = elephc::throwable_string_prelude::inject(resolved, &mut prelude_inventory);
     let resolved = elephc::error_exception_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::sodium_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::password_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_edge_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::array_gradual_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved =
         elephc::dom_html_prelude::inject_if_used(resolved, php_version, false, &mut prelude_inventory);
     let resolved = elephc::array_ucompare_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::attribute_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_merge_prelude::inject_if_used(resolved, &mut prelude_inventory);
-    let resolved = elephc::array_reduce_prelude::inject_if_used(resolved);
-    // Mirrors `pipeline::compile`, which injects this between `array_reduce` and the backend
+    // Mirrors `pipeline::compile`, which injects this between `array_merge` and the backend
     // gap prelude. Omitting it here left the harness unable to compile any `filter_var()`
     // call with a runtime `$filter`, so that whole path had no test coverage at all.
     let resolved = elephc::filter_var_prelude::inject_if_used(resolved, &mut prelude_inventory);
@@ -341,23 +389,31 @@ fn try_compile_source_to_asm_with_defines_repr(
         &synthetic_main,
         &mut prelude_inventory,
     );
+    // Mirrors `pipeline::compile`: the object-cast prelude is injected AFTER autoloading, so a
+    // `(object)` cast that only appears in an autoloaded class file is still detected.
+    let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)
+        .expect("object-cast prelude injection failed");
     let resolved = elephc::backend_gap_prelude::inject_if_used(resolved, &mut prelude_inventory);
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
     // desugared into a hidden variadic parameter plus plain PHP after autoloading and
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
+    let resolved = elephc::lazy_static_defaults::apply(resolved);
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
     // Mirrors `pipeline::compile`'s `conditional-functions` phase: a function declared inside
     // `if (!function_exists(...))` binds when the statement runs, through a variant group.
     // Without it the harness compiled such a declaration as absent, and a program the CLI
     // runs failed here with "Call to undefined function".
+    // Mirrors `pipeline::compile`: a `static` captured by reference becomes a hidden global.
+    let resolved = elephc::static_ref_capture::rewrite_captured_statics(resolved);
     let resolved =
         elephc::conditional_functions::bind_conditional_declarations(resolved, target());
+    let resolved = elephc::conditional_classes::hoist_unique_conditional_class_likes(resolved);
     let mut check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     set_fixture_linked_extensions(&check_result.required_libraries);
     let optimized =
-        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names());
+        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let optimized = elephc::optimize::prune_constant_control_flow(
         optimized,
         check_result.local_binding_decision_spans(),
@@ -370,7 +426,13 @@ fn try_compile_source_to_asm_with_defines_repr(
         optimized,
         check_result.local_binding_decision_spans(),
     );
-    let empty_roots = HashSet::new();
+    // The Throwable string helpers are called from lowering only, like an export.
+    let mut empty_roots: HashSet<String> = elephc::throwable_string_prelude::FUNCTIONS
+        .iter()
+        .map(|name| name.to_string())
+        .collect();
+    // `assert($x)` is routed to its helper by lowering, as `pipeline::compile` roots it.
+    empty_roots.insert(elephc::assert_prelude::ASSERT_ONE_ARG_NAME.to_string());
     // Mirrors `pipeline::compile`: the array_merge and backend-gap prelude groups are
     // rooted whenever they were injected, because the lowering names their bodies
     // without leaving a declaration-level call edge for reachability to follow.
@@ -384,15 +446,18 @@ fn try_compile_source_to_asm_with_defines_repr(
     {
         forced_groups.insert(elephc::backend_gap_prelude::BACKEND_GAP_GROUP.to_string());
     }
-    // Reached from the generated runtime and from `exit()` lowering, never from PHP, exactly as
-    // `pipeline::compile` forces them.
-    for group in [
-        elephc::error_handling_prelude::DIAG_DISPATCH_GROUP,
-        elephc::error_handling_prelude::SHUTDOWN_RUN_GROUP,
-    ] {
-        if prelude_inventory.groups.contains_key(group) {
-            forced_groups.insert(group.to_string());
-        }
+    if prelude_inventory
+        .groups
+        .contains_key(elephc::array_gradual_prelude::GROUP)
+    {
+        forced_groups.insert(elephc::array_gradual_prelude::GROUP.to_string());
+    }
+    // Reached from `exit()` lowering, never from PHP, exactly as `pipeline::compile` forces it.
+    if prelude_inventory
+        .groups
+        .contains_key(elephc::error_handling_prelude::SHUTDOWN_RUN_GROUP)
+    {
+        forced_groups.insert(elephc::error_handling_prelude::SHUTDOWN_RUN_GROUP.to_string());
     }
     if prelude_inventory
         .groups
@@ -453,7 +518,7 @@ fn try_compile_source_to_asm_with_defines_repr(
     // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under both
     // the linear-scan allocator (default) and the stack fallback.
     let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
-    let user_asm = elephc::codegen::generate_user_asm_from_ir_with_options(
+    let generated_user_asm = elephc::codegen::generate_user_asm_from_ir_with_options_and_features(
         &ir_module,
         gc_stats,
         counters,
@@ -467,9 +532,13 @@ fn try_compile_source_to_asm_with_defines_repr(
         false,
         elephc::codegen::WebIsolation::Worker,
         None, // spill: fixtures are small enough to stay in memory
-    )
-    .map(elephc::codegen::UserAssembly::into_string);
-    let runtime_features = ir_module.required_runtime_features;
+    );
+    let mut runtime_features = ir_module.required_runtime_features;
+    if let Ok(output) = &generated_user_asm {
+        runtime_features.handler_state |= output.handler_state;
+        runtime_features.object_clone |= output.object_clone;
+    }
+    let user_asm = generated_user_asm.map(|output| output.asm.into_string());
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);
     let link_requirements = TestLinkRequirements::new(
@@ -489,6 +558,7 @@ fn set_fixture_linked_extensions(libraries: &[String]) {
             "elephc_pdo" => Some("PDO"),
             "elephc_crypto" => Some("hash"),
             "elephc_bcmath" => Some("bcmath"),
+            "elephc_mbstring" => Some("mbstring"),
             "elephc_phar" => Some("Phar"),
             "elephc_image" => Some("gd"),
             "elephc_web" => Some("session"),
@@ -538,9 +608,42 @@ pub(crate) fn lower_and_validate_ir_for_codegen_fixture(
     module
 }
 
-/// Returns whether the codegen fixture should run EIR optimization passes,
-/// matching the CLI's `ELEPHC_IR_OPT=off|on` default-on behavior.
+thread_local! {
+    /// Per-test override of the EIR optimizer, installed by [`without_ir_opt`].
+    static IR_OPT_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Compiles every fixture inside `body` with the EIR optimizer forced off.
+///
+/// `ELEPHC_IR_OPT` selects the mode for a whole test PROCESS, and the harness runs tests in
+/// parallel, so setting it from one test would change how every other in-flight fixture
+/// compiles. The override is a thread-local instead -- the isolation the compiler itself uses
+/// for per-compilation state, see `src/codegen_support/compilation_context.rs` -- and fixture
+/// compilation runs on the calling thread, so it reaches this test's fixtures and no other
+/// test's. It is restored on the way out, panics included.
+pub(crate) fn without_ir_opt<T>(body: impl FnOnce() -> T) -> T {
+    /// Carries the override this block displaced, so the block cannot leak its own setting
+    /// into whatever the harness schedules on this thread next.
+    struct Restore(Option<bool>);
+    impl Drop for Restore {
+        /// Puts the displaced override back, on the panicking path as much as the normal one.
+        fn drop(&mut self) {
+            IR_OPT_OVERRIDE.with(|cell| cell.set(self.0));
+        }
+    }
+
+    let _restore = Restore(IR_OPT_OVERRIDE.with(|cell| cell.replace(Some(false))));
+    body()
+}
+
+/// Returns whether the codegen fixture should run EIR optimization passes.
+///
+/// A [`without_ir_opt`] block wins for its own thread; otherwise this matches the CLI's
+/// `ELEPHC_IR_OPT=off|on` default-on behavior.
 fn ir_opt_enabled_for_codegen_fixture() -> bool {
+    if let Some(forced) = IR_OPT_OVERRIDE.with(|cell| cell.get()) {
+        return forced;
+    }
     match std::env::var("ELEPHC_IR_OPT").as_deref() {
         Ok("off") => false,
         Ok("on") => true,
@@ -776,6 +879,73 @@ fn compile_and_run_capture_with_optional_regex(
 // Uses the default 8_388_608-byte heap and enables heap_debug during codegen.
 /// Provides the Compile and run with heap debug helper used by the compiler module.
 pub(crate) fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
+    compile_and_run_with_heap_debug_and_asm(source).0
+}
+
+/// Compiles `source` ONCE and runs the binary once per argument vector, returning each run's
+/// stdout and asserting every run exits successfully.
+///
+/// `compile_and_run` always starts the program with no arguments, so `$argc` is 1 and a fixture
+/// whose control flow branches on `$argc` only ever executes one arm. Passing `&[&[], &["x"]]`
+/// runs the same binary at `$argc == 1` and `$argc == 2`, so both arms run under CI.
+pub(crate) fn compile_and_run_per_argv(source: &str, argvs: &[&[&str]]) -> Vec<String> {
+    compile_and_capture_per_argv(source, false, argvs)
+        .into_iter()
+        .zip(argvs)
+        .map(|(output, args)| {
+            assert!(
+                output.success,
+                "binary exited with an error for arguments {:?}\nstdout: {}\nstderr: {}",
+                args,
+                output.stdout,
+                output.stderr
+            );
+            output.stdout
+        })
+        .collect()
+}
+
+/// Heap-debug counterpart of [`compile_and_run_per_argv`]: compiles `source` once with heap
+/// debugging and returns every run's captured output, one per argument vector, without asserting
+/// success, so a fixture can check each arm's output and leak summary.
+pub(crate) fn compile_and_run_with_heap_debug_per_argv(
+    source: &str,
+    argvs: &[&[&str]],
+) -> Vec<ProgramOutput> {
+    compile_and_capture_per_argv(source, true, argvs)
+}
+
+/// Compiles `source` once and captures one run per argument vector.
+fn compile_and_capture_per_argv(
+    source: &str,
+    heap_debug: bool,
+    argvs: &[&[&str]],
+) -> Vec<ProgramOutput> {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_argv_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, heap_debug);
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let outputs = assemble_and_run_capture_per_argv(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+        argvs,
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    outputs
+}
+
+/// Returns the exact user assembly with a heap-debug fixture's output for target-specific CI diagnostics.
+pub(crate) fn compile_and_run_with_heap_debug_and_asm(source: &str) -> (ProgramOutput, String) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -795,6 +965,41 @@ pub(crate) fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
         &[],
     );
 
+    let _ = fs::remove_dir_all(&dir);
+    (output, user_asm)
+}
+
+/// Runs a heap-debug fixture with the tagged null representation forced on, whatever
+/// `ELEPHC_NULL_REPR` selects. A fixture about tagged-scalar boxing would otherwise pass
+/// without exercising it when the suite runs under the sentinel representation, where a
+/// nullable int is already boxed.
+pub(crate) fn compile_and_run_with_heap_debug_tagged(source: &str) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_hd_tagged_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) = compile_source_to_asm_with_defines_repr(
+        source,
+        &dir,
+        &HashSet::new(),
+        8_388_608,
+        false,
+        true,
+        elephc::codegen::NullRepr::Tagged,
+    );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_capture(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    let _ = fs::remove_dir_all(&dir);
     output
 }
 
@@ -1095,17 +1300,25 @@ fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr)
 /// `assemble_and_run`, and a `_script_source_file` with no bytes would make the assembled program
 /// report a garbage filename.
 pub(crate) fn asm_without_embedded_script_path(user_asm: &str) -> String {
-    let mut out = Vec::new();
-    let mut drop_next_ascii = false;
-    for line in user_asm.lines() {
-        if drop_next_ascii && line.trim_start().starts_with(".ascii") {
-            drop_next_ascii = false;
-            continue;
-        }
-        drop_next_ascii = line.trim() == "_script_source_file:";
-        out.push(line);
-    }
-    out.join("\n")
+    let lines: Vec<&str> = user_asm.lines().collect();
+    // The path is ALSO embedded in descriptors other than `_script_source_file`, such as a frame
+    // reader's entry-file fallback (`{ptr, len}` over the same bytes). Dropping only the first
+    // occurrence let the directory name satisfy needles the test meant to search for in code.
+    let script_path_line = lines
+        .iter()
+        .enumerate()
+        .find(|(index, line)| {
+            line.trim() == "_script_source_file:"
+                && lines
+                    .get(index + 1)
+                    .is_some_and(|next| next.trim_start().starts_with(".ascii"))
+        })
+        .and_then(|(index, _)| lines.get(index + 1).copied());
+    lines
+        .into_iter()
+        .filter(|line| Some(*line) != script_path_line)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]

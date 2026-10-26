@@ -1,16 +1,16 @@
 ---
-title: "is_subclass_of() — internals"
+title: "is_subclass_of() - internals"
 description: "Compiler internals for is_subclass_of(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 107
+  order: 108
 ---
 
-## `is_subclass_of()` — internals
+## `is_subclass_of()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/is_subclass_of.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/is_subclass_of.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -89,6 +89,11 @@ pub(crate) fn min_max_array_element_type(
     match ty {
         PhpType::Array(element) => Ok(*element),
         PhpType::AssocArray { value, .. } => Ok(*value),
+        // A declared bare `array` is the list-or-hash union; its elements are known only as mixed.
+        other if other.is_php_array() => Ok(PhpType::Mixed),
+        // A gradual operand is checked at run time by `crate::min_max_prelude`, which the lowering
+        // routes it to (php's TypeError for a non-array, ValueError for an empty one).
+        PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
         other => Err(CompileError::new(
             cx.span,
             &format!(

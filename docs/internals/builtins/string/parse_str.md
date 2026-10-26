@@ -1,11 +1,11 @@
 ---
-title: "parse_str() — internals"
+title: "parse_str() - internals"
 description: "Compiler internals for parse_str(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 849
+  order: 942
 ---
 
-## `parse_str()` — internals
+## `parse_str()` - internals
 
 ## Where it lives
 

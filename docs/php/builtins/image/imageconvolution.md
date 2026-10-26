@@ -1,8 +1,8 @@
 ---
 title: "imageconvolution()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Applies a 3x3 convolution matrix to an image."
 sidebar:
-  order: 494
+  order: 495
 ---
 
 ## imageconvolution()
@@ -11,7 +11,7 @@ sidebar:
 function imageconvolution(mixed $image, array $matrix, float $divisor, float $offset): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Applies a 3x3 convolution matrix to an image.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -26,7 +26,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

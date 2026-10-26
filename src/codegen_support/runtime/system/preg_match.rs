@@ -666,13 +666,20 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [sp, #{}]", php_flags_off));          // reload PHP's preg_match() flags
     emitter.instruction("tst x9, #256");                                        // PHP's PREG_OFFSET_CAPTURE is bit 256
     emitter.instruction("b.eq __rt_preg_match_capture_plain");                  // without the flag every capture stays a bare string
+    // PHP adds the MARK verb's name to an offset-capture array too, as a plain string.
+    emitter.instruction(&format!("str xzr, [sp, #{}]", mark_ptr_off));          // clear the mark pointer before the query
+    emitter.instruction(&format!("str xzr, [sp, #{}]", mark_len_off));          // clear the mark length before the query
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // the match data hangs off the compiled pattern handle
+    emitter.instruction(&format!("add x1, sp, #{}", mark_ptr_off));             // receive the mark name pointer
+    emitter.instruction(&format!("add x2, sp, #{}", mark_len_off));             // receive the mark name length
+    emitter.bl_c("elephc_pcre2_v1_last_mark");                                  // ask PCRE2 which MARK the match passed
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // the compiled pattern still owns the group-name table
     emitter.instruction(&format!("ldr x1, [sp, #{}]", regmatches_ptr_off));     // pass the populated offset-pair vector
     emitter.instruction(&format!("ldr x2, [sp, #{}]", max_group_off));          // pass the highest capture index to materialize
     emitter.instruction(&format!("ldr x3, [sp, #{}]", subject_cstr_off));       // pass the subject base those offsets index into
     emitter.instruction("bl __rt_preg_offset_matches");                         // build PHP's offset-capture hash under both key kinds
     emitter.instruction(&format!("str x0, [sp, #{}]", matches_array_off));      // the offset hash is the finished matches array
-    emitter.instruction("b __rt_preg_match_capture_success");                   // the offset path already emitted every key
+    emitter.instruction("b __rt_preg_match_capture_mark");                      // append `MARK` last when the match set one
     emitter.label("__rt_preg_match_capture_plain");
 
     // -- a compiled name table means PHP's $matches is an ordered hash, not a list --
@@ -1093,13 +1100,20 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", php_flags_off)); // reload PHP's preg_match() flags
     emitter.instruction("test r9, 256");                                        // PHP's PREG_OFFSET_CAPTURE is bit 256
     emitter.instruction("jz __rt_preg_match_capture_plain_linux_x86_64");       // without the flag every capture stays a bare string
+    // PHP adds the MARK verb's name to an offset-capture array too, as a plain string.
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", mark_ptr_off)); // clear the mark pointer before the query
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", mark_len_off)); // clear the mark length before the query
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // the match data hangs off the compiled pattern handle
+    emitter.instruction(&format!("lea rsi, [rsp + {}]", mark_ptr_off));         // receive the mark name pointer
+    emitter.instruction(&format!("lea rdx, [rsp + {}]", mark_len_off));         // receive the mark name length
+    emitter.bl_c("elephc_pcre2_v1_last_mark");                                  // ask PCRE2 which MARK the match passed
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // the compiled pattern still owns the group-name table
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass the populated offset-pair vector
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", max_group_off)); // pass the highest capture index to materialize
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass the subject base those offsets index into
     emitter.instruction("call __rt_preg_offset_matches");                       // build PHP's offset-capture hash under both key kinds
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // the offset hash is the finished matches array
-    emitter.instruction("jmp __rt_preg_match_capture_success_linux_x86_64");    // the offset path already emitted every key
+    emitter.instruction("jmp __rt_preg_match_capture_mark_linux_x86_64");       // append `MARK` last when the match set one
     emitter.label("__rt_preg_match_capture_plain_linux_x86_64");
 
     // -- a compiled name table means PHP's $matches is an ordered hash, not a list --

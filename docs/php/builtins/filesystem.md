@@ -15,7 +15,7 @@ sidebar:
 | [`chmod()`](./filesystem/chmod.md) | `(string $filename, int $permissions): bool` | `bool` | ✓ | ✓ |
 | [`chown()`](./filesystem/chown.md) | `(string $filename, string $user): bool` | `bool` | ✓ | ✓ |
 | [`clearstatcache()`](./filesystem/clearstatcache.md) | `(bool $clear_realpath_cache = false, string $filename = ''): void` | `void` | ✓ | ✓ |
-| [`copy()`](./filesystem/copy.md) | `(string $from, string $to): bool` | `bool` | ✓ | ✓ |
+| [`copy()`](./filesystem/copy.md) | `(string $from, string $to, mixed $context = null): bool` | `bool` | ✓ | ✓ |
 | [`dirname()`](./filesystem/dirname.md) | `(string $path, int $levels = 1): string` | `string` | ✓ | ✓ |
 | [`disk_free_space()`](./filesystem/disk_free_space.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |
 | [`disk_total_space()`](./filesystem/disk_total_space.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |

@@ -1,16 +1,16 @@
 ---
-title: "ptr_is_null() — internals"
+title: "ptr_is_null() - internals"
 description: "Compiler internals for ptr_is_null(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 738
+  order: 770
 ---
 
-## `ptr_is_null()` — internals
+## `ptr_is_null()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_is_null.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_is_null.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

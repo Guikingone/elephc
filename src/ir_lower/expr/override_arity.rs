@@ -35,14 +35,6 @@ pub(super) fn lower_wider_override_dispatch(
     if !plain_positional_call_args(args) {
         return None;
     }
-    // The ladder re-uses the receiver in several branches; an owning temporary would need a
-    // release decision per branch, and the shape that needs the ladder is a variable receiver.
-    // The nullable-receiver path parks its unboxed receiver in a synthetic local and passes the
-    // local's load: that load counts as an "owning temporary" only so a return can move it, and
-    // the slot keeps the reference (see `lower_call_on_unboxed_receiver`).
-    if ctx.value_is_owning_temporary(object) && !local_receiver {
-        return None;
-    }
     let base = match ctx.builder.value_php_type(object.value) {
         PhpType::Object(name) => name.trim_start_matches('\\').to_string(),
         _ => return None,
@@ -69,6 +61,37 @@ pub(super) fn lower_wider_override_dispatch(
     let targets = wider_override_classes(ctx, &base, &method_key, site_sig, table_sig);
     if targets.is_empty() {
         return None;
+    }
+    // The ladder re-uses the receiver in several branches; an owning temporary would need a
+    // release decision per branch. It is parked in a synthetic local first, and the ladder runs
+    // on the local's load: `$this->factory->getPasswordHasher($user)->verify($hash, $plain,
+    // $salt)` reached Symfony's `MigratingPasswordHasher::verify(..., ?string $salt = null)`
+    // through the interface's two-parameter signature, and `$salt` received the surplus
+    // collector array (the Symfony demo's login crashed on it). The nullable-receiver path
+    // already parks its unboxed receiver (see `lower_call_on_unboxed_receiver`); that local's
+    // load counts as an "owning temporary" only so a return can move it, and the slot keeps the
+    // reference.
+    if ctx.value_is_owning_temporary(object) && !local_receiver {
+        let object_ty = PhpType::Object(base);
+        let receiver_temp = ctx.declare_synthetic_php_local(object_ty.clone());
+        // A PHP-local store takes over the owned temporary's reference.
+        ctx.store_local(&receiver_temp, object, object_ty.clone(), Some(expr.span));
+        let receiver = ctx.load_local(&receiver_temp, Some(expr.span));
+        let call =
+            lower_wider_override_dispatch(ctx, receiver, method, args, Some(site_sig), expr, true)
+                .unwrap_or_else(|| {
+                    lower_method_call_with_receiver(ctx, receiver, method, args, Op::MethodCall, expr)
+                });
+        let slot = ctx.declare_local(&receiver_temp, object_ty);
+        ctx.release_stored_local_value(&receiver_temp, slot, Some(expr.span));
+        ctx.emit_void(
+            Op::UnsetLocal,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            Op::UnsetLocal.default_effects(),
+            Some(expr.span),
+        );
+        return Some(call);
     }
 
     let result_type = method_call_result_type(ctx, object.value, method, Op::MethodCall, expr);
@@ -208,15 +231,86 @@ fn wider_override_classes(
     table_sig: Option<&FunctionSig>,
 ) -> Vec<(String, u64)> {
     let storage_sig = table_sig.unwrap_or(site_sig);
+    // The answer depends only on the receiver type, the method and the storage the signature
+    // promises, so every call site sharing them shares it: an interface every class implements
+    // otherwise re-walked all of its implementors at each of its call sites.
+    let key = format!(
+        "{}\0{}\0{:?}\0{:?}\0{:?}\0{:?}",
+        php_symbol_key(base.trim_start_matches('\\')),
+        method_key,
+        storage_sig.variadic,
+        storage_sig.ref_params,
+        storage_sig
+            .params
+            .iter()
+            .map(|(_, ty)| ty.codegen_repr())
+            .collect::<Vec<_>>(),
+        storage_sig.params.len(),
+    );
+    let identity = (ctx.classes as *const _ as usize, ctx.classes.len());
+    if let Some(found) = WIDER_OVERRIDE_MEMO.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .filter(|(table, len, _)| (*table, *len) == identity)
+            .and_then(|(_, _, memo)| memo.get(&key).cloned())
+    }) {
+        return found;
+    }
+    let found = compute_wider_override_classes(ctx, base, method_key, storage_sig);
+    WIDER_OVERRIDE_MEMO.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        if cell.as_ref().is_none_or(|(table, len, _)| (*table, *len) != identity) {
+            *cell = Some((identity.0, identity.1, Default::default()));
+        }
+        if let Some((_, _, memo)) = cell.as_mut() {
+            memo.insert(key, found.clone());
+        }
+    });
+    found
+}
+
+/// Per-program memo of [`wider_override_classes`], tagged with the class table it was built from.
+type WiderOverrideMemo = (usize, usize, crate::fast_hash::FastMap<String, Vec<(String, u64)>>);
+
+thread_local! {
+    static WIDER_OVERRIDE_MEMO: std::cell::RefCell<Option<WiderOverrideMemo>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// [`wider_override_classes`] without the memo.
+fn compute_wider_override_classes(
+    ctx: &LoweringContext<'_, '_>,
+    base: &str,
+    method_key: &str,
+    storage_sig: &FunctionSig,
+) -> Vec<(String, u64)> {
     let Some(site_fixed) = fixed_param_count(storage_sig) else {
         return Vec::new();
     };
     let site_variadic = storage_sig.variadic.is_some();
     let mut found = Vec::new();
-    // This runs for every method call on an object receiver, over every class: the cheap map
-    // lookups go first, and the hierarchy walk (which allocates per level) only for the rare
-    // class that declares a wider override. In the other order it was 10% of lowering Symfony.
-    for (name, info) in ctx.classes.iter() {
+    // This runs for every method call on an object receiver. Only the concrete classes that
+    // declare the method AND are `base` (or extend or implement it) can answer, so it walks the
+    // smaller of two per-program indexes instead of every class. Walking the declarers alone was
+    // still quadratic for `__construct`: every padding thunk calls its own class's constructor,
+    // nearly every class declares one, and each candidate re-walked its ancestry -- a third of
+    // lowering the Symfony app.
+    let declarers = concrete_method_declarers(ctx, method_key);
+    let descendants = classes_that_are_or_implement(ctx, base);
+    let candidates: Vec<&String> = if descendants.len() < declarers.len() {
+        descendants.iter().collect()
+    } else {
+        declarers
+            .iter()
+            .filter(|name| descendants.contains(name.as_str()))
+            .collect()
+    };
+    for name in candidates {
+        #[cfg(test)]
+        WIDER_OVERRIDE_CANDIDATES.with(|count| count.set(count.get() + 1));
+        let Some(info) = ctx.classes.get(name.as_str()) else {
+            continue;
+        };
         if info.is_abstract {
             continue;
         }
@@ -259,12 +353,142 @@ fn wider_override_classes(
         {
             continue;
         }
-        if class_is_or_implements(ctx, name, base) {
-            found.push((name.to_string(), info.class_id));
-        }
+        found.push((name.to_string(), info.class_id));
     }
     found.sort_by(|a, b| a.0.cmp(&b.0));
     found
+}
+
+/// Per-program index from a lowercased class or interface name to every class that is it,
+/// extends it or implements it, tagged with the class table it was built from.
+type DescendantIndex = (
+    usize,
+    usize,
+    crate::fast_hash::FastMap<String, std::rc::Rc<crate::fast_hash::FastSet<String>>>,
+);
+
+#[cfg(test)]
+thread_local! {
+    /// Candidates `wider_override_classes` examined, so a test can pin its cost to the program
+    /// size: a return to the all-declarers walk is quadratic in the class count.
+    pub(crate) static WIDER_OVERRIDE_CANDIDATES: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+}
+
+thread_local! {
+    static DESCENDANTS: std::cell::RefCell<Option<DescendantIndex>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The classes that are `target`, extend it or implement it (directly or through a parent), from
+/// an index built once per class table.
+fn classes_that_are_or_implement(
+    ctx: &LoweringContext<'_, '_>,
+    target: &str,
+) -> std::rc::Rc<crate::fast_hash::FastSet<String>> {
+    let identity = (ctx.classes as *const _ as usize, ctx.classes.len());
+    DESCENDANTS.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        let stale = cell
+            .as_ref()
+            .is_none_or(|(table, len, _)| (*table, *len) != identity);
+        if stale {
+            let mut index: crate::fast_hash::FastMap<String, crate::fast_hash::FastSet<String>> =
+                Default::default();
+            for name in ctx.classes.keys() {
+                for key in ancestor_keys(ctx, name) {
+                    index.entry(key).or_default().insert(name.clone());
+                }
+            }
+            let index = index
+                .into_iter()
+                .map(|(key, names)| (key, std::rc::Rc::new(names)))
+                .collect();
+            *cell = Some((identity.0, identity.1, index));
+        }
+        cell.as_ref()
+            .and_then(|(_, _, index)| index.get(&php_symbol_key(target.trim_start_matches('\\'))).cloned())
+            .unwrap_or_default()
+    })
+}
+
+/// Every lowercased name `class_name` answers to: itself, its parents and every interface any of
+/// them implements, at any depth. The walk stops at a parent missing from the class table.
+fn ancestor_keys(ctx: &LoweringContext<'_, '_>, class_name: &str) -> crate::fast_hash::FastSet<String> {
+    let mut keys = crate::fast_hash::FastSet::default();
+    let mut current = Some(class_name.trim_start_matches('\\').to_string());
+    while let Some(name) = current {
+        if !keys.insert(php_symbol_key(&name)) {
+            break;
+        }
+        let Some(info) = ctx.classes.get(name.as_str()) else {
+            break;
+        };
+        let mut pending: Vec<(String, usize)> =
+            info.interfaces.iter().map(|interface| (interface.clone(), 0)).collect();
+        while let Some((interface, depth)) = pending.pop() {
+            let interface = interface.trim_start_matches('\\');
+            if !keys.insert(php_symbol_key(interface)) || depth > 64 {
+                continue;
+            }
+            if let Some(info) = ctx.interfaces.get(interface) {
+                pending.extend(info.parents.iter().map(|parent| (parent.clone(), depth + 1)));
+            }
+        }
+        current = info.parent.clone();
+    }
+    keys
+}
+
+/// Per-program index from a method key to the concrete (non-abstract) classes declaring it,
+/// tagged with the class table it was built from (address and size).
+type MethodDeclarerIndex =
+    (usize, usize, crate::fast_hash::FastMap<String, std::rc::Rc<Vec<String>>>);
+
+thread_local! {
+    static METHOD_DECLARERS: std::cell::RefCell<Option<MethodDeclarerIndex>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Forgets the index; each program lowering starts from a fresh one (a later program's class
+/// table could reuse an address and a size).
+pub(crate) fn reset_method_declarer_index() {
+    METHOD_DECLARERS.with(|cell| *cell.borrow_mut() = None);
+    DESCENDANTS.with(|cell| *cell.borrow_mut() = None);
+    WIDER_OVERRIDE_MEMO.with(|cell| *cell.borrow_mut() = None);
+}
+
+/// The concrete classes declaring `method_key`, from an index built once per class table.
+fn concrete_method_declarers(
+    ctx: &LoweringContext<'_, '_>,
+    method_key: &str,
+) -> std::rc::Rc<Vec<String>> {
+    let identity = (ctx.classes as *const _ as usize, ctx.classes.len());
+    METHOD_DECLARERS.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        let stale = cell
+            .as_ref()
+            .is_none_or(|(table, len, _)| (*table, *len) != identity);
+        if stale {
+            let mut index: crate::fast_hash::FastMap<String, Vec<String>> = Default::default();
+            for (name, info) in ctx.classes.iter() {
+                if info.is_abstract {
+                    continue;
+                }
+                for key in info.methods.keys() {
+                    index.entry(key.clone()).or_default().push(name.clone());
+                }
+            }
+            let index = index
+                .into_iter()
+                .map(|(key, names)| (key, std::rc::Rc::new(names)))
+                .collect();
+            *cell = Some((identity.0, identity.1, index));
+        }
+        cell.as_ref()
+            .and_then(|(_, _, index)| index.get(method_key).cloned())
+            .unwrap_or_default()
+    })
 }
 
 /// Whether `sig` stores one of the site signature's first `fixed` by-value parameters in another
@@ -300,47 +524,3 @@ fn fixed_param_count(sig: &FunctionSig) -> Option<usize> {
     }
 }
 
-/// Whether `class_name` is `target`, extends it, or implements it (directly or through a parent).
-fn class_is_or_implements(ctx: &LoweringContext<'_, '_>, class_name: &str, target: &str) -> bool {
-    let target_key = php_symbol_key(target);
-    let mut current = Some(class_name.trim_start_matches('\\').to_string());
-    while let Some(name) = current {
-        if php_symbol_key(&name) == target_key {
-            return true;
-        }
-        let Some(info) = ctx.classes.get(name.as_str()) else {
-            return false;
-        };
-        if info
-            .interfaces
-            .iter()
-            .any(|interface| interface_is_or_extends(ctx, interface, &target_key, 0))
-        {
-            return true;
-        }
-        current = info.parent.clone();
-    }
-    false
-}
-
-/// Whether `interface` is the interface keyed `target_key` or extends it, at any depth.
-fn interface_is_or_extends(
-    ctx: &LoweringContext<'_, '_>,
-    interface: &str,
-    target_key: &str,
-    depth: usize,
-) -> bool {
-    let name = interface.trim_start_matches('\\');
-    if php_symbol_key(name) == target_key {
-        return true;
-    }
-    // Interface graphs are acyclic in valid PHP; the bound only guards against a malformed one.
-    if depth > 64 {
-        return false;
-    }
-    ctx.interfaces.get(name).is_some_and(|info| {
-        info.parents
-            .iter()
-            .any(|parent| interface_is_or_extends(ctx, parent, target_key, depth + 1))
-    })
-}

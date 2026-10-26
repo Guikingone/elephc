@@ -267,13 +267,20 @@ fn eval_string_constant(value: String) -> EvalConst {
             let byte = (ch as u32 - 0xF0000) as u8;
             bytes.push(byte);
             has_binary_marker = true;
+        } else if (0xE000..=0xE0FF).contains(&(ch as u32)) {
+            // Main's shared literal marker (`elephc_builtin_contract::string_literal`).
+            bytes.push((ch as u32 - 0xE000) as u8);
+            has_binary_marker = true;
         } else {
             let mut encoded = [0; 4];
             bytes.extend_from_slice(ch.encode_utf8(&mut encoded).as_bytes());
         }
     }
     if has_binary_marker {
-        EvalConst::Bytes(bytes)
+        match String::from_utf8(bytes) {
+            Ok(text) => EvalConst::String(text),
+            Err(error) => EvalConst::Bytes(error.into_bytes()),
+        }
     } else {
         EvalConst::String(value)
     }

@@ -287,7 +287,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-    )); // object heap-kind word with the x86_64 marker
+    ));                                                                         // object heap-kind word with the x86_64 marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform heap header
     emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload class_id
@@ -429,7 +429,14 @@ fn emit_runtime_managed_match_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x10]");                                      // load SplFixedArray class id
     emitter.instruction("cmp x12, x10");                                        // is the requested class SplFixedArray?
     emitter.instruction("b.eq __rt_nbn_alloc_spl_fixed");                       // allocate the SPL fixed-array payload with size zero
+    abi::emit_symbol_address(emitter, "x10", "_stdclass_class_id");
+    emitter.instruction("ldr x10, [x10]");                                      // load stdClass class id
+    emitter.instruction("cmp x12, x10");                                        // is the requested class stdClass?
+    emitter.instruction("b.eq __rt_nbn_alloc_stdclass");                        // stdClass keeps its properties in a hash, not in declared slots
     emitter.instruction("b __rt_nbn_generic_alloc");                            // continue with the generic property-object allocator
+    emitter.label("__rt_nbn_alloc_stdclass");
+    emitter.instruction("bl __rt_stdclass_new");                                // allocate the [class_id][hash_ptr] layout with an empty property hash
+    emitter.instruction("b __rt_nbn_return_allocated");                         // return the initialized runtime-managed object
     emitter.label("__rt_nbn_alloc_spl_dll");
     emitter.instruction("mov x0, x12");                                         // pass the matched concrete SPL list class id
     emitter.instruction("bl __rt_spl_dll_new");                                 // allocate the runtime-managed SPL list object layout
@@ -455,7 +462,13 @@ fn emit_runtime_managed_match_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_fixed_array_class_id", 0);
     emitter.instruction("cmp rcx, r10");                                        // is the requested class SplFixedArray?
     emitter.instruction("je __rt_nbn_alloc_spl_fixed_x86");                     // allocate the SPL fixed-array payload with size zero
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);
+    emitter.instruction("cmp rcx, r10");                                        // is the requested class stdClass?
+    emitter.instruction("je __rt_nbn_alloc_stdclass_x86");                      // stdClass keeps its properties in a hash, not in declared slots
     emitter.instruction("jmp __rt_nbn_generic_alloc_x86");                      // continue with the generic property-object allocator
+    emitter.label("__rt_nbn_alloc_stdclass_x86");
+    emitter.instruction("call __rt_stdclass_new");                              // allocate the [class_id][hash_ptr] layout with an empty property hash
+    emitter.instruction("jmp __rt_nbn_return_allocated_x86");                   // return the initialized runtime-managed object
     emitter.label("__rt_nbn_alloc_spl_dll_x86");
     emitter.instruction("mov rdi, rcx");                                        // pass the matched concrete SPL list class id
     emitter.instruction("call __rt_spl_dll_new");                               // allocate the runtime-managed SPL list object layout

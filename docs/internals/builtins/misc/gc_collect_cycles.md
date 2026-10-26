@@ -1,16 +1,16 @@
 ---
-title: "gc_collect_cycles() — internals"
+title: "gc_collect_cycles() - internals"
 description: "Compiler internals for gc_collect_cycles(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 624
+  order: 632
 ---
 
-## `gc_collect_cycles()` — internals
+## `gc_collect_cycles()` - internals
 
 ## Where it lives
 
-- **Signature**: [`src/builtins/system/gc.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/gc.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Signature**: [`src/builtins/system/gc_collect_cycles.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/gc_collect_cycles.rs)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -25,9 +25,9 @@ sidebar:
 - **Validation**: `signature`
 - **Result type source**: `declared`
 - **Result ownership**: `non_heap`
-- **Effects**: `shared`
+- **Effects**: `static (20 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
@@ -46,7 +46,7 @@ function gc_collect_cycles(): int
 
 ## Eval interpreter (magician)
 
-- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/network_env/gc.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/gc.rs) (`eval_builtin!`)
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/gc_collect_cycles.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/gc_collect_cycles.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
 - **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`

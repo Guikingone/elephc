@@ -34,6 +34,7 @@ pub(super) fn eval_native_function_registrations(
             signature: function_signature_from_eir(function),
             bridge_supported: eval_native_function_bridge_supported(function),
             active_slot_symbol: None,
+            is_internal: function.flags.is_internal,
         })
         .collect();
     for group in &groups {
@@ -52,6 +53,8 @@ pub(super) fn eval_native_function_registrations(
             // `function_has_eval_metadata` refuses; only its signature decides here.
             bridge_supported: function_signature_can_bridge_with_eval(variant),
             active_slot_symbol: Some(crate::names::function_variant_active_symbol(&group.name)),
+            // A conditionally declared function is user code, never a PHP internal.
+            is_internal: false,
         });
     }
     registrations
@@ -199,6 +202,7 @@ pub(super) fn eval_native_abstract_property_registration(
         type_spec,
         requires_get,
         requires_set,
+        get_by_ref: contract.get_by_ref,
     })
 }
 
@@ -221,6 +225,7 @@ pub(super) fn eval_native_interface_property_registration(
         type_spec,
         requires_get,
         requires_set,
+        get_by_ref: contract.get_by_ref,
     })
 }
 
@@ -401,6 +406,7 @@ pub(super) fn eval_native_member_attribute_registrations(
     for (class_name, class_info) in classes {
         collect_eval_native_class_attributes(class_name, class_info, &mut registrations);
         collect_eval_native_method_attributes(class_name, class_info, &mut registrations);
+        collect_eval_native_parameter_attributes(class_name, class_info, &mut registrations);
         collect_eval_native_property_attributes(class_name, class_info, &mut registrations);
         collect_eval_native_class_constant_attributes(class_name, class_info, &mut registrations);
     }

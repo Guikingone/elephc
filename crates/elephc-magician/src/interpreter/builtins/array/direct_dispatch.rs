@@ -59,7 +59,7 @@ pub(in crate::interpreter) fn eval_builtin_array_declared_call(
         "array_first" => super::array_first::eval_array_edge_declared_call(super::array_first::ArrayEdge::First, args, context, scope, values),
         "array_last" => super::array_first::eval_array_edge_declared_call(super::array_first::ArrayEdge::Last, args, context, scope, values),
         "array_key_last" => super::array_key_last::eval_array_key_last_declared_call(args, context, scope, values),
-        "count" => super::count::eval_count_declared_call(args, context, scope, values),
+        "count" | "sizeof" => super::count::eval_count_declared_call(args, context, scope, values),
         "current" => super::current::eval_current_declared_call(args, context, scope, values),
         "key" => super::key::eval_key_declared_call(args, context, scope, values),
         "range" => super::range::eval_range_declared_call(args, context, scope, values),

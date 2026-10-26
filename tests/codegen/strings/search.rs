@@ -98,6 +98,94 @@ echo implode("|", $rows);
     assert_eq!(out, "hXo|Xlo|hXllo|heXo|hXello|hX|hXello|hXlo|hX|helloX");
 }
 
+/// Verifies explicit null and named omitted/null lengths run through the string end.
+///
+/// Zero-length controls remain empty selection for `substr()` and pure insertion for
+/// `substr_replace()`, keeping a real zero distinct from PHP's nullable default.
+#[test]
+fn test_substr_and_substr_replace_null_length_runs_to_end() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [
+    substr("hello", 1),
+    substr("hello", 1, null),
+    substr(string: "hello", offset: 1),
+    substr(string: "hello", offset: 1, length: null),
+    substr("hello", 1, 0),
+    substr_replace("hello", "X", 1),
+    substr_replace("hello", "X", 1, null),
+    substr_replace(string: "hello", replace: "X", offset: 1),
+    substr_replace(string: "hello", replace: "X", offset: 1, length: null),
+    substr_replace("hello", "X", 1, 0),
+];
+echo implode("|", $rows);
+"#,
+    );
+    assert_eq!(out, "ello|ello|ello|ello||hX|hX|hX|hX|hXello");
+}
+
+/// Verifies nullable lengths selected at runtime keep `null`, zero, and negative distinct.
+///
+/// The same `?int` fixture runs through tagged and sentinel null representations. A boxed
+/// `mixed` null also covers the dynamic path used by `substr_replace()` and `substr_count()`.
+/// Null selects omitted-length behavior while zero and negative values remain concrete lengths.
+#[test]
+fn test_substring_builtins_runtime_null_length_runs_to_end() {
+    let source = r#"<?php
+function runtime_length(int $selector): ?int {
+    if ($selector === 1) {
+        return null;
+    }
+    if ($selector === 2) {
+        return 0;
+    }
+    return -1;
+}
+
+function runtime_mixed_length(int $selector): mixed {
+    if ($selector === 1) {
+        return null;
+    }
+    if ($selector === 2) {
+        return 0;
+    }
+    return -1;
+}
+
+$null = runtime_length($argc);
+$zero = runtime_length($argc + 1);
+$negative = runtime_length($argc + 2);
+$mixed_null = runtime_mixed_length($argc);
+$mixed_zero = runtime_mixed_length($argc + 1);
+$mixed_negative = runtime_mixed_length($argc + 2);
+
+echo substr("hello", 1, $null), "|",
+     substr_replace("hello", "X", 1, $null), "|",
+     substr_count("hello world", "o", 0, $null), "\n";
+echo substr("hello", 1, $zero), "|",
+     substr_replace("hello", "X", 1, $zero), "|",
+     substr_count("hello world", "o", 0, $zero), "\n";
+echo substr("hello", 1, $negative), "|",
+     substr_replace("hello", "X", 1, $negative), "|",
+     substr_count("hello world", "o", 0, $negative), "\n";
+echo substr("hello", 1, $mixed_null), "|",
+     substr_replace("hello", "X", 1, $mixed_null), "|",
+     substr_count("hello world", "o", 0, $mixed_null), "\n";
+echo substr("hello", 1, $mixed_zero), "|",
+     substr_replace("hello", "X", 1, $mixed_zero), "|",
+     substr_count("hello world", "o", 0, $mixed_zero), "\n";
+echo substr("hello", 1, $mixed_negative), "|",
+     substr_replace("hello", "X", 1, $mixed_negative), "|",
+     substr_count("hello world", "o", 0, $mixed_negative), "\n";
+"#;
+    let tagged = compile_and_run_tagged(source);
+    let sentinel = compile_and_run_sentinel(source);
+    let expected =
+        "ello|hX|2\n|hXello|0\nell|hXo|2\nello|hX|2\n|hXello|0\nell|hXo|2\n";
+    assert_eq!(tagged, expected);
+    assert_eq!(sentinel, expected);
+}
+
 /// Verifies substr accepts a non-negative integer offset derived from a function return via addition.
 /// Regression test: int-to-integer coercion path for the offset expression `$o + 1`.
 /// Fixture: queries with `?` delimiter, strpos + intval, then substr with +1 offset.
@@ -926,4 +1014,74 @@ var_dump(call_user_func('stripos', 'FooBar', 'BAR'));
 "#,
     );
     assert_eq!(out, "int(6)\nint(7)\nint(3)\n");
+}
+
+/// `strtok()` has no backend implementation of its own: the prelude keeps the string and the offset
+/// in `static` locals. Expected output is `php -n` 8.5's, byte for byte.
+#[test]
+fn test_strtok_tokenizes_like_php() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$s = "This is\tan example\nstring";
+$t = strtok($s, " \n\t");
+while ($t !== false) {
+    echo "[", $t, "]";
+    $t = strtok(" \n\t");
+}
+echo "\n";
+$t = strtok("//a//b///c/", "/");
+echo $t, strtok("/"), strtok("/"), "|", var_export(strtok("/"), true), "|", var_export(strtok("/"), true), "\n";
+echo var_export(strtok("abc", ""), true), var_export(strtok(""), true), "\n";
+echo var_export(strtok("", "x"), true), var_export(strtok("x"), true), "\n";
+echo strtok("one two three", " "), "-", strtok(" "), "-";
+echo strtok("alpha,beta;gamma", ",;"), "-", strtok(",;"), "-", strtok(",;"), "\n";
+function col(string $type): string { return strtok($type, '(') ?: ''; }
+echo col("varchar(255)"), "|", col("integer"), "|", col("(x)"), "|", col(""), "\n";
+echo var_export(strtok("a\0b\0c", "\0"), true), var_export(strtok("\0"), true), bin2hex((string) strtok("\0")), "\n";
+$parts = [];
+for ($tok = strtok("k1=v1&k2=v2", "&="); $tok !== false; $tok = strtok("&=")) {
+    $parts[] = $tok;
+}
+echo implode(",", $parts), "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "[This][is][an][example][string]\nabc|false|false\n'abc'false\nfalsefalse\none-two-alpha-beta-gamma\nvarchar|integer|x)|\n'a''b'63\nk1,v1,k2,v2\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Interpreted code reaches its own `strtok()` (Laravel's SQLite processor calls it), with the
+/// same semantics and a request-scoped state of its own.
+#[test]
+fn test_eval_strtok_tokenizes_like_php() {
+    let output = compile_and_run(
+        r#"<?php
+eval(<<<'EOT'
+$s = "This is\tan example\nstring";
+$t = strtok($s, " \n\t");
+while ($t !== false) {
+    echo "[", $t, "]";
+    $t = strtok(" \n\t");
+}
+echo "\n";
+$t = strtok("//a//b///c/", "/");
+echo $t, strtok("/"), strtok("/"), "|", var_export(strtok("/"), true), "|", var_export(strtok("/"), true), "\n";
+echo var_export(strtok("abc", ""), true), var_export(strtok(""), true), "\n";
+echo var_export(strtok("", "x"), true), var_export(strtok("x"), true), "\n";
+echo strtok("one two three", " "), "-", strtok(" "), "-";
+echo strtok("alpha,beta;gamma", ",;"), "-", strtok(",;"), "-", strtok(",;"), "\n";
+function col(string $type): string { return strtok($type, '(') ?: ''; }
+echo col("varchar(255)"), "|", col("integer"), "|", col("(x)"), "|", col(""), "\n";
+echo var_export(strtok("a\0b\0c", "\0"), true), var_export(strtok("\0"), true), bin2hex((string) strtok("\0")), "\n";
+$parts = [];
+for ($tok = strtok("k1=v1&k2=v2", "&="); $tok !== false; $tok = strtok("&=")) {
+    $parts[] = $tok;
+}
+echo implode(",", $parts), "\n";
+
+EOT
+);
+"#,
+    );
+    assert_eq!(output, "[This][is][an][example][string]\nabc|false|false\n'abc'false\nfalsefalse\none-two-alpha-beta-gamma\nvarchar|integer|x)|\n'a''b'63\nk1,v1,k2,v2\n");
 }

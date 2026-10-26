@@ -7,23 +7,27 @@
 //!
 //! Key details:
 //! - Both projections use serialize descriptors: lexical visibility filtering
-//!   demangles accessible keys, while casts retain PHP's mangled keys.
+//!   demangles accessible keys, while casts retain PHP's mangled keys for user objects.
+//! - ReflectionParameter casts apply a per-class public-only view so synthetic private backing
+//!   slots never escape; its modeled public `name` property is still projected.
 //! - Protected filtering uses each descriptor row's declaring class, and copied
 //!   dynamic-property names are normalized with PHP array-key semantics.
 //! - Incomplete objects use class id `-2` and own their original class name at
 //!   offsets 8/16 plus an opaque boxed-Mixed property hash at offset 24.
 
+use crate::codegen_support::sentinels::emit_deref_reference_property_slot;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::emit_resolve_prop_desc_tag;
+use crate::codegen_support::sentinels::{emit_resolve_prop_desc_tag, emit_resolve_tagged_scalar_property_tag};
 
 /// Emits `__rt_object_to_hash(object, cast_mode, scope_class_id)` for the active target.
 ///
 /// `cast_mode == 0` exposes properties visible from `scope_class_id`, with `-1`
-/// representing global scope. A non-zero mode exposes every declared property
-/// under its PHP visibility-mangled cast key. Both modes append dynamic
+/// representing global scope. A non-zero mode exposes declared properties under
+/// PHP's visibility-mangled cast keys, except ReflectionParameter's compiler-only
+/// private slots. Both modes append dynamic
 /// properties and expose the synthetic incomplete-class marker plus retained
 /// opaque values.
 pub(crate) fn emit_object_to_hash(emitter: &mut Emitter) {
@@ -57,6 +61,9 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x10]");                                      // load the current object/descriptor operand for `ldr x10, [x10]`
     emitter.instruction("cmp x9, x10");                                         // evaluate `cmp x9, x10` before selecting the projection branch
     emitter.instruction("b.hs __rt_object_to_hash_empty");                      // use `__rt_object_to_hash_empty` when the object or metadata is absent
+    abi::emit_symbol_address(emitter, "x11", "_class_reflection_parameter_cast_public_flags");
+    emitter.instruction("ldr x11, [x11, x9, lsl #3]");                          // select ReflectionParameter cast projection policy
+    emitter.instruction("str x11, [sp, #104]");                                 // retain the cast projection flag across property iteration
     abi::emit_symbol_address(emitter, "x11", "_class_serprop_ptrs");
     emitter.instruction("ldr x11, [x11, x9, lsl #3]");                          // load the current object/descriptor operand for `ldr x11, [x11, x9, lsl #3]`
     emitter.instruction("ldr x12, [x11]");                                      // load the current object/descriptor operand for `ldr x12, [x11]`
@@ -82,10 +89,16 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x14, [x11, #8]");                                  // load the current object/descriptor operand for `ldr x14, [x11, #8]`
     emitter.instruction("ldr x15, [x11, #16]");                                 // load the current object/descriptor operand for `ldr x15, [x11, #16]`
     emitter.instruction("ldr x16, [x11, #24]");                                 // load the current object/descriptor operand for `ldr x16, [x11, #24]`
-    emitter.instruction("ldr x9, [sp, #8]");                                    // reload cast mode before applying get_object_vars visibility
-    emitter.instruction("cbnz x9, __rt_object_to_hash_row_ready");              // casts retain every serialize-mangled declared property key
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload cast mode before selecting the property projection policy
+    emitter.instruction("cbz x9, __rt_object_to_hash_visibility");              // get_object_vars keeps lexical PHP visibility
+    emitter.instruction("ldr x9, [sp, #104]");                                  // check for ReflectionParameter's public-only cast view
+    emitter.instruction("cbz x9, __rt_object_to_hash_row_ready");               // ordinary casts retain PHP-mangled private properties
+    emitter.instruction("ldrb w9, [x13]");                                      // inspect the first key byte for a private backing slot
+    emitter.instruction("cbz w9, __rt_object_to_hash_next");                    // omit ReflectionParameter's synthetic private fields
+    emitter.instruction("b __rt_object_to_hash_row_ready");                     // retain the declared public `name` property
+    emitter.label("__rt_object_to_hash_visibility");
     emitter.instruction("ldrb w9, [x13]");                                      // inspect the first key byte to distinguish public from mangled visibility
-    emitter.instruction("cbnz x9, __rt_object_to_hash_row_ready");              // ordinary public names are globally visible without demangling
+    emitter.instruction("cbnz w9, __rt_object_to_hash_row_ready");              // ordinary public names are globally visible without demangling
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload the lexical class id for protected/private visibility
     emitter.instruction("cmp x9, #0");                                          // global scope is encoded as a negative class id
     emitter.instruction("b.lt __rt_object_to_hash_next");                       // global calls skip every protected or private property
@@ -178,8 +191,19 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, "x10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp x2, x10");                                         // evaluate `cmp x2, x10` before selecting the projection branch
     emitter.instruction("b.eq __rt_object_to_hash_next");                       // skip or advance the current property via `__rt_object_to_hash_next`
+    emit_deref_reference_property_slot(emitter, "x16", "x1", "x2", "x9");
     emit_resolve_prop_desc_tag(emitter, "x16", "x2", "x9");
     emitter.instruction("mov x0, x16");                                         // prepare the projection argument or result with `mov x0, x16`
+    emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
+    // A Mixed-typed slot (`array`, `?string`, `mixed`, any union) holds a BOX. Passing the box to
+    // `__rt_mixed_from_value` as tag 7 wraps it in a second Mixed cell, which every reader of the
+    // projected hash then saw as null: `(array) $o` and `get_object_vars()` answered `null` for
+    // each such property. Hand over the concrete value instead.
+    emitter.instruction("cmp x0, #7");                                          // does the slot hold a boxed Mixed?
+    emitter.instruction("b.ne 4f");                                             // typed payloads are boxed as they are
+    emitter.instruction("mov x0, x1");                                          // the slot's box becomes the unbox input
+    emitter.instruction("bl __rt_mixed_unbox");                                 // x0 = concrete tag, x1/x2 = payload words
+    emitter.label("4");
     emitter.instruction("bl __rt_mixed_from_value");                            // call `__rt_mixed_from_value` with the prepared projection arguments
     emitter.instruction("mov x3, x0");                                          // prepare the projection argument or result with `mov x3, x0`
     emitter.instruction("ldr x0, [sp, #16]");                                   // load the result-hash slot for `ldr x0, [sp, #16]`
@@ -274,6 +298,9 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rip + _class_gc_desc_count]");     // load the current object/descriptor operand for `mov r10, QWORD PTR [rip + _class_gc_desc_count]`
     emitter.instruction("cmp r9, r10");                                         // evaluate `cmp r9, r10` before selecting the projection branch
     emitter.instruction("jae __rt_object_to_hash_empty_x");                     // use `__rt_object_to_hash_empty_x` when the object or metadata is absent
+    emitter.instruction("lea r10, [rip + _class_reflection_parameter_cast_public_flags]"); // materialize the ReflectionParameter cast-policy table
+    emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // select the ReflectionParameter cast projection policy
+    emitter.instruction("mov QWORD PTR [rbp - 128], r10");                      // retain the cast projection flag across property iteration
     emitter.instruction("lea r10, [rip + _class_serprop_ptrs]");                // materialize the metadata symbol used by `lea r10, [rip + _class_serprop_ptrs]`
     emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // load the current object/descriptor operand for `mov r10, QWORD PTR [r10 + r9 * 8]`
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the current object/descriptor operand for `mov r11, QWORD PTR [r10]`
@@ -298,8 +325,14 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r13, QWORD PTR [r10 + 8]");                        // load the current object/descriptor operand for `mov r13, QWORD PTR [r10 + 8]`
     emitter.instruction("mov r14, QWORD PTR [r10 + 16]");                       // load the current object/descriptor operand for `mov r14, QWORD PTR [r10 + 16]`
     emitter.instruction("mov r15, QWORD PTR [r10 + 24]");                       // load the current object/descriptor operand for `mov r15, QWORD PTR [r10 + 24]`
-    emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // decide whether visibility filtering applies to this serialize row
-    emitter.instruction("jne __rt_object_to_hash_row_ready_x");                 // casts retain every serialize-mangled declared property key
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // choose cast policy or get_object_vars visibility
+    emitter.instruction("je __rt_object_to_hash_visibility_x");                 // get_object_vars keeps lexical PHP visibility
+    emitter.instruction("cmp QWORD PTR [rbp - 128], 0");                        // check for ReflectionParameter's public-only cast view
+    emitter.instruction("je __rt_object_to_hash_row_ready_x");                  // ordinary casts retain PHP-mangled private properties
+    emitter.instruction("cmp BYTE PTR [r12], 0");                               // inspect the first key byte for a private backing slot
+    emitter.instruction("je __rt_object_to_hash_next_x");                       // omit ReflectionParameter's synthetic private fields
+    emitter.instruction("jmp __rt_object_to_hash_row_ready_x");                 // retain the declared public `name` property
+    emitter.label("__rt_object_to_hash_visibility_x");
     emitter.instruction("cmp BYTE PTR [r12], 0");                               // distinguish public names from visibility-mangled keys
     emitter.instruction("jne __rt_object_to_hash_row_ready_x");                 // ordinary public names are globally visible
     emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // reload the lexical class id for protected/private visibility
@@ -393,8 +426,17 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp rsi, r11");                                        // evaluate `cmp rsi, r11` before selecting the projection branch
     emitter.instruction("je __rt_object_to_hash_next_x");                       // skip or advance the current property via `__rt_object_to_hash_next_x`
+    emit_deref_reference_property_slot(emitter, "r15", "rdi", "rsi", "rax");
     emit_resolve_prop_desc_tag(emitter, "r15", "rsi", "rax");
     emitter.instruction("mov rax, r15");                                        // prepare the projection argument or result with `mov rax, r15`
+    emit_resolve_tagged_scalar_property_tag(emitter, "rax", "rsi");
+    // A Mixed-typed slot holds a BOX; hand `__rt_mixed_from_value` the concrete value instead of
+    // wrapping the box in a second Mixed cell (see the AArch64 arm).
+    emitter.instruction("cmp rax, 7");                                          // does the slot hold a boxed Mixed?
+    emitter.instruction("jne 4f");                                              // typed payloads are boxed as they are
+    emitter.instruction("mov rax, rdi");                                        // the slot's box becomes the unbox input
+    emitter.instruction("call __rt_mixed_unbox");                               // rax = concrete tag, rdi/rsi = payload words
+    emitter.label("4");
     emitter.instruction("call __rt_mixed_from_value");                          // call `__rt_mixed_from_value` with the prepared projection arguments
     emitter.instruction("mov rcx, rax");                                        // prepare the projection argument or result with `mov rcx, rax`
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // load the result-hash slot for `mov rdi, QWORD PTR [rbp - 24]`
@@ -468,4 +510,27 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // discard the x86_64 object-projection spill area
     emitter.instruction("pop rbp");                                             // restore the caller frame before returning
     emitter.instruction("ret");                                                 // return the fresh associative property table
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Both runtime architectures consult per-class cast policy before exposing visibility-mangled
+    /// rows, keeping the ReflectionParameter-only projection gate target-symmetric.
+    #[test]
+    fn reflection_parameter_cast_policy_is_emitted_for_both_architectures() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_object_to_hash(&mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains("_class_reflection_parameter_cast_public_flags"));
+            assert!(asm.contains("__rt_object_to_hash_visibility"));
+            assert!(asm.contains("__rt_object_to_hash_next"));
+        }
+    }
 }

@@ -3,7 +3,7 @@
 //! declarative registry.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::registry::eval_declared_builtin_values_call`.
+//! - `crate::interpreter::builtins::registry::eval_declared_builtin_values_call_from_scope`.
 //!
 //! Key details:
 //! - Values hooks run after named/default argument binding has produced PHP
@@ -12,7 +12,7 @@
 
 use super::super::*;
 use super::super::super::{
-    ElephcEvalContext, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
+    ElephcEvalContext, ElephcEvalScope, EvalStatus, RuntimeCellHandle, RuntimeValueOps,
 };
 use super::arity::{one_arg, three_args, two_args};
 
@@ -53,6 +53,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Bcmath,
     /// Dispatches `base64_decode(...)`.
     Base64Decode,
+    /// Dispatches `highlight_string(...)` and `highlight_file(...)`.
+    Highlight,
     /// Dispatches `base64_encode(...)`.
     Base64Encode,
     /// Dispatches `bin2hex(...)`.
@@ -67,10 +69,6 @@ pub(in crate::interpreter) enum EvalValuesHook {
     SubstrCompare,
     /// Dispatches `substr_count(...)`.
     SubstrCount,
-    /// Dispatches `strncmp(...)`.
-    StringCompareN,
-    /// Dispatches `strncasecmp(...)`.
-    StringCompareNCase,
     /// Dispatches `get_debug_type(...)`.
     GetDebugType,
     /// Dispatches `levenshtein(...)`.
@@ -79,6 +77,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     AddCSlashes,
     /// Dispatches `version_compare(...)`.
     VersionCompare,
+    /// Dispatches `strtok(...)`.
+    Strtok,
     /// Dispatches `hash_pbkdf2(...)`.
     HashPbkdf2,
     /// Dispatches the `password_*` API.
@@ -87,7 +87,7 @@ pub(in crate::interpreter) enum EvalValuesHook {
     ArrayChangeKeyCase,
     /// Dispatches `clamp(...)`.
     Clamp,
-    /// Dispatches `count(...)`.
+    /// Dispatches `count(...)` and `sizeof(...)`.
     Count,
     /// Dispatches core callable, constant, process-control, and debug-output builtins.
     Core,
@@ -140,6 +140,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Intval,
     /// Dispatches `is_bool(...)`.
     IsBool,
+    /// Dispatches `is_countable(...)`.
+    IsCountable,
     /// Dispatches `is_double(...)`.
     IsDouble,
     /// Dispatches `is_finite(...)`.
@@ -244,8 +246,6 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Round,
     /// Dispatches `range(...)`.
     Range,
-    /// Dispatches `mb_ereg_match(...)`.
-    MbEregMatch,
     /// Dispatches `preg_filter(...)`.
     PregFilter,
     /// Dispatches `preg_grep(...)`.
@@ -312,7 +312,7 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Sinh,
     /// Dispatches string ASCII case-conversion builtins.
     StringCase,
-    /// Dispatches string comparison builtins.
+    /// Dispatches byte-string comparisons with and without a length limit.
     StringCompare,
     /// Dispatches string position builtins.
     StringPosition,
@@ -383,6 +383,7 @@ impl EvalValuesHook {
         self,
         name: &str,
         evaluated_args: &[RuntimeCellHandle],
+        lexical_scope: Option<&ElephcEvalScope>,
         context: &mut ElephcEvalContext,
         values: &mut impl RuntimeValueOps,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -402,7 +403,13 @@ impl EvalValuesHook {
             | Self::ArrayValues
             | Self::Count
             | Self::Range => {
-                eval_array_declared_values_result(name, evaluated_args, context, values)
+                eval_array_declared_values_result(
+                    name,
+                    evaluated_args,
+                    lexical_scope,
+                    context,
+                    values,
+                )
             }
             Self::Asin => one_arg(evaluated_args, values, eval_asin_result),
             Self::Atan => one_arg(evaluated_args, values, eval_atan_result),
@@ -421,6 +428,7 @@ impl EvalValuesHook {
                 }
                 _ => Err(EvalStatus::RuntimeFatal),
             },
+            Self::Highlight => eval_highlight_values(name, evaluated_args, values),
             Self::Base64Encode => one_arg(evaluated_args, values, eval_base64_encode_result),
             Self::Bin2Hex => one_arg(evaluated_args, values, eval_bin2hex_result),
             Self::Unpack => eval_unpack_values_result(evaluated_args, values),
@@ -437,23 +445,20 @@ impl EvalValuesHook {
             },
             Self::SubstrCompare => eval_substr_compare_values(evaluated_args, context, values),
             Self::SubstrCount => eval_substr_count_values(evaluated_args, context, values),
-            Self::StringCompareN => {
-                eval_string_compare_n_named_result("strncmp", evaluated_args, context, values)
-            }
-            Self::StringCompareNCase => {
-                eval_string_compare_n_named_result("strncasecmp", evaluated_args, context, values)
-            }
             Self::GetDebugType => eval_get_debug_type_values(evaluated_args, context, values),
             Self::Levenshtein => eval_levenshtein_values(evaluated_args, context, values),
             Self::AddCSlashes => eval_addcslashes_values(evaluated_args, context, values),
             Self::VersionCompare => eval_version_compare_values(evaluated_args, context, values),
+            Self::Strtok => eval_strtok_values(evaluated_args, context, values),
             Self::HashPbkdf2 => eval_hash_pbkdf2_values(evaluated_args, context, values),
             Self::PasswordApi => eval_password_api_values(name, evaluated_args, context, values),
             Self::ArrayChangeKeyCase => {
                 eval_array_change_key_case_values(evaluated_args, context, values)
             }
             Self::Clamp => three_args(evaluated_args, values, eval_clamp_result),
-            Self::Core => eval_core_values_result(name, evaluated_args, context, values),
+            Self::Core => {
+                eval_core_values_result(name, evaluated_args, lexical_scope, context, values)
+            }
             Self::Cos => one_arg(evaluated_args, values, eval_cos_result),
             Self::Cosh => one_arg(evaluated_args, values, eval_cosh_result),
             Self::CountChars => match evaluated_args {
@@ -485,6 +490,9 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::IsBool => one_arg(evaluated_args, values, eval_is_bool_result),
+            Self::IsCountable => one_arg(evaluated_args, values, |value, values| {
+                eval_is_countable_result(value, context, values)
+            }),
             Self::IsDouble => one_arg(evaluated_args, values, eval_is_double_result),
             Self::IsFinite => one_arg(evaluated_args, values, eval_is_finite_result),
             Self::IsFloat => one_arg(evaluated_args, values, eval_is_float_result),
@@ -629,7 +637,6 @@ impl EvalValuesHook {
                 }
                 _ => Err(EvalStatus::RuntimeFatal),
             },
-            Self::MbEregMatch => eval_mb_ereg_match_values_result(evaluated_args, values),
             Self::PregLastError => {
                 if !evaluated_args.is_empty() {
                     return Err(EvalStatus::RuntimeFatal);
@@ -651,7 +658,12 @@ impl EvalValuesHook {
                 eval_preg_replace_callback_array_values_result(evaluated_args, context, values)
             }
             Self::PregReplaceCallback => {
-                eval_preg_replace_callback_values_result(evaluated_args, context, values)
+                eval_preg_replace_callback_values_result(
+                    evaluated_args,
+                    lexical_scope,
+                    context,
+                    values,
+                )
             }
             Self::PregSplit => eval_preg_split_values_result(evaluated_args, values),
             Self::BufferFree => eval_buffer_free_values_result(evaluated_args, values),
@@ -689,13 +701,23 @@ impl EvalValuesHook {
                 "ucfirst" => eval_ucfirst_result(value, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             }),
-            Self::StringCompare => two_args(evaluated_args, values, |left, right, values| {
-                match name {
-                    "strcasecmp" => eval_strcasecmp_result(left, right, values),
-                    "strcmp" => eval_strcmp_result(left, right, values),
-                    _ => Err(EvalStatus::RuntimeFatal),
+            Self::StringCompare => match name {
+                "strcasecmp" => two_args(evaluated_args, values, eval_strcasecmp_result),
+                "strcmp" => two_args(evaluated_args, values, eval_strcmp_result),
+                "strncasecmp" => {
+                    let [left, right, length] = evaluated_args else {
+                        return Err(EvalStatus::RuntimeFatal);
+                    };
+                    eval_strncasecmp_result(*left, *right, *length, context, values)
                 }
-            }),
+                "strncmp" => {
+                    let [left, right, length] = evaluated_args else {
+                        return Err(EvalStatus::RuntimeFatal);
+                    };
+                    eval_strncmp_result(*left, *right, *length, context, values)
+                }
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::StringPosition => {
                 let (haystack, needle, offset) = match evaluated_args {
                     [haystack, needle] => (*haystack, *needle, None),
@@ -788,13 +810,6 @@ impl EvalValuesHook {
             },
             Self::Iconv => eval_iconv_values(name, evaluated_args, context, values),
             Self::Strlen => match name {
-                "mb_strlen" => match evaluated_args {
-                    [value] => eval_mb_strlen_result(*value, None, context, values),
-                    [value, encoding] => {
-                        eval_mb_strlen_result(*value, Some(*encoding), context, values)
-                    }
-                    _ => Err(EvalStatus::RuntimeFatal),
-                },
                 "strlen" => one_arg(evaluated_args, values, eval_strlen_result),
                 _ => Err(EvalStatus::RuntimeFatal),
             },

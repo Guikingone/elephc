@@ -5,8 +5,15 @@
 //! - `crate::interpreter::builtins::filesystem`.
 //!
 //! Key details:
-//! - Runtime dispatch preserves optional permissions and recursive creation for
-//!   local paths and passes the matching mode/options pair to userspace wrappers.
+//! - The one-argument form keeps delegating to the unary path operation helper; the optional
+//!   `$permissions` and `$recursive` take their own path, mirroring the AOT runtime (issue #506).
+//! - `$permissions` goes through `DirBuilderExt::mode`, which hands the mode to `mkdir(2)` so
+//!   the process umask applies exactly as it does in PHP and in the compiled runtime. Setting
+//!   the mode after creation instead would bypass the umask and leave a window at the wider
+//!   permissions.
+//! - Recursive creation builds the PARENTS recursively and the final component on its own, so
+//!   an existing target still reports `false`. `create_dir_all` alone succeeds on an existing
+//!   directory, which is neither PHP's answer nor the compiled runtime's.
 
 eval_builtin! {
     contract: "mkdir",
@@ -16,8 +23,8 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use super::user_wrapper_path_ops::{eval_user_wrapper_mkdir_result, DEFAULT_MKDIR_PERMISSIONS};
 use crate::stream_wrappers;
-use std::os::unix::fs::DirBuilderExt;
 
 /// Dispatches direct eval calls for the `mkdir` filesystem builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_mkdir_declared_call(
@@ -26,33 +33,34 @@ pub(in crate::interpreter) fn eval_mkdir_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match args {
-        [directory] => {
-            let directory = eval_expr(directory, context, scope, values)?;
-            eval_mkdir_result(directory, None, None, context, values)
+    let (path, permissions, recursive) = match args {
+        [path] => {
+            let _ = path;
+            return super::chdir::eval_builtin_unary_path_bool(
+                "mkdir", args, context, scope, values,
+            );
         }
-        [directory, permissions] => {
-            let directory = eval_expr(directory, context, scope, values)?;
-            let permissions = eval_expr(permissions, context, scope, values)?;
-            eval_mkdir_result(directory, Some(permissions), None, context, values)
+        [path, permissions] => (path, permissions, None),
+        [path, permissions, recursive] | [path, permissions, recursive, _] => {
+            (path, permissions, Some(recursive))
         }
-        [directory, permissions, recursive] | [directory, permissions, recursive, _] => {
-            let directory = eval_expr(directory, context, scope, values)?;
-            let permissions = eval_expr(permissions, context, scope, values)?;
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    let path = eval_expr(path, context, scope, values)?;
+    let permissions = eval_expr(permissions, context, scope, values)?;
+    let mode = eval_int_value(permissions, values)?;
+    let recursive = match recursive {
+        Some(recursive) => {
             let recursive = eval_expr(recursive, context, scope, values)?;
-            if let [_, _, _, stream_context] = args {
-                let _ = eval_expr(stream_context, context, scope, values)?;
-            }
-            eval_mkdir_result(
-                directory,
-                Some(permissions),
-                Some(recursive),
-                context,
-                values,
-            )
+            eval_int_value(recursive, values)? != 0
         }
-        _ => Err(EvalStatus::RuntimeFatal),
+        None => false,
+    };
+    // A fourth `$context` argument is accepted and ignored, as php does for plain paths.
+    if let Some(stream_context) = args.get(3) {
+        let _ = eval_expr(stream_context, context, scope, values)?;
     }
+    eval_mkdir_with_options(path, mode, recursive, context, values)
 }
 
 /// Dispatches evaluated-argument calls for the `mkdir` filesystem builtin through the area dispatcher.
@@ -62,54 +70,63 @@ pub(in crate::interpreter) fn eval_mkdir_declared_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
-        [directory] => eval_mkdir_result(*directory, None, None, context, values),
-        [directory, permissions] => {
-            eval_mkdir_result(*directory, Some(*permissions), None, context, values)
+        [path] => super::chdir::eval_unary_path_bool_result("mkdir", *path, context, values),
+        [path, permissions] => {
+            let mode = eval_int_value(*permissions, values)?;
+            eval_mkdir_with_options(*path, mode, false, context, values)
         }
-        [directory, permissions, recursive] | [directory, permissions, recursive, _] => {
-            eval_mkdir_result(
-                *directory,
-                Some(*permissions),
-                Some(*recursive),
-                context,
-                values,
-            )
+        [path, permissions, recursive] | [path, permissions, recursive, _] => {
+            let mode = eval_int_value(*permissions, values)?;
+            let recursive = eval_int_value(*recursive, values)? != 0;
+            eval_mkdir_with_options(*path, mode, recursive, context, values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
 
-/// Creates one local directory with PHP-compatible mode and recursive semantics.
-pub(in crate::interpreter) fn eval_mkdir_result(
-    directory: RuntimeCellHandle,
-    permissions: Option<RuntimeCellHandle>,
-    recursive: Option<RuntimeCellHandle>,
+/// Creates one directory, optionally with its parents, and applies the requested mode.
+fn eval_mkdir_with_options(
+    path: RuntimeCellHandle,
+    mode: i64,
+    recursive: bool,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let path = eval_path_string(directory, values)?;
-    let permissions = permissions
-        .map(|value| eval_int_value(value, values))
-        .transpose()?
-        .unwrap_or(0o777) as u32;
-    let recursive = recursive
-        .map(|value| values.truthy(value))
-        .transpose()?
-        .unwrap_or(false);
-    let options = i64::from(recursive);
-    if let Some(result) = super::user_wrapper_path_ops::eval_user_wrapper_mkdir_result(
-        &path,
-        i64::from(permissions),
-        options,
-        context,
-        values,
-    )? {
+    let path = eval_path_string(path, values)?;
+    if let Some(result) = eval_user_wrapper_mkdir_result(&path, mode, recursive, context, values)? {
         return Ok(result);
     }
     let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
         return values.bool_value(false);
     };
+    // Only the FINAL component decides the result, which is why it is always created on its
+    // own: `create_dir_all` succeeds on a directory that already exists, and PHP reports
+    // `false` for that.
+    if recursive {
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                let mut parents = std::fs::DirBuilder::new();
+                parents.recursive(true);
+                apply_directory_mode(&mut parents, mode);
+                if parents.create(parent).is_err() {
+                    return values.bool_value(false);
+                }
+            }
+        }
+    }
     let mut builder = std::fs::DirBuilder::new();
-    builder.mode(permissions).recursive(recursive);
-    values.bool_value(builder.create(path).is_ok())
+    apply_directory_mode(&mut builder, mode);
+    values.bool_value(builder.create(&path).is_ok())
 }
+
+/// Hands PHP's `$permissions` to `mkdir(2)` so the process umask applies, as it does in PHP.
+#[cfg(unix)]
+fn apply_directory_mode(builder: &mut std::fs::DirBuilder, mode: i64) {
+    use std::os::unix::fs::DirBuilderExt;
+    let mode = u32::try_from(mode).unwrap_or(DEFAULT_MKDIR_PERMISSIONS as u32);
+    builder.mode(mode & 0o7777);
+}
+
+/// Non-Unix targets have no POSIX mode to apply.
+#[cfg(not(unix))]
+fn apply_directory_mode(_builder: &mut std::fs::DirBuilder, _mode: i64) {}

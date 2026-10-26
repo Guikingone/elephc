@@ -15,9 +15,20 @@ pub(super) fn method_signature(
     object: crate::ir::ValueId,
     method: &str,
 ) -> Option<FunctionSig> {
-    let object_ty = ctx.builder.value_php_type(object);
+    method_signature_for_receiver_type(ctx, &ctx.builder.value_php_type(object), method)
+}
+
+/// Returns the checked signature for an instance method call on a receiver of `object_ty`.
+///
+/// The type-level core of `method_signature`, for callers that know the receiver's type but have
+/// no lowered receiver value, such as a closure signature derived before its body is lowered.
+pub(super) fn method_signature_for_receiver_type(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+    method: &str,
+) -> Option<FunctionSig> {
     let key = php_symbol_key(method);
-    if let Some((class_name, _)) = singular_object_class(&object_ty) {
+    if let Some((class_name, _)) = singular_object_class(object_ty) {
         let normalized = class_name.trim_start_matches('\\');
         // A bare `object` parameter is `Object("")`: one object type with NO class, so the lookups
         // below can only miss, and the call then lowered with no signature while codegen still
@@ -25,7 +36,7 @@ pub(super) fn method_signature(
         // method A::m()` for an `m` the runtime class declares. It is a dynamic receiver like any
         // other, so it takes the dynamic answer.
         if normalized.is_empty() {
-            return common_dynamic_method_signature(ctx, &key);
+            return program_wide_dynamic_method_signature(ctx, &key);
         }
         if ctx.interfaces.contains_key(normalized) {
             if let Some(mut signature) = narrowed_runtime_method_signature(ctx, normalized, &key) {
@@ -74,7 +85,7 @@ pub(super) fn method_signature(
             .cloned()
             .or_else(|| narrowed_runtime_method_signature(ctx, normalized, &key));
     }
-    if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
+    if dynamic_method_receiver_needs_mixed_fallback(object_ty) {
         if ctx.has_eval_barrier() {
             return None;
         }
@@ -82,9 +93,34 @@ pub(super) fn method_signature(
         if let Some(signature) = union_member_method_signature(ctx, &object_ty, &key) {
             return Some(signature);
         }
-        return common_dynamic_method_signature(ctx, &key);
+        return program_wide_dynamic_method_signature(ctx, &key);
     }
     None
+}
+
+/// The signature every compiled class declaring `method_key` agrees on, when it can stand for a
+/// receiver that may hold an object of ANY class.
+///
+/// In a program that loads code at run time the receiver may hold an object of a class the closed
+/// world never compiled, and the compiled classes' agreement says nothing about it. Laravel's
+/// `Route` is left to the interpreter, so `PendingResourceRegistration::withTrashed(array
+/// $methods = [])` was the only compiled `withTrashed`; the route cache's
+/// `->withTrashed($attributes['withTrashed'] ?? false)` converted `false` to that `array`
+/// parameter and every request answered 500. Without a signature the class-id dispatch applies
+/// each compiled candidate's own parameters and the eval bridge receives the arguments as written.
+/// A signature with by-reference parameters is kept: the argument has to be passed as a reference
+/// before any callee runs, which no later dispatch can arrange.
+fn program_wide_dynamic_method_signature(
+    ctx: &LoweringContext<'_, '_>,
+    method_key: &str,
+) -> Option<FunctionSig> {
+    let signature = common_dynamic_method_signature(ctx, method_key)?;
+    if ctx.program_loads_code_at_run_time()
+        && !signature.ref_params.iter().any(|by_ref| *by_ref)
+    {
+        return None;
+    }
+    Some(signature)
 }
 
 /// Returns the common signature across the object members a UNION receiver actually admits.
@@ -372,11 +408,32 @@ pub(super) fn method_call_result_type(
     op: Op,
     expr: &Expr,
 ) -> PhpType {
-    let object_ty = ctx.builder.value_php_type(object);
-    let nullable = singular_object_class(&object_ty)
+    method_call_result_type_for_receiver_type(
+        ctx,
+        &ctx.builder.value_php_type(object),
+        method,
+        op,
+        expr,
+    )
+}
+
+/// Returns the checked return type for an instance method call on a receiver of `object_ty`.
+///
+/// The type-level core of `method_call_result_type`: late-static returns are bound to the
+/// receiver class and a nullsafe call on a nullable receiver adds `null`. A closure whose body is
+/// `return $o->m();` derives its signature through this before the body is lowered, so the two
+/// agree on the result the call hands back (issue #1269).
+pub(super) fn method_call_result_type_for_receiver_type(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+    method: &str,
+    op: Op,
+    expr: &Expr,
+) -> PhpType {
+    let nullable = singular_object_class(object_ty)
         .map(|(_, nullable)| nullable)
         .unwrap_or(false);
-    let Some(return_ty) = method_signature(ctx, object, method)
+    let Some(return_ty) = method_signature_for_receiver_type(ctx, object_ty, method)
         .filter(|signature| {
             // For a GRADUAL receiver the common signature is one class's, chosen only because it
             // shares the method's name. It may normalize arguments, but it decides the result only
@@ -386,20 +443,20 @@ pub(super) fn method_call_result_type(
             // two required parameters and an unrelated class, so `$result` became `int` and
             // `$result->iterateNumeric()` reached the backend as `method call receiver for PHP
             // type Int`.
-            !dynamic_method_receiver_needs_mixed_fallback(&object_ty)
+            !dynamic_method_receiver_needs_mixed_fallback(object_ty)
                 || method_call_argument_count(expr)
                     .is_none_or(|count| signature_accepts_argument_count(signature, count))
         })
         .map(|signature| normalize_value_php_type(signature.return_type))
     else {
-        if let Some(return_ty) = narrowed_runtime_method_return_type(ctx, &object_ty, method) {
+        if let Some(return_ty) = narrowed_runtime_method_return_type(ctx, object_ty, method) {
             return if op == Op::NullsafeMethodCall && nullable {
                 nullable_result_type(return_ty)
             } else {
                 return_ty
             };
         }
-        if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
+        if dynamic_method_receiver_needs_mixed_fallback(object_ty) {
             return PhpType::Mixed;
         }
         return fallback_expr_type(expr);
@@ -412,14 +469,20 @@ pub(super) fn method_call_result_type(
     // `$this->parser->getEnvironment()->getExpressionParsers()` reached the backend as
     // `method call receiver for PHP type Str`. Codegen boxes a Mixed and dispatches it at
     // runtime, which is what PHP does with a receiver whose class is only known then.
-    let return_ty = if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
+    let return_ty = if dynamic_method_receiver_needs_mixed_fallback(object_ty) {
         PhpType::Mixed
     } else {
         return_ty
     };
-    let return_ty = if let Some((receiver_name, _)) = singular_object_class(&object_ty) {
+    let return_ty = if let Some((receiver_name, _)) = singular_object_class(object_ty) {
+        // The late-static type narrows the result to the receiver class, but the callee returns in
+        // the storage its signature records: an override that narrows `static|false` to `static`
+        // adopts the ancestor's boxed storage, and reading that box as a raw object crashed. The
+        // signature wins whenever the two disagree on representation.
+        let storage_boxed = matches!(return_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
         instance_method_late_static_return_for_ir(ctx, receiver_name, &php_symbol_key(method))
             .map(|return_type| late_static_return_type_for_ir(ctx, &return_type, receiver_name))
+            .filter(|late| !storage_boxed || late.codegen_repr() == return_ty.codegen_repr())
             .unwrap_or(return_ty)
     } else {
         return_ty
@@ -460,6 +523,32 @@ fn narrowed_runtime_method_return_type(
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
         .collect::<Vec<_>>();
     normalize_union_members(candidates)
+}
+
+/// Returns the return type a closure signature records for a directly returned
+/// `$receiver->method(...)` whose receiver has type `object_ty`.
+///
+/// Mirrors `method_call_result_type` wherever the metadata names the method, and answers boxed
+/// `Mixed` wherever the call could dispatch somewhere this metadata cannot see: a receiver that
+/// is not an object type, or a method its class does not declare (a `__call` dispatch, or a
+/// closure later rebound to a class that does). Boxing is always a sound return contract. The
+/// syntactic fallback this replaces answered `Int` for every method call, so a closure returning
+/// `$o->name()` handed a string back through an int slot and printed 0 (issue #1269).
+pub(in crate::ir_lower) fn closure_return_method_call_type(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+    method: &str,
+    expr: &Expr,
+) -> PhpType {
+    if singular_object_class(object_ty).is_none()
+        && !dynamic_method_receiver_needs_mixed_fallback(object_ty)
+    {
+        return PhpType::Mixed;
+    }
+    if method_signature_for_receiver_type(ctx, object_ty, method).is_none() {
+        return PhpType::Mixed;
+    }
+    method_call_result_type_for_receiver_type(ctx, object_ty, method, Op::MethodCall, expr)
 }
 
 /// Returns preserved late-static return syntax for EIR instance dispatch.
@@ -526,7 +615,11 @@ pub(super) fn method_signature_for_call(
     method: &str,
     arg_count: usize,
 ) -> Option<FunctionSig> {
-    let signature = method_signature(ctx, object, method)?;
+    let signature = method_signature(ctx, object, method).or_else(|| {
+        dynamic_method_receiver_needs_mixed_fallback(&ctx.builder.value_php_type(object))
+            .then(|| super::method_calls::mixed_receiver_by_ref_signature(ctx, method))
+            .flatten()
+    })?;
     if !dynamic_method_receiver_needs_mixed_fallback(&ctx.builder.value_php_type(object)) {
         return Some(signature);
     }
@@ -537,7 +630,35 @@ pub(super) fn method_signature_for_call(
     // gives it a real place, and dropping it here instead left the call lowering its arguments
     // without a signature while codegen still resolved the callee nominally — two operands for a
     // three-parameter ABI.
-    Some(signature)
+    boxed_receiver_source_signature(ctx, object, Some(signature))
+}
+
+/// Drops the hidden `func_get_args()` collector from a boxed receiver's shared signature.
+///
+/// The signature found for a boxed receiver is the one every compiled class declaring the method
+/// shares, so its collector is that family's, not the callee's. Packing surplus arguments into it
+/// here handed an INTERPRETED receiver one array where php passes the arguments: Laravel's
+/// `$this->make($bootstrapper)->bootstrap($this)` reached an eval-loaded bootstrapper with
+/// `bootstrap(array)` because the only compiled `bootstrap` was a kernel's parameterless one. The
+/// Mixed dispatch packs each compiled candidate's own collector from the plain operands, and the
+/// eval bridge receives them as written.
+pub(super) fn boxed_receiver_source_signature(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    sig: Option<FunctionSig>,
+) -> Option<FunctionSig> {
+    let signature = sig?;
+    if !crate::func_args::sig_collects_surplus_args(&signature)
+        || !dynamic_method_receiver_needs_mixed_fallback(
+            &ctx.builder.value_php_type(object),
+        )
+    {
+        return Some(signature);
+    }
+    Some(
+        crate::codegen_support::source_method_adapters::source_visible_signature(&signature)
+            .unwrap_or(signature),
+    )
 }
 
 /// Returns the number of arguments a method-call expression passes, when it is one.

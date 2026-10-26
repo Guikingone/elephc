@@ -1,16 +1,16 @@
 ---
-title: "sort() — internals"
+title: "sort() - internals"
 description: "Compiler internals for sort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 80
+  order: 81
 ---
 
-## `sort()` — internals
+## `sort()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/sort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/sort.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function sort(array $array): bool
+function sort(array $array, int $flags = 0): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 - **By-reference parameters**: `$array`.
 
 ## Eval interpreter (magician)

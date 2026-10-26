@@ -125,6 +125,12 @@ pub(super) fn lower(
         RuntimeFnId::OpensslGetCipherMethods => Some({
             crate::codegen::lower_inst::builtins::openssl::lower_openssl_get_cipher_methods(ctx, inst)
         }),
+        RuntimeFnId::HighlightFile => Some({
+            crate::codegen::lower_inst::builtins::eval::lower_eval_highlight(ctx, inst, "highlight_file")
+        }),
+        RuntimeFnId::HighlightString => Some({
+            crate::codegen::lower_inst::builtins::eval::lower_eval_highlight(ctx, inst, "highlight_string")
+        }),
         RuntimeFnId::Htmlentities => Some({
             crate::codegen::lower_inst::builtins::strings::lower_html_escape(ctx, inst, "htmlentities")
         }),
@@ -167,9 +173,6 @@ pub(super) fn lower(
                     "__rt_ltrim",
                     "__rt_ltrim_mask",
                 )
-        }),
-        RuntimeFnId::MbEregMatch => Some({
-            crate::codegen::lower_inst::builtins::regex::lower_mb_ereg_match(ctx, inst)
         }),
         _ => None,
     }

@@ -25,7 +25,7 @@ pub(super) fn class_declares_method(
 
 /// Returns the class whose private declaration answers this call, when the receiver's own class
 /// has none. See [`crate::types::private_scope`] for the rule and its measurement.
-fn lexical_private_method_scope(
+pub(super) fn lexical_private_method_scope(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     method_name: &str,
@@ -58,7 +58,7 @@ pub(super) fn resolve_method_call_target(
             normalized, method_name
         ))
     })?;
-    let expected_args = callee_sig.params.len() + 1;
+    let physical_args = callee_sig.params.len() + 1;
     // php IGNORES arguments a userland function does not declare, and an override further down the
     // family may declare them. Each implementation is emitted with its own frame, so a surplus
     // operand simply occupies an argument register the base's body never reads and the override's
@@ -66,12 +66,53 @@ pub(super) fn resolve_method_call_target(
     // the physical ABI spills, and a callee reading a slot the caller did not write is not the same
     // thing as ignoring an argument.
     const REGISTER_PASSED_ARGS: usize = 8;
+    let tolerated_surplus = |count: usize, expected: usize| {
+        count > expected && count <= REGISTER_PASSED_ARGS
+    };
+    let (call_sig, source_abi) = if operand_count == physical_args {
+        (
+            callee_sig.clone(),
+            !crate::codegen_support::source_method_adapters::uses_physical_func_args_abi(
+                callee_sig,
+            ),
+        )
+    } else {
+        let source = crate::codegen_support::source_method_adapters::source_visible_signature(
+            callee_sig,
+        )
+        .map_err(CodegenIrError::unsupported)?;
+        if operand_count == source.params.len() + 1 {
+            (source, true)
+        } else if tolerated_surplus(operand_count, physical_args) {
+            (
+                callee_sig.clone(),
+                !crate::codegen_support::source_method_adapters::uses_physical_func_args_abi(
+                    callee_sig,
+                ),
+            )
+        } else {
+            return Err(CodegenIrError::unsupported(format!(
+                "method call to {}::{} with {} operands for {} physical or {} source ABI params",
+                normalized,
+                method_name,
+                operand_count,
+                physical_args,
+                source.params.len() + 1
+            )));
+        }
+    };
+    if source_abi {
+        let actual = class_info.methods.get(&method_key).expect("method signature exists");
+        crate::codegen_support::source_method_adapters::plan_method_abi(&call_sig, actual)
+            .map_err(CodegenIrError::unsupported)?;
+    }
+    let expected_args = call_sig.params.len() + 1;
     if operand_count < expected_args
         || (operand_count > expected_args && operand_count > REGISTER_PASSED_ARGS)
     {
         return Err(CodegenIrError::unsupported(format!(
-            "method call to {}::{} with {} operands for {} ABI params",
-            normalized, method_name, operand_count, expected_args
+            "method call to {}::{} has an unresolved ABI shape",
+            normalized, method_name
         )));
     }
     let impl_class = class_info
@@ -107,19 +148,24 @@ pub(super) fn resolve_method_call_target(
         impl_class,
         method_key,
         dynamic_slot,
-        params: callee_sig
+        params: call_sig
             .params
             .iter()
             .map(|(_, ty)| ty.codegen_repr())
             .collect(),
-        ref_params: callee_sig.ref_params.clone(),
+        ref_params: call_sig.ref_params.clone(),
         return_ty,
         by_ref_return: callee_sig.by_ref_return,
+        source_abi,
     })
 }
 
-/// Emits a runtime vtable dispatch for an instance method whose concrete override is late-bound.
-pub(super) fn emit_dynamic_instance_method_call(ctx: &mut FunctionContext<'_>, slot: usize) {
+/// Emits an indirect instance call through either the physical or source-ABI vtable.
+pub(super) fn emit_dynamic_instance_method_call_with_abi(
+    ctx: &mut FunctionContext<'_>,
+    slot: usize,
+    source_abi: bool,
+) {
     let class_id_reg = abi::temp_int_reg(ctx.emitter.target);
     let dispatch_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_load_from_address(
@@ -128,23 +174,76 @@ pub(super) fn emit_dynamic_instance_method_call(ctx: &mut FunctionContext<'_>, s
         abi::int_arg_reg_name(ctx.emitter.target, 0),
         0,
     );
-    abi::emit_symbol_address(ctx.emitter, dispatch_reg, "_class_vtable_ptrs");
+    let table = if source_abi {
+        "_class_source_vtable_ptrs"
+    } else {
+        "_class_vtable_ptrs"
+    };
+    abi::emit_symbol_address(ctx.emitter, dispatch_reg, table);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // load the class-specific instance-vtable pointer
                 "ldr {}, [{}, {}, lsl #3]",
                 dispatch_reg, dispatch_reg, class_id_reg
-            ));                                                                 // load the class-specific instance-vtable pointer
+            ));
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // load the class-specific instance-vtable pointer
                 "mov {}, QWORD PTR [{} + {} * 8]",
                 dispatch_reg, dispatch_reg, class_id_reg
-            ));                                                                 // load the class-specific instance-vtable pointer
+            ));
         }
     }
     abi::emit_load_from_address(ctx.emitter, dispatch_reg, dispatch_reg, slot * 8);
     abi::emit_call_reg(ctx.emitter, dispatch_reg);
+}
+
+/// Calls a resolved target through the ABI selected from its caller-visible signature.
+pub(super) fn emit_resolved_method_call(
+    ctx: &mut FunctionContext<'_>,
+    target: &MethodCallTarget,
+) -> Result<()> {
+    if let Some(slot) = target.dynamic_slot {
+        emit_dynamic_instance_method_call_with_abi(ctx, slot, target.source_abi);
+        return Ok(());
+    }
+    emit_direct_resolved_method_call(ctx, target)
+}
+
+/// Calls one statically selected implementation through its validated ABI entry.
+pub(super) fn emit_direct_resolved_method_call(
+    ctx: &mut FunctionContext<'_>,
+    target: &MethodCallTarget,
+) -> Result<()> {
+    let symbol = if target.source_abi {
+        let class_info = ctx.module.class_infos.get(&target.impl_class).ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "source method ABI target on unknown class {}",
+                target.impl_class
+            ))
+        })?;
+        let physical = class_info.methods.get(&target.method_key).ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "source method ABI target missing {}::{}",
+                target.impl_class, target.method_key
+            ))
+        })?;
+        if crate::codegen_support::source_method_adapters::uses_physical_func_args_abi(physical) {
+            crate::codegen_support::source_method_adapters::source_method_entry_symbol(
+                &target.impl_class,
+                &target.method_key,
+                physical,
+                crate::codegen_support::source_method_adapters::MethodKind::Instance,
+            )
+            .map_err(CodegenIrError::unsupported)?
+        } else {
+            method_symbol(&target.impl_class, &target.method_key)
+        }
+    } else {
+        method_symbol(&target.impl_class, &target.method_key)
+    };
+    abi::emit_call_label(ctx.emitter, &symbol);
+    Ok(())
 }
 
 /// Returns true when the current EIR module includes the target class method body.
@@ -227,8 +326,73 @@ pub(super) fn store_method_call_result(
             );
             return ctx.store_result_value(result);
         }
+        // The box COPIES a string, so the call's own string stayed owned by nobody: every
+        // string-returning method called on an untyped receiver leaked its result. Release it
+        // after boxing, as the typed path's acquire-then-release does; the validating free skips
+        // a scratch or static pointer, so a result that never left them is not freed.
+        if matches!(result_ty, PhpType::Mixed | PhpType::Union(_)) && return_ty == PhpType::Str {
+            emit_box_call_string_releasing_original(ctx);
+            return ctx.store_result_value(result);
+        }
     }
     store_call_result(ctx, inst, &target.return_ty)
+}
+
+/// Turns a direct method call's result into the owned boxed Mixed cell a `Mixed` ladder arm
+/// publishes, whatever the callee's declared return representation.
+///
+/// This is the by-value half of `store_method_call_result` for a site whose consumer is a
+/// `Mixed` slot: a method returns its value OWNED, so an object or container is moved into the
+/// box, a string is boxed and the call's own copy dropped, and a scalar is simply boxed. A callee
+/// that already returns a boxed `Mixed` needs nothing.
+pub(super) fn box_method_result_as_mixed(ctx: &mut FunctionContext<'_>, return_ty: &PhpType) {
+    let return_ty = return_ty.codegen_repr();
+    match return_ty {
+        PhpType::Mixed | PhpType::Union(_) => {}
+        PhpType::Void => {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                0x7fff_ffff_ffff_fffe,
+            );
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
+        }
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Iterable
+        | PhpType::Object(_)
+        | PhpType::Callable => {
+            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &return_ty);
+        }
+        PhpType::Str => emit_box_call_string_releasing_original(ctx),
+        other => emit_box_current_value_as_mixed(ctx.emitter, &other),
+    }
+}
+
+/// Boxes the string call result in the result registers and releases the call's own copy.
+fn emit_box_call_string_releasing_original(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x1, [sp, #-16]!");                     // keep the call's string pointer across boxing
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            ctx.emitter.instruction("ldr x9, [sp]");                            // recover the call's string pointer
+            ctx.emitter.instruction("str x0, [sp]");                            // keep the box across the release
+            ctx.emitter.instruction("mov x0, x9");                              // pass the call's string to the validating free
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // the box is the call's Mixed result
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // keep the call's string pointer across boxing
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // the string pointer is the first result word
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // recover the call's string pointer
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // keep the box across the release
+            ctx.emitter.instruction("mov rax, r10");                            // pass the call's string to the validating free
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // the box is the call's Mixed result
+            ctx.emitter.instruction("add rsp, 16");                             // discard the spill slot
+        }
+    }
 }
 
 /// Resolves an instruction data immediate as a method name.

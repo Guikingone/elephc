@@ -225,16 +225,30 @@ int main(void) {{
 
 /// Emits one compact table and two callbacks, independent of the number of include sites.
 pub(in crate::codegen) fn emit_state_helpers(module: &Module, emitter: &mut Emitter, data: &mut DataSection) {
-    if !module.required_runtime_features.eval_bridge { return; }
+    // A closed-world build with runtime includes keeps the guard cells, the prime and its own
+    // lookup, and none of the callbacks only the interpreter calls.
+    let closed = module.closed_world && module.closed_includes.is_some();
+    if !module.required_runtime_features.eval_bridge && !closed { return; }
     let mut words = Vec::new();
     let mut keys = Vec::new();
+    // With no interpreter, a declaration file that still has activation cells to raise is not
+    // primed as "the compiler ran it": its first include -- the autoloader's, or the compiled
+    // `include_once` it came from -- must run the routine that raises them
+    // (`closed_include::declaration_activation_cells`).
+    let activated = if closed && !module.required_runtime_features.eval_bridge {
+        super::closed_include::declaration_activation_cells(module)
+    } else {
+        Default::default()
+    };
     if let Some(catalog) = module.source_catalog() {
         for (_, source) in catalog.iter() {
             let key = source.canonical_path.as_os_str().as_encoded_bytes().to_vec();
             let (path, length) = data.add_string(&key);
             keys.push(key);
             let cell = data.add_comm(include_guard_symbol(&source.canonical_path), 8);
-            let preincluded = if module.preincluded_sources.contains(&source.canonical_path) {
+            let preincluded = if module.preincluded_sources.contains(&source.canonical_path)
+                && !activated.contains_key(&source.canonical_path)
+            {
                 COMPILER_INCLUDED
             } else {
                 0
@@ -250,6 +264,11 @@ pub(in crate::codegen) fn emit_state_helpers(module: &Module, emitter: &mut Emit
     let count = words.len() / 4;
     let table = data.add_words(words);
     data.add_comm(PRIMED.to_string(), 8);
+    if closed && !module.required_runtime_features.eval_bridge {
+        emit_prime(emitter, &table, count);
+        super::closed_include::emit_closed_include(module, emitter, data);
+        return;
+    }
     emit_lookup(emitter, data, LOOKUP, "source_lookup", &table, &keys, OnMatch::Return);
     emit_reset(emitter, RESET, "source_reset", &table, count, Some(PRIMED));
     emit_prime(emitter, &table, count);
@@ -392,9 +411,11 @@ fn emit_include_unit_lookup(module: &Module, emitter: &mut Emitter, data: &mut D
 
 /// What a table scan does with a record whose path matches.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum OnMatch {
+pub(in crate::codegen) enum OnMatch {
     /// Return that record's cell address, or null when none matched.
     Return,
+    /// Return the matching RECORD's address (so the caller reads more than the cell), or null.
+    Record,
     /// Write 1 into the cell of EVERY matching record, then return.
     RaiseAll,
 }
@@ -442,7 +463,6 @@ fn emit_source_activate(module: &Module, emitter: &mut Emitter, data: &mut DataS
             add(data, &declared, deferred_class_symbol(&folded));
         }
     }
-    let count = words.len() / 4;
     let table = data.add_words(words);
     let symbol = emitter.target.extern_symbol(SOURCE_ACTIVATE);
     emit_lookup(emitter, data, &symbol, "source_activate", &table, &keys, OnMatch::RaiseAll);
@@ -450,7 +470,7 @@ fn emit_source_activate(module: &Module, emitter: &mut Emitter, data: &mut DataS
 
 /// Every interface activation event belonging to a source the autoload pass pre-included, as
 /// (canonical source path, activation cell symbol), deduplicated.
-fn preincluded_interface_activation_cells(module: &Module) -> Vec<(std::path::PathBuf, String)> {
+pub(super) fn preincluded_interface_activation_cells(module: &Module) -> Vec<(std::path::PathBuf, String)> {
     let Some(catalog) = module.source_catalog() else { return Vec::new() };
     let mut cells = std::collections::BTreeSet::new();
     for function in module
@@ -463,11 +483,12 @@ fn preincluded_interface_activation_cells(module: &Module) -> Vec<(std::path::Pa
         .chain(module.runtime_callable_invokers.iter())
     {
         for instruction in &function.instructions {
-            let Some(crate::ir::Immediate::ClassLikeActivation { source, kind, name, .. }) =
+            let Some(crate::ir::Immediate::ClassLikeActivation(activation)) =
                 &instruction.immediate
             else {
                 continue;
             };
+            let (source, kind, name) = (&activation.source, &activation.kind, &activation.name);
             if *kind != crate::parser::ast::ClassLikeKind::Interface {
                 continue;
             }
@@ -523,7 +544,14 @@ pub(in crate::codegen) fn deferred_class_symbol(name: &str) -> String {
 
 /// Installs the program's state access before PHP execution; also safe to repeat at eval entry.
 pub(in crate::codegen) fn emit_state_install(ctx: &mut FunctionContext<'_>) {
-    if !ctx.module.required_runtime_features.eval_bridge { return; }
+    if !ctx.module.required_runtime_features.eval_bridge {
+        // No interpreter to register the table with: a closed-world build only raises the
+        // compiler-included guards its own runtime include consults.
+        if ctx.module.closed_world && ctx.module.closed_includes.is_some() {
+            abi::emit_call_label(ctx.emitter, PRIME);
+        }
+        return;
+    }
     let a0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let a1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
     let a2 = abi::int_arg_reg_name(ctx.emitter.target, 2);
@@ -561,7 +589,7 @@ fn key_hash(key: &[u8]) -> u64 {
 /// in table order with linear probing, so records sharing a key lie on one probe path in table
 /// order: the first match is the one the linear scan used to find, and a raise-all walk meets
 /// every one of them before the empty slot that ends it.
-fn key_index_slots(keys: &[Vec<u8>]) -> Vec<u64> {
+pub(super) fn key_index_slots(keys: &[Vec<u8>]) -> Vec<u64> {
     let size = (keys.len() * 2).max(1).next_power_of_two();
     let mask = size - 1;
     let mut slots = vec![0u64; size];
@@ -581,7 +609,7 @@ fn key_index_slots(keys: &[Vec<u8>]) -> Vec<u64> {
 /// compared by length and then `memcmp`. The table used to be scanned from its first record,
 /// which for the source table meant every source of the closed world (thousands for Symfony) on
 /// every interpreted include.
-fn emit_lookup(
+pub(in crate::codegen) fn emit_lookup(
     emitter: &mut Emitter,
     data: &mut DataSection,
     symbol: &str,
@@ -690,6 +718,8 @@ fn emit_lookup(
     abi::load_at_offset(emitter, result, REMAINING);
     if on_match == OnMatch::Return {
         abi::emit_load_from_address(emitter, result, result, 16);
+        abi::emit_jump(emitter, &done);
+    } else if on_match == OnMatch::Record {
         abi::emit_jump(emitter, &done);
     } else {
         abi::emit_load_from_address(emitter, a2, result, 16);

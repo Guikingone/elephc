@@ -29,7 +29,7 @@
 use crate::parser::ast::{BinOp, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_assign, e_binop, e_bool, e_call, e_index, e_int, e_not, e_post_inc, e_str, e_ternary, e_var,
-    function, internal_declarations, s_assign, s_break, s_continue, s_expr, s_if, s_return, s_while,
+    function, php_semantics_declarations, s_assign, s_break, s_continue, s_expr, s_if, s_return, s_while,
 };
 
 /// Shared helper both PHP-visible wrappers call.
@@ -43,7 +43,7 @@ const IS_SPACE_NAME: &str = "__elephc_strnat_is_space";
 
 /// Returns the natural-order comparison declarations for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| {
+    php_semantics_declarations(|| {
         vec![
             decl_fn_is_digit(),
             decl_fn_is_space(),

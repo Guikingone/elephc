@@ -8,6 +8,9 @@
 //! - The analysis iterates assignment and array-growth evidence until local types stop changing.
 //! - Array payload changes retain their container-specific conversions, while nullable locals
 //!   that receive a non-null whole value across a back-edge use one boxed `Mixed` contract.
+//! - A local that enters holding `null` and is assigned something else inside the body gets boxed
+//!   `Mixed`, so the header holds both the entering null and the value the back edge carries in
+//!   (issue #562).
 //! - EIR lowering consumes the checker-recorded contract instead of repeating expression
 //!   inference, keeping non-literal RHSs and cascading promotions aligned across both layers.
 
@@ -92,8 +95,10 @@ pub fn loop_carried_storage_types<'a>(
 
     let mut iterated_sources = HashSet::new();
     collect_foreach_sources(body, &mut iterated_sources);
+    collect_element_read_sources(body, &mut iterated_sources);
     if let Some(update) = update {
         collect_foreach_sources(std::slice::from_ref(update), &mut iterated_sources);
+        collect_element_read_sources(std::slice::from_ref(update), &mut iterated_sources);
     }
 
     let mut contracts = entry
@@ -106,7 +111,14 @@ pub fn loop_carried_storage_types<'a>(
                 whole_representation_sources.contains(name),
                 iterated_sources.contains(name.as_str()),
             )
-                .map(|contract| (name.clone(), contract))
+            .or_else(|| {
+                if is_array_like(entry_ty) {
+                    None
+                } else {
+                    null_entry_contract(entry_ty, fixed_ty)
+                }
+            })
+            .map(|contract| (name.clone(), contract))
         })
         .collect::<Vec<_>>();
     contracts.sort_by(|left, right| left.0.cmp(&right.0));
@@ -443,6 +455,14 @@ fn join_loop_flow_type(existing: PhpType, incoming: PhpType) -> PhpType {
     if existing == incoming {
         return existing;
     }
+    if existing.is_php_array() || incoming.is_php_array() {
+        // A boxed representation need not erase a proven packed-or-hash array contract.
+        return if is_array_like(&existing) && is_array_like(&incoming) {
+            PhpType::php_array()
+        } else {
+            PhpType::Mixed
+        };
+    }
     match (existing, incoming) {
         (PhpType::Array(left), PhpType::Array(right)) => {
             PhpType::Array(Box::new(join_array_payload_type(*left, *right)))
@@ -537,6 +557,9 @@ fn representation_contract(
     has_whole_representation_source: bool,
     iterated_in_body: bool,
 ) -> Option<PhpType> {
+    if fixed.is_php_array() {
+        return (!entry.is_php_array()).then(|| fixed.clone());
+    }
     match (entry.codegen_repr(), fixed.codegen_repr()) {
         (PhpType::Array(entry_element), PhpType::Array(fixed_element))
             if entry_element.codegen_repr() != PhpType::Mixed
@@ -625,12 +648,34 @@ fn representation_contract(
     }
 }
 
-/// Returns whether a loop-entry type is an indexed or associative array local.
+/// Recognizes concrete array storage and the boxed, non-null PHP array contract.
 fn is_array_like(ty: &PhpType) -> bool {
-    matches!(
-        ty.codegen_repr(),
-        PhpType::Array(_) | PhpType::AssocArray { .. }
-    )
+    ty.is_php_array() || matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+}
+
+/// The contract for a local that enters the loop holding `null` and is assigned something else
+/// inside it.
+///
+/// The body is checked ONCE, with the entry environment, so without this the header keeps the
+/// first iteration's `null` for the whole loop — and every later iteration re-enters holding
+/// whatever the previous one stored. `$n = null; for (…) { if ($n === null) { $n = 0; } $n++;
+/// echo $n; }` printed `111` where PHP prints `123`: the guard was folded as always-true
+/// because the loaded value was typed `null` (issue #562).
+///
+/// Boxed `Mixed` rather than the fixed-point join: the join of `null` and `int` is already
+/// `Mixed`, but the join of `null` and `array` is `array` — right for an array-typed entry that
+/// is merely growing, wrong here, because the FIRST read still happens before the assignment
+/// and still sees null. `Mixed` is the one representation that holds both on every path, which
+/// is also what makes the `=== null` guard a real runtime tag test instead of a folded
+/// constant.
+fn null_entry_contract(entry_ty: &PhpType, fixed_ty: &PhpType) -> Option<PhpType> {
+    if !matches!(entry_ty.codegen_repr(), PhpType::Void) {
+        return None;
+    }
+    if matches!(fixed_ty.codegen_repr(), PhpType::Void) {
+        return None;
+    }
+    Some(PhpType::Mixed)
 }
 
 /// Returns a self-evident scalar type when semantic inference is unavailable.
@@ -1143,6 +1188,13 @@ pub(crate) fn visit_child_expressions<'a>(expr: &'a Expr, visitor: &mut dyn FnMu
                 visitor(value);
             }
         }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries {
+                for expr in entry.exprs() {
+                    visitor(expr);
+                }
+            }
+        }
         ExprKind::NamedArg { value, .. }
         | ExprKind::Spread(value)
         | ExprKind::ErrorSuppress(value)
@@ -1259,6 +1311,47 @@ fn collect_foreach_sources<'a>(statements: &'a [Stmt], out: &mut HashSet<&'a str
     }
 }
 
+/// Adds the locals the body READS as values, beyond the `foreach` sources: an `array_pop($stack)`,
+/// a `$stack[$i]`, an `end($stack)` all reach the elements a previous iteration appended exactly
+/// as a `foreach` does. Symfony's expression-language `Lexer::tokenize()` pushes onto `$brackets`
+/// in one branch and pops it in another; with only `foreach` counted the stack stayed
+/// `array<never>` at the loop header and every pop read null.
+///
+/// A write names its array by a plain local name (`$a[] = v`, `$a[k] = v`), not by a value
+/// expression, so writes are not reads here. `count()`/`sizeof()` read only the length, which
+/// does not depend on the element representation, so an accumulator measured inside its own loop
+/// keeps its precise element type.
+fn collect_element_read_sources<'a>(statements: &'a [Stmt], out: &mut HashSet<&'a str>) {
+    use std::collections::HashMap;
+    let mut reads: HashMap<&'a str, usize> = HashMap::new();
+    let mut length_only: HashMap<&'a str, usize> = HashMap::new();
+    crate::parser::ast::visit::walk_nodes(statements, &mut |node| {
+        let crate::parser::ast::visit::Node::Expr(expr) = node else {
+            return;
+        };
+        match &expr.kind {
+            ExprKind::Variable(name) => *reads.entry(name.as_str()).or_default() += 1,
+            ExprKind::FunctionCall { name, args }
+                if name
+                    .last_segment()
+                    .is_some_and(|segment| {
+                        segment.eq_ignore_ascii_case("count") || segment.eq_ignore_ascii_case("sizeof")
+                    }) =>
+            {
+                if let Some(ExprKind::Variable(name)) = args.first().map(|arg| &arg.kind) {
+                    *length_only.entry(name.as_str()).or_default() += 1;
+                }
+            }
+            _ => {}
+        }
+    });
+    for (name, count) in reads {
+        if count > length_only.get(name).copied().unwrap_or(0) {
+            out.insert(name);
+        }
+    }
+}
+
 /// Borrows every statement list nested directly in `statement`, stopping at scope boundaries.
 fn nested_statement_bodies(statement: &Stmt) -> Vec<&[Stmt]> {
     let mut bodies: Vec<&[Stmt]> = Vec::new();
@@ -1312,4 +1405,60 @@ fn nested_statement_bodies(statement: &Stmt) -> Vec<&[Stmt]> {
         _ => {}
     }
     bodies
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{join_loop_flow_type, representation_contract};
+    use crate::types::PhpType;
+
+    /// Joining concrete storage with a declared array preserves the logical array proof.
+    #[test]
+    fn declared_array_loop_joins_preserve_the_contract_in_both_orders() {
+        for concrete in [
+            PhpType::Array(Box::new(PhpType::Never)),
+            PhpType::Array(Box::new(PhpType::Int)),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Int),
+            },
+        ] {
+            assert_eq!(
+                join_loop_flow_type(concrete.clone(), PhpType::php_array()),
+                PhpType::php_array(),
+            );
+            assert_eq!(
+                join_loop_flow_type(PhpType::php_array(), concrete.clone()),
+                PhpType::php_array(),
+            );
+            let contract = representation_contract(&concrete, &PhpType::php_array(), true, false)
+                .expect("concrete entry storage must widen before the loop");
+            assert!(contract.is_php_array());
+            assert_eq!(contract.codegen_repr(), PhpType::Mixed);
+        }
+        assert_eq!(
+            representation_contract(&PhpType::php_array(), &PhpType::php_array(), true, false),
+            None,
+        );
+    }
+
+    /// Boxed storage alone never proves that nullable, scalar or unknown values are arrays.
+    #[test]
+    fn declared_array_loop_joins_reject_non_array_evidence() {
+        for non_array in [
+            PhpType::Mixed,
+            PhpType::Int,
+            PhpType::Void,
+            PhpType::Union(vec![PhpType::php_array(), PhpType::Void]),
+        ] {
+            assert_eq!(
+                join_loop_flow_type(PhpType::php_array(), non_array.clone()),
+                PhpType::Mixed,
+            );
+            assert_eq!(
+                join_loop_flow_type(non_array, PhpType::php_array()),
+                PhpType::Mixed,
+            );
+        }
+    }
 }

@@ -1,11 +1,11 @@
 ---
-title: "sodium_crypto_box_seal() — internals"
+title: "sodium_crypto_box_seal() - internals"
 description: "Compiler internals for sodium_crypto_box_seal(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 866
+  order: 959
 ---
 
-## `sodium_crypto_box_seal()` — internals
+## `sodium_crypto_box_seal()` - internals
 
 ## Where it lives
 

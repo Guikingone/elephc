@@ -21,7 +21,7 @@
 
 use crate::parser::ast::{BinOp, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_array, e_binop, e_closure_call, e_int, e_var, function, internal_declarations,
+    e_array, e_binop, e_closure_call, e_int, e_var, function, php_semantics_declarations,
     s_array_assign, s_assign, s_foreach, s_if, s_return, t_array,
 };
 
@@ -36,7 +36,7 @@ const USE_BOTH: i64 = 1;
 
 /// Returns the `array_filter()` callback declarations for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| vec![filter_with_callback()])
+    php_semantics_declarations(|| vec![filter_with_callback()])
 }
 
 /// Builds `__elephc_array_filter_callback(array $array, $callback, int $mode): array`.

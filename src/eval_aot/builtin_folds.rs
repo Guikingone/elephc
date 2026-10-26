@@ -10,16 +10,29 @@
 use super::*;
 
 /// Folds pure static builtin calls whose integer result is fully known at compile time.
-pub(crate) fn fold_static_builtin_int_call(short_name: &str, args: &[Expr]) -> Option<i64> {
-    let ExprKind::IntLiteral(value) = fold_static_builtin_call(short_name, args)? else {
+pub(crate) fn fold_static_builtin_int_call(
+    short_name: &str,
+    args: &[Expr],
+    strict_php: bool,
+) -> Option<i64> {
+    let ExprKind::IntLiteral(value) = fold_static_builtin_call(short_name, args, strict_php)? else {
         return None;
     };
     Some(value)
 }
 
 /// Folds pure static builtin calls whose scalar result is fully known at compile time.
-pub(super) fn fold_static_builtin_call(short_name: &str, args: &[Expr]) -> Option<ExprKind> {
+pub(super) fn fold_static_builtin_call(
+    short_name: &str,
+    args: &[Expr],
+    strict_php: bool,
+) -> Option<ExprKind> {
     let name = php_symbol_key(short_name);
+    if crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
+        &name, strict_php,
+    ) {
+        return None;
+    }
     let normalized_args = normalize_static_builtin_args(&name, args)?;
     let args = normalized_args.as_slice();
     match name.as_str() {

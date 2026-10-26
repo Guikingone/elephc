@@ -1,16 +1,16 @@
 ---
-title: "bin2hex() — internals"
+title: "bin2hex() - internals"
 description: "Compiler internals for bin2hex(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 794
+  order: 826
 ---
 
-## `bin2hex()` — internals
+## `bin2hex()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/bin2hex.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/bin2hex.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

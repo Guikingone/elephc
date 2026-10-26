@@ -43,24 +43,23 @@ use crate::codegen_support::runtime_features::RuntimeFeatures;
 ///
 /// NOTHING HERE REACHES THE `elephc_curl` BRIDGE — that was checked, not assumed: none of
 /// these helpers calls a decref/release helper, so none of them can reach
-/// `__rt_mixed_free_deep`'s resource ladder. The three entries that DO reach code outside
-/// the hand-written runtime (`__rt_usort`, `__rt_array_udiff_uintersect`, `__rt_fiber_entry`)
+/// `__rt_mixed_free_deep`'s resource ladder. The two entries that DO reach code outside
+/// the hand-written runtime (`__rt_usort`, `__rt_fiber_entry`)
 /// are called out individually below and are the ones worth fixing first.
 const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     // -- No frame at all: the helper calls without adjusting rsp, so the callee is entered
     //    8 bytes off. Every callee here is hand-written assembly that touches only integer
     //    registers, so nothing observes it. The fix is a `sub rsp, 8` / `add rsp, 8` pair
     //    around each call, which is why these are cheap but not free: several are hot leaves.
-    ("__rt_strtolower", "frameless: calls __rt_strcopy, integer-only assembly"),
     ("__rt_hash_key_hash", "frameless: calls __rt_hash_bytes, integer-only assembly"),
     ("__rt_hash_key_eq", "frameless: calls __rt_str_eq, integer-only assembly"),
     ("__rt_array_rand", "frameless: calls __rt_random_uniform, integer-only assembly"),
     ("__rt_mixed_is_empty", "frameless: calls __rt_mixed_unbox, integer-only assembly"),
-    // __rt_report_uncaught_exception deliberately has NO entry here: it lives in
-    // NOT_STATICALLY_ANALYZABLE (its `and rsp, -16` realigns every call and defeats the
-    // walker), and a second entry in this list would silently absorb a real violation if
-    // the realignment were ever removed — analyze() drops `misaligned` findings for
-    // unanalyzable helpers, so this list must never double-cover one.
+    // The two uncaught-exception helpers deliberately have NO entry here: they live in
+    // NOT_STATICALLY_ANALYZABLE because their `and rsp, -16` instructions realign every
+    // call and defeat the walker. A second entry in this list would silently absorb a real
+    // violation if either realignment were removed because analyze() drops `misaligned`
+    // findings for unanalyzable helpers, so this list must never double-cover one.
     (
         "__rt_incref",
         "frameless: calls __rt_heap_debug_check_live, and only in --heap-debug builds. \
@@ -81,12 +80,6 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     (
         "__rt_heap_alloc",
         "calls __rt_heap_debug_validate_free_list (--heap-debug builds only), integer-only",
-    ),
-    (
-        "__rt_heap_free",
-        "calls __rt_object_handle_release and __rt_heap_debug_validate_free_list, both \
-         integer-only. NOTE this is one frame below __rt_mixed_free_deep, but it is reached \
-         AFTER the resource destructor has already run, never before it",
     ),
     // -- PRIVATE SUBROUTINES sharing the exported helper's `rbp` frame: they take no frame of
     //    their own (they read the caller's `[rbp - N]` spills directly), so the `call` between
@@ -110,26 +103,12 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
         "multi-push frame off by 8: calls __rt_concat_reserve / __rt_wordwrap_cpy_x86_64, \
          integer-only assembly",
     ),
-    (
-        "__rt_array_filter",
-        "multi-push frame off by 8: calls __rt_heap_alloc / __rt_object_handle_acquire, \
-         integer-only assembly",
-    ),
-    (
-        "__rt_array_filter_refcounted",
-        "multi-push frame off by 8: calls __rt_heap_alloc / __rt_object_handle_acquire, \
-         integer-only assembly",
-    ),
-    // -- The three that reach code this runtime did not write. FIX THESE FIRST.
+    // -- The two that reach code this runtime did not write. FIX THESE FIRST.
     (
         "__rt_usort",
         "REACHES NON-RUNTIME CODE: `call r12` is the user's comparator, i.e. COMPILED PHP. \
          It has survived because codegen spills floats with `movsd`/`movq` (alignment-\
          tolerant) rather than `movaps`, which is luck, not design",
-    ),
-    (
-        "__rt_array_udiff_uintersect",
-        "REACHES NON-RUNTIME CODE: same `call r12` user-callback shape as __rt_usort",
     ),
     (
         "__rt_fiber_entry",
@@ -149,20 +128,6 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
     (
         "__rt_vsprintf",
         "two paths reach one instruction with different frames (-72 / -88)",
-    ),
-    ("__rt_closure_bind", "realigns explicitly with `and rsp, -16`"),
-    (
-        "__elephc_eval_fatal",
-        "realigns explicitly with `and rsp, -16` before flushing output and exiting. The \
-         call is aligned by construction, but the walk cannot express an absolute stack \
-         alignment as an offset from the helper entry",
-    ),
-    (
-        "__rt_report_uncaught_exception",
-        "realigns explicitly with `and rsp, -16` before draining the output buffers. The \
-         walk tracks rsp as an exact offset from the entry, and a hard realignment has no \
-         such offset — but it is also the one construct that cannot BE misaligned: the \
-         following `call` runs on a 16-byte boundary by construction, whatever the path in",
     ),
     (
         "__rt_fiber_switch",
@@ -334,6 +299,10 @@ fn walk(
                 match (mnemonic, literal) {
                     ("sub", Some(n)) => work.push((index + 1, offset - n)),
                     ("add", Some(n)) => work.push((index + 1, offset + n)),
+                    ("and", Some(-16)) => {
+                        // Entry rsp is 8 modulo 16, so alignment has an exact relative delta.
+                        work.push((index + 1, offset - (8 + offset).rem_euclid(16)));
+                    }
                     ("mov", _) if rest == "rbp" => work.push((index + 1, -8)),
                     ("lea", _)
                         if rest.starts_with("[rbp - ") && rest.ends_with(']') =>
@@ -472,6 +441,25 @@ fn analyze(function: &Function) -> Analysis {
     misaligned.sort_by_key(|(line, _, _)| *line);
     misaligned.dedup_by_key(|(line, _, _)| *line);
     Analysis { unanalyzable: None, misaligned }
+}
+
+/// Audits aligned calls and still rejects a later misaligned call after explicit alignment.
+#[test]
+fn explicit_stack_alignment_preserves_subsequent_call_checks() {
+    for padding in [0, 8, 16, 24] {
+        let function = Function {
+            name: "fixture".into(),
+            body: [
+                "fixture:".to_string(), format!("sub rsp, {padding}"),
+                "and rsp, -16".into(), "call aligned".into(),
+                "sub rsp, 8".into(), "call misaligned".into(), "ret".into(),
+            ].into_iter().enumerate().collect(),
+        };
+        let analysis = analyze(&function);
+        assert!(analysis.unanalyzable.is_none(), "{padding}: {:?}", analysis.unanalyzable);
+        assert_eq!(analysis.misaligned.len(), 1, "{padding}: {:?}", analysis.misaligned);
+        assert_eq!(analysis.misaligned[0].1, "misaligned");
+    }
 }
 
 /// Renders the `linux-x86_64` runtime for one feature set.

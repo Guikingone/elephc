@@ -10,7 +10,7 @@
 //!   `crate::ir_lower::expr::compat_preludes` redirects every call to the helpers built in
 //!   `crate::array_walk_prelude`, which carry the measurements for why.
 //! - `check` validates the array and callback arguments using the contextual element type.
-//!   Returns `Bool`.
+//!   Boxed PHP arrays expose a writable Mixed value slot and a Mixed key slot. Returns `Bool`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -35,16 +35,12 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         Some(arg) => Some(cx.checker.infer_type(arg, cx.env)?),
         None => None,
     };
-    let callback_arg_types = crate::types::checker::builtins::array_walk_callback_arg_types(
-        &arr_ty,
-        &cx.args[1],
-        extra_arg,
-        false,
-    );
-    crate::types::checker::builtins::check_array_callback_builtin_call(
+    crate::types::checker::builtins::check_array_walk_callback_builtin_call(
         cx.checker,
         &cx.args[1],
-        &callback_arg_types,
+        &arr_ty,
+        extra_arg,
+        false,
         cx.span,
         cx.env,
         &format!("{}() callback", cx.name),

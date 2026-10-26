@@ -21,11 +21,13 @@ mod catalog_constants;
 mod catalog_constants_curl;
 mod catalog_data;
 mod catalog_data_additional;
+mod catalog_mbstring;
 mod catalog_pcntl;
 mod catalog_xml;
 #[cfg(feature = "curl")]
 mod catalog_curl;
 mod catalog_surfaces;
+mod core_functions;
 mod eval_profile;
 mod extensions;
 mod id;
@@ -37,6 +39,10 @@ mod runtime_id;
 /// Named character references and the keep rule for `htmlspecialchars(…, double_encode: false)`.
 pub mod html_entities;
 mod spec;
+mod type_spec;
+pub mod mbstring_abi;
+pub mod output_abi;
+pub mod string_literal;
 mod support;
 mod symbol_registry;
 
@@ -50,6 +56,7 @@ pub use extensions::{complete_surface_modules, module_php_functions, php_registr
 pub use class_spec::{ClassContract, ClassKind, ClassRoute};
 pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
 pub use id::BuiltinId;
+pub use core_functions::CORE_FUNCTION_NAMES;
 pub use module::PhpModule;
 pub use php_version::PhpVersion;
 pub use registry::{contracts, lookup, lookup_id};

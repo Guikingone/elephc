@@ -1,8 +1,8 @@
 ---
 title: "imagecolorclosesthwb()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the palette index closest in hue, whiteness, and blackness."
 sidebar:
-  order: 483
+  order: 484
 ---
 
 ## imagecolorclosesthwb()
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorclosesthwb(mixed $image, int $red, int $green, int $blue): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the palette index closest in hue, whiteness, and blackness.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -26,7 +26,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

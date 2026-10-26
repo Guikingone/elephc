@@ -6,8 +6,12 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - Dynamic constructor conversion owners stay guarded until each normal cleanup consumes it.
 
 use super::*;
+
+// One aligned owner slot followed by its invisible unwind activation.
+pub(super) const CALL_ARG_TEMP_CLEANUP_BYTES: usize = 16 + abi::CALL_OPERAND_OWNER_RECORD_BYTES;
 
 /// Plans scalar Mixed arguments that can be borrowed on the caller stack for a direct callee.
 pub(super) fn plan_borrowed_stack_mixed_args(
@@ -167,13 +171,13 @@ pub(super) fn plan_call_arg_temp_cleanups(
         if let Some(cleanup_ty) = direct_call_arg_temp_cleanup_type(&source_ty, param_ty) {
             cleanups.push(CallArgTempCleanup {
                 param_index: index,
-                offset: cleanups.len() * 16,
+                offset: cleanups.len() * CALL_ARG_TEMP_CLEANUP_BYTES,
                 ty: cleanup_ty,
             });
         } else if direct_call_arg_splits_borrowed_array(ctx, *value, &source_ty, param_ty)? {
             cleanups.push(CallArgTempCleanup {
                 param_index: index,
-                offset: cleanups.len() * 16,
+                offset: cleanups.len() * CALL_ARG_TEMP_CLEANUP_BYTES,
                 ty: widened_array_temp_type(&source_ty),
             });
         }
@@ -194,6 +198,14 @@ pub(super) fn direct_call_arg_temp_cleanup_type(
 ) -> Option<PhpType> {
     if direct_call_arg_creates_mixed_temp(source_ty, param_ty) {
         return Some(PhpType::Mixed);
+    }
+    // A boxed value handed to a `string` parameter is cast into a detached string the caller
+    // owns (`__rt_mixed_cast_string`): a Mixed-receiver call cannot cast it in EIR because the
+    // runtime class decides the signature.
+    if param_ty.codegen_repr() == PhpType::Str
+        && matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    {
+        return Some(PhpType::Str);
     }
     if matches!(
         param_ty.codegen_repr(),
@@ -260,16 +272,26 @@ fn widened_array_temp_type(source_ty: &PhpType) -> PhpType {
     }
 }
 
-/// Saves the current pointer result into the reserved call-argument cleanup area.
+/// Saves and publishes a coercion owner before another argument or the callee can throw.
 pub(super) fn save_call_arg_temp_cleanup(
     ctx: &mut FunctionContext<'_>,
     cleanup: &CallArgTempCleanup,
     arg_temp_bytes: usize,
 ) {
-    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    let scratch = abi::tertiary_scratch_reg(ctx.emitter);
     let offset = arg_temp_bytes + cleanup.offset;
     abi::emit_temporary_stack_address(ctx.emitter, scratch, offset);
     abi::emit_store_to_address(ctx.emitter, abi::int_result_reg(ctx.emitter), scratch, 0);
+    abi::emit_link_call_operand_owner_at_stack(ctx.emitter, scratch, false, offset + 16);
+}
+
+/// Releases one caller-owned argument temporary; a detached string goes through the kind dispatcher.
+pub(super) fn emit_call_arg_cleanup_release(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
+    if *ty == PhpType::Str {
+        abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+    } else {
+        abi::emit_decref_if_refcounted(ctx.emitter, ty);
+    }
 }
 
 /// Releases caller-owned temporary arguments after the call result has been saved.
@@ -282,7 +304,10 @@ pub(super) fn emit_call_arg_temp_cleanups(
         return Ok(());
     }
     let result_alias = call_result_can_alias_mixed_temp(ctx, result)?;
-    for cleanup in &call_args.cleanup_slots {
+    // Owners were published in argument order. Detach one at a time in reverse
+    // order so a throwing destructor still unwinds every outstanding argument.
+    for cleanup in call_args.cleanup_slots.iter().rev() {
+        abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, cleanup.offset + 16);
         abi::emit_load_temporary_stack_slot(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
@@ -295,57 +320,14 @@ pub(super) fn emit_call_arg_temp_cleanups(
         } else {
             None
         };
-        abi::emit_decref_if_refcounted(ctx.emitter, &cleanup.ty);
+        emit_call_arg_cleanup_release(ctx, &cleanup.ty);
         if let Some(label) = skip_cleanup_label {
             ctx.emitter.label(&label);
         }
     }
     abi::emit_release_temporary_stack(ctx.emitter, call_args.cleanup_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.cleanup_guard_bytes);
     Ok(())
-}
-
-/// Whether some `return` of `callee` hands back a parameter cell WITHOUT acquiring it.
-///
-/// Only then can the caller's boxed argument temporary BE the returned value with a single
-/// reference, which is what the result-alias skip in [`emit_call_arg_temp_cleanups`] protects. An
-/// ordinary PHP body never does that: returning a parameter goes through
-/// `acquire_borrowed_return_value`, so the returned cell carries its own reference and the skip
-/// left the caller's temporary unreleased -- `$c = fn($k) => $k; $c(1);` leaked the boxed `1`
-/// on every call. A shape this walk cannot see through answers "may", which keeps the skip.
-pub(super) fn callee_may_return_unacquired_param(callee: &Function) -> bool {
-    fn returns_param(callee: &Function, value: ValueId, depth: usize) -> bool {
-        if depth > 8 {
-            return true;
-        }
-        let Some(value_ref) = callee.value(value) else {
-            return true;
-        };
-        let ValueDef::Instruction { inst, .. } = value_ref.def else {
-            return true;
-        };
-        let Some(inst) = callee.instruction(inst) else {
-            return true;
-        };
-        match inst.op {
-            Op::LoadLocal => match inst.immediate {
-                Some(Immediate::LocalSlot(slot)) => (slot.as_raw() as usize) < callee.params.len(),
-                _ => true,
-            },
-            Op::Move | Op::Borrow => inst
-                .operands
-                .first()
-                .is_none_or(|operand| returns_param(callee, *operand, depth + 1)),
-            _ => false,
-        }
-    }
-    callee
-        .blocks
-        .iter()
-        .filter_map(|block| block.terminator.as_ref())
-        .any(|terminator| match terminator {
-            Terminator::Return { value: Some(value) } => returns_param(callee, *value, 0),
-            _ => false,
-        })
 }
 
 /// Returns the result value when it can alias a caller-owned temporary Mixed argument.

@@ -42,12 +42,8 @@ impl EvalStreamResources {
     /// demo's production logging does on every request; interpreted, it failed to open and the
     /// logger threw.
     fn open_std_stream(&mut self, fd: i32, path: &str, mode: &EvalOpenMode) -> Option<i64> {
-        use std::os::fd::{AsFd, BorrowedFd};
-        // SAFETY: descriptors 0-2 stay open for the life of the process; only borrowed here.
-        let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-        let owned = borrowed.as_fd().try_clone_to_owned().ok()?;
         Some(self.insert(EvalFileStream::new(
-            File::from(owned),
+            duplicate_standard_descriptor(fd).ok()?,
             path.to_string(),
             mode.label.clone(),
         )))

@@ -11,7 +11,7 @@
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
-use crate::parser::ast::{AttributeGroup, Expr, Stmt, StmtKind, TypeExpr};
+use crate::parser::ast::{AttributeGroup, Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
 
@@ -58,6 +58,17 @@ pub(super) fn parse_function_decl(
     };
 
     let body = super::blocks::parse_executable_block(tokens, pos)?;
+    // The declaration's extent ends at the closing `}` just consumed: php's
+    // `ReflectionFunction::getEndLine()` names that line, and it answered the start line.
+    let span = match pos.checked_sub(1).and_then(|index| tokens.get(index)) {
+        Some(close) => Span {
+            line: span.line,
+            col: span.col,
+            end_line: close.1.span.end_line.max(span.line),
+            end_col: close.1.span.end_col,
+        },
+        None => span,
+    };
 
     Ok(Stmt::new(
         StmtKind::FunctionDecl {
@@ -228,6 +239,28 @@ fn type_starts_at(tokens: &[SpannedToken], index: usize) -> bool {
                 | Token::Parent
         )
     )
+}
+
+/// Widens a declared parameter type to accept `null`, for a parameter whose default is `null`.
+///
+/// A type that already admits null (`?T`, a union with a `null` member, `mixed`) is returned
+/// unchanged; a union gains its null sentinel through [`normalize_union_members`] so `A|B = null`
+/// reads exactly like `A|B|null`; every other type becomes `?T`.
+pub(crate) fn implicitly_nullable_type(ty: TypeExpr) -> TypeExpr {
+    match ty {
+        TypeExpr::Nullable(_) | TypeExpr::Void | TypeExpr::Never => ty,
+        TypeExpr::Named(ref name) if name.as_str().eq_ignore_ascii_case("mixed") => ty,
+        TypeExpr::Union(mut members) => {
+            if members.iter().any(|member| matches!(member, TypeExpr::Void)) {
+                return TypeExpr::Union(members);
+            }
+            members.push(TypeExpr::Void);
+            normalize_union_members(members)
+        }
+        // `A&B $x = null` is a php compile error; leave it to the checker.
+        TypeExpr::Intersection(_) => ty,
+        other => TypeExpr::Nullable(Box::new(other)),
+    }
 }
 
 /// Collapses a parsed union member list into its canonical `TypeExpr`.
@@ -496,6 +529,16 @@ pub(super) fn parse_params(
                     Some(parse_expr(tokens, pos)?)
                 } else {
                     None
+                };
+                // `T $x = null` is implicitly `?T`: php lets a null default widen the declared
+                // type (deprecated since 8.4, still the rule), so `f(null)` binds. Without the
+                // widening the checker typed the parameter `T` and refused every explicit null
+                // argument -- `callable $handler = null` is how Guzzle spells an optional handler.
+                let type_ann = match (type_ann, &default) {
+                    (Some(ty), Some(default)) if matches!(default.kind, ExprKind::Null) => {
+                        Some(implicitly_nullable_type(ty))
+                    }
+                    (ty, _) => ty,
                 };
                 param_attributes.push(attributes);
                 params.push((n, type_ann, default, is_ref));

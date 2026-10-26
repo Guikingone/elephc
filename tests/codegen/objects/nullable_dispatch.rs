@@ -543,3 +543,52 @@ echo "after";
         out.stderr
     );
 }
+
+/// Tests that a spread argument reaches a method called on a boxed (retyped, conditionally
+/// assigned) receiver as the arguments it holds, not as one array operand.
+///
+/// `$object` is re-bound to another class inside the `if`, so its slot is a boxed cell and the
+/// call goes through the boxed-receiver path. `$object->deprecate($k, ...$rest)` counts two
+/// arguments against a three-parameter method, which dropped the signature and handed the spread
+/// array to the dispatch as a single plain operand; the call then died with "Call to a member
+/// function deprecate() on null". Symfony's `debug:container --parameters` is this shape.
+#[test]
+fn test_spread_argument_reaches_method_on_boxed_receiver_in_loop() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Bag {
+    public array $deprecated = [];
+    public function deprecate(string $name, string $package, string $version, string $message = 'm'): void
+    {
+        $this->deprecated[$name] = [$package, $version, $message];
+    }
+}
+class Builder {
+    public function nothing(): int { return 0; }
+}
+function run(int $mode, array $source): string {
+    $object = new Builder();
+    if ($mode > 0) {
+        $object = new Bag();
+        foreach ($source as $k => $rest) {
+            $object->deprecate($k, ...$rest);
+        }
+        $object->deprecate('lit', ...['pkg', '9.9']);
+    }
+    return json_encode($object instanceof Bag ? $object->deprecated : []);
+}
+echo run($argc, ['a' => ['p1', '1.0'], 'b' => ['p2', '2.0', 'custom']]), "\n";
+echo run($argc - 1, []), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "{\"a\":[\"p1\",\"1.0\",\"m\"],\"b\":[\"p2\",\"2.0\",\"custom\"],\"lit\":[\"pkg\",\"9.9\",\"m\"]}\n[]\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

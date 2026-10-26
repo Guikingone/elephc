@@ -570,6 +570,47 @@ echo eval('new \\App\\Ghost\\AutoloadedLazyGhostConsumer($container->privates["d
     assert_eq!(out, "ok");
 }
 
+/// Verifies that an eval-declared subclass of a compiled class may redeclare the constructor with
+/// a different signature: php exempts constructors from signature compatibility unless the
+/// parent's is abstract. Symfony's generated container (`__construct()` over
+/// `Container::__construct(?ParameterBagInterface $p = null)`) is this shape.
+#[test]
+fn test_eval_subclass_redeclares_compiled_constructor_with_another_signature() {
+    let out = compile_and_run(
+        r#"<?php
+class CompiledBase {
+    public string $tag = "base";
+    public function __construct(?array $options = null) { $this->tag = "base:" . count($options ?? []); }
+}
+eval('class EvalChild extends CompiledBase {
+    public function __construct(string $name, int $n) { $this->tag = $name . $n; }
+}');
+$c = new EvalChild("child", 2);
+echo $c->tag;
+"#,
+    );
+    assert_eq!(out, "child2");
+}
+
+/// Verifies that eval can call a compiled constructor as an ordinary method. The constructor is
+/// published only as the class's constructor, and the method binder must still find its physical
+/// signature (with the hidden argument collector an eval program gives every body), both on a
+/// constructed object and inside a lazy ghost's initializer.
+#[test]
+fn test_eval_calls_compiled_constructor_as_a_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Dep { public string $value = 'new'; public function __construct(string $value) { $this->value = $value; } }
+$o = new Dep("a");
+eval('$o->__construct("b");');
+echo $o->value, "|";
+eval('$h = (new ReflectionClass("Dep"))->newLazyGhost(static function ($proxy) { $proxy->__construct("init"); });');
+echo $h->value;
+"#,
+    );
+    assert_eq!(out, "b|init");
+}
+
 /// Discarding a dynamic method's return of its borrowed object parameter must not free the
 /// constructorless object retained by the caller.
 #[test]

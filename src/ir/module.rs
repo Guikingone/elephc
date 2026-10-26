@@ -54,11 +54,41 @@ pub enum ConstScalar {
 /// Method metadata retained for standalone trait reflection.
 #[derive(Debug, Clone)]
 pub struct TraitMethodInfo {
+    /// The method's spelling as declared in the trait, for reflected metadata.
+    ///
+    /// Lookup is keyed case-insensitively, but `ReflectionMethod::getName()` must report the
+    /// declaration rather than the lookup key (issue #571), and a trait's declarations are not
+    /// reachable from the using class's `method_decls`.
+    pub declared_name: String,
+    /// Position in the trait's declaration, independent of hash-map iteration order.
+    pub declaration_order: usize,
     pub signature: FunctionSig,
     pub visibility: Visibility,
     pub is_static: bool,
     pub is_final: bool,
     pub is_abstract: bool,
+}
+
+/// One generated PHP 8.5 `clone()` property-override applicator.
+///
+/// Each entry names the synthetic EIR function that applies an override array to a clone of
+/// exactly one runtime class, resolved from one profile of PHP invocation scopes. Backend clone
+/// lowering dispatches on the clone's runtime class id and the invocation-site scope id and then
+/// calls `function_name` with `(clone, overrides)`.
+#[derive(Debug, Clone)]
+pub struct CloneOverrideApplicator {
+    /// Dense runtime class id of the cloned object this applicator serves.
+    pub class_id: u64,
+    /// PHP class name matching `class_id`, used for receiver typing in backend call staging.
+    pub class_name: String,
+    /// Dense class ids of the invocation scopes this applicator body is exact for.
+    ///
+    /// Several scopes share one body whenever they resolve every override name identically.
+    pub scope_class_ids: Vec<u64>,
+    /// Whether this body also serves global scope and every scope unrelated to `class_name`.
+    pub is_default_scope: bool,
+    /// EIR function name of the applicator body.
+    pub function_name: String,
 }
 
 /// Complete EIR module for one compile target.
@@ -81,6 +111,13 @@ pub struct Module {
     /// Files the closed world compiled as callable units (`opcache_compile_file()` in the preload
     /// script), so a runtime `include` of one calls compiled code instead of interpreting it.
     pub include_units: Vec<IncludeUnit>,
+    /// The build links no interpreter (`--closed-world`): a runtime `include`/`require` is
+    /// answered from the compiled-source table (`__rt_closed_include`) and never reaches the
+    /// eval bridge.
+    pub closed_world: bool,
+    /// What a runtime include of each compiled source does in a closed-world build; `None` when
+    /// the program has no runtime include (or is not closed-world). One record per catalog source.
+    pub closed_includes: Option<Vec<ClosedInclude>>,
     /// LOWERCASE names of compiled classes that must still answer `class_exists($n, false)` false.
     ///
     /// A closed-world build declares everything it compiled from the first instruction. For a
@@ -99,6 +136,11 @@ pub struct Module {
     /// Names some `define()` call creates: `defined()` reads their `_define_seen` flag, and
     /// `__rt_web_reset` clears it so each request starts with them undefined, as php does.
     pub(crate) runtime_define_names: std::collections::BTreeSet<String>,
+    /// Optional mbstring startup arguments: effective core encodings followed by raw INI pairs.
+    /// These belong to user assembly, never the reusable runtime object.
+    pub mbstring_startup: Option<Vec<Vec<u8>>>,
+    /// Canonical PHP source paths compiled into this binary, in include order.
+    pub included_files: Vec<String>,
     /// `--probe` build key, embedded as `_elephc_probe_key` so the probe endpoint
     /// can prove the binary's identity through the HMAC handshake. `None` unless
     /// `--probe` is set.
@@ -128,6 +170,7 @@ pub struct Module {
     pub declared_trait_method_names: HashMap<String, Vec<String>>,
     pub declared_trait_methods: HashMap<String, HashMap<String, TraitMethodInfo>>,
     pub declared_trait_property_names: HashMap<String, Vec<String>>,
+    pub declared_trait_properties: HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
     pub declared_trait_constant_names: HashMap<String, Vec<String>>,
     pub declared_trait_constants: HashMap<String, HashMap<String, crate::parser::ast::Expr>>,
     pub declared_trait_constant_types:
@@ -136,6 +179,11 @@ pub struct Module {
     pub declared_trait_final_constants: HashMap<String, HashSet<String>>,
     /// Prescanned global constant values used by EIR lowering and eval metadata registration.
     pub global_constants: HashMap<String, (ExprKind, PhpType)>,
+    /// User-declared global constant names, separated from the seeded builtin inventory.
+    pub user_defined_constants: Vec<String>,
+    /// Path of every included or autoloaded file, by the source identity its spans carry
+    /// (`Span::source_id`). Identity 0 is the entry file, `source_path`.
+    pub source_files: std::collections::BTreeMap<u32, String>,
     pub class_infos: crate::fast_hash::FastMap<String, ClassInfo>,
     pub interface_infos: HashMap<String, InterfaceInfo>,
     pub enum_infos: HashMap<String, EnumInfo>,
@@ -152,6 +200,35 @@ pub struct Module {
     /// those names, so a non-web read/write must not assume a live Hash
     /// pointer is already there.
     pub web: bool,
+    /// Generated `clone()` property-override applicators, sorted by class id then scope id.
+    pub clone_override_applicators: Vec<CloneOverrideApplicator>,
+    /// Lazily built `(implementing class, method key, is_static) -> index into class_methods`,
+    /// tagged with the `class_methods` length it was built for (see [`Module::class_method`]).
+    class_method_lookup: std::sync::OnceLock<(usize, ClassMethodLookup)>,
+}
+
+/// Index from `(implementing class, lowercased method name, is_static)` to a `class_methods` slot.
+type ClassMethodLookup = crate::fast_hash::FastMap<(String, String, bool), usize>;
+
+/// How a closed-world build answers a runtime include of one compiled source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClosedIncludeKind {
+    /// The file is declarations the binary already carries: including it runs nothing and
+    /// evaluates to `1` (`true` for an `_once` form that finds it already included).
+    Declarations,
+    /// A unit function (the PHP name) runs the file's top level and returns its value.
+    Unit(String),
+    /// The file is part of the closed world but its top level has effects the binary cannot
+    /// replay from an include (the compiler ran it at its static include site): a runtime
+    /// include that needs it to run again is a fatal error naming the file.
+    NotCompiled,
+}
+
+/// One compiled source and what a runtime include of its canonical path does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClosedInclude {
+    pub canonical_path: std::path::PathBuf,
+    pub kind: ClosedIncludeKind,
 }
 
 /// One file the compiler turned into a function, and the path a runtime include reaches it by.
@@ -173,12 +250,16 @@ impl Module {
             source_catalog: None,
             preincluded_sources: Default::default(),
             include_units: Vec::new(),
+            closed_world: false,
+            closed_includes: None,
             deferred_class_loads: Default::default(),
             runtime_bound_functions: Default::default(),
             ref_param_escaping_callees: Default::default(),
             runtime_define_names: Default::default(),
             target,
             source_path: None,
+            mbstring_startup: None,
+            included_files: Vec::new(),
             probe_key: None,
             functions: Vec::new(),
             class_methods: Vec::new(),
@@ -205,6 +286,7 @@ impl Module {
             declared_trait_method_names: HashMap::new(),
             declared_trait_methods: HashMap::new(),
             declared_trait_property_names: HashMap::new(),
+            declared_trait_properties: HashMap::new(),
             declared_trait_constant_names: HashMap::new(),
             declared_trait_constants: HashMap::new(),
             declared_trait_constant_types: HashMap::new(),
@@ -212,6 +294,8 @@ impl Module {
             declared_trait_final_constants: HashMap::new(),
             global_constants: HashMap::new(),
             class_infos: crate::fast_hash::FastMap::default(),
+            user_defined_constants: Vec::new(),
+            source_files: std::collections::BTreeMap::new(),
             interface_infos: HashMap::new(),
             enum_infos: HashMap::new(),
             extern_class_infos: HashMap::new(),
@@ -220,7 +304,49 @@ impl Module {
             extern_globals: HashMap::new(),
             required_runtime_features: RuntimeFeatures::none(),
             web: false,
+            clone_override_applicators: Vec::new(),
+            class_method_lookup: std::sync::OnceLock::new(),
         }
+    }
+
+    /// The lowered body implementing `impl_class::method_key` (method key already lowercased).
+    ///
+    /// Codegen asks this from every descriptor template; a linear scan of `class_methods` (47 k
+    /// bodies on the Symfony demo, each split and lowercased per probe) dominated parallel
+    /// codegen. The index is built on first use; if bodies were added since, it is not trusted
+    /// and the scan answers.
+    pub fn class_method(
+        &self,
+        impl_class: &str,
+        method_key: &str,
+        is_static: bool,
+    ) -> Option<&Function> {
+        let (built_for, lookup) = self.class_method_lookup.get_or_init(|| {
+            let mut lookup = ClassMethodLookup::default();
+            for (index, function) in self.class_methods.iter().enumerate() {
+                if let Some((class, method)) = function.name.rsplit_once("::") {
+                    lookup
+                        .entry((
+                            class.to_string(),
+                            crate::names::php_symbol_key(method),
+                            function.flags.is_static,
+                        ))
+                        .or_insert(index);
+                }
+            }
+            (self.class_methods.len(), lookup)
+        });
+        if *built_for == self.class_methods.len() {
+            return lookup
+                .get(&(impl_class.to_string(), method_key.to_string(), is_static))
+                .and_then(|index| self.class_methods.get(*index));
+        }
+        self.class_methods.iter().find(|function| {
+            function.flags.is_static == is_static
+                && function.name.rsplit_once("::").is_some_and(|(class, method)| {
+                    class == impl_class && crate::names::php_symbol_key(method) == method_key
+                })
+        })
     }
 
     /// Creates a module whose source identities are frozen before any body is lowered.
@@ -325,6 +451,11 @@ impl DataPool {
     /// Returns the identifier of an already interned function name, without interning it.
     pub fn function_name_id(&self, value: &str) -> Option<DataId> {
         indexed_id(&self.function_names, &self.index.function_names, value)
+    }
+
+    /// Returns the identifier of an already-interned string literal, without interning it.
+    pub fn string_id(&self, value: &str) -> Option<DataId> {
+        indexed_id(&self.strings, &self.index.strings, value)
     }
 
     /// Interns a class name and returns its stable data identifier.

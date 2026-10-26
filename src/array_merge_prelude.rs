@@ -44,7 +44,15 @@ pub(crate) const GRADUAL_ARRAY_MERGE_ONLY_SPREAD_NAME: &str =
 
 /// PHP source for the injected gradual `array_merge()` implementation.
 pub const ARRAY_MERGE_PRELUDE_SRC: &str = r#"<?php
+function __elephc_array_merge_require_array(mixed $value, int $position): void {
+    if (!is_array($value)) {
+        throw new TypeError("array_merge(): Argument #" . $position . " must be of type array, " . get_debug_type($value) . " given");
+    }
+}
+
 function __elephc_array_merge_gradual(mixed $first, mixed $second): array {
+    __elephc_array_merge_require_array($first, 1);
+    __elephc_array_merge_require_array($second, 2);
     $merged = [];
     foreach ($first as $key => $value) {
         if (is_int($key)) {
@@ -64,6 +72,9 @@ function __elephc_array_merge_gradual(mixed $first, mixed $second): array {
 }
 
 function __elephc_array_merge_gradual_three(mixed $first, mixed $second, mixed $third): array {
+    __elephc_array_merge_require_array($first, 1);
+    __elephc_array_merge_require_array($second, 2);
+    __elephc_array_merge_require_array($third, 3);
     $merged = [];
     foreach ($first as $key => $value) {
         if (is_int($key)) { $merged[] = $value; } else { $merged[$key] = $value; }
@@ -78,6 +89,11 @@ function __elephc_array_merge_gradual_three(mixed $first, mixed $second, mixed $
 }
 
 function __elephc_array_merge_gradual_five(mixed $first, mixed $second, mixed $third, mixed $fourth, mixed $fifth): array {
+    __elephc_array_merge_require_array($first, 1);
+    __elephc_array_merge_require_array($second, 2);
+    __elephc_array_merge_require_array($third, 3);
+    __elephc_array_merge_require_array($fourth, 4);
+    __elephc_array_merge_require_array($fifth, 5);
     $merged = [];
     foreach ($first as $key => $value) {
         if (is_int($key)) { $merged[] = $value; } else { $merged[$key] = $value; }
@@ -98,6 +114,12 @@ function __elephc_array_merge_gradual_five(mixed $first, mixed $second, mixed $t
 }
 
 function __elephc_array_merge_gradual_six(mixed $first, mixed $second, mixed $third, mixed $fourth, mixed $fifth, mixed $sixth): array {
+    __elephc_array_merge_require_array($first, 1);
+    __elephc_array_merge_require_array($second, 2);
+    __elephc_array_merge_require_array($third, 3);
+    __elephc_array_merge_require_array($fourth, 4);
+    __elephc_array_merge_require_array($fifth, 5);
+    __elephc_array_merge_require_array($sixth, 6);
     $merged = [];
     foreach ($first as $key => $value) {
         if (is_int($key)) { $merged[] = $value; } else { $merged[$key] = $value; }
@@ -121,11 +143,15 @@ function __elephc_array_merge_gradual_six(mixed $first, mixed $second, mixed $th
 }
 
 function __elephc_array_merge_gradual_spread(mixed $first, mixed $rest): array {
+    __elephc_array_merge_require_array($first, 1);
+    $position = 1;
     $merged = [];
     foreach ($first as $key => $value) {
         if (is_int($key)) { $merged[] = $value; } else { $merged[$key] = $value; }
     }
     foreach ($rest as $array) {
+        $position++;
+        __elephc_array_merge_require_array($array, $position);
         foreach ($array as $key => $value) {
             if (is_int($key)) { $merged[] = $value; } else { $merged[$key] = $value; }
         }
@@ -134,8 +160,11 @@ function __elephc_array_merge_gradual_spread(mixed $first, mixed $rest): array {
 }
 
 function __elephc_array_merge_gradual_only_spread(mixed $arrays): array {
+    $position = 0;
     $merged = [];
     foreach ($arrays as $array) {
+        $position++;
+        __elephc_array_merge_require_array($array, $position);
         foreach ($array as $key => $value) {
             if (is_int($key)) { $merged[] = $value; } else { $merged[$key] = $value; }
         }

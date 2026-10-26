@@ -128,8 +128,10 @@ Subcommands:
 Modes:
   --web                   Compile as a prefork HTTP server
   --web-isolation MODE    worker (default) | pool | request; requires --web
+  --closed-world          Link no interpreter; fail the build if anything still needs it (or ELEPHC_CLOSED_WORLD=1)
   --strict-php            Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
   --strict-locals         Make an incompatible local retype (e.g. int then string) a compile error instead of a warning
+  --lint                  Report PHP-divergent lints: unused variables, unreachable code, and permissive local retypes
 
 Output modes:
   --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
@@ -145,7 +147,7 @@ Target:
   --php-version VERSION   8.0 through 8.6 (detected; fallback: 8.5)
 
 Codegen:
-  --heap-size=BYTES       Fixed heap size in bytes (default: 8388608)
+  --heap-size=BYTES       Fixed heap size in bytes (default: 134217728, php's memory_limit)
   --null-repr=MODE        tagged (default) | sentinel
   --regalloc=MODE         linear (default) | stack
   --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
@@ -164,7 +166,7 @@ Codegen:
                           or use @file with one name per line)
   --heap-debug            Enable heap debug instrumentation
   --define SYMBOL         Define a symbol for `ifdef` conditional compilation
-  --ini KEY=VALUE         Bake an INI directive override (repeatable; opcache.* honored)
+  --ini KEY=VALUE         Bake an INI directive override (OPcache and mbstring startup)
   --strict-opcache        Throw when opcache_invalidate() targets AOT-frozen code
 
 Linking:
@@ -239,7 +241,13 @@ pub(crate) struct CliConfig {
     /// Make an incompatible local retype (e.g. a variable assigned `int` then
     /// later `string`) a compile error instead of a warning.
     pub(crate) strict_locals: bool,
+    /// Report PHP-divergent lints (unused variables, unreachable code, permissive local retypes).
+    /// Off by default so an ordinary PHP program compiles with the same silence as under php.
+    pub(crate) lint: bool,
     pub(crate) web: bool,
+    /// Link no interpreter (eval bridge): any construct that still needs it fails the build
+    /// with the list of reasons. Also requested by `ELEPHC_CLOSED_WORLD=1`.
+    pub(crate) closed_world: bool,
     /// Process-isolation architecture baked into a `--web` executable.
     pub(crate) web_isolation: WebIsolation,
     /// Optional capabilities the user force-enabled with `--with-<name>` (short
@@ -253,11 +261,10 @@ pub(crate) struct CliConfig {
     /// Errors, warnings, and the final success line are unaffected.
     pub(crate) quiet: bool,
     /// Compile-time INI directive overrides from repeated `--ini <key>=<value>` flags, in
-    /// the order supplied (last-wins per key is resolved downstream). For this increment only
-    /// `opcache.*` keys are meaningful — they are baked into the OPcache configuration surface
-    /// (`opcache_get_configuration`/`opcache_get_status`/`ini_get`/enabled-state). A non-opcache
-    /// key is stored but ignored by the opcache layer (general INI is a future increment); it is
-    /// never an error so a forward-looking `--ini` invocation does not break.
+    /// the order supplied (last-wins per key is resolved downstream). OPcache settings feed
+    /// its compatibility surface. Programs using mbstring also initialize its shared engine
+    /// from mbstring directives and effective core encoding defaults. General INI routing
+    /// remains separate; unknown keys are retained without becoming compiler errors.
     pub(crate) ini_overrides: Vec<(String, String)>,
 }
 
@@ -317,7 +324,10 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         process::exit(0);
     }
 
-    let mut heap_size: usize = 8_388_608; // 8MB default
+    // php's own `memory_limit` default. The heap is reserved (zero-fill, touched only as it is
+    // used), not committed, so the size costs neither binary bytes nor resident memory; 8 MB was
+    // not enough for a Symfony console rebuilding its container (`lint:container`).
+    let mut heap_size: usize = 134_217_728;
     let mut gc_stats = false;
     let mut counters = false;
     let mut instrument = crate::codegen::Instrumentation::Off;
@@ -342,7 +352,9 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut defines: HashSet<String> = HashSet::new();
     let mut strict_php = false;
     let mut strict_locals = false;
+    let mut lint = false;
     let mut web = false;
+    let mut closed_world = crate::closed_world::requested_by_environment();
     let mut web_isolation = WebIsolation::default();
     let mut web_isolation_explicit = false;
     let mut quiet = false;
@@ -514,6 +526,10 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             strict_php = true;
         } else if arg == "--strict-locals" {
             strict_locals = true;
+        } else if arg == "--lint" {
+            lint = true;
+        } else if arg == "--closed-world" {
+            closed_world = true;
         } else if arg == "--web" {
             web = true;
         } else if arg == "--web-isolation" {
@@ -645,7 +661,9 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         defines,
         strict_php,
         strict_locals,
+        lint,
         web,
+        closed_world,
         web_isolation,
         with_crates,
         quiet,
@@ -754,6 +772,20 @@ fn parse_required_php_version(
 
 /// Parses a supported PHP compatibility version or exits with a focused diagnostic.
 fn parse_php_version(value: &str) -> crate::web_prelude::PhpVersion {
+    // `8.5.10`: the `8.5` profile, reporting patch release 10 to the program.
+    let mut parts = value.splitn(3, '.');
+    let (major, minor, patch) = (parts.next(), parts.next(), parts.next());
+    if let (Some(major), Some(minor), Some(patch)) = (major, minor, patch) {
+        if let (Some(profile), Ok(patch)) = (
+            crate::web_prelude::PhpVersion::parse(&format!("{major}.{minor}")),
+            patch.parse::<u32>(),
+        ) {
+            if patch < 100 {
+                crate::web_prelude::PhpVersion::set_reported_release(patch);
+                return profile;
+            }
+        }
+    }
     crate::web_prelude::PhpVersion::parse(value).unwrap_or_else(|| {
         fail(&format!(
             "Unsupported PHP version '{}': expected one of: {}",
@@ -1325,6 +1357,14 @@ mod tests {
         assert!(config.defines.contains("FEATURE"));
     }
 
+    /// Verifies `--lint` sets the lint flag on the parsed config.
+    #[test]
+    fn lint_flag_sets_lint() {
+        let args = vec!["elephc".into(), "--lint".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(config.lint);
+    }
+
     /// Verifies `--strict-locals` sets the strict_locals flag on the parsed config.
     #[test]
     fn strict_locals_flag_sets_strict_locals() {
@@ -1339,6 +1379,14 @@ mod tests {
         let args = vec!["elephc".into(), "app.php".into()];
         let config = compile_config(&args);
         assert!(!config.strict_locals);
+    }
+
+    /// Verifies the absence of `--lint` keeps the PHP-divergent lints off.
+    #[test]
+    fn no_lint_flag_defaults_off() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(!config.lint);
     }
 
     /// Verifies `--quiet` sets the quiet flag.

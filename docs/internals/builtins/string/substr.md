@@ -1,16 +1,16 @@
 ---
-title: "substr() — internals"
+title: "substr() - internals"
 description: "Compiler internals for substr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 898
+  order: 992
 ---
 
-## `substr()` — internals
+## `substr()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/substr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/substr.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

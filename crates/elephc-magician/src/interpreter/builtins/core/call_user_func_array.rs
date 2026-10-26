@@ -8,13 +8,14 @@
 //! - Callable normalization and invocation stay in `registry::callable` because
 //!   the callable engine is shared beyond this builtin.
 
-use super::call_user_func::eval_call_user_func_callback_expr_is_temporary;
 use super::super::super::*;
 use super::super::registry::eval_call_user_func_array_with_values_from_scope;
+use super::func_args::eval_literal_func_args_callback;
 
 eval_builtin! {
     contract: "call_user_func_array",
     area: Core,
+    source_arguments: true,
     direct: Core,
     values: Core,
 }
@@ -29,32 +30,53 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func_array(
     let [callback, arg_array] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let release_callback = eval_call_user_func_callback_expr_is_temporary(callback);
-    let release_arg_array = matches!(arg_array, EvalExpr::Array(_));
-    let callback = eval_expr(callback, context, scope, values)?;
-    let arg_array = match eval_expr(arg_array, context, scope, values) {
-        Ok(arg_array) => arg_array,
-        Err(status) => {
-            if release_callback {
-                values.release(callback)?;
-            }
-            return Err(status);
+    if let Some(name) = eval_literal_func_args_callback(callback) {
+        return eval_literal_func_args_array_call(name, arg_array, context, scope, values);
+    }
+    let callback = eval_owned_expr(callback, context, scope, values)?;
+    if let Some(name) = eval_callable_named_target(callback, context, scope, values) {
+        if eval_builtin_uses_owned_arguments(&name) {
+            let result = eval_builtin_call_array_expr(&name, arg_array, context, scope, values);
+            return finish_eval_argument_values(result, [callback], context, values);
         }
-    };
-    let result = eval_call_user_func_array_with_values_from_scope(
-        callback,
-        arg_array,
-        Some(scope),
-        context,
-        values,
-    );
-    if release_arg_array {
-        values.release(arg_array)?;
     }
-    if release_callback {
-        values.release(callback)?;
-    }
-    result
+    let result = with_eval_operands(&[arg_array], context, scope, values, |args, context, scope, values| {
+        eval_call_user_func_array_with_values_from_scope(
+            callback, args[0], Some(scope), context, values,
+        )
+    });
+    finish_eval_argument_values(result, [callback], context, values)
+}
+
+/// Invokes a literal `func_*` callback using one runtime `call_user_func_array` argument list.
+fn eval_literal_func_args_array_call(
+    name: &str,
+    arg_array: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    with_eval_operands(&[arg_array], context, scope, values, |args, context, _, values| {
+        let arg_array = args[0];
+        if !values.is_array_like(arg_array)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        with_eval_array_call_arguments(arg_array, context, values, |arguments, context, values| {
+            if arguments.iter().any(|arg| {
+                arg.name.as_deref()
+                    .is_some_and(|argument| name != "func_get_arg" || argument != "position")
+            }) {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let evaluated_values = arguments.iter().map(|arg| arg.value).collect::<Vec<_>>();
+            match name {
+                "func_get_arg" => eval_func_get_arg_values_result(&evaluated_values, context, values),
+                "func_get_args" => eval_func_get_args_values_result(&evaluated_values, context, values),
+                "func_num_args" => eval_func_num_args_values_result(&evaluated_values, context, values),
+                _ => unreachable!("literal func-args callback was canonicalized"),
+            }
+        })
+    })
 }
 
 /// Dispatches `call_user_func_array` after callback and array arguments are evaluated.

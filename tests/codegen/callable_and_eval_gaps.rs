@@ -144,14 +144,17 @@ run();
 }
 
 /// `$v = &f()` over a by-value callee bound the returned VALUE as a reference cell and
-/// faulted on the next access. php assigns it (with a notice); an eval-declared `&method` too.
+/// faulted on the next access. php assigns it (with a notice).
+///
+/// A by-reference method DECLARED INSIDE eval() and called from compiled code is not covered:
+/// binding the caller to a reference into the interpreter's property store is the same missing
+/// cross-boundary reference as `$r = &$evalObject->prop`, which the backend refuses
+/// (`load_prop_ref_cell for dynamic or missing property`).
 #[test]
 fn test_reference_bind_of_a_by_value_call_takes_the_value() {
     let out = compile_and_run(r#"<?php
 class N { public $items = ["a"]; function &ref() { return $this->items; } function val() { return $this->items; } }
 function g() { return [1]; }
-class EvalPrelude {}
-eval('class Z { public $items = ["a"]; function &ref() { return $this->items; } }');
 function run() {
     $n = new N;
     $r = &$n->ref();
@@ -163,17 +166,12 @@ function run() {
     $w = &g();
     $w[] = 2;
     echo implode(",", $w), "\n";
-    $z = new Z;
-    $e = &$z->ref();
-    $e[] = "b";
-    echo implode(",", $z->items), "\n";
 }
 run();
 "#);
     assert_eq!(out, r#"a,b
 a,b a,b,c
 1,2
-a,b
 "#);
 }
 
@@ -341,3 +339,392 @@ eval($code);
         "RouteFacade Router\nbool(true)\nRouteFacade Router\nbool(false)\n"
     );
 }
+
+/// A Throwable raised by a method reached through `call_user_func_array([$mixed, 'm'], ...)`
+/// reaches the caller's `catch`. Instance-method descriptors are bounded for the interpreter: the
+/// invoker catches the throw and returns null with it pending, and the owned-argument boundary
+/// AOT code calls them through restored the previous exception over it, so the call yielded null.
+/// With eval in the program every method carries the hidden `func_get_args()` collector, which
+/// also stopped counting as a declared variadic: `$mixed->run(...)` routed through that same
+/// callable path instead of the class-id dispatch.
+#[test]
+fn test_a_throw_through_a_mixed_receiver_method_reaches_the_catch() {
+    let out = compile_and_run(r#"<?php
+class A {
+    public function run(?object $x): string {
+        if ($x instanceof ArrayObject) { throw new LogicException('A cannot run'); }
+        return 'A ok';
+    }
+}
+class B extends A {
+    public function run(?object $x): string { return 'B:' . parent::run($x); }
+}
+function viaCallable($r) {
+    try {
+        echo call_user_func_array([$r, 'run'], [new ArrayObject([])]), "\n";
+    } catch (LogicException $e) {
+        echo 'callable ', $e->getMessage(), "\n";
+    }
+}
+function viaMethod($r) {
+    try {
+        echo $r->run(new ArrayObject([])), "\n";
+    } catch (LogicException $e) {
+        echo 'method ', $e->getMessage(), "\n";
+    }
+    echo $r->run(null), "\n";
+}
+foreach ([new A(), new B()] as $r) {
+    viaCallable($r);
+    viaMethod($r);
+}
+echo eval('return "e";'), "\n";
+"#);
+    assert_eq!(
+        out,
+        "callable A cannot run\nmethod A cannot run\nA ok\ncallable A cannot run\nmethod A cannot run\nB:A ok\ne\n"
+    );
+}
+
+/// A Fiber whose body is an instance method rethrows that method's Throwable out of `start()`.
+/// The Fiber start wrapper calls the descriptor's invoker directly, and an instance-method
+/// invoker is bounded: it returned null with the throw pending, `start()` returned normally, and
+/// the Throwable resurfaced as an uncaught fatal at exit.
+#[test]
+fn test_a_fiber_running_a_throwing_method_rethrows_from_start() {
+    let out = compile_and_run(r#"<?php
+class A {
+    public function run($x) { throw new LogicException('A ' . $x); }
+}
+function f($r) {
+    $fiber = new Fiber([$r, 'run']);
+    try {
+        $fiber->start(1);
+        echo "no throw\n";
+    } catch (LogicException $e) {
+        echo 'caught ', $e->getMessage(), "\n";
+    }
+    $g = new Fiber($r->run(...));
+    try {
+        $g->start(2);
+        echo "no throw\n";
+    } catch (LogicException $e) {
+        echo 'caught ', $e->getMessage(), "\n";
+    }
+}
+f(new A());
+echo eval('return "e";'), "\n";
+"#);
+    assert_eq!(out, "caught A 1\ncaught A 2\ne\n");
+}
+
+/// A builtin's NAME registers as a handler: `set_exception_handler('var_dump')` is how Symfony's
+/// `DebugHandlersListener` probes the active handler on every request. The registration resolves
+/// the string to a callable descriptor at once, and runtime string dispatch had no case for
+/// `var_dump` or `print_r`, so it fataled "Call to undefined function <dynamic>()".
+#[test]
+fn test_builtin_names_register_as_exception_and_error_handlers() {
+    let out = compile_and_run(r#"<?php
+class Listener {
+    public $earlyHandler;
+    public function __construct()
+    {
+        $handler = set_exception_handler('var_dump');
+        $this->earlyHandler = \is_array($handler) ? $handler[0] : null;
+        restore_exception_handler();
+    }
+}
+$l = new Listener();
+var_dump($l->earlyHandler);
+var_dump(set_exception_handler('var_dump'));
+var_dump(set_exception_handler('print_r'));
+restore_exception_handler();
+restore_exception_handler();
+var_dump(set_error_handler('var_dump'));
+restore_error_handler();
+echo "done\n";
+"#);
+    assert_eq!(out, "NULL\nNULL\nstring(8) \"var_dump\"\nNULL\ndone\n");
+}
+
+/// `clone $this` in a program that links the eval bridge returns the clone, for a subclass
+/// receiver too (Symfony's `ServiceLocator::withContext()`).
+///
+/// Two interpreter callbacks shared ONE runtime slot: the clone operation a generated `clone`
+/// offers each object to beforehand (six arguments, a status answer), and the adoption callback
+/// that registers an eval-declared clone afterwards (two arguments, no answer). The adoption one
+/// was installed last, so the operation call read its leftover return register as "handled" and
+/// took a null clone; the next property write through it segfaulted.
+#[test]
+fn test_clone_in_an_eval_program_returns_the_clone_for_a_subclass() {
+    let out = compile_and_run(r#"<?php
+class Container { public string $name = 'c'; }
+trait LocatorTrait {
+    private array $loading = [];
+    private array $providedTypes;
+    public function __construct(private array $factories) {}
+    public function has(string $id): bool { return isset($this->factories[$id]); }
+}
+class Locator {
+    use LocatorTrait;
+    private ?string $externalId = null;
+    private ?Container $container = null;
+    public function withContext(string $externalId, Container $container): static
+    {
+        $locator = clone $this;
+        $locator->externalId = $externalId;
+        $locator->container = $container;
+        return $locator;
+    }
+    public function describe(): string { return ($this->externalId ?? '-') . ':' . ($this->container?->name ?? '-') . ':' . (int) $this->has('a'); }
+}
+class SubLocator extends Locator {}
+$l = new Locator(['a' => fn () => 1]);
+echo $l->withContext('x', new Container())->describe(), ' ', $l->describe(), "\n";
+$s = new SubLocator(['b' => fn () => 2]);
+echo $s->withContext('y', new Container())->describe(), "\n";
+eval('class Dyn extends Locator { public $extra = "x"; public function __clone() { $this->extra .= "!"; } }');
+$name = 'Dyn';
+$d = new $name(['a' => 1]);
+$c = $d->withContext('z', new Container());
+echo get_class($c), ' ', $c->describe(), ' ', $c->extra, ' ', $d->extra, "\n";
+"#);
+    assert_eq!(out, "x:c:1 -:-:1\ny:c:0\nDyn z:c:1 x! x\n");
+}
+
+/// An instance-method error handler that THROWS (Symfony's `ErrorHandler::handleError()` turning
+/// a warning into `ErrorException`) unwinds into the caller's `catch`, for `trigger_error()` and
+/// for warnings the runtime raises itself.
+///
+/// Such a handler runs through a bounded invoker, which returns null with the Throwable left
+/// pending; `__rt_error_handler_invoke` handed that null back and the warning path dereferenced it
+/// as the handler's boxed answer, so every worker segfaulted on its first warning.
+#[test]
+fn test_throwing_instance_method_error_handler_reaches_the_catch() {
+    let out = compile_and_run(r#"<?php
+class EH {
+    public int $calls = 0;
+    public function handleError(int $type, string $message, string $file = '', int $line = 0): bool
+    {
+        $this->calls++;
+        if (!str_contains($message, 'quiet')) {
+            throw new ErrorException('handled: ' . $message, 0, $type);
+        }
+        return true;
+    }
+}
+$h = new EH();
+set_error_handler([$h, 'handleError']);
+function read(array $a, string $k) { return $a[$k]; }
+try {
+    trigger_error('boom', E_USER_WARNING);
+    echo "not reached\n";
+} catch (ErrorException $e) {
+    echo 'caught ', $e->getMessage(), "\n";
+}
+trigger_error('quiet', E_USER_NOTICE);
+try {
+    $x = read([], 'missing');
+    echo "not reached\n";
+} catch (ErrorException $e) {
+    echo 'caught ', $e->getMessage(), "\n";
+}
+echo 'calls=', $h->calls, "\n";
+restore_error_handler();
+echo eval('return "e";'), "\n";
+"#);
+    assert_eq!(
+        out,
+        "caught handled: boom\ncaught handled: Undefined array key \"missing\"\ncalls=3\ne\n"
+    );
+}
+
+/// `getTrace()` of a Throwable whose class declares properties of its own (`ErrorException`, or a
+/// user subclass adding one) is an array that flows into an `array` parameter.
+///
+/// Such a class runs its property initializer, which stores the `trace` default boxed, and the
+/// getter read that box as a raw array: it returned the box's header words as elements, and passed
+/// on, the boxed result arrived as `null` -- Symfony's `ErrorHandler::cleanTrace()` threw
+/// "Argument must be of type array, null given" on every warning. php also records the calling
+/// frame here; that part is a separate gap, so only the shape is asserted.
+#[test]
+fn test_get_trace_of_a_throwable_with_declared_properties_is_an_array() {
+    let out = compile_and_run(r#"<?php
+class MyEx2 extends Exception { protected int $severity = 1; public function __construct(string $m = '') { parent::__construct($m); } }
+class H {
+    private function clean(array $backtrace, int $type, string &$file, int &$line, bool $throw): array { return $backtrace; }
+    public function a(int $type, string $file, int $line): string {
+        $bt = (new \ErrorException('m', 0, $type, $file, $line))->getTrace();
+        return get_debug_type($this->clean($bt, $type, $file, $line, false));
+    }
+    public function b(int $type): string {
+        $file = 'f'; $line = 1;
+        $bt = (new MyEx2('m'))->getTrace();
+        return get_debug_type($this->clean($bt, $type, $file, $line, false));
+    }
+}
+$h = new H();
+echo 'a=', $h->a(2, 'f', 1), ' b=', $h->b(2), "\n";
+foreach ([new ErrorException('m'), new MyEx2('m'), new RuntimeException('m')] as $e) {
+    $t = $e->getTrace();
+    echo get_debug_type($t), ':', is_array($t) && array_is_list($t) ? 'list' : 'other', ' ';
+}
+echo "\n", eval('return "e";'), "\n";
+"#);
+    assert_eq!(out, "a=array b=array\narray:list array:list array:list \ne\n");
+}
+
+/// A compiled `new $class(...)` that reaches the eval bridge before the program's first `eval()`
+/// runs the constructor with its arguments (Symfony's router building `CompiledUrlMatcher`).
+///
+/// The call passes a null eval handle, and the runtime's fallback context synced the module's
+/// AOT metadata snapshot -- which only the registration helper publishes, and only once a
+/// compiled body built its own eval context. Nothing had, so the context knew no constructor
+/// signature, never bound the hidden `func_get_args` collector, and the constructor bridge
+/// refused the one-argument call on arity: "eval() runtime failed" for every class.
+#[test]
+fn test_dynamic_new_before_the_first_eval_runs_the_constructor() {
+    let out = compile_and_run(r#"<?php
+class NInt { public int $v = 0; public function __construct(int $x) { $this->v = $x; } }
+class NArr { public int $v = 0; public function __construct(array $x) { $this->v = count($x); } }
+class Matcher {
+    private bool $matchHost = false;
+    private array $staticRoutes = [];
+    private ?\Closure $checkCondition;
+    public function __construct(array $compiledRoutes)
+    {
+        [$this->matchHost, $this->staticRoutes, $this->checkCondition] = $compiledRoutes;
+    }
+    public function n(): int { return count($this->staticRoutes); }
+}
+$c = $argc > 5 ? 'X' : 'NInt';
+$o = new $c(3);
+echo $c, ' ', $o->v, "\n";
+$c = $argc > 5 ? 'X' : 'NArr';
+$o = new $c([1, 2]);
+echo $c, ' ', $o->v, "\n";
+$c = $argc > 5 ? 'X' : 'Matcher';
+$o = new $c([false, ['/' => 1, '/x' => 2], null]);
+echo $c, ' ', $o->n(), "\n";
+echo eval('return "e";'), "\n";
+"#);
+    assert_eq!(out, "NInt 3\nNArr 2\nMatcher 2\ne\n");
+}
+
+/// A `callable` parameter given `[$object, 'method']` still holds that array: `is_array()` is
+/// true, it indexes, and it spreads into a builtin and a constructor -- from the parameter and
+/// after it is stored in an untyped property (Symfony's `ControllerEvent::setController()`).
+///
+/// Two defects stood between. The argument was lowered to a first-class callable for its target,
+/// which is a Closure, so `is_array()` answered false; and a builtin's iterator-based unpack
+/// walked the stored descriptor as a non-iterable, warning "foreach() argument must be of type
+/// array|object" and raising "Too few arguments for unpacked call".
+#[test]
+fn test_callable_array_parameter_stays_an_array_through_storage_and_spreads() {
+    let out = compile_and_run(r#"<?php
+class HC { public function home(): string { return 'h'; } }
+class Holder {
+    private $c;
+    public function set(callable $c): void { $this->c = $c; }
+    public function isArr(): bool { return \is_array($this->c); }
+    public function exists(): bool { return method_exists(...$this->c); }
+    public function first(): string { return get_class($this->c[0]) . ' ' . $this->c[1]; }
+    public function refl(): string { $m = new \ReflectionMethod(...$this->c); return $m->class . '::' . $m->name; }
+    public function reflClass(): string { return (new \ReflectionClass($this->c[0]))->getName(); }
+}
+function existsParam(callable $c): bool { return \is_array($c) && method_exists(...$c); }
+$o = new HC();
+echo var_export(existsParam([$o, 'home']), true), "\n";
+$h = new Holder();
+$h->set([$o, 'home']);
+echo var_export($h->isArr(), true), "\n";
+echo $h->first(), "\n";
+echo var_export($h->exists(), true), "\n";
+echo $h->refl(), "\n";
+echo $h->reflClass(), "\n";
+echo eval('return "e";'), "\n";
+"#);
+    assert_eq!(out, "true\ntrue\nHC home\ntrue\nHC::home\nHC\ne\n");
+}
+
+/// A named-argument call to a class the compiler never saw reaches the autoloader like a
+/// positional call does (Laravel's `Str::ascii()` -> `ASCII::to_ascii(..., replace_single_chars_only:
+/// false)`): it was compiled into a `Class "..." not found` fatal. Expected output verified
+/// against php 8.5.
+#[test]
+fn test_named_argument_static_call_on_runtime_declared_class_autoloads() {
+    let out = compile_and_run(
+        r#"<?php
+function viaStatic($v, $language = 'en') { return Dyn2::go((string) $v, $language, replace_single_chars_only: false); }
+spl_autoload_register(function ($c) { echo "[autoload $c]"; eval('class Dyn2 { public static function go(string $s, $lang = "en", bool $replace_single_chars_only = false) { return $s . "-" . $lang . "-" . var_export($replace_single_chars_only, true); } }'); });
+echo viaStatic('b'), "\n";
+echo viaStatic('c', 'fr'), "\n";
+"#,
+    );
+    assert_eq!(out, "[autoload Dyn2]b-en-false\nc-fr-false\n");
+}
+
+/// Interpreted `Foo::$prop` reads and writes give the SPL autoloaders their chance at a class
+/// nobody has declared yet (Laravel's `Serializers\\Native::$transformUseVariables = ...` under
+/// artisan died with `Class "..." not found`). Expected output verified against php 8.5.
+#[test]
+fn test_interpreted_static_property_write_autoloads_the_class() {
+    let out = compile_and_run(
+        r#"<?php
+spl_autoload_register(function ($c) { echo "[autoload $c]"; eval('class Late2 { public static $hook = null; public static $n = 0; }'); });
+$code = 'function setIt($f) { Late2::$hook = $f; Late2::$n = 7; return [Late2::$hook === null ? "null" : "set", Late2::$n]; }';
+eval($code);
+echo json_encode(setIt(fn () => 1)), "\n";
+"#,
+    );
+    assert_eq!(out, "[autoload Late2][\"set\",7]\n");
+}
+
+/// A `mixed &$param` kept by a closure stays bound to the caller's variable when the receiver is
+/// only known as a union (`S|false`). Such a call used to go through the eval bridge, which hands
+/// the callee a frame-address marker instead of the caller's durable cell, so the closure read
+/// back an empty value (`PDOStatement::bindParam()` on `prepare()`'s `PDOStatement|false`).
+/// Expected output verified against php 8.5.
+#[test]
+fn test_by_ref_mixed_parameter_kept_by_a_closure_survives_a_union_receiver() {
+    let out = compile_and_run(r#"<?php
+class S {
+    private array $getters = [];
+    public function bind($slot, mixed &$variable): bool {
+        $this->getters[] = function () use (&$variable): mixed { return $variable; };
+        return $slot > 0;
+    }
+    public function read(): void { foreach ($this->getters as $getter) echo $getter(), "\n"; }
+}
+function make(): S|false { return new S(); }
+$n = 42;
+$s = make();
+$s->bind(1, $n);
+$n = 43;
+$s->read();
+"#);
+    assert_eq!(out, "43\n");
+}
+
+/// A first-class callable of an interpreted class's private or protected method keeps the scope
+/// it was created in: compiled code may call it directly, through `call_user_func*`, and through
+/// `array_map`, while a plain `[$o, 'prot']` array is still refused from outside the class.
+/// Symfony's dumped container hands `$this->getService(...)` to a compiled `ServiceLocator`,
+/// whose `($this->factory)(...)` failed with "Call to protected method ... from global scope".
+#[test]
+fn test_interpreted_method_closure_keeps_its_creation_scope() {
+    let out = compile_and_run(r#"<?php
+$o = eval('class K {
+    private function secret($x) { return "s" . $x; }
+    protected function prot($x) { return "p" . $x; }
+    public function closures(): array { return [$this->secret(...), $this->prot(...), [$this, "prot"]]; }
+} return new K();');
+[$s, $p, $arr] = $o->closures();
+echo $s(1), " ", $p(2), "\n";
+echo call_user_func($s, 3), " ", call_user_func_array($p, [4]), "\n";
+echo implode(",", array_map($p, [5, 6])), "\n";
+try { call_user_func($arr, 7); } catch (TypeError $e) { echo str_contains($e->getMessage(), "cannot access protected method K::prot()") ? "refused" : $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(out, "s1 p2\ns3 p4\np5,p6\nrefused\n");
+}
+

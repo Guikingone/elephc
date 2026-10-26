@@ -1024,12 +1024,11 @@ echo "end\n";
 /// no destructor to observe: this program ended at `live_blocks=12` (880 bytes) before the release
 /// and ends at `live_blocks=8` (496 bytes) after it — four blocks, two per leaked container.
 ///
-/// The remaining six are not this bug and are pinned deliberately so the number keeps its meaning:
-/// the eval context, scope, and module registration an `eval()` frame allocates once. The count was
-/// eight while `append_unpacked_call_arg_values` still leaked the Mixed cell `__rt_mixed_array_get`
-/// freshly boxes for each spread element — one per spread — and dropped to six when that element
-/// debt started being paid after the call; that drop is the fix below, not a regression of this
-/// release.
+/// Six further blocks used to remain -- the eval context, scope, and module registration an
+/// `eval()` frame allocated once -- and were pinned as `live_blocks=6`. The count was eight while
+/// `append_unpacked_call_arg_values` still leaked the Mixed cell `__rt_mixed_array_get` freshly
+/// boxes for each spread element, and six once that element debt was paid after the call. The
+/// eval frame now gives those six back as well, so the program ends with a clean heap.
 #[test]
 fn test_spread_call_under_an_eval_context_releases_its_boxed_container() {
     let out = compile_and_run_with_heap_debug(
@@ -1053,7 +1052,7 @@ echo "end\n";
     );
     assert_eq!(out.stdout, "scope end\ndestruct local\nend\n");
     assert!(
-        out.stderr.contains("live_blocks=6"),
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected the two spread containers and their elements to be released, got: {}",
         out.stderr
     );
@@ -1421,4 +1420,57 @@ echo "\nafter\n";
 "#,
     );
     assert_eq!(out, "a=1,destruct broken\n\nafter\n");
+}
+
+/// An overwrite publishes the new value before it releases the old one, as php's assignment does:
+/// the old value's destructor may write the same place, and its write must survive. Each store
+/// used to retire first, so the resumed store clobbered the destructor's value (a static property
+/// read `2` for php's `99`, with a bad refcount), and a destructor that grew the same array freed
+/// the buffer the resumed store then wrote back into its property (garbage strings, leaks). The
+/// expectation is host PHP 8.5.
+#[test]
+fn test_overwrite_survives_a_destructor_that_writes_the_same_place() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Holder { public static $shared; public array $a = []; public array $l = []; }
+class Dropper {
+    public function __construct(public Holder $h, public string $mode) {}
+    public function __destruct() {
+        if ($this->mode === 'static') { Holder::$shared = 'from-destructor'; }
+        if ($this->mode === 'key') { $this->h->a['k'] = 30; $this->h->a['s'] = str_repeat('x', 3); }
+        if ($this->mode === 'grow') {
+            $this->h->l[0] = 5;
+            for ($i = 1; $i < 20; $i++) { $this->h->l[] = str_repeat('y', $i); }
+            for ($i = 0; $i < 20; $i++) { $this->h->a["k$i"] = str_repeat('z', $i + 1); }
+        }
+    }
+}
+$h = new Holder();
+Holder::$shared = new Dropper($h, 'static');
+Holder::$shared = 'plain';
+echo Holder::$shared, "\n";
+$h->a['k'] = new Dropper($h, 'key');
+$h->a['k'] = 'plain';
+echo $h->a['k'], ' ', $h->a['s'], "\n";
+$g = new Holder();
+$g->l[0] = new Dropper($g, 'grow');
+$g->l[0] = 'plain';
+echo count($g->l), ' ', $g->l[0], ' ', $g->l[19], ' ', count($g->a), ' ', $g->a['k19'], "\n";
+$k = new Holder();
+$k->a['x'] = new Dropper($k, 'grow');
+$k->a['x'] = 'plain';
+echo count($k->a), ' ', $k->a['x'], ' ', $k->a['k19'], ' ', count($k->l), "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "from-destructor\n",
+            "30 xxx\n",
+            "20 5 yyyyyyyyyyyyyyyyyyy 20 zzzzzzzzzzzzzzzzzzzz\n",
+            "21 plain zzzzzzzzzzzzzzzzzzzz 20\n",
+        )
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

@@ -89,6 +89,12 @@ pub(super) enum ReflectionMaterializerKey {
         declaring_class: Option<String>,
         name: String,
     },
+    /// The shared filler of everything a table-built class reflector cannot take from the module
+    /// reflection table: attributes, constant and default values, live statics, member fillers.
+    Extras {
+        owner: ReflectionOwnerKind,
+        name: String,
+    },
     /// The filler of one member slot of a full class-like reflector: not a materializer, but a
     /// helper that builds an existing reflector's member reflectors for that slot on first use.
     Members {

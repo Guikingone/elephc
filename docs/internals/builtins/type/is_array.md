@@ -1,16 +1,16 @@
 ---
-title: "is_array() — internals"
+title: "is_array() - internals"
 description: "Compiler internals for is_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 923
+  order: 1017
 ---
 
-## `is_array()` — internals
+## `is_array()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_array.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_array.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

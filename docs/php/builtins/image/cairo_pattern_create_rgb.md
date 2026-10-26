@@ -1,8 +1,8 @@
 ---
 title: "cairo_pattern_create_rgb()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates a solid opaque color pattern."
 sidebar:
-  order: 441
+  order: 442
 ---
 
 ## cairo_pattern_create_rgb()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_pattern_create_rgb(float $red, float $green, float $blue): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates a solid opaque color pattern.
 
 **Parameters**:
 - `$red` (`float`)
@@ -25,7 +25,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

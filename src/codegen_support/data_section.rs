@@ -43,24 +43,26 @@ fn comm_alignment_operand(target: Target, alignment_bytes: usize) -> usize {
 /// inline: the alignment operand is the one part of it that is not portable, and a hardcoded
 /// spelling is accepted by both assemblers while only being right for one of them.
 pub(crate) fn comm_directive(label: &str, size: usize, target: Target) -> String {
-    comm_directive_aligned(label, size, target, COMM_ALIGN_BYTES)
+    comm_directive_aligned(label, size, COMM_ALIGN_BYTES, target)
 }
 
 /// Renders a `.comm` directive with an explicit power-of-two byte alignment.
-///
-/// Runtime allocations whose payload is addressed through 128-bit-safe cells use this to
-/// preserve their own stronger alignment without weakening ordinary common symbols.
 pub(crate) fn comm_directive_aligned(
     label: &str,
     size: usize,
-    target: Target,
     alignment_bytes: usize,
+    target: Target,
 ) -> String {
+    debug_assert!(alignment_bytes.is_power_of_two());
+    let alignment = match target.platform {
+        Platform::MacOS => alignment_bytes.trailing_zeros() as usize,
+        Platform::Linux | Platform::Windows => alignment_bytes,
+    };
     format!(
         ".comm {}, {}, {}\n",
         label,
         size,
-        comm_alignment_operand(target, alignment_bytes)
+        alignment
     )
 }
 
@@ -299,6 +301,7 @@ impl DataSection {
     /// bytes by construction, so it is kept once: that is what stops every codegen worker from
     /// contributing its own copy of the same lookup table. Should two different contents ever
     /// share one, that is a hash collision and the build stops rather than merge them.
+    #[cfg(test)]
     pub fn merge(&mut self, other: Self) {
         let mut index = self.merge_index();
         self.merge_indexed(other, &mut index);
@@ -439,6 +442,16 @@ impl DataSection {
             return;
         }
         self.entries.push((name, bytes.to_vec()));
+    }
+
+    /// Emits `words` under the caller-chosen symbol `name`, for a table other code reaches by a
+    /// fixed name (the reflection rows). Idempotent by name; the table is part of the main
+    /// section only, never of a parallel worker's shard.
+    pub fn add_named_words(&mut self, name: &str, words: Vec<DataWord>) {
+        if self.word_entries.iter().any(|(label, _)| label == name) {
+            return;
+        }
+        self.word_entries.push((name.to_string(), words));
     }
 
     /// Looks up `label` in the common-symbol deduplication map; if found, returns the existing label.
@@ -626,11 +639,11 @@ mod tests {
     /// Verifies callers can request the 16-byte storage alignment required by runtime heap cells.
     #[test]
     fn test_explicit_common_alignment_follows_the_object_format() {
-        assert!(comm_directive_aligned("_heap_buf", 1024, macos(), 16)
+        assert!(comm_directive_aligned("_heap_buf", 1024, 16, macos())
             .contains(".comm _heap_buf, 1024, 4\n"));
-        assert!(comm_directive_aligned("_heap_buf", 1024, linux(Arch::AArch64), 16)
+        assert!(comm_directive_aligned("_heap_buf", 1024, 16, linux(Arch::AArch64))
             .contains(".comm _heap_buf, 1024, 16\n"));
-        assert!(comm_directive_aligned("_heap_buf", 1024, linux(Arch::X86_64), 16)
+        assert!(comm_directive_aligned("_heap_buf", 1024, 16, linux(Arch::X86_64))
             .contains(".comm _heap_buf, 1024, 16\n"));
     }
 

@@ -40,35 +40,36 @@ pub(in crate::interpreter) fn eval_builtin_preg_replace_callback_array_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    let (bound, _) = bind_evaluated_ref_builtin_args(
-        &["pattern", "subject", "limit", "count", "flags"],
-        &evaluated_args,
-        false,
-    )?;
-    let pattern = required_evaluated_ref_arg(&bound, 0)?;
-    let subject = required_evaluated_ref_arg(&bound, 1)?;
-    let limit = optional_evaluated_ref_arg(&bound, 2).map(|arg| arg.value);
-    let flags = optional_evaluated_ref_arg(&bound, 4).map(|arg| arg.value);
-    let (result, replacement_count) = eval_preg_replace_callback_array_result(
-        pattern.value,
-        subject.value,
-        limit,
-        flags,
-        Some(scope),
-        context,
-        values,
-    )?;
-    let Some(count) = optional_evaluated_ref_arg(&bound, 3) else {
-        return Ok(result);
-    };
-    let target = count
-        .ref_target
-        .clone()
-        .ok_or(EvalStatus::RuntimeFatal)?;
-    let replacement_count = values.int(replacement_count)?;
-    eval_write_preg_matches_target(&target, replacement_count, context, values)?;
-    Ok(result)
+    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, scope, values| {
+        let (bound, _) = bind_evaluated_ref_builtin_args(
+            &["pattern", "subject", "limit", "count", "flags"],
+            &evaluated_args,
+            false,
+        )?;
+        let pattern = required_evaluated_ref_arg(&bound, 0)?;
+        let subject = required_evaluated_ref_arg(&bound, 1)?;
+        let limit = optional_evaluated_ref_arg(&bound, 2).map(|arg| arg.value);
+        let flags = optional_evaluated_ref_arg(&bound, 4).map(|arg| arg.value);
+        let (result, replacement_count) = eval_preg_replace_callback_array_result(
+            pattern.value,
+            subject.value,
+            limit,
+            flags,
+            Some(scope),
+            context,
+            values,
+        )?;
+        let Some(count) = optional_evaluated_ref_arg(&bound, 3) else {
+            return Ok(result);
+        };
+        let target = count
+            .ref_target
+            .clone()
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        let replacement_count = values.int(replacement_count)?;
+        eval_write_preg_matches_target(&target, replacement_count, context, values)?;
+        Ok(result)
+    })
 }
 
 /// Applies every `pattern => callback` entry in turn and totals the replacements.

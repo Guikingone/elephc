@@ -124,7 +124,7 @@ pub(super) fn require_assoc_array_key_set_result_type(
 /// (via `resolve_int_operand_to_result`); the `__rt_range` helper only consumes integer endpoints.
 pub(super) fn require_range_endpoint(ty: PhpType, name: &str) -> Result<()> {
     match ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool | PhpType::Mixed | PhpType::Union(_) => Ok(()),
+        PhpType::Int | PhpType::Bool | PhpType::Mixed | PhpType::Union(_) | PhpType::Str => Ok(()),
         other => Err(CodegenIrError::unsupported(format!(
             "range {} PHP type {:?}",
             name, other

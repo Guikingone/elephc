@@ -45,6 +45,15 @@ pub(crate) struct RuntimeStaticMethodCallableCase {
 pub(crate) fn runtime_builtin_wrapper_supported(
     name: &str,
     source_arg_ty: Option<&PhpType>,
+    features: crate::codegen_support::runtime_features::RuntimeFeatures,
+) -> bool {
+    runtime_builtin_wrapper_supported_at_arity(name, source_arg_ty, features, None)
+}
+
+/// Selects a typed wrapper with the callback's known argument count when the caller can prove it.
+pub(crate) fn runtime_builtin_wrapper_supported_at_arity(
+    name: &str, source_arg_ty: Option<&PhpType>,
+    features: crate::codegen_support::runtime_features::RuntimeFeatures, arity: Option<usize>,
 ) -> bool {
     let name = crate::names::php_symbol_key(name.trim_start_matches('\\'));
     let Some(def) = crate::builtins::registry::lookup(&name) else {
@@ -55,9 +64,25 @@ pub(crate) fn runtime_builtin_wrapper_supported(
             accepts(source_arg_ty)
         }
         crate::builtins::semantics::BuiltinCallablePolicy::DynamicRuntime(target) => {
-            target.callable_accepts(source_arg_ty)
+            (!target.uses_mbstring_runtime() || features.mbstring || features.eval_bridge)
+                && (!target.uses_regex_runtime() || features.regex || features.eval_bridge)
+                && target.callable_accepts_arity(source_arg_ty, arity)
         }
-        crate::builtins::semantics::BuiltinCallablePolicy::StaticOnly(_) => false,
+        // The internal-array-pointer builtins are static-only for their first-class form (a
+        // persistent cursor needs the caller's local), but a descriptor call passes a fresh
+        // value with no cursor to keep: `array_map('current', $rows)` (Doctrine's Paginator)
+        // reads each row from its first slot. The wrapper supplies the zero cursor itself
+        // (`build_runtime_call_wrapper_function`).
+        crate::builtins::semantics::BuiltinCallablePolicy::StaticOnly(_)
+            if matches!(
+                def.spec.semantics.argument_lowering,
+                crate::builtins::semantics::BuiltinArgumentLowering::ArrayInternalPointer(_)
+            ) =>
+        {
+            arity.is_none_or(|count| count == 1)
+        }
+        crate::builtins::semantics::BuiltinCallablePolicy::DirectOnly(_)
+        | crate::builtins::semantics::BuiltinCallablePolicy::StaticOnly(_) => false,
     }
 }
 
@@ -133,7 +158,16 @@ pub(crate) fn specialized_runtime_case_sig(
             *param_ty = source_ty.clone();
         }
     }
-    if sig.variadic.is_some() {
+    // The COLLECTOR is specialized only when its storage is not already dynamic. `array<mixed>`
+    // and the `iterable` marker are the storage shapes a descriptor invocation may fill with
+    // either an indexed block or a hash (`crate::types::signatures::descriptor_variadic_container`),
+    // and they are what a descriptor-reachable callee's own frame was compiled to read. Narrowing
+    // one of them to `array<source>` here would publish raw element slots to an invoker whose
+    // callee reads boxed Mixed ones, which is the same indexed-versus-associative disagreement
+    // this contract exists to prevent, only in the other direction.
+    if sig.variadic.is_some()
+        && !crate::types::signatures::variadic_storage_accepts_named_entries(&sig)
+    {
         let variadic_idx = visible_param_count.saturating_sub(1);
         if !sig
             .declared_params

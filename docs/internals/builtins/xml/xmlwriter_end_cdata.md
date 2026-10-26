@@ -1,11 +1,11 @@
 ---
-title: "xmlwriter_end_cdata() — internals"
+title: "xmlwriter_end_cdata() - internals"
 description: "Compiler internals for xmlwriter_end_cdata(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1002
+  order: 1090
 ---
 
-## `xmlwriter_end_cdata()` — internals
+## `xmlwriter_end_cdata()` - internals
 
 ## Where it lives
 

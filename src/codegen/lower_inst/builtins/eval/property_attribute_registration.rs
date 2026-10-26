@@ -188,9 +188,15 @@ pub(super) fn eval_native_member_attribute_args_supported(args: &[AttrArgEntry])
 /// Returns true when one attribute argument value can be encoded for eval registration.
 pub(super) fn eval_native_member_attribute_value_supported(value: &AttrArgValue) -> bool {
     match value {
-        AttrArgValue::ConstRef(_) | AttrArgValue::ScopedConst(_, _) => false,
         AttrArgValue::Array(elements) => eval_native_member_attribute_args_supported(elements),
-        AttrArgValue::Null
+        // A constant reference crosses as its NAME and is folded by the interpreter when
+        // reflection reads it, as php evaluates attribute arguments. Marking the whole list
+        // unsupported made `new ReflectionClass()` of any class carrying
+        // `#[\Attribute(\Attribute::TARGET_METHOD)]` a bare `eval() runtime failed` --
+        // symfony/console's `Attribute\Interact`, which killed the Symfony --web worker at boot.
+        AttrArgValue::ConstRef(_)
+        | AttrArgValue::ScopedConst(_, _)
+        | AttrArgValue::Null
         | AttrArgValue::Bool(_)
         | AttrArgValue::Int(_)
         | AttrArgValue::Float(_)
@@ -237,8 +243,14 @@ pub(super) fn eval_native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &
                 eval_native_member_attribute_push_entry(record, element);
             }
         }
-        AttrArgValue::ConstRef(_) | AttrArgValue::ScopedConst(_, _) => {
-            record.push(NATIVE_ATTRIBUTE_ARGS_UNSUPPORTED);
+        AttrArgValue::ConstRef(name) => {
+            record.push(NATIVE_ATTRIBUTE_ARG_CONST);
+            eval_native_member_attribute_push_string(record, name);
+        }
+        AttrArgValue::ScopedConst(class_name, member) => {
+            record.push(NATIVE_ATTRIBUTE_ARG_CLASS_CONST);
+            eval_native_member_attribute_push_string(record, class_name);
+            eval_native_member_attribute_push_string(record, member);
         }
     }
 }

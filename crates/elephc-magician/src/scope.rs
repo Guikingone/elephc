@@ -203,6 +203,18 @@ impl EvalScopeRef {
         }
     }
 
+    /// A reference to no scope: its id is never live, so [`EvalScopeRef::live_mut`] answers
+    /// `None`. Tests use it for a reference target whose scope is already gone.
+    #[cfg(test)]
+    pub(crate) const fn dangling() -> Self {
+        Self { scope: std::ptr::null_mut(), id: u64::MAX }
+    }
+
+    /// Returns the scope's never-reused id, which identifies it where an address could not.
+    pub const fn id(self) -> u64 {
+        self.id
+    }
+
     /// Returns the scope when it is still alive, and `None` once it has been dropped.
     ///
     /// # Safety
@@ -269,16 +281,39 @@ impl ElephcEvalScope {
         owned_cell_except(previous, cell)
     }
 
-    /// Stores a cell synchronized by generated code and marks its name as AOT-visible.
+    /// Replaces the prior scope lease with a native borrow or a newly transferred owner.
     pub fn set_from_aot(
         &mut self,
         name: impl Into<String>,
         cell: RuntimeCellHandle,
         ownership: ScopeCellOwnership,
     ) -> Option<RuntimeCellHandle> {
+        self.set_from_aot_with_native_binding(name, cell, ownership, NativeScopeBinding::Value)
+    }
+
+    /// Publishes one compiled-frame binding, retiring the scope's previous lease on that name.
+    pub fn set_from_aot_with_native_binding(
+        &mut self,
+        name: impl Into<String>,
+        cell: RuntimeCellHandle,
+        ownership: ScopeCellOwnership,
+        binding: NativeScopeBinding,
+    ) -> Option<RuntimeCellHandle> {
         let name = name.into();
-        self.aot_visible_names.insert(name.clone());
-        self.set(name, cell, ownership)
+        // Native markers are not PHP values (a boxed reference-cell lease, or a by-name global
+        // with no cell); only plain values are scanned when an eval result crosses back to AOT.
+        if binding == NativeScopeBinding::Value {
+            self.aot_visible_names.insert(name.clone());
+        } else {
+            self.aot_visible_names.remove(&name);
+        }
+        let previous = self.entries.get(&name).copied().filter(|entry| {
+            entry.flags().is_visible() && entry.flags().ownership == ScopeCellOwnership::Owned
+        }).map(ScopeEntry::cell);
+        self.set_with_native_binding(name, cell, ownership, binding);
+        // Native code hands over a fresh lease on every publish, even for an unchanged address
+        // (an Owned republish carries its own retain). The former scope owner must retire.
+        previous
     }
 
     /// Stores a variable while preserving existing PHP reference aliases.
@@ -316,6 +351,29 @@ impl ElephcEvalScope {
                 ScopeCellOwnership::Borrowed
             };
             *entry = ScopeEntry::reference(cell, next_ownership, self.generation);
+        }
+        replaced
+    }
+
+    /// Consumes a new owner and returns displaced leases, including same-cell assignments.
+    pub(crate) fn set_owned_respecting_references(
+        &mut self,
+        name: impl Into<String>,
+        cell: RuntimeCellHandle,
+    ) -> Vec<RuntimeCellHandle> {
+        let name = name.into();
+        let same_owner = self.entries.get(&name).is_some_and(|entry| {
+            entry.flags().is_visible() && entry.cell() == cell
+                && (entry.flags().ownership == ScopeCellOwnership::Owned
+                    || (entry.flags().by_ref && self.entries.values().any(|alias| {
+                        alias.flags().is_visible() && alias.flags().by_ref
+                            && alias.flags().ownership == ScopeCellOwnership::Owned
+                            && alias.cell() == cell
+                    })))
+        });
+        let mut replaced = self.set_respecting_references(name, cell, ScopeCellOwnership::Owned);
+        if same_owner {
+            replaced.push(cell);
         }
         replaced
     }
@@ -443,6 +501,22 @@ impl ElephcEvalScope {
         }
     }
 
+    /// Marks a mutated reference and its local aliases dirty without transferring their ownership.
+    pub fn mark_reference_changed(&mut self, name: &str) {
+        let Some(cell) = self.visible_cell(name) else { return; };
+        self.bump_generation();
+        for (entry_name, entry) in &mut self.entries {
+            let flags = entry.flags();
+            if flags.is_visible() && entry.cell() == cell && (entry_name == name || flags.by_ref) {
+                *entry = if flags.by_ref {
+                    ScopeEntry::reference(cell, flags.ownership, self.generation)
+                } else {
+                    ScopeEntry::present(cell, flags.ownership, self.generation)
+                };
+            }
+        }
+    }
+
     /// Returns the entry for a named variable, including unset markers.
     pub fn entry(&self, name: &str) -> Option<ScopeEntry> {
         self.entries.get(name).copied()
@@ -473,6 +547,7 @@ impl ElephcEvalScope {
         self.entry(name)
             .filter(|entry| entry.flags().is_visible())
             .map(ScopeEntry::cell)
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Returns visible cells whose names are synchronized back to generated AOT storage.
@@ -501,6 +576,22 @@ impl ElephcEvalScope {
     /// Returns true when the scope contains a visible value for the named variable.
     pub fn contains_visible(&self, name: &str) -> bool {
         self.visible_cell(name).is_some()
+    }
+
+    /// Returns visible scope entries in stable variable-name order.
+    pub(crate) fn visible_entries(&self) -> Vec<(String, RuntimeCellHandle)> {
+        let mut entries = self
+            .entries
+            .iter()
+            .filter_map(|(name, entry)| {
+                entry
+                    .flags()
+                    .is_visible()
+                    .then_some((name.clone(), entry.cell()))
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
     }
 
     /// Marks a variable name as an alias to the eval context's global scope.

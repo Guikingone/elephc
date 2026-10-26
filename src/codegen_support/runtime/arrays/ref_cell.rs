@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits the kind-7 refcounted reference-cell runtime helpers: `__rt_ref_cell_alloc`,
+//! Emits the refcounted reference-cell runtime helpers: `__rt_ref_cell_alloc`,
 //! `__rt_ref_cell_incref`, `__rt_ref_cell_decref`, `__rt_ref_cell_free_deep`, and
 //! `__rt_ref_cell_store`.
 //! Keeps PHP array/hash storage, heap ownership, and target-specific ABI variants in one focused emitter.
@@ -8,7 +8,11 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
 //!
 //! Key details:
-//! - A reference cell is a managed-heap block with heap kind 7 and payload `{ value@0, inner_tag@8 }`.
+//! - A reference cell is a managed-heap block with heap kind `REFERENCE_CELL_HEAP_KIND` and payload
+//!   `{ value@0, inner_tag@8 }`. The inner tag is ALSO kept in header bits 8-14, the payload
+//!   descriptor every generic managed-cell walker (`__rt_decref_any`, clone, the collectors) reads,
+//!   so these cells and the object-property cells share one release and tracing contract.
+//!   Heap kind 7 is the transient concat buffer and must never be stamped here.
 //!   It carries the uniform 16-byte header (`size@-16`, `refcnt@-12`, `kind@-8`) so it is refcountable
 //!   and visible to the cycle collector, unlike the legacy raw 16-byte cell.
 //! - `inner_tag` is a runtime value-tag (0 Int … 10 Callable), not a heap kind; the container slot that
@@ -17,10 +21,11 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen_support::sentinels::{x86_64_heap_kind_word, REFERENCE_CELL_HEAP_KIND};
 
-/// Emits `__rt_ref_cell_alloc`: allocate a kind-7 refcounted reference cell.
+/// Emits `__rt_ref_cell_alloc`: allocate a managed refcounted reference cell.
 ///
-/// Allocates 16 payload bytes through the managed heap (header refcount = 1), stamps the heap kind to 6,
+/// Allocates 16 payload bytes through the managed heap (header refcount = 1), stamps the managed reference-cell kind and payload descriptor,
 /// and stores the initial inner value at `+0` and the inner value-tag at `+8`.
 ///
 /// # ABI
@@ -45,8 +50,10 @@ pub fn emit_ref_cell_alloc(emitter: &mut Emitter) {
     // -- allocate the 16-byte cell payload through the managed heap --
     emitter.instruction("mov x0, #16");                                         // reference cells store value@0 and inner_tag@8
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the cell storage; header refcount starts at 1
-    emitter.instruction("mov x9, #7");                                          // low byte 7 = refcounted reference-cell heap kind
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the reference-cell heap kind in the uniform header
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the inner value-tag for the header payload descriptor
+    emitter.instruction("lsl x9, x9, #8");                                      // the managed-cell payload descriptor lives in header bits 8-14
+    emitter.instruction(&format!("orr x9, x9, #{}", REFERENCE_CELL_HEAP_KIND)); // identify the block as a managed reference cell
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the cell kind and payload descriptor in the uniform header
 
     // -- install the initial inner value and its value-tag --
     emitter.instruction("ldp x10, x11, [sp, #0]");                              // reload the inner value word and inner value-tag
@@ -61,7 +68,7 @@ pub fn emit_ref_cell_alloc(emitter: &mut Emitter) {
 /// Emits the x86_64 Linux variant of `__rt_ref_cell_alloc`.
 ///
 /// Allocates the 16-byte cell through the shared heap wrapper, stamps the kind word with the x86_64 heap
-/// marker plus low-byte kind 7, and installs the inner value at `+0` and the inner value-tag at `+8`.
+/// marker plus the managed reference-cell kind and payload descriptor, and installs the inner value at `+0` and the inner value-tag at `+8`.
 fn emit_ref_cell_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ref_cell_alloc ---");
@@ -74,8 +81,11 @@ fn emit_ref_cell_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the inner value-tag across the heap allocation call
     emitter.instruction("mov rax, 16");                                         // reference cells store value@0 and inner_tag@8
     emitter.instruction("call __rt_heap_alloc");                                // allocate the cell storage; header refcount starts at 1
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(7))); // materialize the reference-cell kind word with the x86_64 heap marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated payload as a reference cell in the uniform header
+    emitter.instruction(&format!("mov r10, 0x{:x}", x86_64_heap_kind_word(REFERENCE_CELL_HEAP_KIND))); // materialize the managed reference-cell kind word with the x86_64 heap marker
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the inner value-tag for the header payload descriptor
+    emitter.instruction("shl r11, 8");                                          // the managed-cell payload descriptor lives in header bits 8-14
+    emitter.instruction("or r10, r11");                                         // combine the cell kind with its payload descriptor
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the cell kind and payload descriptor in the uniform header
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the inner value word after the heap allocation
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the inner value at cell+0
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the inner value-tag after the heap allocation
@@ -373,6 +383,9 @@ pub fn emit_ref_cell_store(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the new inner value-tag
     emitter.instruction("str x1, [x0]");                                        // store the new inner value word at cell+0
     emitter.instruction("str x2, [x0, #8]");                                    // store the new inner value-tag at cell+8
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the header that also describes the payload
+    emitter.instruction("bfi x9, x2, #8, #7");                                  // keep the header payload descriptor equal to the new inner tag
+    emitter.instruction("str x9, [x0, #-8]");                                   // publish the descriptor the generic cell release reads
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate the frame
 
@@ -421,6 +434,12 @@ fn emit_ref_cell_store_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the new inner value-tag after the release
     emitter.instruction("mov QWORD PTR [rdi], rsi");                            // store the new inner value word at cell+0
     emitter.instruction("mov QWORD PTR [rdi + 8], rdx");                        // store the new inner value-tag at cell+8
+    emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                        // load the header that also describes the payload
+    emitter.instruction("and r10, -32513");                                     // clear header bits 8-14, the payload descriptor
+    emitter.instruction("and rdx, 0x7f");                                       // keep the descriptor within its seven header bits
+    emitter.instruction("shl rdx, 8");                                          // position the new inner tag as the payload descriptor
+    emitter.instruction("or r10, rdx");                                         // keep the header payload descriptor equal to the new inner tag
+    emitter.instruction("mov QWORD PTR [rdi - 8], r10");                        // publish the descriptor the generic cell release reads
     emitter.instruction("add rsp, 32");                                         // release the spill slots reserved for the cell, value, and tag
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
 
@@ -494,8 +513,10 @@ mod tests {
         ] {
             assert!(asm.contains(&format!(".globl {}\n", sym)), "missing {sym}");
         }
-        // Kind 6 is stamped into the header, and incref/decref reuse the generic + free paths.
-        assert!(asm.contains("mov x9, #7"));
+        // The managed-cell kind and the payload descriptor are stamped into the header, and
+        // incref/decref reuse the generic + free paths.
+        assert!(asm.contains("lsl x9, x9, #8"));
+        assert!(asm.contains(&format!("orr x9, x9, #{}", REFERENCE_CELL_HEAP_KIND)));
         assert!(asm.contains("str x9, [x0, #-8]"));
         assert!(asm.contains("b __rt_incref"));
         assert!(asm.contains("b __rt_ref_cell_free_deep"));
@@ -513,12 +534,12 @@ mod tests {
         ] {
             assert!(asm.contains(&format!(".globl {}\n", sym)), "missing {sym}");
         }
-        // The x86_64 kind word combines the heap marker with low-byte kind 7, the same kind the
-        // AArch64 emitter stamps above. Built through the canonical helper, never hand-typed:
+        // The x86_64 kind word combines the heap marker with the managed reference-cell kind, the
+        // same kind the AArch64 emitter stamps above. Built through the canonical helper, never hand-typed:
         // a transposed marker assembles fine and makes every refcount a silent no-op (#482).
         assert!(asm.contains(&format!(
             "mov r10, 0x{:x}",
-            crate::codegen_support::sentinels::x86_64_heap_kind_word(7)
+            x86_64_heap_kind_word(REFERENCE_CELL_HEAP_KIND)
         )));
         assert!(asm.contains("jmp __rt_incref"));
         assert!(asm.contains("jmp __rt_ref_cell_free_deep"));

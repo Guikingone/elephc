@@ -90,6 +90,8 @@ pub(super) fn lower_numeric_binary(
             }
         }
         if let Some((op, result_ty)) = array_union_plan(ctx, lhs.value, rhs.value) {
+            // Union helpers borrow both inputs and return fresh storage. Retire expression
+            // temporaries only after the helper has retained every payload needed by its result.
             let result = ctx.emit_value(
                 op,
                 vec![lhs.value, rhs.value],

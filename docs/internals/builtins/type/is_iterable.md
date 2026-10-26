@@ -1,16 +1,16 @@
 ---
-title: "is_iterable() — internals"
+title: "is_iterable() - internals"
 description: "Compiler internals for is_iterable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 930
+  order: 1025
 ---
 
-## `is_iterable()` — internals
+## `is_iterable()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_iterable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_iterable.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

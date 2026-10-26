@@ -19,9 +19,9 @@ fn module() -> Module {
     let entry = builder.create_named_block("entry", vec![]);
     builder.set_entry(entry);
     builder.position_at_end(entry);
-    builder.emit(Op::ClassLikeActivate, vec![], Some(Immediate::ClassLikeActivation {
-        source: SourceId::from_raw(0), site: Span::new(1, 7), kind: ClassLikeKind::Interface, name,
-    }), IrType::Void, PhpType::Void, Ownership::NonHeap);
+    builder.emit(Op::ClassLikeActivate, vec![], Some(Immediate::class_like_activation(
+        SourceId::from_raw(0), Span::new(1, 7), ClassLikeKind::Interface, name,
+    )), IrType::Void, PhpType::Void, Ownership::NonHeap);
     builder.terminate(Terminator::Return { value: None });
     module.add_function(function);
     module
@@ -41,9 +41,9 @@ fn classlike_activation_validation_preserves_typed_source_and_name() {
 #[test]
 fn classlike_activation_validation_rejects_unknown_source() {
     let mut module = module();
-    let Some(Immediate::ClassLikeActivation { source, .. }) =
+    let Some(Immediate::ClassLikeActivation(activation)) =
         &mut module.functions[0].instructions[0].immediate else { panic!("activation expected") };
-    *source = SourceId::from_raw(1);
+    activation.source = SourceId::from_raw(1);
     assert_eq!(validate_module(&module), Err(ValidationError::UnknownSource(SourceId::from_raw(1))));
 }
 
@@ -90,7 +90,7 @@ fn classlike_activation_ast_preserves_names_and_source_without_reserving_symbol(
         std::path::Path::new("/unit.php"), false, catalog,
     ).unwrap();
     assert!(lowered.functions.iter().flat_map(|function| &function.instructions)
-        .any(|inst| matches!(&inst.immediate, Some(Immediate::ClassLikeActivation { site: actual, .. }) if *actual == site)));
+        .any(|inst| matches!(&inst.immediate, Some(Immediate::ClassLikeActivation(activation)) if activation.site == site)));
 }
 
 #[test]
@@ -105,9 +105,9 @@ fn non_interface_activation_backend_fails_explicitly_on_all_targets_until_implem
     ] {
         let mut module = module();
         module.target = target;
-        let Some(Immediate::ClassLikeActivation { kind, .. }) =
+        let Some(Immediate::ClassLikeActivation(activation)) =
             &mut module.functions[0].instructions[0].immediate else { panic!("activation expected") };
-        *kind = ClassLikeKind::Trait;
+        activation.kind = ClassLikeKind::Trait;
         let error = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .expect_err("activation must not silently disappear");
         assert!(error.to_string().contains("class-like activation for Trait"), "{target:?}: {error}");

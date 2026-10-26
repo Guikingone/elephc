@@ -1,8 +1,8 @@
 ---
 title: "mysqli_real_connect()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Connects an object created by mysqli_init(), with the full option set."
 sidebar:
-  order: 160
+  order: 161
 ---
 
 ## mysqli_real_connect()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_real_connect(mixed $mysql, ?string $hostname = null, ?string $username = null, ?string $password = null, ?string $database = null, ?int $port = null, ?string $socket = null, int $flags = 0): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Connects an object created by mysqli_init(), with the full option set.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -30,7 +30,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

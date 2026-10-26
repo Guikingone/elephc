@@ -144,3 +144,58 @@ echo json_encode($o);
     );
     assert_eq!(out, "loaded;A;y;1;{\"declared\":\"d\",\"dyn\":\"A\"}");
 }
+
+/// A class an autoloader includes from another function frame reads `$_SERVER` lazily, the way
+/// php's `auto_globals_jit` creates it (Laravel's `SetRequestForConsole::bootstrap()` under
+/// artisan died with "Undefined variable $_SERVER"). Expected output verified against php 8.5.
+#[test]
+fn test_runtime_included_class_reads_cli_server_superglobal_from_another_frame() {
+    let out = compile_and_run(
+        r#"<?php
+$dir = sys_get_temp_dir() . '/elephc_sg_' . getmypid();
+@mkdir($dir);
+file_put_contents($dir . '/SgProbe.php', '<?php class SgProbe { function f() { $s = $_SERVER; return count($s) > 0 ? "server-ok" : "server-empty"; } }');
+spl_autoload_register(function ($c) use ($dir) { require $dir . '/' . $c . '.php'; });
+class SgKernel { function run() { $out = ''; foreach (['SgProbe'] as $cls) { $out .= (new $cls)->f(); } return $out; } }
+$k = new SgKernel;
+echo $k->run(), "\n";
+unlink($dir . '/SgProbe.php'); rmdir($dir);
+"#,
+    );
+    assert_eq!(out, "server-ok\n");
+}
+
+/// A compiled closure bound to a class the INTERPRETER declared writes that class's private
+/// properties under the bound scope. The class has no compiled id, so the scope used to be
+/// dropped and the write reached the interpreter from global scope: a runtime-name write fataled
+/// "Cannot access private property" (Symfony's DeepClone hydrators against an interpreted
+/// `Definition`) and a literal-name write was lost. Expected output verified against php 8.5.
+#[test]
+fn test_closure_bound_to_an_interpreted_class_writes_its_private_properties() {
+    let out = compile_and_run(
+        r#"<?php
+$file = sys_get_temp_dir() . '/elephc_bind_scope_' . getmypid() . '.php';
+file_put_contents($file, '<?php namespace Dc; class D { private ?string $class = null; private array $tags = []; function c() { return $this->class; } function t() { return $this->tags; } }');
+require $file;
+unlink($file);
+$c = "Dc\\D";
+$literal = Closure::bind(static function ($o) { $o->class = 'A'; }, null, $c);
+$o = new $c; $literal($o); echo $o->c(), "\n";
+$write = Closure::bind(static function ($o, $values) { foreach ($values as $n => $v) { $o->$n = $v; } }, null, $c);
+$o = new $c; $write($o, ['class' => 'B', 'tags' => ['x']]); echo $o->c(), ' ', implode(',', $o->t()), "\n";
+$read = Closure::bind(static function ($o, $n) { return $o->$n; }, null, $c);
+echo $read($o, 'class'), "\n";
+$scoped = Closure::bind(static function ($o) { $o->class = 'C'; }, null, $o);
+$scoped($o); echo $o->c(), "\n";
+try {
+    (static function ($o, $n) { $o->$n = 'D'; })($o, 'class');
+} catch (Error $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "A\nB x\nB\nC\nCannot access private property Dc\\D::$class\n"
+    );
+}

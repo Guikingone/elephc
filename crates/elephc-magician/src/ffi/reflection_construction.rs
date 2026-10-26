@@ -82,6 +82,7 @@ unsafe fn reflection_new_object_inner(
     };
     context.sync_global_eval_classes();
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    let arg_count = args.len();
     match interpreter::execute_reflection_new_object_outcome(
         context,
         &name,
@@ -89,6 +90,16 @@ unsafe fn reflection_new_object_inner(
         &mut values,
     ) {
         Ok(outcome) => write_outcome(outcome, out).code(),
-        Err(status) => status.code(),
+        Err(status) => {
+            // Without a note the bridge prints the bare `eval() runtime failed`, which is all a
+            // Symfony --web worker said when it died at boot. A deeper frame that described the
+            // failure already wins (first writer), so this only fills the silence.
+            crate::errors::note_eval_runtime_failure(
+                format!("could not construct {name} with {arg_count} argument(s) ({status:?})"),
+                "",
+                None,
+            );
+            status.code()
+        }
     }
 }

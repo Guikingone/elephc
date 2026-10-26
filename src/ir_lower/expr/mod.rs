@@ -12,14 +12,14 @@
 
 use crate::ir::{
     BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, LocalKind, LocalSlotId,
-    MixedNumericOp, Op, Ownership, Terminator, ValueId,
+    MixedNumericOp, Op, Ownership, PropertyFetchMode, Terminator, ValueId,
 };
 use crate::ir_lower::context::{
     value_ir_type, ClosureCapture, LoweredValue, LoweringContext, StaticCallableBinding,
 };
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::function;
-use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method, Name};
+use crate::names::{php_symbol_key, property_hook_get_method, Name};
 use crate::parser::ast::{
     is_compound_assignment_self_read, BinOp, CallableTarget, CastType, Expr, ExprKind,
     InstanceOfTarget, MagicConstant, StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
@@ -37,6 +37,7 @@ mod filter;
 mod late_bound_call;
 mod nullsafe_chain;
 mod ref_place_args;
+mod boxed_user_sort;
 mod scalar_literals;
 mod numeric_binary;
 mod string_concat;
@@ -46,14 +47,16 @@ mod lazy_branches;
 mod pipe;
 mod assignments;
 mod compat_preludes;
+mod gradual_array_calls;
 mod function_calls;
-use function_calls::resolve_registry_builtin_result_type;
 mod eval_barriers;
 mod lazy_isset;
 mod native_isset;
 mod callable_probes;
 mod descriptor_invoke;
+mod call_operand_owners;
 mod descriptor_args;
+mod descriptor_unpack;
 mod static_array_callbacks;
 mod callable_tracking;
 mod callable_resolution;
@@ -62,6 +65,7 @@ mod array_builtin_args;
 mod builtin_special_args;
 mod call_arg_coercion;
 mod positional_spreads;
+mod dynamic_spreads;
 mod named_args;
 mod named_spreads;
 mod variadic_args;
@@ -76,24 +80,37 @@ mod closures;
 mod closure_calls;
 mod descriptor_calls;
 mod object_construction;
-mod property_access;
+pub(crate) mod property_access;
+mod reference_returns;
+use reference_returns::{
+    begin_reference_return_call, finish_reference_return_call, finish_reference_return_value,
+};
 mod property_fetch_for_write;
 mod method_calls;
+mod magic_call_fallback;
 mod reflection_class_calls;
 mod reflection_method_calls;
 mod reflection_property_calls;
 mod reflection_filters;
 mod reflection_constructors;
 mod reflection_static_properties;
+mod class_introspection;
+mod class_introspection_mixed;
+mod core_introspection;
 mod reflection_new_instance;
 mod nullable_method_calls;
 mod override_arity;
+mod packed_builtin_args;
 mod method_metadata;
 mod static_method_calls;
+mod definite_argument_errors;
 mod scoped_values;
 mod generators;
 mod instanceof_coercions;
 mod merge_temps;
+mod array_splice;
+
+use array_splice::lower_array_splice_args;
 
 use scalar_literals::*;
 use filter::*;
@@ -110,10 +127,20 @@ use lazy_isset::*;
 use native_isset::*;
 use callable_probes::*;
 use descriptor_invoke::*;
+use call_operand_owners::*;
 use descriptor_args::*;
+use descriptor_unpack::*;
 use static_array_callbacks::*;
 use callable_tracking::*;
 use callable_resolution::*;
+
+/// Resolves the statically known receiver class for sibling statement lowering.
+pub(in crate::ir_lower) fn instance_object_class_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+) -> Option<String> {
+    callable_resolution::instance_callable_object_class(ctx, object)
+}
 use unset::*;
 use array_builtin_args::*;
 use builtin_special_args::*;
@@ -122,6 +149,7 @@ pub(in crate::ir_lower) use call_arg_coercion::param_accepts_object_without_stri
 pub(in crate::ir_lower) use lazy_isset::emit_quiet_property_fetch;
 use call_arg_coercion::*;
 use positional_spreads::*;
+use packed_builtin_args::*;
 use named_args::*;
 use named_spreads::*;
 
@@ -186,9 +214,14 @@ use reflection_property_calls::*;
 use reflection_filters::*;
 use reflection_constructors::*;
 use reflection_static_properties::*;
+use class_introspection::*;
+use core_introspection::*;
 use reflection_new_instance::*;
 use nullable_method_calls::*;
 use override_arity::*;
+pub(crate) use override_arity::reset_method_declarer_index;
+#[cfg(test)]
+pub(crate) use override_arity::WIDER_OVERRIDE_CANDIDATES;
 use method_metadata::*;
 use static_method_calls::*;
 use scoped_values::*;
@@ -202,6 +235,9 @@ pub(in crate::ir_lower) use instanceof_coercions::{
 
 pub(crate) use callable_resolution::{
     is_bound_closure_assignment_shape, lower_bound_closure_for_assignment,
+};
+pub(crate) use call_operand_owners::{
+    pin_in_flight_owners, retire_owned_call_operand, root_owned_call_operand, unpin_in_flight_owners,
 };
 pub(crate) use callable_tracking::{
     lower_callable_array_for_assignment, reflection_arg_array_binding_for_expr,
@@ -222,17 +258,24 @@ pub(crate) use array_access::{
     lower_by_ref_foreach_element_source,
 };
 pub(crate) use array_access_types::type_satisfies_array_access_for_ir;
-pub(crate) use instanceof_coercions::coerce_to_int_at_span;
+pub(crate) use assignments::lower_null_coalesce_update_stmt;
+pub(crate) use closures::expr_contains_eval_call;
+pub(crate) use instanceof_coercions::{coerce_array_key_to_int_at_span, coerce_to_int_at_span};
 pub(in crate::ir_lower) use instanceof_coercions::coerce_to_string_at_span;
 pub(crate) use merge_temps::emit_bool_literal;
 pub(crate) use property_access::{
-    lower_ref_assign_array_elem, lower_ref_assign_call, lower_ref_assign_dynamic_property,
-    prepare_local_array_element_reference_container,
-    lower_ref_assign_property,
+    lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,
+    lower_ref_assign_dynamic_property, lower_ref_assign_property, lower_ref_assign_static_property,
+    prepare_scoped_addressable_ref_array_receiver,
+    static_property_result_type,
 };
-pub(crate) use property_fetch_for_write::lower_by_ref_foreach_property_source;
+pub(crate) use property_fetch_for_write::{
+    by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,
+    lower_nested_assignment_property_source,
+};
 pub(crate) use string_concat::{
-    cast_string_needs_owned_persist, runtime_call_string_is_fresh, string_op_uses_scratch_storage,
+    cast_string_needs_owned_persist, persist_concat_lhs_if_rhs_can_reset, runtime_call_string_is_fresh,
+    string_op_uses_scratch_storage,
 };
 pub(in crate::ir_lower) use assoc_array_literals::{
     array_access_expr_value_type_for_ir, lower_array_reference_or_value,
@@ -241,8 +284,12 @@ pub(in crate::ir_lower) use assoc_array_literals::{
 };
 pub(super) use call_return_types::call_return_type;
 pub(in crate::ir_lower) use merge_temps::{coerce_container_to_mixed_payload, store_value_into_temp};
+pub(super) use call_return_types::eir_user_function_return_type;
+pub(super) use method_metadata::closure_return_method_call_type;
+pub(super) use nullsafe_chain::result_storage_type as nullsafe_chain_result_storage_type;
 pub(super) use nullable_method_calls::lower_dynamic_method_call_with_receiver;
 pub(super) use static_method_calls::static_method_call_expr_type_for_ir;
+pub(crate) use static_method_calls::static_receiver_class_name;
 
 /// Lowers an expression and returns its EIR value.
 /// Calls a no-argument instance method on an already lowered receiver, for statement lowering
@@ -266,6 +313,30 @@ pub(crate) fn lower_zero_arg_method_call(
 }
 
 pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
+    ctx.expression_depth += 1;
+    let value = lower_expr_inner(ctx, expr);
+    ctx.expression_depth -= 1;
+    if crate::ir_lower::context::is_by_ref_call_result_site(expr.span)
+        && crate::types::checker::is_call_result_argument(expr)
+    {
+        // php binds the value to a temporary for the by-reference parameter and notices it.
+        let message = ctx.intern_string("Notice: Only variables should be passed by reference\n");
+        ctx.emit_void(
+            Op::Warn,
+            Vec::new(),
+            Some(Immediate::Data(message)),
+            Op::Warn.default_effects(),
+            Some(expr.span),
+        );
+    }
+    value
+}
+
+/// Dispatches one expression while its reference-call context remains distinct from nested operands.
+fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
+    if let Some(value) = definite_argument_errors::lower_definite_argument_mismatch(ctx, expr) {
+        return value;
+    }
     if let Some(value) = nullsafe_chain::lower(ctx, expr) {
         return value;
     }
@@ -319,6 +390,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::ArrayReference(_) => {
             unreachable!("array-reference nodes are lowered by their containing literal")
         }
+        ExprKind::ArrayLiteralMixed(entries) => lower_mixed_array_literal(ctx, entries, expr),
         ExprKind::Match { subject, arms, default } => lower_match(ctx, subject, arms, default.as_deref(), expr),
         ExprKind::ArrayAccess { array, index } => lower_array_access(ctx, array, index, expr),
         ExprKind::Ternary { condition, then_expr, else_expr } => {
@@ -381,7 +453,12 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
             object,
             method,
             args,
-        } => lower_method_call(ctx, object, method, args, Op::MethodCall, expr),
+        } => {
+            if let Some(static_bind) = closure_bind_to_as_static_bind(ctx, object, method, args, expr) {
+                return lower_expr(ctx, &static_bind);
+            }
+            lower_method_call(ctx, object, method, args, Op::MethodCall, expr)
+        }
         ExprKind::NullsafeMethodCall {
             object,
             method,
@@ -412,6 +489,56 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::Yield { key, value } => lower_yield(ctx, key.as_deref(), value.as_deref(), expr),
         ExprKind::YieldFrom(inner) => lower_yield_from(ctx, inner, expr),
     }
+}
+
+/// Rewrites `$closureValue->bindTo($newThis, $scope)` into `Closure::bind($closureValue, $newThis, $scope)`.
+///
+/// The two spellings are the same operation in PHP, but only the static form's lowering evaluates
+/// the scope argument and stamps it into the bound copy at run time (see
+/// `static_method_calls::lower_runtime_bind_scope`); the instance form's lowering lives with the
+/// method-call dispatch and can only honour a scope it can name at compile time. The rewrite is
+/// limited to the case the instance form cannot handle: a receiver whose static type is a
+/// callable VALUE (not a closure literal, whose body the instance form already specializes), with
+/// an explicit scope and plain positional arguments. Everything else keeps its existing path.
+fn closure_bind_to_as_static_bind(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<Expr> {
+    if php_symbol_key(method) != "bindto"
+        || args.len() < 2
+        || matches!(object.kind, ExprKind::Closure { .. })
+        || args
+            .iter()
+            .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
+    {
+        return None;
+    }
+    // A `mixed` receiver holding a closure (`$m = H::$hs["k"] ??= static function () {...}`) binds
+    // the same way, but only in a world where nothing else answers `bindTo()`: an object of a
+    // class declaring its own `bindTo` must keep its method call.
+    let receiver_repr = materialized_expr_type_for_merge(ctx, object).codegen_repr();
+    let mixed_closure_receiver = receiver_repr == PhpType::Mixed
+        && !ctx
+            .classes
+            .values()
+            .any(|class| class.methods.contains_key("bindto"));
+    if receiver_repr != PhpType::Callable && !mixed_closure_receiver {
+        return None;
+    }
+    let mut bind_args = Vec::with_capacity(args.len() + 1);
+    bind_args.push(object.clone());
+    bind_args.extend(args.iter().cloned());
+    Some(Expr::new(
+        ExprKind::StaticMethodCall {
+            receiver: StaticReceiver::Named(Name::from("Closure".to_string())),
+            method: "bind".to_string(),
+            args: bind_args,
+        },
+        expr.span,
+    ))
 }
 
 /// Returns the effect set for one arithmetic opcode, dropping `MAY_THROW` when the right
@@ -528,7 +655,26 @@ fn static_callable_builtin_result_type(
     operands: &[crate::ir::ValueId],
     span: Span,
 ) -> PhpType {
-    resolve_registry_builtin_result_type(ctx, name, &[], operands, span, None)
+    // The checker's result for THIS span is authoritative here just as it is for a builtin
+    // written out at its own call site: a first-class callable to a builtin resolves to a direct
+    // call, so the site has its own argument types and the contract has already answered from
+    // them. Passing `None` took the DECLARED return type instead, which for any builtin whose
+    // result depends on its arguments is a different type -- `array_slice($assoc, 1, 2)` returns
+    // an associative array where the declaration says `array`, and lowering then refused the
+    // call outright (issue #1092).
+    //
+    // Read from the FIRST-CLASS map, never from `builtin_call_types`. That one is keyed by the
+    // span of whatever call the checker was inferring, and for `call_user_func($f, ...)` that is
+    // the OUTER call: reading it here handed a `bool`-returning builtin's raw result the outer
+    // call's `Mixed` label, and the consumer dereferenced it as a pointer.
+    let checked = if span.line != 0 {
+        ctx.first_class_builtin_call_types
+            .get(&span)
+            .map(|checked| normalize_value_php_type(checked.clone()))
+    } else {
+        None
+    };
+    resolve_registry_builtin_result_type(ctx, name, &[], operands, span, checked)
         .unwrap_or_else(|| call_return_type(ctx, name, operands))
 }
 
@@ -592,7 +738,7 @@ fn lower_initialized_property_isset(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(read_block);
-    let read_value = lower_property_get_from_value(ctx, object, property, Op::PropGet, arg);
+    let read_value = property_access::lower_initialized_slot_read(ctx, object, property, arg);
     let is_set = emit_builtin_call_value(
         ctx,
         "isset",
@@ -631,8 +777,7 @@ fn lower_initialized_static_property_isset(
     let merge = ctx
         .builder
         .create_named_block("isset.static_property.merge", Vec::new());
-    let name = format!("{}::{}", receiver_name(receiver), property);
-    let data = ctx.intern_string(&name);
+    let data = crate::ir_lower::stmt::static_property_ref_data(ctx, receiver, property);
     let initialized = ctx.emit_value(
         Op::StaticPropInitialized,
         Vec::new(),
@@ -727,7 +872,14 @@ fn lower_initialized_property_empty(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(read_block);
-    let read_value = lower_property_get_from_value(ctx, object, property, Op::PropGet, arg);
+    // `empty()` needs the VALUE: php asks `__isset` and then `__get`, the `??` fetch.
+    let read_value = property_access::lower_initialized_slot_read_in_mode(
+        ctx,
+        object,
+        property,
+        PropertyFetchMode::Coalesce,
+        arg,
+    );
     let construct_name = ctx.intern_function_name(construct);
     let empty_value = ctx.emit_value(
         Op::LanguageConstructCall,
@@ -737,6 +889,10 @@ fn lower_initialized_property_empty(
         effects_lookup::language_construct_effects(construct),
         Some(arg.span),
     );
+    // `__get`'s answer comes back as an owned box the test does not consume.
+    if ctx.value_is_owning_temporary(read_value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, read_value, Some(arg.span));
+    }
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, empty_value, arg.span);
     branch_to(ctx, merge);
 
@@ -763,8 +919,7 @@ fn lower_initialized_static_property_empty(
     let merge = ctx
         .builder
         .create_named_block("empty.static_property.merge", Vec::new());
-    let name = format!("{}::{}", receiver_name(receiver), property);
-    let data = ctx.intern_string(&name);
+    let data = crate::ir_lower::stmt::static_property_ref_data(ctx, receiver, property);
     let initialized = ctx.emit_value(
         Op::StaticPropInitialized,
         Vec::new(),
@@ -821,129 +976,6 @@ fn dynamic_property_unset_action(
     UnsetPropertyAction::RemoveDynamic
 }
 
-/// Lowers `array_splice()` operands, promoting a typed receiver whose `$replacement` cannot fit.
-///
-/// PHP has no per-array element type, so `$a = [1, 2, 3]; array_splice($a, 1, 1, ["x"])` simply
-/// leaves `[1, "x", 3]`. elephc types an indexed array at its payload slot, so the promotion has
-/// to reach the receiver LOCAL: `__rt_array_to_mixed` re-boxes every live payload and the slot's
-/// storage type widens to `array<mixed>`, which is the representation the boxed insert helper
-/// writes into. Without it the backend would have to store a string pointer/length pair in an
-/// 8-byte integer slot, which is why the untyped case used to be an explicit `unsupported`
-/// diagnostic instead of a wrong answer.
-fn lower_array_splice_args(
-    ctx: &mut LoweringContext<'_, '_>,
-    sig: Option<&FunctionSig>,
-    args: &[Expr],
-) -> Vec<crate::ir::ValueId> {
-    let mut operands = if crate::types::call_args::has_named_args(args) {
-        lower_args_with_signature(ctx, sig, args)
-    } else {
-        lower_positional_builtin_args_with_signature(ctx, sig, args)
-    };
-    widen_array_splice_receiver_for_replacement(ctx, sig, args, &mut operands);
-    operands
-}
-
-/// Promotes an `array_splice()` receiver local to `array<mixed>` when `$replacement` retypes it.
-///
-/// Runs after the operands are lowered because the decision needs both the receiver's slot
-/// element type and the replacement's EIR type, and the conversion itself re-reads the receiver
-/// local so it observes any mutation the later arguments performed.
-fn widen_array_splice_receiver_for_replacement(
-    ctx: &mut LoweringContext<'_, '_>,
-    sig: Option<&FunctionSig>,
-    args: &[Expr],
-    operands: &mut [crate::ir::ValueId],
-) {
-    let Some(sig) = sig else {
-        return;
-    };
-    let Some(replacement) = operands.get(3).copied() else {
-        return;
-    };
-    let Some((name, span)) = first_parameter_plain_local(ctx, sig, args) else {
-        return;
-    };
-    let PhpType::Array(elem_ty) = ctx.local_type(&name).codegen_repr() else {
-        return;
-    };
-    let elem_ty = elem_ty.codegen_repr();
-    if elem_ty == PhpType::Mixed {
-        return;
-    }
-    let replacement_ty = ctx.builder.value_php_type(replacement).codegen_repr();
-    if array_splice_replacement_fits_receiver(&elem_ty, &replacement_ty) {
-        return;
-    }
-    let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
-    let local = ctx.load_local(&name, Some(span));
-    let converted = ctx.emit_value(
-        Op::ArrayToMixed,
-        vec![local.value],
-        None,
-        array_ty.clone(),
-        Op::ArrayToMixed.default_effects(),
-        Some(span),
-    );
-    ctx.store_mutated_local(&name, converted, array_ty, Some(span));
-    operands[0] = ctx.load_local(&name, Some(span)).value;
-}
-
-/// Returns the plain local variable bound to a call's first declared parameter.
-///
-/// Reference-bound locals and hidden place temporaries are excluded because retyping their
-/// storage would also require updating a caller, property, or array-element contract outside the
-/// current frame.
-fn first_parameter_plain_local(
-    ctx: &LoweringContext<'_, '_>,
-    sig: &FunctionSig,
-    args: &[Expr],
-) -> Option<(String, Span)> {
-    let receiver = args.iter().enumerate().find_map(|(index, arg)| {
-        let (param_index, place) = match &arg.kind {
-            ExprKind::NamedArg { name, value } => (
-                sig.params.iter().position(|(param, _)| param == name)?,
-                value.as_ref(),
-            ),
-            _ => (index, arg),
-        };
-        (param_index == 0).then_some(place)
-    })?;
-    let ExprKind::Variable(name) = &receiver.kind else {
-        return None;
-    };
-    if !ctx.has_local_slot(name) || ctx.is_ref_bound_local(name) {
-        return None;
-    }
-    if name.starts_with("__eir_place") {
-        return None;
-    }
-    Some((name.clone(), receiver.span))
-}
-
-/// Reports whether a `$replacement` can be written into the receiver's existing payload slots.
-///
-/// Mirrors the shapes the backend's `SpliceReplacement` classifier accepts, so a call this
-/// predicate passes never reaches the `unsupported` arm: an omitted/null/empty replacement
-/// inserts nothing, an array of the receiver's own element type is copied verbatim, an array of
-/// boxed `Mixed` cells is read back as plain integers for an `int`/`bool` receiver (the shape
-/// `[$x + 1]` produces), and a bare scalar of the element type becomes a one-element insertion.
-fn array_splice_replacement_fits_receiver(elem_ty: &PhpType, replacement_ty: &PhpType) -> bool {
-    if matches!(replacement_ty, PhpType::Void | PhpType::Never) {
-        return true;
-    }
-    if let PhpType::Array(inner) = replacement_ty {
-        let inner = inner.codegen_repr();
-        if matches!(inner, PhpType::Void | PhpType::Never) {
-            return true;
-        }
-        if &inner == elem_ty {
-            return true;
-        }
-        return inner == PhpType::Mixed && matches!(elem_ty, PhpType::Int | PhpType::Bool);
-    }
-    replacement_ty == elem_ty
-}
 
 /// Replaces arguments whose declared-parameter binding is decided by their literal spelling.
 ///
@@ -1111,12 +1143,16 @@ fn lower_new_dynamic_planned_dispatch(
         );
         store_value_into_temp(ctx, &result_temp, result_type, fallback, expr.span);
         branch_to(ctx, merge);
-    } else if let Some(parent) = required_parent {
-        let message = ctx.intern_string(&format!(
-            "Fatal error: Cannot instantiate late-static class constrained to {}\n",
-            parent
-        ));
-        ctx.builder.terminate(Terminator::Fatal { message });
+    } else if required_parent.is_some() {
+        // A spread or named argument list for an interpreted late-static class. The constrained
+        // op takes positional operands only, so this goes through the generic dynamic new, which
+        // packs the arguments into a runtime container. Laravel's `Component::resolve()` is
+        // `new static(...array_intersect_key($data, array_flip($parameters)))` (string keys,
+        // so named arguments) for every anonymous Blade component, and this used to be a fatal.
+        let name_value = ctx.load_local(&name_temp, Some(expr.span));
+        let fallback = lower_new_dynamic_generic(ctx, name_value, args, expr);
+        store_value_into_temp(ctx, &result_temp, result_type.clone(), fallback, expr.span);
+        branch_to(ctx, merge);
     } else {
         let name_value = ctx.load_local(&name_temp, Some(expr.span));
         let fallback = lower_new_dynamic_generic(ctx, name_value, args, expr);
@@ -1496,10 +1532,13 @@ fn static_new_args_match_param_storage(
         let Some((_, param_ty)) = sig.params.get(index) else {
             return true;
         };
+        if crate::types::late_static_dispatch::literal_string_cannot_bind_numeric(param_ty, arg) {
+            return false;
+        }
         let Some(arg_repr) = static_new_argument_storage(ctx, arg) else {
             return true;
         };
-        !static_new_param_storage_conflicts(&param_ty.codegen_repr(), &arg_repr)
+        !static_new_param_storage_conflicts(&param_ty.late_bound_param_storage(), &arg_repr)
     })
 }
 
@@ -1536,7 +1575,9 @@ fn static_new_param_storage_conflicts(param: &PhpType, arg: &PhpType) -> bool {
             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
         )
     };
-    (array_like(param) && scalar_like(arg)) || (scalar_like(param) && array_like(arg))
+    let object_like = |ty: &PhpType| matches!(ty, PhpType::Object(_));
+    (array_like(param) && (scalar_like(arg) || object_like(arg)))
+        || ((scalar_like(param) || object_like(param)) && array_like(arg))
 }
 
 /// Returns how many leading arguments a narrowing descendant's constructor binds, when the
@@ -1640,6 +1681,21 @@ fn dynamic_new_args_need_planning(sig: &FunctionSig, args: &[Expr]) -> bool {
     crate::types::call_args::has_named_args(args)
         || args.iter().any(is_spread_arg)
         || sig.params.len() != args.len()
+        || dynamic_new_binds_array_element_by_reference(sig, args)
+}
+
+/// Returns true when a constructor takes an array-element argument BY REFERENCE.
+///
+/// `new $class($params['timeout'])` hands the site's operands over by value, which is right for
+/// every constructor that does not declare that position as a reference. A candidate that does
+/// has to bind the element's storage, so it is constructed through a fixed-class branch that
+/// lowers the arguments against its own signature, while every other class keeps the by-value
+/// generic path. php decides the same thing per class at run time.
+fn dynamic_new_binds_array_element_by_reference(sig: &FunctionSig, args: &[Expr]) -> bool {
+    args.iter().enumerate().any(|(index, arg)| {
+        matches!(arg.kind, ExprKind::ArrayAccess { .. })
+            && sig.ref_params.get(index).copied().unwrap_or(false)
+    })
 }
 
 /// Returns true when `lower_args_with_signature` resolves this call to exactly one operand
@@ -1773,9 +1829,10 @@ fn lower_array_internal_pointer(
         effects_lookup::runtime_effects(),
         Some(expr.span),
     );
-    if cursor_slot.is_none() {
-        crate::ir_lower::ownership::release_if_owned(ctx, container, Some(args[0].span));
-    }
+    // A variable's load is owned too when its slot stores another representation (a local seeded
+    // with a Mixed value, then assigned a list, is read as the list through an unboxing copy);
+    // `release_if_owned` leaves a borrowed load alone.
+    crate::ir_lower::ownership::release_if_owned(ctx, container, Some(args[0].span));
     Some(result)
 }
 
@@ -1783,3 +1840,35 @@ pub(crate) use indexed_array_literals::ir_array_storage_type;
 pub(crate) use assoc_array_literals::merge_ir_assoc_value_type;
 pub(crate) use indexed_array_literals::merge_ir_indexed_element_type;
 pub(in crate::ir_lower) use assignments::lower_conditional_non_local_null_coalesce_assignment;
+
+/// Returns the plain local variable bound to a call's first declared parameter.
+///
+/// Reference-bound locals and hidden place temporaries are excluded because retyping their
+/// storage would also require updating a caller, property, or array-element contract outside the
+/// current frame.
+fn first_parameter_plain_local(
+    ctx: &LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    args: &[Expr],
+) -> Option<(String, Span)> {
+    let receiver = args.iter().enumerate().find_map(|(index, arg)| {
+        let (param_index, place) = match &arg.kind {
+            ExprKind::NamedArg { name, value } => (
+                sig.params.iter().position(|(param, _)| param == name)?,
+                value.as_ref(),
+            ),
+            _ => (index, arg),
+        };
+        (param_index == 0).then_some(place)
+    })?;
+    let ExprKind::Variable(name) = &receiver.kind else {
+        return None;
+    };
+    if !ctx.has_local_slot(name) || ctx.is_ref_bound_local(name) {
+        return None;
+    }
+    if name.starts_with("__eir_place") {
+        return None;
+    }
+    Some((name.clone(), receiver.span))
+}

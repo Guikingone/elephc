@@ -1,16 +1,16 @@
 ---
-title: "clamp() — internals"
+title: "clamp() - internals"
 description: "Compiler internals for clamp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 582
+  order: 583
 ---
 
-## `clamp()` — internals
+## `clamp()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/clamp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/clamp.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

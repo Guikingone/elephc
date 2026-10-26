@@ -92,7 +92,7 @@ pub unsafe extern "C" fn __elephc_eval_class_name_is_a(
 /// # Safety
 /// Mirrors `__elephc_eval_class_autoload`.
 unsafe fn class_autoload_inner(name_ptr: *const u8, name_len: u64) -> u64 {
-    let Ok(name) = (unsafe { abi_name_to_string(name_ptr, name_len) }) else {
+    let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
         return 0;
     };
     if name.is_empty() {

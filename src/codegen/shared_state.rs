@@ -8,6 +8,9 @@
 //!
 //! Key details:
 //! - Cached labels are global assembly entries emitted at their first call site.
+//! - Descriptor invoker cache identity is the signature, the capture list and the
+//!   string-result owner contract. Every invoker binds the same container layout, so two
+//!   wrappers agreeing on those three can safely share one emitted body.
 //! - Receiver-bearing descriptors cache only immutable templates; each call still captures its object.
 //! - Owns the module-wide assembly label counter. It must not be per function: the readable part
 //!   of a label is a lossy fragment of the PHP function/block name, so only a module-unique
@@ -19,7 +22,7 @@
 use crate::fast_hash::FastSet as HashSet;
 
 use crate::codegen::callable_dispatch::{RuntimeCallableCase, RuntimeStaticMethodCallableCase};
-use crate::ir::Module;
+use crate::ir::{CoreBuiltinOp, Function, Immediate, Module, Op, RuntimeCallTarget, RuntimeFnId};
 use crate::names::php_symbol_key;
 use crate::types::{FunctionSig, PhpType};
 
@@ -34,15 +37,32 @@ type StaticCasesEntry = (Option<Vec<String>>, Vec<RuntimeStaticMethodCallableCas
 /// Receiver-captured descriptor templates, bucketed by `instance_descriptor_bucket`.
 type InstanceDescriptorMap =
     crate::fast_hash::FastMap<u64, Vec<RuntimeInstanceMethodDescriptorCacheEntry>>;
+/// Optional runtime families discovered while codegen lowers synthetic EIR functions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct GeneratedRuntimeFeatures {
+    pub(crate) handler_state: bool,
+    pub(crate) object_clone: bool,
+}
 
 /// Module-wide artifacts emitted once and reused by every function lowering context.
 pub(crate) struct SharedCodegenState {
     pub(super) reflection: SharedReflectionState,
     emitted_instance_methods: HashSet<(String, String)>,
     emitted_static_methods: HashSet<(String, String)>,
+    /// Keys of the keyed helpers this state already emitted. Two cache entries can need one
+    /// helper (an instance-method entry wrapper serves every receiver class of its implementing
+    /// class), and a second copy in the same text is a duplicate definition: only the parallel
+    /// merge drops copies, and the helpers emitted ahead of the bodies never pass through it.
+    emitted_keyed_helpers: HashSet<String>,
+    /// Descriptor argument adapters need the shared boxed-callable normalizer.
+    pub(super) callable_argument_normalizer: bool,
+    generated_runtime_features: GeneratedRuntimeFeatures,
     runtime_string_descriptor_cases: Vec<StringCasesEntry>,
     runtime_static_method_descriptor_cases: Vec<StaticCasesEntry>,
-    runtime_static_method_descriptor_case_entries: Vec<RuntimeStaticMethodCallableCase>,
+    /// Static-method descriptor cases by php name: a `Vec` scanned per lookup was the top of
+    /// stack of the Symfony demo's parallel codegen (thousands of cases, asked per target).
+    runtime_static_method_descriptor_case_entries:
+        crate::fast_hash::FastMap<String, RuntimeStaticMethodCallableCase>,
     /// Receiver-captured descriptor templates, bucketed by a hash of theirthree--part name key.
     ///
     /// This was a flat `Vec` scanned linearly, comparing three strings AND a whole `FunctionSig`
@@ -69,7 +89,12 @@ pub(crate) struct SharedCodegenState {
     runtime_extern_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
     /// Memoized sharing decision for open Mixed callable dispatch by strictness profile.
     mixed_callable_sharing: [Option<bool>; 2],
-    label_counter: usize,
+    /// The lookup table naming every non-public instance method, once built in this chunk's data
+    /// section (`Some(None)`: the module has none). Every callable-array site that reports an
+    /// unreachable method consults the same table, and building it is linear in the module's
+    /// methods, so rebuilding it per site would be quadratic. It names a label in THIS data
+    /// section only, which is why it needs no cross-chunk handling.
+    inaccessible_method_table: Option<Option<crate::codegen_support::callable_lookup::StringLookupTable>>,
     /// Bumped by every shared-cache access, READ or write. `emit_module` samples it per body
     /// under `ELEPHC_CODEGEN_SHARED_TOUCHES` to learn how many bodies could be emitted without
     /// the shared state at all, which is what decides whether a parallel emission pass is worth
@@ -109,6 +134,21 @@ pub(crate) struct SharedCodegenState {
     trait_key_index: std::cell::RefCell<Option<crate::fast_hash::FastMap<String, usize>>>,
     /// Enum names by the same key, for the same reason.
     enum_key_index: std::cell::RefCell<Option<crate::fast_hash::FastMap<String, String>>>,
+    /// `object_type_is_a(source, target)` answers, keyed by `source \0 target` as spelled.
+    ///
+    /// A typed-property guard asks it for EVERY class of the program against each declared class,
+    /// at every arm of every dynamic property write: on Laravel that walk -- lowercased keys and
+    /// cloned names at each parent hop -- was most of the codegen phase. The relation is a pure
+    /// function of the module, so remembering it changes nothing an observer can see.
+    type_is_a_memo: std::cell::RefCell<crate::fast_hash::FastMap<String, bool>>,
+    /// `eval_sync_global_type` answers by global name: each one walks every instruction of every
+    /// function and closure, and every dynamic include syncs every global, so Laravel paid
+    /// globals x includes whole-program walks. A pure function of the module.
+    eval_sync_global_type_memo:
+        std::cell::RefCell<crate::fast_hash::FastMap<String, Option<crate::types::PhpType>>>,
+    /// Runtime class ids satisfying a declared class list, keyed by the list as spelled.
+    compatible_class_ids_memo:
+        std::cell::RefCell<crate::fast_hash::FastMap<Vec<String>, std::rc::Rc<[u64]>>>,
     /// Every global needing shared reference-cell storage, collected in one walk of the module.
     ///
     /// `superglobals::uses_shared_ref_cell` answers for ONE name by walking every instruction of
@@ -152,6 +192,89 @@ pub(crate) struct SharedCodegenState {
     /// name table `elephc_instr_init` reads; main is emitted last, so it is
     /// complete by then.
     instr_registry: Vec<String>,
+    /// Keys of the typed-property guard helpers this state has already requested.
+    property_guard_requested: HashSet<String>,
+    /// Requested guard helpers whose bodies have not been emitted yet. They are emitted right
+    /// after the body that asked, never in the middle of it; see `drain_property_guard_helpers`.
+    property_guard_pending: Vec<PendingPropertyGuard>,
+    /// Keys of the runtime-name property helpers this state has already requested.
+    dynamic_prop_requested: HashSet<String>,
+    /// Requested runtime-name property helpers whose bodies are not emitted yet.
+    dynamic_prop_pending: Vec<PendingDynamicPropHelper>,
+    /// The opcode and name immediate each named-read helper repeats, by helper key.
+    pub(super) named_get_templates:
+        crate::fast_hash::FastMap<String, (crate::ir::Op, Option<crate::ir::Immediate>)>,
+    /// What each shared untyped-receiver method-call helper is built from, by helper key.
+    pub(super) method_call_templates:
+        crate::fast_hash::FastMap<String, MethodCallHelperTemplate>,
+    /// What each shared owner-call helper cannot read off its class-erased parameters, by helper
+    /// label: the argument-pack collector flags (they follow from the call site's receiver class)
+    /// and whether the site publishes a lexical class through `_eval_owner_scope_*`.
+    pub(super) owner_call_site_facts: crate::fast_hash::FastMap<String, (i64, bool)>,
+}
+
+/// The instruction shape a shared untyped-receiver method-call helper repeats: the opcode, the
+/// method-name immediate (with its strict-types profile) and the type of every operand and of
+/// the result, which are all part of the helper's key.
+#[derive(Clone, Debug)]
+pub(crate) struct MethodCallHelperTemplate {
+    pub(crate) op: crate::ir::Op,
+    pub(crate) immediate: Option<crate::ir::Immediate>,
+    pub(crate) operands: Vec<(crate::ir::IrType, PhpType)>,
+    pub(crate) result_type: crate::ir::IrType,
+    pub(crate) result_php_type: PhpType,
+    /// Ownership of the result as the site records it.
+    pub(crate) result_ownership: crate::ir::Ownership,
+}
+
+/// What a shared runtime-name property helper does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DynamicPropHelperKind {
+    /// `$mixed->{$name}` read or probe against the whole module's classes.
+    MixedGet(crate::ir::PropertyFetchMode),
+    /// `$mixed->{$name} = $boxed`, emitted as a synthetic function.
+    MixedSet,
+    /// `unset($mixed->{$name})`, emitted as a synthetic function.
+    MixedUnset,
+    /// `$mixed->{$name} = $boxed` from a body with a RUNTIME closure scope: the synthetic function
+    /// also receives the caller's hidden scope capture, so its ladder and scope gate resolve as
+    /// the caller's would.
+    MixedSetRuntimeScope,
+    /// `unset($mixed->{$name})` from a body with a runtime closure scope (see
+    /// [`Self::MixedSetRuntimeScope`]).
+    MixedUnsetRuntimeScope,
+    /// `$mixed->name` read of one declared name, emitted as a synthetic function.
+    /// `$mixed->name = $boxed` of one declared name, emitted as a synthetic function.
+    NamedMixedSet { property: String },
+    NamedMixedGet {
+        property: String,
+        mode: crate::ir::PropertyFetchMode,
+    },
+    /// `$mixed->method(...)` on an untyped receiver, emitted as a synthetic function.
+    MixedMethodCall,
+}
+
+/// One runtime-name property helper waiting for its body to be emitted.
+#[derive(Clone, Debug)]
+pub(crate) struct PendingDynamicPropHelper {
+    /// Cache key: everything the helper's code depends on.
+    pub(crate) key: String,
+    /// Entry symbol, derived from the key.
+    pub(crate) label: String,
+    pub(crate) kind: DynamicPropHelperKind,
+    /// The php scope class the helper resolves visibility from.
+    pub(crate) scope: Option<String>,
+}
+
+/// One typed-property guard helper waiting for its body to be emitted.
+#[derive(Clone, Debug)]
+pub(crate) struct PendingPropertyGuard {
+    /// Cache key: everything the helper's code depends on.
+    pub(crate) key: String,
+    /// Entry symbol, derived from the key so every codegen worker spells it the same way.
+    pub(crate) label: String,
+    /// The declared property type the helper enforces.
+    pub(crate) php_type: PhpType,
 }
 
 /// The shared caches as the helpers emitted ahead of the bodies left them; see
@@ -161,12 +284,17 @@ pub(crate) struct ModulePreset {
     eval_registration_helper: Option<String>,
     string_cases: Vec<StringCasesEntry>,
     static_cases: Vec<StaticCasesEntry>,
-    static_case_entries: Vec<RuntimeStaticMethodCallableCase>,
+    static_case_entries: crate::fast_hash::FastMap<String, RuntimeStaticMethodCallableCase>,
     instance_descriptors:
         crate::fast_hash::FastMap<u64, Vec<RuntimeInstanceMethodDescriptorCacheEntry>>,
     invokers: Vec<RuntimeCallableInvokerCacheEntry>,
     builtin_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
     extern_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
+    /// The module-wide open Mixed callable sharing decision per strictness profile. It is decided
+    /// once, before any body, by counting the module's sites; a worker chunk that did not inherit
+    /// it read "not decided" as "not shared" and inlined the whole dispatcher at every one of its
+    /// sites (about 600 instructions each instead of a call).
+    mixed_callable_sharing: [Option<bool>; 2],
 }
 
 /// Reusable static descriptor template for one public instance method.
@@ -190,6 +318,12 @@ struct RuntimeInstanceMethodDescriptorCacheEntry {
 struct RuntimeCallableInvokerCacheEntry {
     signature: FunctionSig,
     captures: Vec<(String, PhpType, bool)>,
+    owns_string_return: bool,
+    php_return_status: bool,
+    /// The RESOLVED defaults the body materializes. Two signatures can be identical as ABI and
+    /// still fold `self::`/`parent::` defaults differently in different class scopes, so the
+    /// resolved values are part of the key rather than the declaring class name.
+    defaults: crate::codegen::runtime_callable_invoker::InvokerDefaults,
     label: String,
 }
 
@@ -237,9 +371,12 @@ impl SharedCodegenState {
             reflection: SharedReflectionState::empty(),
             emitted_instance_methods: HashSet::default(),
             emitted_static_methods: HashSet::default(),
+            emitted_keyed_helpers: HashSet::default(),
+            callable_argument_normalizer: false,
+            generated_runtime_features: GeneratedRuntimeFeatures::default(),
             runtime_string_descriptor_cases: Vec::new(),
             runtime_static_method_descriptor_cases: Vec::new(),
-            runtime_static_method_descriptor_case_entries: Vec::new(),
+            runtime_static_method_descriptor_case_entries: Default::default(),
             runtime_instance_method_descriptors: crate::fast_hash::FastMap::default(),
             runtime_callable_invokers: Vec::new(),
             eval_registration_helper: None,
@@ -249,7 +386,7 @@ impl SharedCodegenState {
             runtime_extern_wrappers: Vec::new(),
             mixed_string_sharing: [None; 2],
             mixed_callable_sharing: [None; 2],
-            label_counter: 0,
+            inaccessible_method_table: None,
             cache_touches: std::cell::Cell::new(0),
             unkeyed_cache_touches: std::cell::Cell::new(0),
             count_guard_sharing: None,
@@ -258,6 +395,9 @@ impl SharedCodegenState {
             interface_key_index: std::cell::RefCell::new(None),
             trait_key_index: std::cell::RefCell::new(None),
             enum_key_index: std::cell::RefCell::new(None),
+            type_is_a_memo: std::cell::RefCell::new(Default::default()),
+            eval_sync_global_type_memo: std::cell::RefCell::new(Default::default()),
+            compatible_class_ids_memo: std::cell::RefCell::new(Default::default()),
             shared_ref_cell_globals: None,
             pcntl_async_signals: None,
             pcntl_signal_handlers: None,
@@ -268,6 +408,13 @@ impl SharedCodegenState {
             probe_table: None,
             counter_registry: Vec::new(),
             instr_registry: Vec::new(),
+            property_guard_requested: HashSet::default(),
+            property_guard_pending: Vec::new(),
+            dynamic_prop_requested: HashSet::default(),
+            dynamic_prop_pending: Vec::new(),
+            named_get_templates: Default::default(),
+            method_call_templates: Default::default(),
+            owner_call_site_facts: Default::default(),
         }
     }
 
@@ -294,6 +441,21 @@ impl SharedCodegenState {
         &self.emitted_instance_methods
     }
 
+    /// Returns the memoized unreachable-method lookup table, if this chunk already built it.
+    pub(super) fn inaccessible_method_table(
+        &self,
+    ) -> Option<Option<crate::codegen_support::callable_lookup::StringLookupTable>> {
+        self.inaccessible_method_table.clone()
+    }
+
+    /// Memoizes the unreachable-method lookup table built for this chunk's data section.
+    pub(super) fn cache_inaccessible_method_table(
+        &mut self,
+        table: Option<crate::codegen_support::callable_lookup::StringLookupTable>,
+    ) {
+        self.inaccessible_method_table = Some(table);
+    }
+
     /// Returns the memoized Mixed callable sharing decision for one strictness profile.
     pub(super) fn mixed_callable_sharing(&self, profile_index: usize) -> Option<bool> {
         self.mixed_callable_sharing[profile_index]
@@ -302,6 +464,50 @@ impl SharedCodegenState {
     /// Stores the Mixed callable sharing decision for one strictness profile.
     pub(super) fn set_mixed_callable_sharing(&mut self, profile_index: usize, shares: bool) {
         self.mixed_callable_sharing[profile_index] = Some(shares);
+    }
+
+    /// Records dependencies introduced by a synthetic wrapper that was not present during the
+    /// module's original EIR feature scan.
+    pub(super) fn record_generated_runtime_features(&mut self, function: &Function) {
+        for inst in &function.instructions {
+            match inst.op {
+                Op::RuntimeCall => {
+                    let target = match inst.immediate {
+                        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target)))
+                        | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                            target,
+                            ..
+                        })) => Some(target),
+                        _ => None,
+                    };
+                    self.generated_runtime_features.object_clone |=
+                        target == Some(RuntimeFnId::CloneWith);
+                }
+                Op::CoreBuiltin => {
+                    let operation = match inst.immediate {
+                        Some(Immediate::I64(value)) => CoreBuiltinOp::from_i64(value),
+                        _ => None,
+                    };
+                    self.generated_runtime_features.handler_state |= matches!(
+                        operation,
+                        Some(
+                            CoreBuiltinOp::RestoreErrorHandler
+                                | CoreBuiltinOp::RestoreExceptionHandler
+                                | CoreBuiltinOp::SetErrorHandler
+                                | CoreBuiltinOp::SetExceptionHandler
+                                | CoreBuiltinOp::GetErrorHandler
+                                | CoreBuiltinOp::GetExceptionHandler
+                        )
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Returns optional runtime families introduced after the module-level EIR scan.
+    pub(crate) fn generated_runtime_features(&self) -> GeneratedRuntimeFeatures {
+        self.generated_runtime_features
     }
 
     /// Reserves the next module-unique assembly label id.
@@ -351,15 +557,52 @@ impl SharedCodegenState {
         self.cache_touches.set(self.cache_touches.get() + 1);
     }
 
-    /// Returns how many accesses so far were to caches that still force a serial body.
-    pub(super) fn unkeyed_cache_touches(&self) -> usize {
-        self.unkeyed_cache_touches.get()
+    /// Asks for the typed-property guard helper `key` to exist in the module.
+    ///
+    /// The first request queues the body for emission after the current function; later ones are
+    /// free. The access is KEYED -- the entry symbol comes from the key -- so a codegen worker may
+    /// queue it on its own and the merge keeps one copy, instead of the body going serial.
+    pub(super) fn request_property_guard_helper(&mut self, key: &str, label: &str, php_type: &PhpType) {
+        self.touch_cache_keyed();
+        if self.property_guard_requested.insert(key.to_string()) {
+            self.property_guard_pending.push(PendingPropertyGuard {
+                key: key.to_string(),
+                label: label.to_string(),
+                php_type: php_type.clone(),
+            });
+        }
     }
 
-    pub(super) fn next_label_id(&mut self) -> usize {
-        let id = self.label_counter;
-        self.label_counter += 1;
-        id
+    /// Asks for the runtime-name property helper `key` to exist in the module.
+    ///
+    /// Keyed like the typed-property guard: the entry symbol comes from the key, so a codegen
+    /// worker may queue the body itself and the merge keeps one copy.
+    pub(super) fn request_dynamic_prop_helper(
+        &mut self,
+        key: &str,
+        label: &str,
+        kind: DynamicPropHelperKind,
+        scope: Option<&str>,
+    ) {
+        self.touch_cache_keyed();
+        if self.dynamic_prop_requested.insert(key.to_string()) {
+            self.dynamic_prop_pending.push(PendingDynamicPropHelper {
+                key: key.to_string(),
+                label: label.to_string(),
+                kind,
+                scope: scope.map(str::to_string),
+            });
+        }
+    }
+
+    /// Takes the runtime-name property helpers requested since the last drain.
+    pub(super) fn take_pending_dynamic_prop_helpers(&mut self) -> Vec<PendingDynamicPropHelper> {
+        std::mem::take(&mut self.dynamic_prop_pending)
+    }
+
+    /// Takes the guard helpers requested since the last drain.
+    pub(super) fn take_pending_property_guards(&mut self) -> Vec<PendingPropertyGuard> {
+        std::mem::take(&mut self.property_guard_pending)
     }
 
     /// Returns the memoized string-context sharing decision for one mode, if already computed.
@@ -390,6 +633,54 @@ impl SharedCodegenState {
     /// Records the codegen-raised throwable sharing decision so later raises reuse it.
     pub(super) fn set_static_throw_sharing(&mut self, shares: bool) {
         self.static_throw_sharing = Some(shares);
+    }
+
+    /// Returns a remembered `eval_sync_global_type` answer, computing it once through `compute`.
+    pub(crate) fn eval_sync_global_type_memoized(
+        &self,
+        name: &str,
+        compute: impl FnOnce() -> Option<crate::types::PhpType>,
+    ) -> Option<crate::types::PhpType> {
+        if let Some(answer) = self.eval_sync_global_type_memo.borrow().get(name) {
+            return answer.clone();
+        }
+        let answer = compute();
+        self.eval_sync_global_type_memo
+            .borrow_mut()
+            .insert(name.to_string(), answer.clone());
+        answer
+    }
+
+    /// Returns a remembered `object_type_is_a` answer, computing it once through `compute`.
+    pub(crate) fn type_is_a_memoized(
+        &self,
+        source: &str,
+        target: &str,
+        compute: impl FnOnce() -> bool,
+    ) -> bool {
+        let key = format!("{source}\0{target}");
+        if let Some(answer) = self.type_is_a_memo.borrow().get(&key) {
+            return *answer;
+        }
+        let answer = compute();
+        self.type_is_a_memo.borrow_mut().insert(key, answer);
+        answer
+    }
+
+    /// Returns remembered compatible class ids for a declared class list, computing them once.
+    pub(crate) fn compatible_class_ids_memoized(
+        &self,
+        class_names: &[String],
+        compute: impl FnOnce() -> Vec<u64>,
+    ) -> std::rc::Rc<[u64]> {
+        if let Some(ids) = self.compatible_class_ids_memo.borrow().get(class_names) {
+            return ids.clone();
+        }
+        let ids: std::rc::Rc<[u64]> = compute().into();
+        self.compatible_class_ids_memo
+            .borrow_mut()
+            .insert(class_names.to_vec(), ids.clone());
+        ids
     }
 
     /// Returns the module's spelling of the class whose PHP key is `key`, indexing once.
@@ -489,6 +780,38 @@ impl SharedCodegenState {
     /// Returns whether this module still declares the shutdown drain, computed at most once.
     pub(super) fn php_shutdown_drain(&mut self, compute: impl FnOnce() -> bool) -> bool {
         *self.php_shutdown_drain.get_or_insert_with(compute)
+    }
+
+    /// Asks for the shared callable-argument normalizer, emitted once after every body.
+    ///
+    /// The flag is module state a codegen worker cannot keep: a worker's chunk state is dropped
+    /// after its text is merged, so a flag raised there never reached the emission decision and
+    /// the program called an undefined `_eir_callable_argument_normalizer`. The first body that
+    /// raises it therefore counts as a shared-cache touch and is re-emitted serially.
+    pub(super) fn require_callable_argument_normalizer(&mut self) {
+        if !self.callable_argument_normalizer {
+            self.callable_argument_normalizer = true;
+            self.touch_cache();
+        }
+    }
+
+    /// Forgets the worker-built instance-method templates and keyed-helper emissions.
+    ///
+    /// A worker rolls a deferred body's text and data back, but its caches are not rolled back
+    /// (see the note on `touch_cache`). A template or keyed helper that body built would then be
+    /// reused by the next body with its wrapper text and descriptor data gone: the Symfony demo
+    /// linked with undefined `_data_h*` descriptor symbols. Forgetting them on every deferral
+    /// makes the next body rebuild them; the merge drops the copies.
+    pub(super) fn forget_worker_templates(&mut self) {
+        self.runtime_instance_method_descriptors.clear();
+        self.emitted_keyed_helpers.clear();
+    }
+
+    /// Records that the keyed helper `key` is being emitted, returning false when this state
+    /// already emitted it.
+    pub(super) fn first_keyed_helper_emission(&mut self, key: &str) -> bool {
+        self.touch_cache_keyed();
+        self.emitted_keyed_helpers.insert(key.to_string())
     }
 
     /// Starts watching this body for a cache a worker may not reach.
@@ -608,20 +931,16 @@ impl SharedCodegenState {
         &self,
         php_name: &str,
     ) -> Option<RuntimeStaticMethodCallableCase> {
-        let matches = |case: &&RuntimeStaticMethodCallableCase| {
-            case.case.php_name.as_deref() == Some(php_name)
-        };
         if let Some(case) = self
             .preset
             .as_ref()
-            .and_then(|preset| preset.static_case_entries.iter().find(matches))
+            .and_then(|preset| preset.static_case_entries.get(php_name))
         {
             return Some(case.clone());
         }
         self.touch_cache();
         self.runtime_static_method_descriptor_case_entries
-            .iter()
-            .find(matches)
+            .get(php_name)
             .cloned()
     }
 
@@ -631,8 +950,13 @@ impl SharedCodegenState {
         case: &RuntimeStaticMethodCallableCase,
     ) {
         self.touch_cache();
-        self.runtime_static_method_descriptor_case_entries
-            .push(case.clone());
+        // Only a named case can be asked for again; the first one recorded keeps answering, as the
+        // scan this replaced did.
+        if let Some(php_name) = case.case.php_name.as_ref() {
+            self.runtime_static_method_descriptor_case_entries
+                .entry(php_name.clone())
+                .or_insert_with(|| case.clone());
+        }
     }
 
     /// Returns an emitted receiver-captured descriptor template for one method shape.
@@ -659,7 +983,9 @@ impl SharedCodegenState {
         if let Some(template) = preset.and_then(|preset| find(&preset.instance_descriptors)) {
             return Some(template);
         }
-        self.touch_cache();
+        // Keyed: the entry wrapper's symbol comes from its key, the invoker is shared by content
+        // and the descriptor is plain data, so a worker may build its own template.
+        self.touch_cache_keyed();
         find(&self.runtime_instance_method_descriptors)
     }
 
@@ -672,7 +998,7 @@ impl SharedCodegenState {
         signature: &FunctionSig,
         template: RuntimeInstanceMethodDescriptorTemplate,
     ) {
-        self.touch_cache();
+        self.touch_cache_keyed();
         self.runtime_instance_method_descriptors
             .entry(instance_descriptor_bucket(class_name, method_key, impl_class))
             .or_default()
@@ -690,9 +1016,16 @@ impl SharedCodegenState {
         &self,
         signature: &FunctionSig,
         captures: &[(String, PhpType, bool)],
+        owns_string_return: bool,
+        php_return_status: bool,
+        defaults: &[Option<crate::codegen::runtime_callable_invoker::InvokerDefaultValue>],
     ) -> Option<String> {
         let matches = |entry: &&RuntimeCallableInvokerCacheEntry| {
-            entry.signature == *signature && entry.captures == captures
+            entry.signature == *signature
+                && entry.captures == captures
+                && entry.owns_string_return == owns_string_return
+                && entry.php_return_status == php_return_status
+                && entry.defaults == defaults
         };
         let preset = self.preset.as_ref();
         if let Some(entry) = preset.and_then(|preset| preset.invokers.iter().find(matches)) {
@@ -710,6 +1043,9 @@ impl SharedCodegenState {
         &mut self,
         signature: &FunctionSig,
         captures: &[(String, PhpType, bool)],
+        owns_string_return: bool,
+        php_return_status: bool,
+        defaults: &[Option<crate::codegen::runtime_callable_invoker::InvokerDefaultValue>],
         label: &str,
     ) {
         self.touch_cache_keyed();
@@ -717,6 +1053,9 @@ impl SharedCodegenState {
             .push(RuntimeCallableInvokerCacheEntry {
                 signature: signature.clone(),
                 captures: captures.to_vec(),
+                owns_string_return,
+                php_return_status,
+                defaults: defaults.to_vec(),
                 label: label.to_string(),
             });
     }
@@ -757,6 +1096,7 @@ impl SharedCodegenState {
             invokers: self.runtime_callable_invokers.clone(),
             builtin_wrappers: self.runtime_builtin_wrappers.clone(),
             extern_wrappers: self.runtime_extern_wrappers.clone(),
+            mixed_callable_sharing: self.mixed_callable_sharing,
         })
     }
 
@@ -765,6 +1105,7 @@ impl SharedCodegenState {
         if let Some(label) = &preset.eval_registration_helper {
             self.preset_eval_registration_helper(label.clone());
         }
+        self.mixed_callable_sharing = preset.mixed_callable_sharing;
         self.preset = Some(std::sync::Arc::clone(preset));
     }
 

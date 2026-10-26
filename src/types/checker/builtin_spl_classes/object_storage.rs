@@ -50,6 +50,17 @@ fn weak_map_class(mut storage: FlattenedClass) -> FlattenedClass {
     storage.name = "WeakMap".to_string();
     storage.extends = None;
     storage.is_final = true;
+    // `foreach ($map as $object => $value)`: a WeakMap iterates its OBJECTS as keys and the
+    // stored values as values, where `SplObjectStorage` yields positions and objects. Twig's
+    // `Parser::checkPrecedenceDeprecations()` walks a WeakMap that way and handed the parser
+    // object to `in_array()` as its haystack.
+    for method in &mut storage.methods {
+        match method.name.as_str() {
+            "key" => method.body = current_body(),
+            "current" => method.body = get_info_body(),
+            _ => {}
+        }
+    }
     storage
 }
 

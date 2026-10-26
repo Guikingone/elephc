@@ -9,12 +9,20 @@
 //! - Signature names, flags, scalar defaults, and the uniform invoker stay aligned.
 
 use super::*;
+use crate::eval_ir::EvalSourceLocation;
 
 const DESCRIPTOR_PHP_NAME_WORD: usize = 2;
 const DESCRIPTOR_PHP_NAME_LEN_WORD: usize = 3;
 const DESCRIPTOR_SIGNATURE_WORD: usize = 4;
 const DESCRIPTOR_ENVIRONMENT_WORD: usize = 5;
+const DESCRIPTOR_INVOCATION_WORD: usize = 6;
 const DESCRIPTOR_INVOKER_WORD: usize = 7;
+/// Invocation-record words: shape, receiver (ptr, len), method (ptr, len), aux (ptr, len).
+const INVOCATION_SHAPE_WORD: usize = 0;
+const INVOCATION_AUX_WORD: usize = 5;
+const INVOCATION_AUX_LEN_WORD: usize = 6;
+/// `CallableDescriptorShape::Closure` on the compiler side.
+const INVOCATION_SHAPE_CLOSURE: u64 = 1;
 
 const ENVIRONMENT_CAPTURE_COUNT_WORD: usize = 0;
 const ENVIRONMENT_CAPTURE_TABLE_WORD: usize = 2;
@@ -94,6 +102,10 @@ pub(crate) unsafe fn decode_callable_descriptor(
     decode_parameter_defaults(signature, &mut function)?;
     decode_parameter_flags(signature, &mut function)?;
     decode_return_type(signature, &mut function)?;
+    mark_hidden_func_args_collector(&mut function);
+    if let Some((file, location)) = decode_closure_source(words) {
+        function.set_source(file, location);
+    }
     let display_name = decode_descriptor_string(
         read_word(words, DESCRIPTOR_PHP_NAME_WORD)?,
         read_word(words, DESCRIPTOR_PHP_NAME_LEN_WORD)?,
@@ -105,6 +117,53 @@ pub(crate) unsafe fn decode_callable_descriptor(
         function,
         bound_this,
     })
+}
+
+/// Reads a compiled closure literal's `START:END:FILE` source record from its invocation record.
+///
+/// The compiler writes it as the closure shape's aux string; `ReflectionFunction` answers
+/// `getStartLine()`, `getEndLine()` and `getFileName()` from it.
+unsafe fn decode_closure_source(descriptor: *const u64) -> Option<(String, EvalSourceLocation)> {
+    let invocation = read_word(descriptor, DESCRIPTOR_INVOCATION_WORD)? as *const u64;
+    if (invocation as usize) < 4096
+        || read_word(invocation, INVOCATION_SHAPE_WORD)? != INVOCATION_SHAPE_CLOSURE
+    {
+        return None;
+    }
+    let length = read_word(invocation, INVOCATION_AUX_LEN_WORD)?;
+    if length == 0 || length > 1 << 20 {
+        return None;
+    }
+    let aux = decode_descriptor_string(read_word(invocation, INVOCATION_AUX_WORD)?, length)?;
+    let mut parts = aux.splitn(3, ':');
+    let start = parts.next()?.parse::<i64>().ok()?;
+    let end = parts.next()?.parse::<i64>().ok()?;
+    let file = parts.next()?.to_string();
+    Some((file, EvalSourceLocation::new(start, end)))
+}
+
+/// Name the compiler gives the hidden surplus-argument collector of a `func_get_args()` body
+/// (`crate::func_args::HIDDEN_ARGS_PARAM` on the compiler side).
+const HIDDEN_FUNC_ARGS_PARAM: &str = "__elephc_func_args#gen";
+
+/// Declares a descriptor's trailing hidden `func_get_args()` collector as compiler-internal.
+///
+/// A descriptor's signature table lists every physical slot, and a closure whose body calls
+/// `func_get_args()` carries the hidden variadic collector as its last one. Without a shape the
+/// frame took it for a PHP variadic, so `new ReflectionFunction($closure)` reported the extra
+/// `$__elephc_func_args#gen` parameter and `isVariadic()`. The binding still fills the collector:
+/// only the visible/hidden partition changes.
+fn mark_hidden_func_args_collector(function: &mut NativeFunction) {
+    let names = function.param_names();
+    let Some(last) = names.len().checked_sub(1) else {
+        return;
+    };
+    if names[last] != HIDDEN_FUNC_ARGS_PARAM || !function.param_variadic(last) {
+        return;
+    }
+    let required = function.required_param_count().min(last);
+    function.set_param_name(last, "");
+    function.set_shape(NativeCallableShape::new(last, required, false, false));
 }
 
 /// Finds the non-reference `$this` binding in a descriptor environment, when present.

@@ -53,9 +53,9 @@ pub(super) fn lower_scoped_constant_get(
             // failing shape was `f(D::Ascending)` through a typed parameter followed
             // by a `D::Descending` read.
             //
-            // Over-retaining is the safe direction here: the case is a
-            // process-lifetime singleton owned by its slot, so an extra reference
-            // only guarantees what should already be true — it can never be freed.
+            // The enum lowering marks this reference Owned, so ordinary temporary
+            // retirement balances this retain while the singleton slot keeps its
+            // own reference until terminal script cleanup.
             abi::emit_incref_if_refcounted(
                 ctx.emitter,
                 &crate::types::PhpType::Object(class_name.clone()),

@@ -45,14 +45,59 @@ pub(crate) fn emit_initial_file(emitter: &mut Emitter, object: &str) {
     abi::emit_store_to_address(emitter, scratch, object, FILE_OFFSET + 8);
 }
 
-/// Replaces an initialized default file without leaking its owned string.
-pub(crate) fn emit_replace_initial_file(emitter: &mut Emitter, object: &str) {
+/// Replaces the initialized default file with `file` (a static data label and its length), or
+/// with the module path when `file` is `None`, without leaking the previous owned string.
+pub(crate) fn emit_replace_initial_file_with(
+    emitter: &mut Emitter,
+    object: &str,
+    file: Option<(&str, usize)>,
+) {
     abi::emit_push_reg(emitter, object);
     let result = abi::int_result_reg(emitter);
     abi::emit_load_from_address(emitter, result, object, FILE_OFFSET);
     abi::emit_call_label(emitter, "__rt_decref_any");
     abi::emit_pop_reg(emitter, object);
-    emit_initial_file(emitter, object);
+    let Some((label, len)) = file else {
+        emit_initial_file(emitter, object);
+        return;
+    };
+    emit_store_static_file(emitter, object, label, len);
+}
+
+/// The three words a `new $class(...)` site publishes for its shared constructor helper: the
+/// source file's pointer and length and the line, which a Throwable built there records.
+pub(crate) const DYNAMIC_NEW_SITE_SYMBOL: &str = "_dyn_new_site";
+/// Bytes of [`DYNAMIC_NEW_SITE_SYMBOL`].
+pub(crate) const DYNAMIC_NEW_SITE_BYTES: usize = 24;
+
+/// Replaces the initialized default file with the one the calling site published in
+/// [`DYNAMIC_NEW_SITE_SYMBOL`], without leaking the previous owned string.
+pub(crate) fn emit_replace_initial_file_from_site(emitter: &mut Emitter, object: &str) {
+    abi::emit_push_reg(emitter, object);
+    let result = abi::int_result_reg(emitter);
+    abi::emit_load_from_address(emitter, result, object, FILE_OFFSET);
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    abi::emit_pop_reg(emitter, object);
+    let scratch = match emitter.target.arch {
+        Arch::AArch64 => "x10",
+        Arch::X86_64 => "r10",
+    };
+    abi::emit_load_symbol_to_reg(emitter, scratch, DYNAMIC_NEW_SITE_SYMBOL, 0);
+    abi::emit_store_to_address(emitter, scratch, object, FILE_OFFSET);
+    abi::emit_load_symbol_to_reg(emitter, scratch, DYNAMIC_NEW_SITE_SYMBOL, 8);
+    abi::emit_store_to_address(emitter, scratch, object, FILE_OFFSET + 8);
+}
+
+/// Stores a static data string as the object's source file, over a static one (no release).
+pub(crate) fn emit_store_static_file(emitter: &mut Emitter, object: &str, label: &str, len: usize) {
+    let scratch = match emitter.target.arch {
+        Arch::AArch64 => "x10",
+        Arch::X86_64 => "r10",
+    };
+    abi::emit_symbol_address(emitter, scratch, label);
+    abi::emit_store_to_address(emitter, scratch, object, FILE_OFFSET);
+    abi::emit_load_int_immediate(emitter, scratch, len as i64);
+    abi::emit_store_to_address(emitter, scratch, object, FILE_OFFSET + 8);
 }
 
 #[cfg(test)]
@@ -73,6 +118,34 @@ mod tests {
                 assert_eq!(8 + index * 16, expected, "{name}::{property}");
             }
         }
+    }
+
+    /// Regression: a compiled throwable subclass owned by eval storage must reserve the trailing
+    /// property-hash slot, exactly as `_class_object_payload_sizes` reports it. Allocating eight
+    /// bytes short made `__rt_object_free_deep` read the next heap block's word as that hash and
+    /// release an unrelated live array (Symfony's `secrets:reveal` lost `$secrets` inside
+    /// `EnvNotFoundException`'s cleanup).
+    #[test]
+    fn throwable_payload_size_matches_the_free_layout_for_eval_owned_subclasses() {
+        let tokens = crate::lexer::tokenize("<?php class EvalOwnedThrowable extends RuntimeException {}").unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let checked = crate::types::check(&program).unwrap();
+        let mut info = checked.classes["EvalOwnedThrowable"].clone();
+        let declared = 8 + info.properties.len() * 16;
+
+        info.eval_property_storage = true;
+        assert_eq!(
+            crate::types::object_payload_size("EvalOwnedThrowable", &info),
+            declared + 8,
+            "eval-owned throwable subclasses reserve the dynamic-property tail"
+        );
+
+        info.eval_property_storage = false;
+        assert_eq!(
+            crate::types::object_payload_size("EvalOwnedThrowable", &info),
+            declared,
+            "a class with no property-hash storage allocates only its declared slots"
+        );
     }
 
     #[test]

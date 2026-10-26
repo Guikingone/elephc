@@ -487,12 +487,13 @@ fn test_alternative_syntax_malformed_forms_are_rejected() {
 
 // --- terminal goto ---
 
-/// Verifies a jump to a terminal fallback tail is desugared while arbitrary jumps stay rejected.
+/// Verifies a jump to a terminal fallback tail is desugared, a forward jump to a fall-through label
+/// parses (non-terminal `goto` is supported), and a label nothing jumps to stays rejected.
 #[test]
 fn test_terminal_goto_is_desugared() {
     assert!(!parse_fails(
         "<?php if ($retry) { fallback: return 1; } try { return 2; } catch (Throwable) { goto fallback; }"
     ));
-    assert!(parse_fails("<?php goto done; done: echo 1;"));
+    assert!(!parse_fails("<?php goto done; done: echo 1;"));
     assert!(parse_fails("<?php done: echo 1;"));
 }

@@ -85,7 +85,12 @@ fn build_registry() -> HashMap<String, BuiltinDef> {
         let mut ref_params: Vec<bool> = Vec::with_capacity(total);
 
         for p in spec.params {
-            params.push((p.name.to_string(), type_spec_to_php(&p.ty)));
+            let ty = if matches!(spec.semantics.argument_lowering,
+                crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues)
+            {
+                crate::builtins::convert::type_spec_to_php_preserving_null(&p.ty)
+            } else { type_spec_to_php(&p.ty) };
+            params.push((p.name.to_string(), ty));
             defaults.push(p.default.as_ref().map(default_spec_to_expr));
             ref_params.push(p.by_ref);
         }
@@ -119,21 +124,28 @@ fn build_registry() -> HashMap<String, BuiltinDef> {
 
 /// Proves every shared contract has exactly its declared compiler implementation route.
 fn validate_shared_aot_coverage(map: &HashMap<String, BuiltinDef>) {
+    let mut violations = Vec::new();
     for contract in contracts() {
         let registered = map.contains_key(contract.name);
         match aot_support(contract) {
-            BackendSupport::Implemented(BackendImplementation::Registry) => assert!(
-                registered,
-                "shared builtin contract {} requires an AOT registry binding",
-                contract.name
-            ),
-            BackendSupport::Implemented(_) | BackendSupport::Unsupported(_) => assert!(
-                !registered,
-                "shared builtin contract {} must not have an AOT registry binding",
-                contract.name
-            ),
+            BackendSupport::Implemented(BackendImplementation::Registry) if !registered => {
+                violations.push(format!(
+                    "shared builtin contract {} requires an AOT registry binding",
+                    contract.name
+                ));
+            }
+            BackendSupport::Implemented(BackendImplementation::Registry) => {}
+            BackendSupport::Implemented(_) | BackendSupport::Unsupported(_) if registered => {
+                violations.push(format!(
+                    "shared builtin contract {} must not have an AOT registry binding",
+                    contract.name
+                ));
+            }
+            BackendSupport::Implemented(_) | BackendSupport::Unsupported(_) => {}
         }
     }
+    // Every violation at once: a registry edited from two directions breaks in several places.
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
 }
 
 /// Returns the global registry, initializing it on first call.
@@ -154,14 +166,29 @@ pub fn lookup(name: &str) -> Option<&'static BuiltinDef> {
 
 /// Looks up the AOT binding for a boxed-runtime builtin without PHP-name dispatch.
 ///
-/// The map is derived from the same shared contract ID used by Magician. Duplicate
-/// runtime IDs or an ABI ID without exactly one AOT binding are hard invariants.
+/// The map is derived from the same shared contract ID used by Magician. Implemented
+/// registry contracts must have exactly one binding; unsupported contracts have none.
 pub fn lookup_runtime_builtin(id: RuntimeBuiltinId) -> &'static BuiltinDef {
     let name = runtime_builtin_registry()
         .get(&id)
         .copied()
         .unwrap_or_else(|| panic!("runtime builtin ID {} has no AOT binding", id.as_u32()));
     lookup(name).expect("runtime builtin registry must point to an AOT binding")
+}
+
+/// Enumerates runtime identities with validated AOT bindings in stable ABI order.
+/// Engine operations whose frontend adapters are explicitly unsupported remain unavailable.
+pub fn runtime_builtin_ids() -> impl Iterator<Item = RuntimeBuiltinId> {
+    let registry = runtime_builtin_registry();
+    RuntimeBuiltinId::ALL.into_iter().filter(move |id| registry.contains_key(id))
+}
+
+/// Enumerates typed AOT bindings whose eval adapters are also available for boxed dispatch.
+pub fn eval_runtime_builtin_ids() -> impl Iterator<Item = RuntimeBuiltinId> {
+    runtime_builtin_ids().filter(|id| {
+        let contract = elephc_builtin_contract::lookup_id(id.builtin_id()).expect("validated runtime contract");
+        matches!(elephc_builtin_contract::eval_support(contract), BackendSupport::Implemented(_))
+    })
 }
 
 /// Builds the typed runtime-to-AOT join from shared contract identities.
@@ -179,10 +206,14 @@ fn runtime_builtin_registry() -> &'static HashMap<RuntimeBuiltinId, &'static str
             );
         }
         for runtime_id in RuntimeBuiltinId::ALL {
-            assert!(
-                by_runtime_id.contains_key(&runtime_id),
-                "runtime builtin ID {} has no AOT binding",
-                runtime_id.as_u32()
+            let contract = elephc_builtin_contract::lookup_id(runtime_id.builtin_id())
+                .expect("runtime builtin must have a shared contract");
+            let expected = matches!(aot_support(contract),
+                BackendSupport::Implemented(BackendImplementation::Registry));
+            assert_eq!(
+                by_runtime_id.contains_key(&runtime_id), expected,
+                "runtime builtin ID {} must agree with its declared AOT support",
+                runtime_id.as_u32(),
             );
         }
         by_runtime_id
@@ -215,7 +246,7 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 /// |------------------------|------------------------------------------------|
 /// | `params`               | `BuiltinDef.params` (typed via `TypeSpec`)    |
 /// | `defaults`             | `BuiltinDef.defaults` (via `DefaultSpec`)     |
-/// | `return_type`          | `BuiltinDef.return_type` (via `TypeSpec`)     |
+/// | `return_type`          | Shared checker/EIR result resolver, otherwise `TypeSpec` |
 /// | `declared_return`      | `false` for a direct builtin signature          |
 /// | `by_ref_return`        | `BuiltinDef.by_ref_return` (from spec)        |
 /// | `ref_params`           | `BuiltinDef.ref_params` (from spec)           |
@@ -226,18 +257,38 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 /// Returns `None` if the builtin is not registered.
 pub fn function_sig(name: &str) -> Option<FunctionSig> {
     let def = lookup(name)?;
+    // A neutral PHP array declaration does not distinguish indexed arrays from
+    // hashes. When checker and EIR share result typing, callable signatures must
+    // consume that same resolver instead of inventing an indexed payload shape.
+    // Checker-hook builtins retain their existing checker-facing signature here.
+    let return_type = match (def.spec.semantics.validation, def.spec.semantics.result_type) {
+        (
+            crate::builtins::semantics::BuiltinValidation::Shared(_),
+            crate::builtins::semantics::BuiltinResultType::Shared(resolve),
+        ) => {
+            let arg_types = def.params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>();
+            resolve(&crate::builtins::semantics::BuiltinSemanticInput {
+                name: def.name,
+                args: &[],
+                arg_types: &arg_types,
+                span: crate::span::Span::dummy(),
+            })
+        }
+        _ => def.return_type.clone(),
+    };
     Some(FunctionSig {
         params: def.params.clone(),
         param_type_exprs: vec![None; def.params.len()],
         param_attributes: vec![Vec::new(); def.params.len()],
         defaults: def.defaults.clone(),
-        return_type: def.return_type.clone(),
+        return_type,
         declared_return: false,
         by_ref_return: def.by_ref_return,
         ref_params: def.ref_params.clone(),
         declared_params: vec![false; def.params.len()],
         variadic: def.variadic.clone(),
         deprecation: def.spec.deprecation.map(str::to_string),
+        is_generator: false,
     })
 }
 
@@ -278,8 +329,15 @@ fn php_type_may_be_callable(ty: &PhpType) -> bool {
 /// Returns `None` if the builtin is not registered.
 pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
     let def = lookup(name)?;
+    if matches!(
+        def.spec.semantics.callable,
+        crate::builtins::semantics::BuiltinCallablePolicy::DirectOnly(_)
+    ) {
+        return None;
+    }
     let sig = function_sig(def.name)?;
     let mut fcc_sig = callable_wrapper_sig(&sig);
+    truncate_callable_sig_to_enforced_arity(def, &mut fcc_sig);
     refine_first_class_callable_sig(def, &mut fcc_sig);
     fcc_sig.declared_return = true;
     // Mark params declared for reflection hasType, but keep by-ref params
@@ -290,6 +348,44 @@ pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
         .map(|index| !fcc_sig.ref_params.get(index).copied().unwrap_or(false))
         .collect();
     Some(fcc_sig)
+}
+
+/// Drops declared parameters the builtin's enforced arity contract refuses to accept.
+///
+/// A contract may declare PHP's full parameter list while capping `max_args` below it; how
+/// `str_replace()`/`str_ireplace()` document `$count` without supporting it. A direct call is
+/// rejected by that cap, but a callable wrapper materializes one operand per signature
+/// parameter, so the uncapped signature hands the typed backend an operand it has no lowering
+/// for (`str_replace expected 3 args, got 4`). Keeping the callable ABI at the accepted prefix
+/// makes the descriptor signature, the wrapper body and the direct call describe one arity.
+///
+/// Variadic builtins are left alone: their cap counts ARGUMENTS, not parameters, and truncating
+/// would delete the variadic tail the wrapper collects (`array_map`, `array_diff`, …).
+fn truncate_callable_sig_to_enforced_arity(def: &BuiltinDef, sig: &mut FunctionSig) {
+    if sig.variadic.is_some() {
+        return;
+    }
+    let Some(max) = enforced_arity_bounds_for_def(def).1 else {
+        return;
+    };
+    if sig.params.len() <= max {
+        return;
+    }
+    sig.params.truncate(max);
+    sig.param_type_exprs.truncate(max);
+    sig.param_attributes.truncate(max);
+    sig.defaults.truncate(max);
+    sig.ref_params.truncate(max);
+    sig.declared_params.truncate(max);
+}
+
+/// Returns PHP's diagnostic for a builtin that forbids first-class invocation.
+pub fn first_class_callable_rejection(name: &str) -> Option<&'static str> {
+    let definition = lookup(name)?;
+    match definition.spec.semantics.callable {
+        crate::builtins::semantics::BuiltinCallablePolicy::DirectOnly(reason) => Some(reason),
+        _ => None,
+    }
 }
 
 /// Applies first-class-callable refinements that are broader in the direct builtin spec.
@@ -604,6 +700,7 @@ mod tests {
         assert!(independent("htmlentities"));
         assert!(independent("implode"));
         assert!(independent("rawurldecode"));
+        assert!(independent("gettype"));
         assert!(!independent("__registry_probe_opt"));
         assert!(!independent("__not_a_real_builtin_xyz"));
     }
@@ -754,6 +851,22 @@ mod tests {
         assert_eq!(sig.return_type, PhpType::Bool);
     }
 
+    /// Direct and first-class signatures preserve their concrete introspection array layouts.
+    #[test]
+    fn introspection_signatures_preserve_array_shapes() {
+        for (name, expected) in [
+            ("debug_backtrace", PhpType::Array(Box::new(PhpType::Mixed))),
+            ("get_class_vars", PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            }),
+            ("get_class_methods", PhpType::Array(Box::new(PhpType::Str))),
+        ] {
+            assert_eq!(function_sig(name).unwrap().return_type, expected, "{name}");
+            assert_eq!(first_class_callable_sig(name).unwrap().return_type, expected, "{name}");
+        }
+    }
+
     /// Verifies `first_class_callable_sig` applies the variadic-upgrade for variadic builtins.
     #[test]
     fn first_class_callable_sig_upgrades_variadic() {
@@ -770,6 +883,53 @@ mod tests {
     #[test]
     fn function_sig_returns_none_for_unknown() {
         assert!(function_sig("__nonexistent_builtin_xyz").is_none());
+    }
+
+    /// Callable wrappers expose only the accepted prefix of a capped builtin declaration.
+    #[test]
+    fn first_class_callable_sig_stops_at_the_enforced_arity_cap() {
+        for name in ["str_replace", "str_ireplace"] {
+            assert_eq!(function_sig(name).unwrap().params.len(), 4, "{name} declaration");
+            assert_eq!(enforced_arity_bounds(name), Some((3, Some(3))), "{name} cap");
+            let sig = first_class_callable_sig(name).expect("callable signature");
+            assert_eq!(sig.params.len(), 3, "{name} callable arity");
+            assert!(sig.variadic.is_none());
+            for field in [
+                sig.defaults.len(), sig.ref_params.len(), sig.declared_params.len(),
+                sig.param_type_exprs.len(), sig.param_attributes.len(),
+            ] {
+                assert_eq!(field, 3, "{name} parameter metadata stays aligned");
+            }
+            assert!(sig.defaults.iter().all(Option::is_none), "{name} prefix is required");
+        }
+    }
+
+    /// A variadic builtin keeps its collector, even when its contract caps argument count.
+    #[test]
+    fn first_class_callable_sig_keeps_capped_variadic_tails() {
+        for name in ["array_map", "array_diff", "array_merge"] {
+            let sig = first_class_callable_sig(name).expect("callable signature");
+            let variadic = sig.variadic.as_deref().expect("variadic collector preserved");
+            assert!(sig.params.iter().any(|(name, _)| name == variadic));
+        }
+    }
+
+    /// Backend-specific callable prefixes keep declaration annotations aligned too.
+    #[test]
+    fn runtime_callable_prefix_keeps_all_parameter_metadata_aligned() {
+        for (name, target, count) in [
+            ("count", crate::ir::RuntimeFnId::Count, 1),
+            ("array_chunk", crate::ir::RuntimeFnId::ArrayChunk, 2),
+        ] {
+            let mut sig = first_class_callable_sig(name).expect("callable signature");
+            target.refine_runtime_callable_wrapper_sig(&mut sig);
+            for length in [
+                sig.params.len(), sig.defaults.len(), sig.ref_params.len(),
+                sig.declared_params.len(), sig.param_type_exprs.len(), sig.param_attributes.len(),
+            ] {
+                assert_eq!(length, count, "{name} runtime parameter metadata");
+            }
+        }
     }
 
     /// Verifies `arity_bounds` returns None for an unknown builtin.
@@ -910,9 +1070,15 @@ mod tests {
         crate::ir::RuntimeFnId::Count.refine_runtime_callable_wrapper_sig(&mut count);
         assert_eq!(count.params.len(), 1);
 
-        let mut sum = callable_wrapper_sig(&function_sig("array_sum").expect("array_sum signature"));
-        crate::ir::RuntimeFnId::ArraySum.refine_runtime_callable_wrapper_sig(&mut sum);
-        assert_eq!(sum.params[0].1, PhpType::Array(Box::new(PhpType::Int)));
+        for (name, target) in [
+            ("array_sum", crate::ir::RuntimeFnId::ArraySum),
+            ("array_product", crate::ir::RuntimeFnId::ArrayProduct),
+        ] {
+            let mut sig = callable_wrapper_sig(&function_sig(name).expect("array arithmetic signature"));
+            target.refine_runtime_callable_wrapper_sig(&mut sig);
+            assert_eq!(sig.params[0].1, PhpType::php_array(), "{name}");
+            assert_eq!(sig.return_type, PhpType::Mixed, "{name}");
+        }
 
         let mut clamp = callable_wrapper_sig(&function_sig("clamp").expect("clamp signature"));
         crate::ir::RuntimeFnId::Clamp.refine_runtime_callable_wrapper_sig(&mut clamp);
@@ -922,6 +1088,29 @@ mod tests {
         let mut sort = callable_wrapper_sig(&function_sig("sort").expect("sort signature"));
         crate::ir::RuntimeFnId::Sort.refine_runtime_callable_wrapper_sig(&mut sort);
         assert_eq!(sort.params[0].1, PhpType::Array(Box::new(PhpType::Int)));
+    }
+
+    /// The `array_reverse()` and `array_slice()` wrappers keep their `$preserve_keys` parameter:
+    /// the boxed lowering honors a runtime flag, so dropping it would silently renumber keys.
+    #[test]
+    fn preserve_keys_wrappers_keep_the_flag_parameter() {
+        for (name, target, count) in [
+            ("array_reverse", crate::ir::RuntimeFnId::ArrayReverse, 2),
+            ("array_slice", crate::ir::RuntimeFnId::ArraySlice, 4),
+        ] {
+            let mut sig = callable_wrapper_sig(&function_sig(name).expect("callable signature"));
+            target.refine_runtime_callable_wrapper_sig(&mut sig);
+            assert_eq!(sig.params.len(), count, "{name} keeps every parameter");
+            assert_eq!(
+                sig.params.last().map(|(param, ty)| (param.as_str(), ty.clone())),
+                Some(("preserve_keys", PhpType::Bool)),
+                "{name}"
+            );
+            assert_eq!(sig.defaults.len(), count, "{name} parameter metadata stays aligned");
+        }
+        let mut slice = callable_wrapper_sig(&function_sig("array_slice").expect("slice signature"));
+        crate::ir::RuntimeFnId::ArraySlice.refine_runtime_callable_wrapper_sig(&mut slice);
+        assert_eq!(slice.return_type, PhpType::php_array());
     }
 
     /// Verifies source-order argument strategies are registry metadata rather than name dispatch.
@@ -1060,13 +1249,60 @@ mod tests {
         }
     }
 
-    /// Verifies every versioned boxed-runtime ID joins to exactly one canonical AOT binding.
+    /// Verifies runtime IDs have exactly the canonical binding required by their support contract.
     #[test]
     fn runtime_builtin_ids_join_to_aot_contracts() {
         for runtime_id in RuntimeBuiltinId::ALL {
+            let contract = elephc_builtin_contract::lookup_id(runtime_id.builtin_id()).unwrap();
+            if !matches!(aot_support(contract), BackendSupport::Implemented(BackendImplementation::Registry)) {
+                assert!(lookup(contract.name).is_none(), "{} must remain unavailable", contract.name);
+                assert!(!runtime_builtin_ids().any(|id| id == runtime_id));
+                continue;
+            }
             let def = lookup_runtime_builtin(runtime_id);
             assert_eq!(def.spec.id(), runtime_id.builtin_id());
             assert_eq!(def.spec.runtime_builtin_id(), Some(runtime_id));
         }
     }
+    /// Verifies direct and first-class mbstring signatures retain nullable encoding storage.
+    #[test]
+    fn mbstring_signatures_preserve_nullable_encodings() {
+        for id in runtime_builtin_ids().filter(|id| id.is_mbstring()) {
+            let contract = elephc_builtin_contract::lookup_id(id.builtin_id()).unwrap();
+            let definition = lookup(contract.name).unwrap();
+            let callable = first_class_callable_sig(contract.name).unwrap();
+            for (index, parameter) in contract.params.iter().enumerate() {
+                if let elephc_builtin_contract::TypeSpec::Nullable(inner) = parameter.ty {
+                    let expected = PhpType::Union(vec![type_spec_to_php(inner), PhpType::Void]);
+                    assert_eq!(definition.params[index].1, expected, "{} ${}", contract.name, parameter.name);
+                    assert_eq!(callable.params[index].1, expected, "{} ${}", contract.name, parameter.name);
+                }
+            }
+        }
+    }
+
+    /// Verifies neutral mbstring union results reach declarations, callables, and EIR fallbacks.
+    #[test]
+    fn mbstring_union_results_remain_shared() {
+        for (name, expected) in [
+            ("mb_ord", PhpType::Union(vec![PhpType::Int, PhpType::False])),
+            ("mb_chr", PhpType::Union(vec![PhpType::Str, PhpType::False])),
+            ("mb_internal_encoding", PhpType::Union(vec![PhpType::Str, PhpType::Bool])),
+            ("mb_regex_encoding", PhpType::Union(vec![PhpType::Str, PhpType::Bool])),
+        ] {
+            let definition = lookup(name).unwrap();
+            assert_eq!(definition.return_type, expected, "{name}");
+            assert_eq!(first_class_callable_sig(name).unwrap().return_type, expected, "{name}");
+            let operation = definition.spec.runtime_builtin_id().unwrap();
+            let target = match operation {
+                RuntimeBuiltinId::MbOrd => crate::ir::RuntimeFnId::MbOrd,
+                RuntimeBuiltinId::MbChr => crate::ir::RuntimeFnId::MbChr,
+                RuntimeBuiltinId::MbInternalEncoding => crate::ir::RuntimeFnId::MbInternalEncoding,
+                RuntimeBuiltinId::MbRegexEncoding => crate::ir::RuntimeFnId::MbRegexEncoding,
+                _ => unreachable!(),
+            };
+            assert_eq!(target.fallback_result_type(&[], &definition.return_type), expected, "{name}");
+        }
+    }
+
 }

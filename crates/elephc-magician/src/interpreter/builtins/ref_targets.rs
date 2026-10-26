@@ -48,7 +48,7 @@ pub(in crate::interpreter) fn eval_write_direct_ref_target(
                         .unwrap_or(ScopeCellOwnership::Owned)
                 })
             };
-            for replaced in set_scope_cell(context, scope, name.clone(), value, ownership)? {
+            for replaced in set_scope_cell(context, scope, name.clone(), value, ownership, values)? {
                 values.release(replaced)?;
             }
             Ok(())

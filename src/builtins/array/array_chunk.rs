@@ -12,12 +12,16 @@
 //!   into `Array<Array<T>>`; with `true` each chunk keeps the source integer keys of its own
 //!   window, which is `Array<AssocArray { key: Int, value: T }>` because elephc's dense indexed
 //!   representation cannot hold a window that does not start at key 0.
-//! - A non-array input is rejected. An associative or gradual (`mixed`, or a union carrying an
-//!   array) input is accepted ONLY in the two-argument form, where `ir_lower::expr::compat_preludes`
-//!   redirects the call to `__elephc_array_chunk_gradual`: the native lowering walks dense indexed
-//!   storage and picks its helper from the source element type, so it has nothing to run against
-//!   hash storage or a boxed Mixed cell. Those shapes answer `array<mixed>`, which is what the
-//!   prelude helper's declared `array` return produces.
+//! - An ASSOCIATIVE receiver chunks into `Array<AssocArray { … }>` in both modes: with the flag
+//!   each window keeps the source's own keys, and without it the keys restart at 0 inside every
+//!   chunk — which is where chunk's `preserve_keys` rule parts company with `array_slice()`'s,
+//!   since chunk drops STRING keys too. Non-array inputs are still rejected. A check hook is
+//!   required because the return type depends on the inferred argument type and on that literal
+//!   flag.
+//! - A GRADUAL input (`mixed`, or a union carrying an array) is accepted ONLY in the two-argument
+//!   form, where `ir_lower::expr::compat_preludes` redirects the call to
+//!   `__elephc_array_chunk_gradual`; those shapes answer `array<array<mixed>>`, which is what the
+//!   prelude helper's body infers.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -79,7 +83,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             });
         }
         let PhpType::Array(elem_ty) = ty.clone() else {
-            return Err(CompileError::new(
+            return Err(CompileError::aot_literal_required(
                 cx.span,
                 "array_chunk() preserve_keys argument must be a literal bool in AOT mode",
             ));
@@ -97,6 +101,18 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             value: elem_ty,
         }))),
         PhpType::Array(elem_ty) => Ok(PhpType::Array(Box::new(PhpType::Array(elem_ty)))),
+        // An associative receiver chunks into hashes in BOTH modes, because neither mode's inner
+        // container is a dense list elephc can represent: with `preserve_keys` the window keeps
+        // the source's own keys, and without it the keys restart at 0 but the values may be any
+        // width — which is the 16-byte string-slot problem. A hash keyed 0,1,2,… reads and prints
+        // exactly like the list PHP returns.
+        PhpType::AssocArray { key, value } if preserve => {
+            Ok(PhpType::Array(Box::new(PhpType::AssocArray { key, value })))
+        }
+        PhpType::AssocArray { value, .. } => Ok(PhpType::Array(Box::new(PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value,
+        }))),
         // Hash storage and a boxed Mixed cell answer through `__elephc_array_chunk_gradual`, which
         // the lowering substitutes for the two-argument form. The type here must be the one that
         // helper's body INFERS -- `array<array<mixed>>`, from its single `$result[] = $chunk`
@@ -106,10 +122,16 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         other if cx.args.len() == 2 && array_arg_is_gradually_acceptable(&other) => Ok(
             PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Mixed)))),
         ),
-        PhpType::AssocArray { .. } => Err(CompileError::new(
-            cx.span,
-            "array_chunk() argument must be indexed array",
-        )),
+        // The three-argument form over a gradual source goes to `__elephc_array_chunk_gradual_flagged`
+        // whether the flag is a literal or not (the redirect does not look at it), so it answers
+        // with that helper's type, as the non-literal arm above does. Doctrine's
+        // `UnitOfWork::eagerLoadCollections()` chunks a declared `array` with a literal `true`.
+        other if cx.args.len() == 3 && array_arg_is_gradually_acceptable(&other) => {
+            Ok(PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            })
+        }
         _ => Err(CompileError::new(
             cx.span,
             "array_chunk() first argument must be array",

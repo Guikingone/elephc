@@ -20,7 +20,7 @@
 
 use crate::parser::ast::{BinOp, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_binop, e_bool, e_call, e_int, e_str, e_var, function, internal_declarations, s_assign,
+    e_binop, e_bool, e_call, e_int, e_str, e_var, function, php_semantics_declarations, s_assign,
     s_if, s_return, s_while, t_nullable,
 };
 
@@ -32,7 +32,7 @@ const HTML_ENTITY_IS_KEPT_NAME: &str = "__elephc_html_entity_is_kept";
 
 /// Returns the `htmlspecialchars()` double-encode declarations for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| vec![double_encode_fn(), entity_is_kept_fn()])
+    php_semantics_declarations(|| vec![double_encode_fn(), entity_is_kept_fn()])
 }
 
 /// `$target = $target . value`.

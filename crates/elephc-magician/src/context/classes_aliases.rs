@@ -121,6 +121,8 @@ impl ElephcEvalContext {
         self.eval_reflection_class_constants.clear();
         self.eval_static_callables.clear();
         self.eval_object_callables.clear();
+        // Reflection-minted closure registrations name arena descriptors by address.
+        self.local_native_functions.clear();
         self.claimed_aot_include_classlikes.clear();
         self.include_execution_stack.clear();
         self.autoloading_classes.clear();
@@ -139,6 +141,73 @@ impl ElephcEvalContext {
         self.error_suppression_depth = 0;
         self.compile_time_constant_depth = 0;
         self.file_magic_override = None;
+        // The fallback handler slots (used when the runtime has no handler hooks) hold callable
+        // cells in the wiped arena; replacing one on the next request would release a dead cell.
+        self.error_handler = None;
+        self.error_handler_stack.clear();
+        self.exception_handler = None;
+        self.exception_handler_stack.clear();
+        // Keyed by object identity or holding object cells / arena addresses, like the tables
+        // above; an uncaught throw leaves the frame stacks non-empty at the boundary.
+        self.clone_reinitialized_properties.clear();
+        self.function_args_stack.clear();
+        self.eval_backtrace_boundaries.clear();
+        drop(self.array_reference_retirements.take());
+    }
+
+    /// Turns a context that has just been freed into the fresh one the next
+    /// `__elephc_eval_context_new` hands out, keeping ONLY what a fresh context would import.
+    ///
+    /// WHY. Every compiled frame that reaches the bridge builds a context of its own and frees it
+    /// when it returns, so a Laravel request made ~2 200 of them. Each one started empty, adopted
+    /// the AOT snapshot and then imported every class-like the request had declared so far --
+    /// hundreds of hash inserts and name copies -- and dropped all of it on the way out. That
+    /// import plus the drop was the largest named cost of the request. A recycled context has
+    /// already done the import; its sync mark tells `sync_global_eval_classes` to pick up only
+    /// what was declared since.
+    ///
+    /// Everything else -- live-object counters, handler slots, per-frame stacks, dynamic property
+    /// overlays, stream tables, constant cells -- is replaced by the defaults `new` would give:
+    /// those are the fields the old frame owned, and several hold arena handles. Keeping the
+    /// class-like tables is sound because a class-like is request-global in PHP: the registry
+    /// every context imports from is the same one this context imported from, and the request
+    /// boundary (`reset_global_eval_classes`) drains the pool so no declaration crosses it.
+    pub(crate) fn into_recycled(mut self: Box<Self>) -> Box<Self> {
+        let mut fresh = Box::new(Self::new());
+        fresh.native_global_sync = self.native_global_sync;
+        fresh.global_eval_sync = self.global_eval_sync;
+        fresh.classes = std::mem::take(&mut self.classes);
+        fresh.class_source_files = std::mem::take(&mut self.class_source_files);
+        fresh.class_aliases = std::mem::take(&mut self.class_aliases);
+        fresh.declared_class_names = Arc::clone(&self.declared_class_names);
+        fresh.own_declared_class_names = std::mem::take(&mut self.own_declared_class_names);
+        fresh.interfaces = std::mem::take(&mut self.interfaces);
+        fresh.declared_interface_names = Arc::clone(&self.declared_interface_names);
+        fresh.own_declared_interface_names =
+            std::mem::take(&mut self.own_declared_interface_names);
+        fresh.traits = std::mem::take(&mut self.traits);
+        fresh.declared_trait_names = Arc::clone(&self.declared_trait_names);
+        fresh.own_declared_trait_names = std::mem::take(&mut self.own_declared_trait_names);
+        fresh.enums = std::mem::take(&mut self.enums);
+        fresh.declared_enum_names = std::mem::take(&mut self.declared_enum_names);
+        fresh.native_global_constants = Arc::clone(&self.native_global_constants);
+        fresh.native_user_constants = Arc::clone(&self.native_user_constants);
+        fresh.native_functions = Arc::clone(&self.native_functions);
+        fresh.native_methods = Arc::clone(&self.native_methods);
+        fresh.native_static_methods = Arc::clone(&self.native_static_methods);
+        fresh.native_constructors = Arc::clone(&self.native_constructors);
+        fresh.native_class_parents = Arc::clone(&self.native_class_parents);
+        fresh.native_class_attributes = Arc::clone(&self.native_class_attributes);
+        fresh.native_method_attributes = Arc::clone(&self.native_method_attributes);
+        fresh.native_constant_attributes = Arc::clone(&self.native_constant_attributes);
+        fresh.native_interface_properties = Arc::clone(&self.native_interface_properties);
+        fresh.native_abstract_properties = Arc::clone(&self.native_abstract_properties);
+        fresh.native_property_types = Arc::clone(&self.native_property_types);
+        fresh.native_property_defaults = Arc::clone(&self.native_property_defaults);
+        fresh.native_property_attributes = Arc::clone(&self.native_property_attributes);
+        fresh.native_class_constant_defaults = Arc::clone(&self.native_class_constant_defaults);
+        // `self` drops here with everything the old frame owned, exactly as the free did before.
+        fresh
     }
 
     /// Records the physical file that defined one eval class for method magic constants.
@@ -228,6 +297,9 @@ impl ElephcEvalContext {
             };
             self.own_declared_interface_names
                 .push(interface.name().to_string());
+            if let Some(file) = registry.class_source_files.get(&key) {
+                self.class_source_files.insert(key.clone(), file.clone());
+            }
             self.interfaces.insert(key, interface);
         }
         self.global_eval_sync.interfaces = registry.declared_interface_names.len();
@@ -246,6 +318,9 @@ impl ElephcEvalContext {
             };
             self.own_declared_trait_names
                 .push(trait_decl.name().to_string());
+            if let Some(file) = registry.class_source_files.get(&key) {
+                self.class_source_files.insert(key.clone(), file.clone());
+            }
             self.traits.insert(key, trait_decl);
         }
         self.global_eval_sync.traits = registry.declared_trait_names.len();
@@ -266,6 +341,9 @@ impl ElephcEvalContext {
                 .push(enum_decl.name().trim_start_matches('\\').to_string());
             self.own_declared_class_names
                 .push(enum_decl.name().trim_start_matches('\\').to_string());
+            if let Some(file) = registry.class_source_files.get(&key) {
+                self.class_source_files.insert(key.clone(), file.clone());
+            }
             self.classes
                 .insert(key.clone(), Arc::new(enum_decl.as_class_metadata()));
             self.enums.insert(key, enum_decl);

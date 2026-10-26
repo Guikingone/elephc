@@ -1,16 +1,16 @@
 ---
-title: "fpassthru() — internals"
+title: "fpassthru() - internals"
 description: "Compiler internals for fpassthru(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 335
+  order: 336
 ---
 
-## `fpassthru()` — internals
+## `fpassthru()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fpassthru.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fpassthru.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -1,16 +1,16 @@
 ---
-title: "pcntl_wifstopped() — internals"
+title: "pcntl_wifstopped() - internals"
 description: "Compiler internals for pcntl_wifstopped(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 678
+  order: 698
 ---
 
-## `pcntl_wifstopped()` — internals
+## `pcntl_wifstopped()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_wifstopped.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_wifstopped.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

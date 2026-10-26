@@ -780,3 +780,75 @@ echo "[", sprintf($f, null), "]";
     );
     assert_eq!(out, "[][][0][0][]");
 }
+
+/// Releases the `(string)` copy of a Mixed format once `sprintf()`/`vsprintf()` returns.
+///
+/// Both formatters write a new string, but they sat in the "may alias an argument" bucket, so
+/// the cast copy of a boxed format lived as long as the result: four blocks per iteration here.
+/// Expected output is `php -n` 8.5's.
+#[test]
+fn test_sprintf_with_a_mixed_format_releases_its_string_copy() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function a(mixed $format, mixed $v): string { return \sprintf($format, $v, "q$v"); }
+function b(string $f, array $vals): string { return vsprintf($f, $vals) . sprintf('%05.1f|%s', 3.14159, strtoupper($f)); }
+function c(?string $f): string { return sprintf($f ?? '%s-%s', 'x', 'y'); }
+$f = $argc > 5 ? 1 : '<%s|%s>';
+for ($i = 0; $i < 4; $i++) {
+    $r = a($f, "v$i") . b('%s+%d', ["s$i", $i]) . c($argc > 5 ? 'z' : null) . sprintf('plain');
+}
+echo $r, "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "<v3|qv3>s3+3003.1|%S+%Dx-yplain\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Formats the values of a boxed `array` parameter, a keyed array or a call result in order.
+///
+/// `__rt_vsprintf` walks packed slots, and a source `array` parameter arrives boxed, so
+/// `vsprintf('%s+%s', $vals)` printed two addresses. Expected output is `php -n` 8.5's.
+#[test]
+fn test_vsprintf_lists_boxed_and_keyed_value_arrays() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function b(string $f, array $vals): string { return vsprintf($f, $vals); }
+function vals(int $i): array { return ['k' => "s$i", 'n' => $i]; }
+function m(mixed $v): string { return vsprintf('%s/%s', $v); }
+$i = $argc;
+for ($j = 0; $j < 3; $j++) {
+    $r = vsprintf('%s+%d', ["s$i", $i]) . "|" . b('%s+%d', ["s$i", $i]) . "|" . b('%s+%s', ['a', 'b'])
+        . "|" . vsprintf('%s=%s', ['x' => 'u', 'y' => "w$i"]) . "|" . vsprintf('%s~%d', vals($i))
+        . "|" . m($argc > 5 ? 1 : ["p$i", 'q']);
+}
+echo $r, "\n";
+vprintf("%s-%s\n", vals($i));
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "s1+1|s1+1|a+b|u=w1|s1~1|p1/q\ns1-1\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Unpacks a spread into the values of `sprintf()` and `printf()`.
+///
+/// Each source argument became one packed record, so `sprintf('%s+%d', ...$m)` formatted the
+/// array itself ("Array to string conversion") and then failed with too few arguments.
+/// Expected output is `php -n` 8.5's.
+#[test]
+fn test_sprintf_and_printf_unpack_a_spread_argument() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$i = $argc;
+$m = ["s$i", $i];
+echo sprintf('%s+%d', ...$m), "|", sprintf('%s-%s', ...['x', 'y']), "|", sprintf('%s:%s', 'a', ...['b']), "\n";
+function f(array $a): string { return sprintf('%s/%s', ...$a); }
+echo f(['p', 'q']), "\n";
+printf("%s=%s\n", ...$m);
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "s1+1|x-y|a:b\np/q\ns1=1\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

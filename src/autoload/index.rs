@@ -76,6 +76,7 @@ impl AutoloadIndex {
         for manifest in nested_autoload_manifest_paths(&project_root) {
             builder.load_manifest(&manifest, false);
         }
+        builder.load_composer_runtime_classes(&project_root);
         AutoloadIndex {
             fqn_to_path: builder.fqn_to_path,
             files_to_include: builder.files_to_include,
@@ -130,7 +131,7 @@ impl AutoloadIndex {
 /// `canonicalize` is preferred because it also resolves symlinks and `..`; when it fails — the
 /// directory does not exist, or permissions deny it — joining the process's current directory is
 /// the honest fallback and is still strictly better than walking a bare relative path.
-fn nearest_autoload_manifest_root(entry_dir: &Path) -> Option<PathBuf> {
+pub(crate) fn nearest_autoload_manifest_root(entry_dir: &Path) -> Option<PathBuf> {
     let absolute_entry_dir = absolute_entry_dir(entry_dir);
     absolute_entry_dir
         .ancestors()
@@ -269,6 +270,37 @@ impl IndexBuilder {
             if let Some(section) = json.get(section_key) {
                 self.load_section(dir, section, include_files);
             }
+        }
+    }
+
+    /// Indexes the classes Composer GENERATES into `vendor/composer/` (`Composer\InstalledVersions`).
+    ///
+    /// They belong to no package manifest: only the generated `autoload_classmap.php` names them,
+    /// so without this a call such as `InstalledVersions::isInstalled()` named a class the closed
+    /// world never saw and every such call fell to the runtime autoloader. Only entries whose
+    /// file lives under `vendor/composer/` are taken, so the rest of the generated map (which the
+    /// package manifests already describe) does not widen the world.
+    fn load_composer_runtime_classes(&mut self, project_root: &Path) {
+        let vendor = project_root.join("vendor");
+        // Bytes, not UTF-8: php source is a byte string, and Composer writes every class name it
+        // scanned as is. `examples/symfony-app`'s generated map has a `'\xa9'` entry (a Latin-1 byte), and
+        // `read_to_string` refused the whole file over it, so `InstalledVersions` vanished from
+        // the index and the compiled console died including it at run time.
+        let Ok(bytes) = std::fs::read(vendor.join("composer").join("autoload_classmap.php")) else {
+            return;
+        };
+        let content = String::from_utf8_lossy(&bytes);
+        for line in content.lines() {
+            let line = line.trim();
+            let Some(rest) = line.strip_prefix('\'') else { continue };
+            let Some((class, path)) = rest.split_once("' => $vendorDir . '/composer/") else {
+                continue;
+            };
+            let Some(path) = path.strip_suffix("',") else { continue };
+            let class = class.replace("\\\\", "\\");
+            self.fqn_to_path
+                .entry(class)
+                .or_insert_with(|| vendor.join("composer").join(path));
         }
     }
 
@@ -764,6 +796,34 @@ mod tests {
     /// The file contributes no classes either way, so without a diagnostic every class it
     /// declares simply stops existing and the only message anyone sees points at a later use
     /// site. The warning has to name the file and say what went wrong there.
+    /// Composer's generated classmap is php source, so a byte string: a class name it scanned
+    /// with a Latin-1 byte (`examples/symfony-app` has `'\xa9'`) makes it invalid UTF-8. The
+    /// generated runtime classes beside it must still be indexed.
+    #[test]
+    fn a_generated_classmap_with_a_non_utf8_byte_still_indexes_installed_versions() {
+        let dir = manifest_test_dir();
+        let composer_dir = dir.join("vendor/composer");
+        std::fs::create_dir_all(&composer_dir).unwrap();
+        std::fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#)
+            .unwrap();
+        std::fs::write(
+            composer_dir.join("InstalledVersions.php"),
+            "<?php\nnamespace Composer;\nclass InstalledVersions {}\n",
+        )
+        .unwrap();
+        let mut classmap = b"<?php\n\n$vendorDir = dirname(__DIR__);\n\nreturn array(\n    'Composer\\\\InstalledVersions' => $vendorDir . '/composer/InstalledVersions.php',\n    '".to_vec();
+        classmap.push(0xa9);
+        classmap.extend_from_slice(b"' => $vendorDir . '/symfony/polyfill/Resources/stubs/Odd.php',\n);\n");
+        std::fs::write(composer_dir.join("autoload_classmap.php"), classmap).unwrap();
+
+        let index = AutoloadIndex::from_project_root(&dir);
+
+        let found = index
+            .lookup("Composer\\InstalledVersions")
+            .and_then(|path| path.canonicalize().ok());
+        assert_eq!(found, composer_dir.join("InstalledVersions.php").canonicalize().ok());
+    }
+
     #[test]
     fn unparsable_classmap_file_is_reported_not_swallowed() {
         let dir = manifest_test_dir();

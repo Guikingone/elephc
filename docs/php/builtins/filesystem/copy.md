@@ -2,13 +2,13 @@
 title: "copy()"
 description: "Copies a file."
 sidebar:
-  order: 272
+  order: 273
 ---
 
 ## copy()
 
 ```php
-function copy(string $from, string $to): bool
+function copy(string $from, string $to, mixed $context = null): bool
 ```
 
 Copies a file.
@@ -16,15 +16,16 @@ Copies a file.
 **Parameters**:
 - `$from` (`string`)
 - `$to` (`string`)
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `bool`
 
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/copy.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/copy.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/copy.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/copy.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

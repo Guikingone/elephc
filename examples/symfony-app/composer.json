@@ -12,9 +12,8 @@
         "symfony/flex": "^2.11",
         "symfony/framework-bundle": "8.1.*",
         "symfony/runtime": "8.1.*",
+        "symfony/twig-bundle": "8.1.*",
         "symfony/yaml": "8.1.*"
-    },
-    "require-dev": {
     },
     "config": {
         "allow-plugins": {

@@ -1,16 +1,16 @@
 ---
-title: "date_date_set() — internals"
+title: "date_date_set() - internals"
 description: "Compiler internals for date_date_set(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 207
+  order: 208
 ---
 
-## `date_date_set()` — internals
+## `date_date_set()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:968](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L968) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:991](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L991) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

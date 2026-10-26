@@ -493,7 +493,15 @@ fn lower_gradual_union_param_guard(
     super::builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
         ctx,
         &wrong_tag_label,
-        &|given| format!("Argument must be of type {}, {} given", declared_name, given),
+        &|given| {
+            // A return guard carries its whole message prefix ("f(): Return value must be of
+            // type array, ") instead of a bare type name.
+            if declared_name.contains("(): Return value must be of type ") {
+                format!("{}{} returned", declared_name, given)
+            } else {
+                format!("Argument must be of type {}, {} given", declared_name, given)
+            }
+        },
     );
     ctx.emitter.label(&accepted_label);
     ctx.load_value_to_result(value)?;                                          // keep the caller's original boxed union representation
@@ -962,15 +970,25 @@ pub(super) fn lower_boxed_array_access_interface_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    let return_ty =
-        iterators::emit_interface_dispatch_call(ctx, &interface_name, &method_key, None)?;
+    // A write to an object that is not ArrayAccess is php's "Cannot use object of type X as
+    // array" Error; the other methods keep the silent zero answer.
+    let miss = if method_name == "offsetSet" {
+        iterators::InterfaceDispatchMiss::ObjectNotArray
+    } else {
+        iterators::InterfaceDispatchMiss::ZeroResult
+    };
+    let return_ty = iterators::emit_interface_dispatch_call_with_miss(
+        ctx,
+        &interface_name,
+        &method_key,
+        None,
+        miss,
+    )?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;
-    // The boxed key and value reach `offsetSet` as freshly allocated Mixed temporaries that the
-    // callee borrows rather than consumes, so this frame owns them and must release them after the
-    // dispatch, exactly as the direct object path below does.
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    // Interface implementations use ordinary PHP parameter shadows, not argument-owner transfer.
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 
@@ -1001,20 +1019,14 @@ pub(in crate::codegen) fn lower_runtime_object_method_call(
     // The receiver's class is only its DECLARED type: the object is often a subclass that
     // overrides the method, and when the declared class is abstract (`abstract class T implements
     // \Stringable` with no `__toString` of its own) there is no body under its name at all, so a
-    // direct call to it did not even link. Late-bound methods go through the vtable, exactly as an
-    // ordinary `$o->m()` does.
-    if let Some(slot) = target.dynamic_slot {
-        super::method_resolution::emit_dynamic_instance_method_call(ctx, slot);
-    } else {
-        abi::emit_call_label(
-            ctx.emitter,
-            &method_symbol(&target.impl_class, &target.method_key),
-        );
-    }
+    // direct call to it did not even link. Late-bound methods go through the vtable (honouring the
+    // source-ABI table when the target needs it), exactly as an ordinary `$o->m()` does.
+    super::method_resolution::emit_resolved_method_call(ctx, &target)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_runtime_object_call_result(ctx, inst, &target.return_ty)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    // The concrete PHP method owns any Mixed parameter that can flow into its return value.
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 

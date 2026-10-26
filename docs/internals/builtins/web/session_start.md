@@ -1,16 +1,16 @@
 ---
-title: "session_start() — internals"
+title: "session_start() - internals"
 description: "Compiler internals for session_start(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 970
+  order: 1061
 ---
 
-## `session_start()` — internals
+## `session_start()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:1831](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L1831) (`session_start`)
+- **Lowering**: [`src/web_prelude/build.rs`:2004](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L2004) (`session_start`)
 - **Function symbol**: `session_start()`
 
 
@@ -38,7 +38,7 @@ function session_start(mixed $options = []): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

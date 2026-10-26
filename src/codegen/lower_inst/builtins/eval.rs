@@ -14,6 +14,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use crate::codegen::const_default_values;
 use crate::codegen::eval_ref_arg_helpers::eval_signature_ref_params_supported;
 use crate::codegen::platform::Arch;
 use crate::codegen::runtime_callable_invoker::RuntimeCallableInvoker;
@@ -22,10 +23,10 @@ use crate::codegen::{
 };
 use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Module, Op, ValueId};
 use crate::names::{function_symbol, ir_global_symbol, php_symbol_key};
-use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
 use crate::types::{
-    is_php_integer_array_key, AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, FunctionSig,
-    InterfaceInfo, PhpType, PropertyHookContract,
+    AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, FunctionSig, InterfaceInfo, PhpType,
+    PropertyHookContract,
 };
 
 use super::super::super::context::FunctionContext;
@@ -53,7 +54,7 @@ const EVAL_RUNTIME_FATAL_EXIT_STATUS: u32 = 1;
 /// archive only when `eval_bridge` is set), so `__elephc_eval_report_runtime_fatal` does not
 /// exist in its link. These are the exact strings that reporter falls back to when the
 /// interpreter recorded no clause, which is always the case when there is no interpreter.
-const EVAL_PARSE_ERROR_MESSAGE: &str = "Parse error: eval() fragment is invalid\n";
+const EVAL_STATUS_USER_FATAL: i64 = 7;
 const EVAL_UNSUPPORTED_MESSAGE: &str =
     "Fatal error: eval() fragment uses an unsupported construct\n";
 /// The runtime-fatal wording, for programs that do not link the interpreter bridge.
@@ -81,6 +82,10 @@ const EVAL_CALLED_CLASS_LEN_OFFSET: usize = 80;
 /// the pending `__rt_decref_mixed` into a decref of the status integer. The receiver's object
 /// reference is then stranded and its destructor never runs.
 const EVAL_STATUS_SAVE_OFFSET: usize = 88;
+const EVAL_RELOAD_THROWABLE_OFFSET: usize = 88;
+const EVAL_RELOAD_THROW_OWNER_OFFSET: usize = 96;
+const EVAL_RELOAD_VALUE_OWNER_OFFSET: usize = 144;
+const EVAL_BRIDGE_STACK_BYTES: usize = 192;
 const EVAL_SCOPE_FLAG_PRESENT: i64 = 1;
 const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
 const EVAL_CLASS_LOOKUP_GET_CLASS: i64 = 0;
@@ -91,14 +96,19 @@ const EVAL_CLASS_RELATION_IMPLEMENTS: i64 = 0;
 const EVAL_CLASS_RELATION_PARENTS: i64 = 1;
 const EVAL_CLASS_RELATION_USES: i64 = 2;
 const EVAL_CALLABLE_ARG_ARRAY_OFFSET: usize = EVAL_CODE_PTR_OFFSET;
-const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
-const NATIVE_DEFAULT_NULL: i64 = 0;
-const NATIVE_DEFAULT_BOOL: i64 = 1;
-const NATIVE_DEFAULT_INT: i64 = 2;
-const NATIVE_DEFAULT_FLOAT: i64 = 3;
-const NATIVE_DEFAULT_EMPTY_ARRAY: i64 = 4;
+const NATIVE_DEFAULT_NULL: i64 = const_default_values::CONST_DEFAULT_NULL;
+/// Scalar-default ABI kind whose payload is a compiled `fn() -> Mixed*` helper address.
+const NATIVE_DEFAULT_COMPILED: i64 = 5;
+const NATIVE_GLOBAL_CONSTANT_NULL: i64 = 0;
+const NATIVE_GLOBAL_CONSTANT_BOOL: i64 = 1;
+const NATIVE_GLOBAL_CONSTANT_INT: i64 = 2;
+const NATIVE_GLOBAL_CONSTANT_FLOAT: i64 = 3;
+const NATIVE_GLOBAL_CONSTANT_STRING: i64 = 4;
+const NATIVE_GLOBAL_CONSTANT_RESOURCE: i64 = 5;
 const NATIVE_PROPERTY_REQUIRES_GET: i64 = 1;
 const NATIVE_PROPERTY_REQUIRES_SET: i64 = 2;
+/// The property's `get` contract is declared `&get` (returns by reference).
+const NATIVE_PROPERTY_GET_BY_REF: i64 = 4;
 const NATIVE_MEMBER_ATTRIBUTE_METHOD: u8 = 0;
 const NATIVE_MEMBER_ATTRIBUTE_PROPERTY: u8 = 1;
 const NATIVE_MEMBER_ATTRIBUTE_CLASS_CONSTANT: u8 = 2;
@@ -112,6 +122,10 @@ const NATIVE_ATTRIBUTE_ARG_STRING: u8 = 3;
 const NATIVE_ATTRIBUTE_ARG_NAMED: u8 = 4;
 const NATIVE_ATTRIBUTE_ARG_FLOAT: u8 = 5;
 const NATIVE_ATTRIBUTE_ARG_ARRAY: u8 = 6;
+/// A global constant reference (`#[A(SOME_CONST)]`), folded by the interpreter when read.
+const NATIVE_ATTRIBUTE_ARG_CONST: u8 = 7;
+/// A class constant reference (`#[A(C::X)]`), folded by the interpreter when read.
+const NATIVE_ATTRIBUTE_ARG_CLASS_CONST: u8 = 8;
 const NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
 const NATIVE_OBJECT_DEFAULT_ARG_OBJECT: u8 = 2;
@@ -120,8 +134,7 @@ const NATIVE_OBJECT_DEFAULT_ARG_ARRAY: u8 = 4;
 const NATIVE_ARRAY_DEFAULT_KEY_AUTO: u8 = 0;
 const NATIVE_ARRAY_DEFAULT_KEY_INT: u8 = 1;
 const NATIVE_ARRAY_DEFAULT_KEY_STRING: u8 = 2;
-const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = u8::MAX as usize;
-const MAX_NATIVE_DEFAULT_CONSTANT_DEPTH: usize = 16;
+const MAX_NATIVE_DEFAULT_CONSTANT_DEPTH: usize = const_default_values::MAX_CONST_DEFAULT_DEPTH;
 
 /// Local slot metadata needed for conservative eval scope synchronization.
 #[derive(Clone)]
@@ -159,6 +172,7 @@ struct EvalNativeFunctionRegistration {
     /// For a conditionally declared function registered under its public name: the module
     /// symbol of its "active variant" slot, which says whether php would see it declared yet.
     active_slot_symbol: Option<String>,
+    is_internal: bool,
 }
 
 /// A module-local method signature that can be registered with the eval context.
@@ -247,6 +261,7 @@ struct EvalNativeInterfacePropertyRegistration {
     type_spec: String,
     requires_get: bool,
     requires_set: bool,
+    get_by_ref: bool,
 }
 
 /// A module-local abstract class property contract that can be registered with the eval context.
@@ -257,6 +272,7 @@ struct EvalNativeAbstractPropertyRegistration {
     type_spec: String,
     requires_get: bool,
     requires_set: bool,
+    get_by_ref: bool,
 }
 
 /// A module-local property default that can be registered with the eval context.
@@ -288,45 +304,25 @@ struct EvalNativeMemberAttributeRegistration {
     attribute_args: Option<Vec<AttrArgEntry>>,
 }
 
-/// Native callable default that can be registered with libelephc-magician.
-enum EvalNativeCallableDefault {
-    Scalar {
-        kind: i64,
-        payload: i64,
-    },
-    String(String),
-    Array(Vec<EvalNativeCallableArrayDefaultElement>),
-    Object {
-        class_name: String,
-        args: Vec<EvalNativeCallableObjectDefaultArg>,
-    },
-}
-
-/// Array element metadata for a native callable default registered with eval.
-struct EvalNativeCallableArrayDefaultElement {
-    key: Option<EvalNativeCallableArrayDefaultKey>,
-    default: EvalNativeCallableDefault,
-}
-
-/// Static array key metadata for a native callable default registered with eval.
-enum EvalNativeCallableArrayDefaultKey {
-    Int(i64),
-    String(String),
-}
-
-/// Constructor argument metadata for an object-valued native callable default.
-struct EvalNativeCallableObjectDefaultArg {
-    name: Option<String>,
-    default: EvalNativeCallableDefault,
-}
+/// Native callable defaults registered with libelephc-magician are the SHARED resolved constant
+/// values from `crate::codegen::const_default_values`. The descriptor invoker materializes the very
+/// same tree, so there is one folder and one answer to what a representable default is.
+use crate::codegen::const_default_values::{
+    ConstDefaultArrayElement as EvalNativeCallableArrayDefaultElement,
+    ConstDefaultArrayKey as EvalNativeCallableArrayDefaultKey,
+    ConstDefaultObjectArg as EvalNativeCallableObjectDefaultArg,
+    ConstDefaultValue as EvalNativeCallableDefault,
+};
 
 
 mod calls;
 mod scope_access;
 mod dynamic_calls;
+mod outlined_owner_call;
 mod native_object_construction;
 mod extract;
 mod introspection;
+mod inventories;
 mod symbol_queries;
 mod argument_results;
 mod associative_results;
@@ -337,6 +333,7 @@ mod signature_metadata;
 pub(crate) use signature_metadata::eval_native_callable_param_type_specs;
 mod default_expressions;
 mod default_constants;
+mod user_constants;
 mod function_registration;
 mod method_registration;
 mod constructor_registration;
@@ -357,7 +354,11 @@ use calls::*;
 #[allow(unused_imports)]
 use scope_access::*;
 #[allow(unused_imports)]
+use dynamic_calls::*;
+#[allow(unused_imports)]
 pub(in crate::codegen::lower_inst::builtins) use introspection::*;
+pub(in crate::codegen::lower_inst) use introspection::lower_eval_highlight;
+pub(super) use inventories::append_eval_inventory;
 #[allow(unused_imports)]
 use symbol_queries::*;
 #[allow(unused_imports)]
@@ -365,6 +366,18 @@ use argument_results::*;
 #[allow(unused_imports)]
 use context_registration::*;
 pub(in crate::codegen) use context_registration::emit_shared_eval_registration_helper;
+pub(in crate::codegen) use status::{emit_shared_eval_status_fail_body, emit_shared_eval_status_fail_cells_body};
+pub(in crate::codegen) use scope_context::{emit_effective_scope_name, has_runtime_closure_scope};
+
+/// Returns the hidden eval-context local of this function, when it has one.
+///
+/// A function only carries the slot when it can run eval itself; the boxed-callable ladder uses
+/// it to hand an eval closure object to Magician instead of reporting it not callable.
+pub(in crate::codegen::lower_inst) fn eval_context_local_slot(
+    ctx: &FunctionContext<'_>,
+) -> Option<crate::ir::LocalSlotId> {
+    context_registration::eval_context_slot(ctx).ok()
+}
 #[allow(unused_imports)]
 use registration_collection::*;
 #[allow(unused_imports)]
@@ -375,6 +388,8 @@ use signature_metadata::*;
 use default_expressions::*;
 #[allow(unused_imports)]
 use default_constants::*;
+#[allow(unused_imports)]
+use user_constants::*;
 #[allow(unused_imports)]
 use function_registration::*;
 #[allow(unused_imports)]
@@ -398,6 +413,9 @@ use scope_reload::*;
 #[allow(unused_imports)]
 use status::*;
 
+/// Installing the compiled OPcache configuration is a STARTUP concern, not an eval one, so
+/// `crate::codegen::frame` reaches it directly from the prologue.
+pub(crate) use context_registration::configure_eval_opcache;
 pub(super) use calls::{lower_dynamic_include, lower_eval};
 pub(super) use extract::lower_extract;
 pub(super) use dynamic_calls::{
@@ -405,7 +423,11 @@ pub(super) use dynamic_calls::{
     lower_eval_method_call, lower_eval_property_get,
     lower_eval_native_frame_static_method_call, lower_eval_native_frame_static_property_get,
     lower_eval_native_frame_static_property_set, lower_eval_object_new,
-    lower_eval_object_new_dynamic_fallback, lower_eval_static_method_call,
+    lower_eval_object_new_dynamic_fallback, lower_eval_object_new_without_constructor_fallback,
+    lower_eval_static_method_call,
+};
+pub(in crate::codegen::lower_inst) use outlined_owner_call::{
+    inside_owner_call_helper, lower_owner_call_helper_body,
 };
 pub(in crate::codegen::lower_inst) use dynamic_calls::{
     lower_eval_owned_method_call, lower_eval_owned_method_call_with_result,
@@ -420,7 +442,8 @@ pub(super) use native_object_construction::{
 };
 pub(super) use introspection::{
     emit_eval_dynamic_constant_null_context, emit_eval_object_is_a_dynamic_name_fallback,
-    emit_eval_object_is_a_named_fallback, lower_eval_callable_call_array, lower_eval_class_relation,
+    emit_eval_object_is_a_named_fallback, emit_eval_object_is_a_named_fallback_from_result,
+    lower_eval_callable_call_array, lower_eval_class_relation,
     lower_eval_global_class_relation_to_result, lower_eval_is_callable,
     lower_eval_member_exists, lower_eval_object_class_name, lower_eval_object_is_a,
     lower_eval_object_is_a_dynamic,

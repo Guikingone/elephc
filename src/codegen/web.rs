@@ -8,7 +8,8 @@
 //! defaults), releases and zeroes ordinary globals plus request superglobals
 //! ($_SERVER/$_GET/$_POST) that survive between requests, and resets the
 //! native and dynamic include-once bookkeeping, the concat-buffer write offset,
-//! and the fixed runtime's request-scoped flags (`REQUEST_SCOPED_RUNTIME_FLAGS`).
+//! request-local collector controls, and the fixed runtime's request-scoped flags
+//! (`REQUEST_SCOPED_RUNTIME_FLAGS`).
 //!
 //! Called from:
 //! - `crate::codegen::block_emit::emit_module()`, after every function and the
@@ -35,8 +36,9 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::ir::Module;
-use crate::names::{classlike_activation_symbol, ir_global_symbol, static_property_symbol};
+use crate::names::{classlike_activation_symbol, ir_global_symbol};
 use std::collections::BTreeSet;
+use super::runtime_metadata::refcounted_static_properties;
 use crate::superglobals;
 use crate::types::PhpType;
 
@@ -182,12 +184,12 @@ mod tests {
         builder.emit(
             Op::ClassLikeActivate,
             vec![],
-            Some(Immediate::ClassLikeActivation {
-                source: crate::ir::SourceId::from_raw(0),
-                site: crate::span::Span::dummy(),
-                kind: crate::parser::ast::ClassLikeKind::Interface,
+            Some(Immediate::class_like_activation(
+                crate::ir::SourceId::from_raw(0),
+                crate::span::Span::dummy(),
+                crate::parser::ast::ClassLikeKind::Interface,
                 name,
-            }),
+            )),
             IrType::Void,
             PhpType::Void,
             Ownership::NonHeap,
@@ -233,8 +235,7 @@ impl LabelGen {
 
 /// Emits the `__rt_web_reset` routine for the module.
 ///
-/// Always emitted in `--web` builds (even with zero statics) so the handler's
-/// `bl/call __rt_web_reset` resolves; in that case it only resets `_concat_off`.
+/// Always emitted in `--web` builds, even without statics, to reset shared request state.
 /// Runs before the handler body's static-property/enum initializers, so it must
 /// only RELEASE the previous refcounted property value, not rewrite it.
 pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &DataSection) {
@@ -246,6 +247,15 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     emitter.label_global("__rt_web_reset");
     abi::emit_frame_prologue(emitter, RESET_FRAME_SIZE);
 
+    // A request cannot legitimately finish inside a boxed array callback. Clear the
+    // stack-backed borrow chain before any reset cleanup can run user destructors, so a
+    // failed request never leaves them scanning an address in its retired native stack.
+    abi::emit_store_zero_to_symbol(emitter, "_rt_unmanaged_ref_borrow_top", 0);
+    // A normal or throwing `__set` call unlinks its stack-backed recursion node locally. The web
+    // reset is the final backstop for non-Throwable request escapes, before the retired request
+    // stack can be reused and before any reset destructor performs another property write.
+    abi::emit_store_zero_to_symbol(emitter, "_magic_set_guard_head", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_fiber_main_saved_magic_set_guard", 0);
     let mut labels = LabelGen::new();
     emit_discard_frees_start(emitter);
     if super::context::module_uses_pcntl_signal_handlers(module) {
@@ -268,6 +278,16 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
             } else {
                 emit_ordinary_global_reset(emitter, &symbol, &mut labels);
             }
+        }
+    }
+    // `$argc`/`$argv` get Mixed global storage from the eval global-sync hooks even when no
+    // program code names them, so they are missing from `global_names`. The eval-to-native hook
+    // stores the eval scope's box there; left alone, request N+1's hook released request N's
+    // box, which the arena reset had already reclaimed.
+    for name in ["argc", "argv"] {
+        let symbol = ir_global_symbol(name);
+        if !module.data.global_names.iter().any(|global| global == name) && data.has_comm(&symbol) {
+            emit_ordinary_global_reset(emitter, &symbol, &mut labels);
         }
     }
     // Every `define()` guards its constant with a BSS "seen" flag. Constants are request state, so
@@ -315,6 +335,10 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     emit_define_flag_resets(emitter, module, data);
 
     emit_concat_offset_reset(emitter);
+    emit_core_handler_reset(emitter);
+    abi::emit_call_label(emitter, "__rt_resource_inventory_reset");
+    abi::emit_call_label(emitter, "__rt_diag_reset");
+    emit_gc_state_reset(emitter);
 
     // A generator still referenced here is dropped with the arena below, never freed, so its
     // fiber stack would leak a mapping per request; hand every stack still out back first.
@@ -328,7 +352,11 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // per-request arena at once. This is coupled to `--web` full-reset semantics; a
     // future persistent-statics worker-script mode (`--web-worker`, PR #456) must NOT
     // route through this routine, or its surviving statics would be freed underneath it.
+    if module.required_runtime_features.mbstring || module.required_runtime_features.eval_bridge {
+        abi::emit_call_label(emitter, "__rt_mbstring_release_catalog");
+    }
     emit_heap_arena_reset(emitter);
+    abi::emit_call_label(emitter, "__rt_gc_request_start");
 
     abi::emit_frame_restore(emitter, RESET_FRAME_SIZE);
     abi::emit_return(emitter);
@@ -354,11 +382,12 @@ fn emit_native_classlike_activation_resets(
         .chain(module.runtime_callable_invokers.iter())
     {
         for instruction in &function.instructions {
-            let Some(crate::ir::Immediate::ClassLikeActivation { kind, name, .. }) =
+            let Some(crate::ir::Immediate::ClassLikeActivation(activation)) =
                 &instruction.immediate
             else {
                 continue;
             };
+            let (kind, name) = (&activation.kind, &activation.name);
             if *kind != crate::parser::ast::ClassLikeKind::Interface {
                 continue;
             }
@@ -423,6 +452,61 @@ fn emit_deferred_class_load_resets(emitter: &mut Emitter, module: &Module, data:
         if data.has_comm(&label) {
             abi::emit_store_zero_to_symbol(emitter, &label, 0);
         }
+    }
+}
+
+/// Drains both handler stacks and their eval owners while the request heap is still valid.
+fn emit_core_handler_reset(emitter: &mut Emitter) {
+    let again = "__rt_web_reset_core_handlers";
+    emitter.label(again);
+    for kind in ["error", "exception"] {
+        let next = format!("__rt_web_reset_{kind}_handler");
+        emitter.label(&next);
+        abi::emit_call_label(emitter, &format!("__rt_core_{kind}_handler_pop"));
+        abi::emit_load_symbol_to_reg(
+            emitter, abi::int_result_reg(emitter), &format!("_php_{kind}_handler_stack"), 0,
+        );
+        abi::emit_branch_if_int_result_nonzero(emitter, &next);
+    }
+    // The final pop can restore a bottom registration. Destructors can also
+    // register a handler of either kind, so drain again until all owners are gone.
+    for kind in ["error", "exception"] {
+        for suffix in ["stack", "value", "callable", "context", "context_release"] {
+            abi::emit_load_symbol_to_reg(
+                emitter, abi::int_result_reg(emitter), &format!("_php_{kind}_handler_{suffix}"), 0,
+            );
+            abi::emit_branch_if_int_result_nonzero(emitter, again);
+        }
+    }
+    abi::emit_store_zero_to_symbol(emitter, "_php_error_handler_mask", 0);
+    abi::emit_load_int_immediate(
+        emitter, abi::int_result_reg(emitter),
+        crate::codegen::compile_php_version().error_reporting_mask(),
+    );
+    abi::emit_store_reg_to_symbol(emitter, abi::int_result_reg(emitter), "_php_error_reporting", 0);
+}
+
+/// Restores request-local cycle-collector controls and counters to process-start defaults.
+fn emit_gc_state_reset(emitter: &mut Emitter) {
+    emitter.comment("reset cycle collector controls and counters for the next request");
+    abi::emit_call_label(emitter, "__rt_gc_drop_pins");
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 1);
+    abi::emit_store_reg_to_symbol(
+        emitter,
+        abi::int_result_reg(emitter),
+        "_gc_enabled",
+        0,
+    );
+    for symbol in [
+        "_gc_collecting",
+        "_gc_pending_throw",
+        "_gc_freeing_unreachable",
+        "_gc_release_suppressed",
+        "_gc_runs",
+        "_gc_collected",
+        "_gc_destructor_depth",
+    ] {
+        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
     }
 }
 
@@ -535,15 +619,77 @@ fn emit_heap_arena_reset(emitter: &mut Emitter) {
     //
     // `_gc_peak` is deliberately NOT cleared: it is a process high-water mark, which is what
     // php's `memory_get_peak_usage()` is too, and it is only meaningful once `_gc_live` is
-    // honest. `_gc_allocs` / `_gc_frees` are likewise untouched -- they are cumulative and the
-    // leak summary's `live_blocks` is derived from their difference.
-    abi::emit_store_zero_to_symbol(emitter, "_gc_live", 0);
+    // honest. `_gc_allocs` stays cumulative; `_gc_frees` is set equal to it below so the
+    // leak summary's `live_blocks` (their difference) does not count the retired arena.
+    // (`_gc_live` is cleared below, after `_gc_frees` is reconciled with `_gc_allocs`.)
     abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
     // Every size class is emptied too: the blocks parked in them are gone with the arena.
     let classes = abi::int_arg_reg_name(emitter.target, 0);
     abi::emit_symbol_address(emitter, classes, "_heap_small_bins");
     for class in 0..crate::codegen_support::runtime::HEAP_SIZE_CLASS_COUNT {
         abi::emit_store_zero_to_address(emitter, classes, class * 8);
+    }
+    // Bulk reclamation also retires every block that remained after typed cleanup.
+    // Keep cumulative allocation totals, but do not carry their live footprint into a new arena.
+    let value = abi::int_result_reg(emitter);
+    abi::emit_load_symbol_to_reg(emitter, value, "_gc_allocs", 0);
+    abi::emit_store_reg_to_symbol(emitter, value, "_gc_frees", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_gc_live", 0);
+}
+
+#[cfg(test)]
+mod handler_reset_tests {
+    use super::*;
+    use crate::codegen::platform::{AppleVariant, Platform, Target};
+
+    /// Full arena reclamation accounts for outstanding blocks only after retiring the old heap.
+    #[test]
+    fn web_arena_reset_reconciles_allocation_counters_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_heap_arena_reset(&mut emitter);
+            let asm = emitter.output();
+            let heap_reset = asm.rfind("_heap_small_bins").unwrap();
+            let allocs = asm.find("_gc_allocs").unwrap();
+            let frees = asm.find("_gc_frees").unwrap();
+            let live = asm.find("_gc_live").unwrap();
+            assert!(heap_reset < allocs && allocs < frees && frees < live, "{name}");
+            assert!(!asm.contains("__rt_heap_alloc") && !asm.contains("_gc_peak"), "{name}");
+        }
+    }
+
+    /// Every target releases handlers before inventory cleanup and before resetting the heap.
+    #[test]
+    fn web_handler_reset_precedes_heap_reset_on_every_target() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_web_reset(&mut emitter, &Module::new(target), &DataSection::new());
+            let asm = emitter.output();
+            let borrowed_refs = asm.find("_rt_unmanaged_ref_borrow_top").unwrap();
+            let magic_set_guards = asm.find("_magic_set_guard_head").unwrap();
+            let saved_magic_set_guards = asm.find("_fiber_main_saved_magic_set_guard").unwrap();
+            let inventory = asm.find("__rt_resource_inventory_reset").unwrap();
+            let heap = asm.find("_heap_off").unwrap();
+            for symbol in ["__rt_core_error_handler_pop", "__rt_core_exception_handler_pop", "_php_error_reporting"] {
+                assert!(asm.find(symbol).unwrap() < inventory, "{target:?}: {symbol}");
+            }
+            assert!(borrowed_refs < inventory, "{target:?}: stale borrow state must clear first");
+            assert!(
+                magic_set_guards < inventory,
+                "{target:?}: stale magic-set guard state must clear first"
+            );
+            assert!(
+                saved_magic_set_guards < inventory,
+                "{target:?}: saved main magic-set guard state must clear first"
+            );
+            assert!(inventory < heap, "{target:?}: handlers need the live request heap");
+        }
     }
 }
 
@@ -608,6 +754,10 @@ const REQUEST_SCOPED_RUNTIME_FLAGS: &[&str] = &[
     // A `new`'s reserved object handle; a throw between its arguments and its allocation
     // can leave it set.
     "_obj_handle_pending",
+    // The configured default timezone. Zero makes the next date operation apply php's default
+    // (`TZ=UTC`) again; left set, a request's `date_default_timezone_set('Europe/Paris')`
+    // carried into every later request, where php starts each one from the ini default.
+    "_php_default_tz_len",
     // serialize()/unserialize() back-reference counters and policy fields.
     "_ser_value_counter",
     "_ser_obj_count",
@@ -798,38 +948,4 @@ fn emit_branch_if_equals_sentinel(emitter: &mut Emitter, label: &str) {
 fn emit_concat_offset_reset(emitter: &mut Emitter) {
     emitter.comment("reset the concat-buffer write offset for the next request");
     abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
-}
-
-/// Returns `(storage_symbol, php_type)` for every refcounted static class
-/// property that the handler body initializes, enumerated exactly like
-/// `emit_static_property_initializers` so the reset stays in lockstep with what
-/// gets re-initialized each request. Non-refcounted properties are excluded:
-/// their re-run initializer simply overwrites the scalar, with nothing to free.
-fn refcounted_static_properties(module: &Module) -> Vec<(String, PhpType)> {
-    let mut class_names = super::runtime_referenced_class_names(module)
-        .into_iter()
-        .collect::<Vec<_>>();
-    class_names.sort();
-    let mut props = Vec::new();
-    for class_name in class_names {
-        let Some(class_info) = module.class_infos.get(&class_name) else {
-            continue;
-        };
-        for (property, php_type) in &class_info.static_properties {
-            let declaring_class = class_info
-                .static_property_declaring_classes
-                .get(property)
-                .map(String::as_str)
-                .unwrap_or(class_name.as_str());
-            if declaring_class != class_name {
-                continue;
-            }
-            let ty = php_type.codegen_repr();
-            if !(matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()) {
-                continue;
-            }
-            props.push((static_property_symbol(&class_name, property), php_type.clone()));
-        }
-    }
-    props
 }

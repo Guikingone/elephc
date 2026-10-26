@@ -9,6 +9,15 @@
 
 use super::*;
 
+/// Defaults require a backing slot even when virtual hook bodies are concrete.
+#[test]
+fn test_error_virtual_property_hook_default() {
+    expect_error(
+        "<?php class Box { public int $value = 1 { get => 42; } }",
+        "Virtual properties cannot have a default value",
+    );
+}
+
 /// Verifies `method_exists()` requires both a class/object and method name.
 #[test]
 fn test_error_method_exists_wrong_args() {
@@ -54,6 +63,46 @@ fn test_error_undefined_property() {
     );
 }
 
+/// A literal write through `$this` in `__set` can materialize that exact dynamic property when
+/// the active accessor invocation has the same name, so a later read must type-check.
+#[test]
+fn test_magic_set_same_pair_reentry_property_is_readable() {
+    expect_no_error(
+        r#"<?php
+class Box {
+    public function __set(string $name, mixed $value): void {
+        if ($name === "stored") {
+            $this->stored = $value;
+        }
+    }
+}
+$box = new Box();
+$box->stored = 1;
+echo $box->stored;
+"#,
+    );
+}
+
+/// Recording one same-pair `__set` store must not make unrelated missing names readable.
+#[test]
+fn test_magic_set_same_pair_reentry_does_not_open_other_properties() {
+    expect_error(
+        r#"<?php
+class Box {
+    public function __set(string $name, mixed $value): void {
+        if ($name === "stored") {
+            $this->stored = $value;
+        }
+    }
+}
+$box = new Box();
+$box->stored = 1;
+echo $box->missing;
+"#,
+        "Undefined property: Box::missing",
+    );
+}
+
 /// Verifies the error diagnostic for undefined method.
 #[test]
 fn test_error_undefined_method() {
@@ -64,10 +113,11 @@ fn test_error_undefined_method() {
     );
 }
 
-/// Verifies an interface call keeps its declared ancestor return type.
+/// A method that exists only on a sub-interface, called on an ancestor-typed return value, is not a
+/// compile-time error: php resolves the call at run time and elephc now does the same.
 #[test]
-fn test_error_interface_method_does_not_infer_receiver_from_wither_name() {
-    expect_error(
+fn test_interface_method_call_on_ancestor_receiver_is_resolved_at_runtime() {
+    expect_no_error(
         r#"<?php
 interface Message { public function withHeader(): Message; }
 interface Request extends Message { public function requestOnly(): string; }
@@ -80,7 +130,6 @@ function read(Request $request): string {
     return $request->withHeader()->requestOnly();
 }
 "#,
-        "Undefined method: Message::requestOnly",
     );
 }
 
@@ -93,14 +142,12 @@ fn test_error_object_class_name_requires_object() {
     );
 }
 
-/// Verifies that a method call on an object union (`A|B`) is rejected when the
-/// method is absent from one of the member classes: every object member must
-/// provide the method for the runtime class-id dispatch to be sound.
+/// A method that one member of an object union lacks is not a compile-time error; elephc resolves the
+/// call at run time like php and the program output matches php.
 #[test]
-fn test_error_object_union_method_missing_from_member() {
-    expect_error(
+fn test_object_union_method_missing_from_member_is_resolved_at_runtime() {
+    expect_no_error(
         "<?php class A { function only_a() {} } class B {} function make(bool $b): A|B { return $b ? new A() : new B(); } make(true)->only_a();",
-        "Undefined method: B::only_a",
     );
 }
 
@@ -135,16 +182,15 @@ fn test_error_parenthesis_free_new_rejects_immediate_postfix_access() {
     );
 }
 
-/// Verifies unsupported dynamic class-name references after `new` fail instead of miscompiling.
+/// `new $box->className` and `new $classes[0]` are valid php class-name expressions; elephc now
+/// compiles them and the program output matches php.
 #[test]
-fn test_error_dynamic_new_rejects_unsupported_class_name_references() {
-    expect_error(
+fn test_dynamic_new_accepts_property_and_element_class_name_references() {
+    expect_no_error(
         "<?php class Box { public $className = \"stdClass\"; } $box = new Box(); $object = new $box->className;",
-        "Dynamic class-name expressions after 'new' are not supported",
     );
-    expect_error(
+    expect_no_error(
         "<?php $classes = [\"stdClass\"]; $object = new $classes[0];",
-        "Dynamic class-name expressions after 'new' are not supported",
     );
 }
 
@@ -279,6 +325,20 @@ fn test_error_constructor_promotion_by_reference_requires_variable_arg() {
         "<?php class Box { public function __construct(public int &$value) {} } $box = new Box(1);",
         "Constructor 'Box::__construct' parameter $value must be passed a variable",
     );
+}
+
+/// A promoted reference property cannot outlive a managed array-entry argument lease.
+#[test]
+fn test_error_constructor_promoted_reference_rejects_array_element() {
+    for source in [
+        "<?php class Box { public function __construct(public mixed &$value) {} } $items = ['k' => new stdClass()]; $box = new Box($items['k']); $items = []; echo $box->value;",
+        "<?php class Box { public function __construct(public mixed &$value) {} } $items = ['k' => new stdClass()]; $alias =& $items['k']; $box = new Box($alias); unset($alias); $items = []; echo $box->value;",
+    ] {
+        expect_error(
+            source,
+            "cannot retain managed or already-reference-bound storage in a promoted property",
+        );
+    }
 }
 
 /// Verifies the error diagnostic for constructor promotion readonly by reference.
@@ -446,16 +506,6 @@ fn test_error_static_outside_class_scope() {
     );
 }
 
-/// Verifies the error diagnostic for self instance method from static method.
-#[test]
-fn test_error_self_instance_method_from_static_method() {
-    // `self::` in a static method cannot call an instance method.
-    expect_error(
-        "<?php class Box { public static function run() { return self::value(); } public function value() { return 1; } } echo Box::run();",
-        "Cannot call self instance method from a static method",
-    );
-}
-
 /// Verifies the error diagnostic for circular inheritance.
 #[test]
 fn test_error_circular_inheritance() {
@@ -476,13 +526,20 @@ fn test_error_cannot_reduce_visibility_when_overriding_method() {
     );
 }
 
-/// Verifies the error diagnostic for subclass cannot access parent private property.
+/// Verifies that a subclass reading a parent's private property is NOT a compile error.
+///
+/// php 7.4 removed shadow properties: `Base::$value` lives under a mangled key, so the child's
+/// by-name table does not contain it and the plain name is a DYNAMIC property there. php 8.5.10
+/// warns `Undefined property: Child::$value` at run time and answers null, so refusing the
+/// program at compile time rejected a program php accepts. The run-time behaviour is pinned by
+/// `tests/codegen/objects/property_access/scope_visibility.rs`.
+///
+/// A private property declared by the receiver's OWN class is still an access error: see
+/// `test_error_private_access`.
 #[test]
-fn test_error_subclass_cannot_access_parent_private_property() {
-    // private properties are invisible to child classes; accessing them via `$this` is an error.
-    expect_error(
+fn test_subclass_read_of_parent_private_property_is_not_an_access_error() {
+    expect_no_error(
         "<?php class Base { private $value = 1; } class Child extends Base { public function read() { return $this->value; } } $c = new Child(); echo $c->read();",
-        "Cannot access private property: Child::value",
     );
 }
 
@@ -544,6 +601,34 @@ fn test_error_wrong_signature_vs_interface() {
         "<?php interface Named { public function name($x); } class User implements Named { public function name() { return \"x\"; } }",
         "Cannot change parameter count when implementing interface method: User::name",
     );
+}
+
+/// Rejects narrowing an untyped interface parameter to a declared implementation type.
+#[test]
+fn test_error_typed_implementation_of_untyped_interface_parameter() {
+    for (interface_param, implementation_param) in [
+        ("$abstract", "int $abstract"),
+        ("$abstract = null", "int $abstract = null"),
+    ] {
+        let source = format!(
+            "<?php interface BindingContract {{ public function bind({interface_param}); }} class BindingContainer implements BindingContract {{ public function bind({implementation_param}) {{ echo $abstract; }} }}"
+        );
+        expect_error(
+            &source,
+            "Cannot narrow untyped parameter $abstract when implementing interface method: BindingContainer::bind",
+        );
+    }
+}
+
+/// Interface parameter errors point at the implementation method declaration.
+#[test]
+fn test_error_interface_parameter_span_is_concrete_method() {
+    let error = check_source_full(
+        "<?php\ninterface Sink { public function put($value); }\nclass Box implements Sink {\n    public function put(int $value) {}\n}",
+    )
+    .unwrap_err();
+    assert!(error.message.contains("Cannot narrow untyped parameter $value"));
+    assert_eq!(error.span.line, 4);
 }
 
 /// Verifies the error diagnostic for user class cannot implement throwable directly.
@@ -1141,5 +1226,154 @@ fn test_error_asymmetric_visibility_on_static_property() {
     expect_error(
         "<?php class C { public private(set) static int $v = 1; }",
         "Static property may not declare asymmetric visibility",
+    );
+}
+
+/// Verifies that writing a promoted `public private(set)` constructor property from outside the
+/// class is rejected with the same diagnostic as the ordinary declaration (issue #823).
+#[test]
+fn test_error_promoted_asymmetric_visibility_external_write() {
+    expect_error(
+        "<?php class C { public function __construct(public private(set) int $v) {} } $c = new C(1); $c->v = 9;",
+        "Cannot access private property: C::v",
+    );
+}
+
+/// Verifies that writing a promoted `protected(set)` constructor property from outside the class
+/// hierarchy is rejected, like the ordinary `public protected(set)` declaration.
+#[test]
+fn test_error_promoted_protected_set_visibility_external_write() {
+    expect_error(
+        "<?php class C { public function __construct(public protected(set) string $n) {} } $c = new C('a'); $c->n = 'b';",
+        "Cannot access protected property: C::n",
+    );
+}
+
+/// Verifies that a promoted property's `set` visibility may not be weaker than its read
+/// visibility, matching the ordinary declaration check.
+#[test]
+fn test_error_promoted_asymmetric_visibility_set_weaker_than_get() {
+    expect_error(
+        "<?php class C { public function __construct(private public(set) int $v) {} }",
+        "Asymmetric set visibility must not be weaker than the get visibility",
+    );
+}
+
+/// Verifies that asymmetric visibility on an untyped promoted property is rejected.
+#[test]
+fn test_error_promoted_asymmetric_visibility_requires_type() {
+    expect_error(
+        "<?php class C { public function __construct(private(set) $v) {} }",
+        "Property with asymmetric visibility must have a type",
+    );
+}
+
+/// Verifies that a promoted constructor parameter rejects a second `(set)` visibility.
+#[test]
+fn test_error_promoted_duplicate_set_visibility() {
+    expect_error(
+        "<?php class C { public function __construct(private(set) protected(set) int $v) {} }",
+        "Duplicate parameter set visibility",
+    );
+}
+
+/// Verifies incompatible same-named constants from multiple traits reject class composition.
+#[test]
+fn test_error_incompatible_trait_constant_composition() {
+    expect_error(
+        "<?php trait Left { public const VALUE = 1; } trait Right { public const VALUE = 2; } class UsesBoth { use Left, Right; }",
+        "class UsesBoth has incompatible duplicate trait constant 'VALUE'",
+    );
+}
+
+/// Verifies a write to a private property the RECEIVER'S OWN class declares is still refused.
+///
+/// php raises `Cannot access private property Base::$p` here, and step 1 of php's resolution
+/// already took the one scope that may reach the slot. Making a strict ancestor's private name
+/// writable as a dynamic property must not make this one writable too.
+#[test]
+fn test_error_write_to_own_class_private_property_from_global_scope() {
+    expect_error(
+        "<?php class Base { private $p = 1; } $b = new Base(); $b->p = 2;",
+        "Cannot access private property: Base::p",
+    );
+}
+
+/// Verifies a write to a protected property from an unrelated scope is still refused.
+#[test]
+fn test_error_write_to_protected_property_from_an_unrelated_scope() {
+    expect_error(
+        "<?php class Base { protected $q = 1; } $b = new Base(); $b->q = 2;",
+        "Cannot access protected property: Base::q",
+    );
+}
+
+/// Verifies `unset()` on a private property the receiver's own class declares is still refused.
+///
+/// php raises the same access `Error` for `unset()` as for a write. The scope-dynamic arm added
+/// for a strict ancestor's private name must not swallow this one, which is a different
+/// resolution entirely.
+#[test]
+fn test_error_unset_own_class_private_property_from_global_scope() {
+    expect_error(
+        "<?php class Base { private $p = 1; } $b = new Base(); unset($b->p);",
+        "Cannot access private property: Base::p",
+    );
+}
+
+/// Verifies binding a reference to a private property from an unrelated scope is refused.
+///
+/// A reference hands the caller the ADDRESS of the storage, which is the widest exposure a
+/// property access has, so the refusal has to hold there too.
+#[test]
+fn test_error_reference_binding_to_a_private_property_from_global_scope() {
+    expect_error(
+        "<?php class Base { private $p = 1; } $b = new Base(); $r = &$b->p;",
+        "Cannot access private property: Base::p",
+    );
+}
+
+/// Verifies an ARRAY-ELEMENT write through a scope-dynamic name is refused with a precise
+/// diagnostic, and without resolving the ancestor's slot.
+///
+/// `$obj->p[] = v` reads the property's container, mutates it and publishes it back, which needs
+/// storage the element write can address for the whole operation. For a name php resolves to a
+/// dynamic property that container is not a slot at all, and resolving one anyway would select a
+/// strict ancestor's private storage and then refine ITS inferred type from a write that never
+/// reaches it.
+#[test]
+fn test_error_array_element_write_to_a_scope_dynamic_property() {
+    expect_error(
+        "<?php class Base { private $p = []; } class Child extends Base { \
+         public function go() { $this->p[] = 1; } } (new Child())->go();",
+        "Cannot write an array element through Child::p from this scope",
+    );
+}
+
+/// Verifies a `readonly` class refuses to CREATE the dynamic property a strict ancestor's private
+/// name resolves to, instead of storing one.
+///
+/// A `readonly` class carries php's no-dynamic-properties flag, so php answers this write with
+/// `Cannot create dynamic property ROChild::$p`, not with a creation. The scope-dynamic arm
+/// answers before the whole visibility and readonly ladder runs, so without its own check the arm
+/// would have created storage php forbids, and the reservation would have charged every instance
+/// a hash that no legal write can ever fill.
+#[test]
+fn test_error_dynamic_property_creation_on_a_readonly_class() {
+    expect_error(
+        "<?php readonly class ROBase { private string $p; \
+         public function __construct() { $this->p = 'base'; } } \
+         readonly class ROChild extends ROBase {} \
+         $c = new ROChild(); $c->p = 'x';",
+        "Cannot create dynamic property ROChild::$p",
+    );
+}
+
+/// A late-bound constructor cannot promise direct writable storage for an element argument.
+#[test]
+fn test_error_new_static_rejects_array_element_reference_argument() {
+    expect_error(
+        "<?php class Factory { public function __construct(mixed &$value) {} public static function make(array &$items): object { return new static($items['k']); } } $items = ['k' => 1]; Factory::make($items);",
+        "new static() cannot bind an array element by reference because the runtime constructor target is late-bound",
     );
 }

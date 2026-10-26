@@ -1,11 +1,11 @@
 ---
-title: "xmlwriter_start_comment() — internals"
+title: "xmlwriter_start_comment() - internals"
 description: "Compiler internals for xmlwriter_start_comment(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1021
+  order: 1109
 ---
 
-## `xmlwriter_start_comment()` — internals
+## `xmlwriter_start_comment()` - internals
 
 ## Where it lives
 

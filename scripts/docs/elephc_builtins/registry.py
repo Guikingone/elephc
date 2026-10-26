@@ -316,6 +316,8 @@ REGISTRY_AREA_OVERRIDES: Dict[str, Tuple[str, str]] = {
 ParamSpec = object  # str | Tuple[str, str] | None — kept loose for legibility
 PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     '__elephc_gmmktime_raw': ['int', 'int', 'int', 'int', 'int', 'int'],
+    '__elephc_last_error_int': [('int', 'field')],
+    '__elephc_last_error_str': [('int', 'field')],
     '__elephc_mktime_raw': ['int', 'int', 'int', 'int', 'int', 'int'],
     '__elephc_strtotime_raw': ['string', 'int'],
     'abs': ['int'],
@@ -330,7 +332,7 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'array_diff_key': ['array'],
     'array_fill': ['int', 'int', 'mixed'],
     'array_fill_keys': ['array', 'mixed'],
-    'array_filter': ['array', 'callable', 'int'],
+    'array_filter': ['array', '?callable', 'int'],
     'array_flip': ['array'],
     'array_intersect': ['array'],
     'array_intersect_assoc': ['array'],
@@ -339,8 +341,8 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'array_key_first': ['array'],
     'array_key_last': ['array'],
     'array_keys': ['array'],
-    'array_map': ['callable', 'array'],
-    'array_multisort': ['array', 'int'],
+    'array_map': ['?callable', 'array'],
+    'array_multisort': ['array', 'array'],
     'array_pad': ['array', 'int', 'mixed'],
     'array_pop': ['array'],
     'array_product': ['array'],
@@ -847,6 +849,10 @@ def slug(name: str) -> str:
 # `check_builtin()` arms (which sometimes narrow to the wrong type, e.g.
 # `array_shift` returns `mixed`, not the array element type).
 RETURN_TYPE_OVERRIDES: Dict[str, str] = {
+    # Numeric aggregates preserve integer overflow and floating-point values.
+    # Their neutral Mixed contract covers this union because TypeSpec has no union variant.
+    "array_sum": "int|float",
+    "array_product": "int|float",
     # getenv($name) returns the value string or `false` when the name is absent;
     # getenv() with no name returns the whole environment as an array. The
     # neutral contract records the union-covering `Mixed` because TypeSpec has
@@ -946,7 +952,6 @@ RETURN_TYPE_OVERRIDES: Dict[str, str] = {
 
 
 RUNTIME_HELPER_OVERRIDES: Dict[str, List[str]] = {
-    "mb_ereg_match": ["__rt_mb_ereg_match"],
 }
 
 
@@ -991,6 +996,14 @@ DESCRIPTION_OVERRIDES: Dict[str, str] = {
 # Notes for compiler-internal helpers. These appear on the internals pages for
 # the __elephc_* builtins that have no user-facing reference.
 INTERNAL_NOTES: Dict[str, List[str]] = {
+    "__elephc_last_error_int": [
+        "Internal reader of the native last-diagnostic record, used by error_get_last() and error_clear_last().",
+        "Field 0 answers the level (0 when nothing is recorded), 1 the line, and 2 clears the record.",
+    ],
+    "__elephc_last_error_str": [
+        "Internal reader of the native last-diagnostic record, used by error_get_last().",
+        "Field 0 answers the message and 1 the file, each as a fresh owned string.",
+    ],
     "__elephc_mktime_raw": [
         "Internal helper used by the mktime() builtin.",
         "Bypasses timezone handling and calls the runtime mktime helper directly.",

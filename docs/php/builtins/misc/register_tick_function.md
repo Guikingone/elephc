@@ -2,7 +2,7 @@
 title: "register_tick_function()"
 description: "Registers a function to run on each tick."
 sidebar:
-  order: 692
+  order: 718
 ---
 
 ## register_tick_function()
@@ -15,16 +15,16 @@ Registers a function to run on each tick.
 
 **Parameters**:
 - `$callback` (`mixed`)
-- `...$args` — variadic: collects excess arguments into `$args`.
+- `...$args` - variadic: collects excess arguments into `$args`.
 
 **Returns**: `bool`
 
 ## Availability
 
-- **Compiled (AOT)**: not available — compiled programs cannot call this builtin (`aot-implementation-pending`).
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/tick_functions.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/tick_functions.rs)).
+- **Compiled (AOT)**: not available - compiled programs cannot call this builtin (`aot-implementation-pending`).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/tick_functions.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/tick_functions.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

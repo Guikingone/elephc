@@ -95,25 +95,46 @@ fn eval_array_predicate_walk_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
-    let len = values.array_len(array)?;
-    for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        let verdict =
-            eval_evaluated_callable_with_values(&callback, vec![value, key], context, values)?;
-        let accepted = values.truthy(verdict)?;
-        match (walk, accepted) {
-            (ArrayPredicateWalk::FindValue, true) => return Ok(value),
-            (ArrayPredicateWalk::FindKey, true) => return Ok(key),
-            (ArrayPredicateWalk::Any, true) => return values.bool_value(true),
-            (ArrayPredicateWalk::All, false) => return values.bool_value(false),
-            _ => {}
+    // A callable array's receiver read (`[$object, 'method']`) is an owner the dispatch
+    // borrows for the whole walk; it is released once, after the last callback.
+    let (callback, callback_receiver) =
+        eval_callable_for_probe(callback, context, lexical_scope, values)?;
+    let result = (|| -> Result<RuntimeCellHandle, EvalStatus> {
+        let len = values.array_len(array)?;
+        for position in 0..len {
+            let key = values.array_iter_key(array, position)?;
+            let value = values.array_get(array, key)?;
+            let verdict =
+                eval_evaluated_callable_with_values(&callback, vec![value, key], context, values)?;
+            let accepted = values.truthy(verdict);
+            values.release(verdict)?;
+            let accepted = accepted?;
+            // Exactly one of this iteration's key and value reads may leave as the answer; every
+            // other one is released here, where it used to leak two cells per visited element.
+            match (walk, accepted) {
+                (ArrayPredicateWalk::FindValue, true) => {
+                    values.release(key)?;
+                    return Ok(value);
+                }
+                (ArrayPredicateWalk::FindKey, true) => {
+                    values.release(value)?;
+                    return Ok(key);
+                }
+                _ => {}
+            }
+            values.release(key)?;
+            values.release(value)?;
+            match (walk, accepted) {
+                (ArrayPredicateWalk::Any, true) => return values.bool_value(true),
+                (ArrayPredicateWalk::All, false) => return values.bool_value(false),
+                _ => {}
+            }
         }
-    }
-    match walk {
-        ArrayPredicateWalk::FindValue | ArrayPredicateWalk::FindKey => values.null(),
-        ArrayPredicateWalk::Any => values.bool_value(false),
-        ArrayPredicateWalk::All => values.bool_value(true),
-    }
+        match walk {
+            ArrayPredicateWalk::FindValue | ArrayPredicateWalk::FindKey => values.null(),
+            ArrayPredicateWalk::Any => values.bool_value(false),
+            ArrayPredicateWalk::All => values.bool_value(true),
+        }
+    })();
+    eval_release_callable_receiver(result, callback_receiver, values)
 }

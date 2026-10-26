@@ -37,6 +37,7 @@ pub(crate) const ALWAYS_REGISTERED_THROWABLES: &[&str] = &[
     "Throwable",
     "Error",
     "TypeError",
+    "ArgumentCountError",
     "ValueError",
     "ArithmeticError",
     "DivisionByZeroError",
@@ -46,14 +47,11 @@ pub(crate) const ALWAYS_REGISTERED_THROWABLES: &[&str] = &[
 
 /// Throwables `inject_builtin_throwables` registers that nothing in elephc can raise.
 ///
-/// Each has NO `_*_class_id` symbol, and `seed_runtime_throwable_class_names` records why:
-/// elephc rejects a bad builtin arity at COMPILE time where reference PHP raises
-/// `ArgumentCountError` at runtime; `assert()` is not implemented, so `AssertionError` has no
+/// Neither has a `_*_class_id` symbol: `assert()` is not implemented, so `AssertionError` has no
 /// producer; and an unmatched `match` ends in `Terminator::Fatal` rather than throwing
 /// `UnhandledMatchError` — a real gap against reference PHP, and closing it will give the class
 /// the EIR reference that makes it survive this gate on its own.
 const UNRAISED_THROWABLES: &[&str] = &[
-    "ArgumentCountError",
     "AssertionError",
     "UnhandledMatchError",
 ];
@@ -212,6 +210,11 @@ fn program_names(usage: &Usage, class_name: &str) -> bool {
 /// registered), which `eval_generator_new` turned into a bare `RuntimeFatal` with no message, and
 /// the enclosing `Call`/`MethodCall` picked up the generic "unsupported X expression" label.
 ///
+/// A declared `Generator` return type does NOT make a function a generator — the `yield` token
+/// is the whole rule, and a function that merely forwards someone else's generator declares that
+/// type while holding none (issue #1086). It is still covered here, because declaring the type
+/// spells the class and the name scan sees it.
+///
 /// When absent, `_generator_class_id` is emitted as `u64::MAX`, a value no object header carries,
 /// so the runtime comparisons simply never match.
 pub(crate) fn program_may_reference_generator(program: &[Stmt]) -> bool {
@@ -250,6 +253,16 @@ pub(crate) fn program_may_reference_user_filter(program: &[Stmt]) -> bool {
         || usage.references("stream_filter_register")
 }
 
+/// Returns whether `program` can register a userspace stream filter at all.
+///
+/// Only `stream_filter_register()` turns a class into a filter; extending `php_user_filter`, or
+/// naming it in a string (Symfony's `TentativeTypes` table does), does not. Without a registrar a
+/// method named `filter`, `onCreate` or `onClose` is an ordinary method, so it must not keep the
+/// filter contract's raw-argument ABI.
+pub(crate) fn program_may_register_user_filter(program: &[Stmt]) -> bool {
+    crate::prelude_prune::usage::collect(program).references("stream_filter_register")
+}
+
 /// Adds `name` and every ancestor of it, so `catch (BadMethodCallException $e)` does not leave
 /// `BadFunctionCallException` and `LogicException` missing from the chain the checker flattens.
 fn insert_with_ancestors(name: &str, wanted: &mut HashSet<String>) {
@@ -267,11 +280,13 @@ fn insert_with_ancestors(name: &str, wanted: &mut HashSet<String>) {
 mod tests {
     use super::*;
 
+    /// Parses one focused class-registration fixture without running later compiler passes.
     fn parse(source: &str) -> Vec<Stmt> {
         let tokens = crate::lexer::tokenize(source).expect("tokenize");
         crate::parser::parse(&tokens).expect("parse")
     }
 
+    /// Computes required throwable names without enabling optional SPL or reflection surfaces.
     fn registered(source: &str) -> HashSet<String> {
         throwables_to_register(&parse(source), false, false)
     }
@@ -417,6 +432,7 @@ mod tests {
             "Throwable",
             "Error",
             "TypeError",
+            "ArgumentCountError",
             "ValueError",
             "ArithmeticError",
             "DivisionByZeroError",
@@ -446,8 +462,8 @@ mod tests {
         }
     }
 
-    /// Spelling the type is the other route, and a declared `Generator` return type is what makes
-    /// a body a generator in elephc even before its `yield` is reached.
+    /// Spelling the type also registers `Generator`. A declared return type alone does not
+    /// make the function a generator; its body needs a `yield` token.
     #[test]
     fn naming_generator_registers_it() {
         assert!(program_may_reference_generator(&parse(
@@ -517,6 +533,21 @@ mod tests {
         assert!(!program_may_reference_user_filter(&parse("<?php echo 1;")));
         assert!(!program_may_reference_user_filter(&parse(
             "<?php $h = fopen('php://memory', 'r+'); fwrite($h, 'x');"
+        )));
+    }
+
+    /// Only the registrar makes a filter; the base class's name alone, in a string or an
+    /// `extends`, does not.
+    #[test]
+    fn only_the_registrar_can_register_a_user_filter() {
+        assert!(program_may_register_user_filter(&parse(
+            "<?php stream_filter_register('up', 'Up');"
+        )));
+        assert!(!program_may_register_user_filter(&parse(
+            "<?php $types = ['php_user_filter' => ['filter' => 'int']];"
+        )));
+        assert!(!program_may_register_user_filter(&parse(
+            "<?php class Up extends php_user_filter {}"
         )));
     }
 

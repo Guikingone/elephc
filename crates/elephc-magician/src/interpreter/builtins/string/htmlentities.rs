@@ -5,7 +5,8 @@
 //! - `crate::interpreter::builtins::string`.
 //!
 //! Key details:
-//! - Runtime dispatch is declared here and implemented through the HTML entity hook.
+//! - Runtime dispatch is declared here and implemented through the HTML entity hook, which
+//!   honours `$flags` the way `htmlspecialchars()` does.
 
 eval_builtin! {
     contract: "htmlentities",
@@ -23,14 +24,6 @@ pub(in crate::interpreter) fn eval_builtin_htmlentities(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     super::htmlspecialchars::eval_builtin_html_entity_named("htmlentities", args, context, scope, values)
-}
-
-/// Applies PHP `htmlentities(...)` to one evaluated string value.
-pub(in crate::interpreter) fn eval_htmlentities_result(
-    value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::htmlspecialchars::eval_htmlspecialchars_result(value, values)
 }
 
 /// Applies PHP `htmlentities(...)` with an explicit `$flags` bit set.

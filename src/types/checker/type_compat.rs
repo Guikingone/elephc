@@ -12,6 +12,7 @@
 mod declarations;
 mod object_types;
 mod pointers;
-mod unions;
+pub(crate) mod unions;
 
+pub(crate) use declarations::set_program_evaluates_code;
 pub(crate) use object_types::type_is_gradual_object_family;

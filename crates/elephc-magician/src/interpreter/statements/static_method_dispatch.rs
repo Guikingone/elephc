@@ -234,9 +234,16 @@ pub(super) fn eval_static_method_call_result_resolved(
             values,
         );
     }
+    // `parent::createFromFormat()` from an interpreted subclass of a native class resolves the
+    // class to the native parent, but the late-static class is still the subclass: php's
+    // `DateTime::createFromFormat()` returns `static`, and Carbon's `rawCreateFromFormat()` relies
+    // on getting a Carbon back. Without the called class the factory built a plain DateTime.
+    let late_static_class = (!called_class_name.eq_ignore_ascii_case(&class_name)
+        && context.has_class(&called_class_name))
+    .then_some(called_class_name.as_str());
     let native = eval_native_static_syntax_method_result(
         &class_name,
-        None,
+        late_static_class,
         method_name,
         evaluated_args.clone(),
         lexical_scope,

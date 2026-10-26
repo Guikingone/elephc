@@ -1,6 +1,6 @@
 //! Purpose:
 //! Defines the source-position value threaded through tokens, AST nodes, diagnostics, and rewrites.
-//! Carries one-based line and column coordinates from lexer output into later passes.
+//! Carries one-based line/column coordinates and a source identity from lexer output into later passes.
 //!
 //! Called from:
 //! - `crate::lexer`, `crate::parser`, and diagnostic-producing compiler passes.
@@ -10,9 +10,10 @@
 //! - `end_line`/`end_col` are the EXCLUSIVE end position (the character after the
 //!   spanned text). A span whose end equals its start is a point span: the extent
 //!   is unknown and only the start position is meaningful.
-//! - Coordinates are `u32` to keep `Span` at 16 bytes: it is embedded in every
-//!   token and AST node, so its size directly sets the recursive parser's stack
-//!   frame growth (a 32-byte span overflowed 2 MiB test-thread stacks).
+//! - Spans stay 16 bytes: included-file identity is packed into unused high bits of `end_col`,
+//!   preserving the AST and parser-frame size while distinguishing equal source coordinates.
+//!   A pair too wide for those bits (a column past 65535, or a very late source identity) is
+//!   interned in a process-wide table instead, so no source is ever too wide to compile.
 
 /// The first line number handed out to synthetically built nodes.
 ///
@@ -23,6 +24,74 @@ const SYNTHETIC_LINE_BASE: u32 = 1_000_000;
 /// Counts synthetic lines handed out this process. A compile is one process, so a given
 /// program always gets the same numbering.
 static NEXT_SYNTHETIC_LINE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Marks an `end_col` that carries an included file's source identity, not a bare column.
+const PACKED_SOURCE_SPAN: u32 = 1 << 31;
+/// Marks a packed `end_col` whose identity and column live in [`INTERNED_SPAN_ENDS`]: the low
+/// bits are an index there. Used when either half is too wide for the inline form below.
+const INTERNED_SOURCE_SPAN: u32 = 1 << 30;
+/// Inline form: the source identity in bits 16 to 29 (so at most 16383), the end column in
+/// bits 0 to 15 (at most 65535).
+const SOURCE_ID_MASK: u32 = 0x3fff;
+const PACKED_END_COL_MASK: u32 = 0xffff;
+const INTERNED_INDEX_MASK: u32 = INTERNED_SOURCE_SPAN - 1;
+
+/// `(source id, end column)` pairs that do not fit the inline form, such as a column past 65535
+/// on one long line of an included file (#1292).
+///
+/// Process-wide rather than per thread, because a span may be read on another thread than the
+/// one that built it. A pair always interns to the same index, so two spans are equal exactly
+/// when their coordinates and source are: spans stay usable as map keys. Nothing is ever
+/// removed. The table grows by one entry (about 24 bytes with its reverse map) per distinct
+/// `(file, column)` pair that does not fit inline, so a long minified line interns roughly one
+/// pair per token past column 65535, and a compile with more than 16383 included files interns
+/// every span position of the files beyond that. Both cost a lock and a hash lookup per span
+/// instead of a bit test, which is slower but no longer aborts.
+static INTERNED_SPAN_ENDS: std::sync::OnceLock<std::sync::RwLock<InternedSpanEnds>> =
+    std::sync::OnceLock::new();
+
+/// The interned pairs, in index order, and the reverse map that keeps each pair unique.
+#[derive(Default)]
+struct InternedSpanEnds {
+    pairs: Vec<(u32, u32)>,
+    indices: std::collections::HashMap<(u32, u32), u32>,
+}
+
+/// Returns the process-wide table of wide span ends.
+fn interned_span_ends() -> &'static std::sync::RwLock<InternedSpanEnds> {
+    INTERNED_SPAN_ENDS.get_or_init(Default::default)
+}
+
+/// Returns the table index for one wide `(source id, end column)` pair, adding it if new.
+fn intern_span_end(source_id: u32, end_col: u32) -> u32 {
+    let key = (source_id, end_col);
+    let table = interned_span_ends();
+    if let Some(&index) = table.read().unwrap_or_else(|poison| poison.into_inner()).indices.get(&key) {
+        return index;
+    }
+    let mut table = table.write().unwrap_or_else(|poison| poison.into_inner());
+    if let Some(&index) = table.indices.get(&key) {
+        return index;
+    }
+    let index = u32::try_from(table.pairs.len())
+        .ok()
+        .filter(|index| *index <= INTERNED_INDEX_MASK)
+        .expect("more than 2^30 distinct wide included-source span ends in one process");
+    table.pairs.push(key);
+    table.indices.insert(key, index);
+    index
+}
+
+/// Returns the `(source id, end column)` pair stored at one table index.
+fn interned_span_end(index: u32) -> (u32, u32) {
+    interned_span_ends().read().unwrap_or_else(|poison| poison.into_inner()).pairs[index as usize]
+}
+
+std::thread_local! {
+    static NEXT_SOURCE_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
+    /// File path of each included source identity, see [`Span::register_source_path`].
+    static SOURCE_PATHS: std::cell::RefCell<std::collections::BTreeMap<u32, String>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// Source position span for AST nodes.
@@ -30,6 +99,8 @@ pub struct Span {
     pub line: u32,
     pub col: u32,
     pub end_line: u32,
+    /// The upper bits carry source identity for included files; use [`Span::end_column`]
+    /// to read the coordinate without the packed identity.
     pub end_col: u32,
 }
 
@@ -41,18 +112,114 @@ impl Span {
             line,
             col,
             end_line: line,
-            end_col: col,
+            end_col: Self::pack_end_column(col, 0),
         }
     }
 
-    /// Creates a span from a one-based start position and exclusive end position.
+    /// Creates a point span associated with one physical source file.
+    pub fn new_in_source(line: u32, col: u32, source_id: u32) -> Self {
+        Self {
+            line,
+            col,
+            end_line: line,
+            end_col: Self::pack_end_column(col, source_id),
+        }
+    }
+
+    /// Creates a default-source span from one-based start and exclusive end positions.
+    ///
+    /// Test-only: the lexer builds extents with `with_end_from`, which keeps the start token's
+    /// source identity; a bare default-source extent is only useful for constructing fixtures.
+    #[cfg(test)]
     pub fn with_end(line: u32, col: u32, end_line: u32, end_col: u32) -> Self {
         Self {
             line,
             col,
             end_line,
-            end_col,
+            end_col: Self::pack_end_column(end_col, 0),
         }
+    }
+
+    /// Creates a span extent while preserving the identity attached to its token start.
+    pub fn with_end_from(start: Span, end: Span) -> Self {
+        Self {
+            line: start.line,
+            col: start.col,
+            end_line: end.end_line,
+            end_col: Self::pack_end_column(end.end_column(), start.source_id()),
+        }
+    }
+
+    /// Returns a fresh source identity for a separately parsed included file.
+    pub fn fresh_source_id() -> u32 {
+        NEXT_SOURCE_ID.with(|next| {
+            let id = next.get();
+            // An identity past the inline range is interned with its column instead, so the
+            // only limit left is the counter itself.
+            next.set(id.checked_add(1).expect("included source identity counter overflowed u32"));
+            id
+        })
+    }
+
+    /// Resets source identities at the beginning of a new include-resolution unit.
+    pub fn reset_source_ids() {
+        NEXT_SOURCE_ID.with(|next| next.set(1));
+        SOURCE_PATHS.with(|paths| paths.borrow_mut().clear());
+    }
+
+    /// Records the path of the file parsed under `source_id`.
+    ///
+    /// Thread-local like the identity counter it pairs with: compiles run on parallel threads in
+    /// one process and each numbers its files from 1. Codegen reads the map from the module
+    /// (`Module::source_files`), never from here, because it may run on worker threads.
+    pub fn register_source_path(source_id: u32, path: String) {
+        SOURCE_PATHS.with(|paths| {
+            paths.borrow_mut().insert(source_id, path);
+        });
+    }
+
+    /// Returns every file path recorded on this thread since the last reset, by source identity.
+    pub fn source_paths_snapshot() -> std::collections::BTreeMap<u32, String> {
+        SOURCE_PATHS.with(|paths| paths.borrow().clone())
+    }
+
+    /// Returns the source end column without the included-file identity bits.
+    pub fn end_column(self) -> u32 {
+        if self.end_col & PACKED_SOURCE_SPAN == 0 {
+            self.end_col
+        } else if self.end_col & INTERNED_SOURCE_SPAN != 0 {
+            interned_span_end(self.end_col & INTERNED_INDEX_MASK).1
+        } else {
+            self.end_col & PACKED_END_COL_MASK
+        }
+    }
+
+    /// Returns the included-file identity, or zero for the root/default source.
+    pub fn source_id(self) -> u32 {
+        if self.end_col & PACKED_SOURCE_SPAN == 0 {
+            0
+        } else if self.end_col & INTERNED_SOURCE_SPAN != 0 {
+            interned_span_end(self.end_col & INTERNED_INDEX_MASK).0
+        } else {
+            (self.end_col >> 16) & SOURCE_ID_MASK
+        }
+    }
+
+    /// Packs an included-file source identity with its end column.
+    ///
+    /// Inline when both fit; otherwise the pair is interned. The choice depends only on the pair,
+    /// so one pair never has two encodings and span equality stays exact.
+    ///
+    /// A root-source column stays bare unless it reaches bit 31 (a line past 2^31 columns), where
+    /// the bare value would read as a packed one; it is interned with source 0 instead.
+    fn pack_end_column(end_col: u32, source_id: u32) -> u32 {
+        if source_id == 0 && end_col & PACKED_SOURCE_SPAN == 0 {
+            return end_col;
+        }
+        if source_id != 0 && source_id <= SOURCE_ID_MASK && end_col <= PACKED_END_COL_MASK {
+            return PACKED_SOURCE_SPAN | (source_id << 16) | end_col;
+        }
+        PACKED_SOURCE_SPAN | INTERNED_SOURCE_SPAN | intern_span_end(source_id, end_col)
     }
 
     /// Creates a dummy span at line 0, column 0.
@@ -108,6 +275,18 @@ impl Span {
         self.line != 0 && self.line < SYNTHETIC_LINE_BASE
     }
 
+    /// The line a running program may report for this span: its source line, or 0 for a node
+    /// the compiler built. A synthetic line (1 000 000 and up) names no place in the program, and
+    /// it is numbered in an order that changes from run to run, so publishing it made two builds
+    /// of one program differ.
+    pub fn source_line(self) -> u32 {
+        if self.is_from_source() {
+            self.line
+        } else {
+            0
+        }
+    }
+
     /// Can this span single out ONE node?
     ///
     /// A `dummy()` cannot: every node built without a source location shares it, so anything
@@ -121,7 +300,7 @@ impl Span {
     /// Returns true when the span covers a real extent (an end position past
     /// the start), as opposed to a point span or a dummy.
     pub fn has_extent(self) -> bool {
-        self.end_line > self.line || (self.end_line == self.line && self.end_col > self.col)
+        self.end_line > self.line || (self.end_line == self.line && self.end_column() > self.col)
     }
 
     /// Returns the union of two spans: the earlier start and the later end.
@@ -139,17 +318,19 @@ impl Span {
         } else {
             (self.line, self.col)
         };
-        let (end_line, end_col) =
-            if (other.end_line, other.end_col) > (self.end_line, self.end_col) {
-                (other.end_line, other.end_col)
-            } else {
-                (self.end_line, self.end_col)
-            };
+        let start_source_id = if (other.line, other.col) < (self.line, self.col) {
+            other.source_id()
+        } else {
+            self.source_id()
+        };
+        let other_end = (other.end_line, other.end_column());
+        let self_end = (self.end_line, self.end_column());
+        let (end_line, end_col) = if other_end > self_end { other_end } else { self_end };
         Span {
             line,
             col,
             end_line,
-            end_col,
+            end_col: Self::pack_end_column(end_col, start_source_id),
         }
     }
 }
@@ -165,6 +346,106 @@ mod tests {
     #[test]
     fn span_stays_16_bytes() {
         assert_eq!(std::mem::size_of::<Span>(), 16);
+    }
+
+    /// A column past the inline 16 bits keeps its value and its source identity (#1292), and
+    /// stays a distinct key from the same coordinates in another source or with another end.
+    #[test]
+    fn included_source_column_past_16_bits_round_trips() {
+        let wide = Span::new_in_source(1, 70_000, 5);
+        assert_eq!(wide.end_column(), 70_000);
+        assert_eq!(wide.source_id(), 5);
+        assert_eq!(wide.col, 70_000);
+        assert_eq!(wide, Span::new_in_source(1, 70_000, 5));
+        assert_ne!(wide, Span::new_in_source(1, 70_000, 6));
+        assert_ne!(wide, Span::new(1, 70_000));
+
+        let longer = Span::with_end_from(wide, Span::new_in_source(1, 70_010, 5));
+        let shorter = Span::with_end_from(wide, Span::new_in_source(1, 70_004, 5));
+        assert_eq!(longer.end_column(), 70_010);
+        assert_eq!(longer.source_id(), 5);
+        assert_ne!(longer, shorter);
+        assert_eq!(shorter.merge(longer), longer);
+
+        let crossing = Span::with_end_from(Span::new_in_source(1, 65_530, 5), wide);
+        assert_eq!((crossing.col, crossing.end_column(), crossing.source_id()), (65_530, 70_000, 5));
+    }
+
+    /// A root column that reaches bit 31 is interned rather than read back as a packed value.
+    #[test]
+    fn root_column_past_31_bits_round_trips() {
+        let huge = Span::new(1, 0xC000_0005);
+        assert_eq!(huge.end_column(), 0xC000_0005);
+        assert_eq!(huge.source_id(), 0);
+        let extent = Span::with_end(1, 1, 1, 0x8000_0000);
+        assert_eq!((extent.end_column(), extent.source_id()), (0x8000_0000, 0));
+        assert_ne!(huge, Span::new_in_source(1, 0xC000_0005, 1));
+    }
+
+    /// A source identity past the inline 14 bits is interned rather than refused.
+    #[test]
+    fn source_identity_past_the_inline_range_round_trips() {
+        let late = Span::new_in_source(3, 9, SOURCE_ID_MASK + 1);
+        assert_eq!(late.source_id(), SOURCE_ID_MASK + 1);
+        assert_eq!(late.end_column(), 9);
+        assert_ne!(late, Span::new_in_source(3, 9, 1));
+        let inline = Span::new_in_source(3, 9, SOURCE_ID_MASK);
+        assert_eq!(inline.source_id(), SOURCE_ID_MASK);
+        assert_eq!(inline.end_col & INTERNED_SOURCE_SPAN, 0);
+    }
+
+    /// Equal source coordinates from included files remain distinct map keys.
+    #[test]
+    fn included_source_identity_is_packed_without_changing_coordinates() {
+        let first = Span::new_in_source(4, 10, 7);
+        let second = Span::new_in_source(4, 10, 8);
+        assert_ne!(first, second);
+        assert_eq!(first.source_id(), 7);
+        assert_eq!(first.end_column(), 10);
+
+        let extended = Span::with_end_from(first, Span::new_in_source(4, 20, 7));
+        assert_eq!(extended.source_id(), 7);
+        assert_eq!(extended.end_column(), 20);
+        assert!(extended.has_extent());
+    }
+
+    /// An included-file end past the inline 16-bit field keeps its exact column and identity.
+    ///
+    /// It used to abort the compile (#1292); a saturating fallback would put a token that
+    /// STARTS past that column before its own end, so `has_extent()` would be false and source
+    /// maps would drop the end (#1306).
+    #[test]
+    fn an_included_end_past_the_packed_field_stays_exact() {
+        let point = Span::new_in_source(2, 70_000, 5);
+        assert_eq!(point.source_id(), 5);
+        assert_eq!(point.end_column(), 70_000);
+        assert!(!point.has_extent());
+
+        let token = Span::with_end_from(point, Span::new_in_source(2, 70_010, 5));
+        assert_eq!(token.source_id(), 5);
+        assert_eq!(token.end_column(), 70_010);
+        assert!(token.has_extent(), "an end past the start is an extent");
+
+        let wide = Span::with_end_from(Span::new_in_source(2, 6, 5), Span::new_in_source(2, 70_008, 5));
+        assert_eq!(wide.end_column(), 70_008, "a span straddling column 65535 keeps its end");
+
+        let merged = Span::new_in_source(2, 6, 5).merge(token);
+        assert_eq!(merged.end_column(), 70_010);
+        assert_eq!(merged.source_id(), 5);
+    }
+
+    /// Interned wide ends stay distinct map keys exactly as inline ones do.
+    #[test]
+    fn overflowing_ends_keep_spans_distinct_and_equal_where_they_should() {
+        let a = Span::with_end_from(Span::new_in_source(3, 70_000, 9), Span::new_in_source(3, 70_004, 9));
+        let same = Span::with_end_from(Span::new_in_source(3, 70_000, 9), Span::new_in_source(3, 70_004, 9));
+        let longer = Span::with_end_from(Span::new_in_source(3, 70_000, 9), Span::new_in_source(3, 70_009, 9));
+        let other_file = Span::with_end_from(Span::new_in_source(3, 70_000, 10), Span::new_in_source(3, 70_004, 10));
+        assert_eq!(a, same, "equal ends are one table entry, so the spans compare equal");
+        assert_ne!(a, longer);
+        assert_ne!(a, other_file, "the same coordinates in another included file stay distinct");
+        assert_eq!(other_file.source_id(), 10);
+        assert_ne!(a, Span::with_end(3, 70_000, 3, 70_004), "an included span is never a root one");
     }
 
     /// Verifies merge takes the earlier start and later end across lines.

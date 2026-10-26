@@ -26,6 +26,8 @@ mod effect_analysis;
 mod effects;
 mod exception_flow;
 mod fold;
+/// Keeps a declaration PHP calls a generator recognizable as one through the AST passes.
+mod generator_bodies;
 mod namespace_fallbacks;
 mod propagate;
 mod target_guards;
@@ -43,6 +45,13 @@ use propagate::*;
 
 pub use reachability::prune_unreachable_declarations;
 pub(crate) use control::expr_has_side_effects;
+
+/// Returns true when evaluating `expr` can raise a catchable error or has an observable effect,
+/// so a caller holding a half-built owner across it must keep that owner reachable from unwinding.
+pub(crate) fn expr_may_throw(expr: &crate::parser::ast::Expr) -> bool {
+    let effect = effects::expr_effect(expr);
+    effect.may_throw || effect.has_side_effects
+}
 
 #[cfg(test)]
 mod tests;
@@ -96,10 +105,20 @@ pub(in crate::optimize) fn with_active_instance_dispatch_metadata<R>(
 /// placed here cannot be forgotten by one of them. It runs FIRST so the literal it
 /// prepends folds like any other.
 pub fn fold_constants(program: Program) -> Program {
-    let program = crate::superglobals::seed_cli_populated_superglobals(program);
-    with_known_class_constants(program, |program| {
-        fold_block(program)
+    crate::compiler_stack::with_compiler_stack(|| {
+        let program = crate::superglobals::seed_cli_populated_superglobals(program);
+        with_known_class_constants(program, |program| {
+            fold_block(program)
+        })
     })
+}
+
+/// Folds one standalone constant expression without adding program-level runtime metadata.
+///
+/// Trait composition uses this to compare declarations by their resolved
+/// compile-time value rather than by raw expression syntax.
+pub(crate) fn fold_constant_expression(expr: Expr) -> Expr {
+    fold_expr(expr)
 }
 
 /// Folds constants whose values or builtin availability depend on the compile target.
@@ -107,26 +126,60 @@ pub fn fold_constants(program: Program) -> Program {
 /// This variant is used before type checking so portable `PHP_OS[_FAMILY]` and
 /// `function_exists()` guards can remove branches containing target-unavailable builtins.
 pub fn fold_constants_for_target(program: Program, target: Target) -> Program {
-    let signatures = collect_by_ref_signatures(&program);
-    with_fresh_reference_volatile(|| {
-        with_by_ref_signatures(signatures, || ACTIVE_FOLD_TARGET.with(|slot| {
-            let previous = slot.replace(Some(target));
-            let user_functions = collect_top_level_user_functions(&program);
-            let previous_functions =
-                ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(Some(user_functions)));
-            let folded = fold_constants(program);
-            // A target guard can turn a conditional polyfill declaration into an unconditional
-            // declaration. Refresh the inventory so later probes see the retained function.
-            // Avoid `fold_constants` here, which would seed CLI superglobals twice.
-            let materialized_functions = collect_top_level_user_functions(&folded);
-            ACTIVE_FOLD_USER_FUNCTIONS
-                .with(|functions| functions.replace(Some(materialized_functions)));
-            let folded = namespace_fallbacks::fold_after_pruning(folded);
-            ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(previous_functions));
-            slot.replace(previous);
-            folded
-        }))
+    crate::compiler_stack::with_compiler_stack(|| {
+        let signatures = collect_by_ref_signatures(&program);
+        with_fresh_reference_volatile(|| {
+            with_by_ref_signatures(signatures, || ACTIVE_FOLD_TARGET.with(|slot| {
+                let previous = slot.replace(Some(target));
+                let user_functions = collect_top_level_user_functions(&program);
+                let previous_functions =
+                    ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(Some(user_functions)));
+                let folded = flatten_file_scope_synthetic_blocks(fold_constants(program));
+                // A target guard can turn a conditional polyfill declaration into an unconditional
+                // declaration. Refresh the inventory so later probes see the retained function.
+                // Avoid `fold_constants` here, which would seed CLI superglobals twice.
+                let materialized_functions = collect_top_level_user_functions(&folded);
+                ACTIVE_FOLD_USER_FUNCTIONS
+                    .with(|functions| functions.replace(Some(materialized_functions)));
+                let folded = namespace_fallbacks::fold_after_pruning(folded);
+                ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(previous_functions));
+                slot.replace(previous);
+                folded
+            }))
+        })
     })
+}
+
+/// Splices file-scope `Synthetic` blocks into their parent statement list.
+///
+/// Folding replaces an `if` whose condition the target decides with a `Synthetic` block of the
+/// taken branch. At file scope that block is unconditional code, so a declaration in it IS a
+/// file-scope declaration, but the declaration passes and the checker only collect direct
+/// file-scope (and namespace-block) statements, and `conditional_classes` lifts only out of
+/// conditional branches. Polyfills are written exactly this way:
+/// `if (\PHP_VERSION_ID < 80600) { enum SortDirection { ... } }` vanished, so Laravel's
+/// `orderBy($column, $direction = SortDirection::Ascending)` reached through Eloquent's dynamic
+/// forwarding had no enum to materialize and killed `/api/posts`. A block has no scope of its
+/// own, so splicing it changes nothing else; function and class bodies are left alone.
+fn flatten_file_scope_synthetic_blocks(program: Program) -> Program {
+    let mut out = Vec::with_capacity(program.len());
+    for mut stmt in program {
+        match stmt.kind {
+            StmtKind::Synthetic(body) => out.extend(flatten_file_scope_synthetic_blocks(body)),
+            StmtKind::NamespaceBlock { name, body } => {
+                stmt.kind = StmtKind::NamespaceBlock {
+                    name,
+                    body: flatten_file_scope_synthetic_blocks(body),
+                };
+                out.push(stmt);
+            }
+            kind => {
+                stmt.kind = kind;
+                out.push(stmt);
+            }
+        }
+    }
+    out
 }
 
 /// Borrows the target selected for the current constant-folding pass.
@@ -196,9 +249,17 @@ fn collect_top_level_user_functions_from_block(
 /// an empty set would re-enable substitution on a local the checker boxed, and the divergence
 /// surfaces as a compiler PANIC inside a checked builtin's lowering — nothing a reader would trace
 /// back to this call. The test tree shadows this with a no-set wrapper for hand-built ASTs.
+/// `buffer_read_sites` comes from `CheckResult::buffer_read_sites` and preserves unrelated
+/// global facts across native buffer reads without suppressing operand effects or bounds failures.
 #[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
-pub fn propagate_constants(program: Program, mixed_storage_locals: HashSet<String>) -> Program {
-    PostTypecheckOptimizer::new(&program).propagate(program, mixed_storage_locals)
+pub fn propagate_constants(
+    program: Program,
+    mixed_storage_locals: HashSet<String>,
+    buffer_read_sites: HashSet<Span>,
+) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        PostTypecheckOptimizer::new(&program).propagate(program, mixed_storage_locals, buffer_read_sites)
+    })
 }
 
 /// Normalizes control flow structures (ifs, switches, try/catch) for easier optimization.
@@ -209,7 +270,9 @@ pub fn propagate_constants(program: Program, mixed_storage_locals: HashSet<Strin
 /// an empty set would let that clone hand one span-keyed checker decision to two statements.
 #[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
 pub fn normalize_control_flow(program: Program, binding_decision_spans: HashSet<Span>) -> Program {
-    PostTypecheckOptimizer::new(&program).normalize(program, binding_decision_spans)
+    crate::compiler_stack::with_compiler_stack(|| {
+        PostTypecheckOptimizer::new(&program).normalize(program, binding_decision_spans)
+    })
 }
 
 /// Prunes branches with constant conditions that cannot be reached.
@@ -221,7 +284,9 @@ pub fn prune_constant_control_flow(
     program: Program,
     binding_decision_spans: HashSet<Span>,
 ) -> Program {
-    PostTypecheckOptimizer::new(&program).prune(program, binding_decision_spans)
+    crate::compiler_stack::with_compiler_stack(|| {
+        PostTypecheckOptimizer::new(&program).prune(program, binding_decision_spans)
+    })
 }
 
 /// A fact the propagation environment records for a local variable.
@@ -322,6 +387,11 @@ impl PostTypecheckOptimizer {
     }
 
     /// Builds callable and exception analyses, optionally using authoritative checker metadata.
+    ///
+    /// Both public constructors funnel through here, and every analysis walks the whole program,
+    /// so it runs under `crate::compiler_stack::with_compiler_stack` like the four phases below:
+    /// an embedder driving the optimizer without the CLI's wrapper gets the same stack budget
+    /// (issue #1149).
     fn new_with_optional_type_metadata(
         program: &Program,
         type_metadata: Option<(
@@ -330,15 +400,17 @@ impl PostTypecheckOptimizer {
             &HashMap<String, crate::types::InterfaceInfo>,
         )>,
     ) -> Self {
-        let callable_effects = CallableEffectAnalysis::from_program(program);
-        let exception_flow = with_callable_effect_analysis(&callable_effects, || {
-            Rc::new(ExceptionFlowAnalysis::from_program(program, type_metadata))
-        });
-        Self {
-            callable_effects,
-            by_ref_signatures: collect_by_ref_signatures(program),
-            exception_flow,
-        }
+        crate::compiler_stack::with_compiler_stack(|| {
+            let callable_effects = CallableEffectAnalysis::from_program(program);
+            let exception_flow = with_callable_effect_analysis(&callable_effects, || {
+                Rc::new(ExceptionFlowAnalysis::from_program(program, type_metadata))
+            });
+            Self {
+                callable_effects,
+                by_ref_signatures: collect_by_ref_signatures(program),
+                exception_flow,
+            }
+        })
     }
 
     /// Propagates constants while using the shared callable-effect summary.
@@ -349,7 +421,29 @@ impl PostTypecheckOptimizer {
     /// empty set would re-enable substitution on a boxed local, and the divergence surfaces as a
     /// compiler PANIC in a checked builtin's fast path rather than as anything a reader would
     /// connect back to this call.
-    pub fn propagate(&self, program: Program, mixed_storage_locals: HashSet<String>) -> Program {
+    /// `buffer_read_sites` carries checker proofs that indexing cannot invoke a warning handler.
+    ///
+    /// Runs under `crate::compiler_stack::with_compiler_stack`, as do `prune`, `normalize` and
+    /// `eliminate_dead_code`: the CLI pipeline calls these methods directly, so an embedder doing
+    /// the same must get the budget from the method itself rather than from `main` (issue #1149).
+    pub fn propagate(
+        &self,
+        program: Program,
+        mixed_storage_locals: HashSet<String>,
+        buffer_read_sites: HashSet<Span>,
+    ) -> Program {
+        crate::compiler_stack::with_compiler_stack(|| {
+            self.propagate_on_compiler_stack(program, mixed_storage_locals, buffer_read_sites)
+        })
+    }
+
+    /// The body of [`Self::propagate`], run on the stack `with_compiler_stack` sized.
+    fn propagate_on_compiler_stack(
+        &self,
+        program: Program,
+        mixed_storage_locals: HashSet<String>,
+        buffer_read_sites: HashSet<Span>,
+    ) -> Program {
         reset_reference_volatile();
         // Request superglobals are writable from any scope under `--web`, so they
         // can never carry propagated facts.
@@ -369,13 +463,15 @@ impl PostTypecheckOptimizer {
         with_mixed_storage_locals(mixed_storage_locals, || {
             with_callable_effect_analysis(&self.callable_effects, || {
                 with_by_ref_signatures(self.by_ref_signatures.clone(), || {
-                    propagate_block(program, HashMap::new()).0
+                    binding_decisions::with_buffer_read_sites(buffer_read_sites, || {
+                        propagate_block(program, HashMap::new()).0
+                    })
                 })
             })
         })
     }
 
-    /// Normalizes control flow using the shared callable-effect summary.
+    /// Normalizes control flow using the shared callable-effect and exception-flow summaries.
     ///
     /// Takes the same `binding_decision_spans` as `eliminate_dead_code` because this phase is the
     /// SECOND cloning pass: `control::prune_switch_stmt` rewrites a single-case switch on a
@@ -383,18 +479,26 @@ impl PostTypecheckOptimizer {
     /// with its original spans. The spans let that rewrite veto itself; see
     /// `control::switch::single_case_rewrite_would_clone_a_decision`.
     pub fn normalize(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
-        with_local_binding_decision_spans(binding_decision_spans, || {
-            with_callable_effect_analysis(&self.callable_effects, || prune_block(program))
+        crate::compiler_stack::with_compiler_stack(|| {
+            with_local_binding_decision_spans(binding_decision_spans, || {
+                with_callable_effect_analysis(&self.callable_effects, || {
+                    with_exception_flow_analysis(&self.exception_flow, || prune_block(program))
+                })
+            })
         })
     }
 
-    /// Prunes constant control-flow branches using the shared callable-effect summary.
+    /// Prunes constant branches using the shared callable-effect and exception-flow summaries.
     ///
     /// Installs `binding_decision_spans` for the same reason `normalize` does — the two phases run
     /// the same `prune_block`, so the cloning switch rewrite is reachable from both.
     pub fn prune(&self, program: Program, binding_decision_spans: HashSet<Span>) -> Program {
-        with_local_binding_decision_spans(binding_decision_spans, || {
-            with_callable_effect_analysis(&self.callable_effects, || prune_block(program))
+        crate::compiler_stack::with_compiler_stack(|| {
+            with_local_binding_decision_spans(binding_decision_spans, || {
+                with_callable_effect_analysis(&self.callable_effects, || {
+                    with_exception_flow_analysis(&self.exception_flow, || prune_block(program))
+                })
+            })
         })
     }
 
@@ -412,10 +516,14 @@ impl PostTypecheckOptimizer {
         program: Program,
         binding_decision_spans: HashSet<Span>,
     ) -> Program {
-        with_local_binding_decision_spans(binding_decision_spans, || {
-            with_callable_effect_analysis(&self.callable_effects, || {
-                with_exception_flow_analysis(&self.exception_flow, || {
-                    with_by_ref_signatures(self.by_ref_signatures.clone(), || dce_block(program))
+        crate::compiler_stack::with_compiler_stack(|| {
+            with_local_binding_decision_spans(binding_decision_spans, || {
+                with_callable_effect_analysis(&self.callable_effects, || {
+                    with_exception_flow_analysis(&self.exception_flow, || {
+                        with_by_ref_signatures(self.by_ref_signatures.clone(), || {
+                            dce_block(program)
+                        })
+                    })
                 })
             })
         })
@@ -430,7 +538,9 @@ impl PostTypecheckOptimizer {
 /// invisible until the resulting program printed the wrong answer.
 #[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
 pub fn eliminate_dead_code(program: Program, binding_decision_spans: HashSet<Span>) -> Program {
-    PostTypecheckOptimizer::new(&program).eliminate_dead_code(program, binding_decision_spans)
+    crate::compiler_stack::with_compiler_stack(|| {
+        PostTypecheckOptimizer::new(&program).eliminate_dead_code(program, binding_decision_spans)
+    })
 }
 
 /// Returns true when the named builtin can invoke user code through a callback
@@ -474,8 +584,8 @@ impl Effect {
                     | crate::ir::Effects::OUTPUT
                     | crate::ir::Effects::REFCOUNT_OP,
             ),
-            may_throw: effects.contains(crate::ir::Effects::MAY_THROW),
-            writes_globals: effects.contains(crate::ir::Effects::WRITES_GLOBAL),
+            may_throw: effects.intersects(crate::ir::Effects::MAY_THROW | crate::ir::Effects::MAY_WARN),
+            writes_globals: effects.intersects(crate::ir::Effects::WRITES_GLOBAL | crate::ir::Effects::MAY_WARN),
         };
         if effects.intersects(
             crate::ir::Effects::READS_FS

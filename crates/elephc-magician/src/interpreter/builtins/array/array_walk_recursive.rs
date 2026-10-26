@@ -131,23 +131,20 @@ fn eval_array_walk_recursive_ref(
         let mut args = vec![
             EvaluatedCallArg {
                 name: None,
-                value,
+                value: value.borrowed(),
                 ref_target: Some(child),
-                owned: false,
             },
             EvaluatedCallArg {
                 name: None,
-                value: key,
+                value: key.borrowed(),
                 ref_target: None,
-                owned: false,
             },
         ];
         if let Some(extra) = extra {
             args.push(EvaluatedCallArg {
                 name: None,
-                value: extra,
+                value: extra.borrowed(),
                 ref_target: None,
-                owned: false,
             });
         }
         let _ = eval_evaluated_callable_with_call_array_args(callback, args, context, values)?;

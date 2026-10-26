@@ -3417,7 +3417,9 @@ if ($directType instanceof ReflectionNamedType) {
     );
     assert_eq!(
         out.stdout,
-        "id:T:n:int!B|name:T:N:string?B|dep:T:n:ReflectParamTypeDep!C|plain:t:N:null|union:T:n:union!:intB:stringB|nullableUnion:T:N:union?:intB:stringB|intersection:T:n:intersection!:ReflectParamTypeAC:ReflectParamTypeBC|direct:ReflectParamTypeDep"
+        // php 8.5 agrees: union members come back in php's canonical order (`string` before
+        // `int`), and a nullable union lists `null` as its last member.
+        "id:T:n:int!B|name:T:N:string?B|dep:T:n:ReflectParamTypeDep!C|plain:t:N:null|union:T:n:union!:stringB:intB|nullableUnion:T:N:union?:stringB:intB:nullB|intersection:T:n:intersection!:ReflectParamTypeAC:ReflectParamTypeBC|direct:ReflectParamTypeDep"
     );
 }
 
@@ -3452,7 +3454,37 @@ echo $unionType;
     );
     assert_eq!(
         out.stdout,
-        "dep:?ReflectTypeStringDep|union:int|string|null|both:ReflectTypeStringLeft&ReflectTypeStringRight|mixed:mixed|items:?array|cast:int|string|null|concat:int|string|null|echo:int|string|null"
+        // php 8.5 agrees: `int|string|null` renders in php's canonical order.
+        "dep:?ReflectTypeStringDep|union:string|int|null|both:ReflectTypeStringLeft&ReflectTypeStringRight|mixed:mixed|items:?array|cast:string|int|null|concat:string|int|null|echo:string|int|null"
+    );
+}
+
+/// Compiled reflection renders union types in php's canonical member order.
+///
+/// php does not keep the declared order: classes first, then builtins in one fixed order
+/// (`array|string|int|float|bool`), `null` last and listed among `getTypes()`, `null|int` as
+/// `?int`, and `iterable` inside a union as `Traversable|array`. Expected output is php 8.5's.
+#[test]
+fn test_reflection_union_types_use_php_canonical_member_order() {
+    let out = compile_and_run(
+        r#"<?php
+class CanonDep {}
+class CanonOther {}
+function canon(int|string|null $a, string|int $b, float|bool|int|string|array|null $c, CanonDep|string|null $d, null|int $e, iterable|bool $f, false|int $g, int|float $h, CanonDep|CanonOther|null $i, int|string|CanonDep $j): int|string|null { return null; }
+foreach ((new ReflectionFunction("canon"))->getParameters() as $p) {
+    $t = $p->getType();
+    echo $p->getName(), "=", $t, "[";
+    if ($t instanceof ReflectionUnionType) {
+        foreach ($t->getTypes() as $m) { echo $m->getName(), ","; }
+    }
+    echo "] ";
+}
+echo "ret=", (new ReflectionFunction("canon"))->getReturnType();
+"#,
+    );
+    assert_eq!(
+        out,
+        "a=string|int|null[string,int,null,] b=string|int[string,int,] c=array|string|int|float|bool|null[array,string,int,float,bool,null,] d=CanonDep|string|null[CanonDep,string,null,] e=?int[] f=Traversable|array|bool[Traversable,array,bool,] g=int|false[int,false,] h=int|float[int,float,] i=CanonDep|CanonOther|null[CanonDep,CanonOther,null,] j=CanonDep|string|int[CanonDep,string,int,] ret=string|int|null"
     );
 }
 
@@ -3549,7 +3581,8 @@ if ($directUnionSettableType instanceof ReflectionUnionType) {
     );
     assert_eq!(
         out.stdout,
-        "id:T:int!B|name:T:string?B|dep:T:ReflectPropertyTypeDep!C|plain:t:null|union:T:union!:intB:stringB|direct:ReflectPropertyTypeDep:set:ReflectPropertyTypeDep:plainSet:N:unionSet:2"
+        // php 8.5 agrees on the `string`, `int` member order.
+        "id:T:int!B|name:T:string?B|dep:T:ReflectPropertyTypeDep!C|plain:t:null|union:T:union!:stringB:intB|direct:ReflectPropertyTypeDep:set:ReflectPropertyTypeDep:plainSet:N:unionSet:2"
     );
 }
 
@@ -4273,7 +4306,7 @@ foreach ($methods as $method) {
 echo "|";
 $traitMethods = (new ReflectionClass(ReflectListedParamTrait::class))->getMethods();
 foreach ($traitMethods as $method) {
-    if ($method->getName() === "traitlisted") {
+    if ($method->getName() === "traitListed") {
         $params = $method->getParameters();
         echo $method->getNumberOfParameters() . "/";
         echo $method->getNumberOfRequiredParameters() . ":";
@@ -4641,7 +4674,8 @@ foreach ((new ReflectionClass(TypedReflectConstants::class))->getReflectionConst
     );
     assert_eq!(
         out,
-        "typed:int:builtin\nReflectionUnionType:int|string\nuntyped:null\nlisted:int"
+        // php 8.5 agrees: `int|string` renders as `string|int`.
+        "typed:int:builtin\nReflectionUnionType:string|int\nuntyped:null\nlisted:int"
     );
 }
 
@@ -5166,4 +5200,153 @@ try {
 "#,
     );
     assert_eq!(out, "Error: Attribute class \"Nope\\Missing\" not found\n");
+}
+
+/// Releasing a ReflectionNamedType returned by ReflectionEnum must remain safe even when the
+/// program never calls a method on the returned object and its class has no other reference.
+#[test]
+fn test_reflection_enum_backing_type_without_method_use_is_heap_safe() {
+    let out = compile_and_run(
+        r#"<?php
+enum BackingTypeOnly: string { case One = 'one'; }
+$reflection = new ReflectionEnum(BackingTypeOnly::class);
+echo 'built|';
+$type = $reflection->getBackingType();
+echo 'got', "\n";
+"#,
+    );
+    assert_eq!(out, "built|got\n");
+}
+
+/// Releasing a unit-enum ReflectionEnum must retain its distinct case layout,
+/// even when the program never reads the eagerly-created case objects.
+#[test]
+fn test_reflection_enum_unit_case_layout_without_method_use_is_heap_safe() {
+    let out = compile_and_run(
+        r#"<?php
+enum UnitCaseLayout { case One; }
+$reflection = new ReflectionEnum(UnitCaseLayout::class);
+echo "built\n";
+"#,
+    );
+    assert_eq!(out, "built\n");
+}
+
+/// `ReflectionClass::getConstants()` and `getReflectionConstants()` list constants in PHP's
+/// order: the class's own in declaration order, then its traits', then its parent's whole list,
+/// then each interface's; an enum interleaves cases and constants as declared. The constants map
+/// used to be iterated directly, so the order changed from one build to the next.
+/// Expected output measured on PHP 8.5.10.
+#[test]
+fn test_reflection_class_constants_follow_php_declaration_order() {
+    let out = compile_and_run(
+        r#"<?php
+interface J0 { const J0A = 1; }
+interface J extends J0 { const JA = 1; }
+interface I { const I2 = 'i2'; const I1 = 'i1'; }
+trait T { const T2 = 't2'; const T1 = 't1'; }
+class G { const GA = 1; }
+class P extends G implements J { const PB = 1; const PA = 1; }
+class C extends P implements I {
+    use T;
+    const Z = 'z';
+    const K = self::A . '!';
+    const A = 'a';
+    const M = 3.5;
+}
+enum E: string { case B = 'b'; const X = 'x'; case A = 'a'; }
+echo implode(',', array_keys((new ReflectionClass('C'))->getConstants())), "\n";
+$names = [];
+foreach ((new ReflectionClass('C'))->getReflectionConstants() as $constant) { $names[] = $constant->getName(); }
+echo implode(',', $names), "\n";
+echo implode(',', array_keys((new ReflectionClass('P'))->getConstants())), "\n";
+echo implode(',', array_keys((new ReflectionClass('J'))->getConstants())), "\n";
+echo implode(',', array_keys((new ReflectionClass('E'))->getConstants())), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Z,K,A,M,T2,T1,PB,PA,GA,JA,J0A,I2,I1\n\
+         Z,K,A,M,T2,T1,PB,PA,GA,JA,J0A,I2,I1\n\
+         PB,PA,GA,JA,J0A\n\
+         JA,J0A\n\
+         B,X,A\n"
+    );
+}
+
+/// The same order holds where the first version of the fix missed it: a class that compatibly
+/// redeclares trait constants after an earlier own one, a trait reflected directly, and the eval
+/// bridge, which served the same API alphabetically. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_reflection_constant_order_for_redeclarations_traits_and_eval() {
+    let out = compile_and_run(
+        r#"<?php
+trait T { const P = 1; const Q = 2; const TB = 4; const TA = 5; }
+class C { use T; const A = 3; const P = 1; const Q = 2; }
+echo implode(',', array_keys((new ReflectionClass('C'))->getConstants())), "\n";
+echo implode(',', array_keys((new ReflectionClass('T'))->getConstants())), "\n";
+interface J0 { const J0A = 1; }
+interface J extends J0 { const JA = 1; }
+class P implements J { const PB = 1; const PA = 1; }
+class D extends P { const Z = 1; const K = 2; }
+enum E: string { case B = 'b'; const X = 'x'; case A = 'a'; }
+eval('echo implode(",", array_keys((new ReflectionClass("D"))->getConstants())), "\n";');
+eval('echo implode(",", array_keys((new ReflectionClass("C"))->getConstants())), "\n";');
+eval('echo implode(",", array_keys((new ReflectionClass("E"))->getConstants())), "\n";');
+"#,
+    );
+    assert_eq!(
+        out,
+        "A,P,Q,TB,TA\n\
+         P,Q,TB,TA\n\
+         Z,K,PB,PA,JA,J0A\n\
+         A,P,Q,TB,TA\n\
+         B,X,A\n"
+    );
+}
+
+/// `getAttributes()`, filtered or not, on reflectors of classes with and without attributes,
+/// built from a literal name, a runtime name, and inside eval -- Symfony's
+/// `KernelTrait::registerBundle()` shape. The `__attrs` slot is a raw `array<ReflectionAttribute>`
+/// and every writer must store it raw: a boxed store read through that type returned null or
+/// garbage, so every worker died on `getAttributes(RequiredBundle::class)`.
+#[test]
+fn test_get_attributes_on_literal_runtime_and_eval_reflectors() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute(Attribute::TARGET_CLASS | Attribute::IS_REPEATABLE)]
+final class RequiredBundle {
+    public function __construct(public string $class, public bool $ignoreOnInvalid = false) {}
+}
+abstract class Bundle {}
+class FrameworkBundle extends Bundle {}
+#[RequiredBundle(FrameworkBundle::class)]
+class TwigBundle extends Bundle {}
+
+echo count((new \ReflectionClass(FrameworkBundle::class))->getAttributes()), ' ';
+echo (new \ReflectionClass(TwigBundle::class))->getAttributes()[0]->getName(), "\n";
+function requires(string $class): string {
+    $out = [];
+    foreach ((new \ReflectionClass($class))->getAttributes(RequiredBundle::class) as $a) {
+        $out[] = $a->newInstance()->class;
+    }
+    return $class . '=[' . implode(',', $out) . ']';
+}
+echo requires('FrameworkBundle'), ' ', requires('TwigBundle'), "\n";
+eval('foreach (["FrameworkBundle", "TwigBundle"] as $c) {
+    $n = [];
+    foreach ((new \ReflectionClass($c))->getAttributes(RequiredBundle::class) as $a) {
+        $n[] = $a->newInstance()->class;
+    }
+    echo $c, "=[", implode(",", $n), "] ";
+}
+echo "\n";');
+"#,
+    );
+    assert_eq!(
+        out,
+        "0 RequiredBundle\n\
+         FrameworkBundle=[] TwigBundle=[FrameworkBundle]\n\
+         FrameworkBundle=[] TwigBundle=[FrameworkBundle] \n"
+    );
 }

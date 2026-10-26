@@ -30,8 +30,9 @@
 //! | 168    | 8    | user_arg_max      | how many start_args slots `start()` may write |
 //! | 176    | 8    | start_arg_count   | number of boxed values copied by `start()` |
 //! | 184    | 48   | reserved          | legacy slot file; descriptor captures now carry hidden Fiber callback args |
+//! | 232    | 8    | own_magic_set_guard | saved `__set` reentrancy chain head for this fiber |
 //!
-//! Total payload = 232 bytes.
+//! Total payload = 240 bytes.
 
 mod alloc;
 mod api;
@@ -91,6 +92,8 @@ pub(crate) const FIBER_PENDING_THROW_OFFSET: i32 = 88;
 pub(crate) const FIBER_OWN_EXC_HEAD_OFFSET: i32 = 96;
 /// Byte offset of `own_call_frame` (saved _exc_call_frame_top for this fiber's cleanup chain).
 pub(crate) const FIBER_OWN_CALL_FRAME_OFFSET: i32 = 104;
+/// Byte offset of the saved runtime-name `__set` reentrancy chain for this fiber.
+pub(crate) const FIBER_OWN_MAGIC_SET_GUARD_OFFSET: i32 = 232;
 /// Byte offset of the first `start_args` slot (up to 7 Mixed pointers passed to Fiber::start; parallels AArch64 int arg regs).
 pub(crate) const FIBER_START_ARGS_OFFSET: i32 = 112;
 /// Maximum number of `start_args` slots (one per AArch64 integer argument register minus `$this`).
@@ -103,8 +106,30 @@ pub(crate) const FIBER_START_ARG_COUNT_OFFSET: i32 = 176;
 pub(crate) const FIBER_FLOAT_ARGS_OFFSET: i32 = 184;
 /// Maximum number of reserved legacy float slots.
 pub(crate) const FIBER_FLOAT_ARGS_MAX: i32 = 6;
+/// Byte offset of the trailing start-argument slots only GENERATORS use, past every Fiber field.
+///
+/// A generator boxes each parameter, closure captures included, into a start slot until its body
+/// first runs. Seven were too few: Laravel's `Query\Builder::orderedLazyById()` returns a
+/// generator closure with ten, and the whole query builder fell back to the interpreter.
+/// `Fiber::start()` keeps its seven, since they mirror the argument registers it forwards.
+pub(crate) const GENERATOR_EXTRA_ARGS_OFFSET: i32 = 240;
+/// Number of trailing generator-only start-argument slots.
+pub(crate) const GENERATOR_EXTRA_ARGS_MAX: i32 = 9;
+/// Total start-argument slots a generator may fill: the Fiber ones, then the trailing ones.
+pub(crate) const GENERATOR_START_ARGS_MAX: i32 = FIBER_START_ARGS_MAX + GENERATOR_EXTRA_ARGS_MAX;
 /// Total size of the Fiber object payload in bytes (heap-allocated; class_id at offset 0, followed by all runtime-managed fields).
-pub(crate) const FIBER_OBJECT_SIZE: i32 = 232;
+pub(crate) const FIBER_OBJECT_SIZE: i32 = GENERATOR_EXTRA_ARGS_OFFSET + GENERATOR_EXTRA_ARGS_MAX * 8;
+
+/// Byte offset of generator start-argument slot `index`: the Fiber slots first, then the
+/// trailing generator-only ones.
+pub(crate) fn generator_start_arg_offset(index: usize) -> usize {
+    let fiber_slots = FIBER_START_ARGS_MAX as usize;
+    if index < fiber_slots {
+        FIBER_START_ARGS_OFFSET as usize + index * 8
+    } else {
+        GENERATOR_EXTRA_ARGS_OFFSET as usize + (index - fiber_slots) * 8
+    }
+}
 
 // ── Lifecycle states (stored in FIBER_STATE_OFFSET) ──────────────────
 // Phase 3 (suspend) will introduce the first user of FIBER_STATE_SUSPENDED.

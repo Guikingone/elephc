@@ -1,16 +1,16 @@
 ---
-title: "log10() — internals"
+title: "log10() - internals"
 description: "Compiler internals for log10(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 600
+  order: 601
 ---
 
-## `log10()` — internals
+## `log10()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/log10.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/log10.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

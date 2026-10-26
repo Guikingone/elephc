@@ -21,9 +21,14 @@
 use super::super::super::*;
 use crate::extract_policy::{extract_target_name, EXTR_IF_EXISTS, EXTR_OVERWRITE, EXTR_REFS};
 
+// `source_arguments` routes the call to the direct hook below: it is the only implementation
+// (`values: none`), and without it every `extract()` an eval fragment made took the
+// evaluated-argument path and failed as an unsupported function -- Laravel's
+// `Filesystem::getRequire()`, which renders every view and loads every config file.
 eval_builtin! {
     contract: "extract",
     area: Array,
+    source_arguments: true,
     direct: Extract,
     values: none,
 }

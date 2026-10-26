@@ -109,7 +109,7 @@ fn lower_native_container_isset_offset_probe(
             let mut index_value = lower_expr(ctx, index);
             let index_ty = isset_index_expr_key_type(ctx, index, index_value.value);
             if index_ty == PhpType::Int {
-                index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+                index_value = coerce_array_key_to_int_at_span(ctx, index_value, Some(index.span), false);
                 ctx.emit_value(
                     Op::ArrayIsset,
                     vec![array_value.value, index_value.value],
@@ -223,7 +223,7 @@ fn lower_non_native_isset_offset_probe(
 /// 5.8 MB to 28 MB of assembly, and its runtime errors went through the bridge's throw path. The
 /// built-in SPL containers (and the compiler's own `__Elephc*` subclasses of them) are always
 /// declared and answer the quiet read the way `offsetExists()` does, so they do not count.
-fn program_may_hold_array_access_objects(ctx: &LoweringContext<'_, '_>) -> bool {
+pub(super) fn program_may_hold_array_access_objects(ctx: &LoweringContext<'_, '_>) -> bool {
     ctx.has_eval_barrier()
         || ctx.eval_executed()
         || ctx.can_resolve_runtime_dynamic_functions()
@@ -359,7 +359,15 @@ pub(super) fn property_isset_action(
         return Some(IssetPropertyAction::Fallback);
     }
     if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
-        return Some(IssetPropertyAction::Initialized);
+        if let Some((index, (_, property_ty))) = class_info.visible_property(property) {
+            if class_info.property_slot_is_declared(index, property)
+                || (!class_info.property_slot_is_reference(index, property)
+                    && property_ty.codegen_repr() == PhpType::Mixed)
+            {
+                return Some(IssetPropertyAction::Initialized);
+            }
+        }
+        return Some(IssetPropertyAction::Fallback);
     }
     if class_method_signature(ctx, &class_name, &php_symbol_key("__isset")).is_some() {
         Some(IssetPropertyAction::Magic)

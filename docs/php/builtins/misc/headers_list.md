@@ -2,7 +2,7 @@
 title: "headers_list()"
 description: "Returns the pending response headers as `Name: value` lines."
 sidebar:
-  order: 633
+  order: 653
 ---
 
 ## headers_list()
@@ -20,9 +20,9 @@ Returns the pending response headers as `Name: value` lines.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/headers_list.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/headers_list.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/headers_list.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/headers_list.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

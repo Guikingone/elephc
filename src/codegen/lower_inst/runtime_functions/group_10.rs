@@ -19,8 +19,75 @@ pub(super) fn lower(
     target: RuntimeFnId,
 ) -> Option<Result<()>> {
     match target {
-        RuntimeFnId::MbStrlen => Some({
-            crate::codegen::lower_inst::builtins::strings::lower_mb_strlen(ctx, inst)
+        RuntimeFnId::MbStrlen
+        | RuntimeFnId::MbStrwidth
+        | RuntimeFnId::MbStrtoupper
+        | RuntimeFnId::MbStrtolower
+        | RuntimeFnId::MbConvertCase
+        | RuntimeFnId::MbUcfirst
+        | RuntimeFnId::MbLcfirst
+        | RuntimeFnId::MbStrimwidth
+        | RuntimeFnId::MbSubstr
+        | RuntimeFnId::MbStrcut
+        | RuntimeFnId::MbScrub
+        | RuntimeFnId::MbTrim
+        | RuntimeFnId::MbLtrim
+        | RuntimeFnId::MbRtrim
+        | RuntimeFnId::MbStrPad
+        | RuntimeFnId::MbConvertKana
+        | RuntimeFnId::MbSubstrCount
+        | RuntimeFnId::MbOrd
+        | RuntimeFnId::MbChr
+        | RuntimeFnId::MbStrpos
+        | RuntimeFnId::MbStripos
+        | RuntimeFnId::MbStrrpos
+        | RuntimeFnId::MbStrripos
+        | RuntimeFnId::MbStrstr
+        | RuntimeFnId::MbStristr
+        | RuntimeFnId::MbStrrchr
+        | RuntimeFnId::MbStrrichr
+        | RuntimeFnId::MbLanguage
+        | RuntimeFnId::MbInternalEncoding
+        | RuntimeFnId::MbHttpOutput
+        | RuntimeFnId::MbEncodingAliases
+        | RuntimeFnId::MbStrSplit
+        | RuntimeFnId::MbSubstituteCharacter
+        | RuntimeFnId::MbListEncodings
+        | RuntimeFnId::MbDetectOrder
+        | RuntimeFnId::MbDetectEncoding
+        | RuntimeFnId::MbConvertEncoding
+        | RuntimeFnId::MbConvertVariables
+        | RuntimeFnId::MbEncodeNumericentity
+        | RuntimeFnId::MbDecodeMimeheader
+        | RuntimeFnId::MbEncodeMimeheader
+        | RuntimeFnId::MbOutputHandler
+        | RuntimeFnId::MbGetInfo
+        | RuntimeFnId::SharedIni
+        | RuntimeFnId::MbParseStr
+        | RuntimeFnId::MbSendMail
+        | RuntimeFnId::MbHttpInput
+        | RuntimeFnId::MbRegexEncoding
+        | RuntimeFnId::MbRegexSetOptions
+        | RuntimeFnId::MbEregMatch
+        | RuntimeFnId::MbEreg
+        | RuntimeFnId::MbEregi
+        | RuntimeFnId::MbEregSearchInit
+        | RuntimeFnId::MbEregSearch
+        | RuntimeFnId::MbEregSearchPos
+        | RuntimeFnId::MbEregSearchRegs
+        | RuntimeFnId::MbEregSearchGetpos
+        | RuntimeFnId::MbEregSearchGetregs
+        | RuntimeFnId::MbEregSearchSetpos
+        | RuntimeFnId::MbSplit
+        | RuntimeFnId::MbEregReplace
+        | RuntimeFnId::MbEregReplaceCallback
+        | RuntimeFnId::MbEregiReplace
+        | RuntimeFnId::MbDecodeNumericentity
+        | RuntimeFnId::MbCheckEncoding
+        | RuntimeFnId::MbPreferredMimeName => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mbstring(
+                ctx, inst, target.mbstring_operation().expect("mbstring runtime operation"),
+            )
         }),
         RuntimeFnId::Md5 => Some({
             crate::codegen::lower_inst::builtins::strings::lower_md5(ctx, inst)
@@ -236,6 +303,18 @@ pub(super) fn lower(
         }),
         RuntimeFnId::ElephcStrtotimeRaw => Some({
             crate::codegen::lower_inst::builtins::system::lower_elephc_strtotime_raw(ctx, inst)
+        }),
+        RuntimeFnId::ElephcLastErrorInt => Some({
+            crate::codegen::lower_inst::builtins::system::lower_elephc_last_error_int(ctx, inst)
+        }),
+        RuntimeFnId::ElephcStreamFd => Some({
+            crate::codegen::lower_inst::builtins::io::lower_elephc_stream_fd(ctx, inst)
+        }),
+        RuntimeFnId::ElephcFdToStream => Some({
+            crate::codegen::lower_inst::builtins::io::lower_elephc_fd_to_stream(ctx, inst)
+        }),
+        RuntimeFnId::ElephcLastErrorStr => Some({
+            crate::codegen::lower_inst::builtins::system::lower_elephc_last_error_str(ctx, inst)
         }),
         RuntimeFnId::Checkdate => Some({
             crate::codegen::lower_inst::builtins::system::lower_checkdate(ctx, inst)

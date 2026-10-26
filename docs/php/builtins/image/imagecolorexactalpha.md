@@ -1,8 +1,8 @@
 ---
 title: "imagecolorexactalpha()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the palette index of an exact color with alpha, or -1."
 sidebar:
-  order: 486
+  order: 487
 ---
 
 ## imagecolorexactalpha()
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorexactalpha(mixed $image, int $red, int $green, int $blue, int $alpha): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the palette index of an exact color with alpha, or -1.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -27,7 +27,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -1,8 +1,8 @@
 ---
 title: "timezone_location_get()"
-description: "Implemented by the compiler-injected tz prelude."
+description: "Returns a timezone's country code, latitude, longitude, and comments."
 sidebar:
-  order: 258
+  order: 259
 ---
 
 ## timezone_location_get()
@@ -11,7 +11,7 @@ sidebar:
 function timezone_location_get(mixed $object): mixed
 ```
 
-Implemented by the compiler-injected tz prelude.
+Returns a timezone's country code, latitude, longitude, and comments.
 
 **Parameters**:
 - `$object` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected tz prelude.
 - **Compiled (AOT)**: supported through the compiler-injected tz prelude.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

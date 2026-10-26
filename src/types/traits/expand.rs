@@ -19,8 +19,8 @@ use crate::span::Span;
 
 use super::{ExpandedTrait, ImportedMethod, TraitDeclInfo};
 use super::merge::{
-    merge_constant_into, merge_constants, merge_imported_method_set, merge_methods,
-    merge_properties, merge_property_into,
+    merge_constants, merge_imported_constant_set, merge_imported_method_set,
+    merge_methods, merge_properties, merge_property_into,
 };
 use super::validation::validate_direct_members;
 
@@ -119,8 +119,26 @@ pub(super) fn resolve_trait_uses(
     let mut all_methods = Vec::new();
     let mut all_constants = Vec::new();
 
+    // php resolves every `use` of one class-like together: `use A { A::m insteadof B; } use B;`
+    // is `use A, B { A::m insteadof B; }` (Symfony's `CachingHttpClient` writes exactly that with
+    // `AsyncDecoratorTrait` and `HttpClientTrait`). Taken one statement at a time, the `insteadof`
+    // named a trait its own statement did not list, and the conflict across statements went
+    // unresolved.
+    let merged;
+    let trait_uses = if trait_uses.len() > 1 {
+        merged = [TraitUse {
+            trait_names: trait_uses.iter().flat_map(|u| u.trait_names.iter().cloned()).collect(),
+            adaptations: trait_uses.iter().flat_map(|u| u.adaptations.iter().cloned()).collect(),
+            span: trait_uses[0].span,
+        }];
+        &merged[..]
+    } else {
+        trait_uses
+    };
+
     for trait_use in trait_uses {
         let mut imported_properties = Vec::new();
+        let mut imported_constants = Vec::new();
         let mut candidates: HashMap<String, Vec<ImportedMethod>> = HashMap::new();
         let mut method_order = Vec::new();
         let listed_trait_names: HashSet<String> = trait_use
@@ -130,13 +148,22 @@ pub(super) fn resolve_trait_uses(
             .collect();
 
         for trait_name in &trait_use.trait_names {
-            let expanded = expand_trait(trait_name.as_str(), trait_map, cache, stack).map_err(|err| {
-                CompileError::new(
-                    trait_use.span,
-                    &format!("{} references unknown or invalid trait '{}': {}", owner_label, trait_name, err.message),
-                )
-            })?;
-            for property in expanded.properties {
+            let expanded =
+                expand_trait(trait_name.as_str(), trait_map, cache, stack).map_err(|err| {
+                    CompileError::new(
+                        trait_use.span,
+                        &format!(
+                            "{} references unknown or invalid trait '{}': {}",
+                            owner_label, trait_name, err.message
+                        ),
+                    )
+                })?;
+            let ExpandedTrait {
+                properties,
+                methods,
+                constants,
+            } = expanded;
+            for property in properties {
                 merge_property_into(
                     &mut imported_properties,
                     property,
@@ -145,16 +172,7 @@ pub(super) fn resolve_trait_uses(
                     false,
                 )?;
             }
-            for constant in expanded.constants {
-                merge_constant_into(
-                    &mut all_constants,
-                    constant,
-                    trait_use.span,
-                    owner_label,
-                    false,
-                )?;
-            }
-            for method in expanded.methods {
+            for method in methods {
                 let method_key = php_symbol_key(&method.name);
                 if !candidates.contains_key(&method_key) {
                     method_order.push(method_key.clone());
@@ -167,6 +185,12 @@ pub(super) fn resolve_trait_uses(
                         decl: method,
                     });
             }
+            merge_imported_constant_set(
+                &mut imported_constants,
+                constants,
+                trait_use.span,
+                owner_label,
+            )?;
         }
 
         let mut suppressed: HashMap<String, HashSet<String>> = HashMap::new();
@@ -278,6 +302,12 @@ pub(super) fn resolve_trait_uses(
             false,
         )?;
         merge_imported_method_set(&mut all_methods, selected_methods, owner_span, owner_label)?;
+        merge_imported_constant_set(
+            &mut all_constants,
+            imported_constants,
+            owner_span,
+            owner_label,
+        )?;
     }
 
     Ok((all_properties, all_methods, all_constants))

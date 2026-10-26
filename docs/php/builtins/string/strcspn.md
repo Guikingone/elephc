@@ -2,7 +2,7 @@
 title: "strcspn()"
 description: "Returns the length of the initial byte span containing none of the selected characters."
 sidebar:
-  order: 881
+  order: 974
 ---
 
 ## strcspn()
@@ -24,9 +24,9 @@ Returns the length of the initial byte span containing none of the selected char
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strcspn.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strcspn.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strcspn.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strcspn.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

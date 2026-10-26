@@ -16,7 +16,9 @@
 //!   reading `quote:\"`.
 //! - A nowdoc body is a single-quoted body: no interpolation and no escape expansion.
 //! - `\x`, octal and `\u{}` escapes can name a byte that is not valid UTF-8, so they are
-//!   emitted as the `super::binary` markers the parser decodes into `EvalConst::Bytes`.
+//!   emitted as the shared literal markers (`elephc_builtin_contract::string_literal`, the
+//!   ones the compiler's own lexer uses), which the parser decodes into `EvalConst::Bytes`.
+//!   Source text that happens to sit in that marker range is re-encoded so it cannot collide.
 //! - Every synthetic token carries the line of the opening quote or `<<<`, keeping
 //!   `__LINE__` stable across multi-line literals.
 //! - PHP simple syntax allows exactly one `[offset]` or `->prop` after `$name`; anything
@@ -24,10 +26,10 @@
 //! - Malformed offsets (`"$a[]"`, `"$a[ 0]"`, `"$a['k']"`) are refused, matching PHP's
 //!   parse errors rather than silently inventing a key.
 
-use super::binary::BINARY_MARKER_BASE;
 use super::scan::{is_ident_start, tokenize, Lexer};
 use super::{Token, TokenKind};
 use crate::errors::EvalParseError;
+use elephc_builtin_contract::string_literal::{push_escaped_byte, push_literal_char};
 
 /// Selects which of PHP's two interpolating string bodies is being scanned.
 ///
@@ -116,7 +118,13 @@ impl Lexer<'_> {
                         }
                         let content = strip_heredoc_indentation(&content, indent)?;
                         if quote == Some('\'') {
-                            return Ok(vec![Token::new(TokenKind::String(content), line)]);
+                            // Verbatim, but source text in the byte-marker range is
+                            // re-encoded so the parser cannot mistake it for a marker.
+                            let mut literal = String::with_capacity(content.len());
+                            for ch in content.chars() {
+                                push_literal_char(ch, &mut literal);
+                            }
+                            return Ok(vec![Token::new(TokenKind::String(literal), line)]);
                         }
                         return Lexer::new(&content)
                             .lex_interpolated_body(line, InterpolatedBody::Heredoc);
@@ -221,7 +229,7 @@ impl Lexer<'_> {
                     push_interp_part(&mut tokens, &mut current, part, line);
                 }
                 _ => {
-                    current.push(ch);
+                    push_literal_char(ch, &mut current);
                     self.bump_char();
                 }
             }
@@ -342,6 +350,9 @@ impl Lexer<'_> {
     }
 
     /// Expands `\u{1F600}`-style escapes, cursor on the `u`, consuming through the `}`.
+    ///
+    /// A malformed body is `EvalParseError::InvalidUtf8`, the kind that names PHP's own
+    /// "Invalid UTF-8 codepoint escape sequence" parse error.
     fn push_code_point_escape(&mut self, out: &mut String) -> Result<(), EvalParseError> {
         self.bump_char();
         self.bump_char();
@@ -349,24 +360,24 @@ impl Lexer<'_> {
         let mut digits = 0usize;
         loop {
             let Some(ch) = self.peek_char() else {
-                return Err(EvalParseError::UnexpectedToken);
+                return Err(EvalParseError::InvalidUtf8);
             };
             if ch == '}' {
                 self.bump_char();
                 break;
             }
             let Some(digit) = ch.to_digit(16) else {
-                return Err(EvalParseError::UnexpectedToken);
+                return Err(EvalParseError::InvalidUtf8);
             };
             value = value * 16 + digit;
             if value > MAX_CODE_POINT {
-                return Err(EvalParseError::UnexpectedToken);
+                return Err(EvalParseError::InvalidUtf8);
             }
             self.bump_char();
             digits += 1;
         }
         if digits == 0 {
-            return Err(EvalParseError::UnexpectedToken);
+            return Err(EvalParseError::InvalidUtf8);
         }
         push_code_point(value, out);
         Ok(())
@@ -446,7 +457,9 @@ impl Lexer<'_> {
                 if key.is_empty() {
                     return Err(EvalParseError::UnexpectedToken);
                 }
-                part.push(Token::new(TokenKind::String(key), line));
+                let mut literal = String::new();
+                for ch in key.chars() { push_literal_char(ch, &mut literal); }
+                part.push(Token::new(TokenKind::String(literal), line));
             }
         }
         part.push(Token::new(TokenKind::RBracket, line));
@@ -482,9 +495,69 @@ impl Lexer<'_> {
                     inner.push(quote);
                     self.capture_braced_string(quote, &mut inner)?;
                 }
+                '/' if self.peek_char() == Some('*') => {
+                    inner.push('/');
+                    self.bump_char();
+                    self.capture_braced_block_comment(&mut inner)?;
+                }
+                '/' if self.peek_char() == Some('/') => {
+                    // BOTH slashes are copied: the capture is lexed again as a whole, and a lone
+                    // `/` there is a division — `"{$a[ // " }⏎"k"]}"` then read `" }…` as an
+                    // unterminated string.
+                    inner.push_str("//");
+                    self.bump_char();
+                    self.capture_braced_line_comment(&mut inner)?;
+                }
+                '#' if self.peek_char() != Some('[') => {
+                    inner.push('#');
+                    self.capture_braced_line_comment(&mut inner)?;
+                }
                 other => inner.push(other),
             }
         }
+    }
+
+    /// Copies a block comment verbatim so its braces and quotes do not affect nesting.
+    ///
+    /// The caller has already consumed the opening `/*`; only the `*` is still to be copied.
+    /// This used to consume one more character as well, which dropped the first byte of the
+    /// body: harmless for `/*x*/`, fatal for `/**/`, whose first body byte is the closing star,
+    /// so the scan ran past `*/` and `"{$a[/**/"k"]}"` was "eval() fragment is invalid"
+    /// (MEASURED on PHP 8.5.10: reference prints `v`).
+    fn capture_braced_block_comment(&mut self, inner: &mut String) -> Result<(), EvalParseError> {
+        inner.push('*');
+        while let Some(ch) = self.peek_char() {
+            self.bump_char();
+            inner.push(ch);
+            if ch == '*' && self.peek_char() == Some('/') {
+                inner.push('/');
+                self.bump_char();
+                return Ok(());
+            }
+        }
+        Err(EvalParseError::UnterminatedString)
+    }
+
+    /// Copies a line comment through its newline, leaving braces and quotes inert.
+    ///
+    /// A `?>` ends a PHP line comment too, and inside `{$…}` it then ends PHP mode in the middle
+    /// of the expression, which reference PHP always rejects. The copy used to run to the
+    /// newline, hiding the `?>`: `"{$a[// ?>⏎"k"]}"` evaluated to `v` in eval'd code, where
+    /// PHP 8.5.10 raises a parse error (MEASURED; reported by two reviewers of PR #968). The
+    /// capture refuses it itself rather than stopping before it, because the captured text is
+    /// lexed again, and that pass's line-comment skip would swallow the `?>` a second time.
+    fn capture_braced_line_comment(&mut self, inner: &mut String) -> Result<(), EvalParseError> {
+        while let Some(ch) = self.peek_char() {
+            if ch == '?' && self.peek_next_char() == Some('>') {
+                return Err(EvalParseError::UnexpectedToken);
+            }
+            self.bump_char();
+            inner.push(ch);
+            if ch == '\n' {
+                break;
+            }
+        }
+        Ok(())
     }
 
     /// Copies a nested string literal inside a `{$expr}` capture verbatim, including its
@@ -511,54 +584,6 @@ impl Lexer<'_> {
             inner.push(ch);
             if ch == quote {
                 return Ok(());
-            }
-        }
-    }
-
-    /// Appends one PHP double-quoted escape, consuming any hexadecimal or octal tail.
-    fn push_double_quoted_escape(&mut self, escaped: char, out: &mut String) {
-        match escaped {
-            'n' => out.push('\n'),
-            'r' => out.push('\r'),
-            't' => out.push('\t'),
-            'v' => out.push('\x0b'),
-            'e' => out.push('\x1b'),
-            'f' => out.push('\x0c'),
-            '\\' => out.push('\\'),
-            '"' => out.push('"'),
-            '$' => out.push('$'),
-            'x' | 'X' => {
-                let mut digits = String::new();
-                while digits.len() < 2
-                    && self.peek_char().is_some_and(|ch| ch.is_ascii_hexdigit())
-                {
-                    digits.push(self.peek_char().expect("hex digit was checked"));
-                    self.bump_char();
-                }
-                if digits.is_empty() {
-                    out.push('\\');
-                    out.push(escaped);
-                } else {
-                    let byte = u8::from_str_radix(&digits, 16)
-                        .expect("one or two checked hexadecimal digits must parse");
-                    out.push(char::from(byte));
-                }
-            }
-            first @ '0'..='7' => {
-                let mut digits = String::from(first);
-                while digits.len() < 3
-                    && self.peek_char().is_some_and(|ch| matches!(ch, '0'..='7'))
-                {
-                    digits.push(self.peek_char().expect("octal digit was checked"));
-                    self.bump_char();
-                }
-                let byte = u16::from_str_radix(&digits, 8)
-                    .expect("checked octal digits must parse") as u8;
-                out.push(char::from(byte));
-            }
-            other => {
-                out.push('\\');
-                out.push(other);
             }
         }
     }
@@ -646,17 +671,12 @@ const MAX_CODE_POINT: u32 = 0x10_FFFF;
 ///
 /// A PHP string is a byte sequence and `"\xFF"` is the single byte `0xFF`, which is not
 /// valid UTF-8 and so cannot live in a Rust `String` as itself. Bytes at or above `0x80`
-/// are therefore written as the private-use markers `super::binary` defines, exactly as a
-/// non-UTF-8 source byte is; `crate::parser` decodes the same range back into
+/// are therefore written as the shared literal markers (`push_escaped_byte`), the ones the
+/// compiler's lexer writes for the same escape; `crate::parser` decodes that range back into
 /// `EvalConst::Bytes`, so the literal reaches the interpreter as the byte PHP produced.
 fn push_source_byte(byte: u32, out: &mut String) {
-    if byte < 0x80 {
-        out.push(char::from_u32(byte).expect("an ASCII byte is a code point"));
-        return;
-    }
-    out.push(
-        char::from_u32(BINARY_MARKER_BASE + byte).expect("the marker plane holds every byte"),
-    );
+    let byte = u8::try_from(byte).expect("escape scanners mask their value to one byte");
+    push_escaped_byte(byte, out);
 }
 
 /// Appends the UTF-8 encoding of one `\u{…}` code point to the pending text.
@@ -667,7 +687,9 @@ fn push_source_byte(byte: u32, out: &mut String) {
 /// PHP hands the program too.
 fn push_code_point(value: u32, out: &mut String) {
     if let Some(ch) = char::from_u32(value) {
-        out.push(ch);
+        // Through `push_literal_char`: `"\u{E000}"` is the three bytes `ee8080` in PHP, and
+        // pushed as itself the character would read back as the byte marker for `0x00`.
+        push_literal_char(ch, out);
         return;
     }
     push_source_byte(0xE0 | (value >> 12), out);

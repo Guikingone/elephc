@@ -27,6 +27,15 @@ pub fn scan_tokens(
     source: &str,
     mode: SourceMode,
 ) -> Result<Vec<SpannedToken>, CompileError> {
+    scan_tokens_in_source(source, mode, 0)
+}
+
+/// Tokenizes one physical source while assigning a disambiguating source identity to its spans.
+pub(super) fn scan_tokens_in_source(
+    source: &str,
+    mode: SourceMode,
+    source_id: u32,
+) -> Result<Vec<SpannedToken>, CompileError> {
     // A leading UTF-8 byte-order mark (U+FEFF) is ignored, matching editors that save PHP
     // files as BOM-prefixed UTF-8; stripping it keeps the `<?php` open tag at the start.
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
@@ -35,7 +44,7 @@ pub fn scan_tokens(
     // `first_line` carries the numbering across the removal so diagnostics still name the
     // physical line (`crate::sapi`).
     let (source, first_line) = crate::sapi::strip_leading_shebang(source);
-    let mut cursor = Cursor::new_at_line(source, first_line);
+    let mut cursor = Cursor::new_at_line_in_source(source, first_line, source_id);
     let mut tokens = Vec::new();
 
     let span = cursor.span();
@@ -59,7 +68,7 @@ pub fn scan_tokens(
             // included — PHP prints those bytes too. A file whose leading bytes are ONLY
             // whitespace never gets here (the skip above already found the tag), which keeps the
             // indented-open-tag spelling behaving as it always has.
-            cursor = Cursor::new_at_line(source, first_line);
+            cursor = Cursor::new_at_line_in_source(source, first_line, source_id);
             tokens.push(spanned(Token::OpenTag, cursor.span()));
             scan_inline_html_text(&mut cursor, &mut tokens);
         } else {
@@ -117,7 +126,7 @@ pub fn scan_tokens(
             let remaining_before = cursor.remaining();
             let token = scan_token(&mut cursor)?;
             let end = cursor.span();
-            let span = crate::span::Span::with_end(span.line, span.col, end.line, end.col);
+            let span = crate::span::Span::with_end_from(span, end);
             let metadata = if starts_word && !matches!(token, Token::Identifier(_)) {
                 let consumed_len = remaining_before.len() - cursor.remaining().len();
                 let source_spelling = &remaining_before[..consumed_len];
@@ -130,6 +139,20 @@ pub fn scan_tokens(
                 TokenMetadata::new(span)
             };
             tokens.push((token, metadata));
+        }
+    }
+
+    // A docblock that closes a block (`return $x; /** @phpstan-ignore y */ }`) documents nothing:
+    // `retain_declaration_doc_comment` keeps it because a `;` precedes it, but no declaration
+    // follows, and the statement loops would otherwise parse it as the start of one.
+    let mut index = 0;
+    while index + 1 < tokens.len() {
+        if matches!(tokens[index].0, Token::DocComment(_))
+            && matches!(tokens[index + 1].0, Token::RBrace | Token::Eof)
+        {
+            tokens.remove(index);
+        } else {
+            index += 1;
         }
     }
 

@@ -21,12 +21,12 @@
 use crate::parser::ast::{BinOp, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_binop, e_bool, e_call, e_int, e_new_fq, e_str, e_ternary, e_var, function,
-    internal_declarations, s_assign, s_for, s_if, s_return, s_throw, s_try, t_array,
+    php_semantics_declarations, s_assign, s_for, s_if, s_return, s_throw, s_try, t_array,
 };
 
 /// Returns the `hash_pbkdf2()` declaration for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| vec![decl_fn_hash_pbkdf2()])
+    php_semantics_declarations(|| vec![decl_fn_hash_pbkdf2()])
 }
 
 /// `throw new \ValueError('hash_pbkdf2(): Argument #n ($name) must ...')`.

@@ -38,9 +38,17 @@ pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
     class_name: &str,
 ) -> Result<()> {
     if class_name == "ReflectionObject"
-        && lower_reflection_object_by_runtime_class(ctx, inst)?
+        && lower_reflection_object_by_runtime_class(ctx, inst, class_name)?
     {
         // Runtime-class dispatch leaves the fresh ReflectionObject in the result register.
+    } else if class_name == "ReflectionClass"
+        && reflection_class_operand_is_compiled_object(ctx, inst)?
+        && lower_reflection_object_by_runtime_class(ctx, inst, class_name)?
+    {
+        // `new ReflectionClass($object)` over a compiled class: the object's runtime class
+        // selects compile-time metadata, exactly as for `ReflectionObject`. Handing it to the
+        // interpreter (whenever the body owns an eval context) lost facts only the compiler
+        // knows, such as `isAnonymous()` for an anonymous class.
     } else if class_name == "ReflectionProperty"
         && lower_reflection_property_by_runtime_name(ctx, inst)?
     {
@@ -83,6 +91,29 @@ fn reflection_member_literals_name_a_compiled_member(
     if matches!(class_name, "ReflectionClass" | "ReflectionEnum") {
         return reflection_class_literal_names_a_compiled_class_like(ctx, class_name, inst);
     }
+    // A compiled user function. The interpreter rebuilt it from the bridge's signature alone and
+    // answered `getAttributes()` with nothing for `#[Marker] function target() {}`.
+    if class_name == "ReflectionFunction" {
+        if inst.operands.len() != 1 || reflection_owner_requires_runtime_metadata(ctx, inst)? {
+            return Ok(false);
+        }
+        let function = const_required_string_operand(ctx, inst.operands[0], class_name)?;
+        // A compiler builtin (`new ReflectionFunction('strlen')`) is compile-time metadata too:
+        // the interpreter's reflector of it has no return type and is not `isInternal()`.
+        return Ok(ctx.function_by_name(&function).is_some()
+            || reflection_builtin_function_signature(&function).is_some());
+    }
+    // A parameter of a compiled function or method, named by literals (lowering splits the
+    // `[Class::class, 'method']` pair into two operands). The interpreter's reflector answered
+    // `getAttributes()` through a body it could not run.
+    if class_name == "ReflectionParameter" {
+        if !matches!(inst.operands.len(), 2 | 3)
+            || reflection_owner_requires_runtime_metadata(ctx, inst)?
+        {
+            return Ok(false);
+        }
+        return Ok(reflection_parameter_metadata(ctx, inst)?.reflected_name.is_some());
+    }
     // A compiled class constant or enum case. The interpreter knows the cases only of enums it
     // declared, so `new ReflectionEnumUnitCase(E::class, 'A')` over a compiled enum threw
     // "Constant E::A is not a case"; and its `$r->class` came back empty.
@@ -113,12 +144,15 @@ fn reflection_member_literals_name_a_compiled_member(
     }
     let reflected_class = const_string_or_class_operand(ctx, inst.operands[0], class_name)?;
     let member = const_required_string_operand(ctx, inst.operands[1], class_name)?;
-    let Some((_, info)) = resolve_reflection_class(ctx, &reflected_class) else {
-        return Ok(false);
-    };
     if class_name == "ReflectionProperty" {
+        let Some((_, info)) = resolve_reflection_class(ctx, &reflected_class) else {
+            return Ok(false);
+        };
         return Ok(reflection_property_has_compiled_answer(info, &member));
     }
+    // A method of ANY compiled class-like: an interface's or a trait's method is compile-time
+    // metadata too. Requiring a class sent `new ReflectionMethod(SomeTrait::class, 'm')` to the
+    // interpreter, which does not know compiled traits and raised "does not exist".
     Ok(reflection_method_member_for_class_like(ctx, &reflected_class, &php_symbol_key(&member))?
         .is_some())
 }
@@ -127,7 +161,7 @@ fn reflection_member_literals_name_a_compiled_member(
 /// compiled: a class, an enum, an interface or a trait for `ReflectionClass`, an enum for
 /// `ReflectionEnum`. Any other name stays on the interpreter, which raises php's
 /// `ReflectionException`.
-fn reflection_class_literal_names_a_compiled_class_like(
+pub(super) fn reflection_class_literal_names_a_compiled_class_like(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     inst: &Instruction,
@@ -272,7 +306,26 @@ fn reflection_class_literal_requires_runtime_metadata(
         && !is_reflection_enum(ctx, &reflected_class))
 }
 
-/// Materializes `ReflectionObject` metadata from the concrete runtime class of an object operand.
+/// Returns whether `new ReflectionClass(<operand>)` reflects an object statically typed as one of
+/// the program's compiled classes (not a class-name string, not an untyped value).
+fn reflection_class_operand_is_compiled_object(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<bool> {
+    let [operand] = inst.operands[..] else {
+        return Ok(false);
+    };
+    Ok(match ctx.value_php_type(operand)?.codegen_repr() {
+        PhpType::Object(class_name) => ctx
+            .module
+            .class_infos
+            .contains_key(class_name.trim_start_matches('\\')),
+        _ => false,
+    })
+}
+
+/// Materializes `ReflectionObject` (or `ReflectionClass`, per `owner_class`) metadata from the
+/// concrete runtime class of an object operand.
 ///
 /// The eval bridge exposes one script-level source file and therefore cannot represent per-class
 /// files from includes or autoloading. Closed object types dispatch directly to cached AOT
@@ -281,6 +334,7 @@ fn reflection_class_literal_requires_runtime_metadata(
 fn lower_reflection_object_by_runtime_class(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    owner_class: &str,
 ) -> Result<bool> {
     let Some(source) = inst.operands.first().copied() else {
         return Ok(false);
@@ -365,10 +419,14 @@ fn lower_reflection_object_by_runtime_class(
     }
     abi::emit_jump(ctx.emitter, &miss_label);
 
-    let source_metadata_only = reflection_object_uses_only_source_metadata(ctx, inst);
+    let is_reflection_class = owner_class == "ReflectionClass";
+    let source_metadata_only =
+        !is_reflection_class && reflection_object_uses_only_source_metadata(ctx, inst);
     for ((class_name, _), label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
-        if source_metadata_only {
+        if is_reflection_class {
+            emit_full_reflection_class_object(ctx, class_name)?;
+        } else if source_metadata_only {
             emit_source_file_reflection_object(ctx, class_name)?;
         } else {
             emit_full_reflection_object(ctx, class_name)?;

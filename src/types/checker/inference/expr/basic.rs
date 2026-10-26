@@ -11,7 +11,7 @@ use super::{
     is_valid_string_offset_index, merge_match_arm_result_type, Checker,
 };
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{ArrayEntry, Expr, ExprKind};
 use crate::types::{merge_array_key_types, normalized_array_key_type, PhpType, TypeEnv};
 
 impl Checker {
@@ -34,6 +34,19 @@ impl Checker {
             ExprKind::Variable(name) => self.variable_type_or_eval_dynamic(name, expr.span, env),
             ExprKind::ArrayReference(inner) => {
                 self.infer_type(inner, env)?;
+                // `[&$this->pauseExpiry, ...]` (Symfony's `NativeResponse`): the literal's slot
+                // shares the property's cell, which must then hold a boxed value.
+                if let ExprKind::PropertyAccess { object, property } = &inner.kind {
+                    if !crate::types::checker::stmt_check::widen_property_for_element_reference(
+                        self, object, property, env,
+                    )? {
+                        return Err(CompileError::new(
+                            expr.span,
+                            "A reference to a typed property in an array literal is not supported \
+                             by the native backend",
+                        ));
+                    }
+                }
                 Ok(PhpType::Mixed)
             }
             ExprKind::Negate(inner) => {
@@ -134,24 +147,56 @@ impl Checker {
                         "Cannot infer type of empty associative array literal",
                     ));
                 }
-                let mut key_ty = normalized_array_key_type(
-                    &pairs[0].0,
-                    self.infer_type(&pairs[0].0, env)?,
-                );
-                let mut val_ty = self.infer_type(&pairs[0].1, env)?;
-                for (k, v) in &pairs[1..] {
+                let mut key_ty: Option<PhpType> = None;
+                let mut val_ty: Option<PhpType> = None;
+                for (k, v) in pairs {
                     let kt = normalized_array_key_type(k, self.infer_type(k, env)?);
                     let vt = self.infer_type(v, env)?;
-                    if kt != key_ty {
-                        key_ty = merge_array_key_types(key_ty, kt);
-                    }
-                    if vt != val_ty {
-                        val_ty = PhpType::Mixed;
-                    }
+                    key_ty = Some(match key_ty {
+                        Some(current) if current == kt => current,
+                        Some(current) => merge_array_key_types(current, kt),
+                        None => kt,
+                    });
+                    val_ty = Some(match val_ty {
+                        Some(current) if current == vt => current,
+                        Some(_) => PhpType::Mixed,
+                        None => vt,
+                    });
                 }
                 Ok(PhpType::AssocArray {
-                    key: Box::new(key_ty),
-                    value: Box::new(val_ty),
+                    key: Box::new(key_ty.unwrap_or(PhpType::Mixed)),
+                    value: Box::new(val_ty.unwrap_or(PhpType::Mixed)),
+                })
+            }
+            ExprKind::ArrayLiteralMixed(entries) => {
+                // A literal that mixes a spread with explicit keys is always associative: the
+                // explicit key rules out packed storage, and the spread means the key set is
+                // not a compile-time fact. The KEY type is therefore `Mixed` regardless of how
+                // the written keys look -- a spread contributes integer keys of its own, which
+                // are renumbered, on top of whatever string keys its source carries.
+                let mut val_ty: Option<PhpType> = None;
+                for entry in entries {
+                    let next = match entry {
+                        ArrayEntry::Spread(source) => {
+                            // The entry contains an ExprKind::Spread node. Its inference already
+                            // returns the source's element type, including nested array elements.
+                            self.infer_type(source, env)?
+                        }
+                        ArrayEntry::Keyed(key, value) => {
+                            self.infer_type(key, env)?;
+                            self.infer_type(value, env)?
+                        }
+                        ArrayEntry::Value(value) => self.infer_type(value, env)?,
+                    };
+                    val_ty = Some(match val_ty {
+                        Some(acc) if acc == next => acc,
+                        Some(_) => PhpType::Mixed,
+                        None => next,
+                    });
+                }
+                Ok(PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(val_ty.unwrap_or(PhpType::Mixed)),
                 })
             }
             ExprKind::Match {
@@ -189,8 +234,8 @@ impl Checker {
                     let ExprKind::Spread(inner) = &elem.kind else {
                         return false;
                     };
-                    match self.infer_type(inner, env) {
-                        Ok(PhpType::AssocArray { .. } | PhpType::Iterable) => true,
+                    match self.infer_type(inner, env).map(|ty| ty.codegen_repr()) {
+                        Ok(PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Mixed) => true,
                         Ok(PhpType::Object(name)) => self.object_type_implements_iterable(&name),
                         _ => false,
                     }
@@ -217,6 +262,10 @@ impl Checker {
             ExprKind::ArrayAccess { array, index } => {
                 let arr_ty = self.infer_type(array, env)?;
                 let idx_ty = self.infer_type(index, env)?;
+                let buffer = matches!(arr_ty, PhpType::Buffer(_));
+                self.buffer_read_observations.entry(expr.span)
+                    .and_modify(|previous| *previous &= buffer)
+                    .or_insert(buffer);
                 let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
                 match &arr_ty {
                     PhpType::Str => {
@@ -250,6 +299,11 @@ impl Checker {
                     PhpType::Object(class_name) => {
                         if self.object_type_implements_interface(class_name, "ArrayAccess") {
                             Ok(self.array_access_offset_get_type(class_name))
+                        } else if self.object_type_may_gain_array_access(class_name) {
+                            // The static type (a contract, a non-final base) does not say
+                            // whether the object behind it is indexable; lowering reads it
+                            // through the same boxed run-time dispatch a `mixed` receiver uses.
+                            Ok(PhpType::Mixed)
                         } else {
                             Err(CompileError::new(expr.span, "Cannot index non-array"))
                         }
@@ -294,6 +348,9 @@ impl Checker {
                                         saw_indexable_member = true;
                                         result_members
                                             .push(self.array_access_offset_get_type(class_name));
+                                    } else if self.object_type_may_gain_array_access(class_name) {
+                                        saw_indexable_member = true;
+                                        result_members.push(PhpType::Mixed);
                                     }
                                 }
                                 PhpType::Buffer(elem_ty) => {
@@ -346,6 +403,12 @@ impl Checker {
                     // "undefined index" warning behavior for this very
                     // common idiom (e.g. `json_decode($json, true)["k"]`).
                     PhpType::Mixed => Ok(PhpType::Mixed),
+                    // A variadic that received named arguments is typed `iterable` (its storage is
+                    // a list or a hash). Refusing the read here failed the specialized re-check
+                    // silently and left the first pass's `int` placeholder as the function's
+                    // return type: Laravel's `literal(...$arguments)` returned `$arguments[0]` as
+                    // an int and cast its `(object)` result to one.
+                    PhpType::Iterable => Ok(PhpType::Mixed),
                     // `isset($n['k'])` / `$n['k'] ?? $d` reach through a null base in PHP and
                     // answer `false` / the default; only a probe context may do so.
                     PhpType::Void if self.null_probe_depth > 0 => Ok(PhpType::Void),
@@ -388,27 +451,32 @@ impl Checker {
                 let default_ty = self.match_arm_result_type(default, env)?;
                 Ok(merge_match_arm_result_type(self, value_ty, default_ty))
             }
+            // A `throw` EXPRESSION never produces a value: it is the bottom type, accepted wherever
+            // a value is wanted (`new LogicException(throw new RuntimeException(..))`, an argument
+            // of a call, the arm of a `??`), and it must not read as a `null` of type `void`.
             ExprKind::Throw(inner) => {
                 let thrown_ty = self.infer_type(inner, env)?;
                 match thrown_ty {
                     PhpType::Object(type_name)
                         if self.object_type_implements_throwable(&type_name)
                             || self.unresolved_new_object_defers_to_runtime(inner, &type_name)
-                            || self.absent_class_defers_to_runtime(&type_name) =>
+                            || self.absent_class_defers_to_runtime(&type_name)
+                            || self.object_type_may_be_eval_declared(&type_name) =>
                     {
-                        Ok(PhpType::Void)
+                        Ok(PhpType::Never)
                     }
+                    PhpType::Mixed if self.eval_barrier_active => Ok(PhpType::Never),
                     PhpType::Object(_) => Err(CompileError::new(
                         expr.span,
                         "Type error: throw requires an object implementing Throwable",
                     )),
                     // `Never` reaches here only from a guard the checker has just proven
                     // cannot be taken, so the statement is unreachable rather than wrong.
-                    PhpType::Never => Ok(PhpType::Void),
+                    PhpType::Never => Ok(PhpType::Never),
                     ref ty
                         if crate::types::checker::type_compat::type_is_gradual_object_family(ty) =>
                     {
-                        Ok(PhpType::Void)
+                        Ok(PhpType::Never)
                     }
                     _ => Err(CompileError::new(
                         expr.span,
@@ -439,7 +507,28 @@ impl Checker {
                     // containing any scalar/object value, or preserve an existing hash. The EIR
                     // runtime therefore uses its kind-dispatched `array<mixed>` representation.
                     CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
-                    CastType::Object if matches!(&source_ty, PhpType::Object(_)) => source_ty,
+                    // `(object)` is the identity on an object, so the static class survives the
+                    // cast; a runtime-typed source may already hold an unrelated class, which
+                    // only `mixed` can describe. Every other source becomes a fresh stdClass.
+                    CastType::Object
+                        if matches!(source_ty.codegen_repr(), PhpType::Object(_)) =>
+                    {
+                        source_ty.clone()
+                    }
+                    // A declared `array` is represented as the exact packed-or-associative
+                    // storage union. `codegen_repr()` erases that union to Mixed, but every
+                    // member still casts to stdClass, so retain the precise result type.
+                    CastType::Object if source_ty.is_php_array() => {
+                        PhpType::Object("stdClass".to_string())
+                    }
+                    CastType::Object
+                        if matches!(
+                            source_ty.codegen_repr(),
+                            PhpType::Mixed | PhpType::Union(_)
+                        ) =>
+                    {
+                        PhpType::Mixed
+                    }
                     CastType::Object => PhpType::Object("stdClass".to_string()),
                 })
             }

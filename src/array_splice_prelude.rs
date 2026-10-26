@@ -21,7 +21,7 @@
 
 use crate::parser::ast::{BinOp, CastType, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_array, e_binop, e_call, e_cast, e_int, e_null, e_var, function, internal_declarations,
+    e_array, e_binop, e_call, e_cast, e_int, e_null, e_var, function, php_semantics_declarations,
     s_array_assign, s_array_push, s_assign, s_foreach, s_if, s_return, t_mixed,
 };
 
@@ -30,7 +30,7 @@ pub(crate) const ARRAY_SPLICE_GRADUAL_NAME: &str = "__elephc_array_splice_gradua
 
 /// Returns the helper declaration for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| vec![splice_gradual()])
+    php_semantics_declarations(|| vec![splice_gradual()])
 }
 
 /// `$name = $left <op> $right;`.

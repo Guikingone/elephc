@@ -8,7 +8,7 @@
 //! Key details:
 //! - PHP compatibility matters for coercions, operator results, object access, and nullable/union handling.
 
-use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{ArrayEntry, BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{merge_array_key_types, normalized_array_key_type, PhpType};
 
 /// Infer a function's return type by scanning its body for Return statements.
@@ -194,8 +194,24 @@ pub(crate) fn null_coalesce_merge_type(value_ty: &PhpType, default_ty: &PhpType)
     if matches!(value_ty, PhpType::Never | PhpType::Void) {
         return default_ty.clone();
     }
-    if matches!(default_ty, PhpType::Never | PhpType::Void) {
+    if matches!(default_ty, PhpType::Never) {
         return value_ty.clone();
+    }
+    // `$map[$k] ?? null` is the value's type OR null. Dropping the null typed it as the bare
+    // element type, whose storage cannot hold null: a missing int read as 0, a string as "", and
+    // a callable as a null descriptor that is truthy and crashes when called -- Laravel's
+    // `Connection::getResolver()` (`static::$resolvers[$driver] ?? null`) on every query.
+    if matches!(default_ty, PhpType::Void) {
+        return match value_ty {
+            PhpType::Mixed => PhpType::Mixed,
+            PhpType::Union(members) if members.contains(&PhpType::Void) => value_ty.clone(),
+            PhpType::Union(members) => {
+                let mut members = members.clone();
+                members.push(PhpType::Void);
+                PhpType::Union(members)
+            }
+            other => PhpType::Union(vec![other.clone(), PhpType::Void]),
+        };
     }
     if matches!(
         (value_ty, default_ty),
@@ -442,27 +458,57 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             PhpType::Array(Box::new(array_literal_element_type_syntactic(elems)))
         }
         ExprKind::ArrayLiteralAssoc(entries) => {
-            let mut key_ty = entries
-                .first()
-                .map(|(key, _)| normalized_array_key_type(key, infer_expr_type_syntactic(key)))
-                .unwrap_or(PhpType::Mixed);
-            let mut value_ty = entries
-                .first()
-                .map(|(_, value)| infer_expr_type_syntactic(value))
-                .unwrap_or(PhpType::Mixed);
-            for (key, value) in entries.iter().skip(1) {
-                key_ty = merge_array_key_types(
-                    key_ty,
-                    normalized_array_key_type(key, infer_expr_type_syntactic(key)),
-                );
-                value_ty = merge_array_literal_element_type_syntactic(
-                    value_ty,
-                    infer_expr_type_syntactic(value),
-                );
+            let mut key_ty: Option<PhpType> = None;
+            let mut value_ty: Option<PhpType> = None;
+            for (key, value) in entries {
+                let next_key = normalized_array_key_type(key, infer_expr_type_syntactic(key));
+                let next_value = infer_expr_type_syntactic(value);
+                key_ty = Some(match key_ty {
+                    Some(current) => merge_array_key_types(current, next_key),
+                    None => next_key,
+                });
+                value_ty = Some(match value_ty {
+                    Some(current) => {
+                        merge_array_literal_element_type_syntactic(current, next_value)
+                    }
+                    None => next_value,
+                });
             }
             PhpType::AssocArray {
-                key: Box::new(key_ty),
-                value: Box::new(value_ty),
+                key: Box::new(key_ty.unwrap_or(PhpType::Mixed)),
+                value: Box::new(value_ty.unwrap_or(PhpType::Mixed)),
+            }
+        }
+        // A literal mixing keys with a spread is always a hash, and the spread renumbers the
+        // integer keys it contributes, so only the value slot is worth naming: a spread entry
+        // contributes its SOURCE's value type, exactly as the lowering merges it in.
+        ExprKind::ArrayLiteralMixed(entries) => {
+            let mut value_ty: Option<PhpType> = None;
+            for entry in entries {
+                let next_value = match entry {
+                    // The entry holds the `...$source` node itself; the helper types the
+                    // operand under it.
+                    ArrayEntry::Spread(source) => {
+                        let inner = match &source.kind {
+                            ExprKind::Spread(inner) => inner.as_ref(),
+                            _ => source,
+                        };
+                        assoc_spread_entry_types_syntactic(inner).1
+                    }
+                    ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => {
+                        infer_expr_type_syntactic(value)
+                    }
+                };
+                value_ty = Some(match value_ty {
+                    Some(current) => {
+                        merge_array_literal_element_type_syntactic(current, next_value)
+                    }
+                    None => next_value,
+                });
+            }
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(value_ty.unwrap_or(PhpType::Mixed)),
             }
         }
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
@@ -476,6 +522,14 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         // every object it built to a number on the way out -- Doctrine DBAL's
         // `Type::createTypeRegistry()` maps its type classes exactly so.
         ExprKind::NewDynamic { .. } => PhpType::Mixed,
+        // A catalogued global constant has its catalogued type: left to the `int` fallback,
+        // `private string $algorithm = \PASSWORD_BCRYPT;` (Symfony's `NativePasswordHasher`) was
+        // refused as "default expects Str, got Int", and with it the class.
+        ExprKind::ConstRef(name) => {
+            elephc_builtin_contract::lookup_constant(name.as_str())
+                .map(|constant| crate::types::predefined_constants::php_type_of(constant.value))
+                .unwrap_or(PhpType::Int)
+        }
         ExprKind::ClassConstant { .. }
         | ExprKind::ObjectClassName { .. }
         | ExprKind::ScopedConstantAccess { .. } => PhpType::Str,
@@ -654,6 +708,20 @@ fn array_literal_element_type_syntactic(elems: &[Expr]) -> PhpType {
         );
     }
     elem_ty
+}
+
+/// Returns the `(key, value)` types one associative-literal spread entry contributes.
+///
+/// A spread merges its SOURCE's own keys and values into the literal, so an indexed source
+/// contributes integer keys and a hash source contributes the source's key type. Anything this
+/// syntactic pass cannot name stays `Mixed` on both slots rather than inheriting the generic
+/// `PhpType::Int` fallback that `infer_expr_type_syntactic` ends with.
+fn assoc_spread_entry_types_syntactic(inner: &Expr) -> (PhpType, PhpType) {
+    match infer_expr_type_syntactic(inner) {
+        PhpType::Array(elem) => (PhpType::Int, *elem),
+        PhpType::AssocArray { key, value } => (*key, *value),
+        _ => (PhpType::Mixed, PhpType::Mixed),
+    }
 }
 
 /// Merges two indexed-array literal element types, using Mixed for heterogeneous slots.
@@ -861,6 +929,51 @@ mod tests {
             PhpType::AssocArray {
                 key: Box::new(PhpType::Str),
                 value: Box::new(PhpType::Str),
+            }
+        );
+    }
+
+    /// Verifies a spread entry of a mixed literal contributes its SOURCE's value type, while the
+    /// key slot stays `Mixed` because the spread renumbers the integer keys it contributes.
+    #[test]
+    fn test_syntactic_mixed_literal_spread_entry_value_type_comes_from_the_source() {
+        let source = assoc_literal(vec![(Expr::string_lit("b"), Expr::string_lit("y"))]);
+        let ty = infer_expr_type_syntactic(&Expr::new(
+            ExprKind::ArrayLiteralMixed(vec![
+                ArrayEntry::Keyed(Expr::string_lit("a"), Expr::string_lit("x")),
+                ArrayEntry::Spread(Expr::new(ExprKind::Spread(Box::new(source)), Span::dummy())),
+            ]),
+            Span::dummy(),
+        ));
+
+        assert_eq!(
+            ty,
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Str),
+            }
+        );
+    }
+
+    /// Verifies a spread whose source this pass cannot name keeps the value slot `Mixed`.
+    #[test]
+    fn test_syntactic_mixed_literal_unknown_spread_source_widens_to_mixed() {
+        let ty = infer_expr_type_syntactic(&Expr::new(
+            ExprKind::ArrayLiteralMixed(vec![
+                ArrayEntry::Keyed(Expr::string_lit("a"), Expr::string_lit("x")),
+                ArrayEntry::Spread(Expr::new(
+                    ExprKind::Spread(Box::new(Expr::var("extra"))),
+                    Span::dummy(),
+                )),
+            ]),
+            Span::dummy(),
+        ));
+
+        assert_eq!(
+            ty,
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
             }
         );
     }

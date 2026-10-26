@@ -2,7 +2,7 @@
 title: "register_shutdown_function()"
 description: "Registers a callback to run when the script terminates."
 sidebar:
-  order: 948
+  order: 1041
 ---
 
 ## register_shutdown_function()
@@ -15,7 +15,7 @@ Registers a callback to run when the script terminates.
 
 **Parameters**:
 - `$callback` (`callable`)
-- `...$args` — variadic: collects excess arguments into `$args`.
+- `...$args` - variadic: collects excess arguments into `$args`.
 
 **Returns**: `void`
 
@@ -24,7 +24,7 @@ Registers a callback to run when the script terminates.
 - **Compiled (AOT)**: supported through the compiler-injected error_handling prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

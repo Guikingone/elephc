@@ -1,16 +1,16 @@
 ---
-title: "pcntl_wait() — internals"
+title: "pcntl_wait() - internals"
 description: "Compiler internals for pcntl_wait(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 671
+  order: 691
 ---
 
-## `pcntl_wait()` — internals
+## `pcntl_wait()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_wait.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_wait.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

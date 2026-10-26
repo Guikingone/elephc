@@ -236,6 +236,176 @@ pub(super) fn first_conditionally_declared_class_like(program: &Program) -> Opti
     file_scope(program)
 }
 
+/// Returns the first call a class file's FILE-SCOPE code makes, other than the existence probes,
+/// alias and constant definitions every class file may run without observable effect.
+///
+/// php executes that code when the autoloader includes the file. Declarations, namespace and
+/// import statements, plain assignments and the allowed calls are the same whenever they run.
+/// `echo` counts as a call: it writes output. Function and method bodies are not file scope and
+/// are not visited; a condition and the branches it guards are.
+/// Removes the file-scope `trigger_deprecation(...)` statements of a class file, and says whether
+/// there were any.
+///
+/// php runs them when the autoloader first includes the file. A closed-world build has no
+/// autoloader to defer the file to, and running them at boot would report a deprecation for a
+/// class nothing used; the notice is a silenced `E_USER_DEPRECATED` that only an error handler
+/// records, so the closed world compiles the class without it (symfony/http-kernel's
+/// `Config/FileLocator.php` and `DependencyInjection/ServicesResetterInterface.php`).
+pub(super) fn strip_file_scope_deprecations(program: &mut Program) -> bool {
+    fn is_deprecation(stmt: &Stmt) -> bool {
+        matches!(
+            &stmt.kind,
+            StmtKind::ExprStmt(Expr { kind: ExprKind::FunctionCall { name, .. }, .. })
+                // Unqualified in a namespace, the call falls back to the global function.
+                if name.last_segment().is_some_and(|base| base.eq_ignore_ascii_case("trigger_deprecation"))
+        )
+    }
+    let mut stripped = false;
+    program.retain(|stmt| {
+        let deprecation = is_deprecation(stmt);
+        stripped |= deprecation;
+        !deprecation
+    });
+    for stmt in program.iter_mut() {
+        if let StmtKind::NamespaceBlock { body, .. } = &mut stmt.kind {
+            stripped |= strip_file_scope_deprecations(body);
+        }
+    }
+    stripped
+}
+
+pub(super) fn first_file_scope_effect_call(program: &Program) -> Option<String> {
+    /// Functions a class file may call at file scope: answers that do not change state, plus the
+    /// alias and constant definitions that bind names, which are the same at boot as later.
+    const INERT: &[&str] = &[
+        "class_alias",
+        "class_exists",
+        "constant",
+        "define",
+        "defined",
+        "dirname",
+        "enum_exists",
+        "extension_loaded",
+        "function_exists",
+        "interface_exists",
+        "method_exists",
+        "php_sapi_name",
+        "phpversion",
+        "trait_exists",
+        "version_compare",
+    ];
+
+    /// The first effectful call inside one expression, closures included.
+    fn expr_effect(expr: &Expr) -> Option<String> {
+        let probe = Stmt::new(StmtKind::ExprStmt(expr.clone()), expr.span);
+        let mut found = None;
+        crate::parser::ast::visit::walk_nodes(std::slice::from_ref(&probe), &mut |node| {
+            if found.is_some() {
+                return;
+            }
+            let crate::parser::ast::visit::Node::Expr(expr) = node else {
+                return;
+            };
+            found = match &expr.kind {
+                ExprKind::FunctionCall { name, .. } => {
+                    let function = name.as_canonical().trim_start_matches('\\').to_ascii_lowercase();
+                    (!INERT.contains(&function.as_str())).then(|| format!("{function}()"))
+                }
+                ExprKind::MethodCall { method, .. }
+                | ExprKind::NullsafeMethodCall { method, .. } => Some(format!("->{method}()")),
+                ExprKind::StaticMethodCall { method, .. } => Some(format!("::{method}()")),
+                ExprKind::NewObject { class_name, .. } => {
+                    Some(format!("new {}", class_name.as_str()))
+                }
+                ExprKind::ClosureCall { .. } | ExprKind::ExprCall { .. } => {
+                    Some("a callable".to_string())
+                }
+                _ => None,
+            };
+        });
+        found
+    }
+
+    fn stmts_effect(stmts: &[Stmt]) -> Option<String> {
+        stmts.iter().find_map(stmt_effect)
+    }
+
+    fn stmt_effect(stmt: &Stmt) -> Option<String> {
+        match &stmt.kind {
+            StmtKind::ClassDecl { .. }
+            | StmtKind::InterfaceDecl { .. }
+            | StmtKind::TraitDecl { .. }
+            | StmtKind::EnumDecl { .. }
+            | StmtKind::FunctionDecl { .. }
+            | StmtKind::NamespaceDecl { .. }
+            | StmtKind::UseDecl { .. }
+            | StmtKind::IncludeOnceMark { .. } => None,
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::Synthetic(body)
+            | StmtKind::IncludeOnceGuard { body, .. } => stmts_effect(body),
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => expr_effect(condition)
+                .or_else(|| stmts_effect(then_body))
+                .or_else(|| {
+                    elseif_clauses.iter().find_map(|(condition, body)| {
+                        expr_effect(condition).or_else(|| stmts_effect(body))
+                    })
+                })
+                .or_else(|| else_body.as_deref().and_then(stmts_effect)),
+            StmtKind::Echo(_) => Some("echo".to_string()),
+            StmtKind::ExprStmt(expr)
+            | StmtKind::Assign { value: expr, .. }
+            | StmtKind::ConstDecl { value: expr, .. } => expr_effect(expr),
+            StmtKind::Return(value) => value.as_ref().and_then(expr_effect),
+            _ => None,
+        }
+    }
+
+    stmts_effect(program)
+}
+
+/// Returns whether `stmt` names class-like `fqn` from code that runs when the statement runs:
+/// file-scope expressions and the bindings a declaration makes (`extends`, `implements`, trait
+/// uses, constants, property defaults), but not the bodies of the functions and methods it
+/// declares, which php only enters later -- if ever.
+pub(super) fn stmt_references_executably(stmt: &Stmt, fqn: &str) -> bool {
+    /// A copy of the statement whose function and method bodies are emptied.
+    fn without_bodies(stmt: &Stmt) -> Option<Stmt> {
+        let mut stmt = stmt.clone();
+        match &mut stmt.kind {
+            StmtKind::FunctionDecl { .. } => return None,
+            StmtKind::ClassDecl { methods, .. }
+            | StmtKind::InterfaceDecl { methods, .. }
+            | StmtKind::TraitDecl { methods, .. }
+            | StmtKind::EnumDecl { methods, .. } => {
+                for method in methods.iter_mut() {
+                    method.body.clear();
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::Synthetic(body)
+            | StmtKind::IncludeOnceGuard { body, .. } => {
+                *body = body.iter().filter_map(without_bodies).collect();
+            }
+            _ => {}
+        }
+        Some(stmt)
+    }
+    let Some(stripped) = without_bodies(stmt) else {
+        return false;
+    };
+    let mut refs = ReferenceSet::new(&HashMap::new());
+    collect_refs_stmt(&stripped, &mut refs);
+    let key = crate::names::php_symbol_key(fqn);
+    refs.names
+        .iter()
+        .any(|name| crate::names::php_symbol_key(name) == key)
+}
+
 /// Collect the class-likes one freshly autoloaded file needs before its own top-level statements
 /// can run: the binding dependencies of every declaration it makes, plus every reference point of
 /// its executable file-scope statements, in source order.
@@ -253,7 +423,7 @@ pub(super) fn collect_file_scope_dependencies(program: &Program) -> Vec<String> 
 
 /// Recurse into one statement to collect the names its file-scope execution demands.
 fn collect_file_scope_dependencies_in_stmt(stmt: &Stmt, out: &mut Vec<String>) {
-    let mut push = |name: &crate::names::Name, out: &mut Vec<String>| {
+    let push = |name: &crate::names::Name, out: &mut Vec<String>| {
         out.push(name.as_canonical().trim_start_matches('\\').to_string());
     };
     match &stmt.kind {
@@ -610,6 +780,7 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut ReferenceSet) {
             for method in methods {
                 collect_method(method, out);
             }
+            collect_class_string_parameter_flows(methods, out);
             for constant in constants {
                 collect_class_const(constant, out);
             }
@@ -1110,6 +1281,21 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet) {
         // from 7 errors to 30 that way, against one error saved on the widest preload. The four
         // existence functions stay the exception, in their own arm above: handing `Foo::class` to
         // `class_exists()` is what runs the loader.
+        //
+        // A closed-world build is the exception. It has no loader to fall back on, and a class
+        // named only as `Foo::class` is exactly what a framework instantiates from a string later:
+        // `Route::compile()` calls `$class::compile()` on its `'compiler_class' =>
+        // RouteCompiler::class` option, and a container rebuild checks every service class its
+        // config files name. There the name joins the world as a PROBE demand: compiled, but
+        // still "not loaded" to `class_exists($n, false)` until something uses it, as in php.
+        ExprKind::ClassConstant {
+            receiver: StaticReceiver::Named(name),
+        } if crate::closed_world::is_enabled() => {
+            let cleaned = name.as_canonical().trim_start_matches('\\').to_string();
+            if !cleaned.is_empty() {
+                out.insert_probe(cleaned);
+            }
+        }
         ExprKind::ClassConstant { .. } => {}
         ExprKind::ScopedConstantAccess { receiver, .. }
         | ExprKind::StaticPropertyAccess { receiver, .. } => {
@@ -1227,6 +1413,20 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet) {
                         }
                     }
                 }
+                "property_exists" | "method_exists" => {
+                    // php autoloads the class named by the first argument before answering. The
+                    // native member tables only know classes the compilation saw, so an unseen
+                    // class answered `false` (Symfony's FrameworkExtension asks
+                    // `property_exists(ValidatorExtension::class, 'violationMapper')` and dropped
+                    // `form.violation_mapper`). Pulling the class in as a PROBE-ONLY demand keeps
+                    // the build closed-world: no interpreter. It is a USE, not a probe-only demand:
+                    // a probe-only class stays "deferred" until a loading probe runs, and the
+                    // native member tables answer `false` for a deferred class.
+                    push_literal_fqn(args.first(), out);
+                    if let Some(name) = args.first().and_then(class_constant_fqn) {
+                        out.insert(name);
+                    }
+                }
                 "class_alias" if class_alias_autoloads_target(args) => {
                     collect_class_like_name_argument(args.first(), out);
                 }
@@ -1264,6 +1464,13 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet) {
             for (k, v) in pairs {
                 collect_refs_expr(k, out);
                 collect_refs_expr(v, out);
+            }
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries {
+                for expr in entry.exprs() {
+                    collect_refs_expr(expr, out);
+                }
             }
         }
         ExprKind::PropertyAccess { object, .. }
@@ -1321,6 +1528,111 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet) {
         }
         ExprKind::YieldFrom(inner) => collect_refs_expr(inner, out),
         _ => {}
+    }
+}
+
+/// Follows a class string from a call in a class into the method parameter that loads it.
+///
+/// `class_exists($class)` and `new $class()` on a PARAMETER name no class by themselves; the
+/// class arrives at the call. symfony/framework-bundle's `FrameworkBundle::build()` calls
+/// `$this->addCompilerPassIfExists($container, RoutingControllerPass::class)` a dozen times, and
+/// the private helper does `if (class_exists($class)) { $container->addCompilerPass(new $class()); }`.
+/// php loads each pass there; the walker saw only `$class` and left them all out of the world,
+/// so a closed-world console could not build its container. For every method of the class whose
+/// parameter reaches such a sink, the literal or `X::class` argument at that position in a
+/// `$this->m(...)`, `self::m(...)` or `static::m(...)` call of the same class is collected the way
+/// the sink collects a literal: a probe for the existence functions, a use for `new`.
+fn collect_class_string_parameter_flows(methods: &[ClassMethod], out: &mut ReferenceSet) {
+    use crate::parser::ast::visit::{walk_nodes, Node};
+    let mut sinks: HashMap<String, Vec<(usize, bool)>> = HashMap::new();
+    for method in methods {
+        for (index, (param, ..)) in method.params.iter().enumerate() {
+            if let Some(probe_only) = parameter_class_string_sink(&method.body, param) {
+                sinks
+                    .entry(method.name.to_ascii_lowercase())
+                    .or_default()
+                    .push((index, probe_only));
+            }
+        }
+    }
+    if sinks.is_empty() {
+        return;
+    }
+    for method in methods {
+        walk_nodes(&method.body, &mut |node| {
+            let Node::Expr(expr) = node else {
+                return;
+            };
+            let (callee, args) = match &expr.kind {
+                ExprKind::MethodCall { object, method, args }
+                    if matches!(object.kind, ExprKind::This) =>
+                {
+                    (method, args)
+                }
+                ExprKind::StaticMethodCall {
+                    receiver: StaticReceiver::Self_ | StaticReceiver::Static,
+                    method,
+                    args,
+                } => (method, args),
+                _ => return,
+            };
+            let Some(positions) = sinks.get(&callee.to_ascii_lowercase()) else {
+                return;
+            };
+            for (index, probe_only) in positions {
+                let arg = args.get(*index);
+                if *probe_only {
+                    push_probe_literal_fqn(arg, out);
+                    push_probe_class_constant_fqn(arg, out);
+                } else {
+                    push_literal_fqn(arg, out);
+                    if let Some(name) = arg.and_then(class_constant_fqn) {
+                        out.insert(name);
+                    }
+                }
+            }
+        });
+    }
+}
+
+/// Whether `param` is handed to an existence probe (`Some(true)`) or to `new` (`Some(false)`) in
+/// `body`, and nothing else is assigned to it first.
+fn parameter_class_string_sink(body: &[Stmt], param: &str) -> Option<bool> {
+    use crate::parser::ast::visit::{walk_nodes, Node};
+    let is_param = |expr: &Expr| matches!(&expr.kind, ExprKind::Variable(name) if name == param);
+    let mut sink: Option<bool> = None;
+    let mut reassigned = false;
+    walk_nodes(body, &mut |node| match node {
+        Node::Stmt(stmt) => {
+            if matches!(&stmt.kind, StmtKind::Assign { name, .. } if name == param) {
+                reassigned = true;
+            }
+        }
+        Node::Expr(expr) => match &expr.kind {
+            ExprKind::FunctionCall { name, args } => {
+                let canonical = name.as_canonical();
+                let function = canonical.trim_start_matches('\\');
+                let probe = matches!(
+                    function,
+                    "class_exists" | "interface_exists" | "trait_exists" | "enum_exists"
+                );
+                let autoloads = match args.get(1).map(|arg| &arg.kind) {
+                    None => true,
+                    Some(ExprKind::BoolLiteral(value)) => *value,
+                    Some(_) => false,
+                };
+                if probe && autoloads && args.first().is_some_and(is_param) {
+                    sink.get_or_insert(true);
+                }
+            }
+            ExprKind::NewDynamic { name_expr, .. } if is_param(name_expr) => sink = Some(false),
+            _ => {}
+        },
+    });
+    if reassigned {
+        None
+    } else {
+        sink
     }
 }
 
@@ -1408,6 +1720,18 @@ fn push_probe_literal_fqn(arg: Option<&crate::parser::ast::Expr>, out: &mut Refe
     if !cleaned.is_empty() {
         out.insert_probe(cleaned);
     }
+}
+
+/// The class named by a literal `X::class` argument, without a leading backslash.
+fn class_constant_fqn(arg: &crate::parser::ast::Expr) -> Option<String> {
+    let ExprKind::ClassConstant {
+        receiver: StaticReceiver::Named(name),
+    } = &arg.kind
+    else {
+        return None;
+    };
+    let cleaned = name.as_canonical().trim_start_matches('\\').to_string();
+    (!cleaned.is_empty()).then_some(cleaned)
 }
 
 /// Records a `class_exists(X::class)`-style argument as a PROBE-ONLY demand.

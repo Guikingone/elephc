@@ -1,8 +1,8 @@
 ---
 title: "mysqli_stmt_insert_id()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the id the last prepared INSERT generated."
 sidebar:
-  order: 183
+  order: 184
 ---
 
 ## mysqli_stmt_insert_id()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_insert_id(mixed $statement): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the id the last prepared INSERT generated.
 
 **Parameters**:
 - `$statement` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -872,7 +872,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_relation_objects_result(
             "[elephc-eval-trace] phase=reflection_class_relations reflected={reflected_name:?} kind={relation_kind} names={names:?}"
         );
     }
-    eval_reflection_class_object_map_result(&names, context, values).map(Some)
+    eval_reflection_class_object_map_result(&names, Some(relation_kind), context, values).map(Some)
 }
 
 /// Handles eval-backed `ReflectionClass::getTraitAliases()` calls.
@@ -1133,11 +1133,7 @@ pub(in crate::interpreter) fn eval_reflection_class_set_static_property_value_re
             .declaring_class_name
             .as_deref()
             .ok_or(EvalStatus::RuntimeFatal)?;
-        if let Some(replaced) =
-            context.set_static_property(declaring_class, &property_name, args[1])
-        {
-            values.release(replaced)?;
-        }
+        store_borrowed_static_property(declaring_class, &property_name, args[1], context, values)?;
     } else {
         let declaring_class = member
             .declaring_class_name

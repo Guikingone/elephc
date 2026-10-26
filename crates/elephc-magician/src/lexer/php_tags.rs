@@ -11,9 +11,53 @@
 //! - Quoted strings, backticks, block comments, and heredocs hide tag-shaped byte sequences.
 //! - A closing tag ends a line comment, matching PHP source-mode comment semantics.
 
-/// Returns whether an eval fragment contains an actual PHP opening tag.
+/// Returns whether an eval fragment contains an actual PHP opening tag IN PHP MODE.
+///
+/// Eval'd code starts in PHP mode, and a `?>` switches it to inline HTML until the next
+/// `<?php` / `<?=`, exactly as in a file, so an open tag after a close tag is legal:
+/// Twig's `eval('?>' . $compiledTemplate)` starts with `?><?php`. Only a `<?` met while in
+/// PHP mode is the syntax error php reports (`eval('<?php echo 1;')`).
 pub(crate) fn contains_php_open_tag(bytes: &[u8]) -> bool {
-    find_php_tag(bytes, 0, b"<?", false).is_some()
+    let mut cursor = 0;
+    loop {
+        let Some(open) = find_php_tag(bytes, cursor, b"<?", false) else {
+            return false;
+        };
+        match find_php_tag(bytes, cursor, b"?>", true) {
+            Some(close) if close < open => match html_open_tag_code_start(bytes, close + 2) {
+                Some(code_start) => cursor = code_start,
+                None => return false,
+            },
+            _ => return true,
+        }
+    }
+}
+
+/// Byte offset where code resumes after the next open tag in inline HTML starting at `start`.
+///
+/// Uses the eval lexer's rule (`super::inline_html`): `<?php` followed by an ASCII separator
+/// or the end of input, case-insensitively, or `<?=`; a short `<?` is HTML.
+fn html_open_tag_code_start(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = start;
+    while index + 1 < bytes.len() {
+        if bytes[index] == b'<' && bytes[index + 1] == b'?' {
+            if bytes.get(index + 2) == Some(&b'=') {
+                return Some(index + 3);
+            }
+            if bytes
+                .get(index + 2..index + 5)
+                .is_some_and(|word| word.eq_ignore_ascii_case(b"php"))
+                && bytes
+                    .get(index + 5)
+                    .copied()
+                    .is_none_or(crate::script_cache::segments::is_open_tag_separator)
+            {
+                return Some(index + 5);
+            }
+        }
+        index += 1;
+    }
+    None
 }
 
 /// Finds the next PHP closing tag at code level after `start`.
@@ -269,5 +313,15 @@ echo "done";"#;
     #[test]
     fn opening_tag_detects_code_position() {
         assert!(contains_php_open_tag(b"echo 'before'; <?php echo 'after';"));
+    }
+
+    /// Verifies an open tag after a close tag is inline-HTML mode switching, not an error.
+    #[test]
+    fn opening_tag_after_close_tag_is_legal() {
+        assert!(!contains_php_open_tag(b"?><?php\nclass A {}\n"));
+        assert!(!contains_php_open_tag(b"echo 1; ?>html<?= 2 ?>more<?php echo 3;"));
+        assert!(!contains_php_open_tag(b"// c ?>h<?php echo 4;"));
+        assert!(contains_php_open_tag(b"?>a<?php echo 5; <?php echo 6;"));
+        assert!(!contains_php_open_tag(b"?>a <? short is html"));
     }
 }

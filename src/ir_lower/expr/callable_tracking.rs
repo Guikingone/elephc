@@ -139,7 +139,14 @@ pub(crate) fn lower_callable_array_for_assignment(
     let receiver = lower_expr(ctx, object);
     let receiver_ty = ctx.builder.value_php_type(receiver.value);
     let hidden_name = ctx.declare_hidden_temp(receiver_ty.clone());
-    let receiver = ctx.store_local(&hidden_name, receiver, receiver_ty, Some(object.span));
+    store_value_into_temp(
+        ctx,
+        &hidden_name,
+        receiver_ty,
+        receiver,
+        object.span,
+    );
+    let receiver = ctx.load_local(&hidden_name, Some(object.span));
     let array = lower_callable_array_literal_with_receiver(ctx, items, value, receiver);
     let hidden_object = Expr::new(ExprKind::Variable(hidden_name), object.span);
     let target = StaticCallableBinding::InstanceMethod {
@@ -211,7 +218,88 @@ pub(super) fn instance_array_callable_target(
     let ExprKind::StringLiteral(method) = &method_expr.kind else {
         return None;
     };
+    // A method the current scope cannot reach is not a static binding: php resolves the array
+    // against the CALLING scope, and an unreachable method is either routed to `__call()` or
+    // rejected. Binding it here called a protected method from outside its class.
+    if inaccessible_instance_callable(ctx, object, method).is_some() {
+        return None;
+    }
     resolve_instance_method_callable(ctx, object, method.clone(), true)
+}
+
+/// A statically known `[$object, 'method']` whose method the current scope cannot call.
+pub(super) struct InaccessibleInstanceCallable {
+    /// The receiver's class as the diagnostic names it.
+    pub(super) class_name: String,
+    /// `protected` or `private`.
+    pub(super) visibility: &'static str,
+    /// The method as declared, case included.
+    pub(super) method: String,
+    /// Whether the class has a `__call()` that php falls back to.
+    pub(super) has_magic_call: bool,
+}
+
+/// Classifies `[object, 'method']` as unreachable from the class being lowered, when the
+/// receiver's class and the method are known at compile time.
+///
+/// `protected` is reachable from the declaring class and every class related to it, `private`
+/// only from the declaring class itself: the rule php applies to a callable array resolved in
+/// the calling scope. A method the receiver's class does not hold under that name (an inherited
+/// private one, resolved through the lexical scope) is not reported.
+pub(super) fn inaccessible_instance_callable(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    method: &str,
+) -> Option<InaccessibleInstanceCallable> {
+    let class_name = instance_callable_object_class(ctx, object)?;
+    let class_name = class_name.trim_start_matches('\\');
+    let info = ctx.classes.get(class_name)?;
+    let method_key = php_symbol_key(method);
+    let visibility = info.method_visibilities.get(&method_key)?;
+    let declaring = info
+        .method_declaring_classes
+        .get(&method_key)
+        .map(String::as_str)
+        .unwrap_or(class_name);
+    let current = ctx.current_class.as_deref();
+    let reachable = match visibility {
+        Visibility::Public => true,
+        Visibility::Private => {
+            current.is_some_and(|scope| php_symbol_key(scope) == php_symbol_key(declaring))
+        }
+        Visibility::Protected => current.is_some_and(|scope| {
+            class_extends_class(ctx, scope, declaring) || class_extends_class(ctx, declaring, scope)
+        }),
+    };
+    if reachable {
+        return None;
+    }
+    let mut declared = method.to_string();
+    let mut owner = Some(info);
+    while let Some(candidate) = owner {
+        if let Some(decl) = candidate
+            .method_decls
+            .iter()
+            .find(|decl| php_symbol_key(&decl.name) == method_key)
+        {
+            declared = decl.name.clone();
+            break;
+        }
+        owner = candidate
+            .parent
+            .as_deref()
+            .and_then(|parent| ctx.classes.get(parent.trim_start_matches('\\')));
+    }
+    Some(InaccessibleInstanceCallable {
+        class_name: class_name.to_string(),
+        visibility: if matches!(visibility, Visibility::Private) {
+            "private"
+        } else {
+            "protected"
+        },
+        method: declared,
+        has_magic_call: info.methods.contains_key("__call"),
+    })
 }
 
 /// Resolves the named static receiver and method from a static callable array literal.
@@ -255,10 +343,16 @@ const INVOKE_ONLY_CALLBACK_BUILTINS: &[(&str, usize)] = &[
     ("array_filter", 1),
     ("array_find", 1),
     ("array_find_key", 1),
+    ("array_diff_uassoc", usize::MAX),
+    ("array_diff_ukey", usize::MAX),
+    ("array_intersect_uassoc", usize::MAX),
+    ("array_intersect_ukey", usize::MAX),
     ("array_map", 0),
     ("array_reduce", 1),
     ("array_udiff", usize::MAX),
+    ("array_udiff_assoc", usize::MAX),
     ("array_uintersect", usize::MAX),
+    ("array_uintersect_assoc", usize::MAX),
     ("array_walk", 1),
     ("array_walk_recursive", 1),
     ("iterator_apply", 1),
@@ -309,6 +403,85 @@ pub(super) fn invoke_only_callback_args_with_static_method_callables(
     let mut args = args.to_vec();
     args[index] = rewritten;
     Some(args)
+}
+
+/// Replaces a call of an invoke-only builtin by php's `TypeError` when its literal
+/// `[$object, 'method']` callback names an instance method the current scope cannot reach.
+///
+/// php validates the callback before running the builtin: `usort($xs, [$box, 'hidden'])` from
+/// outside `Box` throws `usort(): Argument #2 ($callback) must be a valid callback, cannot access
+/// protected method Box::hidden()`. The callback is known statically here, so the whole call
+/// becomes that throw. A class with `__call()` is left alone: php sends the call there.
+/// The arguments are not evaluated, which php does before validating.
+pub(super) fn inaccessible_callback_rejection(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    span: Span,
+) -> Option<Expr> {
+    // Several of these builtins are implemented as prelude functions (`array_find_key()`,
+    // `array_filter()` with a callback, ...), so a declared function of the name is no reason to
+    // skip: php 8.5 owns every name in the table, and the diagnostic is php's.
+    let key = php_symbol_key(name.trim_start_matches('\\'));
+    let &(_, position) = INVOKE_ONLY_CALLBACK_BUILTINS
+        .iter()
+        .find(|(builtin, _)| *builtin == key)?;
+    if args.is_empty()
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let index = if position == usize::MAX {
+        args.len() - 1
+    } else {
+        position
+    };
+    let ExprKind::ArrayLiteral(items) = &args.get(index)?.kind else {
+        return None;
+    };
+    let [object, method_expr] = items.as_slice() else {
+        return None;
+    };
+    let ExprKind::StringLiteral(method) = &method_expr.kind else {
+        return None;
+    };
+    let inaccessible = inaccessible_instance_callable(ctx, object, method)?;
+    if inaccessible.has_magic_call {
+        return None;
+    }
+    // php's own spelling: most callbacks are `($callback)`, the `array_u*` comparators have no
+    // parameter name, and only `array_map()` / `array_filter()` accept null.
+    let label = if is_unnamed_callback_parameter(&key) { "" } else { " ($callback)" };
+    let or_null = if matches!(key.as_str(), "array_map" | "array_filter") {
+        " or null"
+    } else {
+        ""
+    };
+    let message = format!(
+        "{key}(): Argument #{}{label} must be a valid callback{or_null}, cannot access {} method {}::{}()",
+        index + 1,
+        inaccessible.visibility,
+        inaccessible.class_name,
+        inaccessible.method,
+    );
+    let error = crate::synthetic_class::e_new_fq(
+        "TypeError",
+        vec![crate::synthetic_class::e_str(&message)],
+    );
+    Some(Expr::new(ExprKind::Throw(Box::new(error)), span))
+}
+
+/// Whether php words this builtin's callback argument without a parameter name.
+///
+/// The comparator families take a trailing variadic callback, so php prints `Argument #3 must be
+/// a valid callback` and omits `($callback)`.
+fn is_unnamed_callback_parameter(key: &str) -> bool {
+    key.starts_with("array_u")
+        || matches!(
+            key,
+            "array_diff_uassoc" | "array_diff_ukey" | "array_intersect_uassoc" | "array_intersect_ukey"
+        )
 }
 
 /// Returns `Class::method(...)` for a literal `[<class>, 'method']` naming a static method the

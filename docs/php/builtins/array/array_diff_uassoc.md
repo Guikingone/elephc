@@ -15,16 +15,16 @@ Computes the difference of arrays with an additional index check performed by a 
 
 **Parameters**:
 - `$array` (`array`)
-- `...$rest` — variadic: collects excess arguments into `$rest`.
+- `...$rest` - variadic: collects excess arguments into `$rest`.
 
 **Returns**: `array`
 
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected array_ucompare prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

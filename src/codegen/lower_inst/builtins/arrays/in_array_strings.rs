@@ -9,23 +9,6 @@
 
 use super::*;
 
-/// Lowers membership for an indexed or associative array held in a boxed gradual value.
-///
-/// The container is validated and unboxed before allocating any temporary state, so a
-/// catchable wrong-type error never leaves an artificial codegen spill frame behind. The
-/// needle is normalized to a boxed cell, then the shared runtime helper reads and compares
-/// each source value through the same dynamic array access contract used by other gradual
-/// array operations.
-pub(super) fn lower_in_array_mixed_container(
-    ctx: &mut FunctionContext<'_>,
-    needle: ValueId,
-    array: ValueId,
-    needle_ty: &PhpType,
-    mode: InArrayMode,
-) -> Result<()> {
-    lower_mixed_container_search(ctx, needle, array, needle_ty, mode, false)
-}
-
 /// Lowers strict or loose membership of a gradual needle in a typed indexed container whose
 /// elements require boxed runtime comparison (nested arrays, hashes, objects, or resources).
 ///

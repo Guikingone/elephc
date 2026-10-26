@@ -68,6 +68,17 @@ pub(crate) fn resolve_with_additional_global_symbols(
     global_functions: &[&str],
     global_classes: &[&str],
 ) -> Result<Program, CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        resolve_on_compiler_stack(program, global_functions, global_classes)
+    })
+}
+
+/// The resolver body, running on the stack its entry point established.
+fn resolve_on_compiler_stack(
+    program: Program,
+    global_functions: &[&str],
+    global_classes: &[&str],
+) -> Result<Program, CompileError> {
     let mut symbols = Symbols::default();
     symbols::collect_symbols(&program, None, &mut symbols);
     for function in global_functions {
@@ -273,6 +284,11 @@ pub(crate) fn canonical_compat_prelude_function_name(name: &str) -> Option<Strin
         "version_compare",
         "hash_pbkdf2",
         "array_change_key_case",
+        // `assert()` has no registry contract: `assert_prelude` supplies its one-argument form and
+        // `compat_preludes::lower_single_arg_assert` routes the call by its GLOBAL name. A bare
+        // `assert($x)` inside a namespace stayed `A\assert` and died with `Call to undefined
+        // function A\assert()` (Termwind's `HtmlRenderer` asserts `instanceof DOMNode` that way).
+        "assert",
     ];
     let bare = name.trim_start_matches('\\');
     FUNCTIONS

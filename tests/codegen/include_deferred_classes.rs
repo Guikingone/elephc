@@ -464,3 +464,51 @@ try {
         "a class file was handed to the runtime autoloader: {compile_stderr}"
     );
 }
+
+/// A static property whose default names a constant of a class left to the runtime autoloader
+/// sends its own class file to the runtime too, instead of failing the build.
+///
+/// Symfony's `BaseDateTimeTransformer::$formats` lists `\IntlDateFormatter::NONE` and friends;
+/// without ext-intl that class comes from the ICU polyfill, which elephc defers. The default
+/// then had no compile-time value (`array` of `mixed`), and since static defaults are written
+/// by the entry program's prologue the refusal was recorded against `main`, which no autoloader
+/// can supply: "static property initializer … with PHP type Mixed" stopped the whole build.
+/// php evaluates the default when the class is first used, and the interpreter does the same.
+/// Expected output is php 8.5's.
+#[test]
+fn test_static_default_naming_a_deferred_class_constant_defers_its_class() {
+    let out = compile_cli_files_and_run(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"Lib\\":"src/"}}}"#),
+            (
+                "src/Fmt.php",
+                "<?php\nnamespace Lib;\nclass Fmt {\n    public const NONE = -1;\n    public const FULL = 0;\n    public const LONG = 1;\n    public function bad(): int { return \"not an int\"; }\n}\n",
+            ),
+            (
+                "src/Transformer.php",
+                "<?php\nnamespace Lib;\nabstract class Transformer {\n    protected static array $formats = [\n        \\Lib\\Fmt::NONE,\n        \\Lib\\Fmt::FULL,\n        \\Lib\\Fmt::LONG,\n    ];\n    public function has(int $f): bool { return in_array($f, self::$formats, true); }\n    public static function formats(): array { return static::$formats; }\n}\n",
+            ),
+            ("src/Concrete.php", "<?php\nnamespace Lib;\nclass Concrete extends Transformer {}\n"),
+            (
+                "main.php",
+                r#"<?php
+class Loader {
+    public function __construct(private string $dir) {}
+    public function loadClass($class) {
+        $file = $this->dir . '/src/' . substr($class, 4) . '.php';
+        if (str_starts_with($class, 'Lib\\') && is_file($file)) {
+            require $file;
+        }
+    }
+}
+spl_autoload_register([new Loader(__DIR__), 'loadClass']);
+$t = new Lib\Concrete();
+var_dump($t->has(1), $t->has(5));
+echo implode(",", Lib\Concrete::formats()), "\n";
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\n-1,0,1\n");
+}

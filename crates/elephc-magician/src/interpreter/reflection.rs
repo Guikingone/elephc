@@ -70,7 +70,7 @@ const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
 const EVAL_REFLECTION_CLASS_FLAG_INTERFACE: u64 = 4;
 const EVAL_REFLECTION_CLASS_FLAG_TRAIT: u64 = 8;
 const EVAL_REFLECTION_CLASS_FLAG_ENUM: u64 = 16;
-const EVAL_REFLECTION_CLASS_FLAG_READONLY: u64 = 32;
+pub(in crate::interpreter) const EVAL_REFLECTION_CLASS_FLAG_READONLY: u64 = 32;
 const EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE: u64 = 64;
 const EVAL_REFLECTION_CLASS_FLAG_CLONEABLE: u64 = 128;
 const EVAL_REFLECTION_CLASS_FLAG_INTERNAL: u64 = 256;
@@ -96,7 +96,11 @@ pub(in crate::interpreter) const EVAL_REFLECTION_ATTRIBUTE_TARGET_PROPERTY: u64 
 pub(in crate::interpreter) const EVAL_REFLECTION_ATTRIBUTE_TARGET_CLASS_CONSTANT: u64 = 16;
 pub(in crate::interpreter) const EVAL_REFLECTION_ATTRIBUTE_TARGET_PARAMETER: u64 = 32;
 const EVAL_REFLECTION_MEMBER_FLAG_PROMOTED: u64 = 512;
-const EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL: u64 = 1024;
+pub(in crate::interpreter) const EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL: u64 = 1024;
+pub(in crate::interpreter) const EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK: u64 = 32768;
+/// Generated AOT method rows set this bit for a `function &m()` declaration (or an `&get` hook);
+/// it is property-only (private(set)) in the member-flag space, so a method row cannot confuse it.
+const EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE: u64 = 4096;
 const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED_SET: u64 = 2048;
 const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE_SET: u64 = 4096;
 const EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC: u64 = 8192;
@@ -269,12 +273,16 @@ enum EvalReflectionFunctionMethodTarget {
         static_variables: Vec<EvalStaticVarInitializer>,
         closure_captures: Vec<EvalClosureCaptureBinding>,
         parameters: Vec<EvalReflectionParameterMetadata>,
+        /// File of a closure literal; `None` falls back to the current eval file.
+        source_file: Option<String>,
         source_location: Option<EvalSourceLocation>,
         closure_target: Option<EvalClosureObjectTarget>,
         is_variadic: bool,
         is_static: bool,
         is_closure: bool,
         is_deprecated: bool,
+        /// Whether the reflected declaration returns by reference.
+        returns_reference: bool,
         return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     },
     Method {
@@ -291,6 +299,8 @@ enum EvalReflectionFunctionMethodTarget {
         is_final: bool,
         is_abstract: bool,
         is_deprecated: bool,
+        /// Whether the reflected declaration returns by reference.
+        returns_reference: bool,
         return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     },
 }

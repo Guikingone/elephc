@@ -1,11 +1,11 @@
 ---
-title: "array_change_key_case() — internals"
+title: "array_change_key_case() - internals"
 description: "Compiler internals for array_change_key_case(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 3
 ---
 
-## `array_change_key_case()` — internals
+## `array_change_key_case()` - internals
 
 ## Where it lives
 

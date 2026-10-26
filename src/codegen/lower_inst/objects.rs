@@ -26,7 +26,9 @@ use crate::codegen::{
     emit_box_current_value_as_mixed, runtime_value_tag,
 };
 use crate::intrinsics::IntrinsicCall;
-use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
+use crate::ir::{
+    Immediate, Instruction, LocalSlotId, Op, PropertyFetchMode, ValueDef, ValueId,
+};
 use crate::codegen_support::dynamic_new::known_dynamic_new_builtin_class_names;
 use crate::names::{label_fragment, method_symbol, php_symbol_key};
 use crate::parser::ast::Visibility;
@@ -34,15 +36,15 @@ use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
 use super::super::context::FunctionContext;
 use super::{
-    builtins, callables, cast_loaded_mixed_pointer_to_result, direct_call_stack_pad_bytes,
-    expect_data,
+    box_method_result_as_mixed, builtins, callables, cast_loaded_mixed_pointer_to_result,
+    direct_call_stack_pad_bytes,
+    emit_call_arg_temp_cleanups, emit_resolved_method_call, expect_data,
     coerce_loaded_value_to_tagged_scalar, emit_instance_method_descriptor_entry_wrapper,
     emit_loaded_assoc_array_to_mixed,
     emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
     emit_ref_arg_writebacks, exceptions, expect_operand, iterators, load_value_to_first_int_arg,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
-    emit_runtime_callable_invoker_inline, property_values, store_if_result,
-    store_method_call_result,
+    property_values, store_if_result, store_method_call_result, RefArgCellLifetime,
 };
 use crate::codegen::fibers;
 use crate::codegen::literal_defaults::{
@@ -57,7 +59,12 @@ use crate::codegen::{CodegenIrError, Result};
 
 mod reflection;
 
-pub(super) use reflection::{lower_reflection_fill_members, lower_reflection_materialize};
+pub(in crate::codegen) use reflection::emit_reflection_class_table;
+pub(super) use reflection::{
+    lower_refl_at, lower_refl_callable_name, lower_refl_pool_str, lower_refl_row_lookup, lower_refl_word,
+    lower_reflection_fill_members,
+    lower_reflection_materialize,
+};
 
 const RUNTIME_NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 const ITERATOR_ITERATOR_DOWNCAST_MESSAGE: &str =
@@ -81,15 +88,67 @@ impl PropertySlot {
     pub(super) fn holds_container_directly(&self) -> bool {
         self.is_declared && !self.is_packed && !self.is_reference
     }
+
+    /// The type a store releases the slot's PREVIOUS value as.
+    ///
+    /// A Throwable's `trace` slot is declared `array`, which is a boxed `Mixed` for stores, but
+    /// `__rt_throwable_capture_trace` publishes a RAW array there (the reader and the object free
+    /// dispatch on the heap kind for exactly that reason). Releasing the raw array as a box read
+    /// its header as a tag and payload: a trace of 12 frames (tag 12, a global reference marker)
+    /// faulted in `ReflectionProperty::setValue($e, $trace)`, which is how Symfony's
+    /// `ClassExistenceResource::throwOnRequiredClass()` and `ErrorHandler` replace a trace.
+    /// A heap-kind dispatching release is correct for both shapes.
+    pub(super) fn release_type(&self) -> PhpType {
+        if self.property == "trace"
+            && self.offset == crate::codegen_support::throwable_layout::TRACE_OFFSET
+            && !self.is_packed
+            && !self.is_reference
+            && self.php_type.codegen_repr() == PhpType::Mixed
+        {
+            return PhpType::Array(Box::new(PhpType::Mixed));
+        }
+        self.php_type.clone()
+    }
 }
 
 /// Declared-property candidate reachable from a `Mixed` object receiver.
+#[derive(Clone)]
 struct MixedPropertyCandidate {
     class_id: u64,
     slot: PropertySlot,
 }
 
+/// One arm of a `Mixed` receiver's property READ dispatch.
+///
+/// The slot still selects the arm, because the dispatch is on the runtime class id, but a class
+/// whose scope may not reach the name answers php's catchable `Error` instead of the storage.
+struct MixedPropertyReadCandidate {
+    /// Class id and slot the arm matches on. The slot selects the arm even when it is never read.
+    candidate: MixedPropertyCandidate,
+    /// What the arm does once its class id and name have matched.
+    kind: MixedPropertyReadKind,
+}
+
+/// What one `Mixed` receiver READ arm does once its class id and property name have matched.
+///
+/// The arm is selected by the receiver's runtime class id and the name, but only `Slot` reads
+/// storage. The other three are php's scope-dependent answers for the same name, and each of them
+/// exists precisely so the declared slot is NOT read.
+enum MixedPropertyReadKind {
+    /// Read the declared slot.
+    Slot,
+    /// Raise php's catchable access `Error` carrying this verbatim message.
+    Refuse(String),
+    /// Answer from the per-instance dynamic hash, warning `Undefined property` on a READ miss.
+    ScopeDynamic,
+    /// The class declares the accessor php consults first. A literal-name value read or `??` calls
+    /// `__get` (after `__isset` for `??`); `isset()` still answers php `null` silently, and a
+    /// runtime name cannot reach `__get` / `__isset` yet.
+    MagicDeferred,
+}
+
 /// Resolved object property default metadata for fixed-offset initialization.
+#[derive(Clone)]
 struct PropertyDefault {
     offset: usize,
     value: LiteralDefaultValue,
@@ -105,7 +164,7 @@ struct DynamicNewCandidate {
     property_count: usize,
     allow_dynamic_properties: bool,
     uninitialized_marker_offsets: Vec<usize>,
-    owned_reference_property_offsets: Vec<usize>,
+    owned_reference_property_offsets: Vec<(usize, PhpType, bool)>,
     property_defaults: Vec<PropertyDefault>,
     constructor_impl: Option<ConstructorCallTarget>,
 }
@@ -143,6 +202,7 @@ mod named_property_writes;
 mod instanceof_entry;
 mod object_class_id;
 mod class_name_id;
+mod closure_scope_gate;
 mod allocation_clone;
 mod interface_layout;
 mod property_resolution;
@@ -153,6 +213,11 @@ mod property_stores;
 mod property_store_values;
 mod typed_property_guards;
 mod instanceof_helpers;
+mod mixed_property_type_guard;
+mod outlined_dynamic_property;
+mod arm_groups;
+mod readonly_guard;
+mod dynamic_new_table;
 
 #[allow(unused_imports)]
 use fixed_new::*;
@@ -209,7 +274,30 @@ use property_store_values::*;
 use typed_property_guards::*;
 #[allow(unused_imports)]
 use instanceof_helpers::*;
+#[allow(unused_imports)]
+use mixed_property_type_guard::*;
+pub(in crate::codegen::lower_inst) use mixed_property_type_guard::emit_string_result_into_int_or_jump;
+#[allow(unused_imports)]
+use outlined_dynamic_property::*;
 
+/// Writes the bodies of every shared property helper the function just emitted asked for: the
+/// typed-property guards and the runtime-name ladders. A body may ask for another helper, so the
+/// two drains alternate until neither has anything left.
+pub(in crate::codegen) fn emit_pending_property_guard_helpers(
+    module: &crate::ir::Module,
+    emitter: &mut crate::codegen_support::emit::Emitter,
+    data: &mut crate::codegen::data_section::DataSection,
+    shared: &mut crate::codegen::shared_state::SharedCodegenState,
+) -> Result<()> {
+    loop {
+        mixed_property_type_guard::emit_pending_property_guard_helpers(module, emitter, data, shared)?;
+        if !outlined_dynamic_property::emit_pending_dynamic_property_helpers(
+            module, emitter, data, shared,
+        )? {
+            return Ok(());
+        }
+    }
+}
 pub(super) use dynamic_property_read_entry::{lower_dynamic_prop_get, lower_nullsafe_prop_get};
 pub(super) use dynamic_property_read_resolution::lower_dynamic_prop_ref_cell;
 pub(super) use fiber_dynamic_entry::{
@@ -220,19 +308,21 @@ pub(super) use fixed_new::lower_object_new;
 pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic};
 pub(super) use object_class_id::lower_object_class_id;
 pub(super) use class_name_id::lower_class_name_to_id;
+pub(in crate::codegen::lower_inst) use closure_scope_gate::emit_closure_scope_gate;
 pub(in crate::codegen::lower_inst) use class_name_id::emit_class_id_of_value;
 pub(super) use known_property_reads::{
-    lower_load_prop_ref_cell, lower_prop_get, lower_prop_initialized,
+    lower_load_prop_ref_cell, lower_load_prop_ref_cell_checked, lower_prop_get,
+    lower_prop_initialized,
 };
 pub(super) use property_stores::lower_bind_prop_ref_cell;
 pub(super) use property_fetch_for_write::lower_prop_get_for_write;
-pub(super) use property_store_values::lower_packed_field_mixed_to_int;
+pub(super) use property_store_values::{lower_packed_field_mixed_to_int, release_adopted_mixed_source};
 pub(super) use property_resolution::{
     emit_boxed_null, emit_nullable_receiver_object_payload, nullable_object_receiver_class,
     raw_value_php_type,
 };
 pub(super) use runtime_property_writes::{
-    lower_dynamic_prop_set, lower_dynamic_prop_unset, lower_prop_set, lower_prop_unset,
+    lower_dynamic_prop_set, lower_dynamic_prop_unset_runtime, lower_prop_set, lower_prop_unset,
 };
 pub(super) use clone_and_spl::lower_object_clone_shallow;
 
@@ -290,16 +380,15 @@ fn emit_property_uninitialized_marker(
 /// Removes a dynamic property from the receiver's property hash (`unset($obj->name)`).
 ///
 /// The receiver stores its dynamic properties in a hash whose pointer lives at
-/// `hash_offset` — offset 8 for `stdClass`, just past the fixed slots for an
-/// `#[AllowDynamicProperties]` class. `__rt_hash_unset` copy-on-write splits the table,
-/// releases the removed key and the boxed `Mixed` value the entry owned, tombstones the
-/// slot so other probe chains survive, and returns the unique table pointer, which is
-/// stored back into the receiver. Removing an absent key is a no-op inside the helper,
-/// so `unset($obj->never_set)` and a repeated `unset()` both behave like PHP.
+/// `hash_offset`, offset 8 for `stdClass`, just past the fixed slots for an
+/// `#[AllowDynamicProperties]` class. The unique table is installed before `__rt_hash_unset`
+/// detaches the entry and releases its value. A destructor may replace the property table
+/// or throw, so no receiver storage is touched after the release helper returns.
+/// Removing an absent key is a no-op inside the helper.
 ///
 /// The receiver register is caller-saved, so it is parked on the temporary stack across
-/// the helper call and reloaded before the table pointer is stored back.
-fn lower_const_dynamic_prop_unset(
+/// the COW call and reloaded before the unique table pointer is stored back.
+fn lower_dynamic_prop_unset(
     ctx: &mut FunctionContext<'_>,
     object: ValueId,
     property: &str,
@@ -313,25 +402,60 @@ fn lower_const_dynamic_prop_unset(
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("ldr x0, [{}, #{}]", object_reg, hash_offset)); // load the dynamic-property hash pointer from the receiver
+            abi::emit_call_label(ctx.emitter, "__rt_hash_ensure_unique");
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            abi::emit_store_to_address(ctx.emitter, "x0", object_reg, hash_offset);
             abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
-            abi::emit_pop_reg(ctx.emitter, object_reg);
-            abi::emit_store_to_address(ctx.emitter, "x0", object_reg, hash_offset);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // load the receiver table before publishing a unique replacement
                 "mov rdi, QWORD PTR [{} + {}]",
                 object_reg, hash_offset
             ));                                                                 // load the dynamic-property hash pointer from the receiver
+            abi::emit_call_label(ctx.emitter, "__rt_hash_ensure_unique");
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            abi::emit_store_to_address(ctx.emitter, "rax", object_reg, hash_offset);
+            abi::emit_reg_move(ctx.emitter, "rdi", "rax");
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
-            abi::emit_pop_reg(ctx.emitter, object_reg);
-            abi::emit_store_to_address(ctx.emitter, "rax", object_reg, hash_offset);
         }
     }
     Ok(())
+}
+
+/// Names the reason a resolved fixed property slot cannot represent PHP's "removed"
+/// state, or `None` when the uninitialized marker is a faithful encoding for it.
+///
+/// A by-reference slot is supported: the removal detaches its cell and installs a fresh
+/// uninitialized one (`detach_and_release_unset_property_value`).
+fn unset_unsupported_slot_reason(
+    ctx: &FunctionContext<'_>,
+    slot: &PropertySlot,
+) -> Option<&'static str> {
+    if slot.is_packed {
+        return Some("packed class field");
+    }
+    // An object-OWNED reference slot (`$x = &$obj->p` promoted it) is broken and re-armed with a
+    // fresh cell by `detach_and_release_unset_property_value`. A BORROWED one -- a promoted
+    // `&$param` -- holds the caller's cell, possibly the address of the caller's frame slot, which
+    // that release would treat as a heap cell: `unset($r->p)` decremented a "header" that was the
+    // neighbouring local and the program crashed on its next use.
+    if slot.is_reference
+        && !ctx
+            .module
+            .class_infos
+            .get(&slot.class_name)
+            .is_some_and(|info| info.owned_reference_properties.contains(&slot.property))
+    {
+        return Some("by-reference property");
+    }
+    if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {
+        return Some("untyped property slot");
+    }
+    None
 }
 
 /// Writes the tagged scalar currently held in the result registers into a property slot: the

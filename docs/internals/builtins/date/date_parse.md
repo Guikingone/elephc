@@ -1,16 +1,16 @@
 ---
-title: "date_parse() — internals"
+title: "date_parse() - internals"
 description: "Compiler internals for date_parse(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 218
+  order: 219
 ---
 
-## `date_parse()` — internals
+## `date_parse()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:798](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L798) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:821](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L821) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

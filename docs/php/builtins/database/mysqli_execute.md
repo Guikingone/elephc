@@ -1,8 +1,8 @@
 ---
 title: "mysqli_execute()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Alias of mysqli_stmt_execute()."
 sidebar:
-  order: 125
+  order: 126
 ---
 
 ## mysqli_execute()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_execute(mixed $statement): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Alias of mysqli_stmt_execute().
 
 **Parameters**:
 - `$statement` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

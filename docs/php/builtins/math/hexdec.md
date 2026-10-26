@@ -2,7 +2,7 @@
 title: "hexdec()"
 description: "Converts a hexadecimal string to its decimal number."
 sidebar:
-  order: 593
+  order: 594
 ---
 
 ## hexdec()
@@ -21,9 +21,9 @@ Converts a hexadecimal string to its decimal number.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/hexdec.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/hexdec.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/hexdec.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/hexdec.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

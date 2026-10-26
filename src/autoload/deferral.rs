@@ -29,7 +29,7 @@ use crate::parser::ast::{Program, StmtKind};
 /// records it before namespaces are applied (`class@anonymous#6`), the name resolver afterwards
 /// (`Twig\class@anonymous#6`). Its counter suffix is unique in the process, so the bare suffix is
 /// tried when the qualified name is not found.
-fn class_file<'a>(class_files: &'a HashMap<String, String>, name: &str) -> Option<&'a String> {
+pub(super) fn class_file<'a>(class_files: &'a HashMap<String, String>, name: &str) -> Option<&'a String> {
     let name = name.trim_start_matches('\\');
     class_files.get(&php_symbol_key(name)).or_else(|| {
         let (_, anonymous) = name.rsplit_once('\\')?;
@@ -65,11 +65,24 @@ pub fn deferrable_class_files(
             if error.span == crate::span::Span::dummy() {
                 error.message.clone()
             } else {
-                format!("{}:{}: {}", error.span.line, error.span.col, error.message)
+                // A trait method spliced into the class keeps its own file's coordinates, so the
+                // line is only actionable with that file's name (Carbon's traits are the case).
+                let source = crate::span::Span::source_paths_snapshot()
+                    .get(&error.span.source_id())
+                    .filter(|source| canonical(Path::new(source.as_str())) != canonical(Path::new(path)))
+                    .map(|source| format!("{source}:"))
+                    .unwrap_or_default();
+                format!("{source}{}:{}: {}", error.span.line, error.span.col, error.message)
             }
         });
     }
     files
+}
+
+/// The class file the declaration `error` names is in, canonicalized, if the map has it.
+pub fn error_class_file(error: &CompileError, class_files: &HashMap<String, String>) -> Option<PathBuf> {
+    let declaration = error.declaration.as_deref()?;
+    class_file(class_files, declaration).map(|path| canonical(Path::new(path)))
 }
 
 /// Extends `deferred` with every deferrable file declaring a class-like that extends, implements
@@ -203,13 +216,14 @@ fn effective_constructor_params<'a>(
 /// element) to a constructor parameter another class promotes to a by-reference property, together with that class,
 /// and returns the files it added.
 ///
-/// A native `new Foo($this->items)` copies the property into a temporary: the callee's reference
+/// A native construction passing such a place copies it into a temporary: the callee's reference
 /// never reaches the caller's storage, so a constructor that keeps it
 /// (`__construct(private array &$elements)`, then `$this->elements[] = $x`) writes into a copy
 /// and the owner never sees it -- a silent wrong answer. The interpreter implements references,
-/// so the pair is left to the runtime autoloader and runs there, the way php runs it. Symfony's
-/// `OrderedHashMap::getIterator()` builds `new OrderedHashMapIterator($this->elements,
-/// $this->orderedKeys, $this->managedCursors)`, which is the shape.
+/// so the pair is left to the runtime autoloader and runs there, the way php runs it. A declared
+/// instance property and its elements are no longer such places: the checker hands the callee the
+/// property's own cell (`Checker::promote_by_ref_property_args`), so `ast_usage` does not record
+/// them, and Symfony's `OrderedHashMap` / `OrderedHashMapIterator` pair stays compiled.
 ///
 /// Both files have to be deferrable: a pair the autoloader cannot hand back is left as it is,
 /// because deferring only one half would turn a by-value copy into a call across the compiled
@@ -265,6 +279,17 @@ pub fn propagate_by_ref_place_constructions(
             return added;
         }
     }
+}
+
+/// Every class-like declaration of `program` with the names it extends, implements or uses.
+///
+/// Taken BEFORE any deferral removes declarations: once a deferred class is gone from the
+/// program, nothing else records which compiled classes it descended from, and
+/// `runtime_faults` needs that to know which receivers may hold a deferred subclass.
+pub fn class_parent_edges(program: &Program) -> Vec<(String, Vec<String>)> {
+    let mut edges = Vec::new();
+    collect_class_parents(program, &mut edges);
+    edges
 }
 
 /// Collects each class-like declaration with the names it extends, implements or uses.
@@ -489,6 +514,31 @@ impl BackendDeferral {
                 );
             }
         }
+        // A static-property default is written by the entry program's prologue, and a refused
+        // one is recorded against `Class::$prop` (`codegen::static_property_owner_body`). PHP
+        // evaluates that default when the class is first used, so the declaring file can go to
+        // the runtime autoloader like any refused method body.
+        for (class_name, info) in &module.class_infos {
+            let Some(path) = class_file(class_files, class_name) else {
+                continue;
+            };
+            let path = canonical(Path::new(path));
+            if !deferrable.contains(&path) {
+                continue;
+            }
+            for (property, _) in &info.static_properties {
+                let declared_here = info
+                    .static_property_declaring_classes
+                    .get(property)
+                    .is_none_or(|declaring| declaring == class_name);
+                if declared_here {
+                    body_files.insert(
+                        crate::codegen::static_property_owner_body(class_name, property),
+                        path.clone(),
+                    );
+                }
+            }
+        }
         Self {
             body_files,
             already_deferred: already_deferred.clone(),
@@ -563,11 +613,21 @@ impl BackendDeferral {
         let Ok(executable) = std::env::current_exe() else {
             return;
         };
-        let status = std::process::Command::new(executable)
+        let mut command = std::process::Command::new(executable);
+        command
             .args(std::env::args_os().skip(1))
             .env(DEFERRED_FILES_ENV, all.join("\n"))
-            .env(DEFERRAL_ROUND_ENV, (round + 1).to_string())
-            .status();
+            .env(DEFERRAL_ROUND_ENV, (round + 1).to_string());
+        // Replace this process rather than wait on a child: a waiting parent kept its whole
+        // compiled program resident (~10 GB on the Symfony demo) beside the re-run's, which
+        // doubled the build's peak memory and pushed the machine into reclaim. `exec` returns
+        // only when it failed, and the spawn below is then the fallback.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            let _ = command.exec();
+        }
+        let status = command.status();
         match status {
             Ok(status) => std::process::exit(status.code().unwrap_or(1)),
             Err(_) => {}

@@ -49,6 +49,16 @@ fn name_is_eval_fn(name: &Name) -> bool {
         .is_some_and(|segment| segment.eq_ignore_ascii_case("eval"))
 }
 
+/// Returns whether an `eval()` with these arguments may reach the introspection surface.
+///
+/// A transparent literal fragment is read like the rest of the program; any other is assumed to.
+fn eval_may_reach_tz(args: &[Expr]) -> bool {
+    match crate::prelude_prune::usage::transparent_literal_eval(args) {
+        Some(program) => program_uses_tz_introspection(&program),
+        None => true,
+    }
+}
+
 /// Returns whether a method name is one of the three introspection methods,
 /// compared case-insensitively as PHP method names are.
 fn method_is_tz(method: &str) -> bool {
@@ -141,7 +151,9 @@ fn expr_refs_tz(expr: &Expr) -> bool {
         | ExprKind::MagicConstant(_) => false,
 
         ExprKind::FunctionCall { name, args } => {
-            name_is_eval_fn(name) || name_is_tz_fn(name) || args.iter().any(expr_refs_tz)
+            (name_is_eval_fn(name) && eval_may_reach_tz(args))
+                || name_is_tz_fn(name)
+                || args.iter().any(expr_refs_tz)
         }
         ExprKind::MethodCall {
             object,
@@ -199,6 +211,10 @@ fn expr_refs_tz(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(pairs) => pairs
             .iter()
             .any(|(key, value)| expr_refs_tz(key) || expr_refs_tz(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_refs_tz),
         ExprKind::Match {
             subject,
             arms,

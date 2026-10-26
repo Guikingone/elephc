@@ -1,8 +1,8 @@
 ---
 title: "cairo_surface_write_to_png()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Writes a surface to a PNG file."
 sidebar:
-  order: 458
+  order: 459
 ---
 
 ## cairo_surface_write_to_png()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_surface_write_to_png(mixed $surface, string $filename): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Writes a surface to a PNG file.
 
 **Parameters**:
 - `$surface` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

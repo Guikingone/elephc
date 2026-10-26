@@ -398,18 +398,22 @@ fn test_error_unexpected_token_in_expr() {
     expect_error("<?php echo ;", "Unexpected token");
 }
 
-/// Verifies the error diagnostic for unexpected token in stmt.
+/// A bare expression statement such as `42;` is valid php, so it is accepted.
 #[test]
-fn test_error_unexpected_token_in_stmt() {
-    // A bare expression statement (e.g., `42;`) in statement position produces "Unexpected token".
-    expect_error("<?php 42;", "Unexpected token");
+fn test_bare_expression_statement_is_accepted() {
+    expect_no_error("<?php 42;");
 }
 
 /// Verifies the error diagnostic for missing function name.
 #[test]
 fn test_error_missing_function_name() {
-    // A `function` keyword without a following name produces "Expected function name".
-    expect_error("<?php function () { }", "Expected function name");
+    // `function () { }` is NOT a nameless declaration -- it is a closure EXPRESSION, and PHP
+    // parses it as one, then complains about the missing statement terminator
+    // ("unexpected end of file" on 8.5.10). elephc now says the same thing.
+    expect_error("<?php function () { }", "Expected ';'");
+    // A genuinely malformed declaration -- a name that is not an identifier -- still reports
+    // the missing name, which is the case this test was reaching for.
+    expect_error("<?php function 123() { }", "Expected function name");
 }
 
 /// Verifies the error diagnostic for missing function paren.
@@ -631,42 +635,32 @@ fn test_error_alternative_if_rejects_brace_else() {
 
 // --- terminal goto ---
 
-/// Verifies a goto whose target can fall through remains outside the supported subset.
+/// Verifies a goto whose target can fall through compiles: non-terminal `goto` is supported.
 #[test]
-fn test_error_non_terminal_goto_is_not_supported() {
-    expect_error("<?php goto done; done: echo 1;", "`goto` is not supported");
-}
-
-/// Verifies a non-terminal label on its own reports why it cannot be structured safely.
-#[test]
-fn test_error_non_terminal_goto_label_is_not_supported() {
-    expect_error(
-        "<?php done: echo 1;",
-        "target does not begin a self-contained terminal tail",
-    );
+fn test_non_terminal_goto_compiles() {
+    expect_no_error("<?php goto done; done: echo 1;")
 }
 
 // --- References inside array literals ---
 
-/// Verifies `[&$x]` still rejects an escaping ordinary local with a lifetime-specific diagnostic.
+/// `[&$first]` is valid php; elephc now accepts a reference element that outlives its declaring local
+/// and the program output matches php.
 #[test]
-fn test_error_reference_element_in_array_literal() {
-    expect_error(
+fn test_reference_element_in_array_literal_is_accepted() {
+    expect_no_error(
         "<?php $first = 1; $r = [&$first];",
-        "ordinary local reference cells cannot yet outlive their declaring scope",
     );
 }
 
-/// Verifies the same diagnostic covers a keyed element and the legacy `array(...)` spelling.
+/// A keyed `["k" => &$a]` element and the legacy `array(&$a)` spelling are valid php; elephc now
+/// accepts both and the program output matches php.
 #[test]
-fn test_error_reference_element_in_keyed_and_legacy_array_literals() {
-    expect_error(
+fn test_reference_element_in_keyed_and_legacy_array_literals_is_accepted() {
+    expect_no_error(
         "<?php $a = 1; $r = [\"k\" => &$a];",
-        "ordinary local reference cells cannot yet outlive their declaring scope",
     );
-    expect_error(
+    expect_no_error(
         "<?php $a = 1; $r = array(&$a);",
-        "ordinary local reference cells cannot yet outlive their declaring scope",
     );
 }
 
@@ -674,4 +668,180 @@ fn test_error_reference_element_in_keyed_and_legacy_array_literals() {
 #[test]
 fn test_error_unary_plus_without_operand() {
     expect_error("<?php echo +;", "Unexpected token");
+}
+
+/// Verifies a `(object)` cast with no operand is rejected rather than silently accepted.
+///
+/// `(object)` is a PREFIX operator over the three-token `( identifier )` window, so a missing
+/// operand surfaces at whatever follows the cast.
+#[test]
+fn test_error_object_cast_without_an_operand() {
+    expect_error("<?php $v = (object);", "Unexpected token: Semicolon");
+    expect_error("<?php $v = (object) ;", "Unexpected token: Semicolon");
+}
+
+/// Verifies an unterminated cast window is reported as the missing parenthesis it is, rather
+/// than being mistaken for a cast over `object`.
+#[test]
+fn test_error_object_cast_without_a_closing_paren() {
+    expect_error("<?php $v = (object;", "Expected closing ')'");
+}
+
+/// Verifies a program that declares the compiler's object-cast helper is rejected with a named
+/// diagnostic, not with the checker's bare `Duplicate function declaration`.
+///
+/// `ir_lower` lowers every `(object)` cast to a call on this name, so a user definition would
+/// not merely shadow the prelude — it would BECOME the cast's semantics.
+#[test]
+fn test_error_declaring_the_object_cast_helper() {
+    expect_error(
+        "<?php function __elephc_cast_object(mixed $v): stdClass { return new stdClass(); } $o = (object) [1];",
+        "the name is reserved for the compiler's `(object)` cast helper",
+    );
+    expect_error(
+        "<?php function __elephc_cast_object_dynamic(mixed $v): mixed { return $v; } $o = (object) [1];",
+        "the name is reserved for the compiler's `(object)` cast helper",
+    );
+}
+
+/// A program that declares the helper name but spells NO object cast is left alone: the prelude
+/// is pay-for-use, so there is nothing to collide with and nothing to reject.
+#[test]
+fn test_declaring_the_object_cast_helper_without_a_cast_is_accepted() {
+    expect_no_error(
+        "<?php function __elephc_cast_object(mixed $v): int { return 1; } echo __elephc_cast_object(2);",
+    );
+}
+
+/// Issue #476: the `for` clause parser now delegates to the general statement parser, which
+/// buys every assignment form for free — and would also accept a DECLARATION, which PHP's
+/// clause grammar does not.
+///
+/// Measured on PHP 8.5.10: `for (function f() {}; false; ) {}` is
+/// `syntax error, unexpected identifier "f", expecting "("` — php-src reads `function` as the
+/// start of a CLOSURE there, so a named declaration cannot appear. It was rejected here
+/// before the delegation too, and has to stay rejected.
+#[test]
+fn test_error_for_clause_rejects_non_expression_statements() {
+    // A named declaration. php-src reads `function` in an expression position as the start of
+    // a CLOSURE, so the name is what makes this invalid there:
+    // `syntax error, unexpected identifier "f", expecting "("` on 8.5.10.
+    expect_error(
+        "<?php for (function f() {}; false; ) {} echo 1;",
+        "Only expressions are allowed in a for clause",
+    );
+    // `echo` is a statement, not an expression, and PHP rejects it in a clause too:
+    // `syntax error, unexpected token "echo", expecting ";"`. A deny-list of declarations
+    // alone let this through.
+    expect_error(
+        "<?php for (echo \"x\"; false; ) {} echo 1;",
+        "Only expressions are allowed in a for clause",
+    );
+}
+
+/// Issue #476 review follow-up: `include` / `require` in a clause is named, not crashed on.
+///
+/// They ARE expressions in PHP and PHP runs them there — both `for (include "f.php"; …)` and
+/// `for ($v = include "f.php"; …)` execute on 8.5.10. elephc cannot yet, because
+/// `resolver::engine`'s `StmtKind::For` arm resolves only the loop BODY, so an include left
+/// in a clause survives into the checker as a transient node every consumer treats as
+/// `unreachable!()`.
+///
+/// The assignment spelling is the one that mattered: once the clause started going through
+/// the real statement parser it PARSED, and the compiler then panicked with
+/// `ExprKind::IncludeValue must be expanded by the resolver`. Before that it was a plain
+/// parse error. This pins the diagnostic that replaced the panic.
+#[test]
+fn test_error_for_clause_rejects_include() {
+    expect_error(
+        "<?php for (include \"f.php\"; false; ) {} echo 1;",
+        "include/require is not supported in a for clause",
+    );
+    expect_error(
+        "<?php for ($v = include \"f.php\"; false; ) {} echo 1;",
+        "include/require is not supported in a for clause",
+    );
+    expect_error(
+        "<?php for ($i = 0; $i < 1; require \"f.php\") {} echo 1;",
+        "include/require is not supported in a for clause",
+    );
+}
+
+/// Pins the parser invariant the `for`-clause include guard rests on: `include` is an
+/// expression in exactly ONE position, the whole right-hand side of a plain assignment or a
+/// `return`.
+///
+/// `ExprKind::IncludeValue` has two construction sites, both in `try_parse_value_include`, and
+/// the assignment one builds a plain `StmtKind::Assign` BEFORE `parse_assignment_value_expr`
+/// runs. So no typed, indexed, property or static-property assignment can carry one, and the
+/// guard in `parse_for_clause` does not need to walk for them.
+///
+/// Raised in review on issue #476 as a possible hole. It is not one today — but it is an
+/// invariant nobody was testing, so if any of these ever starts parsing, this fails and points
+/// at that guard.
+#[test]
+fn test_error_include_is_only_an_expression_in_an_assignment_rhs() {
+    expect_error(
+        r#"<?php int $a = include "f.php";"#,
+        "Unexpected token: Include",
+    );
+    expect_error(
+        r#"<?php $a = []; $a[0] = include "f.php";"#,
+        "Unexpected token: Include",
+    );
+    expect_error(
+        r#"<?php $o = new stdClass(); $o->p = include "f.php";"#,
+        "Unexpected token: Include",
+    );
+    expect_error(
+        r#"<?php class K { public static $s; } K::$s = include "f.php";"#,
+        "Unexpected token: Include",
+    );
+    // The same rejection inside a clause, which is the case the review asked about.
+    expect_error(
+        r#"<?php for (int $v = include "f.php"; false; ) {} echo 1;"#,
+        "Unexpected token: Include",
+    );
+}
+
+/// Issue #476 review follow-up: PHP allows a comma list in the `for` CONDITION as well, but
+/// elephc has no sequence expression to hold one and the condition re-runs every iteration,
+/// so the leading expressions cannot be hoisted into the init clause.
+///
+/// The diagnostic says so rather than letting the comma fall through to a bare `Expected ';'`
+/// that names neither the construct nor the limitation.
+#[test]
+fn test_error_for_condition_comma_list_is_named() {
+    expect_error(
+        "<?php for ($i = 0; $i++, $i < 3; $i++) {}",
+        "not supported in a for CONDITION",
+    );
+}
+
+/// Verifies a malformed file-scope `const` declarator list is rejected by its own cause
+/// (issue #1142): a trailing comma names the missing constant, and a declarator without a value
+/// names the missing `=`.
+#[test]
+fn test_error_malformed_file_scope_const_declarator_list() {
+    expect_error(
+        "<?php const A = 1, ;",
+        "Expected a constant name after ',' in the declaration list",
+    );
+    expect_error("<?php const A = 1, B;", "Expected '=' after constant name");
+}
+
+/// Verifies an unparenthesized call used as an `instanceof` target is a syntax error with one
+/// diagnostic, whether the parser consumed the call (`Foo::$method()`) or left its argument list
+/// behind (`self::$method()`) (issue #1454). PHP rejects both forms.
+#[test]
+fn test_error_unparenthesized_call_as_instanceof_target() {
+    for target in ["Foo::$method()", "self::$method()", "$this->cls()"] {
+        expect_error(
+            &format!(
+                "<?php class Foo {{ public static $method = 'Foo'; function t($x) {{ return $x instanceof {}; }} }}",
+                target
+            ),
+            "Cannot use an unparenthesized call as an instanceof target",
+        );
+    }
 }

@@ -109,7 +109,9 @@ def _gen_builtins_command(repo: Path) -> list[str]:
     source_inputs.extend((repo / "crates" / "elephc-builtin-contract").rglob("*.rs"))
     source_inputs.extend((repo / "crates" / "elephc-magician" / "src").rglob("*.rs"))
     newest_source_mtime = max(path.stat().st_mtime for path in source_inputs if path.exists())
-    for profile in ("release", "debug"):
+    # CI builds the debug exporter immediately before this script runs. Prefer it over a
+    # release executable whose timestamp may have been refreshed by cache restoration.
+    for profile in ("debug", "release"):
         exe = repo / "target" / profile / "examples" / "gen_builtins"
         if exe.exists() and exe.stat().st_mtime >= newest_source_mtime:
             cmd = [str(exe), "--include-internal"]
@@ -177,6 +179,7 @@ _NON_HOME_FILES = {
 }
 
 _CONTRACT_RE = re.compile(r'contract:\s*"([^"]+)"')
+_CORE_HOME_RE = re.compile(r'core_builtin_home!\(\s*"([^"]+)"')
 
 
 def build_home_file_map(repo: Path) -> dict[str, str]:
@@ -193,13 +196,15 @@ def build_home_file_map(repo: Path) -> dict[str, str]:
         if path.name in _NON_HOME_FILES:
             continue
         text = path.read_text(encoding="utf-8")
-        if "builtin!" not in text:
-            continue
         # A home file may declare more than one `builtin!` — `src/builtins/system/gc.rs` hosts
         # the five gc functions together because they answer as one story. Reading only the
         # first left the rest unmapped, and the registry pass then refused the whole run with
         # `registry builtin 'gc_collect_cycles' has no single-source home file`.
-        for contract_match in _CONTRACT_RE.finditer(text):
+        contract_matches = list(_CONTRACT_RE.finditer(text))
+        if not contract_matches:
+            core_match = _CORE_HOME_RE.search(text)
+            contract_matches = [core_match] if core_match else []
+        for contract_match in contract_matches:
             canonical = contract_match.group(1).lower()
             out[canonical] = str(path.relative_to(repo))
     return out
@@ -333,16 +338,9 @@ def resolve_registry_area(canonical: str, registry_area: str) -> tuple[str, str]
 # ---------------------------------------------------------------------------
 
 def _normalize_type(reg_type: str) -> str:
-    """Map a registry type string to the doc's simple type vocabulary.
-
-    The registry renders `TypeSpec::ArrayOf`/`AssocOf` as ``array<...>`` and
-    unions as ``a|b``; the docs collapse those to ``array`` / ``mixed``. Scalars
-    (``int``/``float``/``string``/``bool``/``mixed``/``null``/``void``) pass through.
-    """
+    """Preserve shared PHP unions and nullable types, simplifying standalone arrays."""
     reg_type = reg_type.strip()
-    if "|" in reg_type:
-        return "mixed"
-    if reg_type.startswith("array"):
+    if reg_type.startswith("array") and "|" not in reg_type:
         return "array"
     return reg_type
 
@@ -437,7 +435,7 @@ def _render_default(value, optional: bool) -> Optional[str]:
 
     Required params (``optional`` false) have no default (``None``). Optional
     params render their default: ``null``, ``true``/``false``, integers/floats
-    verbatim, strings single-quoted, the ``PHP_INT_MAX``/``PHP_INT_MIN`` sentinels
+    verbatim, strings single-quoted, the ``PHP_INT_MAX``/``PHP_INT_MIN``/``E_ALL`` sentinels
     as constants, class-constant descriptors as ``Class::NAME``, and the empty-array
     sentinel as ``[]``.
     """
@@ -461,9 +459,16 @@ def _render_default(value, optional: bool) -> Optional[str]:
         # `{"constant": NAME}` names a global constant; `{"expr": SRC}` is verbatim PHP.
         return value.get("constant") or value.get("expr") or str(value)
     if isinstance(value, str):
-        if value in ("PHP_INT_MAX", "PHP_INT_MIN"):
+        if value in ("PHP_INT_MAX", "PHP_INT_MIN", "E_ALL"):
             return value
-        return repr(value)
+        if any(ord(char) < 32 or ord(char) == 127 for char in value):
+            escapes = {"\\": "\\\\", '"': '\\"', "$": "\\$", "\r": "\\r", "\n": "\\n", "\t": "\\t"}
+            content = "".join(
+                escapes.get(char, f"\\x{ord(char):02X}" if ord(char) < 32 or ord(char) == 127 else char)
+                for char in value
+            )
+            return f'"{content}"'
+        return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
     return str(value)
 
 
@@ -562,6 +567,7 @@ PRELUDE_SOURCES: dict[str, tuple[tuple[tuple[str, ...], ...], str]] = {
             ("backend_gap_prelude.rs", "backend-gap"),
             ("parse_str_prelude.rs", "parse_str"),
             ("addcslashes_prelude.rs", "addcslashes"),
+            ("strtok_prelude.rs", "strtok"),
             ("sodium_prelude.rs", "sodium"),
             ("hash_pbkdf2_prelude.rs", "hash_pbkdf2"),
             ("version_compare_prelude.rs", "version_compare"),
@@ -593,6 +599,7 @@ PRELUDE_SOURCES: dict[str, tuple[tuple[tuple[str, ...], ...], str]] = {
         (
             ("web_prelude/build.rs", "web"),
             ("error_handling_prelude.rs", "error-handling"),
+            ("shared_ini_prelude.rs", "web"),
         ),
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
@@ -626,6 +633,11 @@ PRELUDE_SOURCES: dict[str, tuple[tuple[tuple[str, ...], ...], str]] = {
     "system": (
         (
             ("version_prelude.rs", "version"),
+            (
+                "proc_prelude.rs",
+                "proc",
+                "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+            ),
             (
                 "preg_array_prelude.rs",
                 "preg-array",
@@ -699,6 +711,14 @@ def resolve_non_registry_lowering(
 ) -> LoweringInfo:
     """Describe a compiler route that intentionally has no ``builtin!`` home."""
     contract_file = "crates/elephc-builtin-contract/src/catalog_surfaces.rs"
+    if aot_support.get("kind") == "none":
+        # Unbound contracts may live outside the older exceptional-surface catalog.
+        needle = re.compile(rf'"{re.escape(canonical)}"')
+        homes = [path for path in (repo / "crates/elephc-builtin-contract/src").glob("catalog*.rs")
+                 if needle.search(read(path))]
+        if len(homes) != 1:
+            raise ValueError(f"expected one neutral source for {canonical}, found {homes}")
+        contract_file = str(homes[0].relative_to(repo))
     emitter_fn = NON_REGISTRY_LOWERING_FUNCTIONS.get(canonical)
     if emitter_fn:
         lowering = resolve_lowering(repo, read, dispatch, lowering_dir, emitter_fn, None)
@@ -866,7 +886,7 @@ def build_registry(repo: Path) -> list[Builtin]:
                 examples=list(entry.get("examples") or []),
                 eval_support=entry.get("eval"),
                 aot_support=aot_support,
-                eval_only=not bool(aot_support.get("supported")),
+                eval_only=not bool(aot_support.get("supported")) and bool((entry.get("eval") or {}).get("supported")),
                 is_extension=bool(entry.get("extension")),
                 semantics=entry.get("semantics"),
                 module=entry["module"],

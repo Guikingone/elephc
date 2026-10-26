@@ -14,7 +14,7 @@
 //!   a Mixed cell too; without the bridge it is php's `TypeError`.
 
 use crate::codegen::platform::Arch;
-use crate::codegen::{abi, emit_box_current_value_as_mixed};
+use crate::codegen::{abi, emit_box_current_owned_value_as_mixed};
 use crate::codegen::Result;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -79,7 +79,10 @@ pub(crate) fn lower_get_class_methods(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_class_method_names");
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Array(Box::new(PhpType::Str)));
+    // The helper hands back the array it just built, an owner nothing else holds: the box adopts
+    // it. Boxing with a retain left one extra reference, so every call stranded the array and its
+    // name strings.
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Array(Box::new(PhpType::Str)));
     store_if_result(ctx, inst)?;
     abi::emit_jump(ctx.emitter, &done);
 

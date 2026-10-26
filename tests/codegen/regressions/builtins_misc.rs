@@ -183,6 +183,92 @@ echo implode(", ", $a);
     assert_eq!(out, "1, 2, 3");
 }
 
+/// Verifies an OBJECT element of a boxed array renders through its own `__toString`.
+///
+/// `implode()` converts each element with `__rt_mixed_cast_string`, whose tag dispatch had no
+/// object arm, so an object fell into the "unsupported" arm and joined as the EMPTY string --
+/// silently, with no warning and no crash. Every other string context was already correct
+/// (`echo`, `(string)`, concatenation, interpolation and `sprintf("%s")` all print `S7`), which
+/// is what made the gap easy to miss.
+///
+/// The selector comes from `count($argv)` on purpose: with a literal the optimizer folds the
+/// branch and narrows `pick()` back to `S`, and the fixture then exercises the STATIC object
+/// path instead of the boxed one it is meant to cover. `Child` is here because the dense table
+/// must resolve an INHERITED method, not just a concrete one.
+///
+/// A class that publishes no `__toString` is deliberately absent: PHP raises
+/// `Error: Object of class X could not be converted to string` there, while elephc still
+/// renders it as an empty field. That gap predates this arm and is unchanged by it, so pinning
+/// it here would record elephc's answer as though it were PHP's.
+#[test]
+fn test_implode_boxed_object_element_uses_tostring() {
+    let out = compile_and_run(
+        r#"<?php
+class S {
+    public int $n = 0;
+    public function __toString(): string { return "S" . $this->n; }
+}
+class Child extends S {}
+
+function pick(int $k): mixed {
+    if ($k === 0) { $s = new S(); $s->n = 7; return $s; }
+    if ($k === 1) { $c = new Child(); $c->n = 9; return $c; }
+    return 42;
+}
+
+$k = count($argv) - 1;
+$a = [pick($k), pick($k + 1), pick($k + 2)];
+echo implode("|", $a);
+"#,
+    );
+    assert_eq!(out, "S7|S9|42");
+}
+
+/// Verifies the `__toString` result is owned exactly once: neither leaked nor freed twice.
+///
+/// The method's return belongs to the method, so the arm persists it and releases the original
+/// only when `__rt_str_persist` hands back a different block -- the ownership dance
+/// `__rt_sprintf_mixed_string` already performs. Getting it wrong leaks one string per element,
+/// which only a repeated fixture makes visible.
+///
+/// The selector is the LOOP COUNTER rather than `count($argv)`: reading `$argv` materializes it
+/// and leaves it alive at exit, which is two live blocks of its own and would drown the signal
+/// this fixture exists to read. `$i % 2` is equally opaque to the optimizer and allocates
+/// nothing, so a clean summary here means exactly what it says.
+///
+/// The total is load-bearing: with the object arm missing, every `S` element joins as empty and
+/// the 200 even iterations contribute 2 bytes instead of 8, for 1000 rather than 1600.
+#[test]
+fn test_implode_boxed_object_element_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class S {
+    public int $n = 0;
+    public function __toString(): string { return "S" . $this->n; }
+}
+
+function pick(int $k): mixed {
+    if ($k === 0) { $s = new S(); $s->n = 7; return $s; }
+    return 42;
+}
+
+$total = 0;
+for ($i = 0; $i < 200; $i++) {
+    $sel = $i % 2;
+    $a = [pick($sel), pick($sel), pick($sel)];
+    $total += strlen(implode(",", $a));
+}
+echo $total;
+"#,
+    );
+    assert_eq!(out.stdout, "1600", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "a __toString element must be owned exactly once: {}",
+        out.stderr
+    );
+}
+
 /// Verifies >32 local variables do not cause stur/ldur offset overflow (Issue #22 regression).
 /// Generates 50 integer variables, initializes each with its index, then sums $v0 + $v49 = 0 + 49 = 49.
 #[test]
@@ -233,39 +319,39 @@ fn test_trim_mask() {
     assert_eq!(out, "hello");
 }
 
-/// Verifies default trim masks include form-feed bytes on both sides.
+/// Verifies default trim masks remove vertical tabs but preserve form-feed bytes.
 #[test]
-fn test_trim_default_mask_includes_form_feed() {
-    let out = compile_and_run(r#"<?php echo "[" . trim("\f value \f") . "]";"#);
-    assert_eq!(out, "[value]");
+fn test_trim_default_mask_preserves_form_feed() {
+    let out = compile_and_run(r#"<?php echo "[" . trim("\x0b\x0c value \x0c\x0b") . "]";"#);
+    assert_eq!(out, "[\x0c value \x0c]");
 }
 
-/// Verifies default ltrim masks include leading form-feed bytes.
+/// Verifies default ltrim masks remove a leading vertical tab but preserve form feed.
 #[test]
-fn test_ltrim_default_mask_includes_form_feed() {
-    let out = compile_and_run(r#"<?php echo "[" . ltrim("\f value") . "]";"#);
-    assert_eq!(out, "[value]");
+fn test_ltrim_default_mask_preserves_form_feed() {
+    let out = compile_and_run(r#"<?php echo "[" . ltrim("\x0b\x0c value") . "]";"#);
+    assert_eq!(out, "[\x0c value]");
 }
 
-/// Verifies default rtrim masks include trailing form-feed bytes.
+/// Verifies default rtrim masks remove a trailing vertical tab but preserve form feed.
 #[test]
-fn test_rtrim_default_mask_includes_form_feed() {
-    let out = compile_and_run(r#"<?php echo "[" . rtrim("value \f") . "]";"#);
-    assert_eq!(out, "[value]");
+fn test_rtrim_default_mask_preserves_form_feed() {
+    let out = compile_and_run(r#"<?php echo "[" . rtrim("value \x0c\x0b") . "]";"#);
+    assert_eq!(out, "[value \x0c]");
 }
 
 /// Verifies explicit trim masks remain exact and do not strip form-feed unless requested.
 #[test]
 fn test_trim_explicit_mask_keeps_form_feed_when_omitted() {
-    let out = compile_and_run(r#"<?php echo "[" . trim("\f value \f", " ") . "]";"#);
+    let out = compile_and_run(r#"<?php echo "[" . trim("\x0c value \x0c", " ") . "]";"#);
     assert_eq!(out, "[\x0c value \x0c]");
 }
 
-/// Verifies `chop()` behaves as PHP's alias for `rtrim()` and strips form-feed by default.
+/// Verifies `chop()` behaves as PHP's alias for `rtrim()` for its default vertical-tab mask.
 #[test]
-fn test_chop_alias_trims_default_form_feed() {
-    let out = compile_and_run(r#"<?php echo "[" . chop("value\f") . "]";"#);
-    assert_eq!(out, "[value]");
+fn test_chop_alias_preserves_default_form_feed() {
+    let out = compile_and_run(r#"<?php echo "[" . chop("value\x0c\x0b") . "]";"#);
+    assert_eq!(out, "[value\x0c]");
 }
 
 /// Verifies `chop()` participates in case-insensitive namespaced builtin fallback.
@@ -274,7 +360,7 @@ fn test_chop_case_insensitive_namespaced_builtin() {
     let out = compile_and_run(
         r#"<?php
 namespace Demo;
-echo ChOp("value\f");
+echo ChOp("value\x0b");
 "#,
     );
     assert_eq!(out, "value");
@@ -660,3 +746,86 @@ echo "after\n";
         )
     );
 }
+
+/// `implode()` over a homogeneous float array joins each element in PHP's `precision = 14` text,
+/// for indexed and associative arrays, `join()`, a long separator, runtime values, exponents and
+/// infinities. The raw 8-byte doubles were read through the string-slot layout, and the call is
+/// now refused at compile time instead of printing nothing. Regression for #640.
+#[test]
+fn test_implode_joins_a_float_array() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$r = [1.5, 2.5];
+echo implode(",", $r), "\n";
+echo implode(", ", [1.5, 2.5, 3.5]), "\n";
+echo join([0.1, 0.2]), "\n";
+$scale = $argc + 0.5;
+$vals = [$scale, $scale * 3, -$scale / 7, 1e20 * $scale, 1.0e-7 * $scale, 100.0];
+echo implode(" | ", $vals), "\n";
+echo implode("<long separator of many bytes>", [INF, -INF, 0.0, -0.0]), "\n";
+$assoc = ["a" => 1.25, "b" => 2.75];
+echo implode("-", $assoc), "\n";
+echo "[" . implode(",", []) . "]\n";
+$f = [];
+for ($i = 0; $i < 5; $i++) { $f[] = $i / 4; }
+echo implode(";", $f), "\n";
+$total = 0;
+for ($i = 0; $i < 40; $i++) { $total += strlen(implode("/", [$i + 0.5, $i * 1.5])); }
+echo $total, "\n";
+echo strtoupper(implode("x", [1.5, 2.0])) . "!" . "\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "1.5,2.5\n",
+            "1.5, 2.5, 3.5\n",
+            "0.10.2\n",
+            "1.5 | 4.5 | -0.21428571428571 | 1.5E+20 | 1.5E-7 | 100\n",
+            "INF<long separator of many bytes>-INF<long separator of many bytes>0<long separator of many bytes>-0\n",
+            "1.25-2.75\n",
+            "[]\n",
+            "0;0.25;0.5;0.75;1\n",
+            "303\n",
+            "1.5X2!\n",
+        ),
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies three shapes the backend used to refuse, each of which deferred a Symfony demo
+/// vendor file to the interpreter and forced a whole second compile: `unpack('H*name')`
+/// (league/uri `IPv6\Converter`), an integer `substr_replace()` replacement (Symfony's
+/// `HttpClientTrait`) and a runtime-name property read on a class the program never declares
+/// (`SimpleXMLElement` in the validator's `XmlFileLoader`), which now fails only when it runs.
+/// Expected output is php 8.5's.
+#[test]
+fn test_backend_refusals_that_forced_a_second_compile() {
+    let out = compile_and_run(
+        r#"<?php
+class Meta { public $p = null; public function set($v) { $this->p = $v; } }
+function load(Meta $m, \SimpleXMLElement $d): void {
+    if (\count($d->{'group-sequence-provider'}) > 0) {
+        $m->set($d->{'group-sequence-provider'}[0]->value ?: null);
+    }
+}
+$hex = (array) unpack('H*hex', (string) inet_pton('2001:db8::1'));
+echo implode(':', str_split(strtolower($hex['hex'] ?? ''), 4)), "\n";
+var_dump(unpack('H*', "\x01\xab"));
+echo substr_replace('Content-Length: 0', \strlen('abcdef'), 16), "|", substr_replace('xyz', 7, 1, 1), "\n";
+if ($argc > 5) { load(new Meta(), json_decode($argv[1])); }
+echo "ok\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "2001:0db8:0000:0000:0000:0000:0000:0001\narray(1) {\n  [1]=>\n  string(4) \"01ab\"\n}\nContent-Length: 6|x7z\nok\n"
+    );
+}
+

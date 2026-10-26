@@ -6,12 +6,18 @@
 //!
 //! Key details:
 //! - Parameter metadata, bridge support, required arity, and return type travel with the invoker.
+//! - Only PHP-VISIBLE parameters are registered for a free function: eval reaches one through a
+//!   descriptor invoker that synthesizes the compiler-internal `func_args` slots itself. The
+//!   registered `NativeCallableShape` is still what states the required arity, because a default
+//!   that the eval default ABI cannot represent registers no default at all.
 
 use super::*;
+use crate::eval_ir::EvalSourceLocation;
 
 /// Native AOT function callback metadata visible to runtime eval fragments.
 #[derive(Clone)]
 pub struct NativeFunction {
+    pub(super) name: String,
     /// Descriptor pointer held as a word so the table can be shared across threads.
     ///
     /// Generated descriptors are immutable module-level data; keeping the address as
@@ -27,6 +33,7 @@ pub struct NativeFunction {
     pub(super) variadic_index: Option<usize>,
     pub(super) return_type: Option<EvalParameterType>,
     pub(super) required_param_count: Option<usize>,
+    pub(super) returns_reference: bool,
     pub(super) bridge_supported: bool,
     /// Address of the word that says whether a CONDITIONALLY declared function exists yet, or 0
     /// for an unconditional one.
@@ -37,6 +44,9 @@ pub struct NativeFunction {
     /// eval must answer from that same slot, at every lookup: the registration snapshot is built
     /// once per process, long before most declarations run.
     pub(super) active_slot: usize,
+    pub(super) shape: Option<NativeCallableShape>,
+    /// File and line range of a compiled closure literal, decoded from its descriptor.
+    pub(super) source: Option<(String, EvalSourceLocation)>,
 }
 
 impl NativeFunction {
@@ -47,6 +57,7 @@ impl NativeFunction {
         param_count: usize,
     ) -> Self {
         Self {
+            name: String::new(),
             descriptor: descriptor as usize,
             invoker,
             param_count,
@@ -57,9 +68,38 @@ impl NativeFunction {
             variadic_index: None,
             return_type: None,
             required_param_count: None,
+            returns_reference: false,
             bridge_supported: true,
             active_slot: 0,
+            shape: None,
+            source: None,
         }
+    }
+
+    /// Records the file and line range of the compiled closure literal behind this callback.
+    pub fn set_source(&mut self, file: String, location: EvalSourceLocation) {
+        self.source = Some((file, location));
+    }
+
+    /// Returns the compiled closure literal's line range, when the descriptor carried one.
+    pub fn source_location(&self) -> Option<EvalSourceLocation> {
+        self.source.as_ref().map(|(_, location)| *location)
+    }
+
+    /// Returns the file of the compiled closure literal, when the descriptor carried one.
+    pub fn source_file(&self) -> Option<&str> {
+        self.source.as_ref().map(|(file, _)| file.as_str())
+    }
+
+    /// Returns the lowercase name this callback was registered under, empty until registered.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns whether the generated registration identifies a compiler-internal declaration.
+    /// Registrations without origin metadata retain user-function semantics.
+    pub fn is_internal(&self) -> bool {
+        self.shape.is_some_and(|shape| shape.is_internal)
     }
 
     /// Returns the visible positional parameter count accepted by this callback.
@@ -193,22 +233,57 @@ impl NativeFunction {
         self.return_type.as_ref()
     }
 
+    /// Records that the AOT declaration is `function &name()`.
+    pub fn set_returns_reference(&mut self, returns_reference: bool) {
+        self.returns_reference = returns_reference;
+    }
+
+    /// Returns whether the AOT declaration returns by reference, for
+    /// `ReflectionFunction::returnsReference()`.
+    pub const fn returns_reference(&self) -> bool {
+        self.returns_reference
+    }
+
     /// Returns whether eval may dispatch this callback through the generated bridge.
     pub const fn bridge_supported(&self) -> bool {
         self.bridge_supported
     }
 
-    /// Returns the minimum number of required parameters implied by defaults.
+    /// Records the explicit PHP signature shape emitted by the generated registration.
+    pub fn set_shape(&mut self, shape: NativeCallableShape) {
+        self.shape = Some(shape);
+    }
+
+    /// Returns the resolved PHP-visible / compiler-internal partition of the registered slots.
+    pub fn frame_shape(&self) -> NativeCallableFrameShape {
+        NativeCallableFrameShape::new(self.param_count, self.variadic_index, self.shape)
+    }
+
+    /// Returns how many registered slots are PHP-visible NON-variadic parameters.
+    pub fn visible_regular_param_count(&self) -> usize {
+        self.frame_shape().visible_regular_param_count()
+    }
+
+    /// Returns the variadic slot the PHP source itself declared, if the source declared one.
+    pub fn source_variadic_index(&self) -> Option<usize> {
+        self.frame_shape().source_variadic_index()
+    }
+
+    /// Returns the minimum number of arguments this callback requires.
+    ///
+    /// The registered shape is authoritative, because a declared default whose VALUE the eval
+    /// default ABI cannot represent (an enum case, a deeply nested constant expression) registers
+    /// no default at all and would otherwise make an optional parameter look required. Only a
+    /// registration that emitted no shape falls back to reading the registered defaults.
     pub fn required_param_count(&self) -> usize {
         if let Some(required_param_count) = self.required_param_count {
             return required_param_count;
         }
-        if let Some(index) = self.variadic_index {
-            return (0..index)
-                .rfind(|position| self.param_default(*position).is_none())
-                .map_or(0, |position| position + 1);
+        let shape = self.frame_shape();
+        if let Some(required) = shape.declared_required_param_count() {
+            return required;
         }
-        (0..self.param_count)
+        (0..shape.visible_regular_param_count())
             .rfind(|index| self.param_default(*index).is_none())
             .map_or(0, |index| index + 1)
     }
@@ -220,9 +295,13 @@ impl NativeFunction {
     /// Mixed cells following the descriptor-invoker ABI.
     pub unsafe fn call(&self, arg_array: RuntimeCellHandle) -> RuntimeCellHandle {
         crate::runtime_hooks::request_invoker_boundary();
+        // Registered AOT user functions ignore the descriptor ABI's trailing lexical-scope
+        // argument. Eval-owned callbacks have their own scope stack, so global is the only
+        // honest native invocation-site value at this bridge boundary.
         RuntimeCellHandle::from_raw((self.invoker)(
             self.descriptor as *mut c_void,
             arg_array.as_ptr(),
+            -1,
         ))
     }
 }

@@ -10,6 +10,8 @@
 //! - Function scopes nest: a closure declared inside a function has its own argument frame,
 //!   so `Rewriter::scope` is saved and restored around every function-like node instead of
 //!   being inherited.
+//! - A source variadic is copied into an internal positional-only snapshot before user code.
+//!   String-keyed named variadic entries are excluded because PHP omits them from `func_*`.
 //! - Children are rewritten before their parent node, so `func_get_arg(func_num_args() - 1)`
 //!   lowers the inner call first and the outer call sees a plain expression.
 //! - The statement and expression matches are exhaustive (no wildcard arm). A new AST node
@@ -18,15 +20,29 @@
 //! - Parameter defaults, class constant initialisers, property defaults and enum case
 //!   values are PHP constant expressions and cannot contain a function call, so they carry
 //!   no introspection call to rewrite and are not walked.
+//! - The same walk also answers `program_uses_backtrace()`, the gate that decides whether
+//!   every frame keeps its hidden argument snapshot. That gate must never under-approximate:
+//!   `crate::codegen::frame::module_uses_backtrace()` independently enables backtraces for
+//!   any program carrying the eval bridge, and a frame lowered without the snapshot would
+//!   then report missing or stale arguments. It therefore also fires on `eval()`, on a
+//!   first-class callable naming a backtrace builtin, and on any string literal spelling one,
+//!   which conservatively covers literal `call_user_func*` and string-variable callables.
+//!   A surviving dynamic `include`/`require` is deliberately not a trigger: it lowers to a
+//!   runtime stub that cannot execute PHP source, so it can reach no new frame.
+
+use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
-use crate::names::Name;
+use crate::names::{Name, NameKind};
 use crate::parser::ast::{
     AttributeGroup, CallableTarget, ClassMethod, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind,
     TypeExpr,
 };
 
-use super::{build, IntrospectionCall, HIDDEN_ARGS_PARAM};
+use super::{
+    build, IntrospectionCall, HIDDEN_ARGC_PARAM, HIDDEN_ARGS_PARAM, SNAPSHOT_KEY_LOCAL,
+    SNAPSHOT_VALUE_LOCAL,
+};
 
 /// The argument frame of the function-like scope currently being walked.
 struct Scope {
@@ -46,15 +62,33 @@ struct Scope {
 pub(super) struct Rewriter {
     scope: Option<Scope>,
     errors: Vec<CompileError>,
+    capture_all_frames: bool,
+    rewrite_introspection: bool,
+    saw_backtrace: bool,
+    /// Virtual methods, per owner, that whole-program frame capture must leave on their source
+    /// signature because their family holds a source-variadic member.
+    capture_opt_outs: HashMap<String, HashSet<(String, bool)>>,
+    /// Set by `walk_methods` for the one method scope it is about to enter.
+    next_scope_opts_out_of_capture: bool,
 }
 
 impl Rewriter {
-    /// Creates a rewriter positioned at top level, where no argument frame exists.
-    pub(super) fn new() -> Self {
+    /// Creates a rewriter positioned at top level with the requested frame-capture mode.
+    pub(super) fn new(capture_all_frames: bool, rewrite_introspection: bool) -> Self {
         Self {
             scope: None,
             errors: Vec::new(),
+            capture_all_frames,
+            rewrite_introspection,
+            saw_backtrace: false,
+            capture_opt_outs: HashMap::new(),
+            next_scope_opts_out_of_capture: false,
         }
+    }
+
+    /// Installs the method families that frame capture must skip (see `method_families`).
+    pub(super) fn set_capture_opt_outs(&mut self, opt_outs: HashMap<String, HashSet<(String, bool)>>) {
+        self.capture_opt_outs = opt_outs;
     }
 
     /// Consumes the rewriter and returns every diagnostic collected during the walk.
@@ -283,6 +317,11 @@ impl Rewriter {
     fn walk_methods(&mut self, owner: &str, methods: &mut [ClassMethod]) {
         for method in methods.iter_mut() {
             let label = format!("method '{}::{}'", owner, method.name);
+            self.next_scope_opts_out_of_capture = method.visibility
+                != crate::parser::ast::Visibility::Private
+                && self.capture_opt_outs.get(owner).is_some_and(|set| {
+                    set.contains(&(crate::names::php_symbol_key(&method.name), method.is_static))
+                });
             let ClassMethod {
                 params,
                 param_attributes,
@@ -302,9 +341,7 @@ impl Rewriter {
         }
     }
 
-    /// Walks a function-like body in its own argument frame and, if the body used one of
-    /// the introspection constructs, appends the hidden `mixed ...$__elephc_func_args`
-    /// parameter that collects the surplus positional arguments.
+    /// Walks a function-like body in its own argument frame and installs its argument snapshot.
     ///
     /// `param_attributes` is `None` for closures, whose AST node carries no per-parameter
     /// attribute list; for every other scope it is kept aligned with `params` plus the one
@@ -312,12 +349,14 @@ impl Rewriter {
     fn walk_function_scope(
         &mut self,
         _label: String,
-        params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+        params: &mut Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
         param_attributes: Option<&mut Vec<Vec<AttributeGroup>>>,
         variadic: &mut Option<String>,
         variadic_type: &mut Option<TypeExpr>,
         body: &mut Vec<Stmt>,
     ) {
+        // Consumed here so closures nested in the method body capture frames as usual.
+        let opts_out = std::mem::take(&mut self.next_scope_opts_out_of_capture);
         let scope = Scope {
             param_names: params.iter().map(|(name, ..)| name.clone()).collect(),
             optional_param: params
@@ -325,7 +364,16 @@ impl Rewriter {
                 .find(|(_, _, default, _)| default.is_some())
                 .map(|(name, ..)| name.clone()),
             source_variadic: variadic.clone(),
-            used: false,
+            // A generator's parameters, `$this` included, live in the coroutine's fixed start
+            // slots, and the snapshot collector would take one more: Symfony's six-parameter
+            // `FileLoader::glob()` generator overflowed them only because a backtrace call
+            // elsewhere asked for every frame's arguments. Such a frame keeps its source
+            // signature; an explicit `func_get_args()` in it still sets `used` below.
+            used: self.capture_all_frames
+                && !opts_out
+                && !(params.len() + 2
+                    > crate::codegen_support::runtime::GENERATOR_START_ARGS_MAX as usize
+                    && crate::types::checker::yield_validation::body_contains_yield(body)),
         };
         let outer = self.scope.replace(scope);
         self.walk_stmts(body);
@@ -334,13 +382,33 @@ impl Rewriter {
         if !scope.used {
             return;
         }
-        if scope.source_variadic.is_none() {
-            *variadic = Some(HIDDEN_ARGS_PARAM.to_string());
-            *variadic_type = Some(TypeExpr::Named(Name::unqualified("mixed")));
-            if let Some(param_attributes) = param_attributes {
-                if param_attributes.len() == params.len() {
-                    param_attributes.push(Vec::new());
+        if let Some(source_variadic) = scope.source_variadic {
+            let count_metadata = scope.optional_param.is_some();
+            let span = body
+                .first()
+                .map(|statement| statement.span)
+                .unwrap_or_else(crate::span::Span::dummy);
+            let snapshot = source_variadic_snapshot(&source_variadic, count_metadata, span);
+            body.splice(0..0, snapshot);
+            if count_metadata {
+                let attribute_index = params.len();
+                params.push((
+                    HIDDEN_ARGC_PARAM.to_string(),
+                    Some(TypeExpr::Int),
+                    Some(Expr::new(ExprKind::IntLiteral(0), span)),
+                    false,
+                ));
+                if let Some(param_attributes) = param_attributes {
+                    param_attributes.insert(attribute_index, Vec::new());
                 }
+            }
+            return;
+        }
+        *variadic = Some(HIDDEN_ARGS_PARAM.to_string());
+        *variadic_type = Some(TypeExpr::Named(Name::unqualified("mixed")));
+        if let Some(param_attributes) = param_attributes {
+            if param_attributes.len() == params.len() {
+                param_attributes.push(Vec::new());
             }
         }
     }
@@ -356,9 +424,17 @@ impl Rewriter {
     /// three introspection calls.
     fn walk_expr(&mut self, expr: &mut Expr) {
         match &mut expr.kind {
+            // A string literal is the only leaf that can name a callable, and every
+            // dynamic backtrace form (literal `call_user_func*`, a callable held in a
+            // variable, a callable array entry) spells the name through one.
+            ExprKind::StringLiteral(literal) => {
+                if string_literal_names_backtrace(literal) {
+                    self.saw_backtrace = true;
+                }
+            }
+
             // Leaves and identifier-only forms.
-            ExprKind::StringLiteral(_)
-            | ExprKind::IntLiteral(_)
+            ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
             | ExprKind::BoolLiteral(_)
             | ExprKind::Null
@@ -447,6 +523,13 @@ impl Rewriter {
                     self.walk_expr(value);
                 }
             }
+            ExprKind::ArrayLiteralMixed(entries) => {
+                for entry in entries.iter_mut() {
+                    for expr in entry.exprs_mut() {
+                        self.walk_expr(expr);
+                    }
+                }
+            }
             ExprKind::Match {
                 subject,
                 arms,
@@ -513,6 +596,9 @@ impl Rewriter {
             ExprKind::FirstClassCallable(target) => {
                 match target {
                     CallableTarget::Function(name) => {
+                        if name_is_backtrace(name) {
+                            self.saw_backtrace = true;
+                        }
                         if let Some(call) = IntrospectionCall::from_name(name) {
                             self.errors.push(CompileError::new(
                                 expr.span,
@@ -548,17 +634,24 @@ impl Rewriter {
         self.try_rewrite_call(expr);
     }
 
-    /// Replaces `expr` in place when it is a call to one of the three introspection
-    /// constructs, recording a diagnostic instead when the enclosing scope cannot support
-    /// it. Any other expression is left untouched.
+    /// Replaces direct and literal `call_user_func*` invocations of the three introspection
+    /// constructs, recording a diagnostic when the enclosing scope cannot support them.
     fn try_rewrite_call(&mut self, expr: &mut Expr) {
         let ExprKind::FunctionCall { name, args } = &expr.kind else {
             return;
         };
-        let Some(call) = IntrospectionCall::from_name(name) else {
+        if name_is_backtrace(name) || name_is_eval(name) {
+            self.saw_backtrace = true;
+        }
+        if !self.rewrite_introspection {
+            return;
+        }
+        let replacement = IntrospectionCall::from_name(name)
+            .map(|call| (call, args.clone()))
+            .or_else(|| literal_call_user_func_introspection(name, args));
+        let Some((call, args)) = replacement else {
             return;
         };
-        let args = args.clone();
         match self.scope_replacement(call, &args, expr.span) {
             Ok(kind) => expr.kind = kind,
             Err(error) => self.errors.push(error),
@@ -568,9 +661,9 @@ impl Rewriter {
     /// Validates that `call` can be rewritten in the current scope and, if so, marks the
     /// scope as needing the hidden variadic parameter and builds the replacement.
     ///
-    /// Invalid arity, dynamic argument forms, and top-level use produce diagnostics. Inside
-    /// a function, source variadics supply their own surplus tail while non-variadic scopes
-    /// receive the compiler-private tail.
+    /// Every rejected shape produces a diagnostic instead of a silently different answer.
+    /// Optional parameters use the hidden collector's passed-count metadata unless the source
+    /// already owns the variadic slot, a combination which still has no count channel.
     fn scope_replacement(
         &mut self,
         call: IntrospectionCall,
@@ -609,22 +702,167 @@ impl Rewriter {
                 ),
             ));
         };
-        // An optional parameter hides whether it was passed; the caller's argc marker says.
-        let argc_marker = scope.optional_param.is_some() && scope.source_variadic.is_none();
         scope.used = true;
         let param_names = scope.param_names.clone();
-        let variadic_name = scope
-            .source_variadic
-            .as_deref()
-            .unwrap_or(HIDDEN_ARGS_PARAM)
-            .to_string();
         Ok(build::replacement(
             call,
             &param_names,
-            &variadic_name,
             args,
+            scope.optional_param.is_some(),
             span,
-            argc_marker,
         ))
     }
+}
+
+/// Extracts PHP's special literal `call_user_func*('func_*', ...)` call shapes.
+fn literal_call_user_func_introspection(
+    name: &Name,
+    args: &[Expr],
+) -> Option<(IntrospectionCall, Vec<Expr>)> {
+    let function = name.last_segment()?;
+    let ExprKind::StringLiteral(callback) = &args.first()?.kind else {
+        return None;
+    };
+    let call = IntrospectionCall::from_segment(callback)?;
+    if function.eq_ignore_ascii_case("call_user_func") {
+        return Some((call, args[1..].to_vec()));
+    }
+    if !function.eq_ignore_ascii_case("call_user_func_array") || args.len() != 2 {
+        return None;
+    }
+    match &args[1].kind {
+        ExprKind::ArrayLiteral(values) => Some((call, values.clone())),
+        ExprKind::ArrayLiteralAssoc(entries)
+            if entries
+                .iter()
+                .all(|(key, _)| matches!(key.kind, ExprKind::IntLiteral(_))) =>
+        {
+            Some((call, entries.iter().map(|(_, value)| value.clone()).collect()))
+        }
+        _ => None,
+    }
+}
+
+/// Returns whether an unqualified name segment spells one of PHP's Core backtrace builtins.
+///
+/// Both spellings are matched case-insensitively, exactly as PHP resolves function names.
+fn segment_is_backtrace(segment: &str) -> bool {
+    segment.eq_ignore_ascii_case("debug_backtrace")
+        || segment.eq_ignore_ascii_case("debug_print_backtrace")
+}
+
+/// Returns whether a resolved call name refers to a Core backtrace builtin.
+///
+/// Matching the unqualified last segment accepts `debug_backtrace`, `\debug_backtrace` and
+/// the `Foo\debug_backtrace` an unqualified call inside a namespace resolves to.
+fn name_is_backtrace(name: &Name) -> bool {
+    name.last_segment().is_some_and(segment_is_backtrace)
+}
+
+/// Returns whether a resolved call name is `eval()`.
+///
+/// Eval-originated PHP can request a backtrace over AOT frames at runtime, which the gate
+/// cannot see in the AST, so any eval call keeps every frame's hidden argument snapshot.
+fn name_is_eval(name: &Name) -> bool {
+    name.last_segment()
+        .is_some_and(|segment| segment.eq_ignore_ascii_case("eval"))
+}
+
+/// Returns whether a string literal spells a Core backtrace builtin as a callable name.
+///
+/// PHP accepts one optional leading namespace separator in a callable string, so exactly one
+/// is stripped before the comparison.
+fn string_literal_names_backtrace(literal: &str) -> bool {
+    segment_is_backtrace(literal.strip_prefix('\\').unwrap_or(literal))
+}
+
+/// Returns whether the resolved program can reach a Core backtrace over AOT frames.
+///
+/// Deliberately conservative: a false positive only costs every frame its hidden argument
+/// snapshot, while a false negative produces a backtrace with missing arguments.
+///
+/// The gate runs in the `func-args` pipeline phase, which is BEFORE `optimize::fold_constants`
+/// (`crate::pipeline`), so a callable name that only becomes a literal through folding, such as
+/// `call_user_func('debug_' . 'backtrace')`, is not yet a single literal when the detector looks
+/// at it. Coverage is therefore conservative in one direction only: every spelling that is
+/// already a literal, a direct call, or a first-class callable IS detected, and `eval()` is a
+/// trigger in its own right, so eval-originated backtraces stay covered whatever they spell.
+/// A name assembled at runtime and called indirectly remains outside this gate by construction,
+/// which no phase ordering could fix. Moving the gate after folding would widen detection only
+/// for the degenerate folded-literal case while making the detector and the rewriting walk see
+/// different ASTs, so the ordering is deliberate rather than incidental.
+///
+/// The detector reuses the rewriting walk so the two can never disagree about which syntax is
+/// reachable, and it takes `&mut` only because that walk does. With `capture_all_frames` and
+/// `rewrite_introspection` both off it writes NOTHING: the only expression rewrite
+/// (`try_rewrite_call`) returns before it on `!rewrite_introspection`, `Scope::used` starts at
+/// `capture_all_frames` and is set solely by `scope_replacement` on that same path, and
+/// `walk_function_scope` does descend into every `body` (that is how a backtrace call nested
+/// inside a function is found at all), but it returns before the `params`/`variadic`/`body`
+/// MUTATIONS while `used` is false. Borrowing the real program instead of cloning it keeps
+/// this gate off the compiler's allocation path for every program, including the ones that
+/// never mention a backtrace.
+pub(super) fn program_uses_backtrace(program: &mut [Stmt]) -> bool {
+    let mut detector = Rewriter::new(false, false);
+    detector.walk_stmts(program);
+    detector.saw_backtrace
+}
+
+/// Builds an entry-time positional snapshot of a source-declared variadic parameter.
+fn source_variadic_snapshot(
+    source_variadic: &str,
+    count_metadata: bool,
+    span: crate::span::Span,
+) -> Vec<Stmt> {
+    let initial = if count_metadata {
+        vec![Expr::new(
+            ExprKind::Variable(HIDDEN_ARGC_PARAM.to_string()),
+            span,
+        )]
+    } else {
+        Vec::new()
+    };
+    let snapshot_init = Stmt::new(
+        StmtKind::Assign {
+            name: HIDDEN_ARGS_PARAM.to_string(),
+            value: Expr::new(ExprKind::ArrayLiteral(initial), span),
+        },
+        span,
+    );
+    let key_name = SNAPSHOT_KEY_LOCAL.to_string();
+    let value_name = SNAPSHOT_VALUE_LOCAL.to_string();
+    let key = Expr::new(ExprKind::Variable(key_name.clone()), span);
+    let is_positional = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from_parts(NameKind::FullyQualified, vec!["is_int".to_string()]),
+            args: vec![key],
+        },
+        span,
+    );
+    let append = Stmt::new(
+        StmtKind::ArrayPush {
+            array: HIDDEN_ARGS_PARAM.to_string(),
+            value: Expr::new(ExprKind::Variable(value_name.clone()), span),
+        },
+        span,
+    );
+    let snapshot_positional = Stmt::new(
+        StmtKind::Foreach {
+            array: Expr::new(ExprKind::Variable(source_variadic.to_string()), span),
+            key_var: Some(key_name),
+            value_var: value_name,
+            value_by_ref: false,
+            body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: is_positional,
+                    then_body: vec![append],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                span,
+            )],
+        },
+        span,
+    );
+    vec![snapshot_init, snapshot_positional]
 }

@@ -11,7 +11,7 @@ use super::*;
 use std::sync::Arc;
 
 /// Dynamic eval statements that operate on a materialized activation scope.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalStmt {
     ArrayAppendVar {
         name: String,
@@ -337,6 +337,8 @@ pub enum EvalStmt {
     UnsetDynamicVar {
         name: EvalExpr,
     },
+    /// Collects cycles after every operand of one source-level unset has been removed.
+    GcCollect,
     While {
         condition: EvalExpr,
         body: Vec<EvalStmt>,
@@ -352,7 +354,7 @@ impl EvalStmt {
 }
 
 /// One `catch` block attached to an eval `try` statement.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalCatch {
     pub class_names: Vec<String>,
     pub var_name: Option<String>,

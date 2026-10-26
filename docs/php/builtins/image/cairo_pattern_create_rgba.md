@@ -1,8 +1,8 @@
 ---
 title: "cairo_pattern_create_rgba()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates a solid color pattern with alpha."
 sidebar:
-  order: 442
+  order: 443
 ---
 
 ## cairo_pattern_create_rgba()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_pattern_create_rgba(float $red, float $green, float $blue, float $alpha): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates a solid color pattern with alpha.
 
 **Parameters**:
 - `$red` (`float`)
@@ -26,7 +26,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

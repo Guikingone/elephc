@@ -68,15 +68,6 @@ pub const fn sapi_name(web: bool) -> &'static str {
 /// `build` spells out what there is to keep.
 pub(crate) mod build;
 
-/// Prelude inventory group holding the engine-diagnostic dispatch pair.
-///
-/// Defined by `crate::error_handling_prelude`, which now owns the dispatch pair itself and
-/// hands the same declarations to this prelude and to the non-`--web` injection. Re-exported
-/// here because `pipeline::compile` spells it `web_prelude::DIAG_DISPATCH_GROUP`, and because
-/// the two injection sites MUST force one and the same group: the constant is what makes that
-/// a fact rather than two matching string literals.
-pub(crate) use crate::error_handling_prelude::DIAG_DISPATCH_GROUP;
-
 
 /// The catch-all wrapper: the whole handler body goes inside its `try` so an uncaught exception
 /// becomes a 500 before response commitment, or aborts an already-streaming response, instead of
@@ -134,10 +125,85 @@ pub(crate) fn web_wrap_stmt() -> Stmt {
     .remove(0)
 }
 
+/// The synthetic function the `--web` entry stub calls before it starts serving.
+pub const PRELOAD_STARTUP_FN: &str = "__elephc_opcache_run_preload";
+
+/// Moves `opcache.preload`'s inlined body out of the per-request handler.
+///
+/// Under `--web` the top-level body IS the request handler, so the preload's executable
+/// statements ran inside the FIRST request of every worker — and again after every
+/// `--max-requests` recycle. MEASURED on reference `php -S`: the preload's output goes to
+/// the SERVER LOG once, no header it sets reaches a response, and a global it assigns reads
+/// back as `NULL` in the request. elephc put that output and those headers into response 1
+/// and let the preload see that request's `$_SERVER`.
+///
+/// ONLY THE EXECUTABLE HALF MOVES, and that is what makes this safe. By this point the
+/// resolver has hoisted the preload file's declarations to the top level — that is what
+/// compiles them into the binary — and what remains inside the `IncludeOnceGuard` is
+/// statements. Wrapping those in a function changes WHEN they run, not whether the
+/// declarations exist.
+///
+/// THE OUTPUT LANDS CORRECTLY WITHOUT ANY ROUTING CODE. `__rt_stdout_write` diverts to
+/// `elephc_web_write` only while `_elephc_web_capture` is set, and nothing sets it until a
+/// request opens. Running from the entry stub — in the master, before the fork, which is
+/// also where php-src runs preload — means the bytes take the plain `write(1, …)` path.
+///
+/// Matched by the guard's canonical source path, not by position, so a `require_once` the user
+/// happened to write first cannot be mistaken for the preload.
+fn lift_preload_to_startup(
+    program: Program,
+    preload_path: Option<&std::path::Path>,
+) -> Program {
+    let Some(path) = preload_path else {
+        return program;
+    };
+    // The guard is keyed by the canonical source path of the included file (ours dropped the
+    // hashed `include_once_label`), so the preload is matched by that path.
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut program = program;
+    let preload = program
+        .iter_mut()
+        .find_map(|statement| take_preload_boundary(statement, &canonical));
+    let Some(preload) = preload else {
+        return program;
+    };
+    let wrapper = crate::synthetic_class::function(PRELOAD_STARTUP_FN)
+        .body(vec![preload])
+        .build();
+    program.insert(0, wrapper);
+    program
+}
+
+/// Extracts the resolver's include-once guard for the exact preload include, searching through
+/// resolver-only wrappers but never into user control flow. A `return` nested in the preload is
+/// already confined INSIDE the guard's body (`resolver::engine_includes::confine_nested_returns`),
+/// so moving the guard moves that confinement with it.
+fn take_preload_boundary(statement: &mut Stmt, preload: &std::path::Path) -> Option<Stmt> {
+    let span = statement.span;
+    match &mut statement.kind {
+        StmtKind::IncludeOnceGuard { source_path: found, .. } if found.as_path() == preload => {
+            Some(std::mem::replace(
+                statement,
+                Stmt::new(StmtKind::Synthetic(Vec::new()), span),
+            ))
+        }
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::Synthetic(body) => body
+            .iter_mut()
+            .find_map(|nested| take_preload_boundary(nested, preload)),
+        _ => None,
+    }
+}
+
 /// Prepends the web prelude when compiling with `--web` and wraps the whole
 /// handler body in a catch-all `try`/`catch` so uncaught exceptions become a
 /// pre-commit 500 or abort an already-committed response.
 /// Returns the program unchanged otherwise.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_web(
     program: Program,
     web: bool,
@@ -145,6 +211,30 @@ pub fn inject_if_web(
     ini_overrides: &[(String, String)],
     entry_path: &Path,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
+    preload_path: Option<&std::path::Path>,
+) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_web_on_compiler_stack(
+            program,
+            web,
+            php_version,
+            ini_overrides,
+            entry_path,
+            inventory,
+            preload_path,
+        )
+    })
+}
+
+/// The body of [`inject_if_web`], run on the stack `with_compiler_stack` sized.
+fn inject_if_web_on_compiler_stack(
+    program: Program,
+    web: bool,
+    php_version: PhpVersion,
+    ini_overrides: &[(String, String)],
+    entry_path: &Path,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+    preload_path: Option<&std::path::Path>,
 ) -> Program {
     if !web {
         return program;
@@ -159,6 +249,7 @@ pub fn inject_if_web(
     // the side that wins. Scoped to that module's own names — the session and `ini_*` surface
     // below carries the identical hazard and is deliberately left as it was.
     let program = crate::error_handling_prelude::without_shadowing_declarations(program);
+    let program = lift_preload_to_startup(program, preload_path);
     let user_usage = usage::collect(&program);
     let needs_callable_session_handler = user_usage.references("session_set_save_handler")
         || user_usage.dynamic_function_call;
@@ -197,16 +288,7 @@ pub fn inject_if_web(
     // declarations are heavy and a program that never mentions `session_set_save_handler` cannot
     // want them, which is a different question from what it can reach.
     inventory.record_program("web", &combined);
-    // See `DIAG_DISPATCH_GROUP`: these two are reached from the generated runtime, not from PHP.
-    let diag_group = inventory.group_mut(DIAG_DISPATCH_GROUP);
-    diag_group
-        .functions
-        .insert(crate::names::php_symbol_key("__elephc_diag_dispatch"));
-    diag_group
-        .functions
-        .insert(crate::names::php_symbol_key(
-            crate::names::DIAG_RENDER_FUNCTION,
-        ));
+    crate::error_handling_prelude::record_internal_callable_drain(inventory, "web");
     combined.extend(program);
 
     // The catch-all try wrap below reorders the top level (declarations hoisted
@@ -253,7 +335,7 @@ pub fn inject_if_web(
 /// user code can reach `session_set_save_handler()` or another dynamic callable
 /// surface; otherwise omitting them avoids compiling ten boxed-Mixed callback
 /// dispatchers into every `--web` binary.
-fn is_callable_session_handler_decl(kind: &StmtKind) -> bool {
+pub(crate) fn is_callable_session_handler_decl(kind: &StmtKind) -> bool {
     match kind {
         StmtKind::ClassDecl { name, .. } => name == "__ElephcCallableSessionHandler",
         StmtKind::FunctionDecl { name, .. } => {
@@ -426,6 +508,8 @@ mod tests {
             ini_overrides,
             Path::new("index.php"),
             &mut inventory,
+            // These tests exercise the declaration selection, not the preload hoist.
+            None,
         )
     }
 

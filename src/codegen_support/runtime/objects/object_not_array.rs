@@ -1,14 +1,22 @@
 //! Purpose:
-//! Emits `__rt_throw_object_not_array`, PHP's catchable `Error` for indexing an object that is
-//! not `ArrayAccess`.
+//! Emits the runtime helpers that throw a PHP Throwable whose message names an object's class:
+//! `__rt_throw_object_not_array` (catchable `Error` for indexing an object that is not
+//! `ArrayAccess`), `__rt_throw_serialization_denied` (catchable `Exception` for serializing an
+//! object PHP refuses to serialize, plus a `_name` entry that takes the class name itself, for
+//! a value that is no class-table object) and `__rt_throw_unserialization_denied_name` (the same
+//! refusal when `unserialize()` meets such a class, entered with the class name alone because it
+//! throws before any object exists).
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::objects::mixed_array_get`'s object paths.
+//! - `__rt_serialize_object`, through a denied class's `_class_serialize_ptrs` entry, and
+//!   `__rt_serialize_value` for a Closure (runtime tag 10), through the `_name` entry.
+//! - `__rt_unser_refuse_class`, from the unserialize preflight.
 //!
 //! Key details:
 //! - PHP stops the program for `$o["k"]` on any object that does not implement `ArrayAccess`,
 //!   `stdClass` included, and it does so in the quiet contexts too — `isset`, `??` and `empty`
-//!   all raise, measured against 8.5. So this helper takes no warning flag: reaching it is
+//!   all raise, measured against 8.5. So that helper takes no warning flag: reaching it is
 //!   already the error.
 //! - The class name comes from the dense `_class_name_entries` metadata `get_class()` reads, so
 //!   the message carries php-src's wording verbatim.
@@ -21,63 +29,135 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::runtime::data::{OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX};
+use crate::codegen_support::runtime::data::{
+    OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX, SERIALIZATION_DENIED_PREFIX,
+    SERIALIZATION_DENIED_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
+};
 use crate::codegen_support::sentinels::{
     emit_throwable_creation_line_unknown, x86_64_heap_kind_word,
 };
 
-/// Dispatches to the target-specific `__rt_throw_object_not_array` emitter.
-pub fn emit_throw_object_not_array(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_throw_object_not_array_x86_64(emitter);
-        return;
-    }
-    emit_throw_object_not_array_aarch64(emitter);
+/// One runtime helper that throws `<prefix><Class><suffix>` as a given Throwable class.
+struct ClassNamedThrow {
+    /// Global entry taking the object whose class the message names, if the helper has one.
+    label: Option<&'static str>,
+    /// Global entry taking the class name itself (AArch64 `x1`/`x2`, x86_64 `rax`/`rdx`, the
+    /// runtime string convention), for callers that hold no object, if the helper has one.
+    name_label: Option<&'static str>,
+    /// Prefix for the helper's local labels, unique per helper.
+    local: &'static str,
+    /// Data symbol and byte length of the message text before the class name.
+    prefix_symbol: &'static str,
+    prefix_len: usize,
+    /// Data symbol and byte length of the message text after the class name.
+    suffix_symbol: &'static str,
+    suffix_len: usize,
+    /// Data symbol holding the per-program class id of the Throwable to raise.
+    class_id_symbol: &'static str,
+    /// Human description of the Throwable, for the emitted comments.
+    what: &'static str,
 }
 
-/// Emits `__rt_throw_object_not_array` for ARM64.
-///
-/// Input: `x0` = the unboxed object pointer whose class cannot be indexed. Never returns.
-fn emit_throw_object_not_array_aarch64(emitter: &mut Emitter) {
+const OBJECT_NOT_ARRAY: ClassNamedThrow = ClassNamedThrow {
+    label: Some("__rt_throw_object_not_array"),
+    name_label: None,
+    local: "__rt_object_not_array",
+    prefix_symbol: "_object_not_array_prefix",
+    prefix_len: OBJECT_NOT_ARRAY_PREFIX.len(),
+    suffix_symbol: "_object_not_array_suffix",
+    suffix_len: OBJECT_NOT_ARRAY_SUFFIX.len(),
+    class_id_symbol: "_spl_error_class_id",
+    what: "object-not-array Error",
+};
+
+const SERIALIZATION_DENIED: ClassNamedThrow = ClassNamedThrow {
+    label: Some("__rt_throw_serialization_denied"),
+    name_label: Some("__rt_throw_serialization_denied_name"),
+    local: "__rt_serialization_denied",
+    prefix_symbol: "_serialization_denied_prefix",
+    prefix_len: SERIALIZATION_DENIED_PREFIX.len(),
+    suffix_symbol: "_serialization_denied_suffix",
+    suffix_len: SERIALIZATION_DENIED_SUFFIX.len(),
+    class_id_symbol: "_spl_exception_class_id",
+    what: "serialization-denied Exception",
+};
+
+const UNSERIALIZATION_DENIED: ClassNamedThrow = ClassNamedThrow {
+    label: None,
+    name_label: Some("__rt_throw_unserialization_denied_name"),
+    local: "__rt_unserialization_denied",
+    prefix_symbol: "_unserialization_denied_prefix",
+    prefix_len: UNSERIALIZATION_DENIED_PREFIX.len(),
+    suffix_symbol: "_serialization_denied_suffix",
+    suffix_len: SERIALIZATION_DENIED_SUFFIX.len(),
+    class_id_symbol: "_spl_exception_class_id",
+    what: "unserialization-denied Exception",
+};
+
+/// Emits `__rt_throw_object_not_array`. Input: the unboxed object pointer (`x0` / `rdi`).
+pub fn emit_throw_object_not_array(emitter: &mut Emitter) {
+    emit_class_named_throw(emitter, &OBJECT_NOT_ARRAY);
+}
+
+/// Emits `__rt_throw_serialization_denied`. Input: the object pointer (`x0` / `rdi`), which is
+/// how `__rt_serialize_object` calls a class's `__serialize` entry. Also emits
+/// `__rt_throw_serialization_denied_name`, which takes the class name pair instead.
+pub fn emit_throw_serialization_denied(emitter: &mut Emitter) {
+    emit_class_named_throw(emitter, &SERIALIZATION_DENIED);
+}
+
+/// Emits `__rt_throw_unserialization_denied_name`. Input: the class name pair (AArch64 `x1`/`x2`,
+/// x86_64 `rax`/`rdx`): `unserialize()` refuses a class before it creates any object.
+pub fn emit_throw_unserialization_denied(emitter: &mut Emitter) {
+    emit_class_named_throw(emitter, &UNSERIALIZATION_DENIED);
+}
+
+/// Dispatches to the target-specific emitter for one class-named throw helper.
+fn emit_class_named_throw(emitter: &mut Emitter, spec: &ClassNamedThrow) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_class_named_throw_x86_64(emitter, spec);
+        return;
+    }
+    emit_class_named_throw_aarch64(emitter, spec);
+}
+
+/// Emits one class-named throw helper for ARM64. Input: `x0` = the object for the object entry,
+/// or `x1`/`x2` = the class name for the name entry. Never returns.
+fn emit_class_named_throw_aarch64(emitter: &mut Emitter, spec: &ClassNamedThrow) {
     emitter.blank();
-    emitter.comment("--- runtime: throw object-not-array Error ---");
-    emitter.label_global("__rt_throw_object_not_array");
+    emitter.comment(&format!("--- runtime: throw {} ---", spec.what));
+    match (spec.label, spec.name_label) {
+        (Some(label), Some(name_label)) => {
+            emit_object_entry_aarch64(emitter, spec, label);
+            let message = format!("{label}_message");
+            emitter.instruction(&format!("b {message}"));                       // join the message construction the name entry shares
+            emit_name_entry_aarch64(emitter, name_label);
+            // Reached from the object entry's atom by an unconditional branch only, so a shared
+            // label keeps it alive under macOS dead stripping without splitting this atom.
+            emitter.label_shared(&message);
+        }
+        (Some(label), None) => emit_object_entry_aarch64(emitter, spec, label),
+        (None, Some(name_label)) => emit_name_entry_aarch64(emitter, name_label),
+        (None, None) => unreachable!("a class-named throw helper needs an entry"),
+    }
 
-    // Stack (48 bytes): [sp, #0] holds the message pair across the object allocation.
-    emitter.instruction("sub sp, sp, #48");                                     // reserve message state and frame linkage
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame and return address
-    emitter.instruction("add x29, sp, #32");                                    // establish a stable Error-construction frame
-
-    emitter.instruction("ldr x13, [x0]");                                       // keep the class id outside the symbol helper's x9 scratch
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_class_name_count", 0);
-    emitter.instruction("cmp x13, x10");                                        // is the class id within the dense name table?
-    emitter.instruction("b.hs __rt_object_not_array_name_fallback");            // malformed ids use the generic spelling
-    abi::emit_symbol_address(emitter, "x10", "_class_name_entries");
-    emitter.instruction("add x10, x10, x13, lsl #4");                           // select the 16-byte class-name row
-    emitter.instruction("ldp x11, x12, [x10]");                                 // borrow the class-name pointer and byte length
-    emitter.instruction("cbnz x12, __rt_object_not_array_name_ready");          // a non-empty name is what PHP prints
-    emitter.label("__rt_object_not_array_name_fallback");
-    abi::emit_symbol_address(emitter, "x11", "_unser_type_object");
-    emitter.instruction("mov x12, #6");                                         // fallback length for the bare word "object"
-    emitter.label("__rt_object_not_array_name_ready");
-
-    abi::emit_symbol_address(emitter, "x1", "_object_not_array_prefix");        // concat left operand pointer
-    emitter.instruction(&format!("mov x2, #{}", OBJECT_NOT_ARRAY_PREFIX.len())); // concat left operand length
+    abi::emit_symbol_address(emitter, "x1", spec.prefix_symbol);                // concat left operand pointer
+    emitter.instruction(&format!("mov x2, #{}", spec.prefix_len));              // concat left operand length
     emitter.instruction("mov x3, x11");                                         // right operand: the resolved class name
     emitter.instruction("mov x4, x12");                                         // and its byte length
-    emitter.instruction("bl __rt_concat");                                      // build `Cannot use object of type <Class>`
-    abi::emit_symbol_address(emitter, "x3", "_object_not_array_suffix");        // right operand pointer
-    emitter.instruction(&format!("mov x4, #{}", OBJECT_NOT_ARRAY_SUFFIX.len())); // right operand length
-    emitter.instruction("bl __rt_concat");                                      // append PHP's ` as array`
-    emitter.instruction("bl __rt_str_persist");                                 // give the Error stable message ownership
+    emitter.instruction("bl __rt_concat");                                      // build `<prefix><Class>`
+    abi::emit_symbol_address(emitter, "x3", spec.suffix_symbol);                // right operand pointer
+    emitter.instruction(&format!("mov x4, #{}", spec.suffix_len));              // right operand length
+    emitter.instruction("bl __rt_concat");                                      // append the message suffix
+    emitter.instruction("bl __rt_str_persist");                                 // give the Throwable stable message ownership
     emitter.instruction("stp x1, x2, [sp]");                                    // preserve the message pair across the allocation
 
     crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     emitter.instruction("mov x9, #6");                                          // heap kind 6 identifies a throwable object
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp the allocation as a runtime object
-    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the Error to its PHP object handle
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_error_class_id", 0);
-    emitter.instruction("str x9, [x0]");                                        // stamp the per-program Error class id
+    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the Throwable to its PHP object handle
+    abi::emit_load_symbol_to_reg(emitter, "x9", spec.class_id_symbol, 0);
+    emitter.instruction("str x9, [x0]");                                        // stamp the per-program Throwable class id
     emitter.instruction("ldp x10, x11, [sp]");                                  // recover the persisted message pair
     emitter.instruction("str x10, [x0, #8]");                                   // message pointer
     emitter.instruction("str x11, [x0, #16]");                                  // message byte length
@@ -91,50 +171,81 @@ fn emit_throw_object_not_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_throw_current");                                // unwind, or report it uncaught and exit like PHP
 }
 
-/// Emits `__rt_throw_object_not_array` for x86_64.
-///
-/// Input: `rdi` = the unboxed object pointer whose class cannot be indexed. Never returns.
-fn emit_throw_object_not_array_x86_64(emitter: &mut Emitter) {
+/// Emits the ARM64 object entry: sets up the helper frame and resolves the object's class name
+/// (`x0` = the object) into `x11`/`x12`, falling back to the word "object" for a malformed id.
+fn emit_object_entry_aarch64(emitter: &mut Emitter, spec: &ClassNamedThrow, label: &str) {
+    let fallback = format!("{}_name_fallback", spec.local);
+    let ready = format!("{}_name_ready", spec.local);
+    emitter.label_global(label);
+
+    // Stack (48 bytes): [sp, #0] holds the message pair across the object allocation.
+    emitter.instruction("sub sp, sp, #48");                                     // reserve message state and frame linkage
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable Throwable-construction frame
+
+    emitter.instruction("ldr x13, [x0]");                                       // keep the class id outside the symbol helper's x9 scratch
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_class_name_count", 0);
+    emitter.instruction("cmp x13, x10");                                        // is the class id within the dense name table?
+    emitter.instruction(&format!("b.hs {fallback}"));                           // malformed ids use the generic spelling
+    abi::emit_symbol_address(emitter, "x10", "_class_name_entries");
+    emitter.instruction("add x10, x10, x13, lsl #4");                           // select the 16-byte class-name row
+    emitter.instruction("ldp x11, x12, [x10]");                                 // borrow the class-name pointer and byte length
+    emitter.instruction(&format!("cbnz x12, {ready}"));                         // a non-empty name is what PHP prints
+    emitter.label(&fallback);
+    abi::emit_symbol_address(emitter, "x11", "_unser_type_object");
+    emitter.instruction("mov x12, #6");                                         // fallback length for the bare word "object"
+    emitter.label(&ready);
+}
+
+/// Emits the ARM64 name entry: sets up the same frame as the object entry and takes the class
+/// name the caller already holds (`x1`/`x2`) into `x11`/`x12`.
+fn emit_name_entry_aarch64(emitter: &mut Emitter, name_label: &str) {
+    emitter.label_global(name_label);
+    emitter.instruction("sub sp, sp, #48");                                     // reserve the same frame as the object entry
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable Throwable-construction frame
+    emitter.instruction("mov x11, x1");                                         // the caller already knows the class-name pointer
+    emitter.instruction("mov x12, x2");                                         // and its byte length
+}
+
+/// Emits one class-named throw helper for x86_64. Input: `rdi` = the object for the object
+/// entry, or `rax`/`rdx` = the class name for the name entry. Never returns.
+fn emit_class_named_throw_x86_64(emitter: &mut Emitter, spec: &ClassNamedThrow) {
     emitter.blank();
-    emitter.comment("--- runtime: throw object-not-array Error ---");
-    emitter.label_global("__rt_throw_object_not_array");
+    emitter.comment(&format!("--- runtime: throw {} ---", spec.what));
+    match (spec.label, spec.name_label) {
+        (Some(label), Some(name_label)) => {
+            emit_object_entry_x86_64(emitter, spec, label);
+            let message = format!("{label}_message");
+            emitter.instruction(&format!("jmp {message}"));                     // join the message construction the name entry shares
+            emit_name_entry_x86_64(emitter, name_label);
+            // Reached from the object entry's atom by an unconditional jump only, so a shared
+            // label keeps it alive under macOS dead stripping without splitting this atom.
+            emitter.label_shared(&message);
+        }
+        (Some(label), None) => emit_object_entry_x86_64(emitter, spec, label),
+        (None, Some(name_label)) => emit_name_entry_x86_64(emitter, name_label),
+        (None, None) => unreachable!("a class-named throw helper needs an entry"),
+    }
 
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish an Error-construction frame
-    emitter.instruction("sub rsp, 32");                                         // reserve the message pair, keeping rsp aligned
-
-    emitter.instruction("mov r13, QWORD PTR [rdi]");                            // runtime class id
-    emitter.instruction("cmp r13, QWORD PTR [rip + _class_name_count]");        // is the class id within the dense name table?
-    emitter.instruction("jae __rt_object_not_array_name_fallback");             // malformed ids use the generic spelling
-    emitter.instruction("lea r10, [rip + _class_name_entries]");                // dense class-name metadata table
-    emitter.instruction("shl r13, 4");                                          // scale the class id to the 16-byte row
-    emitter.instruction("mov r11, QWORD PTR [r10 + r13]");                      // borrow the class-name pointer
-    emitter.instruction("mov r12, QWORD PTR [r10 + r13 + 8]");                  // borrow the class-name byte length
-    emitter.instruction("test r12, r12");                                       // is the name non-empty?
-    emitter.instruction("jnz __rt_object_not_array_name_ready");                // a non-empty name is what PHP prints
-    emitter.label("__rt_object_not_array_name_fallback");
-    emitter.instruction("lea r11, [rip + _unser_type_object]");                 // fall back to the bare word "object"
-    emitter.instruction("mov r12, 6");                                          // fallback name length
-    emitter.label("__rt_object_not_array_name_ready");
-
-    emitter.instruction("lea rax, [rip + _object_not_array_prefix]");           // concat left operand pointer
-    emitter.instruction(&format!("mov rdx, {}", OBJECT_NOT_ARRAY_PREFIX.len())); // concat left operand length
+    emitter.instruction(&format!("lea rax, [rip + {}]", spec.prefix_symbol));   // concat left operand pointer
+    emitter.instruction(&format!("mov rdx, {}", spec.prefix_len));              // concat left operand length
     emitter.instruction("mov rdi, r11");                                        // right operand: the resolved class name
     emitter.instruction("mov rsi, r12");                                        // and its byte length
-    abi::emit_call_label(emitter, "__rt_concat");                               // build `Cannot use object of type <Class>`
-    emitter.instruction("lea rdi, [rip + _object_not_array_suffix]");           // right operand pointer
-    emitter.instruction(&format!("mov rsi, {}", OBJECT_NOT_ARRAY_SUFFIX.len())); // right operand length
-    abi::emit_call_label(emitter, "__rt_concat");                               // append PHP's ` as array`
-    abi::emit_call_label(emitter, "__rt_str_persist");                          // give the Error stable message ownership
+    abi::emit_call_label(emitter, "__rt_concat");                               // build `<prefix><Class>`
+    emitter.instruction(&format!("lea rdi, [rip + {}]", spec.suffix_symbol));   // right operand pointer
+    emitter.instruction(&format!("mov rsi, {}", spec.suffix_len));              // right operand length
+    abi::emit_call_label(emitter, "__rt_concat");                               // append the message suffix
+    abi::emit_call_label(emitter, "__rt_str_persist");                          // give the Throwable stable message ownership
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the message pointer across the allocation
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the message byte length
 
     crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     emitter.instruction(&format!("mov r10, 0x{:x}", x86_64_heap_kind_word(6))); // magic + kind 6 identifies a throwable object
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform heap header
-    abi::emit_call_label(emitter, "__rt_object_handle_acquire");                // bind the Error to its PHP object handle
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_error_class_id", 0);
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // stamp the per-program Error class id
+    abi::emit_call_label(emitter, "__rt_object_handle_acquire");                // bind the Throwable to its PHP object handle
+    abi::emit_load_symbol_to_reg(emitter, "r10", spec.class_id_symbol, 0);
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // stamp the per-program Throwable class id
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // recover the message pointer
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // recover the message byte length
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // message pointer
@@ -147,4 +258,41 @@ fn emit_throw_object_not_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // release the local frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("jmp __rt_throw_current");                              // unwind, or report it uncaught and exit like PHP
+}
+
+/// Emits the x86_64 object entry: sets up the helper frame and resolves the object's class name
+/// (`rdi` = the object) into `r11`/`r12`, falling back to the word "object" for a malformed id.
+fn emit_object_entry_x86_64(emitter: &mut Emitter, spec: &ClassNamedThrow, label: &str) {
+    let fallback = format!("{}_name_fallback", spec.local);
+    let ready = format!("{}_name_ready", spec.local);
+    emitter.label_global(label);
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a Throwable-construction frame
+    emitter.instruction("sub rsp, 32");                                         // reserve the message pair, keeping rsp aligned
+
+    emitter.instruction("mov r13, QWORD PTR [rdi]");                            // runtime class id
+    emitter.instruction("cmp r13, QWORD PTR [rip + _class_name_count]");        // is the class id within the dense name table?
+    emitter.instruction(&format!("jae {fallback}"));                            // malformed ids use the generic spelling
+    emitter.instruction("lea r10, [rip + _class_name_entries]");                // dense class-name metadata table
+    emitter.instruction("shl r13, 4");                                          // scale the class id to the 16-byte row
+    emitter.instruction("mov r11, QWORD PTR [r10 + r13]");                      // borrow the class-name pointer
+    emitter.instruction("mov r12, QWORD PTR [r10 + r13 + 8]");                  // borrow the class-name byte length
+    emitter.instruction("test r12, r12");                                       // is the name non-empty?
+    emitter.instruction(&format!("jnz {ready}"));                               // a non-empty name is what PHP prints
+    emitter.label(&fallback);
+    emitter.instruction("lea r11, [rip + _unser_type_object]");                 // fall back to the bare word "object"
+    emitter.instruction("mov r12, 6");                                          // fallback name length
+    emitter.label(&ready);
+}
+
+/// Emits the x86_64 name entry: sets up the same frame as the object entry and takes the class
+/// name the caller already holds (`rax`/`rdx`) into `r11`/`r12`.
+fn emit_name_entry_x86_64(emitter: &mut Emitter, name_label: &str) {
+    emitter.label_global(name_label);
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the same frame as the object entry
+    emitter.instruction("sub rsp, 32");                                         // reserve the message pair, keeping rsp aligned
+    emitter.instruction("mov r11, rax");                                        // the caller already knows the class-name pointer
+    emitter.instruction("mov r12, rdx");                                        // and its byte length
 }

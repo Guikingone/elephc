@@ -1,16 +1,16 @@
 ---
-title: "zval_unpack() — internals"
+title: "zval_unpack() - internals"
 description: "Compiler internals for zval_unpack(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 754
+  order: 786
 ---
 
-## `zval_unpack()` — internals
+## `zval_unpack()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/zval_unpack.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/zval_unpack.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,7 +48,7 @@ function zval_unpack(pointer $zval): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

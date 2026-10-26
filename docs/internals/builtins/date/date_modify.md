@@ -1,16 +1,16 @@
 ---
-title: "date_modify() — internals"
+title: "date_modify() - internals"
 description: "Compiler internals for date_modify(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 216
+  order: 217
 ---
 
-## `date_modify()` — internals
+## `date_modify()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:962](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L962) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:985](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L985) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

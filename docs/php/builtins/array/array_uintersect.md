@@ -1,6 +1,6 @@
 ---
 title: "array_uintersect()"
-description: "Computes the intersection of arrays using a callback comparator."
+description: "Returns entries from the first of exactly two arrays whose values occur in the second according to an integer-cast callback comparator, preserving keys."
 sidebar:
   order: 52
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_uintersect(array $array1, array $array2, callable $callback): array
 ```
 
-Computes the intersection of arrays using a callback comparator.
+Returns entries from the first of exactly two arrays whose values occur in the second according to an integer-cast callback comparator, preserving keys.
 
 **Parameters**:
 - `$array1` (`array`)
@@ -23,9 +23,9 @@ Computes the intersection of arrays using a callback comparator.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

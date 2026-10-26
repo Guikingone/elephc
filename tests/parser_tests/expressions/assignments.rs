@@ -283,7 +283,7 @@ fn test_parse_reference_to_nested_array_append_slot() {
     let StmtKind::Synthetic(body) = &stmts[0].kind else {
         panic!("expected synthetic reference append lowering");
     };
-    assert_eq!(body.len(), 3);
+    assert_eq!(body.len(), 4);
     let temp = match &body[0].kind {
         StmtKind::Assign { name, value } => {
             assert!(matches!(value.kind, ExprKind::Null));
@@ -297,6 +297,15 @@ fn test_parse_reference_to_nested_array_append_slot() {
         StmtKind::RefAssign { target, source }
             if target == "closure"
                 && matches!(&source.kind, ExprKind::Variable(name) if name == &temp)
+    ));
+    // The temporary is unbound LAST, so the next execution of the same statement (a loop over
+    // listeners) promotes a fresh cell instead of writing through the previous one.
+    assert!(matches!(
+        &body[3].kind,
+        StmtKind::ExprStmt(call)
+            if matches!(&call.kind, ExprKind::FunctionCall { name, args }
+                if name.as_str() == "unset"
+                    && matches!(args.as_slice(), [arg] if matches!(&arg.kind, ExprKind::Variable(n) if n == &temp)))
     ));
 }
 

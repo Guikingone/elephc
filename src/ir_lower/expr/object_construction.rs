@@ -85,6 +85,21 @@ fn lower_new_object_resolved(
         );
     }
     let sig = constructor_signature(ctx, class_name).cloned();
+    // A class the program names but never compiled a constructor for -- one the runtime
+    // autoloader supplies -- has no signature to place NAMED arguments with, and lowering them
+    // positionally handed `new LogRecord(datetime: ..., channel: ..., message: ..., level: ...)`
+    // its message as the level. The runtime construction path binds the names.
+    if sig.is_none()
+        && ctx.program_loads_code_at_run_time()
+        && (crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg))
+    {
+        let name_expr = Expr::new(
+            ExprKind::StringLiteral(class_name.as_str().trim_start_matches('\\').to_string()),
+            expr.span,
+        );
+        let name_value = lower_expr(ctx, &name_expr);
+        return lower_new_dynamic_generic(ctx, name_value, args, expr);
+    }
     // php-src allocates the object before evaluating the arguments, so `new A(new B())` numbers
     // A `#1`: reserve A's handle now when an argument may allocate one first.
     let reserved_handle = args.iter().any(arg_may_allocate_object).then(|| {
@@ -97,8 +112,26 @@ fn lower_new_object_resolved(
             Some(expr.span),
         )
     });
-    let operands = lower_user_args_with_signature(ctx, sig.as_ref(), args);
     let php_type = PhpType::Object(class_name.as_str().to_string());
+    let result_staging = prepublish_user_call_result(
+        ctx,
+        sig.as_ref(),
+        &ReturnArgAlias::None,
+        &php_type,
+        expr.span,
+    );
+    begin_call_argument_evaluation(ctx);
+    let mut operands = lower_user_args_with_signature(ctx, sig.as_ref(), args);
+    let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+    let roots = root_user_call_operands(
+        ctx,
+        &mut operands,
+        sig.as_ref(),
+        &ReturnArgAlias::None,
+        &php_type,
+        expr.span,
+    );
+    ctx.invalidate_callable_ref_argument_locals(sig.as_ref(), &operands);
     if let Some(handle) = &reserved_handle {
         ctx.emit_void(
             Op::ObjectHandlePend,
@@ -108,7 +141,21 @@ fn lower_new_object_resolved(
             Some(expr.span),
         );
     }
-    let object = emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span);
+    // A class with no constructor anywhere in its chain takes no constructor operands: php
+    // evaluates the arguments for their effects and discards them (`new A(f())`), which the
+    // lowering above already did, and the release below retires them.
+    let constructor_operands = if sig.is_none()
+        && ctx.classes.contains_key(class_name.as_str().trim_start_matches('\\'))
+        && crate::types::constructor_owner(&ctx.classes, class_name.as_str().trim_start_matches('\\'))
+            .is_none()
+    {
+        Vec::new()
+    } else {
+        operands.clone()
+    };
+    // The rooted operands are released below, once, by `release_owned_call_arg_temporaries_with_roots`.
+    let object =
+        emit_object_new_value(ctx, class_name.as_str(), constructor_operands, php_type, expr.span);
     if reserved_handle.is_some() {
         ctx.emit_void(
             Op::ObjectHandleUnpend,
@@ -118,8 +165,20 @@ fn lower_new_object_resolved(
             Some(expr.span),
         );
     }
-    object
+    stage_call_result(ctx, result_staging.as_ref(), object, expr.span);
+    release_owned_call_arg_temporaries_with_roots(
+        ctx,
+        &operands,
+        None,
+        &ReturnArgAlias::None,
+        sig.as_ref(),
+        &roots,
+        expr.span,
+    );
+    retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    take_prepublished_call_result(ctx, result_staging, object, expr.span)
 }
+
 
 /// Whether evaluating a constructor argument may allocate an object: anything but a literal,
 /// a variable or a constant read (a call, a `new`, a closure, an operator over those...).
@@ -215,57 +274,31 @@ fn unwrap_eval_aggregate_iterator_source(
     Some(rewritten)
 }
 
-/// Appends the source argument count to the hidden tail of an introspecting scope with
-/// optional parameters.
-///
-/// Default materialization erases whether an optional regular parameter was supplied, so
-/// `func_num_args()` in `function response($content = null, ...)` counted every declared
-/// parameter and Laravel's `response()` returned a `Response` where php hands back the factory.
-/// The hidden variadic array is private compiler ABI, so its final element carries the count
-/// (`crate::func_args::argc_marker`) after any genuine surplus arguments. A call whose count is
-/// not known here -- a spread, named arguments -- adds nothing, and the callee falls back to its
-/// conservative count.
-pub(super) fn append_argc_marker(
-    ctx: &mut LoweringContext<'_, '_>,
-    sig: Option<&FunctionSig>,
-    args: &[Expr],
-    operands: &[ValueId],
-    span: Span,
-) {
-    let Some(sig) = sig else {
-        return;
-    };
-    // Only a call that leaves optional parameters out needs it: with every regular parameter
-    // passed, the callee's own count (declared + surplus) is already exact, and keeping marked
-    // tails free of surplus is what lets the callee rebuild `func_get_args()` as a prefix.
-    if !crate::func_args::sig_collects_surplus_args(sig)
-        || !sig.defaults.iter().any(Option::is_some)
-        || args.len() >= crate::types::call_args::regular_param_count(sig)
-        || crate::types::call_args::has_named_args(args)
-        || args.iter().any(is_spread_arg)
-    {
-        return;
-    }
-    let Some(variadic_tail) = operands.last().copied() else {
-        return;
-    };
-    let marker = crate::func_args::argc_marker(args.len());
-    let marker = lower_string_literal(ctx, &marker, &Expr::new(ExprKind::Null, span));
-    ctx.emit_void(
-        Op::ArrayPush,
-        vec![variadic_tail, marker.value],
-        None,
-        Op::ArrayPush.default_effects(),
-        Some(span),
-    );
-}
-
 /// Emits fixed-class object construction and releases owned constructor argument temporaries.
 ///
 /// A newly allocated object cannot alias a constructor argument. The constructor has already
 /// retained or copied every argument it keeps by the time `ObjectNew` returns, so the caller's
 /// owning temporary references can be dropped without the general call-result alias guard.
 pub(super) fn emit_fixed_object_new(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    operands: Vec<ValueId>,
+    php_type: PhpType,
+    span: Span,
+) -> LoweredValue {
+    let object = emit_object_new_value(ctx, class_name, operands.clone(), php_type, span);
+    release_owned_call_arg_temporaries(
+        ctx,
+        &operands,
+        None,
+        &ReturnArgAlias::None,
+        span,
+    );
+    object
+}
+
+/// Emits the `ObjectNew` itself, leaving the operands' ownership to the caller.
+fn emit_object_new_value(
     ctx: &mut LoweringContext<'_, '_>,
     class_name: &str,
     operands: Vec<ValueId>,
@@ -279,28 +312,22 @@ pub(super) fn emit_fixed_object_new(
     if ctx.has_eval_barrier() {
         ctx.declare_eval_context_local();
     }
-    if is_reflection_owner_class_name(class_name)
-        || reflection_object_new_requires_eval_context(ctx, class_name, &operands)
+    // A closed-world build has no interpreter to fall back to for a name the compiler did not see.
+    if !crate::closed_world::is_enabled()
+        && (is_reflection_owner_class_name(class_name)
+            || reflection_object_new_requires_eval_context(ctx, class_name, &operands))
     {
         ctx.declare_eval_context_local();
     }
     let data = ctx.intern_class_name(class_name);
-    let object = ctx.emit_value(
+    ctx.emit_value(
         Op::ObjectNew,
-        operands.clone(),
+        operands,
         Some(Immediate::Data(data)),
         php_type,
         Op::ObjectNew.default_effects(),
         Some(span),
-    );
-    release_owned_call_arg_temporaries(
-        ctx,
-        &operands,
-        None,
-        &ReturnArgAlias::None,
-        span,
-    );
-    object
+    )
 }
 
 /// Returns whether a construction targets a Reflection owner whose metadata may
@@ -405,75 +432,60 @@ pub(super) fn lower_reflection_method_constructor_operands(
 pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let object = lower_expr(ctx, inner);
     let object_ty = ctx.builder.value_php_type(object.value);
-    let (object, class_name, gradual_result_ty, result_ty) = if let Some((class_name, false)) =
-        singular_object_class(&object_ty)
-    {
-        // PHP's generic `object` type is represented as `PhpType::Object("")`. It does not name
-        // a concrete layout: dispatch clone by the runtime class just like an interface-typed
-        // receiver, while preserving the generic object result type for later lowering.
-        if class_name.is_empty() {
-            (
-                object,
-                "object".to_string(),
-                None,
-                Some(object_ty.clone()),
-            )
-        } else {
-            (object, class_name.to_string(), None, None)
-        }
-    } else if matches!(object_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        && crate::types::checker::type_is_gradual_object_family(&object_ty)
-    {
-        let unboxed = ctx.emit_value(
-            Op::MixedUnbox,
-            vec![object.value],
-            Some(Immediate::Bool(true)),
-            PhpType::Object("object".to_string()),
-            Op::MixedUnbox.default_effects(),
-            Some(inner.span),
-        );
-        (
-            unboxed,
-            "object".to_string(),
-            Some(object_ty.clone()),
-            None,
-        )
-    } else {
-        unreachable!(
-            "clone expressions must be type-checked as object-capable values before lowering: {object_ty:?} at {:?}",
-            inner.span
-        );
+    if matches!(object_ty, PhpType::Callable) {
+        return lower_closure_clone(ctx, inner, object, expr);
+    }
+    let result_ty = match object_ty.codegen_repr() {
+        PhpType::Object(class_name) => PhpType::Object(class_name),
+        PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
+        other => unreachable!("clone expression reached EIR lowering with {other:?}"),
     };
-    let data = ctx.intern_class_name(&class_name);
-    let result_ty = result_ty.unwrap_or_else(|| PhpType::Object(class_name.clone()));
-    let cloned = ctx.emit_value(
-        Op::ObjectCloneShallow,
+    // The result record is outside the source root. A temporary source object's destructor can
+    // throw while its post-clone owner is retired, and the already-created clone must remain
+    // reachable from that same-frame catch.
+    let result_staging = prepublish_call_result(ctx, &result_ty, expr.span);
+    let (object, object_owner) = root_owned_call_operand(ctx, object, expr.span);
+    let cloned = ctx.emit_owned_value(
+        Op::RuntimeCall,
         vec![object.value],
-        Some(Immediate::Data(data)),
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+            crate::ir::RuntimeFnId::CloneWith,
+        ))),
         result_ty,
-        Op::ObjectCloneShallow.default_effects(),
+        crate::ir::RuntimeFnId::CloneWith.effects(),
         Some(expr.span),
     );
-    if let Some(result_ty) = gradual_result_ty {
-        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
-        // Runtime-class cloning needs a raw object pointer, while a gradual source is represented
-        // by a boxed cell. Restore that representation before a following property or method
-        // operation so it dispatches on the cloned object's runtime class.
-        return ctx.box_value_as_mixed(cloned, result_ty, Some(expr.span));
+    stage_call_result(ctx, result_staging.as_ref(), cloned, expr.span);
+    if let Some(owner) = object_owner {
+        retire_owned_call_operand(ctx, owner, expr.span);
     }
-    if class_method_signature(ctx, &class_name, &php_symbol_key("__clone")).is_some() {
-        // The generic method-call path releases an owning temporary receiver after the call.
-        // Keep an independent owner for the clone expression result while `__clone()` borrows
-        // and mutates the same object.
-        let preserved = crate::ir_lower::ownership::acquire_if_refcounted(
-            ctx,
-            cloned,
-            Some(expr.span),
-        );
-        lower_method_call_with_receiver(ctx, cloned, "__clone", &[], Op::MethodCall, expr);
-        return preserved;
+    take_prepublished_call_result(ctx, result_staging, cloned, expr.span)
+}
+
+/// Lowers `clone $closure` to a null-receiver rebind: a fresh descriptor copy that keeps
+/// `$this`, scope and every capture, with its own references to them (as php's cloned Closure).
+fn lower_closure_clone(
+    ctx: &mut LoweringContext<'_, '_>,
+    inner: &Expr,
+    closure: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let result_staging = prepublish_call_result(ctx, &PhpType::Callable, expr.span);
+    let (closure, closure_owner) = root_owned_call_operand(ctx, closure, inner.span);
+    // A raw zero, not a tagged null: `__rt_closure_bind` tests its receiver word against 0.
+    let no_receiver = lower_int_literal(ctx, 0, expr);
+    let cloned = super::static_method_calls::emit_closure_bind_with_scope(
+        ctx,
+        closure.value,
+        no_receiver.value,
+        None,
+        expr,
+    );
+    stage_call_result(ctx, result_staging.as_ref(), cloned, expr.span);
+    if let Some(owner) = closure_owner {
+        retire_owned_call_operand(ctx, owner, expr.span);
     }
-    cloned
+    take_prepublished_call_result(ctx, result_staging, cloned, expr.span)
 }
 
 /// Metadata operand source for direct `ReflectionParameter` constructor lowering.
@@ -672,10 +684,25 @@ pub(super) fn lower_new_dynamic(
     expr: &Expr,
 ) -> LoweredValue {
     let args = expand_static_call_spread_args(args);
-    if let Some(value) =
-        lower_new_dynamic_planned_dispatch(ctx, name_expr, &args, expr, None)
-    {
-        return value;
+    // The bodies of the builtin `ReflectionClass::newInstance()` family are `new $this->__name(...$args)`
+    // over a runtime array: planning that per class repeats a class-specific argument binder for
+    // every class in the module, in every one of those bodies (about 1M instructions each in a
+    // framework build). The runtime-argument-container form binds the same arguments at run time
+    // through the shared dynamic-new helper instead.
+    let reflection_body_with_runtime_args = !std::env::var_os("ELEPHC_NO_OUTLINED_DYNAMIC_NEW")
+        .is_some()
+        && ctx
+            .current_class
+            .as_deref()
+            .is_some_and(|class| crate::ir_lower::reflection::canonical_builtin_reflection_class_name(class).is_some())
+        && args.len() == 1
+        && is_spread_arg(&args[0]);
+    if !reflection_body_with_runtime_args {
+        if let Some(value) =
+            lower_new_dynamic_planned_dispatch(ctx, name_expr, &args, expr, None)
+        {
+            return value;
+        }
     }
     let name_value = lower_expr(ctx, name_expr);
     lower_new_dynamic_generic(ctx, name_value, &args, expr)
@@ -701,28 +728,36 @@ pub(super) fn lower_new_dynamic_generic(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    if ctx.web {
+    if ctx.web && !crate::closed_world::is_enabled() {
         ctx.declare_eval_context_local();
     }
     let mut operands = vec![name_value.value];
+    let mut positional_operands: Vec<crate::ir::ValueId> = Vec::new();
     let uses_runtime_arg_container =
         args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args);
-    let mut boxed_container = None;
-    if uses_runtime_arg_container {
-        let mut arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
-            .expect("dynamic constructor arguments always have a runtime container form");
+    let arg_container = if uses_runtime_arg_container {
+        let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
         // A variadic parameter that received a named argument is typed `iterable` (its storage
         // may be a list or a hash), and the invoker normalizes only arrays and boxed values. The
-        // box carries the run-time kind; it is ours, so it is released after the call.
-        if ctx.builder.value_php_type(arg_container.value).codegen_repr() == PhpType::Iterable {
-            arg_container = ctx.box_value_as_mixed(arg_container, PhpType::Mixed, Some(expr.span));
-            boxed_container = Some(arg_container);
-        }
+        // box carries the run-time kind; it is owned here and released with the container below.
+        let arg_container =
+            if ctx.builder.value_php_type(arg_container.value).codegen_repr() == PhpType::Iterable {
+                ctx.box_value_as_mixed(arg_container, PhpType::Mixed, Some(expr.span))
+            } else {
+                arg_container
+            };
         operands.push(arg_container.value);
+        let owns_arguments = ctx.value_is_owning_temporary(arg_container);
+        if owns_arguments && !ctx.has_call_argument_guard(arg_container.value) {
+            guard_descriptor_container(ctx, arg_container, expr.span);
+        }
+        Some((arg_container, owns_arguments))
     } else {
-        operands.extend(lower_args(ctx, args));
-    }
-    let object = ctx.emit_value(
+        positional_operands = lower_args(ctx, args);
+        operands.extend(positional_operands.iter().copied());
+        None
+    };
+    let result = ctx.emit_value(
         Op::DynamicObjectNewMixed,
         operands,
         uses_runtime_arg_container.then_some(Immediate::Bool(true)),
@@ -730,10 +765,29 @@ pub(super) fn lower_new_dynamic_generic(
         Op::DynamicObjectNewMixed.default_effects(),
         Some(expr.span),
     );
-    if let Some(boxed) = boxed_container {
-        crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(expr.span));
+    // The constructor copies what it keeps, so an owned temporary argument (an array element read,
+    // `strtoupper($x)`) is still the site's to retire: it leaked one block per call.
+    if !positional_operands.is_empty() {
+        release_owned_call_arg_temporaries(
+            ctx,
+            &positional_operands,
+            Some(result.value),
+            &ReturnArgAlias::Unknown,
+            expr.span,
+        );
     }
-    object
+    if let Some((arg_container, true)) = arg_container {
+        let guard_result = ctx.value_is_owning_temporary(result);
+        if guard_result {
+            guard_descriptor_container(ctx, result, expr.span);
+        }
+        ctx.unguard_call_argument(arg_container.value, expr.span);
+        crate::ir_lower::ownership::release_if_owned(ctx, arg_container, Some(expr.span));
+        if guard_result {
+            ctx.unguard_call_argument(result.value, expr.span);
+        }
+    }
+    result
 }
 
 /// Lowers dynamic object construction.
@@ -760,12 +814,22 @@ pub(super) fn lower_new_dynamic_object(
 }
 
 /// Returns constructor signature metadata when available for a fixed class.
+///
+/// Resolved through [`crate::types::constructor_owner`] rather than off the instantiated
+/// class's own `methods` map: a private constructor is not inherited, so a descendant of a
+/// class with one carries no `__construct` entry even though PHP instantiates it through the
+/// ancestor's constructor. Reading `methods` directly made that descendant look like it had
+/// NO constructor, so omitted defaults were never padded and `fixed_new` then rejected the
+/// arity — `new Child()` on `private function __construct(int $n = 1)` failed with
+/// `constructor call to Child::__construct with 0 args for 1 params` (issue #868).
+///
+/// An inherited public or protected constructor is unaffected: the owner walk stops at the
+/// instantiated class itself whenever its own map has the entry.
 pub(super) fn constructor_signature<'a>(
     ctx: &'a LoweringContext<'_, '_>,
     class_name: &Name,
 ) -> Option<&'a FunctionSig> {
     let key = php_symbol_key("__construct");
-    ctx.classes
-        .get(class_name.as_str().trim_start_matches('\\'))
-        .and_then(|class_info| class_info.methods.get(&key))
+    crate::types::constructor_owner(ctx.classes, class_name.as_str().trim_start_matches('\\'))
+        .and_then(|(_, class_info)| class_info.methods.get(&key))
 }

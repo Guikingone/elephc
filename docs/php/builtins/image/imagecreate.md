@@ -1,8 +1,8 @@
 ---
 title: "imagecreate()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an empty palette image of the given size."
 sidebar:
-  order: 500
+  order: 501
 ---
 
 ## imagecreate()
@@ -11,7 +11,7 @@ sidebar:
 function imagecreate(int $width, int $height): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an empty palette image of the given size.
 
 **Parameters**:
 - `$width` (`int`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

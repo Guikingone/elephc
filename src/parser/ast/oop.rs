@@ -89,6 +89,8 @@ pub struct PropertyHooks {
     /// that the declaring class assigns like any other. Recorded by the parser, which is where
     /// the hook bodies are still in hand.
     pub backed: bool,
+    /// Whether the original hook bodies explicitly access this property's backing value.
+    pub uses_backing_slot: bool,
 }
 
 impl PropertyHooks {
@@ -105,6 +107,19 @@ impl PropertyHooks {
     /// Returns true if a getter is required (either value or by-ref getter present).
     pub fn requires_get(&self) -> bool {
         self.get || self.get_by_ref
+    }
+
+    /// Returns whether hooks expose a property with no backing value.
+    pub fn is_virtual(&self) -> bool {
+        self.any() && !self.uses_backing_slot
+    }
+
+    /// Recognizes only generated accessors actually declared for this property.
+    pub fn matches_accessor(&self, property: &str, method: &str) -> bool {
+        (self.requires_get()
+            && method.eq_ignore_ascii_case(&crate::names::property_hook_get_method(property)))
+            || (self.set
+                && method.eq_ignore_ascii_case(&crate::names::property_hook_set_method(property)))
     }
 }
 

@@ -106,7 +106,7 @@ pub(in crate::interpreter) fn eval_class_exists_name(
 }
 
 /// Returns whether a class name is already declared, without consulting any autoloader.
-fn eval_class_is_declared(
+pub(in crate::interpreter) fn eval_class_is_declared(
     name: &str,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

@@ -14,8 +14,8 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 ///
 /// dispatches to `emit_mixed_strict_eq_linux_x86_64` on x86_64, otherwise uses ARM64 SysV ABI.
 /// Saves both operand pointers and calls `__rt_mixed_unbox` on each to extract runtime tags.
-/// If tags match, dispatches on the shared tag: scalar/pointer payloads compare word-for-word;
-/// string payloads delegate to `__rt_str_eq` for byte-by-byte comparison.
+/// If tags match, strings compare by bytes and floats use IEEE numeric equality;
+/// other scalar/pointer payloads compare word-for-word.
 /// Returns 1 in `x0` (ARM64) or `rax` (x86_64) if strictly equal, 0 otherwise.
 /// Clobbers: x0–x12, lr. Preserves: x29 (frame pointer).
 pub fn emit_mixed_strict_eq(emitter: &mut Emitter) {

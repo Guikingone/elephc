@@ -77,38 +77,39 @@ pub(in crate::interpreter) fn eval_builtin_preg_replace_callback_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    let (bound, _) = bind_evaluated_ref_builtin_args(
-        &["pattern", "callback", "subject", "limit", "count", "flags"],
-        &evaluated_args,
-        false,
-    )?;
-    let pattern = required_evaluated_ref_arg(&bound, 0)?;
-    let callback = required_evaluated_ref_arg(&bound, 1)?;
-    let subject = required_evaluated_ref_arg(&bound, 2)?;
-    let limit = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
-    let flags = optional_evaluated_ref_arg(&bound, 5).map(|arg| arg.value);
-    let (result, replacement_count) = eval_preg_replace_callback_full(
-        pattern.value,
-        callback.value,
-        subject.value,
-        limit,
-        flags,
-        "preg_replace_callback",
-        Some(scope),
-        context,
-        values,
-    )?;
-    let Some(count) = optional_evaluated_ref_arg(&bound, 4) else {
-        return Ok(result);
-    };
-    let target = count
-        .ref_target
-        .clone()
-        .ok_or(EvalStatus::RuntimeFatal)?;
-    let replacement_count = values.int(replacement_count)?;
-    eval_write_preg_matches_target(&target, replacement_count, context, values)?;
-    Ok(result)
+    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, scope, values| {
+        let (bound, _) = bind_evaluated_ref_builtin_args(
+            &["pattern", "callback", "subject", "limit", "count", "flags"],
+            &evaluated_args,
+            false,
+        )?;
+        let pattern = required_evaluated_ref_arg(&bound, 0)?;
+        let callback = required_evaluated_ref_arg(&bound, 1)?;
+        let subject = required_evaluated_ref_arg(&bound, 2)?;
+        let limit = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+        let flags = optional_evaluated_ref_arg(&bound, 5).map(|arg| arg.value);
+        let (result, replacement_count) = eval_preg_replace_callback_full(
+            pattern.value,
+            callback.value,
+            subject.value,
+            limit,
+            flags,
+            "preg_replace_callback",
+            Some(scope),
+            context,
+            values,
+        )?;
+        let Some(count) = optional_evaluated_ref_arg(&bound, 4) else {
+            return Ok(result);
+        };
+        let target = count
+            .ref_target
+            .clone()
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        let replacement_count = values.int(replacement_count)?;
+        eval_write_preg_matches_target(&target, replacement_count, context, values)?;
+        Ok(result)
+    })
 }
 
 /// Replaces callback matches up to the optional limit and returns the completed count.
@@ -233,6 +234,7 @@ fn eval_preg_replace_callback_bytes(
 /// Dispatches by-value `preg_replace_callback()` calls after argument binding.
 pub(in crate::interpreter) fn eval_preg_replace_callback_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -255,7 +257,7 @@ pub(in crate::interpreter) fn eval_preg_replace_callback_values_result(
         rest.first().copied(),
         rest.get(2).copied(),
         "preg_replace_callback",
-        None,
+        lexical_scope,
         context,
         values,
     )

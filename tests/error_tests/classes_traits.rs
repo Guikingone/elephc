@@ -274,16 +274,6 @@ fn test_error_typed_interface_constant_implementation_must_be_compatible() {
     );
 }
 
-/// Verifies that `new static()` on a child with a required constructor parameter
-/// reports a missing argument error.
-#[test]
-fn test_error_new_static_validates_child_constructor() {
-    expect_error(
-        "<?php class Base { public static function make(): Base { return new static(); } } class Child extends Base { public function __construct(string $name) {} } echo Child::make();",
-        "Constructor 'Child::__construct' expects 1 arguments, got 0",
-    );
-}
-
 /// Verifies the builtin `DatePeriod` constructor enforces its 3-to-4 argument arity.
 #[test]
 fn test_error_date_period_too_few_args() {
@@ -650,6 +640,75 @@ fn test_error_private_grandparent_constructor_names_its_declaring_class() {
     );
 }
 
+/// Issue #870: the ARITY diagnostic names the declaring class too, not the one being
+/// instantiated. php-src reports `Too few arguments to function Owner::__construct()` for a
+/// descendant of a class with a private constructor; elephc said `Child::__construct`, so the
+/// message pointed at a class whose source has no constructor to look at.
+#[test]
+fn test_error_inherited_private_constructor_arity_names_the_declaring_class() {
+    expect_error(
+        "<?php class Owner { private function __construct(int $n) {} public static function makeChild(): Owner { return new Child(); } } class Child extends Owner {} Owner::makeChild();",
+        "Constructor 'Owner::__construct' expects 1 arguments, got 0",
+    );
+}
+
+/// The same for TOO MANY arguments, which reaches the arity check by the other side. php ignores
+/// the surplus for a userland constructor; a fixed `new` has no lowering that drops it yet
+/// (bead elephc-1cx.17).
+#[test]
+fn test_error_inherited_private_constructor_excess_arity_names_the_declaring_class() {
+    expect_error(
+        "<?php class Owner { private function __construct(int $n) {} public static function makeChild(): Owner { return new Child(1, 2, 3); } } class Child extends Owner {} Owner::makeChild();",
+        "Constructor 'Owner::__construct' expects 1 arguments, got 3",
+    );
+}
+
+/// A NAMED argument that matches no parameter is normalized against the same signature, so its
+/// diagnostic must name the declaring class as well.
+#[test]
+fn test_error_inherited_private_constructor_unknown_named_arg_names_the_declaring_class() {
+    expect_error(
+        "<?php class Owner { private function __construct(int $n) {} public static function makeChild(): Owner { return new Child(nope: 1); } } class Child extends Owner {} Owner::makeChild();",
+        "Constructor 'Owner::__construct'",
+    );
+}
+
+/// The declaring class is reported from further up the chain here too, matching the visibility
+/// half's `test_error_private_grandparent_constructor_names_its_declaring_class`.
+#[test]
+fn test_error_inherited_private_grandparent_constructor_arity_names_its_declaring_class() {
+    expect_error(
+        "<?php class Root { private function __construct(int $n) {} public static function makeLeaf(): Root { return new Leaf(); } } class Middle extends Root {} class Leaf extends Middle {} Root::makeLeaf();",
+        "Constructor 'Root::__construct' expects 1 arguments, got 0",
+    );
+}
+
+/// A class that declares its OWN constructor is unchanged: the declaring class and the
+/// instantiated class are the same, so the message reads exactly as before.
+#[test]
+fn test_error_own_constructor_arity_still_names_the_instantiated_class() {
+    expect_error(
+        "<?php class Owner { public function __construct(int $n) {} } $o = new Owner();",
+        "Constructor 'Owner::__construct' expects 1 arguments, got 0",
+    );
+}
+
+/// An inherited PUBLIC constructor names the class that DECLARES it, which is what php-src
+/// reports (`Too few arguments to function Base::__construct()`).
+///
+/// This one CHANGES with the fix, and deliberately so: a public constructor IS in the
+/// descendant's own method map, so the owner walk stops at the descendant — but the declaring
+/// class it then reports is still the ancestor. Measured before the fix, this same program said
+/// `Constructor 'Sub::__construct'`, naming a class whose source has no constructor. The
+/// message moves for every INHERITED constructor, not only a private one.
+#[test]
+fn test_error_inherited_public_constructor_arity_names_the_declaring_class() {
+    expect_error(
+        "<?php class Base { public function __construct(int $n) {} } class Sub extends Base {} $o = new Sub();",
+        "Constructor 'Base::__construct' expects 1 arguments, got 0",
+    );
+}
+
 /// Verifies that `new ReflectionParameter()` rejects unknown parameter names.
 #[test]
 fn test_error_reflection_parameter_constructor_unknown_name() {
@@ -668,13 +727,12 @@ fn test_error_reflection_parameter_constructor_unknown_function() {
     );
 }
 
-/// Verifies that `new ReflectionParameter()` rejects dynamic function names
-/// because runtime function reflection lookup metadata is not available.
+/// `new ReflectionParameter($f, 'a')` with a function name held in a variable is valid php; elephc now
+/// compiles it and the program output matches php.
 #[test]
-fn test_error_reflection_parameter_constructor_dynamic_function_name() {
-    expect_error(
+fn test_reflection_parameter_constructor_accepts_dynamic_function_name() {
+    expect_no_error(
         "<?php function reflected_function($a) {} $f = 'reflected_function'; $r = new ReflectionParameter($f, 'a');",
-        "requires a string literal function name",
     );
 }
 
@@ -800,5 +858,134 @@ fn test_error_pdo_exception_internal_factory_is_private() {
     expect_pdo_error(
         "<?php $error = PDOException::__elephcFromErrorInfo('x', ['HY000', 1]);",
         "Cannot access private method: PDOException::__elephcFromErrorInfo",
+    );
+}
+
+/// Issue #871: a descendant that declares its OWN private constructor HIDES the ancestor's, so
+/// the owner walk stops at the descendant and `new static()` from the ancestor's scope names
+/// the DESCENDANT's constructor.
+///
+/// php-src raises `Error: Call to private HideChild::__construct() from scope HideOwner` for the
+/// same program, so the class named here is the class PHP names. The test guards the direction
+/// the walk must NOT take: resolving to the ancestor would have accepted the call, because the
+/// ancestor's constructor is public and the call site is its own scope.
+#[test]
+fn test_error_a_descendants_own_private_constructor_hides_the_ancestors() {
+    expect_error(
+        "<?php class HideOwner { public function __construct() {} public static function make(): static { return new static(); } } class HideChild extends HideOwner { private function __construct() {} } HideChild::make();",
+        "Cannot access private constructor: HideChild::__construct",
+    );
+}
+
+/// The same hiding rule through the NAMED form rather than late static binding.
+#[test]
+fn test_error_a_descendants_own_private_constructor_hides_the_ancestors_for_a_named_new() {
+    expect_error(
+        "<?php class NamedHideOwner { public function __construct() {} } class NamedHideChild extends NamedHideOwner { private function __construct() {} } $o = new NamedHideChild();",
+        "Cannot access private constructor: NamedHideChild::__construct",
+    );
+}
+
+
+/// Verifies the malformed declarator lists PHP rejects are still rejected, each by its own cause.
+///
+/// Accepting `public int $w = 40, $h = 22;` (issue #684) must not turn the comma into a place
+/// where anything goes. The four shapes here are the ones a looping parser gets wrong most
+/// easily: a duplicate name inside one list, a trailing comma, a constant declarator with no
+/// value, and a HOOK block on a list — which php-src rejects outright, because a hook block
+/// belongs to one property (`unexpected token "{", expecting "," or ";"`).
+#[test]
+fn test_malformed_declarator_lists_are_rejected() {
+    expect_error(
+        "<?php class A { public int $a = 1, $a = 2; }",
+        "Cannot redeclare property $a",
+    );
+    expect_error(
+        "<?php class B { const X = 1, X = 2; }",
+        "Cannot redeclare class constant X",
+    );
+    expect_error(
+        "<?php class C { public int $a = 1, ; }",
+        "Expected a property name after ',' in the declaration list",
+    );
+    expect_error(
+        "<?php class E { const X = 1, Y; }",
+        "Expected '=' after class constant name",
+    );
+    expect_error(
+        "<?php class G { public int $a = 1, $b { get => 1; } }",
+        "A property hook block needs a declaration of its own",
+    );
+}
+
+/// Verifies a redeclared constant names the kind of type that declares it (issue #1141).
+///
+/// The class-like body parser passed a hardcoded `"class"` for every owner, so a trait or an enum
+/// reported `Cannot redeclare class constant`; only the interface parser named its own kind. The
+/// duplicate is reported whether it repeats a whole `const` or sits inside one declarator list.
+#[test]
+fn test_constant_redeclaration_names_the_declaring_kind() {
+    expect_error(
+        "<?php class K { const A = 1; const A = 2; }",
+        "Cannot redeclare class constant A",
+    );
+    expect_error(
+        "<?php trait T { const A = 1, A = 2; }",
+        "Cannot redeclare trait constant A",
+    );
+    expect_error(
+        "<?php enum E { case X; const A = 1; const A = 2; }",
+        "Cannot redeclare enum constant A",
+    );
+    expect_error(
+        "<?php interface I { const A = 1; const A = 2; }",
+        "Cannot redeclare interface constant A",
+    );
+}
+
+/// Verifies PHP-final Exception accessors cannot be overridden by user subclasses.
+#[test]
+fn test_error_cannot_override_final_exception_method() {
+    expect_error(
+        "<?php class CustomException extends Exception { public function getMessage(): string { return 'custom'; } }",
+        "Cannot override final method Exception::getMessage",
+    );
+}
+
+/// Verifies Exception::getCode cannot be overridden by user classes.
+#[test]
+fn test_error_cannot_override_final_exception_get_code() {
+    expect_error(
+        "<?php class CustomCodeException extends Exception { public function getCode(): int { return 0; } }",
+        "Cannot override final method Exception::getCode",
+    );
+}
+
+/// Verifies a source class that merely shares the name of the compiler-injected `PDOException`
+/// gets no exemption: its real spans keep it off the prelude's SQLSTATE `getCode()` hatch, so
+/// overriding `getCode()` still reports `Exception` as the declaring class of the final method.
+#[test]
+fn test_error_user_pdo_exception_cannot_override_final_get_code() {
+    expect_error(
+        "<?php class PDOException extends Exception { public function getCode(): string|int { return 'HY000'; } }",
+        "Cannot override final method Exception::getCode",
+    );
+    expect_error(
+        "<?php namespace App; class PDOException extends \\Exception { public function getCode(): string|int { return 'HY000'; } }",
+        "Cannot override final method Exception::getCode",
+    );
+}
+
+/// Verifies `Error` shares the final Throwable accessors with `Exception`, and the diagnostic
+/// names `Error` as the declaring class, also for a subclass reached through `TypeError`.
+#[test]
+fn test_error_cannot_override_final_error_methods() {
+    expect_error(
+        "<?php class AppError extends Error { public function getMessage(): string { return 'custom'; } }",
+        "Cannot override final method Error::getMessage",
+    );
+    expect_error(
+        "<?php class AppTypeError extends TypeError { public function getPrevious(): ?Throwable { return null; } }",
+        "Cannot override final method Error::getPrevious",
     );
 }

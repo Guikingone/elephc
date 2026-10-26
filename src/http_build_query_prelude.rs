@@ -20,7 +20,7 @@
 use crate::parser::ast::{BinOp, CastType, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_binop, e_call, e_cast, e_int, e_null, e_str, e_ternary, e_var, function,
-    internal_declarations, s_array_push, s_assign, s_foreach, s_if, s_return, t_array, t_mixed,
+    php_semantics_declarations, s_array_push, s_assign, s_foreach, s_if, s_return, t_array, t_mixed,
 };
 
 /// Name of the recursive pair builder.
@@ -31,7 +31,7 @@ const FIELDS_NAME: &str = "__elephc_http_build_query_fields";
 
 /// Returns the `http_build_query()` declarations for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| {
+    php_semantics_declarations(|| {
         vec![
             decl_fn_fields(),
             decl_fn_pairs(),
@@ -160,14 +160,15 @@ fn decl_fn_pairs() -> Stmt {
 }
 
 /// The shared signature of the helper and its PHP-visible wrapper:
-/// `(array|object $data, string $numericPrefix = '', mixed $argSeparator = null,
-/// int $encodingType = 1): string`, with `$data` declared `mixed`.
+/// `(array|object $data, string $numeric_prefix = '', mixed $arg_separator = null,
+/// int $encoding_type = 1): string`, with `$data` declared `mixed`. The names are php's own, so
+/// named arguments (`http_build_query(data: $d, arg_separator: '&')`) bind.
 fn with_signature(name: &str, body: Vec<Stmt>) -> Stmt {
     function(name)
         .param("data", t_mixed())
-        .param_default("numericPrefix", TypeExpr::Str, e_str(""))
-        .param_default("argSeparator", t_mixed(), e_null())
-        .param_default("encodingType", TypeExpr::Int, e_int(1))
+        .param_default("numeric_prefix", TypeExpr::Str, e_str(""))
+        .param_default("arg_separator", t_mixed(), e_null())
+        .param_default("encoding_type", TypeExpr::Int, e_int(1))
         .returns(TypeExpr::Str)
         .body(body)
         .build()
@@ -176,9 +177,9 @@ fn with_signature(name: &str, body: Vec<Stmt>) -> Stmt {
 /// `__elephc_http_build_query(...)`, the helper the builtin call lowers to.
 fn decl_fn_build(name: &str) -> Stmt {
     let separator = e_ternary(
-        e_binop(e_var("argSeparator"), BinOp::StrictEq, e_null()),
+        e_binop(e_var("arg_separator"), BinOp::StrictEq, e_null()),
         e_str("&"),
-        e_cast(CastType::String, e_var("argSeparator")),
+        e_cast(CastType::String, e_var("arg_separator")),
     );
     with_signature(
         name,
@@ -191,7 +192,7 @@ fn decl_fn_build(name: &str) -> Stmt {
                     e_var("separator"),
                     e_call(
                         PAIRS_NAME,
-                        vec![e_var("data"), e_str(""), e_var("numericPrefix"), e_var("encodingType")],
+                        vec![e_var("data"), e_str(""), e_var("numeric_prefix"), e_var("encoding_type")],
                     ),
                 ],
             )),
@@ -207,9 +208,9 @@ fn decl_fn_wrapper() -> Stmt {
             crate::backend_gap_prelude::HTTP_BUILD_QUERY_NAME,
             vec![
                 e_var("data"),
-                e_var("numericPrefix"),
-                e_var("argSeparator"),
-                e_var("encodingType"),
+                e_var("numeric_prefix"),
+                e_var("arg_separator"),
+                e_var("encoding_type"),
             ],
         ))],
     )

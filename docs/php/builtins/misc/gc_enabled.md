@@ -1,8 +1,8 @@
 ---
 title: "gc_enabled()"
-description: "Returns whether the circular reference collector is active."
+description: "Reports whether automatic cycle collection is enabled."
 sidebar:
-  order: 627
+  order: 635
 ---
 
 ## gc_enabled()
@@ -11,7 +11,7 @@ sidebar:
 function gc_enabled(): bool
 ```
 
-Returns whether the circular reference collector is active.
+Reports whether automatic cycle collection is enabled.
 
 **Parameters**: none.
 
@@ -20,9 +20,9 @@ Returns whether the circular reference collector is active.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/gc.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/gc.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/gc_enabled.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/gc_enabled.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

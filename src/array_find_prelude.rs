@@ -16,7 +16,7 @@
 
 use crate::parser::ast::{Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_bool, e_closure_call, e_not, e_null, e_var, function, internal_declarations, s_foreach, s_if,
+    e_bool, e_closure_call, e_not, e_null, e_var, function, php_semantics_declarations, s_foreach, s_if,
     s_return, t_array, t_mixed,
 };
 
@@ -31,7 +31,7 @@ pub(crate) const ARRAY_FIND_NAME: &str = "__elephc_array_find";
 
 /// Returns the `array_any()` / `array_all()` / `array_find()` declarations for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| {
+    php_semantics_declarations(|| {
         vec![
             predicate_walk(ARRAY_ANY_NAME, true),
             predicate_walk(ARRAY_ALL_NAME, false),

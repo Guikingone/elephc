@@ -58,7 +58,7 @@ fn lower_eval_callable_call_array_with_context(
     let pushed_caller_class = if use_local_context {
         false
     } else {
-        push_native_caller_class(ctx)
+        push_native_caller_class(ctx)?
     };
     let mut boxed = EvalBoxedOperands::new();
     boxed.extend(store_eval_mixed_operand_at(ctx, callback, EVAL_TEMP_CELL_OFFSET)?);
@@ -86,7 +86,7 @@ fn lower_eval_callable_call_array_with_context(
     abi::emit_call_label(ctx.emitter, &symbol);
     pop_eval_context_class_scope(ctx, pushed_class_scope);
     pop_native_caller_class(ctx, pushed_caller_class);
-    emit_eval_status_check(ctx);
+    emit_eval_status_check_releasing(ctx, &boxed);
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -115,7 +115,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_is_callable(
         .target
         .extern_symbol("__elephc_eval_is_callable");
     abi::emit_call_label(ctx.emitter, &symbol);
-    emit_release_eval_boxed_operands_keeping_int_answer(ctx, &boxed);
+    retire_eval_metadata_operand_boxes(ctx, &[(callback, EVAL_TEMP_CELL_OFFSET)])?;
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     box_eval_bool_result_if_mixed(ctx, inst);
     store_if_result(ctx, inst)
@@ -254,7 +254,9 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_member_exists(
         .target
         .extern_symbol("__elephc_eval_member_exists");
     abi::emit_call_label(ctx.emitter, &symbol);
-    emit_release_eval_boxed_operands_keeping_int_answer(ctx, &boxed);
+    retire_eval_metadata_operand_boxes(ctx, &[
+        (target, EVAL_TEMP_CELL_OFFSET), (member, EVAL_CODE_PTR_OFFSET),
+    ])?;
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     box_eval_bool_result_if_mixed(ctx, inst);
     store_if_result(ctx, inst)
@@ -312,8 +314,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_class_relation(
     let relation_kind = eval_class_relation_kind(name)?;
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     ensure_eval_context(ctx)?;
-    let mut boxed = EvalBoxedOperands::new();
-    boxed.extend(store_eval_mixed_operand_at(ctx, target, EVAL_TEMP_CELL_OFFSET)?);
+    store_eval_mixed_operand_at(ctx, target, EVAL_TEMP_CELL_OFFSET)?;
     load_eval_context_to_arg(ctx, 0);
     let target_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, target_arg, EVAL_TEMP_CELL_OFFSET);
@@ -329,8 +330,8 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_class_relation(
         .target
         .extern_symbol("__elephc_eval_class_relation");
     abi::emit_call_label(ctx.emitter, &symbol);
+    retire_eval_metadata_operand_boxes(ctx, &[(target, EVAL_TEMP_CELL_OFFSET)])?;
     emit_eval_status_check(ctx);
-    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
@@ -367,7 +368,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_global_class_relation
         .target
         .extern_symbol("__elephc_eval_class_relation");
     abi::emit_call_label(ctx.emitter, &symbol);
-    emit_eval_status_check(ctx);
+    emit_eval_status_check_releasing(ctx, &boxed);
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -403,7 +404,7 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_eval_dynamic_constant_null_
         .target
         .extern_symbol("__elephc_eval_dynamic_constant");
     abi::emit_call_label(ctx.emitter, &symbol);
-    emit_eval_status_check(ctx);
+    emit_eval_status_check_releasing(ctx, &boxed);
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
@@ -411,24 +412,34 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_eval_dynamic_constant_null_
     Ok(())
 }
 
-/// Lowers object class-name introspection through the eval bridge.
-///
-/// The bridge borrows the receiver cell rather than taking it, so the box this frame made is still
-/// this frame's to release, on the answered path and on the non-object shortcut alike. The answered
-/// path releases before it loads the published name cell, so the release never sees a live result.
+/// Transfers boxed class-name results or detaches native strings before retiring their bridge cell.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_class_name(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     object: ValueId,
     name: &str,
 ) -> Result<()> {
+    let boxed_result = inst.result_php_type.codegen_repr() == PhpType::Mixed;
+    emit_eval_object_class_name(ctx, object, name, boxed_result)?;
+    store_if_result(ctx, inst)
+}
+
+/// Leaves the class name of `object` -- as the eval bridge answers it, so an interpreter-made
+/// object or closure reports its PHP class (`Closure`, an eval-declared class) rather than the
+/// native carrier's class id -- in the string result registers, or boxed as Mixed when
+/// `boxed_result`. A non-object yields the empty string.
+pub(in crate::codegen::lower_inst::builtins) fn emit_eval_object_class_name(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    name: &str,
+    boxed_result: bool,
+) -> Result<()> {
     let lookup_kind = eval_class_lookup_kind(name)?;
     let non_object_label = ctx.next_label("eval_object_class_non_object");
     let done_label = ctx.next_label("eval_object_class_done");
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     ensure_eval_context(ctx)?;
-    let mut boxed = EvalBoxedOperands::new();
-    boxed.extend(store_eval_object_operand(ctx, object)?);
+    store_eval_object_operand(ctx, object)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_branch_if_eval_unboxed_not_object(ctx, &non_object_label);
     load_eval_context_to_arg(ctx, 0);
@@ -446,22 +457,41 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_class_name(
         .target
         .extern_symbol("__elephc_eval_object_class_name");
     abi::emit_call_label(ctx.emitter, &symbol);
+    retire_eval_metadata_operand_boxes(ctx, &[(object, EVAL_TEMP_CELL_OFFSET)])?;
     emit_eval_status_check(ctx);
-    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_eval_unboxed_string_result(ctx);
+    if !boxed_result {
+        emit_owned_eval_class_name_string(ctx);
+    }
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&non_object_label);
-    emit_release_eval_boxed_operands(ctx, &boxed);
+    retire_eval_metadata_operand_boxes(ctx, &[(object, EVAL_TEMP_CELL_OFFSET)])?;
     emit_eval_string_result(ctx, b"");
+    if boxed_result {
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    }
 
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
-    box_eval_bool_result_if_mixed(ctx, inst);
-    store_if_result(ctx, inst)
+    Ok(())
+}
+
+/// Copies a bridge string payload and releases its owned cell without invalidating the copy.
+fn emit_owned_eval_class_name_string(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_eval_unboxed_string_result(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        EVAL_RESULT_VALUE_CELL_OFFSET + 16,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
 }
 
 /// Lowers object/class relation predicates through the eval bridge.
@@ -536,9 +566,54 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_eval_object_is_a_named_fall
     native_fallback_label: &str,
     definite_no_label: &str,
 ) -> Result<()> {
+    emit_eval_object_is_a_named_fallback_with(
+        ctx,
+        |ctx, _| store_eval_object_operand(ctx, object),
+        target_class,
+        matched_label,
+        native_fallback_label,
+        definite_no_label,
+    )
+}
+
+/// Same probe for an object that is already a boxed Mixed cell in the int result register.
+///
+/// The shared typed-property guard uses this: its helper body has no SSA value to name, so the
+/// cell arrives in a register instead. The bridge borrows the cell, so the caller's own
+/// reference is untouched by the probe.
+pub(in crate::codegen::lower_inst) fn emit_eval_object_is_a_named_fallback_from_result(
+    ctx: &mut FunctionContext<'_>,
+    target_class: &str,
+    matched_label: &str,
+    native_fallback_label: &str,
+    definite_no_label: &str,
+) -> Result<()> {
+    emit_eval_object_is_a_named_fallback_with(
+        ctx,
+        |ctx, offset| {
+            abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+            Ok(None)
+        },
+        target_class,
+        matched_label,
+        native_fallback_label,
+        definite_no_label,
+    )
+}
+
+/// Shared body of the named-fallback probes. `store_operand` receives the cell's offset in the
+/// scratch frame and returns it again only when it boxed the cell itself and so owes its release.
+fn emit_eval_object_is_a_named_fallback_with(
+    ctx: &mut FunctionContext<'_>,
+    store_operand: impl FnOnce(&mut FunctionContext<'_>, usize) -> Result<Option<usize>>,
+    target_class: &str,
+    matched_label: &str,
+    native_fallback_label: &str,
+    definite_no_label: &str,
+) -> Result<()> {
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     let mut boxed = EvalBoxedOperands::new();
-    boxed.extend(store_eval_object_operand(ctx, object)?);
+    boxed.extend(store_operand(ctx, EVAL_TEMP_CELL_OFFSET)?);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
     let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
@@ -726,11 +801,69 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a_dynamic(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&invalid_label);
+    retire_eval_metadata_operand_boxes(ctx, &[
+        (object, EVAL_TEMP_CELL_OFFSET), (target, EVAL_CODE_PTR_OFFSET),
+    ])?;
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     abi::emit_call_label(ctx.emitter, "__rt_instanceof_invalid_target");
 
     ctx.emitter.label(&done_label);
+    retire_eval_metadata_operand_boxes(ctx, &[
+        (object, EVAL_TEMP_CELL_OFFSET), (target, EVAL_CODE_PTR_OFFSET),
+    ])?;
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+/// Lowers `highlight_string()`/`highlight_file()` through the interpreter's PHP highlighter.
+///
+/// The bridge borrows the boxed subject cell (so an object argument still converts through
+/// `__toString()` inside the interpreter), echoes or returns through the same renderer the eval
+/// builtin uses, and answers one owned boxed `string|bool` cell, which is exactly the `Mixed`
+/// representation of the declared union.
+pub(in crate::codegen::lower_inst) fn lower_eval_highlight(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<()> {
+    if !(1..=2).contains(&inst.operands.len()) {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{name} expected 1..=2 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    let subject = expect_operand(inst, 0)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    let mut boxed = EvalBoxedOperands::new();
+    boxed.extend(store_eval_mixed_operand_at(ctx, subject, EVAL_TEMP_CELL_OFFSET)?);
+    // `$return` is PHP's second parameter: absent means the default `false`.
+    let flag_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    if let Some(flag) = inst.operands.get(1).copied() {
+        let flag_ty = ctx.load_value_to_result(flag)?.codegen_repr();
+        if flag_ty != PhpType::Bool {
+            return Err(CodegenIrError::unsupported(format!(
+                "{name} $return lowering for PHP type {flag_ty:?}"
+            )));
+        }
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        if flag_arg != result_reg {
+            ctx.emitter
+                .instruction(&format!("mov {flag_arg}, {result_reg}")); // pass PHP's `$return` flag as the bridge's second argument
+        }
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, flag_arg, 0);
+    }
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        EVAL_TEMP_CELL_OFFSET,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol(&format!("__elephc_eval_{name}"));
+    abi::emit_call_label(ctx.emitter, &symbol);
     emit_release_eval_boxed_operands_keeping_int_answer(ctx, &boxed);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     store_if_result(ctx, inst)
 }
+

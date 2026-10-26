@@ -1,11 +1,11 @@
 ---
-title: "array_uintersect_uassoc() — internals"
+title: "array_uintersect_uassoc() - internals"
 description: "Compiler internals for array_uintersect_uassoc(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 54
 ---
 
-## `array_uintersect_uassoc()` — internals
+## `array_uintersect_uassoc()` - internals
 
 ## Where it lives
 

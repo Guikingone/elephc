@@ -1,8 +1,8 @@
 ---
 title: "timezone_transitions_get()"
-description: "Implemented by the compiler-injected tz prelude."
+description: "Returns a timezone's DST transitions in a time range."
 sidebar:
-  order: 263
+  order: 264
 ---
 
 ## timezone_transitions_get()
@@ -11,7 +11,7 @@ sidebar:
 function timezone_transitions_get(mixed $object, int $timestampBegin = PHP_INT_MIN, int $timestampEnd = PHP_INT_MAX): mixed
 ```
 
-Implemented by the compiler-injected tz prelude.
+Returns a timezone's DST transitions in a time range.
 
 **Parameters**:
 - `$object` (`mixed`)
@@ -25,7 +25,7 @@ Implemented by the compiler-injected tz prelude.
 - **Compiled (AOT)**: supported through the compiler-injected tz prelude.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

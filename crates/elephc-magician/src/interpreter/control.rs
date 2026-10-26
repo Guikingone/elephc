@@ -6,15 +6,12 @@
 //! - `crate::interpreter` execution, builtin, and call-dispatch helpers.
 //!
 //! Key details:
-//! - Runtime cells are opaque handles; these types do not own or release values by themselves,
-//!   with one declared exception: `owned` records a reference the CALL MACHINERY still owes.
-//!   An argument read out of a spread container comes back owned from `array_get`
-//!   (`src/codegen_support/runtime/objects/mixed_array_get.rs`: every successful return is an
-//!   owned `Mixed*`), while every consumer treats `value` as borrowed. `owned` carries that debt
-//!   from the producer to the one place that can settle it — after the callee has been handed
-//!   the value — so the element is neither leaked nor freed while the callee still reads it.
-//! - Runtime cells are opaque handles; only foreign PCNTL callables own a
-//!   temporary lease that keeps their eval context alive through dispatch.
+//! - Runtime cells are opaque handles; an argument's ownership travels on the handle itself
+//!   (`RuntimeCellHandle::is_borrowed`). A value the call machinery still owes a release on is
+//!   an owned handle; `with_eval_call_arguments` hands consumers borrowed views and settles the
+//!   owners after dispatch.
+//! - Only foreign PCNTL callables own a temporary lease that keeps their eval context alive
+//!   through dispatch.
 
 use crate::context::{pcntl_runtime::EvalPcntlContextLease, EvalReferenceTarget};
 use crate::value::RuntimeCellHandle;
@@ -42,8 +39,6 @@ pub(super) struct EvaluatedCallArg {
     pub(super) name: Option<String>,
     pub(super) value: RuntimeCellHandle,
     pub(super) ref_target: Option<EvalReferenceTarget>,
-    /// Whether the call machinery still owes one release on `value` after the call.
-    pub(super) owned: bool,
 }
 
 /// One method argument after PHP parameter-order binding and default materialization.
@@ -52,23 +47,27 @@ pub(super) struct BoundMethodArg {
     pub(super) value: RuntimeCellHandle,
     pub(super) ref_target: Option<EvalReferenceTarget>,
     pub(super) variadic_ref_targets: Vec<(RuntimeCellHandle, EvalReferenceTarget)>,
-    /// Whether the call machinery still owes one release on `value` after the call.
-    pub(super) owned: bool,
 }
 
 /// One native function argument list prepared for the descriptor invoker ABI.
+#[derive(Default)]
 pub(super) struct BoundNativeFunctionArgs {
     pub(super) values: Vec<RuntimeCellHandle>,
     pub(super) ref_slots: Vec<BoundNativeFunctionRefSlot>,
-    /// Argument cells the caller still owes a release on once the invoker has returned.
-    pub(super) owned_temporaries: Vec<RuntimeCellHandle>,
+    /// Container key of each staged value: `None` is its own position, `Some(name)` a string key.
+    ///
+    /// Only a SOURCE-declared variadic can absorb an unknown named argument, and PHP keeps that
+    /// argument's string key in the collected array. Recording the key here is what lets the
+    /// container become associative instead of losing the name, and it stays index-aligned with
+    /// `values` because staging pushes exactly one value per bound argument, in order.
+    pub(super) named_keys: Vec<Option<String>>,
 }
 
 /// One staged by-reference slot passed to a native function invoker.
 pub(super) enum BoundNativeFunctionRefSlot {
     Mixed {
         original: RuntimeCellHandle,
-        slot: Box<RuntimeCellHandle>,
+        slot: Box<*mut crate::value::RuntimeCell>,
         target: Option<EvalReferenceTarget>,
     },
     RawWord {
@@ -167,4 +166,5 @@ pub(super) enum EvalPredefinedConstant {
     Int(i64),
     Float(f64),
     String(&'static str),
+    Bool(bool),
 }

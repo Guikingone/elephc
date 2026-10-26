@@ -1,8 +1,8 @@
 ---
 title: "mysqli_prepare()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Prepares a statement for execution."
 sidebar:
-  order: 158
+  order: 159
 ---
 
 ## mysqli_prepare()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_prepare(mixed $mysql, string $query): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Prepares a statement for execution.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

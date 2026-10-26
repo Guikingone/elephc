@@ -8,6 +8,7 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+use crate::parser::ast::ArrayEntry;
 
 /// Distinguishes pre-lowered array-literal items between plain elements and spread operands.
 pub(super) enum SpreadItem {
@@ -23,35 +24,82 @@ pub(super) fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Ex
         let array_ty = array_literal_type_for_ir(ctx, items, expr);
         return lower_array_literal_without_spread(ctx, items, expr, array_ty);
     }
-    // Spread-containing literals: lower every item value in source order first so PHP-visible side
-    // effects happen in order, then inspect each spread source's actual IR type to decide whether
-    // the destination must be associative (hash) storage. Dest allocation is pure, so emitting it
-    // after source evaluation preserves observable behavior.
+    // Validate boxed spreads as they are evaluated, before later element side effects.
+    // Root owned items across subsequent evaluation and allocate the destination only once
+    // every spread has a valid concrete container layout.
     let mut lowered: Vec<SpreadItem> = Vec::with_capacity(items.len());
+    let mut roots = Vec::new();
     let mut any_assoc_spread = false;
     for item in items {
         match &item.kind {
             ExprKind::Spread(inner) => {
                 let source = lower_expr(ctx, inner);
+                let source = if source.ir_type == IrType::Heap(IrHeapKind::Mixed) {
+                    lower_boxed_array_spread_source(ctx, source, item.span)
+                } else {
+                    source
+                };
                 if matches!(
                     ctx.builder.value_php_type(source.value).codegen_repr(),
-                    PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Object(_)
+                    PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Object(_) | PhpType::Mixed
                 ) {
                     any_assoc_spread = true;
                 }
+                let source = root_array_literal_item(ctx, source, item.span, &mut roots);
                 lowered.push(SpreadItem::Spread(source));
             }
             _ => {
                 let value = lower_array_reference_or_value(ctx, item);
+                let value = root_array_literal_item(ctx, value, item.span, &mut roots);
                 lowered.push(SpreadItem::Element(value));
             }
         }
     }
-    if any_assoc_spread {
+    let result = if any_assoc_spread {
         lower_array_literal_as_hash_from_lowered(ctx, items, &lowered, expr)
     } else {
         lower_array_literal_as_indexed_from_lowered(ctx, items, &lowered, expr)
+    };
+    for slot in roots.into_iter().rev() {
+        retire_owned_call_operand(ctx, slot, expr.span);
     }
+    result
+}
+
+/// Roots owned literal items across later evaluation and lends their stable slot value to insertion.
+fn root_array_literal_item(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+    roots: &mut Vec<crate::ir::LocalSlotId>,
+) -> LoweredValue {
+    let (rooted, owner) = root_owned_call_operand(ctx, value, span);
+    let Some(slot) = owner else { return rooted; };
+    roots.push(slot);
+    let php_type = ctx.builder.value_php_type(rooted.value);
+    let value = ctx.builder.emit_load_local(slot, rooted.ir_type, php_type);
+    LoweredValue { value, ir_type: ctx.builder.value_type(value) }
+}
+
+/// Validates and copies a boxed spread without leaving its expression owner live after a throw.
+pub(super) fn lower_boxed_array_spread_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let (source, owner) = root_owned_call_operand(ctx, source, span);
+    let result = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![source.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ArrayUnpackToHash)),
+        PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed) },
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+    if let Some(slot) = owner {
+        retire_owned_call_operand(ctx, slot, span);
+    }
+    result
 }
 
 /// Lowers an indexed array literal using a contextual element storage type.
@@ -91,19 +139,37 @@ pub(super) fn lower_array_literal_without_spread(
         Op::ArrayNew.default_effects(),
         Some(expr.span),
     );
+    // The literal is the only owner of the elements already pushed, so an element expression
+    // that throws (`[1, bad()]`) would strand it. Publish it in an unwind-visible slot for the
+    // construction when any element can throw; plain literals keep the direct SSA form.
+    let published = if items.iter().any(crate::optimize::expr_may_throw) {
+        let array_ty = ctx.builder.value_php_type(array.value);
+        Some((publish_constructed_container(ctx, array, expr.span), array_ty))
+    } else {
+        None
+    };
     for item in items {
         let value = lower_array_reference_or_value(ctx, item);
         let value = coerce_array_literal_element_to_storage_type(ctx, value, elem_ty.as_ref(), item);
+        let target = match &published {
+            Some((owner, array_ty)) => {
+                load_published_container(ctx, *owner, array_ty.clone(), item.span)
+            }
+            None => array,
+        };
         ctx.emit_void(
             Op::ArrayPush,
-            vec![array.value, value.value],
+            vec![target.value, value.value],
             None,
             Op::ArrayPush.default_effects(),
             Some(item.span),
         );
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, item.span);
     }
-    array
+    match published {
+        Some((owner, array_ty)) => take_published_container(ctx, owner, array_ty, expr.span),
+        None => array,
+    }
 }
 
 /// Coerces an array literal element to the contextual storage type when needed.
@@ -144,7 +210,15 @@ pub(super) fn lower_array_literal_as_indexed_from_lowered(
     lowered: &[SpreadItem],
     expr: &Expr,
 ) -> LoweredValue {
-    let array_ty = array_literal_type_for_ir(ctx, items, expr);
+    // The static prediction looks at the spread's CHECKED type, while this path was chosen from the
+    // LOWERED sources, which are all list-shaped. doctrine/dbal's
+    // `[$first, ...array_values($others)]` over an `array` parameter predicts an associative
+    // result for `array_values()` and lowers it to a list, so a predicted hash would be filled by
+    // `array_push` (an `OperandTypeMismatch`) and refuse the whole class.
+    let array_ty = match array_literal_type_for_ir(ctx, items, expr) {
+        PhpType::AssocArray { value, .. } => PhpType::Array(Box::new(value.codegen_repr())),
+        other => other,
+    };
     let elem_ty = indexed_array_literal_element_type(&array_ty);
     let array = ctx.emit_value(
         Op::ArrayNew,
@@ -208,6 +282,117 @@ pub(super) fn lower_array_literal_as_hash_from_lowered(
     hash
 }
 
+/// Lowers an array literal that mixes spreads with explicit keys.
+///
+/// The destination is always a hash: an explicit key means the result cannot be packed storage,
+/// and a spread means the entry count is not known until it runs. Each entry is lowered where it
+/// appears, because the ORDER is observable -- a spread's elements take the next free integer
+/// key at the point the spread sits, so `["a" => 1, ...$v, 2]` and `[...$v, "a" => 1, 2]` do not
+/// agree on which key the trailing `2` gets.
+///
+/// The three entry forms reuse what the two single-shape paths already do: a spread goes through
+/// `lower_hash_spread_into_hash_from_value` (which promotes an indexed source first), a keyed
+/// entry emits `Op::HashSet` as `lower_assoc_array_literal` does, and a bare value appends
+/// through the same runtime call the hash path uses for a spread-literal element.
+pub(super) fn lower_mixed_array_literal(
+    ctx: &mut LoweringContext<'_, '_>,
+    entries: &[ArrayEntry],
+    expr: &Expr,
+) -> LoweredValue {
+    let hash_ty = assoc_array_literal_type_from_entries(ctx, entries, expr);
+    let value_ty = match hash_ty.codegen_repr() {
+        PhpType::AssocArray { value, .. } => value.codegen_repr(),
+        _ => PhpType::Mixed,
+    };
+    let hash = ctx.emit_value(
+        Op::HashNew,
+        Vec::new(),
+        Some(Immediate::Capacity(entries.len() as u32)),
+        hash_ty,
+        Op::HashNew.default_effects(),
+        Some(expr.span),
+    );
+    for entry in entries {
+        match entry {
+            ArrayEntry::Spread(source) => {
+                let span = source.span;
+                let source = lower_expr(ctx, source);
+                // A boxed source (a declared `array` parameter, a `mixed` value) has to be
+                // unboxed and validated before the hash spread reads its layout.
+                let source = if source.ir_type == IrType::Heap(IrHeapKind::Mixed) {
+                    lower_boxed_array_spread_source(ctx, source, span)
+                } else {
+                    source
+                };
+                lower_hash_spread_into_hash_from_value(ctx, hash, source, span);
+            }
+            ArrayEntry::Keyed(key, value) => {
+                let span = key.span;
+                let key = lower_expr(ctx, key);
+                let value = lower_expr(ctx, value);
+                ctx.emit_void(
+                    Op::HashSet,
+                    vec![hash.value, key.value, value.value],
+                    None,
+                    Op::HashSet.default_effects(),
+                    Some(span),
+                );
+                super::assoc_array_literals::release_string_after_hash_insert(ctx, value, span);
+                super::assoc_array_literals::release_key_after_hash_insert(ctx, key, span);
+            }
+            ArrayEntry::Value(value) => {
+                let span = value.span;
+                let value = lower_expr(ctx, value);
+                ctx.emit_void(
+                    Op::RuntimeCall,
+                    vec![hash.value, value.value],
+                    None,
+                    effects_lookup::runtime_effects(),
+                    Some(span),
+                );
+                release_value_after_retaining_insert(ctx, Some(&value_ty), value, span);
+            }
+        }
+    }
+    hash
+}
+
+/// Returns the hash type for a mixed literal, merging every entry's value type.
+///
+/// A spread contributes its SOURCE's element type, exactly as it does for a spread-only literal;
+/// a keyed entry and a bare value contribute the value's own type.
+pub(super) fn assoc_array_literal_type_from_entries(
+    ctx: &LoweringContext<'_, '_>,
+    entries: &[ArrayEntry],
+    expr: &Expr,
+) -> PhpType {
+    let mut value_ty = PhpType::Never;
+    for entry in entries {
+        let next = match entry {
+            ArrayEntry::Spread(inner) => {
+                match array_literal_spread_source_type_for_ir(ctx, inner).codegen_repr() {
+                    PhpType::Array(elem) => elem.codegen_repr(),
+                    PhpType::AssocArray { value, .. } => value.codegen_repr(),
+                    _ => PhpType::Mixed,
+                }
+            }
+            ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => {
+                array_literal_element_type_for_ir(ctx, value).codegen_repr()
+            }
+        };
+        value_ty = crate::ir_lower::expr::assoc_array_literals::merge_ir_assoc_value_type(
+            value_ty, next,
+        );
+    }
+    if matches!(value_ty, PhpType::Never) {
+        return fallback_expr_type(expr);
+    }
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(value_ty),
+    }
+}
+
 /// Lowers a single already-lowered spread operand into a hash destination, handling both
 /// associative and indexed source storage. PHP array mutators can reindex an associative
 /// runtime value without changing the caller's static array contract, so every array operand
@@ -227,36 +412,38 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
         lower_iterable_spread_into_hash(ctx, hash, source, span);
         return;
     }
-    // A source that already IS a hash needs no promotion, and must not be promoted: `ArrayToHash`
-    // hands an existing hash back without taking a reference, so releasing its "owned" result
-    // dropped the reference of a local (`...$p`) that the caller still holds.
-    if matches!(source_ty, PhpType::AssocArray { .. }) {
-        ctx.emit_void(
-            Op::HashSpread,
-            vec![hash.value, source.value],
+    let source_is_hash = matches!(source_ty, PhpType::AssocArray { .. });
+    let spread_source = if source_is_hash {
+        source
+    } else {
+        // `Op::ArrayToHash` CONSUMES its operand: its promote path abandons the source indexed
+        // array for a freshly built hash and decrefs it (`lower_array_to_hash`). A spread source
+        // is usually a borrowed LOCAL, so handing it over unowned releases the caller's only
+        // reference -- `[...$idx, ...$assoc]` left `$idx` reading `array(0) {}` while its
+        // elements were still intact, and reusing it crashed. Acquiring first is the same ledger
+        // `lower_array_set_mixed_key` documents: the promote path consumes the `+1`, and the
+        // local keeps the reference it started with.
+        //
+        // The acquire stays unconditional; an OWNING TEMPORARY source is balanced by releasing it
+        // after the spread instead (below). Skipping the acquire for a temporary is the wrong half
+        // of the ledger -- the promotion's decref then consumes the only reference a BORROWED
+        // local has, which segfaults -- so the two cases are separated at the release, not here.
+        let owned_source = crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span));
+        let promoted = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![owned_source.value],
             None,
-            Op::HashSpread.default_effects(),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Int),
+                value: Box::new(PhpType::Mixed),
+            },
+            Op::ArrayToHash.default_effects(),
             Some(span),
         );
-        if ctx.value_is_owning_temporary(source) {
-            crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+        LoweredValue {
+            value: promoted.value,
+            ir_type: IrType::Heap(IrHeapKind::Hash),
         }
-        return;
-    }
-    let promoted = ctx.emit_value(
-        Op::ArrayToHash,
-        vec![source.value],
-        None,
-        PhpType::AssocArray {
-            key: Box::new(PhpType::Int),
-            value: Box::new(PhpType::Mixed),
-        },
-        Op::ArrayToHash.default_effects(),
-        Some(span),
-    );
-    let spread_source = LoweredValue {
-        value: promoted.value,
-        ir_type: IrType::Heap(IrHeapKind::Hash),
     };
     ctx.emit_void(
         Op::HashSpread,
@@ -267,6 +454,15 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
     );
     if ctx.value_is_owning_temporary(spread_source) {
         crate::ir_lower::ownership::release_if_owned(ctx, spread_source, Some(span));
+    }
+    // The promoted hash is a DIFFERENT value from the one the caller handed us, so releasing it
+    // above says nothing about the original array. An owning temporary source -- a call result, a
+    // nested literal -- has no other owner once the promotion has consumed the reference the
+    // acquire added, so it is released here, exactly as the indexed sibling releases its own
+    // source. Without this, `[...f(), "k" => 1]` leaked one array per evaluation while the
+    // borrowed-local form stayed clean.
+    if spread_source.value != source.value && ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
 }
 
@@ -288,14 +484,10 @@ fn lower_iterable_spread_into_hash(
         Op::HashNew.default_effects(),
         Some(span),
     );
-    let iterator = ctx.emit_value(
-        Op::IterStart,
-        vec![source.value],
-        None,
-        PhpType::Iterable,
-        Op::IterStart.default_effects(),
-        Some(span),
-    );
+    // `IterStart` carries its state slot and optional `getIterator()` owner in its immediate;
+    // a bare instruction fails EIR validation (`MissingImmediate { expected: "iter_start
+    // metadata" }`) for `[...$iterable]`.
+    let (iterator, iterator_owner, _) = ctx.emit_iter_start(source, false, span);
     let header = ctx
         .builder
         .create_named_block("iterable.spread.next", Vec::new());
@@ -365,6 +557,9 @@ fn lower_iterable_spread_into_hash(
         Some(span),
     );
     crate::ir_lower::ownership::release_if_owned(ctx, materialized, Some(span));
+    if let Some(slot) = iterator_owner {
+        ctx.retire_iter_start_owner(slot, span);
+    }
     if ctx.value_is_owning_temporary(source) {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
@@ -456,6 +651,7 @@ pub(crate) fn lower_indexed_array_spread_into_array(
         Op::ArrayPush.default_effects(),
         Some(span),
     );
+    ctx.refresh_argument_array_guard(array, span);
     crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, container_elem_ty, value, span);
     let one = emit_i64_at_span(ctx, 1, span);
     let next = ctx.emit_value(
@@ -481,6 +677,64 @@ pub(super) fn narrow_gradual_indexed_spread_source(
     span: crate::span::Span,
 ) -> LoweredValue {
     let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
+    // A Traversable (a generator, an `iterable` return) unpacks the values it yields, in order:
+    // `iterator_to_array($source, false)` is that list. Doctrine's inflector spreads generators
+    // into variadic constructors (`new Patterns(...Uninflected::getSingular())`); the spread loop
+    // read the object as an array and the lowering was refused.
+    if matches!(source_ty, PhpType::Object(_) | PhpType::Iterable) {
+        let keep_keys = ctx.emit_value(
+            Op::ConstBool,
+            Vec::new(),
+            Some(Immediate::Bool(false)),
+            PhpType::Bool,
+            Op::ConstBool.default_effects(),
+            Some(span),
+        );
+        let list = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![source.value, keep_keys.value],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::IteratorToArray,
+            ))),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            crate::ir::RuntimeFnId::IteratorToArray.effects(),
+            Some(span),
+        );
+        if ctx.value_is_owning_temporary(source) {
+            crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+        }
+        return list;
+    }
+    // A hash spreads its values in order (string keys only matter in a call's named spread, which
+    // does not come here). The indexed loop below reads slots, so the hash is listed first:
+    // Doctrine DBAL's `[$first, ...array_values($others)]` over a variadic reached it typed as a
+    // hash and the lowering was refused, which cost the Symfony demo a second compile.
+    let hash_value = match &source_ty {
+        PhpType::AssocArray { value, .. } => Some(value.as_ref().clone()),
+        PhpType::Array(element)
+            if ctx.builder.value_type(source.value) == IrType::Heap(crate::ir::IrHeapKind::Hash) =>
+        {
+            Some(element.as_ref().clone())
+        }
+        _ => None,
+    };
+    if let Some(value) = hash_value {
+        let value = Box::new(value);
+        let list = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![source.value],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::ArrayValues,
+            ))),
+            PhpType::Array(value),
+            crate::ir::RuntimeFnId::ArrayValues.effects(),
+            Some(span),
+        );
+        if ctx.value_is_owning_temporary(source) {
+            crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+        }
+        return list;
+    }
     if !matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         return source;
     }
@@ -559,7 +813,7 @@ pub(super) fn release_value_after_retaining_insert(
     }
 }
 
-/// Returns the indexed-array type that the EIR backend can faithfully materialize.
+/// Returns literal storage, allowing hash keys when a spread can contain associative entries.
 pub(crate) fn array_literal_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     items: &[Expr],
@@ -567,6 +821,14 @@ pub(crate) fn array_literal_type_for_ir(
 ) -> PhpType {
     if items.is_empty() {
         return fallback_expr_type(expr);
+    }
+    if items.iter().any(|item| {
+        matches!(&item.kind, ExprKind::Spread(inner) if matches!(
+            array_literal_spread_source_type_for_ir(ctx, inner).codegen_repr(),
+            PhpType::AssocArray { .. } | PhpType::Mixed
+        ))
+    }) {
+        return assoc_array_literal_type_from_spreads(ctx, items, expr);
     }
     let mut elem_ty = array_literal_element_type_for_ir(ctx, &items[0]);
     for item in items.iter().skip(1) {
@@ -583,10 +845,17 @@ pub(super) fn array_literal_element_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     item: &Expr,
 ) -> PhpType {
+    if let Some(storage) = nullsafe_chain::result_storage_type(item) {
+        return storage;
+    }
     match &item.kind {
         ExprKind::Null => PhpType::Mixed,
         ExprKind::ArrayReference(_) => PhpType::Mixed,
-        ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
+        ExprKind::Ternary { .. } => {
+            // Keep array element ownership consistent with the lowered branch result.
+            ir_array_storage_type(materialized_expr_type_for_merge(ctx, item))
+        }
+        ExprKind::Spread(inner) => match array_literal_spread_source_type_for_ir(ctx, inner).codegen_repr() {
             // A spread of an empty/unknown array (`array<never>`, e.g. a `$x = []` local or a
             // bare-`array`-returning method) contributes no element constraint, so widen its
             // Void/Never element to Mixed rather than collapsing the outer literal to
@@ -596,6 +865,7 @@ pub(super) fn array_literal_element_type_for_ir(
                 PhpType::Void | PhpType::Never => PhpType::Mixed,
                 other => other,
             },
+            PhpType::AssocArray { value, .. } => value.codegen_repr(),
             _ => PhpType::Mixed,
         },
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, item).codegen_repr(),
@@ -604,6 +874,9 @@ pub(super) fn array_literal_element_type_for_ir(
             .constant_value(name.as_str())
             .map(|(_, ty)| ir_array_storage_type(ty))
             .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            scoped_constant_value_type_for_ir(ctx, receiver, name, item)
+        }
         ExprKind::Variable(name) => ir_array_storage_type(
             ctx.local_types
                 .get(name)
@@ -613,10 +886,17 @@ pub(super) fn array_literal_element_type_for_ir(
         ExprKind::FunctionCall { name, .. } => {
             let canonical = name.as_str();
             if let Some(sig) = ctx.functions.get(canonical) {
-                return ir_array_storage_type(sig.return_type.clone());
+                return ir_array_storage_type(eir_user_function_return_type(sig));
             }
             if let Some(sig) = ctx.extern_functions.get(canonical) {
                 return ir_array_storage_type(sig.return_type.clone());
+            }
+            // A builtin is in neither map, and the syntactic fallback below answers `Int` for
+            // every name outside its hand-written allowlist -- which stamps the literal
+            // `array<int>` and makes lowering cast the element to match (#1096). The checker
+            // already asked the registry contract about this very call.
+            if let Some(resolved) = builtin_call_result_type_for_ir(ctx, item.span) {
+                return resolved;
             }
             ir_array_storage_type(infer_expr_type_syntactic(item))
         }
@@ -624,11 +904,6 @@ pub(super) fn array_literal_element_type_for_ir(
         // or an object result is cast into an incorrectly stamped scalar array.
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)
-                .and_then(materializable_array_element_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
-        }
-        ExprKind::NullsafeMethodCall { object, method, .. } => {
-            nullsafe_method_call_expr_type_for_ir(ctx, object, method)
                 .and_then(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
         }
@@ -651,20 +926,6 @@ pub(super) fn array_literal_element_type_for_ir(
                 .map(ir_array_storage_type)
                 .unwrap_or(PhpType::Mixed)
         }
-        ExprKind::ScopedConstantAccess { receiver, name } => {
-            scoped_constant_type_for_ir(ctx, receiver, name, 0)
-                .map(ir_array_storage_type)
-                .unwrap_or(PhpType::Mixed)
-        }
-        // A conditional's element is whichever branch runs, so it is typed from the BRANCHES.
-        // The syntactic pre-pass answers `Int` for all of these, and as a storage stamp that
-        // re-read an object or array branch as its pointer: symfony/console's
-        // `[$row instanceof TableSeparator ? $row : $this->fillCells($row)]` handed every table
-        // row to the renderer as an integer.
-        ExprKind::Ternary { then_expr, else_expr, .. } => merge_ir_indexed_element_type(
-            array_literal_element_type_for_ir(ctx, then_expr),
-            array_literal_element_type_for_ir(ctx, else_expr),
-        ),
         ExprKind::ShortTernary { value, default } | ExprKind::NullCoalesce { value, default } => {
             merge_ir_indexed_element_type(
                 array_literal_element_type_for_ir(ctx, value),
@@ -735,6 +996,40 @@ pub(super) fn scoped_constant_type_for_ir(
     }
 }
 
+/// Returns the full storage type of a spread source, rather than the element type contributed
+/// by a call when it appears as an ordinary literal value.
+///
+/// Desugared argument-introspection calls can synthesize `array_slice()` nodes that share the
+/// source call's span. The builtin element-type helper therefore sees the checker's type for
+/// `func_get_args()` at that span and mistakes the spread container for an element. Resolve the
+/// builtin's own contract without a checker span here so static spread classification agrees
+/// with the runtime value lowered below.
+pub(super) fn array_literal_spread_source_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    source: &Expr,
+) -> PhpType {
+    if let ExprKind::FunctionCall { name, args } = &source.kind {
+        let canonical = name.as_str();
+        if let Some(sig) = ctx.functions.get(canonical) {
+            return ir_array_storage_type(eir_user_function_return_type(sig));
+        }
+        if let Some(sig) = ctx.extern_functions.get(canonical) {
+            return ir_array_storage_type(sig.return_type.clone());
+        }
+        if let Some(result) = super::function_calls::resolve_registry_builtin_result_type(
+            ctx,
+            canonical,
+            args,
+            &[],
+            Span::dummy(),
+            None,
+        ) {
+            return ir_array_storage_type(result);
+        }
+    }
+    array_literal_element_type_for_ir(ctx, source)
+}
+
 /// Returns the EIR array storage type for a resolved element type, or `None` when the type
 /// cannot be an array element. A `Void`/`Never` method return (a value-less call whose result
 /// is nonetheless collected into a literal) has no array-element representation — stamping it
@@ -745,6 +1040,54 @@ pub(super) fn materializable_array_element_type(return_type: PhpType) -> Option<
     match stored.codegen_repr() {
         PhpType::Void | PhpType::Never => None,
         _ => Some(stored),
+    }
+}
+
+/// Returns the array-element storage type for a builtin call the checker already resolved.
+///
+/// `infer_expr_type_syntactic` answers a builtin call from a hand-written allowlist of names and
+/// falls back to `Int` for every name it does not list, so an array-returning or bool-returning
+/// builtin outside that list stamped its literal `array<int>` and lowering converted the element
+/// to match: `(int)` of a non-empty array is `1`, and so is `(int)true` (issue #1096).
+/// A user function is looked up in `ctx.functions` before this point and a builtin is in neither
+/// that map nor `ctx.extern_functions`, which is why only builtins ever reached the fallback.
+///
+/// The key is the call's OWN span, which is the node lowering is looking at, so unlike
+/// `call_user_func()` there is no way for a different callee to be recorded under it. A
+/// synthesized node (line 0) is left to the fallback rather than risk sharing a key with an
+/// unrelated prelude call.
+///
+/// # Why a non-scalar result is stamped `Mixed` rather than taken verbatim
+///
+/// This map holds the CHECKER's type. The value the call actually produces is typed by
+/// `resolve_registry_builtin_result_type`, which overrides the checker for a `Declared` or
+/// `Shared` result contract and re-derives its own for a `Checked` one whose runtime target
+/// rejects the checked type against the operands it was really given. The two disagree, and not
+/// rarely: `array_map()`'s hook answers `array<int>` for a callback declared `: int` while its
+/// EIR result is a boxed `Mixed` cell.
+///
+/// A stamp that disagrees is only harmless when the push CONVERTS, and
+/// `coerce_array_literal_element_to_storage_type` converts exactly the scalar stamps —
+/// `Int`, `Bool`, `Float`, `Str`. A heap stamp is stored as-is, so an `array<array<int>>` stamp
+/// over a boxed `Mixed` value reads the box's header as an array: `[array_map(fn(int $x): int =>
+/// $x * 2, [1, 2, 3])][0][1]` printed a pointer.
+///
+/// So a scalar result is taken precisely and anything else is stamped `Mixed`, which is the one
+/// element type that is right whatever the call's own contract answers: a concrete value is boxed
+/// into it on the way in, and a `Mixed` value is stored as-is. It is also what a literal mixing a
+/// builtin call with a plain element already merged to, which is why `[array_slice(...), [9, 9]]`
+/// was correct all along while `[array_slice(...)]` alone was not.
+pub(super) fn builtin_call_result_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    span: Span,
+) -> Option<PhpType> {
+    if span.line == 0 {
+        return None;
+    }
+    let checked = ctx.builtin_call_type_at(span).cloned()?;
+    match materializable_array_element_type(checked)? {
+        scalar @ (PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str) => Some(scalar),
+        _ => Some(PhpType::Mixed),
     }
 }
 

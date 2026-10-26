@@ -9,6 +9,10 @@
 //!   surplus positional arguments.
 //! - Relationships come from class inheritance, interface implementation and extension, and
 //!   trait use; method names follow PHP's case-insensitive lookup rules.
+//! - A family that contains a method with a SOURCE variadic cannot adopt the hidden tail: the
+//!   source variadic already owns the tail slot, so its ABI would differ from every sibling's.
+//!   `capture_all_opt_outs` names those families so whole-program frame capture can leave every
+//!   member on its source signature (the frames just carry no captured arguments).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -24,15 +28,37 @@ struct OwnerInfo {
     name: String,
     related: Vec<String>,
     hidden_methods: Vec<MethodCapability>,
+    /// Virtual methods declared with a variadic the source wrote.
+    source_variadic_methods: Vec<MethodCapability>,
 }
 
 /// Widens every declared member of an introspection-aware virtual method family to the same ABI.
 pub(super) fn propagate(program: &mut Program) {
     let mut owners = Vec::new();
     collect_owners(program, &mut owners);
+    let required = spread_capabilities(&owners, |owner| &owner.hidden_methods);
+    apply_requirements(program, &required);
+}
 
+/// Names, per owner, the virtual methods whose family holds a source-variadic declaration.
+///
+/// Whole-program frame capture appends the hidden tail to every method; for these families that
+/// would split the ABI between the source-variadic member and the rest, so they are skipped.
+pub(super) fn capture_all_opt_outs(
+    program: &[Stmt],
+) -> HashMap<String, HashSet<MethodCapability>> {
+    let mut owners = Vec::new();
+    collect_owners(program, &mut owners);
+    spread_capabilities(&owners, |owner| &owner.source_variadic_methods)
+}
+
+/// Spreads each owner's capabilities over its whole relationship component.
+fn spread_capabilities(
+    owners: &[OwnerInfo],
+    capabilities_of: impl Fn(&OwnerInfo) -> &Vec<MethodCapability>,
+) -> HashMap<String, HashSet<MethodCapability>> {
     let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
-    for owner in &owners {
+    for owner in owners {
         adjacency.entry(owner.name.clone()).or_default();
         for related in &owner.related {
             adjacency
@@ -47,8 +73,8 @@ pub(super) fn propagate(program: &mut Program) {
     }
 
     let mut required: HashMap<String, HashSet<MethodCapability>> = HashMap::new();
-    for owner in &owners {
-        for capability in &owner.hidden_methods {
+    for owner in owners {
+        for capability in capabilities_of(owner) {
             let mut queue = VecDeque::from([owner.name.clone()]);
             let mut visited = HashSet::new();
             while let Some(name) = queue.pop_front() {
@@ -65,8 +91,7 @@ pub(super) fn propagate(program: &mut Program) {
             }
         }
     }
-
-    apply_requirements(program, &required);
+    required
 }
 
 /// Collects class-like declarations recursively from every statement body.
@@ -208,10 +233,23 @@ fn owner_info(name: &str, related: Vec<String>, methods: &[ClassMethod]) -> Owne
         })
         .map(|method| (php_symbol_key(&method.name), method.is_static))
         .collect();
+    let source_variadic_methods = methods
+        .iter()
+        .filter(|method| {
+            method.visibility != Visibility::Private
+                && php_symbol_key(&method.name) != "__construct"
+                && method
+                    .variadic
+                    .as_deref()
+                    .is_some_and(|variadic| variadic != HIDDEN_ARGS_PARAM)
+        })
+        .map(|method| (php_symbol_key(&method.name), method.is_static))
+        .collect();
     OwnerInfo {
         name: name.to_string(),
         related,
         hidden_methods,
+        source_variadic_methods,
     }
 }
 

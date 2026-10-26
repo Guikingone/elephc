@@ -1,8 +1,8 @@
 ---
 title: "date_offset_get()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns a date's UTC offset in seconds."
 sidebar:
-  order: 217
+  order: 218
 ---
 
 ## date_offset_get()
@@ -11,7 +11,7 @@ sidebar:
 function date_offset_get(mixed $object): int
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns a date's UTC offset in seconds.
 
 **Parameters**:
 - `$object` (`mixed`)
@@ -23,7 +23,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

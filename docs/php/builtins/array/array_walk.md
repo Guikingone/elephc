@@ -1,6 +1,6 @@
 ---
 title: "array_walk()"
-description: "Applies a user function to every member of an array."
+description: "Applies a user function to every member of an array. AOT boxed arrays pass a writable value reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported."
 sidebar:
   order: 58
 ---
@@ -11,7 +11,7 @@ sidebar:
 function array_walk(array $array, callable $callback, mixed $arg = null): bool
 ```
 
-Applies a user function to every member of an array.
+Applies a user function to every member of an array. AOT boxed arrays pass a writable value reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
@@ -23,9 +23,9 @@ Applies a user function to every member of an array.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_walk.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_walk.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_walk.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_walk.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

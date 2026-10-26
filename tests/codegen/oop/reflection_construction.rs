@@ -401,3 +401,85 @@ foreach ((new ReflectionClass('Escaped'))->getAttributes() as $a) { echo (string
         )
     );
 }
+
+/// A class constant or global constant as an attribute argument (`#[\Attribute(\Attribute::
+/// TARGET_METHOD)]`, symfony/console's `Attribute\Interact`), read through a `ReflectionClass`
+/// built from a runtime name. The compiled class metadata marked the whole argument list
+/// unsupported, and constructing the reflector died with a bare `eval() runtime failed` -- the
+/// Symfony --web worker at boot. The reference now crosses by name and is folded when read.
+#[test]
+fn test_runtime_named_reflection_reads_constant_attribute_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+const LIMIT = 3;
+class K { const V = 7; }
+#[\Attribute(\Attribute::TARGET_METHOD)]
+class Marker { }
+#[\Attribute(K::V)]
+class Keyed { }
+#[\Attribute(LIMIT)]
+class Limited { }
+function args(string $name): string {
+    $r = new ReflectionClass($name);
+    return $r->getName() . json_encode($r->getAttributes()[0]->getArguments());
+}
+foreach (['Marker', 'Keyed', 'Limited'] as $name) {
+    echo args($argc > 5 ? 'X' : $name), "|";
+}
+if ($argc > 5) { eval('echo 1;'); }
+"#,
+    );
+    assert_eq!(out, "Marker[4]|Keyed[7]|Limited[3]|");
+}
+
+/// The built-in `Attribute` class constants fold to their php 8.5 values, alone or combined with
+/// `|`, in a program WITHOUT eval. The class-level argument capture had its own copy of the folding
+/// that kept `\Attribute::TARGET_CLASS` symbolic; the post-pass found no `Attribute` schema to
+/// resolve it against and dropped the whole attribute, so `getAttributes()` was empty for every
+/// `#[\Attribute(\Attribute::TARGET_CLASS)]` class -- the way Symfony declares its attributes.
+#[test]
+fn test_builtin_attribute_flags_fold_alone_and_combined() {
+    let out = compile_and_run(
+        r#"<?php
+#[\Attribute(\Attribute::TARGET_CLASS)]
+class A1 { }
+#[\Attribute(\Attribute::TARGET_METHOD)]
+class A2 { }
+#[\Attribute(\Attribute::TARGET_CLASS | \Attribute::IS_REPEATABLE)]
+class A3 { }
+#[\Attribute(\Attribute::TARGET_ALL ^ \Attribute::TARGET_CONSTANT)]
+class A4 { }
+foreach (['A1', 'A2', 'A3', 'A4'] as $name) {
+    $r = new ReflectionClass($argc > 5 ? 'X' : $name);
+    $a = $r->getAttributes();
+    echo $name, count($a), count($a) ? json_encode($a[0]->getArguments()) : '', ' ';
+}
+"#,
+    );
+    assert_eq!(out, "A11[1] A21[4] A31[129] A41[63] ");
+}
+
+/// php runs a lazy ghost's initializer on the object's FIRST USE, so a ghost nothing touches never
+/// raises what its initializer would have. Symfony's container hands out such ghosts for services
+/// a command never needs; one whose initializer failed (`uri_signer` over an empty
+/// `kernel.secret`) aborted `debug:event-dispatcher`, which php completes.
+#[test]
+fn test_lazy_ghost_whose_initializer_fails_does_not_raise_unless_used() {
+    let out = compile_and_run(
+        r#"<?php
+class Signer {
+    public string $secret = '';
+    public function __construct(string $secret) {
+        if ($secret === '') { throw new InvalidArgumentException('empty secret'); }
+        $this->secret = $secret;
+    }
+}
+$r = new ReflectionClass(Signer::class);
+$bad = $r->newLazyGhost(function (Signer $g) { $g->__construct(''); });
+echo get_class($bad), "|";
+$good = $r->newLazyGhost(function (Signer $g) { $g->__construct('k'); });
+echo $good->secret;
+"#,
+    );
+    assert_eq!(out, "Signer|k");
+}

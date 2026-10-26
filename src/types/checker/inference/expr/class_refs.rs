@@ -8,8 +8,8 @@
 //! Key details:
 //! - Expression inference shares environments with statement checking, so variable and effect updates must stay synchronized.
 
-use crate::errors::CompileError;
-use crate::parser::ast::{Expr, StaticReceiver};
+use crate::errors::{CompileError, RuntimeFault};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::span::Span;
 use crate::types::{PhpType, TypeEnv};
 
@@ -45,6 +45,38 @@ impl Checker {
             {
                 continue;
             }
+            let constructor = self
+                .classes
+                .get(&class_name)
+                .and_then(|class| class.methods.get("__construct"))
+                .cloned();
+            if let Some(constructor) = constructor {
+                for (arg_index, arg) in args.iter().enumerate() {
+                    let (param_index, value) = match &arg.kind {
+                        ExprKind::NamedArg { name, value } => (
+                            constructor
+                                .params
+                                .iter()
+                                .position(|(param, _)| param == name)
+                                .unwrap_or(arg_index),
+                            value.as_ref(),
+                        ),
+                        _ => (arg_index, arg),
+                    };
+                    if constructor
+                        .ref_params
+                        .get(param_index)
+                        .copied()
+                        .unwrap_or(false)
+                        && matches!(value.kind, ExprKind::ArrayAccess { .. })
+                    {
+                        return Err(CompileError::new(
+                            value.span,
+                            "new static() cannot bind an array element by reference because the runtime constructor target is late-bound",
+                        ));
+                    }
+                }
+            }
             self.infer_new_object_type(&class_name, args, expr, env)?;
         }
 
@@ -67,8 +99,13 @@ impl Checker {
     ///   `MethodNotAllowedHttpException::fromStatusCode()`; the lowering drops the class from its
     ///   candidate set (`static_new_args_match_param_storage`) and the branch raises if reached.
     ///
-    /// Too FEW arguments is deliberately NOT here: that is an `ArgumentCountError` every time the
-    /// branch runs, so reporting it at compile time still describes the program truthfully.
+    /// - TOO FEW: Laravel's `Collection::newInstance()` is `new static($items)`, and
+    ///   `SortedMiddleware extends Collection` declares `__construct(array $priorityMap,
+    ///   $middlewares)`. PHP raises `ArgumentCountError` only if a `SortedMiddleware` receiver
+    ///   reaches that method, which Laravel never does; reporting it at compile time refused the
+    ///   whole `Collection` class, and the deferred class then failed to declare at run time, so
+    ///   every request died. The lowering already leaves such a class out of its candidate set
+    ///   (`dynamic_new_args_lower_to_exact_arity`).
     fn late_bound_target_cannot_bind(
         &mut self,
         class_name: &str,
@@ -83,25 +120,36 @@ impl Checker {
         else {
             return Ok(false);
         };
-        if args.iter().any(|arg| {
-            matches!(
-                arg.kind,
-                crate::parser::ast::ExprKind::Spread(_)
-                    | crate::parser::ast::ExprKind::NamedArg { .. }
-            )
-        }) {
-            return Ok(false);
+        // Arguments before the first spread or named one bind by position whatever follows, so
+        // their storage still rules a descendant out; only the arity checks need the full list.
+        let positional = args
+            .iter()
+            .position(|arg| {
+                matches!(
+                    arg.kind,
+                    crate::parser::ast::ExprKind::Spread(_)
+                        | crate::parser::ast::ExprKind::NamedArg { .. }
+                )
+            })
+            .unwrap_or(args.len());
+        if positional == args.len() {
+            if !crate::func_args::sig_collects_surplus_args(&sig) && args.len() > sig.params.len() {
+                return Ok(true);
+            }
+            if args.len() < crate::types::checker::schema::validation::required_param_count(&sig) {
+                return Ok(true);
+            }
         }
-        if !crate::func_args::sig_collects_surplus_args(&sig) && args.len() > sig.params.len() {
-            return Ok(true);
-        }
-        for (index, arg) in args.iter().enumerate() {
+        for (index, arg) in args[..positional].iter().enumerate() {
             let Some((_, param_ty)) = sig.params.get(index) else {
                 break;
             };
+            if crate::types::late_static_dispatch::literal_string_cannot_bind_numeric(param_ty, arg) {
+                return Ok(true);
+            }
             let arg_ty = self.infer_type(arg, env)?;
             if late_bound_param_storage_conflicts(
-                &param_ty.codegen_repr(),
+                &param_ty.late_bound_param_storage(),
                 &arg_ty.codegen_repr(),
             ) {
                 return Ok(true);
@@ -204,10 +252,15 @@ impl Checker {
                 &format!("Undefined enum case: {}::{}", class_name, name),
             ));
         }
+        // php resolves the constant when the read runs: `Error: Undefined constant X::C`.
         Err(CompileError::new(
             expr.span,
             &format!("Undefined class constant: {}::{}", class_name, name),
-        ))
+        )
+        .with_runtime_fault(RuntimeFault::UndefinedClassConstant {
+            class: class_name.clone(),
+            constant: name.to_string(),
+        }))
     }
 
     /// Infers a class constant read whose receiver is an object-valued expression.
@@ -363,5 +416,7 @@ fn late_bound_param_storage_conflicts(param: &PhpType, arg: &PhpType) -> bool {
             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
         )
     };
-    (array_like(param) && scalar_like(arg)) || (scalar_like(param) && array_like(arg))
+    let object_like = |ty: &PhpType| matches!(ty, PhpType::Object(_));
+    (array_like(param) && (scalar_like(arg) || object_like(arg)))
+        || ((scalar_like(param) || object_like(param)) && array_like(arg))
 }

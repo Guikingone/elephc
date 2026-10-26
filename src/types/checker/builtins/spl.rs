@@ -72,8 +72,24 @@ fn traversable_object_supported(checker: &Checker, name: &str) -> bool {
     if name == "Traversable" {
         return true;
     }
+    // An interface that merely EXTENDS `Traversable` (Symfony's `FormInterface` is
+    // `ArrayAccess, Traversable, Countable`) is the same open question `Traversable` itself is:
+    // the run-time object is an `Iterator` or an `IteratorAggregate`, and the generic Traversable
+    // lowering asks it.
+    // A class the world does not declare (`symfony/validator` absent, so `RequestPayloadValueResolver`'s
+    // `iterator_to_array(new ConstraintViolationList())` names nothing) never reaches here at run
+    // time: php raises `Class not found` at the `new`. Refusing it refused the whole class file,
+    // which a closed-world binary then could not load at all. It is the same open question
+    // `Traversable` is.
+    if !checker.classes.contains_key(name)
+        && !checker.interfaces.contains_key(name)
+        && !checker.enums.contains_key(name)
+    {
+        return true;
+    }
     checker.object_type_implements_interface(name, "Iterator")
         || checker.object_type_implements_interface(name, "IteratorAggregate")
+        || checker.object_type_implements_interface(name, "Traversable")
 }
 
 /// Checks iterator to array preserve keys and reports a compile error when it is invalid.
@@ -207,9 +223,13 @@ pub(crate) fn iterator_apply_callback_args<'a>(
         }
         _ => {
             let args_ty = checker.infer_type(args_expr, env)?;
-            if matches!(args_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            if args_ty.is_php_array()
+                || matches!(args_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+            {
                 Ok(IteratorApplyArgs::Dynamic {
-                    associative: matches!(args_ty, PhpType::AssocArray { .. }),
+                    // A declared array can carry named keys even when its layout is opaque.
+                    associative: args_ty.is_php_array()
+                        || matches!(args_ty, PhpType::AssocArray { .. }),
                 })
             } else {
                 Err(CompileError::new(

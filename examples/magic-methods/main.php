@@ -35,6 +35,11 @@ class User {
         return $this->name . ":" . $suffix;
     }
 
+    // `$this(...)` invokes the object from inside its own class.
+    public function tagged() {
+        return $this("self");
+    }
+
     public function __call($method, $args) {
         return "missing " . $method . "(" . $args[0] . ")";
     }
@@ -52,8 +57,19 @@ echo $user . "\n";
 echo $user->missing . "\n";
 echo $user->log . "\n";
 echo $user("active") . "\n";
+echo $user->tagged() . "\n";
 echo $user->displayName("short") . "\n";
 echo (isset($user->active) ? "active" : "inactive") . "\n";
 unset($user->active);
 echo (isset($user->active) ? "active" : "inactive") . "\n";
 echo User::create("nahime") . "\n";
+
+// __toString() is reached through every string context, not only concatenation.
+// A builtin that renders a heterogeneous ("mixed") array element goes through the same
+// conversion, so an object sitting beside scalars in one array renders through its own
+// __toString() rather than as a class name or an address.
+$mixed = ["plain", 42, new User("ada"), 2.5, true];
+echo "implode: " . implode(", ", $mixed) . "\n";
+echo "interp:  {$mixed[2]}\n";
+echo "concat:  " . $mixed[2] . "\n";
+echo "cast:    " . (string) $mixed[2] . "\n";

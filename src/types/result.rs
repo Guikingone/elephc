@@ -65,6 +65,36 @@ pub enum ThrowAccessKind {
         /// The complete `TypeError` message, already in php's wording.
         message: String,
     },
+    /// An argument the checker proved can never bind to its declared parameter (a strict_types
+    /// scalar mismatch, or a class/array/null no coercion accepts). Keyed by the ARGUMENT's span.
+    ///
+    /// php never refuses this at compile time: the call evaluates its arguments, then throws
+    /// `TypeError`. Lowering finds the site from the call's arguments, evaluates all of them, and
+    /// appends php's `, called in FILE on line N` clause to `message`.
+    CallArgumentType {
+        /// The message without the `called in` clause.
+        message: String,
+    },
+    /// A weak-mode argument php coerces to an `int` parameter at run time: a string or float
+    /// whose value only the call knows. Keyed by the ARGUMENT's span.
+    ///
+    /// A numeric string or an integral float binds, a fractional one binds after php's
+    /// `Deprecated:` precision notice, and anything else throws `TypeError`. Lowering converts
+    /// the argument with the return-boundary int coercion, whose message is `prefix` followed by
+    /// the runtime type word and php's `given, called in FILE on line N` clause.
+    CallArgumentIntCoercion {
+        /// `f(): Argument #N ($p) must be of type int, `
+        prefix: String,
+    },
+    /// A `self::`/`parent::` call naming a method the class does not have.
+    ///
+    /// php resolves the method when the call RUNS. A trait shared by several classes may call a
+    /// method only one of them declares (Carbon's `Mixin` calls `self::copyStep()`, which only
+    /// `CarbonInterval` has): the other users load fine and fail only if that branch executes.
+    UndefinedMethod {
+        /// The complete `Error` message, already in php's wording.
+        message: String,
+    },
 }
 
 #[derive(Debug)]
@@ -100,6 +130,13 @@ pub struct CheckResult {
     pub builtin_call_types: HashMap<(String, Span), PhpType>,
     /// Authoritative checker result types for property reads through flow-narrowed receivers.
     pub flow_typed_property_accesses: HashMap<(String, Span), PhpType>,
+    /// Checker-authorized call-argument sites that may widen one local to a boxed Mixed cell.
+    pub boxed_reference_promotion_sites: HashMap<(String, Span), HashSet<String>>,
+    /// Reads proven to use native buffers on every checker visit to the source span.
+    /// Buffer bounds checks cannot invoke PHP warning handlers.
+    pub buffer_read_sites: HashSet<Span>,
+    /// See `Checker::first_class_builtin_call_types`.
+    pub first_class_builtin_call_types: HashMap<Span, PhpType>,
     /// Fixed-point array-local storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: LoopStorageTypes,
     /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
@@ -109,6 +146,11 @@ pub struct CheckResult {
     pub by_ref_local_storage_types: HashMap<(String, String), PhpType>,
     /// Lowercase bare names of callees whose by-reference parameter cell may outlive the call.
     pub ref_param_escaping_callees: HashSet<String>,
+    /// Call-site locals passed to a property-bound by-reference parameter; see
+    /// `Checker::property_bound_promotion_sites`.
+    pub property_bound_promotion_sites: HashSet<(String, crate::span::Span)>,
+    /// Call results passed to a by-reference parameter; see `Checker::by_ref_call_result_sites`.
+    pub by_ref_call_result_sites: HashSet<crate::span::Span>,
     /// Names some `define()` call creates; see `Checker::runtime_define_names`.
     pub runtime_define_names: HashSet<String>,
     /// Constant names read but never defined; see `Checker::undefined_constant_reads`.
@@ -144,6 +186,10 @@ pub struct CheckResult {
     /// file identity would remove the ambiguity outright, and every span-keyed map here would
     /// want it.
     pub local_bind_kill_sites: HashMap<Span, HashSet<String>>,
+    /// Unconditional statement-form unsets allowed to detach an ordinary promoted reference.
+    /// Unlike binding kills, these preserve the checker's escaped-reference type restrictions.
+    /// Lowering keeps the old capture storage type and retires only this binding's cell owner.
+    pub local_ref_detach_sites: HashMap<Span, HashSet<String>>,
     /// The statement-form assignments the checker re-bound to a fresh binding of an incompatible
     /// type, as span -> the SET of local NAMES re-bound at that position, so EIR lowering mints a
     /// new slot there. Read by `crate::ir_lower` alongside `local_bind_kill_sites`, and keyed the
@@ -166,10 +212,12 @@ pub struct CheckResult {
     /// compiler panicked (`strlen cannot lower checked operand type Int`) on valid PHP. Same-NAME
     /// collisions remain genuinely ambiguous and are still rejected by the ambiguity pass.
     pub mixed_storage_store_sites: HashMap<Span, HashSet<String>>,
+    /// See `Checker::user_filters_reachable`: EIR metadata keeps the raw filter ABI only then.
+    pub user_filters_reachable: bool,
 }
 
 impl CheckResult {
-    /// Every span carrying a local-binding decision: kills, retypes and mixed-storage stores.
+    /// Every span carrying a local-binding decision: kills, reference detaches, retypes and stores.
     ///
     /// Handed to the post-typecheck optimizer. These decisions are keyed BY SPAN and EIR lowering
     /// consults them by span, so any pass that CLONES an AST node would hand one decision to two
@@ -193,8 +241,14 @@ impl CheckResult {
     pub fn local_binding_decision_spans(&self) -> HashSet<Span> {
         self.local_bind_kill_sites
             .keys()
+            .chain(self.local_ref_detach_sites.keys())
             .chain(self.local_retype_sites.keys())
             .chain(self.mixed_storage_store_sites.keys())
+            .chain(
+                self.boxed_reference_promotion_sites
+                    .keys()
+                    .map(|(_, span)| span),
+            )
             .copied()
             .collect()
     }
@@ -259,6 +313,7 @@ pub fn check_with_target_and_options(
     target: Target,
     options: checker::CheckOptions,
 ) -> Result<CheckResult, CompileError> {
+    checker::set_program_evaluates_code(crate::ast_usage::collect(program).references("eval"));
     checker::check_types_with_options(program, target, options)
 }
 

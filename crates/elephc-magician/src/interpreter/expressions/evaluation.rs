@@ -47,15 +47,24 @@ pub(in crate::interpreter) fn eval_binary_result(
         | EvalBinOp::BitXor
         | EvalBinOp::ShiftLeft
         | EvalBinOp::ShiftRight => values.bitwise(op, left, right),
-        EvalBinOp::Concat => {
-            let left = eval_string_context_value(left, context, values)?;
-            let right = eval_string_context_value(right, context, values)?;
-            values.concat(left, right)
-        }
+        EvalBinOp::Concat => eval_concat_result(left, right, context, values),
         EvalBinOp::LogicalXor => {
             let left_truthy = values.truthy(left)?;
             let right_truthy = values.truthy(right)?;
             values.bool_value(left_truthy ^ right_truthy)
+        }
+        EvalBinOp::LooseEq | EvalBinOp::LooseNotEq
+            if values.type_tag(left)? == EVAL_TAG_OBJECT
+                && values.type_tag(right)? == EVAL_TAG_OBJECT =>
+        {
+            if let Some(ordering) = eval_date_objects_ordering(left, right, context, values)? {
+                return eval_ordering_result(op, ordering, values);
+            }
+            if values.is_array_like(left)? && values.is_array_like(right)? {
+                let equal = eval_values_loosely_equal(left, right, values)?;
+                return values.bool_value(equal == (op == EvalBinOp::LooseEq));
+            }
+            values.compare(op, left, right)
         }
         EvalBinOp::LooseEq | EvalBinOp::LooseNotEq
             if values.is_array_like(left)? && values.is_array_like(right)? =>
@@ -67,15 +76,85 @@ pub(in crate::interpreter) fn eval_binary_result(
         }
         EvalBinOp::LooseEq
         | EvalBinOp::LooseNotEq
-        | EvalBinOp::StrictEq
-        | EvalBinOp::StrictNotEq
         | EvalBinOp::Lt
         | EvalBinOp::LtEq
         | EvalBinOp::Gt
-        | EvalBinOp::GtEq => values.compare(op, left, right),
-        EvalBinOp::Spaceship => values.spaceship(left, right),
+        | EvalBinOp::GtEq
+        | EvalBinOp::Spaceship => {
+            if let Some(ordering) = eval_date_objects_ordering(left, right, context, values)? {
+                return eval_ordering_result(op, ordering, values);
+            }
+            if op == EvalBinOp::Spaceship {
+                values.spaceship(left, right)
+            } else {
+                values.compare(op, left, right)
+            }
+        }
+        EvalBinOp::StrictEq | EvalBinOp::StrictNotEq => values.compare(op, left, right),
         EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr => Err(EvalStatus::UnsupportedConstruct),
     }
+}
+
+/// php orders two `DateTimeInterface` objects by the instant they denote (`date_object_compare`),
+/// whatever their class or time zone. The runtime's ordering ranks every object pair as equal,
+/// so Carbon's `lt()`/`gt()` (`$this < $date`) answered false for any two dates. `None` when
+/// either side is not a date object.
+fn eval_date_objects_ordering(
+    left: RuntimeCellHandle,
+    right: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<std::cmp::Ordering>, EvalStatus> {
+    if values.type_tag(left)? != EVAL_TAG_OBJECT || values.type_tag(right)? != EVAL_TAG_OBJECT {
+        return Ok(None);
+    }
+    if !eval_instanceof_object_result(left, "DateTimeInterface", context, values)?
+        || !eval_instanceof_object_result(right, "DateTimeInterface", context, values)?
+    {
+        return Ok(None);
+    }
+    let left = eval_date_object_instant(left, context, values)?;
+    let right = eval_date_object_instant(right, context, values)?;
+    Ok(Some(left.cmp(&right)))
+}
+
+/// A date object's instant as (Unix seconds, microseconds), read through its own `format()`.
+fn eval_date_object_instant(
+    date: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(i64, i64), EvalStatus> {
+    let format = values.string("U.u")?;
+    let rendered = eval_method_call_result(date, "format", vec![format], context, values)?;
+    let bytes = values.string_bytes(rendered);
+    eval_release_value(context, values, rendered)?;
+    let text = String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let (seconds, micros) = text.split_once('.').unwrap_or((text.as_str(), "0"));
+    let seconds = seconds.parse::<i64>().map_err(|_| EvalStatus::RuntimeFatal)?;
+    let micros = micros.parse::<i64>().map_err(|_| EvalStatus::RuntimeFatal)?;
+    Ok((seconds, micros))
+}
+
+/// Turns an ordering into the result of one comparison operator.
+fn eval_ordering_result(
+    op: EvalBinOp,
+    ordering: std::cmp::Ordering,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    use std::cmp::Ordering::{Equal, Greater, Less};
+    let truth = match op {
+        EvalBinOp::Spaceship => {
+            return values.int(match ordering { Less => -1, Equal => 0, Greater => 1 });
+        }
+        EvalBinOp::LooseEq => ordering == Equal,
+        EvalBinOp::LooseNotEq => ordering != Equal,
+        EvalBinOp::Lt => ordering == Less,
+        EvalBinOp::LtEq => ordering != Greater,
+        EvalBinOp::Gt => ordering == Greater,
+        EvalBinOp::GtEq => ordering != Less,
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    values.bool_value(truth)
 }
 
 /// PHP's `==` between two values, comparing arrays element by element.
@@ -172,6 +251,40 @@ fn eval_array_union_result(
     Ok(result)
 }
 
+/// Concatenates borrowed operands and releases any separate cells returned by object string hooks.
+fn eval_concat_result(
+    left: RuntimeCellHandle,
+    right: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let left_string = eval_string_context_value(left, context, values)?;
+    let right_string = match eval_string_context_value(right, context, values) {
+        Ok(value) => value,
+        Err(status) => {
+            if left_string != left {
+                let _ = release_expr_result(left_string, context, values);
+            }
+            return Err(status);
+        }
+    };
+    let result = values.concat(left_string, right_string);
+    let left_released = if left_string != left {
+        release_expr_result(left_string, context, values)
+    } else { Ok(()) };
+    let right_released = if right_string != right {
+        release_expr_result(right_string, context, values)
+    } else { Ok(()) };
+    match (result, left_released.and(right_released)) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = release_expr_result(value, context, values);
+            Err(status)
+        }
+        (Ok(value), Ok(())) => Ok(value),
+    }
+}
+
 /// Evaluates a runtime property or method name expression and returns its PHP string bytes as UTF-8.
 pub(in crate::interpreter) fn eval_dynamic_member_name(
     expr: &EvalExpr,
@@ -179,10 +292,18 @@ pub(in crate::interpreter) fn eval_dynamic_member_name(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
-    let value = eval_expr(expr, context, scope, values)?;
-    let value = eval_string_context_value(value, context, values)?;
-    let bytes = values.string_bytes(value)?;
-    String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
+    let source = eval_owned_expr(expr, context, scope, values)?;
+    let result = (|| {
+        let value = eval_string_context_value(source, context, values)?;
+        let bytes = values.string_bytes(value);
+        let released = if value != source {
+            release_expr_result(value, context, values)
+        } else { Ok(()) };
+        let bytes = bytes.and_then(|bytes| released.map(|()| bytes))?;
+        String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
+    })();
+    let released = eval_release_value(context, values, source);
+    result.and_then(|result| released.map(|()| result))
 }
 
 /// Reads an array element or dispatches `ArrayAccess::offsetGet()` for objects.
@@ -193,16 +314,16 @@ pub(in crate::interpreter) fn eval_array_get_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if values.type_tag(array)? != EVAL_TAG_OBJECT {
-        let array_identity = values.raw_value_word(array)?;
         let key = eval_array_reference_key(index, values)?;
         let target = key.as_ref().and_then(|key| {
             context
-                .array_element_alias(array_identity, &key)
+                .array_element_alias(array, &key)
                 .cloned()
         });
         if crate::eval_trace::enabled() {
             eprintln!(
-                "[elephc-eval-trace] phase=array_reference_read identity={array_identity:#x} key={key:?} bound={}",
+                "[elephc-eval-trace] phase=array_reference_read identity={:#x} key={key:?} bound={}",
+                array.as_ptr() as usize,
                 target.is_some(),
             );
         }
@@ -235,18 +356,23 @@ pub(super) fn eval_cast_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let value = eval_expr(expr, context, scope, values)?;
-    match target {
-        EvalCastType::Int => values.cast_int(value),
-        EvalCastType::Float => values.cast_float(value),
-        EvalCastType::String => {
-            let value = eval_string_context_value(value, context, values)?;
-            values.cast_string(value)
+    with_eval_operands(&[expr], context, scope, values, |args, context, _, values| {
+        match target {
+            EvalCastType::Int => values.cast_int(args[0]),
+            EvalCastType::Float => values.cast_float(args[0]),
+            EvalCastType::String => {
+                let value = eval_string_context_value(args[0], context, values)?;
+                let result = values.cast_string(value);
+                let released = if value != args[0] {
+                    release_expr_result(value, context, values)
+                } else { Ok(()) };
+                result.and_then(|result| released.map(|()| result))
+            }
+            EvalCastType::Bool => values.cast_bool(args[0]),
+            EvalCastType::Array => eval_array_cast_value(args[0], context, values),
+            EvalCastType::Object => eval_object_cast_value(args[0], context, values),
         }
-        EvalCastType::Bool => values.cast_bool(value),
-        EvalCastType::Array => eval_array_cast_value(value, context, values),
-        EvalCastType::Object => eval_object_cast_value(value, context, values),
-    }
+    })
 }
 
 /// Casts one dynamic eval value to a `stdClass` object with PHP's `(object)` rules.
@@ -515,9 +641,15 @@ pub(in crate::interpreter) fn eval_new_object_result(
             return eval_throw_class_not_found_error(class_name, context, values);
         }
     };
-    if let Err(err) = initialize_native_throwable_source(object, context, values)
-        .and_then(|()| eval_native_constructor_with_evaluated_args(class_name, object, args, context, values))
-    {
+    let result = initialize_native_throwable_source(object, context, values).and_then(|()| {
+        eval_native_constructor_with_evaluated_args(class_name, object, args.clone(), context, values)
+    });
+    let mut released = Ok(());
+    for arg in args {
+        let cleanup = release_expr_result(arg.value, context, values);
+        if released.is_ok() { released = cleanup; }
+    }
+    if let Err(err) = result.and(released) {
         trace_new_object_error("native_constructor", class_name, err, context);
         let _ = values.release(object);
         return Err(err);
@@ -526,7 +658,7 @@ pub(in crate::interpreter) fn eval_new_object_result(
 }
 
 /// PHP captures Throwable source properties at allocation, before user constructors.
-fn initialize_native_throwable_source(
+pub(in crate::interpreter) fn initialize_native_throwable_source(
     object: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -807,23 +939,23 @@ pub(in crate::interpreter) fn eval_closure_object_expr(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let object = values.new_object("stdClass")?;
-    let identity = match values.object_identity(object) {
+    let attached = (|| {
+        if let Some(receiver) = target.receiver_mut() {
+            values.retain_object_children(object, &[*receiver])?;
+            // Metadata borrows the cell owned by the runtime edge, not its caller's scope.
+            *receiver = receiver.borrowed();
+        }
+        values.object_identity(object)
+    })();
+    let identity = match attached {
         Ok(identity) => identity,
         Err(status) => {
-            values.release(object)?;
+            let _ = values.release(object);
             return Err(status);
         }
     };
-    if let Some(receiver) = target.receiver_mut() {
-        match values.retain(*receiver) {
-            Ok(retained) => *receiver = retained,
-            Err(status) => {
-                values.release(object)?;
-                return Err(status);
-            }
-        }
-    }
     context.register_closure_object_target(identity, target);
+    crate::ffi::dynamic_destructors::register_dynamic_object_context(identity, context);
     Ok(object)
 }
 
@@ -835,6 +967,10 @@ fn eval_closure_capture(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalClosureCaptureBinding, EvalStatus> {
     if capture.by_ref() {
+        if let Some(reference) = eval_persistent_variable_reference(capture.name(), context, scope, values)? {
+            let reference = values.retain(reference)?;
+            return Ok(EvalClosureCaptureBinding::new(capture.name(), reference, Some(EvalReferenceTarget::Cell { cell: reference })));
+        }
         // The closure OWNS one reference to the captured cell, as a by-value capture does. It
         // routinely outlives the defining activation (`return function () use (&$x) {...};`),
         // and that activation releases its own reference when it returns. An undefined
@@ -850,6 +986,13 @@ fn eval_closure_capture(
             }
             status
         })?;
+        let target = match target {
+            Some(mut target) => {
+                retain_capture_target_object(&mut target, values)?;
+                Some(target)
+            }
+            None => None,
+        };
         let value = if defined { values.retain(value)? } else { value };
         // The variable may itself be a reference (a by-reference parameter): `target` is then
         // the variable it aliases, so keep this scope's own entry as a second holder.
@@ -865,11 +1008,35 @@ fn eval_closure_capture(
         );
     }
     let value = if let Some(value) = visible_scope_cell(context, scope, capture.name()) {
-        values.retain(value)?
+        if values.is_reference(value)? { values.copy_value(value)? } else { values.retain(value)? }
     } else {
         values.null()?
     };
     Ok(EvalClosureCaptureBinding::new(capture.name(), value, None))
+}
+
+/// Gives a by-reference capture rooted in an object property a reference to that object's cell.
+///
+/// The target names the receiver through the cell the method ran on, and that cell is the call's
+/// own copy of the caller's, released when the call returns. A non-static closure keeps it alive
+/// through `$this`; a `static` one holds nothing, so a capture outliving the method wrote through
+/// a freed cell -- Symfony's `EventDispatcher::optimizeListeners()` wrapper assigns its
+/// `use (&$closure)`, bound to `&$this->optimized[$event][]`, from a `static function`. The
+/// closure owns this reference the way it owns the `$this` it captures.
+fn retain_capture_target_object(
+    target: &mut EvalReferenceTarget,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    match target {
+        EvalReferenceTarget::ObjectProperty { object, .. } => {
+            *object = values.retain(*object)?;
+            Ok(())
+        }
+        EvalReferenceTarget::NestedArrayElement { array_target, .. } => {
+            retain_capture_target_object(array_target, values)
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Evaluates one `match` arm value as an OWNED result.
@@ -901,21 +1068,28 @@ pub(in crate::interpreter) fn eval_match_expr(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
+    _own_result: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let subject = eval_expr(subject, context, scope, values)?;
-    for arm in arms {
-        for pattern in &arm.patterns {
-            let pattern = eval_expr(pattern, context, scope, values)?;
-            let matched = values.compare(EvalBinOp::StrictEq, subject, pattern)?;
-            if values.truthy(matched)? {
-                return eval_match_arm_value(&arm.value, context, scope, values);
+    with_eval_operands(&[subject], context, scope, values, |args, context, scope, values| {
+        for arm in arms {
+            for pattern in &arm.patterns {
+                let matched = with_eval_operands(&[pattern], context, scope, values, |patterns, _, _, values| {
+                    values.compare(EvalBinOp::StrictEq, args[0], patterns[0])
+                })?;
+                let truthy = values.truthy(matched);
+                let released = values.release(matched);
+                let truthy = truthy?;
+                released?;
+                if truthy {
+                    return eval_match_arm_value(&arm.value, context, scope, values);
+                }
             }
         }
-    }
-    if let Some(expr) = default {
-        return eval_match_arm_value(expr, context, scope, values);
-    }
-    eval_throw_unhandled_match_error(subject, context, values)
+        if let Some(expr) = default {
+            return eval_match_arm_value(expr, context, scope, values);
+        }
+        eval_throw_unhandled_match_error(args[0], context, values)
+    })
 }
 
 /// Raises PHP's `\UnhandledMatchError` for a `match` no arm accepted.
@@ -929,12 +1103,7 @@ fn eval_throw_unhandled_match_error<T>(
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
     let description = eval_unhandled_match_subject(subject, values)?;
-    let error = values.new_object("UnhandledMatchError")?;
-    let message = values.string(&format!("Unhandled match case {description}"))?;
-    let code = values.int(0)?;
-    values.construct_object(error, vec![message, code])?;
-    context.set_pending_throw(error);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("UnhandledMatchError", &format!("Unhandled match case {description}"), 0, context, values)
 }
 
 /// Renders the unmatched subject the way PHP names it in the error message.

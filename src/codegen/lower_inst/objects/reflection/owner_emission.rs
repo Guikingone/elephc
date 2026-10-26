@@ -138,10 +138,9 @@ pub(super) fn emit_reflection_owner_object_with_members(
                 "__static_properties",
                 &metadata.static_property_members,
             )?;
-        } else if class_name == "ReflectionFunction" {
-            let (_, short_name) = reflection_name_parts(reflected_name);
-            emit_reflection_owner_string_property_by_name(ctx, class_name, "__short_name", short_name)?;
         }
+        // `ReflectionFunction`'s `__short_name` is written by `emit_reflection_function_name_parts`
+        // below; a second store here overwrote a persisted copy without releasing it.
         if class_name == "ReflectionEnum" {
             let case_names = metadata
                 .enum_case_members
@@ -170,7 +169,7 @@ pub(super) fn emit_reflection_owner_object_with_members(
         if is_reflection_class_owner {
             match lazy_members {
                 Some(owner) => {
-                    emit_reflection_owner_lazy_members(ctx, owner, class_name, metadata)?
+                    emit_reflection_owner_lazy_members(ctx, owner, class_name, metadata, false)?
                 }
                 None => emit_reflection_owner_members(ctx, class_name, metadata)?,
             }
@@ -274,6 +273,12 @@ pub(super) fn emit_reflection_owner_object_with_members(
             class_name,
             "__is_generator",
             metadata.is_generator,
+        )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            class_name,
+            "__returns_reference",
+            metadata.returns_reference,
         )?;
     }
     if matches!(
@@ -422,7 +427,7 @@ fn emit_reflection_source_properties(
 }
 
 /// Resolves the physical source path for one reflected declaration.
-fn reflection_source_file(
+pub(super) fn reflection_source_file(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     metadata: &ReflectionOwnerMetadata,
@@ -455,7 +460,7 @@ fn reflection_source_file(
 }
 
 /// Resolves the best available declaration line range for one reflected owner.
-fn reflection_source_lines(
+pub(super) fn reflection_source_lines(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     metadata: &ReflectionOwnerMetadata,
@@ -652,9 +657,14 @@ fn emit_reflection_owner_lazy_members(
     owner: ReflectionOwnerKind,
     class_name: &str,
     metadata: &ReflectionOwnerMetadata,
+    skip_generic: bool,
 ) -> Result<()> {
     for slot in REFLECTION_LAZY_MEMBER_SLOTS {
         if !reflection_owner_member_slot_applies(class_name, slot) {
+            continue;
+        }
+        // A table-built reflector builds this slot from the row's name list when it is read.
+        if skip_generic && crate::reflection_table::generic_slots_for(ctx.module.closed_world).contains(slot) {
             continue;
         }
         if reflection_owner_member_slot_is_empty(metadata, slot) {
@@ -769,4 +779,92 @@ pub(super) fn emit_reflection_owner_code_address_property(
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset + 8);
     abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
     Ok(())
+}
+
+/// Which value-bearing slots the reflection table row already carries as data, so the extras
+/// filler need not store them.
+#[derive(Clone, Copy, Default)]
+pub(super) struct TableValues {
+    pub(super) constants: bool,
+    pub(super) defaults: bool,
+}
+
+/// Fills the slots of a table-built class reflector that are not plain data: attributes, trait
+/// aliases, constant values, default and static property values, an enum's backing type, and --
+/// when `lazy_members` -- the addresses of the shared member fillers.
+///
+/// The reflector is in the integer result register on entry and exit, as for every slot emitter.
+/// The constructor (`ReflectionClass::__construct`, filled from the module reflection table) has
+/// already stored every name, flag, line and list; this is the part that needs code.
+pub(super) fn emit_reflection_class_extras(
+    ctx: &mut FunctionContext<'_>,
+    owner: ReflectionOwnerKind,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+    lazy_members: bool,
+    in_table: TableValues,
+) -> Result<()> {
+    if !metadata.attr_names.is_empty() {
+        emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
+    }
+    if !metadata.trait_aliases.is_empty() {
+        emit_reflection_string_assoc_property_by_name(
+            ctx,
+            class_name,
+            "__trait_aliases",
+            &metadata.trait_aliases,
+        )?;
+    }
+    if !in_table.constants && !metadata.constant_members.is_empty() {
+        emit_reflection_constant_array_property_by_name(
+            ctx,
+            class_name,
+            "__constants",
+            &metadata.constant_members,
+        )?;
+    }
+    if !in_table.defaults && !metadata.default_property_members.is_empty() {
+        emit_reflection_default_property_array_property_by_name(
+            ctx,
+            class_name,
+            "__default_properties",
+            &metadata.default_property_members,
+        )?;
+    }
+    if !metadata.static_property_members.is_empty() {
+        emit_reflection_static_property_array_property_by_name(
+            ctx,
+            class_name,
+            "__static_properties",
+            &metadata.static_property_members,
+        )?;
+    }
+    if class_name == "ReflectionEnum" && metadata.type_metadata.is_some() {
+        emit_reflection_owner_type_property_by_name(
+            ctx,
+            class_name,
+            "__backing_type",
+            metadata.type_metadata.as_ref(),
+        )?;
+    }
+    if lazy_members {
+        emit_reflection_owner_lazy_members(ctx, owner, class_name, metadata, true)?;
+    }
+    Ok(())
+}
+
+/// Whether a table-built reflector of this class-like needs the extras filler at all.
+pub(super) fn reflection_class_extras_are_needed(
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+    lazy_members: bool,
+    in_table: TableValues,
+) -> bool {
+    !metadata.attr_names.is_empty()
+        || !metadata.trait_aliases.is_empty()
+        || (!in_table.constants && !metadata.constant_members.is_empty())
+        || (!in_table.defaults && !metadata.default_property_members.is_empty())
+        || !metadata.static_property_members.is_empty()
+        || (class_name == "ReflectionEnum" && metadata.type_metadata.is_some())
+        || lazy_members
 }

@@ -9,21 +9,6 @@
 
 use super::*;
 
-/// Loads a path string, calls a stat helper, boxes int success or PHP false, and stores it.
-pub(super) fn lower_unary_path_stat_int_or_false(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    runtime_label: &str,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 1)?;
-    let path = expect_operand(inst, 0)?;
-    load_string_to_result(ctx, path, name)?;
-    abi::emit_call_label(ctx.emitter, runtime_label);
-    box_stat_int_or_false_result(ctx);
-    store_if_result(ctx, inst)
-}
-
 /// Loads a resource or boxed resource handle into the target integer result register.
 pub(in crate::codegen::lower_inst::builtins) fn load_stream_fd_to_result(
     ctx: &mut FunctionContext<'_>,
@@ -123,6 +108,7 @@ pub(super) fn emit_resource_release_sentinel(emitter: &mut crate::codegen::emit:
             emitter.instruction("ldr x9, [sp], #16");                           // restore the stashed resource Mixed box pointer
             emitter.instruction("mov x11, x0");                                 // preserve the native handle the caller still has to close
             abi::emit_call_label(emitter, "__rt_resource_id_of");               // resolve the id this handle keeps for the rest of the request
+            abi::emit_call_label(emitter, "__rt_resource_inventory_close");     // retain the closed incarnation for get_resources("Unknown")
             emitter.instruction("neg x10, x0");                                 // a negative payload encodes "closed, PHP id = -payload"
             emitter.instruction("str x10, [x9, #8]");                           // overwrite the low payload word so scope cleanup skips it
             emitter.instruction("mov x0, x11");                                 // restore the native handle for the caller's close dispatch
@@ -132,6 +118,7 @@ pub(super) fn emit_resource_release_sentinel(emitter: &mut crate::codegen::emit:
             emitter.instruction("add rsp, 16");                                 // release the stash slot
             emitter.instruction("mov r10, rax");                                // preserve the native handle the caller still has to close
             abi::emit_call_label(emitter, "__rt_resource_id_of");               // resolve the id this handle keeps for the rest of the request
+            abi::emit_call_label(emitter, "__rt_resource_inventory_close");     // retain the closed incarnation for get_resources("Unknown")
             emitter.instruction("neg rax");                                     // a negative payload encodes "closed, PHP id = -payload"
             emitter.instruction("mov QWORD PTR [r11 + 8], rax");                // overwrite the low payload word so scope cleanup skips it
             emitter.instruction("mov rax, r10");                                // restore the native handle for the caller's close dispatch

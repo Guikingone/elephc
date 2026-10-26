@@ -13,9 +13,8 @@
 //!   diagnostic is `expects at least 1 argument`.
 //! - The `ref` marker on `array` is mandatory — it is what makes by-reference mutation
 //!   lower correctly (ir_lower reads `ref_params` from the registry sig).
-//! - Returns the new element count, like PHP and like the eval interpreter
-//!   (`eval_array_push_unshift_count_result`). It used to return `Void`, so `$n = array_push(...)`
-//!   was empty when compiled and correct when interpreted.
+//! - Returns `Int` — the new number of elements, as PHP does and as the `array_unshift`
+//!   sibling already did. It used to return `Void`, so `$n = array_push($a, 1)` read `NULL`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -29,20 +28,12 @@ builtin! {
     ),
 }
 
-/// Validates the receiver of an `array_push` call and infers every pushed value.
+/// Validates indexed arrays and boxed PHP array declarations for an `array_push` call.
 ///
-/// Arity (at least 1 arg) is pre-validated by `check_arity`. Every argument is inferred so its
-/// side effects happen, and the receiver must be a shape `lower_array_push` dispatches on: an
-/// indexed `Array`, a `Mixed`-valued `AssocArray`, or the boxed `Mixed`/`Union` cell it hands to
-/// `lower_mixed_array_append`.
-///
-/// The hash receiver is php's own behaviour -- `array_push()` appends under the next free integer
-/// key whatever storage the array has -- and the backend reaches it through the same runtime
-/// heap-kind dispatch a packed `array<mixed>` already used when a by-reference write had promoted
-/// it. `twig/twig`'s `ArrayExpression::addElement` writes `array_push($this->nodes, $key, $value)`
-/// against a string-keyed child map, and refusing it stopped the build. A hash with a NARROWER
-/// value payload stays refused: the append would store a boxed cell into raw-pointer slots.
-/// Returns the array's new element count, as PHP does.
+/// Arity (at least 1 arg) is pre-validated by `check_arity`. Every argument is inferred so the
+/// appended values still produce their side effects; the first must be an indexed array or a
+/// declared PHP array (boxed packed-or-hash storage) or the call is rejected. Returns `Int` — the
+/// new element count.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     for index in 1..cx.args.len() {
@@ -54,7 +45,8 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     ) || matches!(
         arr_ty,
         PhpType::AssocArray { ref value, .. } if value.codegen_repr() == PhpType::Mixed
-    ) {
+    ) || arr_ty.is_php_array()
+    {
         Ok(PhpType::Int)
     } else {
         Err(CompileError::new(cx.span, "array_push() first argument must be array"))

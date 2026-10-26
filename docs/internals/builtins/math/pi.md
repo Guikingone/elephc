@@ -1,16 +1,16 @@
 ---
-title: "pi() — internals"
+title: "pi() - internals"
 description: "Compiler internals for pi(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 606
+  order: 607
 ---
 
-## `pi()` — internals
+## `pi()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/pi.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/pi.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

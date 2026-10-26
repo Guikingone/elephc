@@ -14,11 +14,54 @@ use std::path::{Path, PathBuf};
 use crate::codegen::platform::Target;
 use crate::ir::{print_module, Terminator};
 
+mod aggregate_operand_owners;
+mod argument_evaluation_owners;
 mod arrays;
+mod array_reference_outputs;
+mod array_implode;
+mod array_membership;
+mod call_coercion_owners;
+mod callable_flow_safety;
+mod callable_property_owners;
+mod class_introspection_owners;
+mod closure_bind_owners;
 mod corpus;
+mod debug_info;
+mod descriptor_ownership;
+mod descriptor_unpack_keys;
+mod destructor_catch_preservation;
+mod dynamic_spreads;
 mod effects;
+mod eval_ownership;
+mod eval_default_helpers;
 mod exhaustive;
 mod ownership;
+mod object_mixed_return_owners;
+mod boxed_array_write_owners;
+mod boxed_array_reduce;
+mod boxed_array_aggregates;
+mod boxed_array_multisort;
+mod builtin_datetime_methods;
+mod instanceof_operand_owners;
+mod iter_start_origin;
+mod iterator_cleanup;
+mod iterator_aggregate_owners;
+mod lowering_complexity;
+mod frame_density;
+mod boxed_array_predicates;
+mod boxed_array_set_comparators;
+mod reference_loop_cleanup;
+mod static_callable_string_owners;
+mod reference_cells;
+mod reference_detach;
+mod reference_property_payload;
+mod reference_return_boundaries;
+mod callable_operand_owners;
+mod capture_view_owners;
+mod static_properties;
+mod synthetic_arrays;
+mod throwable_constructors;
+mod xml_parser_arguments;
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.
 fn lower_source(source: &str) -> crate::ir::Module {
@@ -38,12 +81,31 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
 }
 
 /// Runs the corpus frontend for a selected target, including precheck availability folding.
-fn lower_source_at_for_target(
+pub(crate) fn lower_source_at_for_target(
     source: &str,
     main_file_path: &Path,
     parent: &Path,
     target: Target,
 ) -> crate::ir::Module {
+    let display = main_file_path.display().to_string();
+    try_lower_source_at_for_target(source, main_file_path, parent, target)
+        .unwrap_or_else(|error| panic!("EIR lowering failed for {display}: {error:?}"))
+}
+
+/// Prelude-inventory group naming the fixture source's own declarations, forced reachable.
+const FIXTURE_DECLARATIONS_GROUP: &str = "ir-lower-test-fixture";
+
+/// Runs the same frontend and lowering but hands back the lowering `Result`.
+///
+/// Refusal tests need the error rather than a panic: `lower_program` reports a shape EIR
+/// lowering declines through `LoweringError::Unsupported`, which the CLI prints as an ordinary
+/// source diagnostic.
+fn try_lower_source_at_for_target(
+    source: &str,
+    main_file_path: &Path,
+    parent: &Path,
+    target: Target,
+) -> Result<crate::ir::Module, crate::ir_lower::LoweringError> {
     let source_mode = crate::source::SourceMode::from_path(main_file_path);
     let tokens =
         crate::lexer::tokenize_with_mode(source, source_mode).expect("tokenize failed");
@@ -63,8 +125,12 @@ fn lower_source_at_for_target(
         crate::resolver::resolve_collecting_includes_with_defines_and_sources(parsed, parent, &defines)
             .expect("resolver failed");
     let ast = crate::autoload::collect_aliases(ast);
-    let ast = crate::dom_prelude::inject(ast);
     let mut prelude_inventory = crate::optimize::reachability::PreludeInventory::new();
+    // The fixture's own declarations stay lowered whether or not its top level calls them: these
+    // tests inspect a named function or method's EIR, and most declare helpers only to lower
+    // them. Compiler preludes are still pruned exactly as `pipeline::compile` prunes them.
+    prelude_inventory.record_program(FIXTURE_DECLARATIONS_GROUP, &ast);
+    let ast = crate::dom_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::pdo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     // Same injection order as `pipeline::compile`: mysqli after PDO, so the
     // shared `elephc_pdo` externs are merged in exactly once.
@@ -77,10 +143,30 @@ fn lower_source_at_for_target(
     let ast = crate::tz_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let (ast, _) = crate::opcache_prelude::inject_if_used(
+        ast,
+        crate::php_version::PhpVersion::default(),
+        false,
+        None,
+        &[],
+        &[],
+        None,
+        false,
+        &mut prelude_inventory,
+    );
     let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    // The array compatibility preludes `pipeline::compile` injects at the same point.
+    let ast = crate::array_edge_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::array_gradual_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::array_ucompare_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::version_prelude::inject_if_used(
+        ast,
+        crate::php_version::PhpVersion::default(),
+        &mut prelude_inventory,
+    );
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
     let (ast, _, autoload_sources) = crate::autoload::run_collecting_included_with_defines_and_sources(
         ast,
@@ -89,6 +175,33 @@ fn lower_source_at_for_target(
         &defines,
     )
     .expect("autoload failed");
+    // The compatibility preludes `pipeline::compile` injects once the autoloaded classes are
+    // spliced in (`compat-preludes` phase): the lowering routes `array_merge`, `array_walk`,
+    // `min`/`max`, `filter_var` and friends to these helpers, so a fixture lowered without them
+    // takes the bare native path and no longer matches what a real build emits.
+    let mut forced_groups = HashSet::from([FIXTURE_DECLARATIONS_GROUP.to_string()]);
+    let ast = crate::array_edge_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::array_gradual_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::array_ucompare_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::array_merge_prelude::inject_if_used(ast, &mut prelude_inventory);
+    if prelude_inventory.groups.contains_key("array_merge") {
+        forced_groups.insert("array_merge".to_string());
+    }
+    let ast = crate::filter_var_prelude::inject_if_used(ast, &mut prelude_inventory);
+    if prelude_inventory.groups.contains_key(crate::filter_var_prelude::FILTER_VAR_GROUP) {
+        forced_groups.insert(crate::filter_var_prelude::FILTER_VAR_GROUP.to_string());
+    }
+    let ast = crate::backend_gap_prelude::inject_if_used(ast, &mut prelude_inventory);
+    for group in [
+        crate::array_gradual_prelude::GROUP,
+        crate::backend_gap_prelude::BACKEND_GAP_GROUP,
+    ] {
+        if prelude_inventory.groups.contains_key(group) {
+            forced_groups.insert(group.to_string());
+        }
+    }
+    let ast = crate::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)
+        .expect("object-cast prelude failed");
     // Mirrors `pipeline::compile`, which desugars the `func_get_args()` family between
     // `autoload::run` and constant folding. Without it an example using those functions
     // reaches the checker as an undefined call, so the corpus would fail on valid PHP.
@@ -96,7 +209,7 @@ fn lower_source_at_for_target(
     let ast = crate::optimize::fold_constants_for_target(ast, target);
     let mut check_result =
         crate::types::check_with_target(&ast, target).expect("type check failed");
-    let ast = crate::optimize::propagate_constants(ast, check_result.mixed_storage_local_names());
+    let ast = crate::optimize::propagate_constants(ast, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let ast = crate::optimize::prune_constant_control_flow(
         ast,
         check_result.local_binding_decision_spans(),
@@ -108,12 +221,13 @@ fn lower_source_at_for_target(
     let ast =
         crate::optimize::eliminate_dead_code(ast, check_result.local_binding_decision_spans());
     let empty_roots = HashSet::new();
+    let fixture_roots = forced_groups;
     let ast = crate::optimize::prune_unreachable_declarations(
         ast,
         &mut check_result,
         crate::optimize::reachability::PruneOptions {
             inventory: &prelude_inventory,
-            forced_groups: &empty_roots,
+            forced_groups: &fixture_roots,
             exported_functions: &empty_roots,
             eval_forced: false,
         },
@@ -127,17 +241,12 @@ fn lower_source_at_for_target(
         .expect("source catalog construction failed");
     let mut module = crate::ir_lower::lower_program_with_source_catalog(
         &ast, &check_result, target, &main_file_path, false, catalog,
-    ).unwrap_or_else(|error| {
-        panic!(
-            "EIR lowering failed for {}: {error:?}",
-            main_file_path.display()
-        )
-    });
+    )?;
     module.declared_class_source_files = autoload_sources.class_likes;
     module.declared_class_source_files.extend(included_sources.class_likes);
     module.declared_function_source_files = autoload_sources.functions;
     module.declared_function_source_files.extend(included_sources.functions);
-    module
+    Ok(module)
 }
 
 #[test]
@@ -349,6 +458,35 @@ fn strlen_uses_backend_neutral_eir_graph() {
         !text.contains("builtin_call @strlen"),
         "strlen leaked through the legacy name-based backend boundary: {text}"
     );
+}
+
+/// Dynamic strlen retires its internal cast after reading the length on every target.
+#[test]
+fn strlen_releases_only_its_internal_string_cast_on_every_target() {
+    use crate::ir::Op;
+
+    let source = r#"<?php
+function boxedLength(mixed $value): int { return strlen($value); }
+function borrowedLength(string $value): int { return strlen($value); }
+echo boxedLength("abc"), borrowedLength("abc");
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."),
+            crate::codegen::platform::Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "boxedLength").unwrap();
+        let length_index = function.instructions.iter().position(|inst| inst.op == Op::StrLen).unwrap();
+        let string = function.instructions[length_index].operands[0];
+        let cast = function.instructions.iter().find(|inst| inst.result == Some(string)).unwrap();
+        assert_eq!(cast.op, Op::Cast, "{name}");
+        assert!(function.instructions[length_index + 1..].iter().any(|inst| {
+            inst.op == Op::Release && inst.operands == [string]
+        }), "{name}: the detached string must be released after reading its length");
+        let borrowed = module.functions.iter().find(|function| function.name == "borrowedLength").unwrap();
+        assert!(!borrowed.instructions.iter().any(|inst| inst.op == Op::Cast), "{name}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
 }
 
 /// Verifies nested autovivification carries a typed fetch-for-write runtime identity.

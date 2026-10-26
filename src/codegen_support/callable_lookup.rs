@@ -23,6 +23,7 @@ const FNV1A_OFFSET: u64 = 14_695_981_039_346_656_037;
 const FNV1A_PRIME: u64 = 1_099_511_628_211;
 
 /// Metadata table selected for one string-callable universe.
+#[derive(Clone)]
 pub(crate) enum StringLookupTable {
     /// Canonical entries stored consecutively for a runtime linear scan.
     Linear { label: String, count: usize },

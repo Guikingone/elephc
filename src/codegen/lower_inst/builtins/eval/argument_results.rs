@@ -63,15 +63,27 @@ pub(super) fn store_eval_function_call_operands(
     Ok(boxed)
 }
 
+/// Count-word flag: the pack's last argument is the hidden `func_get_args()` collector, whose
+/// elements the bridge splices in as the surplus arguments. Mirrors
+/// `elephc_magician::abi::EVAL_ARG_PACK_SURPLUS_COLLECTOR`.
+const EVAL_ARG_PACK_SURPLUS_COLLECTOR: i64 = 1 << 62;
+/// Count-word flag: the collector opens with the actual PHP argument count. Mirrors
+/// `elephc_magician::abi::EVAL_ARG_PACK_COLLECTOR_COUNTS`.
+const EVAL_ARG_PACK_COLLECTOR_COUNTS: i64 = 1 << 61;
+
 /// Stores a count-prefixed positional argument pack for the eval method-call ABI.
+///
+/// `collector_flags` comes from [`eval_method_call_collector_flags`] and rides in the count
+/// word's high bits.
 pub(super) fn store_eval_method_call_arg_pack(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     args_offset: usize,
+    collector_flags: i64,
 ) -> Result<EvalBoxedOperands> {
     let arg_count = inst.operands.len().saturating_sub(1);
     let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, arg_count as i64);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, arg_count as i64 | collector_flags);
     abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset);
     let mut boxed = EvalBoxedOperands::new();
     for (index, operand) in inst.operands.iter().skip(1).enumerate() {
@@ -84,14 +96,106 @@ pub(super) fn store_eval_method_call_arg_pack(
     Ok(boxed)
 }
 
+/// Returns the count-word flags telling the bridge that the last argument is a hidden collector.
+///
+/// The call was planned against the receiver class's COMPILED signature, which carries the
+/// generated `func_get_args()` collector as its last parameter, so the operands end with that
+/// collector. An interpreted override declares only its source parameters and bound the
+/// collector as a real argument: Symfony's compiled `Container::get()` calling `$this->load($file)`
+/// on the dumped container gave `load($file, $lazyLoad = true)` the collector array as
+/// `$lazyLoad`, and the entity manager's lazy-ghost factory then called `__construct` on an array.
+/// The collector holds the surplus arguments (after the actual count, when it carries one), so
+/// the bridge splices it rather than dropping it. A source variadic owns its tail differently
+/// and is left alone.
+pub(super) fn eval_method_call_collector_flags(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    method_name: &str,
+) -> Result<i64> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Ok(0);
+    };
+    let class_name = class_name.trim_start_matches('\\');
+    let key = php_symbol_key(method_name);
+    // An INTERFACE-typed receiver was planned against the interface's signature, which carries
+    // the collector the same way: Symfony's `CheckCredentialsListener` calls
+    // `PasswordHasherInterface::verify($hash, $plain, $salt)` -- two declared parameters, `$salt`
+    // packed as surplus -- on an interpreted `MigratingPasswordHasher`, which then received the
+    // collector array as `$salt` and every demo login died on a TypeError.
+    let signature = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .and_then(|info| info.methods.get(&key))
+        .or_else(|| {
+            ctx.module
+                .interface_infos
+                .get(class_name)
+                .and_then(|info| info.methods.get(&key))
+        });
+    Ok(collector_flags_for_signature(
+        signature,
+        inst.operands.len().saturating_sub(1),
+    ))
+}
+
+/// Static-method twin of [`eval_method_call_collector_flags`]: `static::load($file)` in a
+/// compiled body was planned against `class_name`'s compiled signature too.
+pub(super) fn eval_static_method_call_collector_flags(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+    method_name: &str,
+) -> i64 {
+    let signature = ctx
+        .module
+        .class_infos
+        .get(class_name.trim_start_matches('\\'))
+        .and_then(|info| info.static_methods.get(&php_symbol_key(method_name)));
+    collector_flags_for_signature(signature, inst.operands.len())
+}
+
+/// Returns the collector flags when `passed` operands fill `signature` up to its trailing
+/// hidden collector.
+fn collector_flags_for_signature(
+    signature: Option<&crate::types::FunctionSig>,
+    passed: usize,
+) -> i64 {
+    let Some(signature) = signature else {
+        return 0;
+    };
+    let trailing_collector = crate::func_args::sig_collects_surplus_args(signature)
+        && !crate::func_args::sig_has_hidden_argc_param(signature)
+        && signature
+            .params
+            .last()
+            .is_some_and(|(name, _)| name == crate::func_args::HIDDEN_ARGS_PARAM);
+    if !trailing_collector || passed != signature.params.len() {
+        return 0;
+    }
+    let mut flags = EVAL_ARG_PACK_SURPLUS_COLLECTOR;
+    if crate::func_args::sig_collects_optional_arg_count(signature) {
+        flags |= EVAL_ARG_PACK_COLLECTOR_COUNTS;
+    }
+    flags
+}
+
 /// Stores all positional operands as a count-prefixed static-method argument pack.
+///
+/// `collector_flags` comes from [`eval_static_method_call_collector_flags`].
 pub(super) fn store_eval_static_method_call_arg_pack(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     args_offset: usize,
+    collector_flags: i64,
 ) -> Result<EvalBoxedOperands> {
     let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, inst.operands.len() as i64);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        result_reg,
+        inst.operands.len() as i64 | collector_flags,
+    );
     abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset);
     let mut boxed = EvalBoxedOperands::new();
     for (index, operand) in inst.operands.iter().enumerate() {
@@ -115,6 +219,11 @@ fn store_eval_native_method_argument(
     offset: usize,
 ) -> Result<Option<usize>> {
     let local_slot = crate::codegen::lower_inst::reference_arguments::local_slot_for_loaded_value(ctx, value);
+    // The shared owner-call helper only ever sees its own parameters: a reference marker would
+    // point at the helper's copy, so the site proved the argument is passed by value instead.
+    if super::outlined_owner_call::inside_owner_call_helper(ctx) {
+        return store_eval_native_method_argument_by_value(ctx, value, offset);
+    }
     if let Ok(slot) = local_slot {
         if !eval_method_argument_has_stable_ref_place(ctx, slot) {
             return store_eval_native_method_argument_by_value(ctx, value, offset);
@@ -159,7 +268,7 @@ fn store_eval_native_method_argument(
 /// Passing their frame address to the eval bridge would therefore expose an empty cell instead of
 /// the loaded value. Ordinary PHP and function-static locals retain stable storage and may carry
 /// a reference marker when the runtime-resolved method requires one.
-fn eval_method_argument_has_stable_ref_place(ctx: &FunctionContext<'_>, slot: LocalSlotId) -> bool {
+pub(super) fn eval_method_argument_has_stable_ref_place(ctx: &FunctionContext<'_>, slot: LocalSlotId) -> bool {
     matches!(
         ctx.local_kind(slot),
         Ok(LocalKind::PhpLocal | LocalKind::StaticLocal)
@@ -192,7 +301,7 @@ pub(super) fn store_eval_object_operand(
     store_eval_mixed_operand_at(ctx, object, EVAL_TEMP_CELL_OFFSET)
 }
 
-/// Stores one operand as a boxed Mixed cell at an eval scratch offset.
+/// Stores one operand as a boxed Mixed cell; native representations create an owner to retire.
 pub(super) fn store_eval_mixed_operand_at(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
@@ -272,6 +381,26 @@ pub(super) fn emit_release_eval_boxed_operands_keeping_result(
     boxed: &[usize],
 ) {
     emit_release_eval_boxed_operands(ctx, boxed);
+}
+
+/// Retires metadata-query adapter boxes while preserving the C status or scalar predicate result.
+/// Existing Mixed operands remain borrowed; native payloads retain their original EIR owner.
+pub(super) fn retire_eval_metadata_operand_boxes(
+    ctx: &mut FunctionContext<'_>,
+    operands: &[(ValueId, usize)],
+) -> Result<()> {
+    let result = abi::int_result_reg(ctx.emitter);
+    for &(value, offset) in operands {
+        if matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            continue;
+        }
+        ctx.emitter.comment("retire temporary eval metadata operand box");
+        abi::emit_push_reg(ctx.emitter, result);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, offset + 16);
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        abi::emit_pop_reg(ctx.emitter, result);
+    }
+    Ok(())
 }
 
 /// Probes whether eval has a late-static called-class override for an AOT frame.
@@ -359,14 +488,16 @@ pub(super) fn emit_eval_result_as_type(ctx: &mut FunctionContext<'_>, result_ty:
     }
 }
 
-/// Converts an eval call's OWNED Mixed result to its static type, releasing the box when the
-/// conversion leaves a scalar.
+/// Converts an eval call's OWNED Mixed result to its static type, releasing the box whenever the
+/// conversion leaves something other than the box itself.
 ///
-/// The bridge hands the call's result back as a fresh Mixed cell. A Mixed result type keeps it,
-/// and the unboxing arms take their own reference, but the scalar casts only READ it (a string
-/// cast returns a detached copy), so the cell was never released: every eval-dispatched call
-/// typed `string` -- `$reflector->getName()` on a compiled class among them -- leaked the box
-/// and its string.
+/// The bridge hands the call's result back as a fresh Mixed cell. A Mixed result type keeps it.
+/// Every other arm only READS it: the scalar casts return detached values, and the unboxing and
+/// cloning arms take their own reference to the payload. The cell was never released, so every
+/// eval-dispatched call typed `string` leaked the box and its string, and one typed with a class
+/// kept the object alive through the leaked box -- `ReflectionClass::getMethods()` on a
+/// dynamically named class leaked every method object and all it holds, which exhausted Symfony's
+/// heap in the opcache preloader.
 pub(super) fn emit_eval_owned_result_as_type(
     ctx: &mut FunctionContext<'_>,
     result_ty: &PhpType,
@@ -374,7 +505,20 @@ pub(super) fn emit_eval_owned_result_as_type(
     let repr = result_ty.codegen_repr();
     if !matches!(
         repr,
-        PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
+        PhpType::Str
+            | PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Iterable
+            | PhpType::Object(_)
+            | PhpType::Buffer(_)
+            | PhpType::Callable
+            | PhpType::Packed(_)
+            | PhpType::Pointer(_)
+            | PhpType::Resource(_)
     ) {
         return emit_eval_result_as_type(ctx, result_ty);
     }

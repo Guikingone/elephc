@@ -48,7 +48,7 @@ pub(super) fn builtin_reflection_owner_constructor_method(
 ///     $attributeName = (string) $attribute->getName();
 ///     $keep = $name === null ? true : (($flags & ReflectionAttribute::IS_INSTANCEOF) !== 0
 ///         ? is_a($attributeName, (string) $name, true)
-///         : strcasecmp(ltrim($attributeName, '\\'), ltrim((string) $name, '\\')) === 0);
+///         : strcasecmp(ltrim($attributeName, '\\'), (string) $name) === 0);
 ///     if ($keep) { $matching[] = $attribute; }
 /// }
 /// return $matching;
@@ -58,7 +58,17 @@ pub(super) fn builtin_reflection_owner_constructor_method(
 /// asks each method for `Route::class` with `IS_INSTANCEOF`, got the `#[Required]` on
 /// `AbstractController::setContainer()` back as a route, and the console's route collection came
 /// out empty.
-pub(super) fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
+///
+/// PHP validates `$flags` first, as php-src does: any value but `0` and
+/// `ReflectionAttribute::IS_INSTANCEOF` (2) raises PHP's `ValueError`, named after
+/// `declaring_owner` (the class PHP declares the method on, such as
+/// `ReflectionFunctionAbstract` for `ReflectionMethod`), whatever `$name` holds. With
+/// `IS_INSTANCEOF` the filter is `is_a($attributeName, $name, true)`.
+///
+/// The exact-name filter folds ASCII case but does not resolve a leading separator in `$name`,
+/// as PHP 8.5 does: `getAttributes("markerone")` finds `#[MarkerOne]` while
+/// `getAttributes("\\MarkerOne")` finds nothing.
+pub(super) fn builtin_reflection_owner_get_attributes_method(declaring_owner: &str) -> ClassMethod {
     use crate::synthetic_class::{
         e_binop, e_bool, e_call, e_cast, e_int, e_method_call, e_null, e_str, e_ternary,
         e_this_prop, e_var, s_array_push, s_assign, s_foreach, s_if, s_return,
@@ -73,7 +83,40 @@ pub(super) fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
     // the pushed values keep the object representation the caller reads the result with.
     // No early `return $this->__attrs` for the unfiltered call: returning the property converted
     // its object array to the boxed result in place, and the next call freed those cells twice.
+    // `($flags & ~ReflectionAttribute::IS_INSTANCEOF) !== 0`: php-src's validity test.
+    let invalid_flags = binary_expr(
+        binary_expr(
+            variable_expr("flags", dummy_span),
+            BinOp::BitAnd,
+            Expr::new(ExprKind::IntLiteral(!2), dummy_span),
+            dummy_span,
+        ),
+        BinOp::StrictNotEq,
+        Expr::new(ExprKind::IntLiteral(0), dummy_span),
+        dummy_span,
+    );
+    let invalid_flags_message = format!(
+        "{declaring_owner}::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag"
+    );
     let body = vec![
+        Stmt::new(
+            StmtKind::If {
+                condition: invalid_flags,
+                then_body: vec![Stmt::new(
+                    StmtKind::Throw(Expr::new(
+                        ExprKind::NewObject {
+                            class_name: Name::unqualified("ValueError"),
+                            args: vec![string_lit(&invalid_flags_message, dummy_span)],
+                        },
+                        dummy_span,
+                    )),
+                    dummy_span,
+                )],
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            dummy_span,
+        ),
         // Seeded as an EMPTY SLICE of the property rather than `[]`: this body is lowered without a
         // checker pass, and a `[]` grown inside the loop is widened to `array<mixed>` at the loop
         // header -- boxed cells the caller then read as attribute objects.
@@ -102,7 +145,7 @@ pub(super) fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
                             e_binop(
                                 e_call(
                                     "strcasecmp",
-                                    vec![unqualified(e_var("attributeName")), unqualified(wanted())],
+                                    vec![unqualified(e_var("attributeName")), wanted()],
                                 ),
                                 BinOp::StrictEq,
                                 e_int(0),

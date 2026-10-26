@@ -1,16 +1,16 @@
 ---
-title: "date_offset_get() — internals"
+title: "date_offset_get() - internals"
 description: "Compiler internals for date_offset_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 217
+  order: 218
 ---
 
-## `date_offset_get()` — internals
+## `date_offset_get()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:967](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L967) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:990](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L990) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

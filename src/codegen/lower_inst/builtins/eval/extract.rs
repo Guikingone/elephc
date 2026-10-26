@@ -97,7 +97,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_extract(
         abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
         abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     }
-    reload_eval_scope_locals(ctx, &sync_locals)?;
+    reload_eval_scope_locals(ctx, &sync_locals, None)?;
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_CALLED_CLASS_PTR_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     store_if_result(ctx, inst)

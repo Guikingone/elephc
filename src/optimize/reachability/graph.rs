@@ -82,13 +82,13 @@ struct BehavioralReachability {
     instantiated_classes: HashSet<String>,
 }
 
-/// Computes reachable declarations from executable, export, forced-prelude, and hazard roots.
 thread_local! {
     /// Per-round totals for the five sub-steps of `seed_live_methods`, printed once at the end
     /// of the fixed point under `ELEPHC_DECL_REACH_TIMES=1`.
     static SEED_SPENT: std::cell::RefCell<[f64; 5]> = const { std::cell::RefCell::new([0.0; 5]) };
 }
 
+/// Computes reachable declarations from executable, export, forced-prelude, and hazard roots.
 pub fn compute(
     program: &[Stmt],
     check_result: &CheckResult,
@@ -111,6 +111,11 @@ pub fn compute(
         options
             .inventory
             .internal_callable_methods()
+            .into_iter()
+            .collect(),
+        options
+            .inventory
+            .array_iteration_only_bodies()
             .into_iter()
             .collect(),
         check_result,
@@ -146,6 +151,15 @@ pub fn compute(
     state.reach
 }
 
+/// Removes the by-name Iterator/IteratorAggregate wildcards a `foreach` over an untyped value adds.
+///
+/// Only called for compiler-owned bodies declared `array_iteration_only`, whose loops walk arrays.
+fn drop_iterator_protocol_wildcards(usage: &mut Usage) {
+    for method in ["getiterator", "rewind", "valid", "current", "key", "next"] {
+        usage.wildcard_methods.remove(&(method.to_string(), false));
+    }
+}
+
 struct GraphState {
     index: DeclarationIndex,
     reach: Reachability,
@@ -164,6 +178,9 @@ struct GraphState {
     all_variables_opaque: bool,
     behavioral_variable_methods: HashMap<String, HashSet<(String, bool)>>,
     internal_callable_methods: HashSet<(String, String, bool)>,
+    /// Compiler-owned bodies (functions under an empty class key, and methods) whose `foreach`
+    /// loops walk arrays only; see `PreludeGroup::array_iteration_only`.
+    array_iteration_only: HashSet<(String, String, bool)>,
     checker_interface_methods: HashMap<String, HashSet<(String, bool)>>,
     checker_method_implementations: HashMap<(String, String, bool), String>,
     /// `checker_method_implementations` restricted to MAGIC methods and keyed by visible class.
@@ -196,6 +213,7 @@ impl GraphState {
         index: DeclarationIndex,
         hazards: Hazards,
         internal_callable_methods: HashSet<(String, String, bool)>,
+        array_iteration_only: HashSet<(String, String, bool)>,
         check_result: &CheckResult,
     ) -> Self {
         let checker_interface_methods = check_result
@@ -280,6 +298,7 @@ impl GraphState {
             all_variables_opaque: false,
             behavioral_variable_methods: HashMap::default(),
             internal_callable_methods,
+            array_iteration_only,
             checker_magic_methods_by_class: magic_methods_by_visible_class(
                 &checker_method_implementations,
             ),
@@ -313,6 +332,9 @@ impl GraphState {
 
     /// Applies dynamic hazard widening accumulated from executable and reachable bodies.
     fn apply_global_hazards(&mut self) {
+        if self.reach.hazards.enumerates_functions {
+            self.reach.functions.extend(self.index.functions.keys().cloned());
+        }
         if self.reach.hazards.dynamic_function {
             self.reach.functions.extend(self.index.functions.keys().cloned());
             self.reach.externs.extend(self.index.externs.iter().cloned());
@@ -424,7 +446,19 @@ impl GraphState {
             if behavioral {
                 self.behaviorally_scanned_functions.insert(name.clone());
             }
-            if let Some(usage) = self.index.functions.get(&name).cloned() {
+            if let Some(mut usage) = self.index.functions.get(&name).cloned() {
+                // See `PreludeInventory::record_internal_callable_function`.
+                if behavioral
+                    && self
+                        .internal_callable_methods
+                        .contains(&(String::new(), name.clone(), false))
+                {
+                    usage.hazards.dynamic_function = false;
+                    usage.hazards.dynamic_method = false;
+                }
+                if self.array_iteration_only.contains(&(String::new(), name.clone(), false)) {
+                    drop_iterator_protocol_wildcards(&mut usage);
+                }
                 self.apply_usage(usage, behavioral);
             }
         }
@@ -505,7 +539,7 @@ impl GraphState {
         // suspect (the direct loop below) is not in fact where the time goes.
         let trace = std::env::var("ELEPHC_DECL_REACH_TIMES").is_ok();
         let mut mark = std::time::Instant::now();
-        let mut lap = |slot: usize, mark: &mut std::time::Instant| {
+        let lap = |slot: usize, mark: &mut std::time::Instant| {
             if trace {
                 SEED_SPENT.with(|spent| spent.borrow_mut()[slot] += mark.elapsed().as_secs_f64());
                 *mark = std::time::Instant::now();
@@ -543,6 +577,8 @@ impl GraphState {
                 if self.reach.hazards.dynamic_method
                     || has_runtime_owned_parent
                     || matches!(method.as_str(), "__call" | "__callstatic")
+                    // A lazy static-default initializer is called by lowering, not by source.
+                    || method.starts_with(crate::lazy_static_defaults::STATIC_INIT_PREFIX)
                     || self.behavioral.referenced_methods.contains(&probe)
                     || self
                         .index
@@ -741,12 +777,6 @@ impl GraphState {
         // `parent.clone()` at every hop of it.
         let mut chain: Vec<&str> = Vec::new();
         let mut seen: HashSet<&str> = HashSet::default();
-        // Probes into maps keyed by `(String, bool)` and `(String, String, bool)`, which cannot
-        // be looked up with borrowed parts; reused so a miss costs nothing.
-        let mut probe: (String, bool) = (String::new(), false);
-        let mut visible_probe: (String, String, bool) = (String::new(), String::new(), false);
-        let mut chain: Vec<&str> = Vec::new();
-        let mut seen: HashSet<&str> = HashSet::default();
         // Keys already resolved for the current class: the chain is walked from the class
         // upwards, so the first entry to declare a key is its owner.
         let mut done: HashSet<(&str, bool)> = HashSet::default();
@@ -851,6 +881,9 @@ impl GraphState {
                 // names a second time for a probe that is thrown away.
                 .or_else(|| self.index.checker_methods.get(&key).cloned());
             if let Some(usage) = usage.as_mut() {
+                if self.array_iteration_only.contains(&key) {
+                    drop_iterator_protocol_wildcards(usage);
+                }
                 if behavioral && self.internal_callable_methods.contains(&key) {
                     usage.hazards.dynamic_function = false;
                     usage.hazards.dynamic_method = false;
@@ -871,6 +904,7 @@ impl GraphState {
             self.keep_instantiable_subclasses(root, behavioral);
         }
         if behavioral {
+            self.reach.hazards.enumerates_functions |= usage.hazards.enumerates_functions;
             self.reach.hazards.dynamic_function |= usage.hazards.dynamic_function;
             self.reach.hazards.dynamic_method |= usage.hazards.dynamic_method;
             self.reach.hazards.dynamic_class |= usage.hazards.dynamic_class;
@@ -1078,13 +1112,24 @@ impl GraphState {
                 .map(HashSet::len)
                 .sum::<usize>()
             + usize::from(self.reach.hazards.dynamic_function)
+            + usize::from(self.reach.hazards.enumerates_functions)
             + usize::from(self.reach.hazards.dynamic_method)
             + usize::from(self.reach.hazards.dynamic_class)
     }
 }
 
 /// Returns whether an instantiated class must retain the declared PHP magic method.
+///
+/// Property HOOK accessors count. The parser compiles `set { … }` into `__propset_<p>` and
+/// `get { … }` into `__propget_<p>`, and the only thing that used to mark one reachable was a
+/// literal `$obj->p = …` statement somewhere in the source. Every other route to the same hook
+/// PHP 8.5's `clone($obj, ["p" => …])` above all, whose write is synthesized after this pass
+/// runs, found the accessor pruned and silently wrote the BACKING SLOT instead, skipping the
+/// hook body entirely. An instantiated class keeps its own hooks.
 fn is_magic_method(method: &str) -> bool {
+    if method.starts_with("__propget_") || method.starts_with("__propset_") {
+        return true;
+    }
     matches!(
         method,
         "__construct"

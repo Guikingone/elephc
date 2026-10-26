@@ -23,7 +23,7 @@
 use crate::parser::ast::{BinOp, Program, Stmt, StmtKind, TypeExpr};
 use crate::prelude_prune::usage;
 use crate::synthetic_class::{
-    class, e_binop, e_call, e_int, e_new_fq, e_str, e_var, function, internal_declarations,
+    class, e_binop, e_call, e_int, e_new_fq, e_str, e_var, function, php_semantics_declarations,
     s_assign, s_if, s_return, s_throw, t_union,
 };
 
@@ -164,7 +164,7 @@ fn function_declarations() -> Vec<Stmt> {
 
 /// Returns the declarations to inject: the class when wanted, then the functions when wanted.
 pub(crate) fn declarations(with_class: bool, with_functions: bool) -> Program {
-    internal_declarations(|| {
+    php_semantics_declarations(|| {
         let mut out = Vec::new();
         if with_class {
             out.push(exception_declaration());

@@ -1951,7 +1951,23 @@ pub fn inject_if_used(
 /// would. The version-specific parts of the source are fenced with
 /// `// -- elephc PHP >= <version> … begin/end --` markers and removed by
 /// [`prelude_source_for_version`], the same mechanism `crate::pdo_prelude` uses.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_used_for_version(
+    program: crate::parser::ast::Program,
+    force: bool,
+    php_version: crate::php_version::PhpVersion,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> crate::parser::ast::Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_for_version_on_compiler_stack(program, force, php_version, inventory)
+    })
+}
+
+/// The body of [`inject_if_used_for_version`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_for_version_on_compiler_stack(
     program: crate::parser::ast::Program,
     force: bool,
     php_version: crate::php_version::PhpVersion,

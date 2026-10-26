@@ -1,7 +1,7 @@
 //! Purpose:
 //! Canonical contracts for PHP surfaces implemented outside the AOT `builtin!`
 //! registry, including language constructs, dedicated syntax, preludes, and
-//! currently eval-only reflection functions.
+//! compiler transforms, and reflection functions.
 //!
 //! Called from:
 //! - `crate::registry` when assembling the complete shared contract catalog.
@@ -12,8 +12,8 @@
 //! - Backend support is joined separately and must not be inferred from this file.
 
 use crate::{
-    Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, PhpModule, TypeSpec,
-    VariadicSpec,
+    Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, PhpModule, PhpVersion,
+    TypeSpec, VariadicSpec,
 };
 
 macro_rules! param {
@@ -55,14 +55,14 @@ macro_rules! surface {
     (
         $name:literal, $area:ident, $module:ident, $kind:ident,
         [$($param:expr),* $(,)?], $variadic:expr, $returns:ident,
-        $summary:literal $(, extension: $extension:expr)?
+        $summary:literal $(, since: $since:ident)? $(, extension: $extension:expr)?
     ) => {
         BuiltinContract {
             id: BuiltinId::from_canonical_name($name),
             name: $name,
             area: Area::$area,
             module: PhpModule::$module,
-            since: None,
+            since: surface!(@since $($since)?),
             kind: BuiltinKind::$kind,
             params: &[$($param),*],
             variadic: $variadic,
@@ -82,6 +82,8 @@ macro_rules! surface {
     };
     (@bool $value:expr) => { $value };
     (@bool) => { false };
+    (@since $version:ident) => { Some(PhpVersion::$version) };
+    (@since) => { None };
 }
 
 pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
@@ -95,6 +97,32 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Mixed,
         "Allocates a raw byte buffer.",
         extension: true
+    ),
+    surface!(
+        "debug_backtrace",
+        Callables,
+        Core,
+        Function,
+        [
+            param!("options", Int = DefaultSpec::Int(1)),
+            param!("limit", Int = DefaultSpec::Int(0)),
+        ],
+        None,
+        Array,
+        "Generates a PHP backtrace for the active call stack."
+    ),
+    surface!(
+        "debug_print_backtrace",
+        Callables,
+        Core,
+        Function,
+        [
+            param!("options", Int = DefaultSpec::Int(0)),
+            param!("limit", Int = DefaultSpec::Int(0)),
+        ],
+        None,
+        Void,
+        "Prints a PHP backtrace for the active call stack."
     ),
     surface!(
         "die",
@@ -117,6 +145,16 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         "Determines whether a variable is considered empty."
     ),
     surface!(
+        "error_reporting",
+        System,
+        Core,
+        Function,
+        [param!("error_level", Mixed = DefaultSpec::Null)],
+        None,
+        Int,
+        "Gets or sets the active error reporting mask."
+    ),
+    surface!(
         "exit",
         System,
         Core,
@@ -127,14 +165,146 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         "Terminates execution with an optional status."
     ),
     surface!(
-        "get_called_class",
+        "func_get_arg",
+        Callables,
+        Core,
+        Function,
+        [param!("position", Int)],
+        None,
+        Mixed,
+        "Returns one argument from the current function call."
+    ),
+    surface!(
+        "func_get_args",
         Callables,
         Core,
         Function,
         [],
         None,
         Mixed,
-        "Returns the late-static-binding class name in eval context."
+        "Returns the arguments passed to the current function call."
+    ),
+    surface!(
+        "func_num_args",
+        Callables,
+        Core,
+        Function,
+        [],
+        None,
+        Int,
+        "Returns the number of arguments passed to the current function call."
+    ),
+    surface!(
+        "get_called_class",
+        Callables,
+        Core,
+        Function,
+        [],
+        None,
+        Str,
+        "Returns the late-static-binding class name."
+    ),
+    surface!(
+        "get_defined_constants",
+        Callables,
+        Core,
+        Function,
+        [param!("categorize", Bool = DefaultSpec::Bool(false))],
+        None,
+        Mixed,
+        "Returns constants visible to the current program."
+    ),
+    surface!(
+        "get_defined_functions",
+        Callables,
+        Core,
+        Function,
+        [param!("exclude_disabled", Bool = DefaultSpec::Bool(true))],
+        None,
+        Mixed,
+        "Returns internal and user-defined function names. Elephc has no disable_functions configuration, so exclude_disabled is accepted but does not change the result."
+    ),
+    surface!(
+        "get_defined_vars",
+        Callables,
+        Core,
+        Function,
+        [],
+        None,
+        Mixed,
+        "Returns variables visible in the current scope."
+    ),
+    surface!(
+        "get_error_handler",
+        System,
+        Core,
+        Function,
+        [],
+        None,
+        Mixed,
+        "Returns the currently active user error handler, or null when none is installed.",
+        since: Php85
+    ),
+    surface!(
+        "get_exception_handler",
+        System,
+        Core,
+        Function,
+        [],
+        None,
+        Mixed,
+        "Returns the currently active uncaught-exception handler, or null when none is installed.",
+        since: Php85
+    ),
+    surface!(
+        "get_extension_funcs",
+        Callables,
+        Core,
+        Function,
+        [param!("extension", Str)],
+        None,
+        Mixed,
+        "Returns functions exported by a loaded extension or false."
+    ),
+    surface!(
+        "get_included_files",
+        Callables,
+        Core,
+        Function,
+        [],
+        None,
+        Mixed,
+        "Returns the files included by the current program."
+    ),
+    surface!(
+        "get_mangled_object_vars",
+        Callables,
+        Core,
+        Function,
+        [param!("object", Mixed)],
+        None,
+        Mixed,
+        "Returns an object's properties using PHP's visibility-mangled keys."
+    ),
+    surface!(
+        "get_required_files",
+        Callables,
+        Core,
+        Function,
+        [],
+        None,
+        Mixed,
+        "Returns the files included or required by the current program."
+    ),
+    surface!(
+        "get_resources",
+        Callables,
+        Core,
+        Function,
+        [param!("type", Mixed = DefaultSpec::Null)],
+        None,
+        Mixed,
+        "Returns currently active resources, optionally filtered by type."
     ),
     surface!(
         "get_class_methods",
@@ -143,8 +313,8 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Function,
         [param!("object_or_class", Mixed)],
         None,
-        Mixed,
-        "Returns method names visible on an object or class."
+        Array,
+        "Returns visible PHP method names, excluding generated property-hook accessors. AOT supports direct calls, literal call_user_func calls, first-class callables, and argument unpacking, with an object, a class-name string, or a boxed value whose runtime tag is an object or a string; any other tag throws TypeError. Runtime-selected callable targets are unsupported."
     ),
     // `PreludeProvided` like `parse_str` below: the AOT side builds it per program from the
     // compiled class declarations (`src/class_vars_prelude.rs`), and the lowering passes the
@@ -153,11 +323,11 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         "get_class_vars",
         Callables,
         Core,
-        PreludeProvided,
+        Function,
         [param!("class", Mixed)],
         None,
-        Mixed,
-        "Returns visible default properties for a class."
+        Array,
+        "Returns visible default properties for a class, excluding virtual properties. Uninitialized backed properties are returned as null. AOT supports direct calls, literal call_user_func calls, first-class callables, and argument unpacking, with a class-name string that may be a boxed runtime value; a non-string runtime tag throws TypeError. Runtime-selected callable targets are unsupported."
     ),
     surface!(
         "hash_copy",
@@ -247,21 +417,8 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Mixed,
         "Opens a sealed box with a keypair, returning false when it does not authenticate."
     ),
-    // The `--web` request prelude's error/exception-handler stack and shutdown queue. All six
-    // are PHP declarations over the request-local state helpers (`__elephc_error_handler_state`
-    // and friends), so they have no `builtin!` binding. The prelude widens PHP's `?callable`
-    // to `mixed` because a handler slot also holds `null` and a callable array; the contracts
-    // record what the prelude declares, which is what prelude parity compares.
-    surface!(
-        "get_error_handler",
-        Web,
-        Core,
-        PreludeProvided,
-        [],
-        None,
-        Mixed,
-        "Returns the current user-defined error handler."
-    ),
+    // The `--web` request prelude's shutdown queue: a PHP declaration over the request-local
+    // `__elephc_shutdown_function_state` registry, so it has no `builtin!` binding.
     surface!(
         "register_shutdown_function",
         Web,
@@ -271,49 +428,6 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Some(VariadicSpec::value("args")),
         Void,
         "Registers a callback to run when the script terminates."
-    ),
-    surface!(
-        "restore_error_handler",
-        Web,
-        Core,
-        PreludeProvided,
-        [],
-        None,
-        Bool,
-        "Restores the previous user-defined error handler."
-    ),
-    surface!(
-        "restore_exception_handler",
-        Web,
-        Core,
-        PreludeProvided,
-        [],
-        None,
-        Bool,
-        "Restores the previous user-defined exception handler."
-    ),
-    surface!(
-        "set_error_handler",
-        Web,
-        Core,
-        PreludeProvided,
-        [
-            param!("callback", Mixed),
-            param!("error_levels", Int = DefaultSpec::Constant("E_ALL")),
-        ],
-        None,
-        Mixed,
-        "Installs a user-defined error handler and returns the previous one."
-    ),
-    surface!(
-        "set_exception_handler",
-        Web,
-        Core,
-        PreludeProvided,
-        [param!("callback", Mixed)],
-        None,
-        Mixed,
-        "Installs a user-defined exception handler and returns the previous one."
     ),
     surface!(
         "isset",
@@ -380,6 +494,21 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         None,
         Mixed,
         "Compares two PHP-standardized version number strings."
+    ),
+    // `PreludeProvided` for the same asymmetry: the AOT side declares it as an AST prelude with
+    // `static` locals (`src/strtok_prelude.rs`) and the INTERPRETER keeps the tokenizer state in
+    // the request-scoped store (`interpreter::builtins::string::strtok`), because Laravel's
+    // `SQLiteProcessor::processColumns` calls it from interpreted code. The two sides keep
+    // separate state. Returns `string|false`; the one-argument form continues the stored string.
+    surface!(
+        "strtok",
+        String,
+        Standard,
+        PreludeProvided,
+        [param!("string", Str), param!("token", Str = DefaultSpec::Null)],
+        None,
+        Mixed,
+        "Tokenizes a string by a set of delimiter bytes."
     ),
     // `PreludeProvided` for the same asymmetry again: the AOT side declares it as an AST prelude
     // over the backend's raw `hash_hmac()` (`src/hash_pbkdf2_prelude.rs`) and the INTERPRETER
@@ -457,6 +586,89 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Void,
         "Parses a query string into an array of variables."
     ),
+    // The `proc_*` family is `PreludeProvided` like `parse_str` above: the AOT side declares it as
+    // one conditionally injected AST prelude (`src/proc_prelude.rs`) over the `elephc_proc`
+    // bridge, because the by-reference `$pipes` array and the stream resources it holds are
+    // ordinary PHP values there and need no runtime symbol of their own. The INTERPRETER has its
+    // own homes (`interpreter::builtins::filesystem::proc_open`, ...) over the same bridge crate,
+    // since interpreted code never runs through a compiler prelude.
+    surface!(
+        "proc_open",
+        System,
+        Standard,
+        PreludeProvided,
+        [
+            ParamSpec {
+                name: "command",
+                ty: TypeSpec::Union(&[TypeSpec::Array, TypeSpec::Str]),
+                default: None,
+                by_ref: false,
+            },
+            param!("descriptor_spec", Array),
+            param!(ref "pipes", Mixed),
+            ParamSpec {
+                name: "cwd",
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "env_vars",
+                ty: TypeSpec::Nullable(&TypeSpec::Array),
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "options",
+                ty: TypeSpec::Nullable(&TypeSpec::Array),
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
+        ],
+        None,
+        Mixed,
+        "Executes a command and opens file pointers for input/output."
+    ),
+    surface!(
+        "proc_close",
+        System,
+        Standard,
+        PreludeProvided,
+        [param!("process", Mixed)],
+        None,
+        Int,
+        "Closes a process opened by proc_open() and returns its exit code."
+    ),
+    surface!(
+        "proc_get_status",
+        System,
+        Standard,
+        PreludeProvided,
+        [param!("process", Mixed)],
+        None,
+        Array,
+        "Returns information about a process opened by proc_open()."
+    ),
+    surface!(
+        "proc_terminate",
+        System,
+        Standard,
+        PreludeProvided,
+        [param!("process", Mixed), param!("signal", Int = DefaultSpec::Int(15))],
+        None,
+        Bool,
+        "Kills a process opened by proc_open()."
+    ),
+    surface!(
+        "proc_nice",
+        System,
+        Standard,
+        PreludeProvided,
+        [param!("priority", Int)],
+        None,
+        Bool,
+        "Changes the priority of the current process."
+    ),
     // `PreludeProvided` for the same asymmetry as `levenshtein` above: the AOT side serves
     // `var_export` as a conditionally injected PHP-source prelude (`src/var_export_prelude.rs`),
     // not a `builtin!` registry binding, so a `Function` contract would wrongly demand one. The
@@ -477,6 +689,49 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         "Renders a parsable string representation of a variable."
     ),
     surface!(
+        "restore_error_handler",
+        System,
+        Core,
+        Function,
+        [],
+        None,
+        Bool,
+        "Restores the previously active user error handler."
+    ),
+    surface!(
+        "restore_exception_handler",
+        System,
+        Core,
+        Function,
+        [],
+        None,
+        Bool,
+        "Restores the previously active uncaught-exception handler."
+    ),
+    surface!(
+        "set_error_handler",
+        System,
+        Core,
+        Function,
+        [
+            param!("callback", Mixed),
+            param!("error_levels", Int = DefaultSpec::ErrorAll),
+        ],
+        None,
+        Mixed,
+        "Installs a user error handler and returns the previous handler."
+    ),
+    surface!(
+        "set_exception_handler",
+        System,
+        Core,
+        Function,
+        [param!("callback", Mixed)],
+        None,
+        Mixed,
+        "Installs an uncaught-exception handler and returns the previous handler."
+    ),
+    surface!(
         "unset",
         Types,
         Core,
@@ -485,5 +740,18 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Some(VariadicSpec::value("vars")),
         Void,
         "Unsets the given variables."
+    ),
+    surface!(
+        "user_error",
+        System,
+        Core,
+        Function,
+        [
+            param!("message", Str),
+            param!("error_level", Int = DefaultSpec::Int(1_024)),
+        ],
+        None,
+        Bool,
+        "Alias of trigger_error."
     ),
 ];

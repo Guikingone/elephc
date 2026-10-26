@@ -183,15 +183,19 @@ echo implode(',', $filtered);
 }
 
 /// Verifies the null callback filters boxed heterogeneous elements with PHP truthiness.
+///
+/// `array_filter()` preserves keys: the survivors are `[3 => 2, 4 => "ok"]`, so keys 0 and 1
+/// are missing and read as empty (php 8.5 prints `2||` plus two warnings). The expectation
+/// used to be `2|2|ok`, which encoded the old renumbering of the filtered result.
 #[test]
 fn test_array_filter_null_callback_uses_boxed_truthiness() {
     let out = compile_and_run(
         r#"<?php
 $filtered = array_filter([0, "0", "", 2, "ok", false, null], null, ARRAY_FILTER_USE_KEY);
-echo count($filtered) . '|' . $filtered[0] . '|' . $filtered[1];
+echo count($filtered) . '|' . $filtered[0] . '|' . $filtered[1] . '|' . $filtered[3] . '|' . $filtered[4];
 "#,
     );
-    assert_eq!(out, "2|2|ok");
+    assert_eq!(out, "2|||2|ok");
 }
 
 /// Verifies an untyped array boundary is checked and filtered through gradual array storage.
@@ -345,10 +349,10 @@ echo $filtered["first"] . "|" . $filtered["third"];
     );
 }
 
-/// Verifies invalid literal modes throw a catchable `ValueError` before callback invocation.
+/// PHP 8.6 invalid literal modes throw a catchable ValueError before callback invocation.
 #[test]
 fn test_array_filter_invalid_literal_mode_throws_value_error() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_php_version(
         r#"<?php
 function keep_value($value) { echo "callback"; return true; }
 try {
@@ -358,14 +362,15 @@ try {
     echo "ValueError";
 }
 "#,
+        elephc::php_version::PhpVersion::Php86,
     );
     assert_eq!(out, "ValueError");
 }
 
-/// Verifies invalid runtime mode variables throw a catchable `ValueError`.
+/// PHP 8.6 invalid runtime modes throw a catchable ValueError.
 #[test]
 fn test_array_filter_invalid_runtime_mode_throws_value_error() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_php_version(
         r#"<?php
 function keep_value_runtime($value) { echo "callback"; return true; }
 $mode = 9;
@@ -376,6 +381,7 @@ try {
     echo "ValueError";
 }
 "#,
+        elephc::php_version::PhpVersion::Php86,
     );
     assert_eq!(out, "ValueError");
 }
@@ -438,9 +444,10 @@ echo array_reduce([1, 2, 3], $reduce, 0);
     let dir = make_cli_test_dir("elephc_array_callback_runtime_string_descriptors");
     let (user_asm, _runtime_asm, _required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    // `array_walk` is lowered through its AST prelude (`crate::array_walk_prelude`), which calls
+    // the callback through the same descriptor invoker instead of `__rt_array_walk`.
     assert!(
-        user_asm.contains("__rt_array_filter")
-            && user_asm.contains("__rt_array_walk")
+        user_asm.contains("__rt_array_predicate_boxed")
             && user_asm.contains("__rt_array_reduce")
             && user_asm.contains("callable_invoker"),
         "array callback runtime string paths should route through descriptor invokers:\n{}",
@@ -488,7 +495,7 @@ foreach ($uasorted as $value) {
 }
 "#;
     let out = compile_and_run(source);
-    assert_eq!(out, "321:321:321");
+    assert_eq!(out, "321:231:321");
 
     let dir = make_cli_test_dir("elephc_sort_callback_runtime_string_descriptors");
     let (user_asm, _runtime_asm, _required_libraries) =
@@ -612,7 +619,8 @@ foreach ($a as $v) { echo $v; }
 
 // Tests `uksort` with a comparison callback, verifying keys are reordered while values
 // stay associated with their original keys.
-/// Verifies that uksort.
+/// Verifies that uksort orders the KEYS of a list (`0..4` stay in order here) and keeps each value
+/// with its key; it used to sort the values and renumber them (`12345`). Host PHP 8.5: `53142`.
 #[test]
 fn test_uksort() {
     let out = compile_and_run(
@@ -623,7 +631,7 @@ uksort($a, "cmp");
 foreach ($a as $v) { echo $v; }
 "#,
     );
-    assert_eq!(out, "12345");
+    assert_eq!(out, "53142");
 }
 
 // Tests `uasort` with a comparison callback, verifying values are sorted while preserving
@@ -861,7 +869,7 @@ foreach ($uasorted as $value) {
 }
 "#,
     );
-    assert_eq!(out, "34:23:11,12,:321:321:321");
+    assert_eq!(out, "34:23:11,12,:321:231:321");
 }
 
 /// Verifies runtime-selected instance callable arrays route array_map through Mixed descriptors.
@@ -1022,7 +1030,7 @@ foreach ($uasorted as $value) {
 }
 "#,
     );
-    assert_eq!(out, "34:23:11,12,:321:321:321");
+    assert_eq!(out, "34:23:11,12,:321:231:321");
 }
 
 // --- array_map over heterogeneous (Mixed-element) input arrays ---
@@ -1081,6 +1089,53 @@ exercise([false, false]);
 "#,
     );
     assert_eq!(out, "2:2:ww:rr:2:boolean:1:1:0:2");
+}
+
+/// Verifies boxed declared arrays preserve COW, by-reference writes, actual keys, and recursive
+/// leaf order when the callback receives runtime-typed Mixed values.
+#[test]
+fn test_declared_array_walks_preserve_references_keys_and_cow() {
+    let out = compile_and_run(
+        r#"<?php
+function walk_declared(array $values): void {
+    $copy = $values;
+    $alias = $values;
+    array_walk($values, static function (mixed &$value, mixed $key) use (&$alias): void {
+        if ($key === "first") {
+            $alias["first"] = 100;
+            unset($alias[7]);
+        }
+        echo gettype($value), "/", gettype($key), "/", $key, ";";
+        $value = $value + 10;
+    });
+    echo $values["first"], ",", $values[7], "|", $copy["first"], ",", $copy[7], "|";
+    echo $alias["first"], ",", count($alias), ":";
+}
+
+function walk_recursive_declared(array $values): void {
+    $copy = $values;
+    $alias = $values;
+    array_walk_recursive($values, static function (mixed &$value, mixed $key) use (&$alias): void {
+        if ($key === "leaf") {
+            $alias[9] = 40;
+            unset($alias["outer"]);
+        }
+        echo gettype($value), "/", gettype($key), "/", $key, ";";
+        $value = $value + 10;
+    });
+    echo $values["outer"]["leaf"], ",", $values[9], "|";
+    echo $copy["outer"]["leaf"], ",", $copy[9], "|", $alias[9], ",", count($alias);
+}
+
+walk_declared(["first" => 1, 7 => 2]);
+walk_recursive_declared(["outer" => ["leaf" => 3], 9 => 4]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "integer/string/first;integer/integer/7;11,12|1,2|100,1:\
+         integer/string/leaf;integer/integer/9;13,14|3,4|40,1"
+    );
 }
 
 /// Verifies the reported repro: array_map with an untyped closure over a heterogeneous
@@ -1277,7 +1332,7 @@ foreach ($uasorted as $value) {
 }
 "#,
     );
-    assert_eq!(out, "34:23:11,12,:321:321:321");
+    assert_eq!(out, "34:23:11,12,:321:231:321");
 }
 
 /// Verifies array_walk_recursive() visits the leaf values of a nested indexed array
@@ -1551,6 +1606,19 @@ foreach ($m as $k => $v) { echo $k, "=", $v, ";"; }
 "#,
     );
     assert_eq!(out, "a=p!;b=q!;");
+}
+
+/// A descriptor callback's transient string remains live after later string operations reuse scratch storage.
+#[test]
+fn test_array_map_assoc_descriptor_string_result_owns_bytes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$source = ["A" => chr(233)];
+$mapped = array_map(fn($value) => bin2hex($value), $source);
+echo bin2hex($mapped["A"]), "|", $mapped["A"];
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "6539|e9");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Verifies `array_map()` over a `string => int` hash keeps the source keys.
@@ -1902,6 +1970,27 @@ echo implode(",", $w);
     assert_eq!(out, "d,c,b,a");
 }
 
+/// Verifies typed first-class-callable callbacks over Mixed elements compile through the
+/// inline argument adapter, which must be minted as a real symbol for `label_global()`.
+#[test]
+fn test_first_class_callable_callbacks_adapt_mixed_elements() {
+    let out = compile_and_run(
+        r#"<?php
+function cmp(int $a, int $b): int { return $a <=> $b; }
+function dbl(int $x): int { return $x * 2; }
+function mk(): array { return [3, "1", 2]; }
+$a = mk();
+usort($a, cmp(...));
+echo json_encode($a), "\n";
+$b = [3, "1", 2];
+usort($b, cmp(...));
+echo json_encode($b), "\n";
+echo json_encode(array_map(dbl(...), mk())), "\n";
+"#,
+    );
+    assert_eq!(out, "[\"1\",2,3]\n[\"1\",2,3]\n[6,2,4]\n");
+}
+
 // --- array_reduce over indexed string arrays (16-byte descriptor slots) ---
 
 /// Verifies `array_reduce()` folds an indexed string array into an integer accumulator,
@@ -2244,4 +2333,40 @@ echo json_encode(array_uintersect([1, 5, 3], [3, 1], fn ($x, $y) => $x <=> $y)),
             "{\"0\":1,\"2\":3}\n",
         )
     );
+}
+
+/// `preg_quote` named by a string is an `array_map` callback like `trim`: Symfony's console
+/// quotes each segment of an abbreviated command name this way, and the call fataled with
+/// "callback string does not name a supported callable" on every unknown command.
+#[test]
+fn test_array_map_preg_quote_string_callback() {
+    let out = compile_and_run(
+        r#"<?php
+class App {
+    public function expr(string $name): string {
+        return implode('[^:]*:', array_map('preg_quote', explode(':', $name))) . '[^:]*';
+    }
+}
+echo (new App)->expr('no:such.command'), "|", implode(',', array_map('preg_quote', ['a.b', 'c'])), "\n";
+"#,
+    );
+    assert_eq!(out, "no[^:]*:such\\.command[^:]*|a\\.b,c\n");
+}
+
+/// `ord` and `chr` named by a string: symfony/polyfill-intl-idn decodes punycode with
+/// `array_map('ord', str_split($input))`, which fataled with "callback string does not name a
+/// supported callable" and dragged the whole runtime-name table into that one site.
+#[test]
+fn test_array_map_ord_and_chr_string_callbacks() {
+    let out = compile_and_run(
+        r#"<?php
+function dec(string $s): array { return array_map('ord', str_split($s)); }
+function enc(array $a): string { return implode('', array_map('chr', $a)); }
+$b = dec("héllo");
+echo json_encode($b), "|", enc($b), "|";
+$f = 'ord';
+echo $f('A'), "|", implode('', array_map('chr', json_decode('[65, 66]'))), "\n";
+"#,
+    );
+    assert_eq!(out, "[104,195,169,108,108,111]|héllo|65|AB\n");
 }

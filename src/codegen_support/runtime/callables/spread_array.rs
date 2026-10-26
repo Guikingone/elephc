@@ -17,7 +17,6 @@
 //!   its "Only arrays and Traversables can be unpacked" message, and the invoker clone it
 //!   makes for an `array<mixed>` result.
 
-use crate::codegen_support::abi;
 use crate::codegen_support::callable_descriptor::{
     CALLABLE_DESC_KIND_ARRAY, CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET,
 };

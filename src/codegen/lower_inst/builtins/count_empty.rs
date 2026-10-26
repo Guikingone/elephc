@@ -8,6 +8,7 @@
 //! - Handles sentinel null markers and target-specific float truthiness without changing representation contracts.
 
 use super::*;
+use crate::codegen::lower_inst::runtime_class_messages;
 
 /// PHP's `count()` TypeError, which names the offending type — and a boolean by its VALUE.
 const COUNT_TYPE_ERROR_PREFIX: &str =
@@ -110,67 +111,23 @@ fn emit_non_countable_object_type_error(
     // Re-materialize the receiver: the count call clobbered the registers, and the class name has
     // to come from the object itself.
     ctx.load_value_to_result(value)?;
-    let (name_ptr_reg, name_len_reg) = abi::string_result_regs(ctx.emitter);
+    let receiver_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("ldr x0, [x0, #8]");                        // unbox the object payload from the Mixed cell
-            ctx.emitter.instruction("ldr x9, [x0]");                            // load the receiver class id
-            abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_entries");
-            ctx.emitter.instruction("lsl x11, x9, #4");                         // scale the class id to the 16-byte class-name row
-            ctx.emitter.instruction("add x10, x10, x11");                       // address the receiver's class-name metadata
-            ctx.emitter.instruction(&format!("ldr {}, [x10]", name_ptr_reg));   // borrow the class-name pointer
-            ctx.emitter
-                .instruction(&format!("ldr {}, [x10, #8]", name_len_reg));      // borrow the class-name byte length
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");            // unbox the object payload from the Mixed cell
-            ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // load the receiver class id
-            abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
-            ctx.emitter.instruction("shl r9, 4");                               // scale the class id to the 16-byte class-name row
-            ctx.emitter
-                .instruction(&format!("mov {}, QWORD PTR [r10 + r9]", name_ptr_reg)); // borrow the class-name pointer
-            ctx.emitter
-                .instruction(&format!("mov {}, QWORD PTR [r10 + r9 + 8]", name_len_reg)); // borrow the class-name byte length
         }
     }
-    emit_count_error_concat_prefix(ctx, COUNT_TYPE_ERROR_PREFIX);
-    emit_count_error_concat_suffix(ctx, " given");
+    runtime_class_messages::emit_runtime_class_name_to_string_result(ctx, receiver_reg, "object");
+    runtime_class_messages::emit_concat_static_prefix(ctx, COUNT_TYPE_ERROR_PREFIX);
+    runtime_class_messages::emit_concat_static_suffix(ctx, " given");
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     super::super::exceptions::emit_type_error_from_string_result(ctx);
 
     ctx.emitter.label(&countable);
     Ok(())
-}
-
-/// Prepends a static fragment to the message held in the string-result registers.
-fn emit_count_error_concat_prefix(ctx: &mut FunctionContext<'_>, prefix: &str) {
-    let (text_ptr, text_len) = abi::string_result_regs(ctx.emitter);
-    let (right_ptr, right_len) = count_concat_right_operand_regs(ctx);
-    let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
-    ctx.emitter
-        .instruction(&format!("mov {}, {}", right_ptr, text_ptr));              // move the built text into the concat right operand
-    ctx.emitter
-        .instruction(&format!("mov {}, {}", right_len, text_len));              // move its length into the concat right operand
-    abi::emit_symbol_address(ctx.emitter, text_ptr, &prefix_label);
-    abi::emit_load_int_immediate(ctx.emitter, text_len, prefix_len as i64);
-    abi::emit_call_label(ctx.emitter, "__rt_concat");
-}
-
-/// Appends a static fragment to the message held in the string-result registers.
-fn emit_count_error_concat_suffix(ctx: &mut FunctionContext<'_>, suffix: &str) {
-    let (right_ptr, right_len) = count_concat_right_operand_regs(ctx);
-    let (suffix_label, suffix_len) = ctx.data.add_string(suffix.as_bytes());
-    abi::emit_symbol_address(ctx.emitter, right_ptr, &suffix_label);
-    abi::emit_load_int_immediate(ctx.emitter, right_len, suffix_len as i64);
-    abi::emit_call_label(ctx.emitter, "__rt_concat");
-}
-
-/// The register pair `__rt_concat` reads its right operand from.
-fn count_concat_right_operand_regs(ctx: &FunctionContext<'_>) -> (&'static str, &'static str) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ("x3", "x4"),
-        Arch::X86_64 => ("rdi", "rsi"),
-    }
 }
 
 /// Raises the `count()` TypeError naming `type_name`, exactly as php-src words it.
@@ -291,6 +248,16 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             }
             Ok(())
         }
+        // A `callable` that `is_array()` accepted is a callable ARRAY -- `[$object, 'method']` or
+        // `['Class', 'method']` -- which always holds exactly two elements
+        // (`!is_array($controller) || 2 !== count($controller)`, symfony/ux-live-component). The
+        // value is a descriptor here, not an array, so the length is the constant it must have;
+        // a closure or a function-name string cannot get past that `is_array()` guard.
+        PhpType::Callable => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 2);
+            store_if_result(ctx, inst)
+        }
         // Any other object: PHP raises, naming the class. It is known statically on this path,
         // so the message is a constant — the `Mixed` path has to resolve the name at run time.
         PhpType::Object(class_name) => {
@@ -389,8 +356,131 @@ fn lower_iterable_count(
 /// Lowers the synthetic `closure_bind` call: rebinds a closure's captured
 /// `$this` to a new receiver via `__rt_closure_bind(descriptor, new_this)`,
 /// returning the rebound closure descriptor.
+///
+/// An optional third operand is the RUNTIME-resolved scope class id (`-1` when the scope named no
+/// class): `Closure::bind($f, $t, $scope)` with a scope that is only a string or object at run
+/// time. The bound copy is stamped with it through `__rt_closure_set_scope`, which stores
+/// `id + 1` into the descriptor's hidden scope capture so the property-access gate sees it.
+///
+/// The optional fourth operand is the scope value itself. When no compiled class has its name
+/// and the program links the interpreter, the class may be one the interpreter declared: the
+/// stamp is then the interpreter's interned name record with bit 63 set, a negative stamp the
+/// eval bridges turn back into the name (`scope_context::emit_effective_scope_name`).
 pub(in crate::codegen::lower_inst) fn lower_closure_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "closure_bind", 2)?;
+    ensure_arg_count_between(inst, "closure_bind", 2, 4)?;
+    lower_closure_bind_receiver(ctx, inst)?;
+    let (Some(scope), Some(result)) = (inst.operands.get(2).copied(), inst.result) else {
+        return Ok(());
+    };
+    let (descriptor_reg, scope_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x1"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    ctx.load_value_to_reg(scope, scope_reg)?;
+    let interpreted_scope = inst.operands.get(3).copied().filter(|_| {
+        crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(
+            ctx.module,
+        )
+    });
+    if let Some(scope_value) = interpreted_scope {
+        return stamp_closure_scope_with_interpreted_fallback(ctx, scope_value, result);
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("add x1, x1, #1"),             // encode the class id as id + 1 so a miss (-1) becomes "unchanged" (0)
+        Arch::X86_64 => ctx.emitter.instruction("add rsi, 1"),                  // encode the class id as id + 1 so a miss (-1) becomes "unchanged" (0)
+    }
+    ctx.load_value_to_reg(result, descriptor_reg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_closure_set_scope");
+    Ok(())
+}
+
+/// Stamps the scope id already loaded in the second argument register, or the interpreter's
+/// interned name record for `scope_value` with bit 63 set when the interpreter declared the class.
+///
+/// The interpreter is asked when the id is `-1` (a name no compiled class has) and when it is
+/// stdClass's: an eval-declared object is CARRIED by a stdClass runtime object, so binding to such
+/// an object resolved to stdClass's scope. When the interpreter does not know the scope either,
+/// the compiled id is stamped as before.
+fn stamp_closure_scope_with_interpreted_fallback(
+    ctx: &mut FunctionContext<'_>,
+    scope_value: crate::ir::ValueId,
+    result: crate::ir::ValueId,
+) -> Result<()> {
+    let ask = ctx.next_label("closure_scope_ask_interpreter");
+    let compiled = ctx.next_label("closure_scope_compiled");
+    let stamp = ctx.next_label("closure_scope_stamp");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmn x1, #1");                              // a name no compiled class has?
+            ctx.emitter.instruction(&format!("b.eq {ask}"));                    // maybe the interpreter declared it
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_stdclass_class_id", 0);
+            ctx.emitter.instruction("cmp x1, x10");                             // stdClass also carries eval-declared objects
+            ctx.emitter.instruction(&format!("b.ne {compiled}"));               // any other compiled class: stamp its id
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rsi, -1");                             // a name no compiled class has?
+            ctx.emitter.instruction(&format!("je {ask}"));                      // maybe the interpreter declared it
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_stdclass_class_id", 0);
+            ctx.emitter.instruction("cmp rsi, r10");                            // stdClass also carries eval-declared objects
+            ctx.emitter.instruction(&format!("jne {compiled}"));                // any other compiled class: stamp its id
+        }
+    }
+    ctx.emitter.label(&ask);
+    abi::emit_push_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1));
+    // -- the scope as (tag, payload, length) for the interpreter --
+    match ctx.value_php_type(scope_value)?.codegen_repr() {
+        PhpType::Str => {
+            let (ptr, len) = match ctx.emitter.target.arch {
+                Arch::AArch64 => ("x1", "x2"),
+                Arch::X86_64 => ("rsi", "rdx"),
+            };
+            ctx.load_string_value_to_regs(scope_value, ptr, len)?;
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 1);
+        }
+        PhpType::Object(_) => {
+            ctx.load_value_to_reg(scope_value, abi::int_arg_reg_name(ctx.emitter.target, 1))?;
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 6);
+        }
+        _ => {
+            ctx.load_value_to_result(scope_value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            if ctx.emitter.target.arch == Arch::X86_64 {
+                ctx.emitter.instruction("mov rsi, rdi");                        // payload low word becomes the second argument
+                ctx.emitter.instruction("mov rdi, rax");                        // runtime tag becomes the first argument
+            }
+        }
+    }
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_name_token");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x1");
+            ctx.emitter.instruction(&format!("cbz x0, {compiled}"));            // the interpreter does not know it: keep the compiled id
+            ctx.emitter.instruction("orr x1, x0, #0x8000000000000000");         // bit 63 marks a name record, not a class id
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+            ctx.emitter.instruction("test rax, rax");                           // does the interpreter know it?
+            ctx.emitter.instruction(&format!("jz {compiled}"));                 // no: keep the compiled id
+            ctx.emitter.instruction("mov rsi, rax");                            // the interned name record
+            ctx.emitter.instruction("bts rsi, 63");                             // bit 63 marks a name record, not a class id
+        }
+    }
+    abi::emit_jump(ctx.emitter, &stamp);
+    ctx.emitter.label(&compiled);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("add x1, x1, #1"),             // encode the class id as id + 1 (a miss becomes 0)
+        Arch::X86_64 => ctx.emitter.instruction("add rsi, 1"),                  // encode the class id as id + 1 (a miss becomes 0)
+    }
+    ctx.emitter.label(&stamp);
+    let descriptor_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(result, descriptor_reg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_closure_set_scope");
+    Ok(())
+}
+
+/// Binds the receiver half of `closure_bind`, leaving the bound descriptor stored in the result.
+fn lower_closure_bind_receiver(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let descriptor = expect_operand(inst, 0)?;
     let new_this = expect_operand(inst, 1)?;
     // `__rt_closure_bind` takes the new receiver as a RAW object pointer — it stores it straight
@@ -475,7 +565,18 @@ fn lower_closure_bind_gradual_receiver(
     }
 
     ctx.emitter.label(&unbind_label);
-    ctx.load_value_to_result(descriptor)?;
+    if inst.operands.len() > 2 {
+        // A scope is about to be stamped into the result, and the source descriptor is shared:
+        // bind it to a null receiver, which copies it and keeps every capture in place.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction(&format!("mov {second_arg}, #0")), // no receiver: keep the captures
+            Arch::X86_64 => ctx.emitter.instruction(&format!("mov {second_arg}, 0")),   // no receiver: keep the captures
+        }
+        ctx.load_value_to_reg(descriptor, first_arg)?;
+        abi::emit_call_label(ctx.emitter, "__rt_closure_bind");
+    } else {
+        ctx.load_value_to_result(descriptor)?;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done_label)),
         Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done_label)),

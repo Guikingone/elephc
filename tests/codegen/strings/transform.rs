@@ -9,6 +9,20 @@
 
 use super::*;
 
+/// Keeps form feed outside PHP's default trim mask in native calls, eval, and constant-folded pipes.
+#[test]
+fn test_trim_preserves_form_feed_with_default_mask() {
+    let body = r#"$subject = " \x0b\x0cA\x0c\x0b ";
+echo bin2hex(trim($subject)), "|", bin2hex(ltrim($subject)), "|", bin2hex(rtrim($subject));"#;
+    for eval in [false, true] {
+        let source = if eval { format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);") }
+            else { format!("<?php {body}") };
+        assert_eq!(compile_and_run(&source), "0c410c|0c410c0b20|200b0c410c", "eval={eval}");
+    }
+    let pipe = r#"<?php echo bin2hex("\x0cA\x0c" |> trim(...));"#;
+    assert_eq!(compile_and_run(pipe), "0c410c");
+}
+
 /// Verifies strtolower converts all alphabetic characters to lowercase.
 #[test]
 fn test_strtolower() {
@@ -913,6 +927,54 @@ try { $randomizer->getBytesFromString('x', 0); } catch (ValueError $error) { ech
     assert_eq!(out, "xxxx:4:empty:length");
 }
 
+/// `Random\Randomizer::pickArrayKeys()`, `shuffleArray()` and `getInt()` keep php's contracts:
+/// distinct keys returned in the ORIGINAL array order, a keyless shuffled permutation, and php 8.5's
+/// `ValueError` wording. Laravel's `Arr::random()` / `Collection::random()` call the first two.
+/// The draws are random, so the fixture asserts the invariants php guarantees, not the values.
+#[test]
+fn test_randomizer_pick_array_keys_shuffle_array_and_get_int() {
+    let out = compile_and_run(
+        r#"<?php
+use Random\Randomizer;
+$r = new Randomizer();
+foreach ([[[], 1], [[1, 2], 0], [[1, 2], 3]] as [$a, $n]) {
+    try { $r->pickArrayKeys($a, $n); echo "no error\n"; } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+}
+$src = ["x" => 1, "y" => 2, "z" => 3, 10 => 4, 11 => 5];
+$keys = array_keys($src);
+$ok = true;
+for ($i = 0; $i < 100; $i++) {
+    $picked = $r->pickArrayKeys($src, 3);
+    if (count($picked) !== 3 || count(array_unique($picked)) !== 3) { $ok = false; }
+    $positions = [];
+    foreach ($picked as $key) { $positions[] = array_search($key, $keys, true); }
+    $sorted = $positions;
+    sort($sorted);
+    if ($positions !== $sorted) { $ok = false; }
+}
+echo $ok ? "pick ok\n" : "pick BAD\n";
+$list = [1, 2, 3, 4, 5, 6];
+$shuffled = $r->shuffleArray($list);
+$sorted = $shuffled;
+sort($sorted);
+echo ($sorted === $list && array_is_list($shuffled)) ? "shuffle ok\n" : "shuffle BAD\n";
+$assoc = $r->shuffleArray(["a" => 1, "b" => 2, "c" => 3]);
+sort($assoc);
+echo json_encode($assoc), json_encode($r->shuffleArray([])), "\n";
+echo $r->getInt(3, 3), "\n";
+try { $r->getInt(5, 1); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "Random\\Randomizer::pickArrayKeys(): Argument #1 ($array) must not be empty\n\
+Random\\Randomizer::pickArrayKeys(): Argument #2 ($num) must be between 1 and the number of elements in argument #1 ($array)\n\
+Random\\Randomizer::pickArrayKeys(): Argument #2 ($num) must be between 1 and the number of elements in argument #1 ($array)\n\
+pick ok\nshuffle ok\n[1,2,3][]\n3\n\
+Random\\Randomizer::getInt(): Argument #2 ($max) must be greater than or equal to argument #1 ($min)\n"
+    );
+}
+
 /// Verifies `str_getcsv()` preserves quoted separators and collapses doubled enclosures.
 #[test]
 fn test_str_getcsv_compatibility_helper() {
@@ -1037,4 +1099,123 @@ echo implode(',', [1, 22, 333]), '|', implode('--', [10, 20]), '|', implode(',',
 "#,
     );
     assert_eq!(out, "1,22,333|10--20|7");
+}
+
+/// Verifies `(int)` over a numeric STRING caps at PHP_INT_MAX/MIN instead of wrapping.
+///
+/// PHP applies two different rules, and elephc was using the wrong one here. A float VALUE is
+/// reduced modulo 2^64 (`(int)1e19` is negative in PHP too, and `__rt_php_float_to_int` is right
+/// to do that); a numeric STRING is CAPPED. Routing the string through the wrapping helper made
+/// `(int)"1e19"` answer -8446744073709551616, and `(int)"1e308"` answer 0.
+///
+/// The `9007199254740993` case is the guard on the fix: 2^53+1 is exactly representable as an
+/// integer but not as a double, so a cap applied to the parsed double instead of to the
+/// integer-form parse would round it down by one.
+#[test]
+fn test_int_cast_of_a_numeric_string_caps_instead_of_wrapping() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = ["1e19", "-1e19", "1.8e19", "1e100", "1e308", "9e18", "9.9", "-9.9",
+          "9223372036854775807", "9223372036854775808", "-9223372036854775809",
+          "9007199254740993"];
+foreach ($cases as $s) { echo (int)$s, ","; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "9223372036854775807,-9223372036854775808,9223372036854775807,9223372036854775807,9223372036854775807,9000000000000000000,9,-9,9223372036854775807,9223372036854775807,-9223372036854775808,9007199254740993,"
+    );
+}
+
+/// Pins the same cap on the LITERAL inputs the constant folder sees, and on `intval()`.
+///
+/// The runtime siblings above feed the helper a variable, so they never reach `fold_intval` or
+/// the literal `(int)` fold. Those entry points parse with Rust's `i64::from_str`, which simply
+/// refuses `"1e19"` and a 310-digit run and leaves the call to the runtime; a future fold that
+/// accepted them by routing through `f64` would silently answer `-8446744073709551616` and `0`
+/// here while every existing test stayed green.
+#[test]
+fn test_int_cast_and_intval_of_literal_numeric_strings_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+echo (int)"1e19", ",", (int)"-1e19", ",";
+echo intval("1e19"), ",", intval("-1e19"), ",";
+echo (int)"1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111", ",";
+echo intval("1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"), ",";
+echo (int)"1e309", ",", intval("1e309"), ",";
+echo intval("9223372036854775808"), ",", intval("-9223372036854775809"), ",";
+echo intval("9007199254740993"), ",", intval("42"), ",";
+"#,
+    );
+    assert_eq!(
+        out,
+        "9223372036854775807,-9223372036854775808,\
+9223372036854775807,-9223372036854775808,\
+0,0,\
+0,0,\
+9223372036854775807,-9223372036854775808,\
+9007199254740993,42,"
+    );
+}
+
+/// Verifies a numeric string whose value overflows the double casts to 0, as PHP does.
+///
+/// `strtoll` saturates a 310-digit integer to PHP_INT_MAX, so the integer-form path answered
+/// with that; PHP classifies such a string as a double, and INF casts to 0. The check has to
+/// come before the integer/float form choice, because this string is integer-form.
+#[test]
+fn test_int_cast_of_an_infinite_numeric_string_is_zero() {
+    let out = compile_and_run(
+        r#"<?php
+$huge = str_repeat("1", 310);
+echo (int)$huge, ",", (int)("-" . $huge), ",", (int)("   " . $huge), ",";
+echo (int)"1e309", ",", (int)"-1e309", ",";
+$finite = str_repeat("1", 309);
+echo (int)$finite, ",";
+"#,
+    );
+    assert_eq!(
+        out,
+        "0,0,0,0,0,9223372036854775807,"
+    );
+}
+
+/// `str_replace()`'s by-reference `$count`: php counts each search's replacements over the text
+/// the earlier searches produced, skips an empty search, pairs an array `$replace` by position
+/// (an exhausted one replaces with ""), and sums the counts over an array `$subject` whose keys it
+/// keeps. The fourth argument was refused outright, so Symfony's `cache:clear` -- which writes a
+/// warmed file back only when `$count` is set -- could not be compiled.
+#[test]
+fn test_str_replace_reports_its_replacement_count() {
+    let out = compile_and_run(
+        r#"<?php
+$c = str_replace("a", "x", "banana", $n); echo $c, ":", $n, "|";
+$c = str_replace(["a", "n", ""], ["1"], "banana", $n); echo $c, ":", $n, "|";
+$c = str_replace(["a", "1"], "1", "banana", $n); echo $c, ":", $n, "|";
+$c = str_replace("o", "0", ["k" => "foo", "bar", "zoo"], $n); echo json_encode($c), ":", $n, "|";
+$c = str_replace("zz", "y", "abc", $n); echo $c, ":", $n, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "bxnxnx:3|b111:5|b1n1n1:6|{\"k\":\"f00\",\"0\":\"bar\",\"1\":\"z00\"}:4|abc:0\n"
+    );
+}
+
+/// A three-argument `str_replace()` whose search and replace are gradual arrays (untyped
+/// properties, `mixed` parameters) pairs them like php. The backend only walks `array<string>`
+/// and refused the call, so Twig's lexer -- which closes brackets with
+/// `str_replace($this->openingBrackets, $this->closingBrackets, $expect)` -- could not compile.
+#[test]
+fn test_str_replace_with_gradual_array_search_and_replace() {
+    let out = compile_and_run(
+        r#"<?php
+class L { private $open = ['(', '[', '{']; private $close = [')', ']', '}'];
+  public function m(string $e) { return str_replace($this->open, $this->close, $e); } }
+echo (new L)->m('('), (new L)->m('['), "|";
+function f(mixed $a, mixed $b, string $s) { return str_replace($a, $b, $s); }
+echo f(['a', 'n'], ['b'], 'banana'), "|", f('a', 'o', 'banana'), "\n";
+"#,
+    );
+    assert_eq!(out, ")]|bbbb|bonono\n");
 }

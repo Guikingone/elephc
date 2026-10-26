@@ -16,6 +16,7 @@ mod macros;
 
 mod array;
 mod class_metadata;
+pub(super) mod collection_builder;
 mod core;
 #[cfg(feature = "curl")]
 mod curl;
@@ -37,6 +38,8 @@ mod spec;
 pub(in crate::interpreter) mod spl;
 mod string;
 mod symbols;
+
+pub(crate) use symbols::eval_registered_spl_autoload_functions_result;
 mod time;
 mod types;
 mod xml;
@@ -59,6 +62,7 @@ pub(super) use regex::*;
 pub(super) use registry::*;
 pub(super) use scalars::*;
 pub(super) use string::*;
+pub(crate) use string::highlight::eval_highlight_render;
 pub(super) use symbols::*;
 #[cfg(not(test))]
 pub(crate) use core::eval_unserialize_declared_object_from_hash;
@@ -66,6 +70,7 @@ pub(crate) use core::eval_unserialize_declared_object_from_hash;
 pub(crate) use core::eval_serialize_object_fragment;
 #[cfg(not(test))]
 pub(crate) use core::eval_throwable_trace_value;
+pub(in crate::interpreter) use core::eval_throwable_string;
 pub(crate) use symbols::eval_class_name_is_a_bridge;
 pub(crate) use symbols::eval_spl_autoload_class;
 pub(crate) use symbols::eval_spl_autoload_classlike_definition;

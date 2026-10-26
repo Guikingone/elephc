@@ -10,6 +10,19 @@
 
 use super::*;
 
+/// Guarded union writes are accepted in permissive mode, as in php, and still reported by
+/// `--strict-locals`.
+#[test]
+fn test_guarded_union_assignment_preserves_declared_boundaries() {
+    for source in [
+        "<?php function update(array $fields): void { if (is_array($fields)) { $fields = mb_split(',', 'a,b'); } } update([]);",
+        "<?php function update(array|false $fields): void { if (is_array($fields)) { $fields = 'wrong'; } } update([]);",
+    ] {
+        expect_no_error(source);
+        expect_error_strict(source, "cannot reassign $fields");
+    }
+}
+
 /// Verifies the literal `false` parameter type rejects `true` rather than widening to bool.
 #[test]
 fn test_literal_false_parameter_rejects_true() {
@@ -19,86 +32,84 @@ fn test_literal_false_parameter_rejects_true() {
     );
 }
 
-/// Verifies the fallthrough after `$value === false` does not remove a full bool member because
-/// `true` remains possible.
+/// The fallthrough after `$value === false` keeps the `true` member, so returning `int|bool` from a function
+/// declared `: int` is checked at run time (weak mode coerces `true` to 1), as in php.
 #[test]
-fn test_strict_false_guard_keeps_full_bool_member() {
-    expect_error(
+fn test_strict_false_guard_bool_member_return_is_checked_at_runtime() {
+    expect_no_error(
         "<?php function requireInt(int|bool $value): int { if ($value === false) { throw new Exception('false'); } return $value; }",
-        "got Union([Int, Bool])",
     );
 }
 
-/// Verifies a direct property write clears a prior property narrowing before a later return.
+/// A direct property write clears a prior narrowing; returning the (now null) property from a function
+/// declared `: W` is a TypeError at run time in php, and in elephc too (checked against php).
 #[test]
-fn test_property_write_invalidates_narrowing() {
-    expect_error(
+fn test_property_write_return_is_checked_at_runtime() {
+    expect_no_error(
         "<?php class W {} class Box { public function __construct(public ?W $value) {} } function read(Box $box): W { if (!$box->value instanceof W) { throw new Exception('missing'); } $box->value = null; return $box->value; }",
-        "return type expects Object(\"W\"), got Union",
     );
 }
 
-/// Verifies rebinding the local receiver clears property facts tied to the old object.
+/// Rebinding the local receiver clears property facts tied to the old object; the nullable return is
+/// checked at run time, as in php.
 #[test]
-fn test_property_receiver_rebinding_invalidates_narrowing() {
-    expect_error(
+fn test_property_receiver_rebinding_return_is_checked_at_runtime() {
+    expect_no_error(
         "<?php class W {} class Box { public function __construct(public ?W $value) {} } function read(Box $box, Box $replacement): W { if (!$box->value instanceof W) { throw new Exception('missing'); } $box = $replacement; return $box->value; }",
-        "return type expects Object(\"W\"), got Union",
     );
 }
 
-/// Verifies a hooked property is never treated as a stable flow binding across two reads.
+/// A hooked property is never a stable flow binding across two reads; returning it from a function
+/// declared `: W` is checked at run time, as in php.
 #[test]
-fn test_property_get_hook_is_not_persistently_narrowed() {
-    expect_error(
+fn test_property_get_hook_return_is_checked_at_runtime() {
+    expect_no_error(
         "<?php class W {} class Box { private ?W $stored; public function __construct(?W $stored) { $this->stored = $stored; } public ?W $value { get { $result = $this->stored; $this->stored = null; return $result; } } } function read(Box $box): W { if (!$box->value instanceof W) { throw new Exception('missing'); } return $box->value; }",
-        "return type expects Object(\"W\"), got Union",
     );
 }
 
-/// Verifies an undeclared property served by `__get` is not treated as a stable flow binding.
+/// An undeclared property served by `__get` is not a stable flow binding; returning it from a function
+/// declared `: W` is checked at run time, as in php.
 #[test]
-fn test_magic_get_property_is_not_persistently_narrowed() {
-    expect_error(
+fn test_magic_get_property_return_is_checked_at_runtime() {
+    expect_no_error(
         "<?php class W {} class Box { private ?W $stored; public function __construct(?W $stored) { $this->stored = $stored; } public function __get(string $name): ?W { $result = $this->stored; $this->stored = null; return $result; } } function read(Box $box): W { if (!$box->value instanceof W) { throw new Exception('missing'); } return $box->value; }",
-        "return type expects Object(\"W\"), got Union",
     );
 }
 
-/// Verifies the post-guard narrowing is NOT kept when a nested branch inside the null guard can
-/// fall through: the inner `if` has no `else`, so reaching the code after the guard does not imply
-/// the guard was false and `?array` must stay a union (issue #590 negative case).
+/// When a nested branch inside the null guard can fall through, `?array` stays a union and the list unpack
+/// is checked at run time, as in php (issue #590 negative case).
 #[test]
-fn test_no_narrow_when_nested_branch_falls_through() {
-    expect_error(
+fn test_list_unpack_after_nested_fallthrough_branch_is_checked_at_runtime() {
+    expect_no_error(
         "<?php function consume(?array $entry, bool $flag): void { if ($entry === null) { if ($flag) { return; } } [$key, $value] = $entry; }",
-        "List unpacking requires an array",
     );
 }
 
-/// Verifies a nested diverging call in only one arm does not make the enclosing `if` terminal.
+/// A nested diverging call in only one arm does not make the enclosing `if` terminal, so the list unpack
+/// of `?array` is checked at run time, as in php.
 #[test]
-fn test_no_narrow_when_nested_exit_branch_falls_through() {
-    expect_error(
+fn test_list_unpack_after_nested_exit_branch_is_checked_at_runtime() {
+    expect_no_error(
         "<?php function consume(?array $entry, bool $flag): void { if ($entry === null) { if ($flag) { exit(1); } } [$key, $value] = $entry; }",
-        "List unpacking requires an array",
     );
 }
 
-/// Verifies a literal-true loop that can break may still fall through to the code after the guard.
+/// A literal-true loop that can break may fall through to the code after the guard, so the list unpack
+/// of `?array` is checked at run time, as in php.
 #[test]
-fn test_no_narrow_when_literal_true_loop_can_break() {
-    expect_error(
+fn test_list_unpack_after_breakable_literal_true_loop_is_checked_at_runtime() {
+    expect_no_error(
         "<?php function consume(?array $entry, bool $flag): void { if ($entry === null) { while (true) { if ($flag) { break; } } } [$key, $value] = $entry; }",
-        "List unpacking requires an array",
     );
 }
 
-/// Verifies a static-property narrowing does not survive an intervening call that could reassign
-/// it: PHP raises a `TypeError` for this program at runtime, so the compiler must keep rejecting it.
+/// A static-property narrowing does not survive an intervening call that reassigns it; php raises a
+/// TypeError for this program when `get()` runs and elephc raises the same TypeError at run time (checked
+/// against php).
 #[test]
-fn test_static_property_narrowing_dropped_by_intervening_call() {
-    expect_error(
+fn test_static_property_return_after_intervening_call_is_checked_at_runtime() {
+    expect_no_error(
         r#"<?php
 class S {
     private static ?S $inst = null;
@@ -110,15 +121,14 @@ class S {
     }
 }
 "#,
-        "return type expects Object(\"S\")",
     );
 }
 
-/// Verifies return-type validation is flow-sensitive: a `return` placed BEFORE the guard that
-/// establishes the narrowing must not borrow that later fact.
+/// A `return` placed before the guard that narrows `$this->p` does not borrow that later fact; the nullable
+/// return is checked at run time, as in php (a null there is a TypeError raised when the call runs).
 #[test]
-fn test_property_narrowing_does_not_leak_backwards_to_earlier_return() {
-    expect_error(
+fn test_property_narrowing_does_not_leak_backwards_return_is_checked_at_runtime() {
+    expect_no_error(
         r#"<?php
 class A {
     public ?A $p = null;
@@ -129,29 +139,28 @@ class A {
     }
 }
 "#,
-        "return type expects Object(\"A\")",
     );
 }
 
-/// Verifies a nullable static property with no narrowing at all still fails the non-null return.
+/// Returning a nullable static property from a function declared `: S` is checked at run time, as in php
+/// (a null is a TypeError raised when the call runs).
 #[test]
-fn test_unguarded_nullable_static_property_return_still_rejected() {
-    expect_error(
+fn test_unguarded_nullable_static_property_return_is_checked_at_runtime() {
+    expect_no_error(
         r#"<?php
 class S {
     private static ?S $inst = null;
     public static function get(): S { return self::$inst; }
 }
 "#,
-        "return type expects Object(\"S\")",
     );
 }
 
-/// Verifies `static::$p` is not narrowed: late static binding can select a subclass that
-/// redeclares the property, so the guarded fact does not describe the storage a later read hits.
+/// Returning `static::$inst` from a function declared `: S` is not a compile-time error: a possible null is
+/// checked at run time, as in php.
 #[test]
-fn test_late_static_bound_property_is_not_narrowed() {
-    expect_error(
+fn test_late_static_bound_property_return_is_checked_at_runtime() {
+    expect_no_error(
         r#"<?php
 class S {
     protected static ?S $inst = null;
@@ -161,7 +170,6 @@ class S {
     }
 }
 "#,
-        "return type expects Object(\"S\")",
     );
 }
 
@@ -205,4 +213,102 @@ fn test_method_exists_guard_does_not_admit_a_different_receiver() {
         "<?php interface ParserInterface { public function getName(): string; } class Plain implements ParserInterface { public function getName(): string { return 'plain'; } } function tokensFor(ParserInterface $a, ParserInterface $b): array { if (method_exists($a, 'getOperatorTokens')) { return $b->getOperatorTokens(); } return [$a->getName()]; }",
         "Undefined method: ParserInterface::getOperatorTokens",
     );
+}
+
+/// Issue #509: a store inside a guarded region is measured against the BINDING, not against the
+/// guard's view of the value, so the universal PHP fallback idiom type-checks.
+///
+/// `glob()` returns `array<string>|false`; the guard narrows `$g` to `false` for its branch, and
+/// merging an empty array with `false` is what produced
+/// `cannot reassign $g from false to array<never>`. The binding holds an empty array perfectly
+/// well and no slot is abandoned, so the rule holds under `--strict-locals` too.
+#[test]
+fn test_false_fallback_store_inside_the_guard_is_accepted() {
+    let source = r#"<?php
+$g = glob("*.meta");
+if ($g === false) { $g = []; }
+echo count($g);
+"#;
+    expect_no_error(source);
+    expect_no_error_strict(source);
+}
+
+/// The complement an `if`/`else` chain publishes is a guard fact in its own right, so the same
+/// idiom with the fallback in the `else` is accepted the same way.
+#[test]
+fn test_false_fallback_store_on_the_complement_side_is_accepted() {
+    let source = r#"<?php
+$g = glob("*.meta");
+if ($g !== false) { echo count($g); } else { $g = []; }
+echo count($g);
+"#;
+    expect_no_error(source);
+    expect_no_error_strict(source);
+}
+
+/// The origin is the BINDING's type, not the enclosing guard's view: an inner guard narrows
+/// further, and a store inside it is still judged against `int|string`.
+#[test]
+fn test_nested_guard_store_is_judged_against_the_binding() {
+    let source = r#"<?php
+function p(int $n): int|string { return $n === 0 ? 1 : "s"; }
+$v = p($argc);
+if (is_scalar($v)) { if (is_int($v)) { $v = "s"; } }
+echo $v;
+"#;
+    expect_no_error(source);
+    expect_no_error_strict(source);
+}
+
+/// A value the narrowed binding cannot hold is accepted in permissive mode, as in php (the name is re-bound
+/// to the new value); `--strict-locals` still rejects the conflicting store.
+#[test]
+fn test_a_store_the_binding_cannot_hold_is_accepted_but_strict_rejected() {
+    let source = r#"<?php
+function p(int $n): int|string { return $n === 0 ? 1 : "s"; }
+$v = p($argc);
+if (is_int($v)) { $v = new stdClass(); }
+echo 1;
+"#;
+    expect_no_error(source);
+    expect_error_strict(source, "cannot reassign $v");
+}
+
+/// The guard stops governing a name once the region has bound it: the SECOND store measures
+/// itself against what the first one left behind. That is what keeps
+/// `$a = 1; if (is_string($a)) { $a = "x"; $a = 2; }` on the branch-divergent `Mixed`-storage
+/// path (`type_system::test_guarded_region_shapes_still_error_under_strict`) instead of being
+/// waved through on the strength of `$a`'s original `int`.
+#[test]
+fn test_the_guard_stops_governing_after_the_region_stores() {
+    expect_warning(
+        "<?php $a = 1; if (is_string($a)) { $a = \"x\"; $a = 2; } echo $a;",
+        "boxed mixed storage",
+    );
+    expect_error_strict(
+        "<?php $a = 1; if (is_string($a)) { $a = \"x\"; $a = 2; } echo $a;",
+        "cannot reassign $a",
+    );
+}
+
+/// Raised in review on #509: a store in a NESTED guard must end the enclosing guard's authority
+/// too, or nesting becomes a way around the rule above.
+///
+/// The inner region's entry is the one `record_store_over_flow_narrowing` clears, and the outer
+/// entry is restored when that region closes — so the outer view came back intact and the later
+/// `$a = 2` was accepted against `$a`'s original `int`. The enclosing region CONTAINS the inner
+/// one, so a store the inner one made is a store the enclosing one made:
+/// `NarrowedLocalOrigin::stored_in_region` travels outward at `exit_flow_narrowing` and the two
+/// spellings agree again.
+///
+/// Written with `$a = 1.5` rather than `$a = "x"` on purpose: `"x"` does not fit the `int`
+/// binding either, so it is rejected at the inner store and never reaches the shape under test.
+#[test]
+fn a_store_in_a_nested_guard_ends_the_enclosing_guards_authority() {
+    let source =
+        "<?php $a = 1; if (is_string($a)) { if (is_float($a)) { $a = 1.5; } $a = 2; } echo $a;";
+    // Permissive mode accepts the program, as php does (`$a` is an int throughout at run time);
+    // `--strict-locals` still reports the conflicting stores.
+    expect_no_error(source);
+    expect_error_strict(source, "cannot reassign $a from float|string to int");
 }

@@ -1,16 +1,16 @@
 ---
-title: "pcntl_wstopsig() — internals"
+title: "pcntl_wstopsig() - internals"
 description: "Compiler internals for pcntl_wstopsig(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 679
+  order: 699
 ---
 
-## `pcntl_wstopsig()` — internals
+## `pcntl_wstopsig()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_wstopsig.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_wstopsig.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

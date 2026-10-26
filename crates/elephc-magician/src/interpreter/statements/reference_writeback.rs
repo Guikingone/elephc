@@ -51,7 +51,8 @@ pub(in crate::interpreter) fn bind_method_scope_args(
     params: &[String],
     parameter_is_by_ref: &[bool],
     bound_args: &[BoundMethodArg],
-) {
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     for (position, (name, bound_arg)) in params.iter().zip(bound_args.iter()).enumerate() {
         if parameter_is_by_ref.get(position).copied().unwrap_or(false) {
             method_scope.set_reference(
@@ -64,10 +65,17 @@ pub(in crate::interpreter) fn bind_method_scope_args(
                 method_scope.set_reference_target(name.clone(), target);
             }
         } else {
-            method_scope.set(name.clone(), bound_arg.value, ScopeCellOwnership::Borrowed);
+            let value = if values.is_reference(bound_arg.value)? {
+                values.copy_value(bound_arg.value)?
+            } else {
+                bound_arg.value
+            };
+            let ownership = if value == bound_arg.value { ScopeCellOwnership::Borrowed } else { ScopeCellOwnership::Owned };
+            method_scope.set(name.clone(), value, ownership);
         }
     }
     alias_duplicate_method_ref_args(method_scope, params, bound_args);
+    Ok(())
 }
 
 /// Re-binds a GENERATOR's by-value parameters as cells the generator's own scope OWNS.
@@ -349,6 +357,30 @@ pub(super) fn write_back_method_variadic_ref_args(
     Ok(())
 }
 
+/// Gives a persistent variable reference its own value owner before releasing displaced storage.
+pub(super) fn write_back_owned_variable_ref_target(
+    scope: &mut ElephcEvalScope,
+    name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let retained = values.retain(value)?;
+    let replaced = match set_owned_scope_cell(context, scope, name.to_string(), retained, values) {
+        Ok(replaced) => replaced,
+        Err(status) => {
+            let _ = eval_release_value(context, values, retained);
+            return Err(status);
+        }
+    };
+    let mut result = Ok(());
+    for replaced in replaced {
+        let released = eval_release_value(context, values, replaced);
+        if result.is_ok() { result = released; }
+    }
+    result
+}
+
 /// Stores one by-reference result in the original caller-side target.
 pub(in crate::interpreter) fn write_back_method_ref_target(
     target: &EvalReferenceTarget,
@@ -389,6 +421,7 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
                 name.clone(),
                 stored,
                 ScopeCellOwnership::Owned,
+                values,
             ) {
                 Ok(replaced) => replaced,
                 Err(status) => {
@@ -458,7 +491,13 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             }
             Ok(())
         }
-        EvalReferenceTarget::Cell { .. } => Ok(()),
+        EvalReferenceTarget::Cell { cell } => {
+            if *cell != value && values.is_reference(*cell)? {
+                let previous = values.reference_replace(*cell, value)?;
+                eval_release_value(context, values, previous)?;
+            }
+            Ok(())
+        },
         EvalReferenceTarget::InvokerSlot { slot, source_tag } => {
             write_back_invoker_slot_ref_target(*slot, *source_tag, value, values)
         }
@@ -466,7 +505,7 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
 }
 
 /// Reads a value from a native descriptor-invoker by-reference slot.
-pub(super) fn eval_invoker_slot_ref_target_value(
+pub(in crate::interpreter) fn eval_invoker_slot_ref_target_value(
     slot: usize,
     source_tag: u64,
     values: &mut impl RuntimeValueOps,
@@ -485,7 +524,9 @@ pub(super) fn eval_invoker_slot_ref_target_value(
             raw_slot_word_value(source_tag, word, values)
         }
         EVAL_TAG_MIXED => {
-            let value = unsafe { *(slot as *const RuntimeCellHandle) };
+            let value = RuntimeCellHandle::from_raw(unsafe {
+                *(slot as *const *mut crate::value::RuntimeCell)
+            });
             values.retain(value)
         }
         _ => Err(EvalStatus::RuntimeFatal),
@@ -514,9 +555,9 @@ pub(super) fn write_back_invoker_slot_ref_target(
         EVAL_TAG_MIXED => {
             let retained = values.retain(value)?;
             let replaced = unsafe {
-                let slot = slot as *mut RuntimeCellHandle;
-                let replaced = *slot;
-                *slot = retained;
+                let slot = slot as *mut *mut crate::value::RuntimeCell;
+                let replaced = RuntimeCellHandle::from_raw(*slot);
+                *slot = retained.as_ptr();
                 replaced
             };
             values.release(replaced)
@@ -596,12 +637,13 @@ fn write_back_method_array_element_ref_target_value(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut ownership = ScopeCellOwnership::Owned;
+    // The rebuilt array is a fresh owner whatever the slot held before, a borrowed by-reference
+    // parameter included: recording it `Borrowed` left nothing to release it.
+    let ownership = ScopeCellOwnership::Owned;
     let array = if let Some(existing) =
         scope_entry(context, scope, array_name).filter(|entry| entry.flags().is_visible())
     {
         if values.is_array_like(existing.cell())? {
-            ownership = existing.flags().ownership;
             values.array_clone_shallow(existing.cell())?
         } else {
             eval_new_array_for_index(index, values)?
@@ -610,7 +652,7 @@ fn write_back_method_array_element_ref_target_value(
         eval_new_array_for_index(index, values)?
     };
     let array = values.array_set(array, index, value)?;
-    for replaced in set_scope_cell(context, scope, array_name.to_string(), array, ownership)? {
+    for replaced in set_scope_cell(context, scope, array_name.to_string(), array, ownership, values)? {
         values.release(replaced)?;
     }
     Ok(())
@@ -663,12 +705,21 @@ fn write_back_method_nested_array_element_ref_target_value(
     }
     let current = eval_reference_target_value(array_target, context, values)?;
     let array = if values.is_array_like(current)? {
-        values.array_clone_shallow(current)?
+        values.array_clone_shallow(current)
     } else {
-        eval_new_array_for_index(index, values)?
+        eval_new_array_for_index(index, values)
     };
-    let array = values.array_set(array, index, value)?;
-    write_back_method_ref_target(array_target, array, context, values)
+    // A property or element read hands back an owner of its own; a variable read only borrows.
+    if !current.is_borrowed() {
+        values.release(current)?;
+    }
+    let array = values.array_set(array?, index, value)?;
+    let written = write_back_method_ref_target(array_target, array, context, values);
+    // Every target but a static property keeps a reference of its own to the rebuilt array.
+    if !matches!(array_target, EvalReferenceTarget::StaticProperty { .. }) {
+        values.release(array)?;
+    }
+    written
 }
 
 /// Stores one by-reference method result in a caller-side object property.

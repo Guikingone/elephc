@@ -16,7 +16,7 @@
 
 use crate::parser::ast::{BinOp, Program, Stmt};
 use crate::synthetic_class::{
-    e_array, e_binop, e_bool, e_var, function, internal_declarations, s_array_push, s_assign,
+    e_array, e_binop, e_bool, e_var, function, php_semantics_declarations, s_array_push, s_assign,
     s_foreach, s_if, s_return, t_array, t_mixed,
 };
 
@@ -25,7 +25,7 @@ pub(crate) const ARRAY_KEYS_SEARCH_NAME: &str = "__elephc_array_keys_search";
 
 /// Returns the search-form `array_keys()` declarations for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| vec![keys_search()])
+    php_semantics_declarations(|| vec![keys_search()])
 }
 
 /// Builds `__elephc_array_keys_search(array $array, mixed $search, $strict = false): array`.

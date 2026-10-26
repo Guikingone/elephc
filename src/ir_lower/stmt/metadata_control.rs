@@ -19,10 +19,10 @@ pub(super) fn lower_class_like_activation(
 ) {
     let source = ctx.source_catalog.as_ref().and_then(|catalog| catalog.id_for_path(source_path));
     let immediate = match source {
-        Some(source) => Immediate::ClassLikeActivation {
-            source, site: span, kind, name: ctx.intern_string(name),
-        },
-        None => Immediate::UnresolvedSource(source_path.to_path_buf()),
+        Some(source) => {
+            Immediate::class_like_activation(source, span, kind, ctx.intern_string(name))
+        }
+        None => Immediate::UnresolvedSource(Box::new(source_path.to_path_buf())),
     };
     ctx.emit_void(Op::ClassLikeActivate, Vec::new(), Some(immediate),
         Op::ClassLikeActivate.default_effects(), Some(span));

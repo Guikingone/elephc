@@ -9,6 +9,8 @@
 //! - Each opcode exposes a conservative default effect set. Call-like opcodes
 //!   may be refined by builders once semantic metadata is available.
 
+use std::fmt;
+
 use crate::ir::effects::Effects;
 use crate::ir::function::{FunctionId, LocalSlotId};
 use crate::ir::module::DataId;
@@ -55,11 +57,57 @@ pub struct Instruction {
     pub origin: Option<PassOrigin>,
 }
 
+// `Instruction` is passed by value through recursive AST-to-EIR lowering. Keep this assertion in
+// production builds so ordinary `cargo check --lib` catches metadata changes that would exhaust
+// the smaller stacks used by test threads on linux-aarch64.
+const _: () = assert!(std::mem::size_of::<Instruction>() <= 112);
+
 /// Optimization pass recorded as an instruction's provenance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PassOrigin {
     ConstFold,
     Licm,
+}
+
+/// One statically inlined include's synthetic PHP frame.
+///
+/// The compiler expands a resolved `require_once`/`include_once` body inline, so PHP's own
+/// `require_once('<path>')` frame disappears from `debug_backtrace()` and Throwable traces.
+/// `Op::IncludeFrameEnter`/`Exit` republish that frame on the activation chain around the body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IncludeFrameImmediate {
+    /// Frozen physical source identity of the included file (the frame's `args[0]`).
+    pub source: crate::ir::SourceId,
+    /// `require_once` when true, `include_once` when false.
+    pub required: bool,
+    /// Per-function frame slot holding this site's 48-byte activation record.
+    pub slot: u32,
+}
+
+/// Declaration identity carried by `Immediate::ClassLikeActivation`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassLikeActivationImmediate {
+    pub source: crate::ir::SourceId,
+    pub site: Span,
+    pub kind: crate::parser::ast::ClassLikeKind,
+    pub name: DataId,
+}
+
+impl Immediate {
+    /// Builds a class-like activation immediate.
+    pub fn class_like_activation(
+        source: crate::ir::SourceId,
+        site: Span,
+        kind: crate::parser::ast::ClassLikeKind,
+        name: DataId,
+    ) -> Self {
+        Self::ClassLikeActivation(Box::new(ClassLikeActivationImmediate {
+            source,
+            site,
+            kind,
+            name,
+        }))
+    }
 }
 
 /// PHP boundary whose nominal object contract is enforced by a runtime class check.
@@ -122,18 +170,23 @@ pub enum Immediate {
     I64(i64),
     F64(f64),
     Bool(bool),
+    /// Reports PHP's array-key diagnostic while converting a float to an integer key.
+    FloatKeyDiagnostic,
+    /// Converts a string offset with runtime cast diagnostics for boxed values.
+    StringOffsetCast,
+    /// A `HashSet` whose receiver is a declared property read borrowed: the property's own
+    /// reference is the one the write consumes, and codegen publishes into the slot.
+    InPlacePropertyWrite,
     Data(DataId),
     /// Frozen physical-source identity, separate from the literal pool.
     Source(crate::ir::SourceId),
-    /// A physical declaration site, not proof of an active PHP symbol binding.
-    ClassLikeActivation {
-        source: crate::ir::SourceId,
-        site: Span,
-        kind: crate::parser::ast::ClassLikeKind,
-        name: DataId,
-    },
+    /// Synthetic include frame republished around a statically inlined include body.
+    IncludeFrame(Box<IncludeFrameImmediate>),
+    /// A physical declaration site, not proof of an active PHP symbol binding. Boxed, like
+    /// `UnresolvedSource`, to keep `Instruction` within its size budget.
+    ClassLikeActivation(Box<ClassLikeActivationImmediate>),
     /// Diagnostic-only lowering recovery; validation rejects this before codegen.
-    UnresolvedSource(std::path::PathBuf),
+    UnresolvedSource(Box<std::path::PathBuf>),
     /// Named object target plus the PHP boundary that requested its runtime guard.
     NominalObject {
         target: DataId,
@@ -166,7 +219,15 @@ pub enum Immediate {
         class: u32,
         method: u32,
     },
+    /// A physical class-id/property-index pair used by synthetic allocation initializers.
     PropertyRef {
+        class: u32,
+        property: u32,
+    },
+    /// A physical class-id/property-index pair used by statically resolved ReflectionProperty
+    /// value access. This bypasses PHP caller visibility but still requires a compatible concrete
+    /// receiver in the backend.
+    ReflectionPropertyRef {
         class: u32,
         property: u32,
     },
@@ -194,7 +255,165 @@ pub enum Immediate {
     },
     Capacity(u32),
     WidthBytes(u8),
+    /// Selects php's read-vs-probe fetch semantics for one runtime-name property read.
+    ///
+    /// Carried by `Op::DynamicPropGet`. Absent means `PropertyFetchMode::Read`, which is the
+    /// raising, warning variant, so an emitter that forgets the immediate cannot silently turn a
+    /// value read into a silent probe.
+    PropertyFetchMode(PropertyFetchMode),
+    /// Compact metadata for `Op::IterStart`.
+    IterStart(IterStartMetadata),
 }
+
+/// Value-semantic metadata for `Op::IterStart`.
+///
+/// `state` is the addressable local that owns the iterator's cursor and private relocation
+/// anchors. Cleanup names this slot directly instead of retaining an SSA value across exits.
+///
+/// `owner` is the OwnedTemp Mixed slot that holds a successful
+/// `IteratorAggregate::getIterator()` result for the iterator lifetime. The iterator source word
+/// then borrows that payload. `None` means this start cannot produce such a result (arrays, direct
+/// `Iterator`, generators).
+///
+/// `origin` is the local slot the by-reference source was promoted into, and it is only set for a
+/// simple-variable by-reference foreach. Growth and copy-on-write inside the loop body republish
+/// the replacement table into that slot, so `IterNext` reloads the live table from the origin
+/// instead of trusting the pointer captured at `IterStart`. `None` means the iterator must keep
+/// using its own captured source word, which is the case for by-value loops and for
+/// element/property sources.
+///
+/// The optional slots use `u32::MAX` as their absent sentinel. A real function cannot contain that
+/// slot because local tables are indexed in memory, so the encoding retains all realizable EIR
+/// while keeping this payload at 12 bytes. In particular, adding `origin` does not grow
+/// `Immediate` or the stack-sensitive `Instruction` type.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct IterStartMetadata {
+    owner: PackedOptionalLocalSlot,
+    origin: PackedOptionalLocalSlot,
+    state_and_by_ref: PackedIteratorState,
+}
+
+impl IterStartMetadata {
+    /// Creates iterator-start metadata from its semantic fields.
+    pub fn new(
+        state: LocalSlotId,
+        by_ref: bool,
+        owner: Option<LocalSlotId>,
+        origin: Option<LocalSlotId>,
+    ) -> Self {
+        Self {
+            owner: PackedOptionalLocalSlot::new(owner),
+            origin: PackedOptionalLocalSlot::new(origin),
+            state_and_by_ref: PackedIteratorState::new(state, by_ref),
+        }
+    }
+
+    /// Returns the addressable iterator-state slot.
+    pub fn state(self) -> LocalSlotId {
+        self.state_and_by_ref.state()
+    }
+
+    /// Returns whether the foreach binds each value by reference.
+    pub fn is_by_ref(self) -> bool {
+        self.state_and_by_ref.is_by_ref()
+    }
+
+    /// Returns the optional Mixed slot owning a `getIterator()` result.
+    pub fn owner(self) -> Option<LocalSlotId> {
+        self.owner.get()
+    }
+
+    /// Returns the optional local that republishes a relocated by-reference source container.
+    pub fn origin(self) -> Option<LocalSlotId> {
+        self.origin.get()
+    }
+
+    /// Iterates the mandatory state slot followed by optional owner and origin slots.
+    pub fn local_slots(self) -> impl Iterator<Item = LocalSlotId> {
+        [Some(self.state()), self.owner(), self.origin()]
+            .into_iter()
+            .flatten()
+    }
+
+    /// Replaces the optional Mixed owner slot.
+    pub fn set_owner(&mut self, owner: Option<LocalSlotId>) {
+        self.owner = PackedOptionalLocalSlot::new(owner);
+    }
+
+    /// Replaces the optional relocated-container origin slot.
+    pub fn set_origin(&mut self, origin: Option<LocalSlotId>) {
+        self.origin = PackedOptionalLocalSlot::new(origin);
+    }
+
+    /// Replaces the addressable iterator-state slot without changing reference mode.
+    pub fn set_state(&mut self, state: LocalSlotId) {
+        self.state_and_by_ref = PackedIteratorState::new(state, self.is_by_ref());
+    }
+}
+
+impl fmt::Debug for IterStartMetadata {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("IterStartMetadata")
+            .field("state", &self.state())
+            .field("by_ref", &self.is_by_ref())
+            .field("owner", &self.owner())
+            .field("origin", &self.origin())
+            .finish()
+    }
+}
+
+/// Iterator-state slot packed with the by-reference flag in its high bit.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PackedIteratorState(u32);
+
+impl PackedIteratorState {
+    const BY_REF: u32 = 1 << 31;
+    const SLOT_MASK: u32 = !Self::BY_REF;
+
+    fn new(state: LocalSlotId, by_ref: bool) -> Self {
+        let raw = state.as_raw();
+        assert_eq!(
+            raw & Self::BY_REF,
+            0,
+            "iterator-state local slot exceeds the compact metadata range",
+        );
+        Self(raw | if by_ref { Self::BY_REF } else { 0 })
+    }
+
+    fn state(self) -> LocalSlotId {
+        LocalSlotId::from_raw(self.0 & Self::SLOT_MASK)
+    }
+
+    fn is_by_ref(self) -> bool {
+        self.0 & Self::BY_REF != 0
+    }
+}
+
+/// Optional local-slot encoding that does not carry `Option`'s extra discriminant word.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PackedOptionalLocalSlot(u32);
+
+impl PackedOptionalLocalSlot {
+    const NONE: u32 = u32::MAX;
+
+    fn new(slot: Option<LocalSlotId>) -> Self {
+        match slot {
+            Some(slot) => {
+                let raw = slot.as_raw();
+                assert_ne!(raw, Self::NONE, "u32::MAX is reserved for an absent local slot");
+                Self(raw)
+            }
+            None => Self(Self::NONE),
+        }
+    }
+
+    fn get(self) -> Option<LocalSlotId> {
+        (self.0 != Self::NONE).then(|| LocalSlotId::from_raw(self.0))
+    }
+}
+
+const _: () = assert!(std::mem::size_of::<IterStartMetadata>() <= 12);
 
 /// Heap-backed operation sequence carried by a fused checked numeric chain immediate.
 #[derive(Debug, Clone, PartialEq)]
@@ -226,11 +445,48 @@ pub enum MixedNumericOp {
     BitXor,
 }
 
+/// php's fetch mode for one object property access, php-src's `BP_VAR_R` vs `BP_VAR_IS`.
+///
+/// The two differ ONLY in how they answer a name the scope may not reach or has not created:
+/// a value read raises `Cannot access private property D::$n` and warns `Undefined property`,
+/// while `isset()`, `empty()` and the left operand of `??` / `??=` answer `null` in silence.
+/// php never reports either diagnostic from a probe, so the mode has to travel with the read
+/// rather than be re-derived by each consumer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PropertyFetchMode {
+    /// An ordinary value read: refuse an inaccessible name, warn on an undefined one.
+    Read,
+    /// A silent existence probe: an inaccessible or undefined name answers `null`.
+    Probe,
+    /// The left operand of `??`: silent like `Probe`, but a class that declares `__get` is
+    /// asked for the value (after `__isset`, when it declares one). `isset()` keeps `Probe`
+    /// because php never calls `__get` there.
+    Coalesce,
+}
+
+impl PropertyFetchMode {
+    /// Returns the stable textual spelling used by the EIR printer.
+    pub const fn as_eir(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Probe => "probe",
+            Self::Coalesce => "coalesce",
+        }
+    }
+
+    /// Returns whether this mode may raise or warn about the name it fetches.
+    pub const fn is_read(self) -> bool {
+        matches!(self, Self::Read)
+    }
+}
+
 /// PHP runtime type category tested by the backend-neutral `TypePredicate` opcode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PhpTypePredicate {
     Array,
     Bool,
+    /// `is_countable()`: an array, or an object whose class implements `Countable`.
+    Countable,
     Float,
     Int,
     Iterable,
@@ -246,6 +502,7 @@ impl PhpTypePredicate {
         match self {
             Self::Array => "array",
             Self::Bool => "bool",
+            Self::Countable => "countable",
             Self::Float => "float",
             Self::Int => "int",
             Self::Iterable => "iterable",
@@ -295,6 +552,242 @@ pub struct BuiltinId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RuntimeId(pub u32);
 
+/// Typed selector for PHP cycle-collector control and status operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(i64)]
+pub enum GcControlOp {
+    /// Runs the collector even when automatic collection is disabled.
+    Collect = 0,
+    /// Disables automatic collection safe points.
+    Disable = 1,
+    /// Enables automatic collection safe points.
+    Enable = 2,
+    /// Reads the automatic-collection enabled flag.
+    Enabled = 3,
+    /// Releases allocator caches and reports reclaimed bytes.
+    MemCaches = 4,
+    /// Reads whether the collector is currently running.
+    Running = 5,
+    /// Reads whether collector-triggered releases are protected.
+    Protected = 6,
+    /// Reads the number of productive collector runs.
+    Runs = 7,
+    /// Reads the cumulative number of collected graph nodes.
+    Collected = 8,
+    /// Reads the number of live cycle-collector candidate blocks.
+    Roots = 9,
+    /// Reads elapsed application time in seconds.
+    ApplicationTime = 10,
+    /// Reads cumulative collector time in seconds.
+    CollectorTime = 11,
+    /// Reads cumulative destructor time during collection in seconds.
+    DestructorTime = 12,
+    /// Reads cumulative graph-free time in seconds.
+    FreeTime = 13,
+}
+
+impl GcControlOp {
+    /// Returns the stable integer stored in the EIR immediate.
+    pub const fn as_i64(self) -> i64 {
+        self as i64
+    }
+
+    /// Decodes a validated EIR immediate into its typed GC operation.
+    pub const fn from_i64(value: i64) -> Option<Self> {
+        match value {
+            0 => Some(Self::Collect),
+            1 => Some(Self::Disable),
+            2 => Some(Self::Enable),
+            3 => Some(Self::Enabled),
+            4 => Some(Self::MemCaches),
+            5 => Some(Self::Running),
+            6 => Some(Self::Protected),
+            7 => Some(Self::Runs),
+            8 => Some(Self::Collected),
+            9 => Some(Self::Roots),
+            10 => Some(Self::ApplicationTime),
+            11 => Some(Self::CollectorTime),
+            12 => Some(Self::DestructorTime),
+            13 => Some(Self::FreeTime),
+            _ => None,
+        }
+    }
+
+    /// Returns the precise conservative effects of this collector operation.
+    pub const fn effects(self) -> Effects {
+        use Effects as E;
+        match self {
+            // Destructors are arbitrary PHP callbacks. In particular, omitting MAY_THROW
+            // lets AST pruning discard the catch around an explicit collection call.
+            Self::Collect => E::all(),
+            Self::Disable | Self::Enable => E::WRITES_GLOBAL,
+            Self::Enabled
+            | Self::Running
+            | Self::Protected
+            | Self::Runs
+            | Self::Collected
+            | Self::Roots
+            | Self::CollectorTime
+            | Self::DestructorTime
+            | Self::FreeTime => E::READS_GLOBAL,
+            Self::ApplicationTime => {
+                Effects::from_bits_retain(E::READS_GLOBAL.bits() | E::READS_PROCESS.bits())
+            }
+            Self::MemCaches => {
+                Effects::from_bits_retain(E::READS_HEAP.bits() | E::WRITES_HEAP.bits())
+            }
+        }
+    }
+}
+
+/// Typed selector for PHP Core runtime and introspection builtins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(i64)]
+pub enum CoreBuiltinOp {
+    DebugBacktrace = 0,
+    DebugPrintBacktrace = 1,
+    ErrorReporting = 2,
+    RestoreErrorHandler = 3,
+    RestoreExceptionHandler = 4,
+    SetErrorHandler = 5,
+    SetExceptionHandler = 6,
+    TriggerError = 7,
+    GetDefinedConstants = 8,
+    GetDefinedFunctions = 9,
+    GetDefinedVars = 10,
+    GetExtensionFuncs = 11,
+    GetIncludedFiles = 12,
+    GetMangledObjectVars = 13,
+    GetResources = 14,
+    GetErrorHandler = 15,
+    GetExceptionHandler = 16,
+}
+
+impl CoreBuiltinOp {
+    /// Returns the shared ownership contract consumed by builtin and temporary lowering.
+    pub const fn result_ownership(self) -> crate::builtins::semantics::BuiltinResultOwnership {
+        use crate::builtins::semantics::BuiltinResultOwnership;
+        match self {
+            Self::DebugBacktrace
+            | Self::SetErrorHandler
+            | Self::SetExceptionHandler
+            | Self::GetDefinedConstants
+            | Self::GetDefinedFunctions
+            | Self::GetDefinedVars
+            | Self::GetExtensionFuncs
+            | Self::GetIncludedFiles
+            | Self::GetMangledObjectVars
+            | Self::GetResources
+            | Self::GetErrorHandler
+            | Self::GetExceptionHandler => BuiltinResultOwnership::Fresh,
+            Self::DebugPrintBacktrace
+            | Self::ErrorReporting
+            | Self::RestoreErrorHandler
+            | Self::RestoreExceptionHandler
+            | Self::TriggerError => BuiltinResultOwnership::NonHeap,
+        }
+    }
+
+    /// Returns the stable integer stored in the EIR immediate.
+    pub const fn as_i64(self) -> i64 {
+        self as i64
+    }
+
+    /// Decodes a validated EIR immediate into its typed Core operation.
+    pub const fn from_i64(value: i64) -> Option<Self> {
+        match value {
+            0 => Some(Self::DebugBacktrace),
+            1 => Some(Self::DebugPrintBacktrace),
+            2 => Some(Self::ErrorReporting),
+            3 => Some(Self::RestoreErrorHandler),
+            4 => Some(Self::RestoreExceptionHandler),
+            5 => Some(Self::SetErrorHandler),
+            6 => Some(Self::SetExceptionHandler),
+            7 => Some(Self::TriggerError),
+            8 => Some(Self::GetDefinedConstants),
+            9 => Some(Self::GetDefinedFunctions),
+            10 => Some(Self::GetDefinedVars),
+            11 => Some(Self::GetExtensionFuncs),
+            12 => Some(Self::GetIncludedFiles),
+            13 => Some(Self::GetMangledObjectVars),
+            14 => Some(Self::GetResources),
+            15 => Some(Self::GetErrorHandler),
+            16 => Some(Self::GetExceptionHandler),
+            _ => None,
+        }
+    }
+
+    /// Returns the normalized EIR operand count required by this operation.
+    pub const fn operand_count(self) -> usize {
+        match self {
+            Self::DebugBacktrace | Self::DebugPrintBacktrace => 2,
+            Self::ErrorReporting
+            | Self::GetDefinedConstants
+            | Self::GetExtensionFuncs
+            | Self::GetMangledObjectVars
+            | Self::GetResources => 1,
+            Self::SetErrorHandler => 3,
+            Self::SetExceptionHandler => 2,
+            Self::TriggerError => 4,
+            Self::RestoreErrorHandler
+            | Self::RestoreExceptionHandler
+            | Self::GetDefinedVars
+            | Self::GetIncludedFiles
+            | Self::GetErrorHandler
+            | Self::GetExceptionHandler => 0,
+            Self::GetDefinedFunctions => 1,
+        }
+    }
+
+    /// Returns the conservative effects of the selected Core operation.
+    pub const fn effects(self) -> Effects {
+        use Effects as E;
+        match self {
+            Self::GetDefinedConstants
+            | Self::GetDefinedFunctions
+            | Self::GetDefinedVars
+            | Self::GetExtensionFuncs
+            | Self::GetIncludedFiles
+            | Self::GetMangledObjectVars
+            | Self::GetResources
+            | Self::DebugBacktrace => Effects::from_bits_retain(
+                E::READS_GLOBAL.bits()
+                    | E::READS_LOCAL.bits()
+                    | E::READS_HEAP.bits()
+                    | E::WRITES_HEAP.bits()
+                    | E::ALLOC_HEAP.bits()
+                    | E::REFCOUNT_OP.bits()
+                    | E::MAY_THROW.bits(),
+            ),
+            Self::DebugPrintBacktrace | Self::TriggerError => E::all(),
+            Self::ErrorReporting => {
+                Effects::from_bits_retain(E::READS_GLOBAL.bits() | E::WRITES_GLOBAL.bits())
+            }
+            // Getters only read the active registration; boxing null or retaining the
+            // stored callback allocates and touches refcounts but never runs PHP code.
+            Self::GetErrorHandler | Self::GetExceptionHandler => Effects::from_bits_retain(
+                E::READS_GLOBAL.bits()
+                    | E::READS_HEAP.bits()
+                    | E::ALLOC_HEAP.bits()
+                    | E::REFCOUNT_OP.bits(),
+            ),
+            Self::RestoreErrorHandler
+            | Self::RestoreExceptionHandler
+            | Self::SetErrorHandler
+            | Self::SetExceptionHandler => Effects::from_bits_retain(
+                E::READS_GLOBAL.bits()
+                    | E::WRITES_GLOBAL.bits()
+                    | E::READS_HEAP.bits()
+                    | E::WRITES_HEAP.bits()
+                    | E::ALLOC_HEAP.bits()
+                    | E::REFCOUNT_OP.bits()
+                    | E::MAY_THROW.bits()
+                    | E::MAY_FATAL.bits(),
+            ),
+        }
+    }
+}
+
 /// EIR opcode family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Op {
@@ -304,6 +797,10 @@ pub enum Op {
     ConstNull,
     ConstBool,
     ConstClassName,
+    /// `self::class` inside a closure that may be rebound at run time: the class name of the
+    /// scope `Closure::bind()` stamped into the hidden scope capture, or the lexical class named
+    /// by the immediate (a class-name data id) while the closure still has its own scope.
+    ClosureScopeClassName,
     ConstEnumCase,
     LoadCalledClassId,
     ObjectClassId,
@@ -319,8 +816,13 @@ pub enum Op {
     StoreRefCell,
     PromoteLocalRefCell,
     AliasLocalRefCell,
+    /// Retains the nullable cell in one hidden owner slot into another hidden owner slot.
+    /// Immediate: source/destination owner slots. Inline borrowed references remain null owners.
+    RetainLocalRefCell,
     ReleaseLocalRefCell,
     ReleaseLocalSlot,
+    PushCallOperandOwner,
+    PopCallOperandOwner,
     LoadGlobal,
     StoreGlobal,
     /// Acquires one ownership share of a named global's durable reference cell.
@@ -331,9 +833,18 @@ pub enum Op {
     LoadStaticLocal,
     StoreStaticLocal,
     InitStaticLocal,
+    /// Answers whether a static local's one-time initializer has not run yet: `I64` 1 before
+    /// the first `init_static_local` of the slot, 0 after. Lowering branches on it so the
+    /// initializer expression is evaluated only while the static is still unset.
+    StaticLocalUninitialized,
     LoadStaticProperty,
     /// Loads a static property selected by a runtime string name.
     LoadDynamicStaticProperty,
+    /// Returns the address of a native static-property storage slot.
+    ///
+    /// The pointer is borrowed from process-lifetime symbol storage and lets a synthetic local
+    /// reference publish container replacements back to the static property.
+    LoadStaticPropertyRefCell,
     StoreStaticProperty,
     /// Stores a static property selected by a runtime string name.
     StoreDynamicStaticProperty,
@@ -427,6 +938,7 @@ pub enum Op {
     StrSetOffset,
     StrLen,
     StrPersist,
+    /// Reads a string offset; an optional Bool immediate controls missing-offset warnings.
     StrCharAt,
     StrInterpolate,
     ConcatReset,
@@ -459,6 +971,30 @@ pub enum Op {
     /// key. The (possibly split, vivified or hash-promoted) container is stored back to the
     /// operand's place, as `HashRefElement` does.
     ElemRefCell,
+    /// Writes one signature-unknown callable-descriptor argument WITHOUT PHP's numeric-string
+    /// key normalization.
+    ///
+    /// A descriptor argument container is not a PHP array: its string keys are PARAMETER NAMES,
+    /// and PHP binds `"12"` as the name `$12` rather than as position 12. `HashSet` would route
+    /// the key through `__rt_hash_normalize_key` and turn it into the integer 12, which is the
+    /// right answer for `$a["12"] = 1` and the wrong one here. Everything else, including string
+    /// key persistence and the grown-table write-back, is exactly `HashSet`.
+    DescriptorArgSet,
+    /// Probes a descriptor argument container for a raw, unnormalized key.
+    ///
+    /// The `array_key_exists` counterpart of `DescriptorArgSet`, and the read a duplicate-name
+    /// guard needs: it must see the same key space the write uses, so a container that already
+    /// carries the NAME `"12"` is not reported free because the probe normalized to integer 12.
+    DescriptorArgKeyExists,
+    /// Raises PHP's catchable `Named parameter $<name> overwrites previous argument` `Error`.
+    ///
+    /// The offending name is a RUNTIME value: a `Traversable` hands the unpack walk whatever its
+    /// `key()` returns, so the message cannot be a compile-time string. The single operand is
+    /// that key read in the descriptor key space, exactly as `DescriptorArgKeyExists` reads it,
+    /// and the text is composed by `__rt_throw_named_parameter_overwrite`, the same runtime
+    /// helper the callable invoker's prevalidation walk calls. The helper never returns, so the
+    /// emitting block ends `Unreachable`.
+    ThrowNamedParameterOverwrite,
     HashUnset,
     /// Writes PHP null into `container[key]`, releasing whatever was there.
     ///
@@ -494,6 +1030,7 @@ pub enum Op {
     ArrayGetMixedKeyForWrite,
     ArrayKeyExists,
     OffsetExists,
+    /// Removes an offset from a detached boxed PHP array cell, preserving sparse keys and aliases.
     OffsetUnset,
     ListUnpack,
     IterStart,
@@ -513,6 +1050,19 @@ pub enum Op {
     /// Builds a fresh `ReflectionClass` by calling the compiled materializer whose address a
     /// member reflector recorded (operand 0, a raw code address).
     ReflectionMaterialize,
+    /// Finds the metadata-table row of the class-like whose lowercase name is operand 0
+    /// (a string); the row index, or 0 when the module reflects no such class-like.
+    ReflRowLookup,
+    /// Reads word operand 1 of table row operand 0 (both ints): a count, a flag set, a line, or
+    /// the address of a string pool.
+    ReflWord,
+    /// Reads string number operand 1 of the string pool at address operand 0 (an int).
+    ReflPoolStr,
+    /// Reads word number operand 1 of the table at address operand 0 (an int).
+    ReflAt,
+    /// The PHP name a callable descriptor carries (operand 0, a boxed callable): `{closure:...}`
+    /// for a closure, the function name for a named one, "" for anything else.
+    ReflCallableName,
     /// Runs the compiled member filler whose address a class reflector recorded (operand 0, a
     /// raw code address) on that reflector (operand 1), filling its member-reflector slots.
     ReflectionFillMembers,
@@ -545,35 +1095,68 @@ pub enum Op {
     /// Tests whether a statically named declared property is initialized and non-null without
     /// performing an observable property read. Operand: object; immediate: property-name data id.
     PropIsset,
+    /// Stores through a property name, a physical PropertyRef inside its allocation initializer,
+    /// or a trusted ReflectionPropertyRef for reflected value access. Physical initialization
+    /// adds ALLOC_HEAP to the default effects for owned reference cells.
     PropSet,
     /// Clears a declared instance-property slot for `unset($obj->prop)`: releases the
     /// refcounted payload the slot owned and stamps the uninitialized-typed-property
     /// marker, so the property stops being reported by `isset()` and by the
     /// descriptor walkers. Operand: object; immediate: property name data id.
+    /// An initializer may instead supply PropertyRef to mark a freshly zeroed physical slot.
+    /// That form adds ALLOC_HEAP to the default effects for owned reference cells.
     PropUnset,
+    /// Removes `unset($object->{$name})` for a property NAME only known at run time.
+    ///
+    /// Operands: object, name string. There is no immediate: the name is a value, which is the
+    /// whole difference from `PropUnset`. The backend compares the runtime name against the
+    /// receiver's declared names and then takes php's answer for the matched name on the
+    /// receiver's RUNTIME class: a visible declared slot is cleared, a name the scope may not
+    /// reach raises the catchable `Error`, and a name php resolves dynamically is removed from
+    /// that class's per-instance property hash. A name that matches nothing is removed from the
+    /// hash too, or is php's no-op when the class reserves none.
+    DynamicPropUnset,
     /// Loads the raw reference-cell pointer stored in a reference property's slot,
     /// without dereferencing it. Used to alias a local to `$obj->prop` and to return
     /// `$this->prop` by reference. Operand: object; immediate: property name data id.
     LoadPropRefCell,
-    /// Promotes an indexed-array element to a reference cell and returns the cell
-    /// pointer. Used to alias a local to `$a[idx]` (`$b =& $a[0]`). The returned pointer
-    /// addresses the element's inline storage within the array; the local aliases it
-    /// non-owning (the array owns the storage). Operands: array, index. No immediate.
+    /// Loads a reference property's cell pointer for a BY-REFERENCE RETURN, after proving the
+    /// slot's stored payload can be read with the declared result representation. Operand:
+    /// object; immediate: property name data id; `result_php_type` is the DECLARED by-reference
+    /// result, i.e. the representation the caller will dereference the transferred cell with.
+    ///
+    /// This is deliberately a distinct opcode from `LoadPropRefCell` rather than a flag on it:
+    /// an ordinary `$x = &$obj->prop` alias produces a bare `Pointer` with no payload claim and
+    /// must never be guarded against a property type, while this form carries exactly that claim
+    /// and must be. A receiver whose class is only known at run time raises a catchable `Error`
+    /// when the matched class stores an incompatible payload, so the effects below admit a throw.
+    LoadPropRefCellChecked,
+    /// Returns the cell for PHP element address-of. Indexed storage exposes its borrowed inline
+    /// slot; associative or boxed storage creates or reuses a managed tag-11 cell, inserting a
+    /// missing key as null before returning it. Operands: array, index. No immediate.
     LoadArrayElemRefCell,
-    /// Binds a local slot as a non-owning reference alias to a ref-cell pointer value.
-    /// Operand: the cell pointer (SSA value); immediate: target local slot. The local
-    /// does not own the cell (no release at scope exit); the owner is the object/source.
+    /// Fetches an existing element cell for a nested by-reference `foreach` source. Unlike a
+    /// PHP address-of operation, a missing key warns and returns no cell without inserting null.
+    /// Operands: array, index. No immediate.
+    LoadArrayElemRefCellExisting,
+    /// Binds a local slot to a ref-cell pointer. A LocalSlot immediate borrows the cell;
+    /// a LocalSlotPair gives the target and an owned cell slot, retaining the cell for scope cleanup.
     BindRefCellPtr,
     /// Replaces a declared reference property's owned cell with another property's cell.
     /// Operands: target object, then source cell pointer; immediate: target property name.
     BindPropRefCell,
+    /// Adopts a returned cell owner into an alias/owner slot pair without retaining it twice.
+    AdoptRefCellPtr,
+    /// Snapshots a reference-cell address as Pointer/I64 and retains its optional managed owner.
+    /// Operand: addressed local/property; immediate: ReturnRefCell cleanup slot. Active bounded
+    /// borrows publish a zero owner, never their interior address, into that cleanup slot.
+    AcquireRefCell,
+    /// Reads a property whose name is only known at run time. Operands: receiver, name.
+    /// Immediate: `PropertyFetchMode`, php's read-vs-probe distinction; absent means `Read`.
     DynamicPropGet,
     /// Loads the raw reference-cell pointer for a runtime-named declared property.
     /// Operands: object, then the runtime property-name string.
     DynamicPropRefCell,
-    /// Unsets a runtime-named instance property. Operands: object, then the runtime
-    /// property-name string. Declared slots transition to PHP's uninitialized state.
-    DynamicPropUnset,
     DynamicPropSet,
     NullsafePropGet,
     NullsafeMethodCall,
@@ -585,6 +1168,12 @@ pub enum Op {
     /// `from()`/`tryFrom()` call. Operand: the string. Immediate: data id of the PHP
     /// `TypeError` message thrown when the string is not numeric. Result: `I64`.
     EnumBackingStringToInt,
+    /// Converts a weak-mode string argument bound to a declared `int` parameter the way php does
+    /// when the call runs: a numeric string binds (a fractional one after php's float-string
+    /// precision `Deprecated:`), a non-numeric or out-of-range one throws `TypeError`. Operand: the
+    /// string, which is only read. Immediate: data id of the complete `TypeError` message.
+    /// Result: `I64`.
+    ArgumentStringToInt,
     /// Coerces a `Mixed` (dynamically-typed) operand to the integer backing value for an
     /// int-backed enum `from()`/`tryFrom()` call, dispatching on the runtime tag: int/bool
     /// forward the payload, float truncates, null becomes 0, a numeric string coerces (a
@@ -682,6 +1271,10 @@ pub enum Op {
     GeneratorReturn,
     IncludeOnceMark,
     IncludeOnceGuard,
+    /// Links one synthetic include activation into `_exc_call_frame_top`.
+    IncludeFrameEnter,
+    /// Unlinks the site's synthetic include activation on normal completion.
+    IncludeFrameExit,
     ClassLikeActivate,
     FunctionVariantMark,
     FunctionVariantDispatch,
@@ -689,6 +1282,8 @@ pub enum Op {
     Release,
     ReleaseUnlessAliases,
     GcCollect,
+    GcControl,
+    CoreBuiltin,
     Move,
     Borrow,
     EnsureOwned,
@@ -788,21 +1383,29 @@ impl Op {
             PtrCheckNonnull => E::MAY_FATAL,
             ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedPow => E::ALLOC_HEAP | E::READS_HEAP,
             ConstEnumCase => E::ALLOC_HEAP,
-            LoadCalledClassId => E::READS_LOCAL,
+            LoadCalledClassId | ClosureScopeClassName => E::READS_LOCAL,
             ObjectClassId => E::READS_HEAP,
             ClassNameToId => E::READS_GLOBAL | E::READS_HEAP,
-            LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
-            StoreLocal | UnsetLocal | ZeroLocalSlot | StoreRefCell | ListUnpack | FinallyEnter
-            | FinallyExit => E::WRITES_LOCAL,
+            LoadLocal | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
+            LoadRefCell => E::READS_LOCAL | E::READS_HEAP,
+            StoreLocal | UnsetLocal | ZeroLocalSlot | ListUnpack | FinallyEnter | FinallyExit => {
+                E::WRITES_LOCAL
+            }
+            // A refcounted cell publishes replacement storage and can run the previous payload's
+            // destructor immediately, so the store has the full user-code effect boundary.
+            StoreRefCell => E::all(),
             PromoteLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
             }
-            AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL
-                | E::WRITES_HEAP | E::REFCOUNT_OP,
-            ReleaseLocalRefCell => {
-                E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP
+            AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL,
+            RetainLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
+            // The last cell owner can run an arbitrary payload destructor.
+            ReleaseLocalRefCell => E::all(),
+            // Retiring the slot can invoke an arbitrary PHP destructor after clearing its owner.
+            ReleaseLocalSlot => E::all(),
+            PushCallOperandOwner | PopCallOperandOwner => {
+                E::READS_LOCAL | E::READS_GLOBAL | E::WRITES_GLOBAL
             }
-            ReleaseLocalSlot => E::READS_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
             GlobalRefCell => E::READS_GLOBAL | E::WRITES_GLOBAL | E::ALLOC_HEAP
                 | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             UnsetGlobal => E::READS_GLOBAL | E::WRITES_GLOBAL | E::WRITES_HEAP
@@ -810,6 +1413,7 @@ impl Op {
             LoadGlobal
             | LoadStaticProperty
             | StaticPropInitialized
+            | StaticLocalUninitialized
             | LoadReflectionStaticProperty
             | ReflectionStaticPropertyInitialized
             | ScopedConstantGet
@@ -818,6 +1422,9 @@ impl Op {
             | ClassGetAttributes
             | CatchCurrent => E::READS_GLOBAL,
             LoadDynamicStaticProperty => E::READS_HEAP | E::MAY_FATAL,
+            // Address selection can raise a catchable typed-uninitialized error or a
+            // late-static visibility fatal before exposing the writable symbol slot.
+            LoadStaticPropertyRefCell => E::READS_GLOBAL | E::MAY_THROW | E::MAY_FATAL,
             CatchBind => E::READS_GLOBAL | E::WRITES_GLOBAL,
             StoreGlobal
             | StoreStaticLocal
@@ -832,9 +1439,11 @@ impl Op {
                 E::WRITES_HEAP | E::READS_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
             }
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
+            IncludeFrameEnter | IncludeFrameExit => E::READS_GLOBAL | E::WRITES_GLOBAL,
             IToStr | FToStr | ResourceToStr | StrConcat | StrBitAnd | StrBitOr | StrBitXor
-            | StrSetOffset | StrCharAt | StrInterpolate
+            | StrSetOffset | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
+            StrCharAt => E::ALLOC_CONCAT | E::MAY_WARN,
             ConcatReset => E::WRITES_GLOBAL,
             Cast => {
                 E::READS_HEAP
@@ -847,16 +1456,22 @@ impl Op {
             InvokerRefArg => E::READS_LOCAL | E::READS_GLOBAL | E::ALLOC_HEAP | E::REFCOUNT_OP,
             ArrayLocalRefCell => E::READS_LOCAL | E::ALLOC_HEAP | E::REFCOUNT_OP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
-            | ClosureNew | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
+            | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
             | GeneratorNew => {
                 E::ALLOC_HEAP
             }
-            IsNull | IsTruthy | TypePredicate | MixedCastBool | MixedCastInt | MixedCastFloat
-            | BufferGet | BufferLen | PackedFieldGet | PtrRead | PtrReadString => {
+            ClosureNew => E::READS_LOCAL | E::WRITES_LOCAL
+                | E::READS_HEAP | E::WRITES_HEAP | E::READS_GLOBAL
+                | E::WRITES_GLOBAL | E::ALLOC_HEAP | E::MAY_THROW | E::REFCOUNT_OP,
+            IsNull | IsTruthy | TypePredicate | MixedCastBool | MixedCastInt
+            | MixedCastFloat | BufferGet | BufferLen | PackedFieldGet | PtrRead
+            | PtrReadString => {
                 E::READS_HEAP | E::MAY_FATAL
             }
             MixedUnbox => E::READS_HEAP | E::MAY_FATAL | E::MAY_THROW | E::REFCOUNT_OP,
-            ArrayGetSilent | HashGetSilent | ArrayIsset | HashIsset => E::READS_HEAP,
+            ArrayGetSilent | HashGetSilent | ArrayIsset | HashIsset | DescriptorArgKeyExists => {
+                E::READS_HEAP
+            }
             ArrayGet | HashGet => E::READS_HEAP | E::MAY_WARN,
             // Not a pure read despite the name: the copy-on-write split rewrites the receiver's
             // element slot (and the receiver's own local slot), so it must never be treated as
@@ -870,8 +1485,25 @@ impl Op {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             ArrayLen | HashLen => E::READS_HEAP,
-            ArrayKeyExists | OffsetExists | PropInitialized | LoadPropRefCell => {
-                E::READS_HEAP
+            ArrayKeyExists | OffsetExists | PropInitialized => E::READS_HEAP,
+            // `LoadPropRefCell` now carries exactly its checked sibling's contract. Phase B2 made
+            // the plain form raise php's catchable access `Error` for a name this scope may not
+            // reach, and made the `Mixed` form raise instead of publishing a zero pointer as a
+            // live cell, so the unguarded read it used to advertise is no longer what it does.
+            // A throw unwinds through frame cleanup that can run PHP destructors, and modelling
+            // it as a plain heap read would let the optimizer hoist, sink or drop the load across
+            // the very cleanup the throw depends on.
+            LoadPropRefCell => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+                    | E::MAY_THROW | E::MAY_FATAL
+            }
+            // The payload guard allocates and throws a catchable `Error` for an incompatible
+            // runtime class, and that throw unwinds through frame cleanup that can run PHP
+            // destructors. Modelling it as a plain heap read would let the optimizer hoist,
+            // sink or drop the guarded load across the very cleanup the throw depends on.
+            LoadPropRefCellChecked => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+                    | E::MAY_THROW | E::MAY_FATAL
             }
             PropGet | NullsafePropGet => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
@@ -887,11 +1519,37 @@ impl Op {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
             }
             DynamicPropRefCell => E::READS_HEAP | E::MAY_FATAL,
-            LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
-            BindRefCellPtr => E::WRITES_LOCAL,
             BindPropRefCell => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
-            ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
-            | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
+            // Nested by-reference source preparation can unbox a Mixed child, split or promote
+            // its container, box hash entries, release the replaced owner, write the replacement
+            // through the parent box, and promote the selected entry to a managed reference cell.
+            LoadArrayElemRefCell => {
+                E::READS_HEAP
+                    | E::WRITES_HEAP
+                    | E::ALLOC_HEAP
+                    | E::REFCOUNT_OP
+                    | E::MAY_FATAL
+            }
+            LoadArrayElemRefCellExisting => {
+                E::READS_HEAP
+                    | E::WRITES_HEAP
+                    | E::ALLOC_HEAP
+                    | E::REFCOUNT_OP
+                    | E::MAY_WARN
+                    | E::MAY_FATAL
+            }
+            BindRefCellPtr | AdoptRefCellPtr => {
+                E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+            }
+            // Replacing a pending return can retire a payload with an arbitrary destructor.
+            AcquireRefCell => E::all(),
+            // `DynamicPropUnset` carries exactly `PropUnset`'s contract: the same storage is
+            // removed, the same destructors can run, the same access `Error` can be raised, and
+            // the hash removal can reallocate the table.
+            HashUnset | PropUnset | DynamicPropUnset | OffsetUnset => E::READS_HEAP
+                | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
+            ArraySet | HashSet | DescriptorArgSet | ArrayPush | HashAppend
+            | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             HashRefElement | HashBindRefElement | ElemRefCell => {
                 E::READS_HEAP
@@ -902,18 +1560,29 @@ impl Op {
                     | E::REFCOUNT_OP
             }
             PropIsset => E::READS_HEAP | E::MAY_FATAL,
-            // Reads the fixed slot's initialization marker and old refcounted payload before
-            // transitioning it to the typed-uninitialized sentinel or untyped null.
-            PropUnset | DynamicPropUnset => {
-                E::READS_HEAP | E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
-            }
+            // `PropSet` and `DynamicPropSet` now carry the SAME conservative contract, because
+            // phase B2 gave them the same set of observable consequences. Either can create a
+            // dynamic property in the receiver's per-instance hash, which READS the table,
+            // ALLOCATES on a rehash and REFCOUNTS the boxed value; either can report php 8.5's
+            // `Creation of dynamic property C::$p is deprecated` on the diagnostic stream, which
+            // is `MAY_WARN` plus the global read and write the stream itself is; and either can
+            // raise php's catchable access `Error` for a name this scope may not write, or a
+            // `TypeError` for a value a declared slot refuses, which is `MAY_THROW`. Advertising
+            // `DynamicPropSet` as a bare heap write let the optimizer reorder or drop a store
+            // that now diagnoses and can unwind.
+            PropSet | DynamicPropSet => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP
+                | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_FATAL
+                | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             // ALLOC_HEAP because the hash-storage lowering goes through `__rt_hash_set`, which
             // checks its load factor and may grow/rehash the table before it even knows whether
             // the key is already present.
             SlotDetach => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
-            ArrayElemAddr | ArraySetMixedKey => {
+            ArrayElemAddr => {
                 E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
+            }
+            ArraySetMixedKey => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::MAY_WARN | E::REFCOUNT_OP
             }
             ArrayGetMixedKey => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::MAY_WARN,
             ArrayGetMixedKeySilent => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
@@ -934,13 +1603,21 @@ impl Op {
             MethodCall | NullsafeMethodCall => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_DEOPT
             }
-            IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
-            | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
+            // These opcodes drive PHP's Iterator protocol through hidden method calls.
+            // The callbacks may observe or mutate arbitrary program state, allocate,
+            // adjust ownership, emit output, or throw. Keep them conservative until
+            // iterator method summaries become explicit EIR calls.
+            IterStart | IterCurrentKey | IterCurrentValue | IterNext | IteratorMethodCall => {
+                E::all()
+            }
+            SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
             | DynamicObjectNewWithoutConstructorMixed | MethodLookup | StaticMethodCall
             | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | PhpRelCmp => {
                 E::READS_HEAP | E::MAY_DEOPT
             }
             ReflectionMaterialize => E::READS_HEAP | E::ALLOC_HEAP,
+            // Pure reads of immutable module tables.
+            ReflRowLookup | ReflWord | ReflPoolStr | ReflAt | ReflCallableName => E::READS_GLOBAL,
             ReflectionFillMembers => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP,
             ObjectHandleReserve | ObjectHandlePend | ObjectHandleUnpend => {
                 E::READS_GLOBAL | E::WRITES_GLOBAL
@@ -949,11 +1626,13 @@ impl Op {
             // concat scratch while building the carried result, and always allocates the
             // boxed Mixed cell the new value is returned in.
             StrIncDec => E::READS_HEAP | E::ALLOC_CONCAT | E::ALLOC_HEAP | E::MAY_DEOPT,
-            IterCurrentValueRef | IterNext | IterEnd | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
+            IterCurrentValueRef | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
+            IterEnd => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_DEOPT,
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
-            EnumBackingStringToInt | EnumBackingMixedToInt | PackedFieldMixedToInt
+            EnumBackingStringToInt | ArgumentStringToInt | EnumBackingMixedToInt
+            | PackedFieldMixedToInt
             | ReturnBoundaryMixedToInt => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
             }
@@ -989,6 +1668,11 @@ impl Op {
             PrintValue => E::OUTPUT,
             ErrorSuppressBegin | ErrorSuppressEnd => E::READS_GLOBAL | E::WRITES_GLOBAL,
             ThrowException => E::MAY_THROW | E::WRITES_GLOBAL,
+            // Reads the key out of its boxed cell, allocates the composed message and the
+            // `Error` payload, publishes `_exc_value`, then unwinds.
+            ThrowNamedParameterOverwrite => {
+                E::MAY_THROW | E::READS_HEAP | E::ALLOC_HEAP | E::WRITES_GLOBAL
+            }
             ThrowError | ThrowErrorValue => {
                 E::MAY_THROW
                     | E::READS_GLOBAL
@@ -998,8 +1682,21 @@ impl Op {
             }
             Acquire | Release | EnsureOwned => E::REFCOUNT_OP | E::WRITES_HEAP,
             ReleaseUnlessAliases => E::REFCOUNT_OP | E::WRITES_HEAP | E::READS_HEAP,
-            GcCollect => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
+            GcCollect | GcControl => GcControlOp::Collect.effects(),
+            CoreBuiltin => E::all(),
             ClassConstant => E::MAY_DEOPT,
+        }
+    }
+
+    /// Returns the exact effects of extracting a concrete payload from a Mixed cell.
+    /// Heap payloads and callable descriptors acquire an independent runtime reference.
+    pub fn mixed_unbox_effects(result_type: &PhpType) -> Effects {
+        let result_type = result_type.codegen_repr();
+        let effects = Self::MixedUnbox.default_effects();
+        if result_type.is_refcounted() || result_type == PhpType::Callable {
+            effects | Effects::REFCOUNT_OP | Effects::WRITES_HEAP
+        } else {
+            effects
         }
     }
 
@@ -1042,6 +1739,8 @@ impl Op {
                 | Op::IteratorMethodCall
                 | Op::SplRuntimeCall
                 | Op::FiberRuntimeCall
+                | Op::GcControl
+                | Op::CoreBuiltin
         )
     }
 
@@ -1055,6 +1754,7 @@ impl Op {
             ConstNull => "const_null",
             ConstBool => "const_bool",
             ConstClassName => "const_class_name",
+            ClosureScopeClassName => "closure_scope_class_name",
             ConstEnumCase => "const_enum_case",
             LoadCalledClassId => "load_called_class_id",
             ObjectClassId => "object_class_id",
@@ -1068,8 +1768,11 @@ impl Op {
             StoreRefCell => "store_ref_cell",
             PromoteLocalRefCell => "promote_local_ref_cell",
             AliasLocalRefCell => "alias_local_ref_cell",
+            RetainLocalRefCell => "retain_local_ref_cell",
             ReleaseLocalRefCell => "release_local_ref_cell",
             ReleaseLocalSlot => "release_local_slot",
+            PushCallOperandOwner => "push_call_operand_owner",
+            PopCallOperandOwner => "pop_call_operand_owner",
             LoadGlobal => "load_global",
             StoreGlobal => "store_global",
             GlobalRefCell => "global_ref_cell",
@@ -1077,8 +1780,10 @@ impl Op {
             LoadStaticLocal => "load_static_local",
             StoreStaticLocal => "store_static_local",
             InitStaticLocal => "init_static_local",
+            StaticLocalUninitialized => "static_local_uninitialized",
             LoadStaticProperty => "load_static_property",
             LoadDynamicStaticProperty => "load_dynamic_static_property",
+            LoadStaticPropertyRefCell => "load_static_property_ref_cell",
             StoreStaticProperty => "store_static_property",
             StoreDynamicStaticProperty => "store_dynamic_static_property",
             StaticPropInitialized => "static_prop_initialized",
@@ -1182,6 +1887,9 @@ impl Op {
             HashRefElement => "hash_ref_element",
             ElemRefCell => "elem_ref_cell",
             HashBindRefElement => "hash_bind_ref_element",
+            DescriptorArgSet => "descriptor_arg_set",
+            DescriptorArgKeyExists => "descriptor_arg_key_exists",
+            ThrowNamedParameterOverwrite => "throw_named_parameter_overwrite",
             HashUnset => "hash_unset",
             SlotDetach => "slot_detach",
             ArrayPush => "array_push",
@@ -1223,6 +1931,11 @@ impl Op {
                 "dynamic_object_new_without_constructor_mixed"
             }
             ReflectionMaterialize => "reflection_materialize",
+            ReflRowLookup => "refl_row_lookup",
+            ReflWord => "refl_word",
+            ReflPoolStr => "refl_pool_str",
+            ReflCallableName => "refl_callable_name",
+            ReflAt => "refl_at",
             ReflectionFillMembers => "reflection_fill_members",
             ObjectHandleReserve => "object_handle_reserve",
             ObjectHandlePend => "object_handle_pend",
@@ -1242,9 +1955,13 @@ impl Op {
             PropSet => "prop_set",
             PropUnset => "prop_unset",
             LoadPropRefCell => "load_prop_ref_cell",
+            LoadPropRefCellChecked => "load_prop_ref_cell_checked",
             LoadArrayElemRefCell => "load_array_elem_ref_cell",
+            LoadArrayElemRefCellExisting => "load_array_elem_ref_cell_existing",
             BindRefCellPtr => "bind_ref_cell_ptr",
             BindPropRefCell => "bind_prop_ref_cell",
+            AdoptRefCellPtr => "adopt_ref_cell_ptr",
+            AcquireRefCell => "acquire_ref_cell",
             DynamicPropGet => "dynamic_prop_get",
             DynamicPropRefCell => "dynamic_prop_ref_cell",
             DynamicPropUnset => "dynamic_prop_unset",
@@ -1256,6 +1973,7 @@ impl Op {
             StaticMethodCall => "static_method_call",
             EvalStaticMethodCall => "eval_static_method_call",
             EnumBackingStringToInt => "enum_backing_string_to_int",
+            ArgumentStringToInt => "argument_string_to_int",
             EnumBackingMixedToInt => "enum_backing_mixed_to_int",
             PackedFieldMixedToInt => "packed_field_mixed_to_int",
             ReturnBoundaryMixedToInt => "return_boundary_mixed_to_int",
@@ -1329,6 +2047,8 @@ impl Op {
             GeneratorReturn => "generator_return",
             IncludeOnceMark => "include_once_mark",
             IncludeOnceGuard => "include_once_guard",
+            IncludeFrameEnter => "include_frame_enter",
+            IncludeFrameExit => "include_frame_exit",
             ClassLikeActivate => "class_like_activate",
             FunctionVariantMark => "function_variant_mark",
             FunctionVariantDispatch => "function_variant_dispatch",
@@ -1336,6 +2056,8 @@ impl Op {
             Release => "release",
             ReleaseUnlessAliases => "release_unless_aliases",
             GcCollect => "gc_collect",
+            GcControl => "gc_control",
+            CoreBuiltin => "core_builtin",
             Move => "move",
             Borrow => "borrow",
             EnsureOwned => "ensure_owned",
@@ -1346,6 +2068,9 @@ impl Op {
 
 #[cfg(test)]
 mod tests {
+    use super::IterStartMetadata;
+    use crate::ir::LocalSlotId;
+
     /// `Instruction` is built by value inside the recursive AST->EIR lowering
     /// paths, so its size feeds every lowering stack frame. Growing it past
     /// main's 112 bytes shrank the headroom enough that 2 MiB test threads
@@ -1355,5 +2080,44 @@ mod tests {
     fn instruction_stays_112_bytes() {
         let size = std::mem::size_of::<super::Instruction>();
         assert!(size <= 112, "Instruction grew to {size} bytes");
+    }
+
+    /// Iterator metadata must remain inside the payload space already reserved by `Immediate`.
+    #[test]
+    fn iter_start_metadata_stays_12_bytes() {
+        assert_eq!(std::mem::size_of::<IterStartMetadata>(), 12);
+    }
+
+    /// The compact encoding must preserve every semantic field exposed to EIR consumers.
+    #[test]
+    fn iter_start_metadata_round_trips_slots_and_flags() {
+        let metadata = IterStartMetadata::new(
+            LocalSlotId::from_raw(2),
+            true,
+            Some(LocalSlotId::from_raw(5)),
+            Some(LocalSlotId::from_raw(8)),
+        );
+
+        assert_eq!(metadata.state(), LocalSlotId::from_raw(2));
+        assert!(metadata.is_by_ref());
+        assert_eq!(metadata.owner(), Some(LocalSlotId::from_raw(5)));
+        assert_eq!(metadata.origin(), Some(LocalSlotId::from_raw(8)));
+    }
+
+    /// Remapping a copied payload must not mutate the source instruction's value metadata.
+    #[test]
+    fn iter_start_metadata_copies_independently() {
+        let original = IterStartMetadata::new(LocalSlotId::from_raw(2), false, None, None);
+        let mut remapped = original;
+        remapped.set_state(LocalSlotId::from_raw(3));
+        remapped.set_owner(Some(LocalSlotId::from_raw(4)));
+        remapped.set_origin(Some(LocalSlotId::from_raw(5)));
+
+        assert_eq!(original.state(), LocalSlotId::from_raw(2));
+        assert_eq!(original.owner(), None);
+        assert_eq!(original.origin(), None);
+        assert_eq!(remapped.state(), LocalSlotId::from_raw(3));
+        assert_eq!(remapped.owner(), Some(LocalSlotId::from_raw(4)));
+        assert_eq!(remapped.origin(), Some(LocalSlotId::from_raw(5)));
     }
 }

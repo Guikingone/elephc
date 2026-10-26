@@ -288,3 +288,241 @@ echo (new ActiveNode())->describe();
     );
     assert_eq!(out, "active");
 }
+
+/// `new static(...)` pads omitted constructor defaults and gathers variadic arguments, as
+/// `new self()` and a named `new Child()` already did: one default omitted, several omitted,
+/// a variadic constructor with and without arguments, and a named argument. It failed with
+/// `dynamic object construction for Tagged without EIR-lowered candidates`, because the
+/// padding thunks were only generated for `new $class()` sites. Regression for #797.
+#[test]
+fn test_new_static_pads_omitted_constructor_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+class Tagged {
+    public function __construct(private int $tag = 5) {}
+    public static function make(): static { return new static(); }
+    public function tag(): int { return $this->tag; }
+}
+class SubTagged extends Tagged {}
+echo SubTagged::make()->tag(), "\n";
+echo Tagged::make()->tag(), "\n";
+
+class Pair {
+    public function __construct(public int $a = 1, public int $b = 2) {}
+    public static function one(int $a): static { return new static($a); }
+    public static function none(): static { return new static(); }
+}
+class SubPair extends Pair {}
+$p = SubPair::one(9);
+echo get_class($p), " ", $p->a, ",", $p->b, "\n";
+$q = Pair::none();
+echo $q->a, ",", $q->b, "\n";
+
+class Bag {
+    public array $items;
+    public function __construct(int ...$items) { $this->items = $items; }
+    public static function of(int $x): static { return new static($x, $x + 1, $x + 2); }
+    public static function empty(): static { return new static(); }
+}
+class SubBag extends Bag {}
+echo count(SubBag::of(3)->items), " ", array_sum(SubBag::of(3)->items), "\n";
+echo count(SubBag::empty()->items), "\n";
+
+class Named {
+    public function __construct(public string $label = "default", public int $n = 0) {}
+    public static function labelled(): static { return new static(label: "x"); }
+}
+class SubNamed extends Named {}
+$n = SubNamed::labelled();
+echo $n->label, " ", $n->n, "\n";
+for ($i = 0; $i < 20; $i++) { $t = SubTagged::make(); }
+echo $t->tag(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "5\n",
+            "5\n",
+            "SubPair 9,2\n",
+            "1,2\n",
+            "3 12\n",
+            "0\n",
+            "x 0\n",
+            "5\n",
+        )
+    );
+}
+
+/// A `new static('', ...)` factory whose descendant narrows the constructor to numeric
+/// parameters must still compile: the descendant is simply not a candidate at that site.
+///
+/// Laravel's `Limit::perSecond()` is `new static('', $maxAttempts, $decaySeconds)` while
+/// `GlobalLimit::__construct(int $maxAttempts, int $decaySeconds)` takes the attempts first. php
+/// raises a `TypeError` only for a program that calls `GlobalLimit::perSecond()`; the checker used
+/// to refuse the whole program ("parameter $maxAttempts expects Int, got Str"). The base class
+/// still builds normally.
+#[test]
+fn test_new_static_with_literal_string_skips_numeric_descendant_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class Limit {
+    public function __construct(public $key = '', public int $max = 60, public int $decay = 60) {}
+    public static function perSecond($max, $decay = 1) { return new static('', $max, $decay); }
+}
+class GlobalLimit extends Limit {
+    public function __construct(int $max, int $decay = 60) { parent::__construct('', $max, $decay); }
+}
+$l = Limit::perSecond(5);
+echo $l->max, ":", $l->decay, ":", get_class($l), "\n";
+$g = new GlobalLimit(7);
+echo $g->max, ":", $g->decay, ":", get_class($g), "\n";
+"#,
+    );
+    assert_eq!(out, "5:1:Limit\n7:60:GlobalLimit\n");
+}
+
+/// Laravel's `EnumeratesValues::wrap()` is `new static($value, ...$args)` with `$value` narrowed to
+/// an `Enumerable`, while `SortedMiddleware extends Collection` takes `array $priorityMap` first.
+/// The spread hid the descendant from the candidate filter, so the checker refused `Collection`
+/// ("parameter $priorityMap expects Array, got Object"), the class was deferred and failed to
+/// declare at run time. An object can never reach an array parameter, so that descendant is not a
+/// candidate at this call site; the array-taking branch still builds it.
+#[test]
+fn test_new_static_with_spread_skips_descendant_whose_array_param_gets_an_object() {
+    let out = compile_and_run(
+        r#"<?php
+interface Enumerable {}
+class Coll implements Enumerable {
+    public array $items;
+    public function __construct($items = []) { $this->items = $items instanceof Enumerable ? $items->items : (array) $items; }
+    public static function wrap($value, ...$args) {
+        return $value instanceof Enumerable
+            ? new static($value, ...$args)
+            : new static((array) $value, ...$args);
+    }
+}
+class Sorted extends Coll {
+    public function __construct(array $priorityMap, $middlewares) { parent::__construct($middlewares); }
+}
+$c = Coll::wrap(new Coll([1, 2]));
+echo get_class($c), count($c->items), "\n";
+$d = Coll::wrap([3]);
+echo get_class($d), count($d->items), "\n";
+$s = Sorted::wrap([1], [7, 8, 9]);
+echo get_class($s), count($s->items), "\n";
+"#,
+    );
+    assert_eq!(out, "Coll2\nColl1\nSorted3\n");
+}
+
+/// `static::$singletons[$key] ??= new static($locale)` whose constructor unsets another key of
+/// the same static array (Carbon's `AbstractTranslator::get()`). php evaluates the default
+/// before fetching the static property for write; separating the container first stored the
+/// new instance into a stale copy, so the following read found no "en" key.
+#[test]
+fn test_static_array_element_write_sees_writes_made_by_its_right_hand_side() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class AbstractT {
+    protected static array $singletons = [];
+    public string $locale = '';
+    public static function get(?string $locale = null): static {
+        $locale = $locale ?: 'en';
+        $key = static::class . '|' . $locale;
+        static::$singletons[$key] ??= new static($locale);
+        return static::$singletons[$key];
+    }
+    public static function put(string $key): void {
+        static::$singletons[$key] = static::fill($key);
+    }
+    private static function fill(string $key): string {
+        static::$singletons['side'] = 'effect';
+        return strtoupper($key);
+    }
+    public function __construct($locale) { $this->setLocale($locale); }
+    public function setLocale($locale): void {
+        unset(static::$singletons[$this->locale]);
+        $this->locale = $locale;
+    }
+    public static function keys(): string { return implode(',', array_keys(static::$singletons)); }
+}
+class Plain extends AbstractT {}
+$a = Plain::get('en');
+$b = Plain::get('en');
+echo $a->locale, ' ', var_export($a === $b, true), "\n";
+Plain::put('k');
+echo AbstractT::keys(), "\n";
+"#,
+    );
+    assert_eq!(out, "en true\nPlain|en,side,k\n");
+}
+
+/// Carbon's `Mixin` trait, shared by `Carbon` and `CarbonInterval`: a closure a STATIC method
+/// builds tests `isset($this)` (its null receiver was captured as a raw word and the read
+/// crashed), and calls `self::copyStep()`, which only one user of the trait declares (the other
+/// user's copy was refused at compile time, where php raises only if that line runs).
+#[test]
+fn test_trait_closure_from_static_method_and_missing_self_method() {
+    let out = compile_and_run(
+        r#"<?php
+trait Mixin {
+    private static array $macros = [];
+    private static function load(): void {
+        static::$macros[static::class] = function (bool $deep) {
+            $down = isset($this) ? $this : new static();
+            if ($deep) {
+                return self::copyStep($down);
+            }
+            return get_class($down) . ':shallow';
+        };
+    }
+    public static function run(bool $deep): string {
+        self::load();
+        return (static::$macros[static::class])($deep);
+    }
+}
+class Interval { use Mixin; private static function copyStep(self $a): string { return 'copied'; } }
+class Moment { use Mixin; }
+echo Interval::run(true), "|", Moment::run(false), "|";
+try {
+    Moment::run(true);
+} catch (Error $e) {
+    echo get_class($e), ":", $e->getMessage();
+}
+echo "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "copied|Moment:shallow|Error:Call to undefined method Moment::copyStep()\n"
+    );
+}
+
+/// `static $result;` holds what an earlier call stored, so `if (null !== $result) return
+/// $result;` in a `bool` method is the lazy-cache idiom (Symfony `Process::isPtySupported()`),
+/// not a return of null. Typing the static as its null initializer refused the method.
+#[test]
+fn test_null_initialized_static_local_is_a_lazy_cache() {
+    let out = compile_and_run(
+        r#"<?php
+class P {
+    public static function supported(): bool {
+        static $result;
+        if (null !== $result) {
+            return $result;
+        }
+        return $result = strlen('x') === 1;
+    }
+}
+function counter(): int {
+    static $n;
+    $n = ($n ?? 0) + 1;
+    return $n;
+}
+var_dump(P::supported(), P::supported());
+echo counter(), counter(), counter(), "\n";
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\n123\n");
+}

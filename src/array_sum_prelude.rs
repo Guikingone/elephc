@@ -25,7 +25,7 @@
 
 use crate::parser::ast::{BinOp, Program, Stmt};
 use crate::synthetic_class::{
-    e_binop, e_int, e_var, function, internal_declarations, s_assign, s_foreach, s_return,
+    e_binop, e_int, e_var, function, php_semantics_declarations, s_assign, s_foreach, s_return,
     t_array, t_mixed,
 };
 
@@ -36,7 +36,7 @@ pub(crate) const ARRAY_PRODUCT_VALUES_NAME: &str = "__elephc_array_product_value
 
 /// Returns both fold declarations for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| {
+    php_semantics_declarations(|| {
         vec![
             fold(ARRAY_SUM_VALUES_NAME, 0, BinOp::Add),
             fold(ARRAY_PRODUCT_VALUES_NAME, 1, BinOp::Mul),

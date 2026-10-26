@@ -14,6 +14,7 @@ use super::context::*;
 use super::declared_symbols::*;
 use super::execute::*;
 use super::native_functions::*;
+use super::native_constants::*;
 use super::native_methods::*;
 use super::scope::*;
 use super::symbols::*;
@@ -35,6 +36,7 @@ mod class_metadata;
 mod context_symbols;
 mod native_functions;
 mod native_methods;
+mod native_user_constants;
 mod scope_execution;
 
 const TEST_NATIVE_DEFAULT_NULL: u64 = 0;
@@ -44,6 +46,7 @@ const TEST_NATIVE_DEFAULT_FLOAT: u64 = 3;
 const TEST_NATIVE_DEFAULT_EMPTY_ARRAY: u64 = 4;
 const TEST_NATIVE_PROPERTY_REQUIRES_GET: u64 = 1;
 const TEST_NATIVE_PROPERTY_REQUIRES_SET: u64 = 2;
+const TEST_NATIVE_PROPERTY_GET_BY_REF: u64 = 4;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_OBJECT: u8 = 2;
@@ -58,6 +61,7 @@ const TEST_MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = u8::MAX as usize;
 unsafe extern "C" fn fake_native_invoker(
     _descriptor: *mut c_void,
     _args: *mut RuntimeCell,
+    _invocation_scope: i64,
 ) -> *mut RuntimeCell {
     std::ptr::null_mut()
 }
@@ -105,6 +109,14 @@ fn native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &EvalAttributeArg
         EvalAttributeArg::String(value) => {
             record.push(3);
             native_member_attribute_push_string(record, value);
+        }
+        EvalAttributeArg::Bytes(value) => {
+            record.push(3);
+            record.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            record.extend_from_slice(value);
+        }
+        EvalAttributeArg::Expr(_) => {
+            panic!("native attribute test ABI does not encode unfolded constant expressions")
         }
         EvalAttributeArg::Named { name, value } => {
             record.push(4);

@@ -1,8 +1,8 @@
 ---
 title: "jdmonthname()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the month name for a Julian Day count in the requested calendar."
 sidebar:
-  order: 241
+  order: 242
 ---
 
 ## jdmonthname()
@@ -11,7 +11,7 @@ sidebar:
 function jdmonthname(int $julian_day, int $mode): string
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the month name for a Julian Day count in the requested calendar.
 
 **Parameters**:
 - `$julian_day` (`int`)
@@ -24,7 +24,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

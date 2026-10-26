@@ -102,6 +102,13 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     } else {
         rhs
     };
+    // A compound operation reads and writes one dimension. Capture a mutable index after
+    // any eager RHS evaluation, before a diagnostic handler can change its source variable.
+    let lhs_expr = if matches!(op, AssignmentOperator::Compound(_)) {
+        hoisted.snapshot_update_dimension(lhs_expr)
+    } else {
+        lhs_expr
+    };
     let lhs_span = lhs_expr.span;
     if is_append {
         let stmt = match lhs_expr.kind {
@@ -118,6 +125,13 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
                     span,
                 )
                 .map(Some);
+            }
+            ExprKind::DynamicPropertyAccess { object, property }
+                if matches!(object.kind, ExprKind::This | ExprKind::Variable(_)) =>
+            {
+                return dynamic_property_append(*object, *property, rhs, span)
+                    .map(Some)
+                    .ok_or_else(|| CompileError::new(span, "Invalid assignment target"));
             }
             _ => return Err(CompileError::new(span, "Invalid assignment target")),
         };
@@ -261,6 +275,20 @@ fn element_to_element_reference(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     let temp = format!("__elephc_ref_elem_{}_{}", span.line, span.col);
+    bound_through_hidden_local(temp, source, span, |temp_expr| {
+        complex_ref_store(target, is_append, temp_expr, span)
+    })
+}
+
+/// Binds the hidden local `temp` to `source` by reference (`$temp = &<source>`), runs the store
+/// `store` builds from that local, then ends the local's binding: the places the store linked
+/// keep their own shares of the reference.
+fn bound_through_hidden_local(
+    temp: String,
+    source: Expr,
+    span: Span,
+    store: impl FnOnce(Expr) -> Result<Stmt, CompileError>,
+) -> Result<Stmt, CompileError> {
     let temp_expr = Expr::new(ExprKind::Variable(temp.clone()), span);
     let bind = Stmt::new(
         StmtKind::RefAssign {
@@ -269,7 +297,7 @@ fn element_to_element_reference(
         },
         span,
     );
-    let store = complex_ref_store(target, is_append, temp_expr.clone(), span)?;
+    let store = store(temp_expr.clone())?;
     let unbind = Stmt::new(
         StmtKind::ExprStmt(Expr::new(
             ExprKind::FunctionCall {
@@ -283,6 +311,58 @@ fn element_to_element_reference(
     Ok(Stmt::new(StmtKind::Synthetic(vec![bind, store, unbind]), span))
 }
 
+/// Lowers `$obj->{'p'}[] = $v` and `$obj->{$c ? 'a' : 'b'}[] = $v` to appends on NAMED
+/// properties, the second as an `if`.
+///
+/// Laravel's `Query\Builder::orderBy()` is `$this->{$this->unions ? 'unionOrders' : 'orders'}[] =
+/// [...]`; refusing it sent the whole query builder to the interpreter. A name the parser cannot
+/// see is still refused here: a read-append-write through a runtime name would store a boxed
+/// array into a property the checker refined, which the backend can only reject at run time.
+fn dynamic_property_append(object: Expr, property: Expr, value: Expr, span: Span) -> Option<Stmt> {
+    let push = |name: &str, value: Expr| {
+        Stmt::new(
+            StmtKind::PropertyArrayPush {
+                object: Box::new(object.clone()),
+                property: name.to_string(),
+                value,
+            },
+            span,
+        )
+    };
+    match property.kind {
+        ExprKind::StringLiteral(name) => Some(push(&name, value)),
+        ExprKind::Ternary { condition, then_expr, else_expr } => {
+            let (ExprKind::StringLiteral(then_name), ExprKind::StringLiteral(else_name)) =
+                (&then_expr.kind, &else_expr.kind)
+            else {
+                return None;
+            };
+            // The value is evaluated once, after the condition, as php does.
+            let temp = format!("__elephc_dynprop_value_{}_{}", span.line, span.col);
+            let temp_var = Expr::new(ExprKind::Variable(temp.clone()), span);
+            let cond_temp = format!("__elephc_dynprop_cond_{}_{}", span.line, span.col);
+            let cond_var = Expr::new(ExprKind::Variable(cond_temp.clone()), span);
+            Some(Stmt::new(
+                StmtKind::Synthetic(vec![
+                    Stmt::new(StmtKind::Assign { name: cond_temp, value: *condition }, span),
+                    Stmt::new(StmtKind::Assign { name: temp, value }, span),
+                    Stmt::new(
+                        StmtKind::If {
+                            condition: cond_var,
+                            then_body: vec![push(then_name, temp_var.clone())],
+                            elseif_clauses: Vec::new(),
+                            else_body: Some(vec![push(else_name, temp_var)]),
+                        },
+                        span,
+                    ),
+                ]),
+                span,
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// Builds the store of an already-parsed complex reference assignment.
 fn complex_ref_store(
     target: Expr,
@@ -290,6 +370,50 @@ fn complex_ref_store(
     source: Expr,
     span: Span,
 ) -> Result<Stmt, CompileError> {
+    let element_target = is_append || matches!(&target.kind, ExprKind::ArrayAccess { .. });
+    let source_is_variable = matches!(&source.kind, ExprKind::Variable(_));
+    // `$this->data['forms'][$n] = &$this->build(...)` (Symfony's `FormDataCollector`),
+    // `$result[self::REF] = &$object->$name` (`PropertyAccessor`), `$list[] = &$o->p`: the element
+    // stores a marker over the reference a hidden local is bound to, which `$t = &<source>`
+    // lowers for every source kind.
+    if element_target
+        && !source_is_variable
+        && (is_append || !matches!(&source.kind, ExprKind::PropertyAccess { .. }))
+    {
+        let prefix = if matches!(&source.kind, ExprKind::PropertyAccess { .. }) {
+            ARRAY_PROPERTY_REF_TEMP_PREFIX
+        } else {
+            "__elephc_ref_elem_"
+        };
+        let temp = format!("{}{}_{}", prefix, span.line, span.col);
+        return bound_through_hidden_local(temp, source, span, |temp_expr| {
+            complex_ref_store(target, is_append, temp_expr, span)
+        });
+    }
+    // `$this->in = &$pipes[0]` (Symfony's `ProcessStream`): the element and the property become one
+    // reference held in the property's cell. `$t = &$pipes[0]` makes the element a reference (a
+    // missing key becomes null without a warning, as php's address-of does), the property takes
+    // its value, and the element is re-bound to the property's cell.
+    if let (ExprKind::PropertyAccess { object, property }, ExprKind::ArrayAccess { .. }) =
+        (&target.kind, &source.kind)
+    {
+        if can_replay_assignment_target(&source) {
+            let temp = format!("__elephc_ref_elem_{}_{}", span.line, span.col);
+            let (object, property) = (object.clone(), property.clone());
+            return bound_through_hidden_local(temp, source.clone(), span, |temp_expr| {
+                let copy = Stmt::new(
+                    StmtKind::PropertyAssign {
+                        object,
+                        property,
+                        value: temp_expr,
+                    },
+                    span,
+                );
+                let rebind = complex_ref_store(source, false, target, span)?;
+                Ok(Stmt::new(StmtKind::Synthetic(vec![copy, rebind]), span))
+            });
+        }
+    }
     if is_append {
         if !matches!(&source.kind, ExprKind::Variable(_)) {
             return Err(CompileError::new(
@@ -590,6 +714,9 @@ pub(in crate::parser::stmt) fn try_parse_scoped_postfix_incdec(
     if incdec_pos < start + 3 {
         return Ok(None);
     }
+    if assignment_precedes(tokens, start, incdec_pos) {
+        return Ok(None);
+    }
 
     let lhs = &tokens[start..incdec_pos];
     let mut lhs_pos = 0;
@@ -625,6 +752,9 @@ pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
     if incdec_pos < start + 3 {
         return Ok(None);
     }
+    if assignment_precedes(tokens, start, incdec_pos) {
+        return Ok(None);
+    }
 
     let lhs = &tokens[start..incdec_pos];
     let contains_complex_target = lhs
@@ -645,6 +775,18 @@ pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
     expect_semicolon(tokens, pos)?;
 
     lower_postfix_incdec_assignment(lhs_expr, is_increment, span).map(Some)
+}
+
+/// Reports whether a top-level assignment operator comes BEFORE `incdec_pos`.
+///
+/// When it does, the `++`/`--` belongs to the assignment's right-hand side, not to the statement:
+/// `$t += $b[0]++;` increments `$b[0]`, it does not increment `$t += $b[0]`. Both postfix-incdec
+/// statement parsers used to claim such a statement anyway, parse the whole `$t += $b[0]` as their
+/// target, and reject it with `Invalid assignment target` (issue #682). Declining here hands the
+/// statement to the assignment parsers, which lower the increment inside the value expression.
+fn assignment_precedes(tokens: &[SpannedToken], start: usize, incdec_pos: usize) -> bool {
+    find_top_level_assignment(tokens, start)
+        .is_some_and(|(assign_pos, _)| assign_pos < incdec_pos)
 }
 
 /// Parses a scoped (static class member) postfix assignment, handling targets like
@@ -717,6 +859,19 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
         return lower_effectful_static_assignment(lhs_expr, op, rhs, span).map(Some);
     }
+    // A compound update settles a disturbing right-hand side, then captures a mutable index,
+    // exactly as `try_parse_postfix_assignment` does for local and property targets.
+    let mut hoisted = EffectfulTargetLowerer::new(span);
+    let (lhs_expr, rhs) = if matches!(op, AssignmentOperator::Compound(_)) {
+        let rhs = if compound_rhs_can_disturb_index(&lhs_expr, &rhs) {
+            hoisted.stabilize_unconditionally(rhs)
+        } else {
+            rhs
+        };
+        (hoisted.snapshot_update_dimension(lhs_expr), rhs)
+    } else {
+        (lhs_expr, rhs)
+    };
     let value = assignment_value(lhs_expr.clone(), op, rhs, span);
 
     // `self::$b[$k][] = $v` (and its `static::` / `parent::` / `Named::` siblings) is an append
@@ -789,7 +944,7 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
         _ => return Err(CompileError::new(span, "Invalid assignment target")),
     };
 
-    Ok(Some(Stmt::new(stmt, span)))
+    Ok(Some(hoisted.finish_if_used(stmt, span)))
 }
 
 /// Scans tokens starting from `start` (skipping nested parentheses, brackets, and braces)
@@ -876,6 +1031,16 @@ fn find_top_level_postfix_incdec(tokens: &[SpannedToken], start: usize) -> Optio
             Token::Assign if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return None;
             }
+            // A top-level `?` opens a ternary, so the `++` sits in one of its BRANCHES:
+            // `$c ? $a[0]++ : $b;` increments `$a[0]`, it does not increment `$c ? $a[0]`.
+            // Claiming it anyway made the scan parse `$c ? $a[0]` as its target and report
+            // `Expected ':' in ternary operator` from the middle of a statement the scan had
+            // truncated itself (issue #1139). Declining leaves the honest diagnostic, which is
+            // that a ternary at statement position is not parsed at all yet (#827, #841).
+            // `??` and `?->` are their own tokens, so neither reaches this arm.
+            Token::Question if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                return None;
+            }
             Token::PlusPlus
                 if paren_depth == 0
                     && bracket_depth == 0
@@ -950,6 +1115,30 @@ pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => true,
         _ => false,
+    }
+}
+
+/// Returns whether an update's array base is one whose single dimension gets an index snapshot.
+///
+/// A local, a property, or a static property is written by the statement itself, so its key
+/// can be captured before the read. Deeper places keep their own nested-write handling.
+pub(crate) fn update_dimension_base_is_snapshotted(array: &Expr) -> bool {
+    matches!(
+        array.kind,
+        ExprKind::Variable(_) | ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+    )
+}
+
+/// Returns whether an update must capture an index before its read and write halves.
+pub(crate) fn update_index_needs_snapshot(index: &Expr) -> bool {
+    match &index.kind {
+        ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null => false,
+        ExprKind::Variable(name) if crate::names::is_generated_local_name(name) => false,
+        _ => true,
     }
 }
 
@@ -1063,6 +1252,8 @@ pub(crate) fn lower_postfix_incdec_assignment(
         return lower_effectful_postfix_assignment(lhs_expr, op, one, span);
     }
 
+    let mut lowerer = EffectfulTargetLowerer::new(span);
+    let lhs_expr = lowerer.snapshot_update_dimension(lhs_expr);
     let value = assignment_value(lhs_expr.clone(), op, one, span);
     let kind = match lhs_expr.kind {
         ExprKind::ArrayAccess { array, index } => match array.kind {
@@ -1097,7 +1288,7 @@ pub(crate) fn lower_postfix_incdec_assignment(
         _ => return Err(CompileError::new(span, "Invalid increment target")),
     };
 
-    Ok(Stmt::new(kind, span))
+    Ok(lowerer.finish_if_used(kind, span))
 }
 
 /// Lowers a compound static property assignment where the target cannot be replayed safely.
@@ -1201,12 +1392,37 @@ impl EffectfulTargetLowerer {
         Expr::new(ExprKind::Variable(name), self.span)
     }
 
+    /// Captures a mutable index once for both halves of an update.
+    ///
+    /// Covers one dimension of a local, property, or static-property array: the read reports a
+    /// float key's conversion, and the write must land on that same key even when a diagnostic
+    /// handler reassigns the index variable in between.
+    fn snapshot_update_dimension(&mut self, target: Expr) -> Expr {
+        let span = target.span;
+        match target.kind {
+            ExprKind::ArrayAccess { array, index }
+                if update_dimension_base_is_snapshotted(&array) =>
+            {
+                let index = if update_index_needs_snapshot(&index) {
+                    self.stabilize_unconditionally(*index)
+                } else {
+                    *index
+                };
+                Expr::new(ExprKind::ArrayAccess {
+                    array,
+                    index: Box::new(index),
+                }, span)
+            }
+            kind => Expr::new(kind, span),
+        }
+    }
+
     /// Returns a unique synthetic temporary name for this lowered statement.
     fn next_temp_name(&mut self) -> String {
-        let name = format!(
+        let name = crate::names::generated_local_name(&format!(
             "__elephc_compound_{}_{}_{}",
             self.span.line, self.span.col, self.next_temp
-        );
+        ));
         self.next_temp += 1;
         name
     }
@@ -1218,13 +1434,13 @@ impl EffectfulTargetLowerer {
     /// lower it as a fused, in-place append instead of the read/copy/write-back it desugars
     /// to here. `next_temp_name`'s prefix is shared with the `.=` / `+=` desugars, which emit
     /// the same statement shapes, so it cannot serve as that signal. PHP source cannot forge
-    /// either lock: the name is not a legal PHP identifier and `StmtKind::Synthetic` has no
-    /// surface syntax.
+    /// either lock: the name carries `crate::names::GENERATED_LOCAL_MARKER`, whose `#` is not a
+    /// legal PHP identifier character, and `StmtKind::Synthetic` has no surface syntax.
     fn next_nested_append_temp_name(&mut self) -> String {
-        let name = format!(
+        let name = crate::names::generated_local_name(&format!(
             "{}{}_{}_{}",
             NESTED_APPEND_TEMP_PREFIX, self.span.line, self.span.col, self.next_temp
-        );
+        ));
         self.next_temp += 1;
         name
     }

@@ -9,6 +9,52 @@
 
 use super::*;
 
+/// Interns the `Class::property` metadata immediate of a static-property op, first running the
+/// property's run-once default initializer when it has one.
+///
+/// A static default that names a class only the run time knows is moved into
+/// `__elephc_static_init_<property>` by `crate::lazy_static_defaults`; php evaluates such a default
+/// when the class is first used, which is exactly the first access this guards. Every static
+/// property op interns its name through here, so no access can run ahead of the initializer.
+pub(in crate::ir_lower) fn static_property_ref_data(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+) -> crate::ir::DataId {
+    emit_lazy_static_default_guard(ctx, receiver, property);
+    let name = format!("{}::{}", receiver_name(receiver), property);
+    ctx.intern_string(&name)
+}
+
+/// Calls the receiver class's lazy initializer for `property`, when the class has one.
+fn emit_lazy_static_default_guard(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+) {
+    let Some(class_name) = static_receiver_class_name(ctx, receiver) else {
+        return;
+    };
+    let method = crate::lazy_static_defaults::static_init_method_name(property);
+    let has_initializer = ctx
+        .classes
+        .get(class_name.as_str())
+        .is_some_and(|class_info| class_info.static_methods.contains_key(&method));
+    if !has_initializer {
+        return;
+    }
+    let call = Expr::new(
+        ExprKind::StaticMethodCall {
+            receiver: StaticReceiver::Named(crate::names::Name::unqualified(&class_name)),
+            method,
+            args: Vec::new(),
+        },
+        Span::dummy(),
+    );
+    let result = lower_expr(ctx, &call);
+    crate::ir_lower::ownership::release_if_owned(ctx, result, None);
+}
+
 /// Loads a static property value through a high-level EIR read.
 pub(super) fn load_static_property(
     ctx: &mut LoweringContext<'_, '_>,
@@ -27,8 +73,7 @@ pub(super) fn load_static_property_as(
     php_type: PhpType,
     span: Span,
 ) -> LoweredValue {
-    let name = format!("{}::{}", receiver_name(receiver), property);
-    let data = ctx.intern_string(&name);
+    let data = static_property_ref_data(ctx, receiver, property);
     ctx.emit_value(
         Op::LoadStaticProperty,
         Vec::new(),
@@ -47,8 +92,7 @@ pub(in crate::ir_lower) fn store_static_property(
     value: crate::ir::ValueId,
     span: Span,
 ) {
-    let name = format!("{}::{}", receiver_name(receiver), property);
-    let data = ctx.intern_string(&name);
+    let data = static_property_ref_data(ctx, receiver, property);
     ctx.emit_void(
         Op::StoreStaticProperty,
         vec![value],
@@ -80,7 +124,7 @@ pub(super) fn static_property_type(
         .static_properties
         .iter()
         .find(|(name, _)| name == property)
-        .map(|(_, property_ty)| normalize_value_php_type(property_ty.codegen_repr()))
+        .map(|(_, property_ty)| property_lowering_type(property_ty))
 }
 
 /// Resolves a static receiver to a concrete class name when lexical metadata is available.
@@ -113,7 +157,25 @@ pub(in crate::ir_lower) fn object_property_type(
     ctx.classes
         .get(class_name.trim_start_matches('\\'))?
         .visible_property(property)
-        .map(|(_, (_, property_ty))| normalize_value_php_type(property_ty.clone()))
+        .map(|(_, (_, property_ty))| property_lowering_type(property_ty))
+}
+
+/// Returns a concrete receiver's DECLARED property type, before lowering normalizes it.
+///
+/// `property_lowering_type` collapses `?array` to `Mixed`, which is right for the slot's storage
+/// but loses the array member auto-initialization needs to know what container to make.
+pub(in crate::ir_lower) fn declared_object_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> Option<PhpType> {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object) else {
+        return None;
+    };
+    ctx.classes
+        .get(class_name.trim_start_matches('\\'))?
+        .visible_property(property)
+        .map(|(_, (_, property_ty))| property_ty.clone())
 }
 
 /// Resolves an array-like property type for a receiver declared as bare PHP `object`.
@@ -177,6 +239,22 @@ pub(in crate::ir_lower) fn generic_object_array_property_type(
         });
     }
     Some(PhpType::Mixed)
+}
+
+/// Preserves boxed PHP array metadata until statement lowering selects its mutation path.
+///
+/// A nullable object (`?WeakMap`, `?SplObjectStorage`) keeps its declared union too: its boxed
+/// representation is `Mixed`, which routed `$this->map[$object] = $v` to the Mixed array-storage
+/// path and hashed the object as a key instead of calling `offsetSet()`.
+fn property_lowering_type(php_type: &PhpType) -> PhpType {
+    let nullable_object = matches!(php_type, PhpType::Union(members)
+        if members.iter().any(|member| matches!(member, PhpType::Object(_)))
+            && members.iter().all(|member| matches!(member, PhpType::Object(_) | PhpType::Void)));
+    if php_type.is_php_array() || nullable_object {
+        php_type.clone()
+    } else {
+        normalize_value_php_type(php_type.codegen_repr())
+    }
 }
 
 /// Returns true when a property type uses concrete indexed-array storage.

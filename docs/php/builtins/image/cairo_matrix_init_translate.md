@@ -1,8 +1,8 @@
 ---
 title: "cairo_matrix_init_translate()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates a matrix that translates by the given x and y offsets."
 sidebar:
-  order: 430
+  order: 431
 ---
 
 ## cairo_matrix_init_translate()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_matrix_init_translate(float $tx, float $ty): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates a matrix that translates by the given x and y offsets.
 
 **Parameters**:
 - `$tx` (`float`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

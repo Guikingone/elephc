@@ -71,6 +71,42 @@ pub(super) fn collect_eval_native_method_attributes(
     }
 }
 
+/// Adds parameter attribute metadata for one class's methods to eval registration.
+///
+/// A parameter's attributes travel as METHOD attributes under the synthetic member name
+/// `method#index` (`#` cannot occur in a PHP method name), which Magician reads back when it
+/// builds the reflected parameters of a compiled method. Without them an interpreted
+/// `ReflectionParameter::getAttributes()` on a compiled method returned nothing: Symfony's
+/// argument resolver never saw `#[CurrentUser]` on a compiled controller, so every admin page of
+/// the demo failed to resolve `$user` instead of redirecting an anonymous visitor to the login.
+pub(super) fn collect_eval_native_parameter_attributes(
+    class_name: &str,
+    class_info: &ClassInfo,
+    registrations: &mut Vec<EvalNativeMemberAttributeRegistration>,
+) {
+    let mut methods = class_info
+        .methods
+        .iter()
+        .chain(class_info.static_methods.iter())
+        .collect::<Vec<_>>();
+    methods.sort_by_key(|(method_name, _)| method_name.as_str());
+    for (method_name, signature) in methods {
+        for (index, groups) in signature.param_attributes.iter().enumerate() {
+            if groups.is_empty() {
+                continue;
+            }
+            collect_eval_native_member_attributes(
+                NATIVE_MEMBER_ATTRIBUTE_METHOD,
+                eval_native_method_declaring_class(class_name, class_info, method_name),
+                &format!("{}#{}", method_name, index),
+                &crate::types::collect_attribute_names(groups),
+                &crate::types::collect_attribute_args(groups),
+                registrations,
+            );
+        }
+    }
+}
+
 /// Adds property attribute metadata for one class to eval registration.
 pub(super) fn collect_eval_native_property_attributes(
     class_name: &str,
@@ -217,6 +253,23 @@ pub(super) fn collect_eval_native_static_property_defaults(
     }
 }
 
+/// Formats a declared property type for eval registration.
+///
+/// The checker lowers a `Closure` hint to `callable`, and php forbids `callable` as a property
+/// type, so on a property it can only have been `Closure`. Publishing `callable` made every
+/// interpreted subclass that redeclares the property (Laravel Prompts' `TextareaPrompt` promotes
+/// `public ?Closure $transform` over `Prompt`'s) fail php's invariant-type check, and the class
+/// could not be declared.
+fn eval_native_property_type_spec(php_type: &PhpType) -> Option<String> {
+    let spec = eval_native_php_type_spec(php_type, false)?;
+    Some(
+        spec.split('|')
+            .map(|member| if member == "callable" { "Closure" } else { member })
+            .collect::<Vec<_>>()
+            .join("|"),
+    )
+}
+
 /// Adds declared instance-property type metadata for one class to eval registration.
 pub(super) fn collect_eval_native_instance_property_types(
     class_name: &str,
@@ -227,7 +280,7 @@ pub(super) fn collect_eval_native_instance_property_types(
         if !class_info.property_slot_is_declared(slot, property_name) {
             continue;
         }
-        let Some(type_spec) = eval_native_php_type_spec(php_type, false) else {
+        let Some(type_spec) = eval_native_property_type_spec(php_type) else {
             continue;
         };
         registrations.push(EvalNativePropertyTypeRegistration {
@@ -256,7 +309,7 @@ pub(super) fn collect_eval_native_static_property_types(
         {
             continue;
         }
-        let Some(type_spec) = eval_native_php_type_spec(php_type, false) else {
+        let Some(type_spec) = eval_native_property_type_spec(php_type) else {
             continue;
         };
         registrations.push(EvalNativePropertyTypeRegistration {
@@ -298,18 +351,19 @@ pub(super) fn eval_native_static_property_declaring_class<'a>(
         .unwrap_or(reflected_class)
 }
 
-/// Returns the class name that declares one AOT method metadata row.
+/// Returns the class name that declares one AOT method metadata row, reading the declaring-class
+/// maps before the implementing ones so attributes are keyed by the class eval reflection reports.
 pub(super) fn eval_native_method_declaring_class<'a>(
     reflected_class: &'a str,
     class_info: &'a ClassInfo,
     method_name: &str,
 ) -> &'a str {
     class_info
-        .method_impl_classes
+        .method_declaring_classes
         .get(method_name)
-        .or_else(|| class_info.static_method_impl_classes.get(method_name))
-        .or_else(|| class_info.method_declaring_classes.get(method_name))
         .or_else(|| class_info.static_method_declaring_classes.get(method_name))
+        .or_else(|| class_info.method_impl_classes.get(method_name))
+        .or_else(|| class_info.static_method_impl_classes.get(method_name))
         .map(String::as_str)
         .unwrap_or(reflected_class)
 }

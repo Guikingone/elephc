@@ -1,8 +1,8 @@
 ---
 title: "gc_disable()"
-description: "Deactivates the circular reference collector."
+description: "Disables automatic collection of circular references."
 sidebar:
-  order: 625
+  order: 633
 ---
 
 ## gc_disable()
@@ -11,7 +11,7 @@ sidebar:
 function gc_disable(): void
 ```
 
-Deactivates the circular reference collector.
+Disables automatic collection of circular references.
 
 **Parameters**: none.
 
@@ -20,9 +20,9 @@ Deactivates the circular reference collector.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/gc.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/gc.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/gc_disable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/gc_disable.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -142,6 +142,13 @@ pub(super) fn collect_expr_reads(
             }
         }
         ExprKind::ArrayReference(value) => collect_expr_reads(value, scope, warnings),
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    collect_expr_reads(expr, scope, warnings);
+                }
+            }
+        }
         ExprKind::Match {
             subject,
             arms,

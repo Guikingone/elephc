@@ -53,6 +53,7 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 pub use alias_metadata::*;
 pub use call_frames::*;
 pub(crate) use callable_descriptor::*;
+pub use class_metadata::EvalClassMethodRef;
 pub use classlike_objects::{
     eval_array_iterator_class_is_a, eval_builtin_class_is_a, EvalArrayIteratorState,
 };
@@ -60,6 +61,7 @@ pub use closure_metadata::*;
 pub use reflection_registry::EvalReflectionKind;
 pub use generators::*;
 pub use core::*;
+pub use functions::{EvalNativeGlobalConstant, EvalNativeUserConstant};
 pub(crate) use global_registry::*;
 pub use native_defaults::*;
 pub use native_metadata::NativeClassConstantDefault;
@@ -69,7 +71,7 @@ pub use reference_metadata::*;
 pub(crate) use request_includes::{
     install_native_include_hooks, request_include_marks, NativeIncludeHooks,
 };
-pub(crate) use request_statics::reset_request_statics;
+pub(crate) use request_statics::{reset_request_statics, with_request_strtok};
 
 #[cfg(not(test))]
 static GLOBAL_EVAL_CLASSES: OnceLock<Mutex<GlobalEvalClassRegistry>> = OnceLock::new();

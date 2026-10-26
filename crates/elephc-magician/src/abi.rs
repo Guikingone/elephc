@@ -34,6 +34,12 @@ pub const SCOPE_FLAG_NATIVE_REF: u32 = 1 << 5;
 /// Compiled scope entry names native global storage rather than a copied value.
 pub const SCOPE_FLAG_NATIVE_GLOBAL: u32 = 1 << 6;
 
+/// Method-call argument-pack count-word flag: the last argument is the compiled callee's hidden
+/// `func_get_args()` collector, whose elements are the surplus arguments to splice in.
+pub const EVAL_ARG_PACK_SURPLUS_COLLECTOR: usize = 1 << 62;
+/// Method-call argument-pack count-word flag: that collector opens with the actual argument count.
+pub const EVAL_ARG_PACK_COLLECTOR_COUNTS: usize = 1 << 61;
+
 /// Result storage written by `__elephc_eval_execute`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

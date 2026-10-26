@@ -1,16 +1,16 @@
 ---
-title: "xml_set_character_data_handler() — internals"
+title: "xml_set_character_data_handler() - internals"
 description: "Compiler internals for xml_set_character_data_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 991
+  order: 1079
 ---
 
-## `xml_set_character_data_handler()` — internals
+## `xml_set_character_data_handler()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/xml/xml_set_character_data_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/xml/xml_set_character_data_handler.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -1,11 +1,11 @@
 ---
-title: "xmlwriter_open_uri() — internals"
+title: "xmlwriter_open_uri() - internals"
 description: "Compiler internals for xmlwriter_open_uri(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1014
+  order: 1102
 ---
 
-## `xmlwriter_open_uri()` — internals
+## `xmlwriter_open_uri()` - internals
 
 ## Where it lives
 

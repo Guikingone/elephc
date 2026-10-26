@@ -20,6 +20,18 @@ use super::scan::tokenize;
 use super::TokenKind;
 use crate::errors::EvalParseError;
 
+/// Preserves hexadecimal/octal bytes and keeps private-use source characters distinct from byte markers.
+#[test]
+fn string_literal_bytes_preserve_raw_escapes_and_private_use_text() {
+    for (source, expected) in [(r#""\xFF\377\xC3\xA9";"#.to_owned(), vec![0xff, 0xff, 0xc3, 0xa9]),
+        ("\"\u{e000}\u{e0ff}\";".to_owned(), "\u{e000}\u{e0ff}".as_bytes().to_vec()),
+        ("'\u{e000}\u{e0ff}';".to_owned(), "\u{e000}\u{e0ff}".as_bytes().to_vec())] {
+        let tokens = kinds(&source);
+        let [TokenKind::String(value), TokenKind::Semicolon, TokenKind::Eof] = tokens.as_slice() else { panic!("unexpected tokens: {tokens:?}"); };
+        assert_eq!(elephc_builtin_contract::string_literal::literal_bytes(value), expected);
+    }
+}
+
 /// Tokenizes a fragment and returns the token kinds, failing the test on a parse error.
 fn kinds(source: &str) -> Vec<TokenKind> {
     tokenize(source)
@@ -70,10 +82,16 @@ fn numeric_literals_preserve_php_radices_and_float_forms() {
 }
 
 /// Verifies malformed radix digits and separator placement are rejected by eval parsing.
+///
+/// Only the invalid legacy octal is a LEXICAL error in php ("Invalid numeric literal"); the
+/// others lex as two tokens and the parser refuses the second (PHP 8.5: `0o78;` is
+/// `unexpected integer "8"`, `0xfg;` is `unexpected identifier "g"`).
 #[test]
 fn malformed_numeric_literals_are_refused() {
-    for source in ["078;", "0o78;", "0xfg;", "0b12;", "1__0;"] {
-        assert_eq!(error(source), EvalParseError::InvalidNumber, "{source}");
+    assert_eq!(error("078;"), EvalParseError::InvalidNumber);
+    for source in ["0o78;", "0xfg;", "0b12;", "1__0;"] {
+        assert!(tokenize(source).is_ok(), "{source} lexes as two tokens");
+        assert!(crate::parser::parse_fragment(source.as_bytes()).is_err(), "{source}");
     }
 }
 
@@ -538,10 +556,10 @@ fn numeric_escapes_match_php_byte_for_byte() {
 ///
 /// `bin2hex("\xFF")` is `ff` under `php -n` 8.5.6: the literal is one byte, not the two
 /// bytes UTF-8 would need, so the scanner cannot store it as a `char` and hands the parser
-/// the private-use marker for it instead. `\377` names the same byte.
+/// the shared literal byte marker (U+E000 + byte) for it instead. `\377` names the same byte.
 #[test]
-fn high_byte_escapes_become_binary_markers() {
-    let marker = char::from_u32(0xF_0000 + 0xFF).expect("marker is a valid code point");
+fn high_byte_escapes_become_byte_markers() {
+    let marker = char::from_u32(0xE000 + 0xFF).expect("marker is a valid code point");
     for source in [r#""\xFF";"#, r#""\377";"#] {
         assert_eq!(
             kinds(source),
@@ -566,7 +584,7 @@ fn overflowing_octal_escape_keeps_its_low_byte() {
         kinds(r#""\400";"#),
         vec![string("\0"), TokenKind::Semicolon, TokenKind::Eof]
     );
-    let marker = char::from_u32(0xF_0000 + 0xFF).expect("marker is a valid code point");
+    let marker = char::from_u32(0xE000 + 0xFF).expect("marker is a valid code point");
     assert_eq!(
         kinds(r#""\777";"#),
         vec![
@@ -585,7 +603,7 @@ fn overflowing_octal_escape_keeps_its_low_byte() {
 fn surrogate_code_point_escape_is_encoded_as_bytes() {
     let expected: String = [0xED, 0xA0, 0x80]
         .into_iter()
-        .map(|byte: u32| char::from_u32(0xF_0000 + byte).expect("marker is a valid code point"))
+        .map(|byte: u32| char::from_u32(0xE000 + byte).expect("marker is a valid code point"))
         .collect();
     assert_eq!(
         kinds(r#""\u{D800}";"#),
@@ -606,7 +624,7 @@ fn malformed_code_point_escapes_are_refused() {
         r#""\u{41";"#,
         r#""\u{110000}";"#,
     ] {
-        assert_eq!(error(source), EvalParseError::UnexpectedToken, "{source}");
+        assert_eq!(error(source), EvalParseError::InvalidUtf8, "{source}");
     }
 }
 
@@ -959,4 +977,125 @@ fn nested_literal_inside_braces_is_captured_verbatim() {
             TokenKind::Eof,
         ]
     );
+}
+
+/// Pins every base PHP writes an integer literal in.
+///
+/// The eval lexer used to read decimal digits only. `0700` therefore tokenized as the integer
+/// SEVEN HUNDRED rather than 448, and `0x1F` / `0b101` / `0o17` / `1_000` made the whole
+/// fragment invalid. A plain `eval('return mkdir($p, 0700, true);')` reached both: the mode
+/// arrived as 700, which `mkdir(2)` then masked into the nonsense permissions `0254`.
+///
+/// Every expectation is the host PHP 8.5.10 value for the same literal.
+#[test]
+fn integer_literals_are_read_in_every_php_base() {
+    assert_eq!(kinds("0700"), vec![TokenKind::Int(448), TokenKind::Eof]);
+    assert_eq!(kinds("0o17"), vec![TokenKind::Int(15), TokenKind::Eof]);
+    assert_eq!(kinds("0O17"), vec![TokenKind::Int(15), TokenKind::Eof]);
+    assert_eq!(kinds("0x1F"), vec![TokenKind::Int(31), TokenKind::Eof]);
+    assert_eq!(kinds("0X1f"), vec![TokenKind::Int(31), TokenKind::Eof]);
+    assert_eq!(kinds("0b101"), vec![TokenKind::Int(5), TokenKind::Eof]);
+    assert_eq!(kinds("0B101"), vec![TokenKind::Int(5), TokenKind::Eof]);
+    assert_eq!(kinds("42"), vec![TokenKind::Int(42), TokenKind::Eof]);
+    assert_eq!(kinds("0"), vec![TokenKind::Int(0), TokenKind::Eof]);
+}
+
+/// Pins PHP's `_` numeric separators, which are legal only BETWEEN digits.
+#[test]
+fn numeric_separators_are_dropped_between_digits() {
+    assert_eq!(kinds("1_000"), vec![TokenKind::Int(1000), TokenKind::Eof]);
+    assert_eq!(kinds("0xFF_FF"), vec![TokenKind::Int(65535), TokenKind::Eof]);
+    assert_eq!(kinds("0b1010_1010"), vec![TokenKind::Int(170), TokenKind::Eof]);
+    assert_eq!(kinds("1_000.5"), vec![TokenKind::Float(1000.5), TokenKind::Eof]);
+}
+
+/// Pins the float spellings, including the exponent the decimal-only scanner never read.
+#[test]
+fn float_literals_keep_their_fraction_and_exponent() {
+    assert_eq!(kinds("1.5"), vec![TokenKind::Float(1.5), TokenKind::Eof]);
+    assert_eq!(kinds("1e3"), vec![TokenKind::Float(1000.0), TokenKind::Eof]);
+    assert_eq!(kinds("1E3"), vec![TokenKind::Float(1000.0), TokenKind::Eof]);
+    assert_eq!(kinds("1.5e-2"), vec![TokenKind::Float(0.015), TokenKind::Eof]);
+    assert_eq!(kinds("2e+2"), vec![TokenKind::Float(200.0), TokenKind::Eof]);
+}
+
+/// An integer literal past `PHP_INT_MAX` becomes a float in PHP rather than an error, in
+/// every base.
+#[test]
+fn oversized_integer_literals_become_floats() {
+    assert_eq!(
+        kinds("9223372036854775808"),
+        vec![TokenKind::Float(9223372036854775808.0), TokenKind::Eof]
+    );
+    assert_eq!(
+        kinds("0xFFFFFFFFFFFFFFFFF"),
+        vec![TokenKind::Float(295147905179352825855.0), TokenKind::Eof]
+    );
+}
+
+/// Pins the malformed literals PHP refuses, which the radix support must refuse too.
+///
+/// `078` is the one that mattered: `8` is not an octal digit, so the legacy-octal conversion
+/// reached a `to_digit(8)` that cannot answer and PANICKED the interpreter. PHP reports
+/// "Invalid numeric literal" for those two; every other form here lexes as a literal followed
+/// by another token, and php's parser refuses that token in source order.
+#[test]
+fn malformed_numeric_literals_without_terminator_are_refused() {
+    assert_eq!(error("078"), EvalParseError::InvalidNumber);
+    assert_eq!(error("099"), EvalParseError::InvalidNumber);
+    for source in ["0o78", "0x1G", "0b12", "123abc", "0x", "1e", "1.5e", "9d"] {
+        assert!(tokenize(source).is_ok(), "{source} lexes as two tokens");
+        assert!(crate::parser::parse_fragment(format!("{source};").as_bytes()).is_err(), "{source}");
+    }
+    assert_eq!(kinds("1e3;")[0], TokenKind::Float(1000.0));
+    assert_eq!(kinds("1e-3;")[0], TokenKind::Float(0.001));
+    assert_eq!(kinds("0x1f;")[0], TokenKind::Int(31));
+}
+
+/// `\u{…}` is decoded to its codepoint's UTF-8 bytes, as reference PHP 8.5.10 decodes it.
+///
+/// The eval lexer had no `\u` arm and kept the six characters `\u{e9}`. Without a `{` the
+/// escape stays literal; an empty, non-hex or out-of-range body is refused.
+#[test]
+fn a_unicode_escape_is_decoded_to_utf8() {
+    assert_eq!(kinds("\"\\u{e9}\";")[0], string("é"));
+    assert_eq!(kinds("\"\\u{1F600}!\";")[0], string("😀!"));
+    assert_eq!(kinds("\"\\u41\";")[0], string("\\u41"));
+    assert_eq!(error("\"\\u{}\";"), EvalParseError::InvalidUtf8);
+    assert_eq!(error("\"\\u{zz}\";"), EvalParseError::InvalidUtf8);
+    assert_eq!(error("\"\\u{110000}\";"), EvalParseError::InvalidUtf8);
+}
+
+/// A `?>` in a line comment inside `{$…}` is refused, as reference PHP refuses it.
+///
+/// It ends the comment, then PHP mode, in the middle of the expression: PHP 8.5.10 raises a
+/// parse error for `"{$a[// ?>⏎"k"]}"`, and the eval lexer evaluated it to `v` (PR #968 review,
+/// two reviewers). A `?>` elsewhere in the capture is still an ordinary pair of characters.
+#[test]
+fn a_close_tag_in_a_line_comment_inside_an_interpolation_is_refused() {
+    assert_eq!(error("\"{$a[// ?>\n\"k\"]}\";"), EvalParseError::UnexpectedToken);
+    assert_eq!(error("\"{$a[# ?>\n\"k\"]}\";"), EvalParseError::UnexpectedToken);
+    assert_eq!(kinds("\"{$a[/* ?> */\"k\"]}\";"), kinds(r#""{$a["k"]}";"#));
+}
+
+/// A comment inside `{$…}` is inert to the eval lexer too: the fragment lexes exactly as it does
+/// without the comment. A quote or brace in the comment used to end the capture or open a string.
+///
+/// The empty comments pin a second defect: the capture skipped the first byte of a block
+/// comment's body, which for `/**/` is the closing star, so the scan ran past `*/` and the
+/// fragment failed to parse (PR #968 review; reference PHP 8.5.10 prints `v`).
+#[test]
+fn a_comment_inside_a_complex_interpolation_is_inert() {
+    let plain = kinds(r#""{$a["k"]}";"#);
+    for source in [
+        r#""{$a[/**/"k"]}";"#,
+        r#""{$a[/***/"k"]}";"#,
+        r#""{$a[/*/ */"k"]}";"#,
+        r#""{$a[/* " */ "k"]}";"#,
+        r#""{$a[/* } { */ "k"]}";"#,
+        "\"{$a[ // \" } '\n\"k\"]}\";",
+        "\"{$a[ # \" }\n\"k\"]}\";",
+    ] {
+        assert_eq!(kinds(source), plain, "{source}");
+    }
 }

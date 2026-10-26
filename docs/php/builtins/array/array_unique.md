@@ -8,22 +8,23 @@ sidebar:
 ## array_unique()
 
 ```php
-function array_unique(array $array): array
+function array_unique(array $array, int $flags = 2): array
 ```
 
 Removes duplicate values from an array.
 
 **Parameters**:
 - `$array` (`array`)
+- `$flags` (`int`), default `2`, optional
 
 **Returns**: `array`
 
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_unique.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_unique.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_unique.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_unique.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

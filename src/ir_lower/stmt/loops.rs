@@ -23,7 +23,7 @@ pub(super) fn lower_while(
     branch_to(ctx, header);
 
     ctx.builder.position_at_end(header);
-    let cond = lower_expr(ctx, condition);
+    let cond = with_loop_frame(ctx, exit, header, |ctx| lower_expr(ctx, condition));
     let cond = ctx.truthy_consuming(cond, Some(condition.span));
     // The condition runs before both the body and the ordinary loop exit. Keep its
     // flow-sensitive facts separate from assignments made later in the body: otherwise a
@@ -47,7 +47,11 @@ pub(super) fn lower_while(
         break_block: exit,
         continue_block: header,
         cleanup: None,
+        source_owner: None,
         source_pin: None,
+        iterator_owner: None,
+        iterator_cleanup: None,
+        receiver_pin: None,
     });
     lower_block(ctx, body);
     let body_exit_types = ctx.local_types_snapshot();
@@ -123,7 +127,11 @@ pub(super) fn lower_do_while(
         break_block: exit,
         continue_block: cond_block,
         cleanup: None,
+        source_owner: None,
         source_pin: None,
+        iterator_owner: None,
+        iterator_cleanup: None,
+        receiver_pin: None,
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
@@ -131,7 +139,7 @@ pub(super) fn lower_do_while(
     branch_to(ctx, cond_block);
 
     ctx.builder.position_at_end(cond_block);
-    let cond = lower_expr(ctx, condition);
+    let cond = with_loop_frame(ctx, exit, cond_block, |ctx| lower_expr(ctx, condition));
     let cond = ctx.truthy_consuming(cond, Some(condition.span));
     ctx.builder.terminate(Terminator::CondBr {
         cond: cond.value,
@@ -201,7 +209,7 @@ fn lower_for_once(
 
     ctx.builder.position_at_end(header);
     let cond = if let Some(condition) = condition {
-        let cond = lower_expr(ctx, condition);
+        let cond = with_loop_frame(ctx, exit, update_block, |ctx| lower_expr(ctx, condition));
         ctx.truthy_consuming(cond, Some(condition.span))
     } else {
         emit_const_bool(ctx, true, None)
@@ -221,7 +229,11 @@ fn lower_for_once(
         break_block: exit,
         continue_block: update_block,
         cleanup: None,
+        source_owner: None,
         source_pin: None,
+        iterator_owner: None,
+        iterator_cleanup: None,
+        receiver_pin: None,
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
@@ -230,10 +242,38 @@ fn lower_for_once(
 
     ctx.builder.position_at_end(update_block);
     if let Some(update) = update {
-        lower_stmt(ctx, update);
+        with_loop_frame(ctx, exit, update_block, |ctx| lower_stmt(ctx, update));
     }
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.reassert_widened_local_storage_types();
     ctx.clear_static_callable_locals();
+}
+
+/// Lowers a loop's condition or update with the loop frame pushed, as a body statement would be.
+///
+/// These run on every back-edge, so a local first assigned in them (`while (($t = next()) !==
+/// null)`) holds the previous iteration's value when the store executes again. The store's
+/// liveness test treats an uninitialized slot inside a loop as possibly occupied; with the frame
+/// pushed only after the condition, the first store saw straight-line flow and skipped the
+/// release, leaking one value per call (a box per `array_pop()` loop over an array of objects).
+fn with_loop_frame<R>(
+    ctx: &mut LoweringContext<'_, '_>,
+    break_block: BlockId,
+    continue_block: BlockId,
+    lower: impl FnOnce(&mut LoweringContext<'_, '_>) -> R,
+) -> R {
+    ctx.loop_stack.push(LoopFrame {
+        break_block,
+        continue_block,
+        cleanup: None,
+        source_owner: None,
+        source_pin: None,
+        iterator_owner: None,
+        iterator_cleanup: None,
+        receiver_pin: None,
+    });
+    let result = lower(ctx);
+    ctx.loop_stack.pop();
+    result
 }

@@ -19,6 +19,8 @@
 //! - x86_64 heap headers carry `X86_64_HEAP_MAGIC_HI32` ("ELPH") in the high 32 bits. Every
 //!   stamp must go through `x86_64_heap_kind_word`; every magic check must compare against
 //!   `X86_64_HEAP_MAGIC_HI32`. Local copies of either constant are forbidden.
+//! - Uniform heap kinds are a single numeric namespace on both architectures. New managed
+//!   shapes must be registered here so the compile-time uniqueness gate catches collisions.
 //! - The compact Throwable payload's creation-line slot lives here for the same reason as the
 //!   heap-header word: it is written by a dozen emitters across `codegen` and read by the runtime
 //!   emitters in `codegen_support::runtime`, which cannot see `codegen`. Every allocator of that
@@ -86,61 +88,131 @@ pub(crate) const TAGGED_SCALAR_TAG_NULL: i64 = 8;
 /// This is an internal array-storage tag, not a boxed Mixed runtime value tag.
 pub(crate) const TAGGED_SCALAR_ARRAY_VALUE_TYPE: i64 = 11;
 
-/// Property-descriptor tag meaning "this slot is an inline `{payload, tag}` tagged scalar".
+/// Value tag a class property descriptor (`_class_vd_desc_*`, `_class_prop_desc_*`,
+/// `_class_json_desc_*`, `_class_serprop_*`) carries for an inline `{payload, tag}` slot.
 ///
-/// The per-class descriptor tables (`_class_serprop_*`, `_class_vd_desc_*`,
-/// `_class_prop_desc_*`, `_class_json_desc_*`) normally carry the property's STATIC runtime
-/// value tag, because a declared type pins one shape for the slot's whole life. A
-/// `PhpType::TaggedScalar` property (`?int`, `int|null`) is the one declared type that does
-/// not: its slot carries the payload at `offset` and its OWN runtime value tag — 0 for int,
-/// 8 for null — at `offset + 8`. There is therefore no single static tag that describes it,
-/// and every value it must be one of the reserved tags 0..=10 could name, so the descriptor
-/// gets this out-of-band marker instead. It never reaches a value consumer: each descriptor
-/// reader folds it away with `emit_resolve_prop_desc_tag` the moment the row and the slot
-/// have both been loaded.
-pub(crate) const PROP_DESC_TAG_TAGGED_SCALAR: i64 = 11;
+/// A `?int` property stores its runtime tag in the slot's HIGH word, so no single static tag
+/// describes it: `0` would render a null as the sentinel integer, and `7` (the tag every other
+/// union gets) makes the walker dereference the integer payload as a Mixed cell pointer — the
+/// segfault `var_dump($objectWithNullableInt)` hit (#1503). Walkers replace this marker with
+/// the slot's high word before dispatching, via [`emit_resolve_tagged_scalar_property_tag`].
+/// It is deliberately outside the runtime value tag range (0-10), and the GC descriptor never
+/// carries it: there a tagged slot is `0`, since it owns no heap reference.
+pub(crate) const TAGGED_SCALAR_PROPERTY_TAG: u64 = 12;
 
-/// Folds `PROP_DESC_TAG_TAGGED_SCALAR` out of a just-loaded property descriptor row.
+/// Flag OR-ed into a class property descriptor's value tag when the slot is REFERENCE-BOUND.
 ///
-/// `tag_reg` holds the descriptor row's tag and `hi_reg` the slot's high word. When the row
-/// marks an inline tagged scalar, the slot's high word IS the runtime value tag, so it moves
-/// into `tag_reg` and `hi_reg` is cleared — leaving exactly the `(tag, lo, hi)` triple a
-/// plain slot of that runtime type would have produced. Any other tag passes through
-/// untouched, so a reader can call this unconditionally right after loading the row.
+/// A property that took part in `$r = &$o->p` stores a pointer to a managed reference cell
+/// instead of the value, and the cell holds the value in the DECLARED type's representation
+/// (`{payload, high word}` at offsets 0 and 8). The descriptor used to say `7` (Mixed) for such
+/// a slot, so every object walker (`(array)`, `get_object_vars`, `foreach`, `var_export`,
+/// `var_dump`, `print_r`, `serialize`, `json_encode`) read the cell pointer as a boxed Mixed
+/// and saw garbage: `(array) $o` answered `null` for the property and `var_export` printed an
+/// empty object. The descriptor now carries the declared type's real tag plus this flag, and a
+/// walker folds it out with [`emit_deref_reference_property_slot`] right after loading the row.
+/// It sits above the runtime value tag range (0-12), like [`TAGGED_SCALAR_PROPERTY_TAG`].
+pub(crate) const REFERENCE_PROPERTY_TAG_FLAG: u64 = 0x100;
+
+/// Replaces a reference-bound slot's words with the value its cell holds.
 ///
-/// Branch-free on purpose: these readers sit inside descriptor walk loops whose labels are
-/// global (one runtime emission per program), so a conditional would need a fresh unique
-/// label per call site. `scratch_reg` is clobbered on x86_64 only; AArch64 uses `xzr`.
-///
-/// MUST run AFTER the caller's `UNINITIALIZED_TYPED_PROPERTY_SENTINEL` check, which reads
-/// the same high word: an uninitialized tagged scalar carries that sentinel in its tag word,
-/// and folding first would hide it behind a nonsense runtime tag.
-pub(crate) fn emit_resolve_prop_desc_tag(
+/// `tag_reg` holds the descriptor tag, `lo_reg`/`hi_reg` the slot's two words as loaded, and
+/// `tmp_reg` is any free register. A descriptor tag without [`REFERENCE_PROPERTY_TAG_FLAG`]
+/// passes through untouched, so a walker runs this right after loading a row and keeps its
+/// existing `(tag, low word, high word)` dispatch. Run it BEFORE
+/// [`emit_resolve_tagged_scalar_property_tag`]: a `?int` reference cell carries its runtime tag
+/// in the cell's high word.
+pub(crate) fn emit_deref_reference_property_slot(
     emitter: &mut Emitter,
     tag_reg: &str,
+    lo_reg: &str,
     hi_reg: &str,
-    scratch_reg: &str,
+    tmp_reg: &str,
 ) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, #{}", tag_reg, PROP_DESC_TAG_TAGGED_SCALAR)); // does this descriptor row describe an inline tagged-scalar slot?
-            emitter.instruction(&format!("csel {}, {}, {}, eq", tag_reg, hi_reg, tag_reg)); // a tagged scalar carries its own runtime value tag in the slot's high word
-            emitter.instruction(&format!("csel {}, xzr, {}, eq", hi_reg, hi_reg)); // and no second payload word once that tag has been consumed
+            emitter.instruction(&format!("tbz {}, #8, 1f", tag_reg));           // a plain slot keeps its own words
+            emitter.instruction(&format!("and {}, {}, #0xff", tag_reg, tag_reg)); // fold the reference flag out of the descriptor tag
+            emitter.instruction(&format!("mov {}, {}", tmp_reg, lo_reg));       // the slot's low word is the reference-cell pointer
+            emitter.instruction(&format!("ldr {}, [{}]", lo_reg, tmp_reg));     // load the cell's payload word
+            emitter.instruction(&format!("ldr {}, [{}, #8]", hi_reg, tmp_reg)); // load the cell's high word
+            emitter.label("1");
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, {}", tag_reg, PROP_DESC_TAG_TAGGED_SCALAR)); // does this descriptor row describe an inline tagged-scalar slot?
-            emitter.instruction(&format!("mov {}, 0", scratch_reg));            // materialize the cleared high word without disturbing the comparison flags
-            emitter.instruction(&format!("cmove {}, {}", tag_reg, hi_reg));     // a tagged scalar carries its own runtime value tag in the slot's high word
-            emitter.instruction(&format!("cmove {}, {}", hi_reg, scratch_reg)); // and no second payload word once that tag has been consumed
+            emitter.instruction(&format!("test {}, 0x100", tag_reg));           // is this a reference-bound slot?
+            emitter.instruction("jz 1f");                                       // a plain slot keeps its own words
+            emitter.instruction(&format!("and {}, 0xff", tag_reg));             // fold the reference flag out of the descriptor tag
+            emitter.instruction(&format!("mov {}, {}", tmp_reg, lo_reg));       // the slot's low word is the reference-cell pointer
+            emitter.instruction(&format!("mov {}, QWORD PTR [{}]", lo_reg, tmp_reg)); // load the cell's payload word
+            emitter.instruction(&format!("mov {}, QWORD PTR [{} + 8]", hi_reg, tmp_reg)); // load the cell's high word
+            emitter.label("1");
         }
     }
 }
 
+/// Uniform low-byte heap kinds shared by allocation producers, ownership dispatchers and GC.
+///
+/// These values describe top-level managed allocations. They are unrelated to Mixed runtime
+/// tags, indexed-array value types and resource subtypes, which use separate namespaces.
+pub(crate) const STRING_HEAP_KIND: u32 = 1;
+pub(crate) const ARRAY_HEAP_KIND: u32 = 2;
+pub(crate) const HASH_HEAP_KIND: u32 = 3;
+pub(crate) const OBJECT_HEAP_KIND: u32 = 4;
+pub(crate) const MIXED_HEAP_KIND: u32 = 5;
+pub(crate) const THROWABLE_HEAP_KIND: u32 = 6;
+/// Heap-backed `.` result that remains transient until `__rt_str_persist` adopts it.
+pub(crate) const CONCAT_TEMP_HEAP_KIND: u32 = 7;
+/// Independently owned reference cell whose payload descriptor occupies bits 8 through 14.
+pub(crate) const REFERENCE_CELL_HEAP_KIND: u32 = 8;
+
+/// The complete registered top-level heap-kind namespace.
+const MANAGED_HEAP_KINDS: [u32; 9] = [
+    STRING_HEAP_KIND,
+    ARRAY_HEAP_KIND,
+    HASH_HEAP_KIND,
+    OBJECT_HEAP_KIND,
+    MIXED_HEAP_KIND,
+    THROWABLE_HEAP_KIND,
+    CONCAT_TEMP_HEAP_KIND,
+    REFERENCE_CELL_HEAP_KIND,
+    GLOBAL_REF_CELL_HEAP_KIND as u32,
+];
+
+/// Reject duplicate heap-kind registrations at compile time. The reference-cell allocator
+/// previously reused concat temporary kind 7, which made generic ownership dispatch inspect a
+/// transient string buffer as a reference cell.
+const _: () = {
+    let mut left = 0;
+    while left < MANAGED_HEAP_KINDS.len() {
+        assert!(MANAGED_HEAP_KINDS[left] > 0 && MANAGED_HEAP_KINDS[left] <= u8::MAX as u32);
+        let mut right = left + 1;
+        while right < MANAGED_HEAP_KINDS.len() {
+            assert!(MANAGED_HEAP_KINDS[left] != MANAGED_HEAP_KINDS[right]);
+            right += 1;
+        }
+        left += 1;
+    }
+};
+
+/// Folds the tagged-scalar marker out of a just-loaded property descriptor row.
+///
+/// Same operation as [`emit_resolve_tagged_scalar_property_tag`]; `_scratch_reg` is accepted for
+/// the older call shape and is not needed.
+pub(crate) fn emit_resolve_prop_desc_tag(
+    emitter: &mut Emitter,
+    tag_reg: &str,
+    hi_reg: &str,
+    _scratch_reg: &str,
+) {
+    emit_resolve_tagged_scalar_property_tag(emitter, tag_reg, hi_reg);
+}
+
+
 /// Heap kind stamped on a request-lifetime global reference cell.
 ///
 /// The uniform dispatcher intentionally treats this private kind as opaque; the owning global
-/// slot and tag-12 array markers release it through `__rt_global_ref_cell_decref`.
-pub(crate) const GLOBAL_REF_CELL_HEAP_KIND: u8 = 8;
+/// slot and tag-12 array markers release it through `__rt_global_ref_cell_decref`. It must not
+/// reuse `REFERENCE_CELL_HEAP_KIND` (8), which the dispatcher releases as a managed cell.
+pub(crate) const GLOBAL_REF_CELL_HEAP_KIND: u8 = 9;
 
 /// Returns the register holding a tagged scalar's tag word; the payload word lives in the
 /// integer result register. AArch64: `x1`. x86_64: `rdx` (mirrors the `Str` second word).
@@ -244,6 +316,27 @@ pub(crate) fn emit_branch_if_tagged_scalar_null(emitter: &mut Emitter, label: &s
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp rdx, {}", TAGGED_SCALAR_TAG_NULL)); // does the tagged scalar carry the runtime null tag?
             emitter.instruction(&format!("je {}", label));                      // branch when the tagged scalar is PHP null
+        }
+    }
+}
+
+/// Replaces a property descriptor's [`TAGGED_SCALAR_PROPERTY_TAG`] in `tag_reg` with the
+/// runtime tag the slot itself carries in its high word, already loaded into `high_word_reg`.
+/// Every other descriptor tag passes through unchanged, so a walker can run this right after
+/// loading a row's tag and keep its existing `(tag, low word, high word)` dispatch.
+pub(crate) fn emit_resolve_tagged_scalar_property_tag(
+    emitter: &mut Emitter,
+    tag_reg: &str,
+    high_word_reg: &str,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {}, #{}", tag_reg, TAGGED_SCALAR_PROPERTY_TAG)); // is this an inline tagged-scalar property slot?
+            emitter.instruction(&format!("csel {}, {}, {}, eq", tag_reg, high_word_reg, tag_reg)); // such a slot carries its runtime tag in its high word
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {}, {}", tag_reg, TAGGED_SCALAR_PROPERTY_TAG)); // is this an inline tagged-scalar property slot?
+            emitter.instruction(&format!("cmove {}, {}", tag_reg, high_word_reg)); // such a slot carries its runtime tag in its high word
         }
     }
 }
@@ -369,11 +462,11 @@ pub(crate) fn emit_throwable_creation_line_unknown(emitter: &mut Emitter, payloa
         Arch::AArch64 => emitter.instruction(&format!(
             "str xzr, [{}, #{}]",
             payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        )), // no user `new` behind this Throwable: the creation line is unknown
+        )),                                                                     // no user `new` behind this Throwable: the creation line is unknown
         Arch::X86_64 => emitter.instruction(&format!(
             "mov QWORD PTR [{} + {}], 0",
             payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        )), // no user `new` behind this Throwable: the creation line is unknown
+        )),                                                                     // no user `new` behind this Throwable: the creation line is unknown
     }
 }
 

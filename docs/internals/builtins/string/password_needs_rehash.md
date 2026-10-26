@@ -1,11 +1,11 @@
 ---
-title: "password_needs_rehash() — internals"
+title: "password_needs_rehash() - internals"
 description: "Compiler internals for password_needs_rehash(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 854
+  order: 947
 ---
 
-## `password_needs_rehash()` — internals
+## `password_needs_rehash()` - internals
 
 ## Where it lives
 

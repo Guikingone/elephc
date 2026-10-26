@@ -1,8 +1,8 @@
 ---
 title: "imagearc()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws an arc of an ellipse."
 sidebar:
-  order: 474
+  order: 475
 ---
 
 ## imagearc()
@@ -11,7 +11,7 @@ sidebar:
 function imagearc(mixed $image, int $center_x, int $center_y, int $width, int $height, int $start_angle, int $end_angle, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws an arc of an ellipse.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -30,7 +30,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

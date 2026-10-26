@@ -1,8 +1,8 @@
 ---
 title: "opcache_compile_file()"
-description: "Implemented by the compiler-injected OPcache prelude."
+description: "Compiles a script into the opcode cache without executing it."
 sidebar:
-  order: 640
+  order: 660
 ---
 
 ## opcache_compile_file()
@@ -11,7 +11,7 @@ sidebar:
 function opcache_compile_file(mixed $filename): bool
 ```
 
-Implemented by the compiler-injected OPcache prelude.
+Compiles a script into the opcode cache without executing it.
 
 **Parameters**:
 - `$filename` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected OPcache prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

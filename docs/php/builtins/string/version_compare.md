@@ -2,7 +2,7 @@
 title: "version_compare()"
 description: "Compares two PHP-standardized version number strings."
 sidebar:
-  order: 908
+  order: 1002
 ---
 
 ## version_compare()
@@ -23,9 +23,9 @@ Compares two PHP-standardized version number strings.
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected version_compare prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/version_compare.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/version_compare.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/version_compare.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/version_compare.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

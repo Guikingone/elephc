@@ -8,16 +8,24 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+use crate::names::NameKind;
 
 /// Lowers one trailing indexed spread in a fixed-arity positional call.
 pub(super) fn lower_positional_spread_args_with_signature(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     args: &[Expr],
+    builtin_name: Option<&str>,
+    capture_values: bool,
 ) -> Option<Vec<crate::ir::ValueId>> {
-    if sig.variadic.is_some() && !crate::func_args::sig_collects_surplus_args(sig) {
-        return None;
-    }
+    // Keep generic source planning intact. Only by-value indexed tails can be
+    // materialized into one array without losing references or named keys.
+    let projected = (!sig.ref_params.iter().any(|by_ref| *by_ref))
+        .then(|| crate::types::call_args::coalesce_planned_indexed_spreads(
+            args, |source| indexed_spread_source_type(ctx, source).is_some(),
+        ))
+        .flatten();
+    let args = projected.as_deref().unwrap_or(args);
     let spread_idx = single_trailing_indexed_spread_arg(ctx, args)?;
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
     if spread_idx > regular_param_count {
@@ -32,9 +40,31 @@ pub(super) fn lower_positional_spread_args_with_signature(
         return None;
     }
 
+    // A variadic-only callee whose collector is `iterable` takes a keyed source as a HASH tail
+    // (`collect(...$args)` forwarding a relay's own `...$args`). This path slices the source as an
+    // indexed array, which reads a hash's buckets as slots, so the generic tail builder (it
+    // spreads each source by its runtime shape) lowers that call instead.
+    if regular_param_count == 0
+        && super::variadic_args::variadic_param_is_iterable(sig)
+        && !super::variadic_args::variadic_param_is_by_ref(sig)
+        && indexed_spread_source_type(ctx, inner).is_some_and(|ty| match &ty {
+            PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+            PhpType::Iterable | PhpType::Mixed | PhpType::Union(_) => true,
+            _ => false,
+        })
+    {
+        return None;
+    }
+
     let mut operands = Vec::with_capacity(regular_param_count);
     for (index, arg) in args[..spread_idx].iter().enumerate() {
-        operands.push(lower_arg_with_signature(ctx, sig, index, arg));
+        let value = lower_arg_with_signature_options(ctx, sig, index, arg, capture_values);
+        if capture_values || sig.ref_params.get(index).copied().unwrap_or(false) {
+            operands.push(value);
+        } else {
+            let lowered = lowered_value_from_id(ctx, value);
+            operands.push(root_evaluated_call_argument(ctx, lowered, arg.span).value);
+        }
     }
 
     let source_ty = indexed_spread_source_type(ctx, inner)?;
@@ -61,23 +91,38 @@ pub(super) fn lower_positional_spread_args_with_signature(
     // narrowing MATERIALIZE it: `__rt_mixed_spread_array` turns a callable descriptor into a real
     // two-element array. Handing the boxed descriptor downstream instead left the hidden variadic
     // tail slicing a descriptor, and the callee's own `count()` then received null.
-    let spread = if callable_source || iterable_source {
+    // A source that may carry names AND is already a hash (a property or call declared to return
+    // an associative array) is boxed too: the narrowing below lists a typed hash through
+    // `array_values()`, which is right for a positional spread but threw away the string keys
+    // the per-parameter name probes read. That is `ReflectionAttribute::newInstance()`'s
+    // `new $this->__name(...$this->__args)` over a run-time materialized attribute: with
+    // `#[Route('/p', name: 'n', requirements: [...])]` the values landed in declaration order
+    // (`'n'` in the `requirements` array slot), a TypeError, and `debug:router` lost the route.
+    let keyed_hash_source = may_carry_names
+        && ctx.builder.value_type(spread.value) == IrType::Heap(IrHeapKind::Hash);
+    let spread = if callable_source || iterable_source || keyed_hash_source {
         ctx.box_value_as_mixed(spread, PhpType::Mixed, Some(args[spread_idx].span))
     } else {
         spread
     };
     let spread = narrow_gradual_indexed_spread_source(ctx, spread, args[spread_idx].span);
+    let spread = root_evaluated_call_argument(ctx, spread, inner.span);
     let spread_type = ctx.builder.value_php_type(spread.value);
     let temp_name = ctx.declare_hidden_temp(spread_type.clone());
     store_value_into_temp(ctx, &temp_name, spread_type, spread, args[spread_idx].span);
     let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
     let spread_value = lower_expr(ctx, &spread_expr);
-    emit_positional_spread_min_len_guard(
-        ctx,
-        spread_value.value,
-        required_len,
-        args[spread_idx].span,
-    );
+    if let Some(name) = builtin_name {
+        emit_builtin_spread_arity_guard(
+            ctx, spread_value.value, required_len,
+            sig.variadic.is_none().then_some(regular_param_count - spread_idx),
+            name, args[spread_idx].span,
+        );
+    } else {
+        emit_positional_spread_min_len_guard(
+            ctx, spread_value.value, required_len, args[spread_idx].span,
+        );
+    }
 
     for param_idx in first_spread_param_idx..regular_param_count {
         let element_idx = param_idx - first_spread_param_idx;
@@ -130,52 +175,218 @@ pub(super) fn lower_positional_spread_args_with_signature(
                 args[spread_idx].span,
             )
         };
-        operands.push(lower_expr(ctx, &expr).value);
+        operands.push(lower_arg_with_signature_options(ctx, sig, param_idx, &expr, capture_values));
     }
 
-    if crate::func_args::sig_collects_surplus_args(sig) {
-        operands.push(lower_hidden_variadic_spread_tail(
-            ctx,
+    if sig.variadic.is_some() {
+        let tail_offset = regular_param_count.saturating_sub(spread_idx);
+        let actual_count = positional_spread_actual_count_expr(
             &spread_expr,
-            regular_param_count - first_spread_param_idx,
+            spread_idx,
             args[spread_idx].span,
-        ));
+        );
+        if crate::func_args::sig_has_hidden_argc_param(sig) {
+            operands.push(lower_expr(ctx, &actual_count).value);
+        }
+        let tail = if crate::func_args::sig_collects_optional_arg_count(sig) {
+            let tail = positional_spread_tail_expr(
+                &spread_expr,
+                tail_offset,
+                args[spread_idx].span,
+            );
+            let tail = Expr::new(
+                ExprKind::ArrayLiteral(vec![
+                    actual_count,
+                    Expr::new(ExprKind::Spread(Box::new(tail)), args[spread_idx].span),
+                ]),
+                args[spread_idx].span,
+            );
+            lower_expr(ctx, &tail)
+        } else {
+            lower_positional_spread_tail(
+                ctx,
+                sig,
+                &spread_expr,
+                tail_offset,
+                args[spread_idx].span,
+            )
+        };
+        let tail = coerce_spread_variadic_array(ctx, sig, tail, args[spread_idx].span);
+        operands.push(tail.value);
     }
 
-    Some(operands)
+    Some(coerce_operands_to_params(ctx, sig, operands))
 }
 
-/// Copies the part of an indexed spread that remains after the visible fixed parameters.
-///
-/// Argument-introspection lowering uses a compiler-private variadic slot to preserve surplus PHP
-/// arguments. Calls still have a fixed source signature, so a runtime spread must materialize the
-/// visible parameters individually and pass only its remaining suffix into that hidden slot.
-fn lower_hidden_variadic_spread_tail(
+/// Counts a staged unpack using its actual storage representation, not its PHP array hint.
+pub(super) fn lower_spread_length(
     ctx: &mut LoweringContext<'_, '_>,
-    spread_expr: &Expr,
+    spread: ValueId,
+    span: Span,
+) -> LoweredValue {
+    if matches!(ctx.builder.value_php_type(spread).codegen_repr(), PhpType::Array(_)) {
+        return ctx.emit_value(
+            Op::ArrayLen, vec![spread], None, PhpType::Int,
+            Op::ArrayLen.default_effects(), Some(span),
+        );
+    }
+    let target = crate::ir::RuntimeFnId::Count;
+    ctx.emit_value(
+        Op::RuntimeCall,
+        vec![spread],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))),
+        PhpType::Int,
+        target.effects(),
+        Some(span),
+    )
+}
+
+/// Rejects runtime builtin arity violations without discarding surplus unpacked values.
+fn emit_builtin_spread_arity_guard(
+    ctx: &mut LoweringContext<'_, '_>,
+    spread: ValueId,
+    min: usize,
+    max: Option<usize>,
+    name: &str,
+    span: Span,
+) {
+    let len = lower_spread_length(ctx, spread, span);
+    for (bound, predicate, direction) in [
+        (Some(min), CmpPredicate::Sge, "few"),
+        (max, CmpPredicate::Sle, "many"),
+    ] {
+        let Some(bound) = bound else { continue };
+        let bound = emit_i64_at_span(ctx, bound as i64, span);
+        let valid = ctx.emit_value(
+            Op::ICmp, vec![len.value, bound.value],
+            Some(Immediate::CmpPredicate(predicate)), PhpType::Bool,
+            Op::ICmp.default_effects(), Some(span),
+        );
+        let ok = ctx.builder.create_named_block("builtin.spread.arity.ok", Vec::new());
+        let invalid = ctx.builder.create_named_block("builtin.spread.arity.invalid", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: valid.value, then_target: ok, then_args: Vec::new(),
+            else_target: invalid, else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(invalid);
+        let exception = Expr::new(ExprKind::NewObject {
+            class_name: Name::unqualified("ArgumentCountError"),
+            args: vec![Expr::new(ExprKind::StringLiteral(
+                format!("{name}(): Too {direction} arguments for unpacked call")
+            ), span)],
+        }, span);
+        let exception = lower_expr(ctx, &exception);
+        ctx.builder.terminate(Terminator::Throw { value: exception.value });
+        ctx.builder.position_at_end(ok);
+    }
+}
+
+/// Lowers a compiler-generated spread tail with the variadic slot's concrete element layout.
+fn lower_positional_spread_tail(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    spread: &Expr,
     offset: usize,
     span: crate::span::Span,
-) -> crate::ir::ValueId {
-    let source = lower_expr(ctx, spread_expr);
+) -> LoweredValue {
+    let source = lower_expr(ctx, spread);
     let offset = emit_i64_at_span(ctx, offset as i64, span);
     let target = crate::ir::RuntimeFnId::ArraySlice;
+    // The slice copies the SOURCE's slot layout. A gradual source (a declared `: array` return,
+    // `array<mixed>` after the merge) holds boxed slots that the slice cannot narrow into a typed
+    // variadic's raw ones, so it keeps the source layout and the parameter coercion converts it.
+    let expected = variadic_array_type(sig);
+    let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
+    let result_ty = match (&source_ty, expected.codegen_repr()) {
+        (PhpType::Array(source_elem), PhpType::Array(expected_elem))
+            if source_elem.codegen_repr() == PhpType::Mixed
+                && expected_elem.codegen_repr() != PhpType::Mixed =>
+        {
+            source_ty.clone()
+        }
+        _ => expected,
+    };
     ctx.emit_value(
         Op::RuntimeCall,
         vec![source.value, offset.value],
         Some(Immediate::RuntimeCall(
             crate::ir::RuntimeCallTarget::Function(target),
         )),
-        PhpType::Array(Box::new(PhpType::Mixed)),
+        result_ty,
         target.effects(),
         Some(span),
     )
-    .value
 }
 
-/// Returns the element count for a statically-known indexed spread source.
+/// Builds `array_slice($spread, $offset)` for the values beyond regular parameters.
+fn positional_spread_tail_expr(spread: &Expr, offset: usize, span: crate::span::Span) -> Expr {
+    Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from_parts(NameKind::FullyQualified, vec!["array_slice".to_string()]),
+            args: vec![
+                spread.clone(),
+                Expr::new(ExprKind::IntLiteral(offset as i64), span),
+            ],
+        },
+        span,
+    )
+}
+
+/// Builds the runtime count of explicit prefix values plus one dynamic indexed spread.
+fn positional_spread_actual_count_expr(
+    spread: &Expr,
+    prefix_len: usize,
+    span: crate::span::Span,
+) -> Expr {
+    let spread_count = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from_parts(NameKind::FullyQualified, vec!["count".to_string()]),
+            args: vec![spread.clone()],
+        },
+        span,
+    );
+    if prefix_len == 0 {
+        spread_count
+    } else {
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(Expr::new(ExprKind::IntLiteral(prefix_len as i64), span)),
+                op: BinOp::Add,
+                right: Box::new(spread_count),
+            },
+            span,
+        )
+    }
+}
+
+/// Converts a sliced dynamic tail to the variadic slot's indexed storage representation.
+fn coerce_spread_variadic_array(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    tail: LoweredValue,
+    span: crate::span::Span,
+) -> LoweredValue {
+    let expected = variadic_array_type(sig);
+    let actual = ctx.builder.value_php_type(tail.value).codegen_repr();
+    let needs_mixed = matches!(expected.codegen_repr(), PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed)
+        && !matches!(actual, PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed);
+    if !needs_mixed {
+        return tail;
+    }
+    ctx.emit_value(
+        Op::ArrayToMixed,
+        vec![tail.value],
+        None,
+        expected,
+        Op::ArrayToMixed.default_effects(),
+        Some(span),
+    )
+}
+
+/// Returns an indexed spread length only when no nested unpack can change its size.
 pub(super) fn static_indexed_spread_len(expr: &Expr) -> Option<usize> {
     match &expr.kind {
-        ExprKind::ArrayLiteral(items) => Some(items.len()),
+        ExprKind::ArrayLiteral(items) if !items.iter().any(is_spread_arg) => Some(items.len()),
         _ => None,
     }
 }
@@ -220,11 +431,7 @@ pub(super) fn indexed_spread_source_type(
         ExprKind::PropertyAccess { .. }
         | ExprKind::NullsafePropertyAccess { .. }
         | ExprKind::DynamicPropertyAccess { .. } => PhpType::Mixed,
-        _ => ctx
-            .builtin_call_types
-            .get(&(ctx.loop_storage_scope.clone(), expr.span))
-            .cloned()
-            .unwrap_or_else(|| infer_expr_type_syntactic(expr)),
+        _ => array_literal_element_type_for_ir(ctx, expr),
     }
     .codegen_repr();
     // `Callable` joins the gradual shapes: its slot holds a descriptor, and a descriptor built
@@ -270,25 +477,7 @@ pub(super) fn emit_positional_spread_min_len_guard(
     if min_len == 0 {
         return;
     }
-    // `ArrayLen` reads an INDEXED array header. A gradual spread source can be hash storage —
-    // `...$this->someAssoc` reaches here now that a property read counts as a spread source — and
-    // handing that to `ArrayLen` fails EIR validation outright (`expected Heap(Array), actual
-    // Heap(Hash)`) rather than producing a wrong count. The guard is an extra diagnostic, not a
-    // correctness requirement, so a shape it cannot measure simply goes unguarded.
-    if !matches!(
-        ctx.builder.value_type(spread),
-        crate::ir::IrType::Heap(crate::ir::IrHeapKind::Array)
-    ) {
-        return;
-    }
-    let len = ctx.emit_value(
-        Op::ArrayLen,
-        vec![spread],
-        None,
-        PhpType::Int,
-        Op::ArrayLen.default_effects(),
-        Some(span),
-    );
+    let len = lower_spread_length(ctx, spread, span);
     let min = emit_i64_at_span(ctx, min_len as i64, span);
     let has_required_args = ctx.emit_value(
         Op::ICmp,

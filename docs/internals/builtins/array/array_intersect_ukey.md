@@ -1,11 +1,11 @@
 ---
-title: "array_intersect_ukey() — internals"
+title: "array_intersect_ukey() - internals"
 description: "Compiler internals for array_intersect_ukey(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 24
 ---
 
-## `array_intersect_ukey()` — internals
+## `array_intersect_ukey()` - internals
 
 ## Where it lives
 

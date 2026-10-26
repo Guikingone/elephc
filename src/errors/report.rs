@@ -56,6 +56,22 @@ pub fn print_warning(warning: &CompileWarning) {
     }
 }
 
+/// Prints a `note: message` line to stderr: something the build did that is neither an error nor
+/// a warning but that a reader of the log should be able to find, such as a construct compiled
+/// as php's run-time fault (`autoload::runtime_faults`).
+pub fn print_note(message: &str) {
+    let plain = format_diagnostic("note", &None, crate::span::Span::dummy(), message);
+    if crate::progress::is_decorated() {
+        eprintln!(
+            "{} {}",
+            console::style("\u{2139}").cyan().bold(),
+            console::style(&plain).cyan()
+        );
+    } else {
+        eprintln!("{}", plain);
+    }
+}
+
 /// Builds the plain `kind[location]: message` diagnostic text shared by both
 /// `print_error` and `print_warning`, independent of decoration.
 fn format_diagnostic(

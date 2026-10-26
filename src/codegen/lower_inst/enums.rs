@@ -507,6 +507,73 @@ pub(super) fn lower_enum_backing_string_to_int(
     store_if_result(ctx, inst)
 }
 
+/// Converts the float in the float-result register for a weak-mode `int` parameter: an integral
+/// value binds as it stands, a fractional one prints php's "loses precision" deprecation and is
+/// truncated, and NaN, the infinities or an out-of-range value branch to `invalid_label` with
+/// nothing left on the stack. The integer is left in the int-result register.
+fn emit_float_result_into_int_argument_or_jump(ctx: &mut FunctionContext<'_>, invalid_label: &str) {
+    let unrepresentable = ctx.next_label("int_arg_float_unrepresentable");
+    let converted = ctx.next_label("int_arg_float_converted");
+    // The diagnostics call the deprecation handler, which does not keep the float registers.
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("str d0, [sp]"),               // keep the float argument across the coercion diagnostics
+        Arch::X86_64 => ctx.emitter.instruction("movsd QWORD PTR [rsp], xmm0"), // keep the float argument across the coercion diagnostics
+    }
+    super::builtins::strings::emit_float_result_int_coercion_diagnostics(ctx, &unrepresentable);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr d0, [sp]");                            // reload the diagnosed float argument
+            ctx.emitter.instruction("fcvtzs x0, d0");                           // truncate it toward zero as php's int coercion does
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("movsd xmm0, QWORD PTR [rsp]");             // reload the diagnosed float argument
+            ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // truncate it toward zero as php's int coercion does
+        }
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_jump(ctx.emitter, &converted);
+    ctx.emitter.label(&unrepresentable);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_jump(ctx.emitter, invalid_label);
+    ctx.emitter.label(&converted);
+}
+
+/// Lowers `Op::ArgumentStringToInt`: php's weak-mode conversion of a string (or float) argument
+/// bound to a declared `int` parameter, throwing the call site's `TypeError` when it does not
+/// convert.
+pub(super) fn lower_argument_string_to_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let input = *inst.operands.first().ok_or_else(|| {
+        CodegenIrError::unsupported("argument_string_to_int without operand".to_string())
+    })?;
+    let Some(crate::ir::Immediate::Data(data_id)) = inst.immediate else {
+        return Err(CodegenIrError::unsupported(
+            "argument_string_to_int without a TypeError message immediate".to_string(),
+        ));
+    };
+    let (message_label, message_len) = ctx.intern_string_data(data_id)?;
+    let float_input = ctx.value_php_type(input)?.codegen_repr() == PhpType::Float;
+    ctx.load_value_to_result(input)?;
+    let type_error_label = ctx.next_label("int_arg_type_error");
+    let done_label = ctx.next_label("int_arg_coerce_done");
+    if float_input {
+        emit_float_result_into_int_argument_or_jump(ctx, &type_error_label);
+    } else {
+        super::objects::emit_string_result_into_int_or_jump(ctx, &type_error_label);
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&type_error_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => emit_throw_enum_from_type_error_aarch64(ctx, &message_label, message_len),
+        Arch::X86_64 => emit_throw_enum_from_type_error_x86_64(ctx, &message_label, message_len),
+    }
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
 /// Probes PHP numeric validity of a string already in the string-result registers. On a
 /// valid numeric string the integer value (float-form truncated toward zero) is left in the
 /// int-result register and control falls through. On a non-numeric string, control branches

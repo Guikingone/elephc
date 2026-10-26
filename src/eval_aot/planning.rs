@@ -175,10 +175,12 @@ where
         .collect();
     let folded_program = with_implicit_eval_return(fold_static_builtin_calls_in_program(
         program.clone(),
+        strict_php,
     ));
     let support = EirStaticCallPredicates {
         function: &static_call_supported,
         static_method: &static_method_supported,
+        strict_php,
     };
     let eir_program =
         program_is_eir_function_safe(&folded_program, &support).then_some(folded_program.clone());

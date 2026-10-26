@@ -34,8 +34,9 @@ pub use catalog::{packages, ArchiveFormat, PackageSpec, PackageVersion, SourceAr
 pub use cli::{native_help, parse_native_args, NativeCommand, NativeOptions, NativeParseOutcome};
 pub use error::{NativeError, NativeErrorKind};
 pub use orchestration::NativeRunOutput;
+pub use project::{discover_for_source, ProjectPaths};
 pub use requirements::NativeRequirement;
-pub use resolver::{resolve_for_compilation, ResolvedNativePackage};
+pub use resolver::{resolve_for_compilation, resolve_for_compilation_in_cache, ResolvedNativePackage};
 
 /// Executes a native command with the production HTTPS, curated recipe, and system toolchain services.
 pub fn run_native_command(command: &NativeCommand, cwd: &Path) -> Result<NativeRunOutput, NativeError> {

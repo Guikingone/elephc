@@ -1,16 +1,16 @@
 ---
-title: "opcache_is_script_cached_in_file_cache() — internals"
+title: "opcache_is_script_cached_in_file_cache() - internals"
 description: "Compiler internals for opcache_is_script_cached_in_file_cache(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 645
+  order: 665
 ---
 
-## `opcache_is_script_cached_in_file_cache()` — internals
+## `opcache_is_script_cached_in_file_cache()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/opcache_prelude/build.rs`:513](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L513) (`opcache_is_script_cached_in_file_cache`)
+- **Lowering**: [`src/opcache_prelude/build.rs`:1001](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L1001) (`opcache_is_script_cached_in_file_cache`)
 - **Function symbol**: `opcache_is_script_cached_in_file_cache()`
 
 
@@ -38,7 +38,7 @@ function opcache_is_script_cached_in_file_cache(mixed $filename): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

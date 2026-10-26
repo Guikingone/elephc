@@ -25,6 +25,20 @@ pub(super) fn lower_const_decl(ctx: &mut LoweringContext<'_, '_>, name: &str, va
 /// Lowers simple positional list destructuring into indexed reads plus local writes.
 pub(super) fn lower_list_unpack(ctx: &mut LoweringContext<'_, '_>, vars: &[String], value: &Expr, span: Span) {
     let source = lower_expr(ctx, value);
+    // A destination can replace the RHS local before later elements are read.
+    let source = if ctx.value_is_owning_temporary(source) {
+        source
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span))
+    };
+    // An `ArrayAccess` object (the checker admits no other object) is read through the boxed
+    // reader, which dispatches `offsetGet()` per position. Boxing moves the owned reference into
+    // the box, which becomes the source this statement releases.
+    let source = if matches!(source.ir_type, IrType::Heap(crate::ir::IrHeapKind::Object)) {
+        ctx.box_value_as_mixed(source, PhpType::Mixed, Some(span))
+    } else {
+        source
+    };
     let item_type = list_unpack_item_type(ctx, source.value);
     let get_op = list_unpack_get_op(source.ir_type);
     // Boxed `Mixed` sources read through `__rt_mixed_array_get`, which takes an explicit
@@ -151,7 +165,20 @@ pub(super) fn lower_global(ctx: &mut LoweringContext<'_, '_>, vars: &[String], s
 }
 
 /// Lowers a static local variable initialization.
+///
+/// PHP evaluates the initializer only until the static holds a value, so it is lowered in
+/// its own block behind a `static_local_uninitialized` branch: `static $c = new C();` runs
+/// the constructor once, not on every call. The initializer is lowered first, out of line,
+/// because its type is what declares the slot the guard then names.
 pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, init: &Expr, span: Span) {
+    let entry_block = ctx
+        .builder
+        .insertion_block()
+        .expect("a static declaration is lowered inside a block");
+    let init_block = ctx.builder.create_named_block("static_local_init", Vec::new());
+    let after_block = ctx.builder.create_named_block("static_local_after", Vec::new());
+
+    ctx.builder.position_at_end(init_block);
     let mut value = lower_expr(ctx, init);
     let slot = ctx.declare_local_with_kind(
         name,
@@ -184,4 +211,29 @@ pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, in
         Op::InitStaticLocal.default_effects(),
         Some(span),
     );
+    branch_to(ctx, after_block);
+
+    ctx.builder.position_at_end(entry_block);
+    let uninitialized = ctx
+        .builder
+        .emit_with_effects(
+            Op::StaticLocalUninitialized,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            IrType::I64,
+            PhpType::Bool,
+            Ownership::NonHeap,
+            Op::StaticLocalUninitialized.default_effects(),
+            Some(span),
+        )
+        .expect("static_local_uninitialized produces a branch condition");
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: uninitialized,
+        then_target: init_block,
+        then_args: Vec::new(),
+        else_target: after_block,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(after_block);
+    ctx.clear_static_callable_locals();
 }

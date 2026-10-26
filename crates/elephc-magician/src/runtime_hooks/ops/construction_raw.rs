@@ -36,7 +36,7 @@ macro_rules! impl_construction_raw_ops {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<(), EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
-        let arg_array = Self::arg_array(args)?;
+        let arg_array = self.arg_array(args)?;
         let ok = unsafe {
             __elephc_eval_value_construct_object(
                 object.as_ptr(),
@@ -48,10 +48,7 @@ macro_rules! impl_construction_raw_ops {
                 0,
             )
         };
-        unsafe {
-            __elephc_eval_value_release(arg_array.as_ptr());
-        }
-        if ok == 0 {
+        let outcome = if ok == 0 {
             self.take_pending_native_throwable()
                 .map_or(Err(EvalStatus::RuntimeFatal), |thrown| {
                     self.schedule_pending_throw(thrown)?;
@@ -59,7 +56,9 @@ macro_rules! impl_construction_raw_ops {
                 })
         } else {
             Ok(())
-        }
+        };
+        self.release_cells([arg_array])?;
+        outcome
     }
 
     /// Calls an AOT constructor through the generated bridge for its resolved declaring class.
@@ -70,7 +69,7 @@ macro_rules! impl_construction_raw_ops {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<(), EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
-        let arg_array = Self::arg_array(args)?;
+        let arg_array = self.arg_array(args)?;
         let ok = unsafe {
             __elephc_eval_value_construct_object(
                 object.as_ptr(),
@@ -82,10 +81,7 @@ macro_rules! impl_construction_raw_ops {
                 class_name.len() as u64,
             )
         };
-        unsafe {
-            __elephc_eval_value_release(arg_array.as_ptr());
-        }
-        if ok == 0 {
+        let outcome = if ok == 0 {
             self.take_pending_native_throwable()
                 .map_or(Err(EvalStatus::RuntimeFatal), |thrown| {
                     self.schedule_pending_throw(thrown)?;
@@ -93,33 +89,35 @@ macro_rules! impl_construction_raw_ops {
                 })
         } else {
             Ok(())
-        }
+        };
+        self.release_cells([arg_array])?;
+        outcome
     }
 
     /// Returns whether the generated AOT class-name table contains the requested class.
     fn class_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
-        aot_memo::memoized(&aot_memo::KIND_EXISTS, name, "#class", || {
+        aot_memo::memoized_existence(name, "#class", || {
             Ok(unsafe { __elephc_eval_class_exists(name.as_ptr(), name.len() as u64) != 0 })
         })
     }
 
     /// Returns whether the generated AOT interface-name table contains the requested interface.
     fn interface_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
-        aot_memo::memoized(&aot_memo::KIND_EXISTS, name, "#interface", || {
+        aot_memo::memoized_existence(name, "#interface", || {
             Ok(unsafe { __elephc_eval_interface_exists(name.as_ptr(), name.len() as u64) != 0 })
         })
     }
 
     /// Returns whether the generated AOT trait-name table contains the requested trait.
     fn trait_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
-        aot_memo::memoized(&aot_memo::KIND_EXISTS, name, "#trait", || {
+        aot_memo::memoized_existence(name, "#trait", || {
             Ok(unsafe { __elephc_eval_trait_exists(name.as_ptr(), name.len() as u64) != 0 })
         })
     }
 
     /// Returns whether the generated AOT enum-name table contains the requested enum.
     fn enum_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
-        aot_memo::memoized(&aot_memo::KIND_EXISTS, name, "#enum", || {
+        aot_memo::memoized_existence(name, "#enum", || {
             Ok(unsafe { __elephc_eval_enum_exists(name.as_ptr(), name.len() as u64) != 0 })
         })
     }
@@ -172,6 +170,32 @@ macro_rules! impl_construction_raw_ops {
         usize::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)
     }
 
+    /// Reads automatic-key history without executing PHP or unwinding through Rust.
+    fn array_next_index(&mut self, array: RuntimeCellHandle) -> Result<Option<i64>, EvalStatus> {
+        unsafe extern "C" {
+            /// Borrows the current signed index, returning zero, exhaustion one, or invalid-storage two.
+            fn __elephc_eval_value_array_next_index(array: *mut RuntimeCell, index: *mut i64) -> u64;
+        }
+        let mut index = 0;
+        match unsafe { __elephc_eval_value_array_next_index(array.as_ptr(), &mut index) } {
+            0 => Ok(Some(index)),
+            1 => Ok(None),
+            _ => Err(EvalStatus::RuntimeFatal),
+        }
+    }
+
+    /// Preserves automatic-key history when rebuilding a hash after eval unset.
+    fn array_copy_index_history(&mut self, source: RuntimeCellHandle, destination: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        unsafe extern "C" {
+            /// Copies only host array-index metadata into a new associative destination.
+            fn __elephc_eval_value_array_copy_index_history(source: *mut RuntimeCell, destination: *mut RuntimeCell) -> u64;
+        }
+        match unsafe { __elephc_eval_value_array_copy_index_history(source.as_ptr(), destination.as_ptr()) } {
+            0 => Ok(()),
+            _ => Err(EvalStatus::RuntimeFatal),
+        }
+    }
+
     /// Returns whether a boxed Mixed cell has an array-like runtime tag.
     fn is_array_like(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
         Ok(unsafe { __elephc_eval_value_is_array_like(value.as_ptr()) != 0 })
@@ -185,6 +209,20 @@ macro_rules! impl_construction_raw_ops {
     /// Returns the unboxed Mixed runtime tag for PHP type-predicate builtins.
     fn type_tag(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         Ok(unsafe { __elephc_eval_value_type_tag(value.as_ptr()) })
+    }
+
+    /// Rebinds a compiled closure descriptor through the runtime's `__rt_closure_bind`.
+    fn bind_native_closure(
+        &mut self,
+        closure: RuntimeCellHandle,
+        new_this: Option<RuntimeCellHandle>,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let receiver = new_this.map_or(std::ptr::null_mut(), |value| value.as_ptr());
+        let bound = unsafe { __elephc_eval_value_closure_bind(closure.as_ptr(), receiver) };
+        if bound.is_null() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        Ok(RuntimeCellHandle::from_raw(bound))
     }
 
     /// Returns the first three words of a real runtime cell, for `ELEPHC_EVAL_TRACE` only.
@@ -206,7 +244,7 @@ macro_rules! impl_construction_raw_ops {
     /// Creates an invoker-only by-reference marker for a staged Mixed slot.
     fn invoker_ref_cell(
         &mut self,
-        slot: *mut RuntimeCellHandle,
+        slot: *mut *mut crate::value::RuntimeCell,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_invoker_ref_cell(slot) })
     }

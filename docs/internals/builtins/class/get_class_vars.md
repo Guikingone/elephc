@@ -1,35 +1,43 @@
 ---
-title: "get_class_vars() — internals"
+title: "get_class_vars() - internals"
 description: "Compiler internals for get_class_vars(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 99
+  order: 100
 ---
 
-## `get_class_vars()` — internals
+## `get_class_vars()` - internals
 
 ## Where it lives
 
-- **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/class_vars_prelude.rs`:241](https://github.com/illegalstudio/elephc/blob/main/src/class_vars_prelude.rs#L241) (`get_class_vars`)
-- **Function symbol**: `get_class_vars()`
+- **Signature**: [`src/builtins/callables/get_class_vars.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/get_class_vars.rs)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Implemented by the compiler-injected class-vars prelude.
+- Uses the `eir_graph` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
 ## Semantic descriptor
 
-Shared contract implemented by an injected elephc-PHP prelude.
+- **Target strategy**: `eir_graph`
+- **Validation**: `shared`
+- **Result type source**: `shared`
+- **Result ownership**: `fresh`
+- **Effects**: `static (3 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 
-_Implemented by an injected elephc-PHP prelude._
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
 
 ## Signature summary
 
 ```php
-function get_class_vars(mixed $class): mixed
+function get_class_vars(mixed $class): array
 ```
 
 ## What the type checker enforces

@@ -11,7 +11,7 @@ use super::*;
 use std::sync::Arc;
 
 /// Public method metadata for a runtime eval class.
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct EvalClassMethod {
     name: String,
     trait_origin: Option<String>,

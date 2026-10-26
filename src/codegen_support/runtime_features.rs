@@ -9,8 +9,8 @@
 //! Key details:
 //! - Direct `preg_*` calls and emitted regex iterator classes both enable regex
 //!   helpers because generated SPL methods can call them.
-//! - Lowered `mb_strlen()` calls enable its iconv-backed runtime helper without
-//!   imposing that native dependency on programs that never use the builtin.
+//! - Lowered mbstring calls enable the shared encoding bridge. Dynamic eval uses
+//!   the same archive, so settings and caches have a single owner.
 //! - Emitted stream/archive classes enable PHAR bridge libraries because their
 //!   generated methods route dynamic paths through `__rt_*_maybe_phar` helpers.
 //! - The dynamic builtin dispatcher (descriptor invoker) emits per-builtin
@@ -18,8 +18,6 @@
 //!   staticlib, so its detection forces that crate to link.
 //! - `eval()` keeps the dynamic bridge feature separate from scope-only helpers
 //!   so AOT fragments can shed bridge-only runtime/link dependencies incrementally.
-
-use std::collections::HashMap;
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
@@ -44,8 +42,12 @@ pub enum LinkRequirement {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RuntimeFeatures {
     pub regex: bool,
-    /// True when lowered code can call the optional iconv-backed `mb_strlen()` helper.
-    pub mb_strlen: bool,
+    /// True when lowered code can call the optional mbstring bridge.
+    pub mbstring: bool,
+    /// True when matching operations require the managed Oniguruma provider.
+    pub mbregex: bool,
+    /// True when output conversion or startup validation requires the managed PCRE2 MIME provider.
+    pub mbstring_mime: bool,
     pub phar_archive: bool,
     /// True when codegen can emit the runtime callable dispatcher (descriptor
     /// invoker) that builds per-builtin wrappers referencing `elephc_crypto`.
@@ -115,6 +117,12 @@ pub struct RuntimeFeatures {
     /// build today) would fail to link. When false, `__rt_diag_warning` keeps its original
     /// shape — suppression depth, then `write(2)` — and no diagnostic buffer is emitted.
     pub diag_user_handler: bool,
+    /// True when native code can push, pop, inspect, or restore a PHP error or exception
+    /// handler registration. The linked-stack helpers are otherwise omitted from the runtime.
+    pub handler_state: bool,
+    /// True when lowered native code can clone an object. The boxed clone adapter is also
+    /// required by the full eval bridge, which exposes the same operation to Magician.
+    pub object_clone: bool,
 }
 
 /// Every `RuntimeFeatures` field is a `bool`, so the struct is exactly one byte per feature and
@@ -145,7 +153,7 @@ impl RuntimeFeatures {
     /// them or reusing a retired bit is not, and would serve one feature set's object for another.
     pub const fn cache_key_bits(&self) -> u64 {
         (self.regex as u64)
-            | ((self.mb_strlen as u64) << 1)
+            | ((self.mbstring as u64) << 1)
             | ((self.phar_archive as u64) << 2)
             | ((self.descriptor_invoker as u64) << 3)
             | ((self.eval_bridge as u64) << 4)
@@ -167,13 +175,18 @@ impl RuntimeFeatures {
             | ((self.class_relation_introspection as u64) << 14)
             | ((self.class_methods_introspection as u64) << 15)
             | ((self.diag_user_handler as u64) << 16)
+            // Main's switches, numbered after ours so no existing bit moves.
+            | ((self.handler_state as u64) << 17)
+            | ((self.object_clone as u64) << 18)
+            | ((self.mbregex as u64) << 19)
+            | ((self.mbstring_mime as u64) << 20)
     }
 
     /// Number of feature bits `cache_key_bits` packs, which is also the number of fields.
     ///
     /// `runtime_cache::identity` puts the relocation and library-boundary modes in bits 62/63,
     /// so appending features here stays free until bit 62.
-    pub const CACHE_KEY_BIT_COUNT: u32 = 17;
+    pub const CACHE_KEY_BIT_COUNT: u32 = 21;
 
     /// Returns one variant per field, each with exactly that field set and every other clear.
     ///
@@ -186,7 +199,7 @@ impl RuntimeFeatures {
     ) -> [(&'static str, Self); Self::CACHE_KEY_BIT_COUNT as usize] {
         [
             ("regex", Self { regex: true, ..Self::none() }),
-            ("mb_strlen", Self { mb_strlen: true, ..Self::none() }),
+            ("mbstring", Self { mbstring: true, ..Self::none() }),
             ("phar_archive", Self { phar_archive: true, ..Self::none() }),
             ("descriptor_invoker", Self { descriptor_invoker: true, ..Self::none() }),
             ("eval_bridge", Self { eval_bridge: true, ..Self::none() }),
@@ -208,6 +221,10 @@ impl RuntimeFeatures {
                 Self { class_methods_introspection: true, ..Self::none() },
             ),
             ("diag_user_handler", Self { diag_user_handler: true, ..Self::none() }),
+            ("mbregex", Self { mbregex: true, ..Self::none() }),
+            ("mbstring_mime", Self { mbstring_mime: true, ..Self::none() }),
+            ("handler_state", Self { handler_state: true, ..Self::none() }),
+            ("object_clone", Self { object_clone: true, ..Self::none() }),
         ]
     }
 
@@ -215,7 +232,9 @@ impl RuntimeFeatures {
     pub const fn none() -> Self {
         Self {
             regex: false,
-            mb_strlen: false,
+            mbstring: false,
+            mbregex: false,
+            mbstring_mime: false,
             phar_archive: false,
             descriptor_invoker: false,
             eval_bridge: false,
@@ -231,6 +250,8 @@ impl RuntimeFeatures {
             popen_resource: false,
             directory_resource: false,
             diag_user_handler: false,
+            handler_state: false,
+            object_clone: false,
         }
     }
 
@@ -239,7 +260,9 @@ impl RuntimeFeatures {
     pub const fn all() -> Self {
         Self {
             regex: true,
-            mb_strlen: true,
+            mbstring: true,
+            mbregex: true,
+            mbstring_mime: true,
             phar_archive: true,
             descriptor_invoker: true,
             eval_bridge: true,
@@ -255,6 +278,8 @@ impl RuntimeFeatures {
             popen_resource: true,
             directory_resource: true,
             diag_user_handler: true,
+            handler_state: true,
+            object_clone: true,
         }
     }
 }
@@ -276,9 +301,10 @@ pub fn runtime_features_for_program_and_classes(
 /// Returns typed final-link requirements for the selected optional runtime features.
 pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<LinkRequirement> {
     let mut requirements = Vec::new();
-    if features.regex {
+    if features.regex || features.mbstring_mime {
         requirements.push(LinkRequirement::NativePackage("pcre2"));
     }
+    if features.mbregex { requirements.push(LinkRequirement::NativePackage("oniguruma")); }
     if features.phar_archive {
         if !features.eval_bridge {
             // Magician already embeds the PHAR implementation. Adding the standalone
@@ -320,6 +346,9 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
         // Regex is a separate optional capability registered only when enabled.
         requirements.push(LinkRequirement::Bridge("elephc_magician"));
         requirements.push(LinkRequirement::Bridge("elephc_bcmath"));
+    }
+    if features.mbstring || features.mbregex || features.eval_bridge {
+        requirements.push(LinkRequirement::Bridge("elephc_mbstring"));
     }
     requirements
 }
@@ -610,6 +639,10 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(items) => items
             .iter()
             .any(|(key, value)| expr_has_regex_call(key) || expr_has_regex_call(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_has_regex_call),
         ExprKind::Match {
             subject,
             arms,
@@ -963,6 +996,10 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, value)| {
             expr_needs_descriptor_invoker(key) || expr_needs_descriptor_invoker(value)
         }),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_needs_descriptor_invoker),
         ExprKind::Match {
             subject,
             arms,
@@ -1066,7 +1103,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
 /// - `call_user_func`/`call_user_func_array` whose callback is not a statically resolved
 ///   form (closure / first-class callable / array literal);
 /// - `iterator_apply` whose callback is not a statically resolved form;
-/// - `preg_replace_callback` whose callback is a runtime (non-literal) string candidate;
+/// - `preg_replace_callback`, whose raw match array always crosses a descriptor adapter;
 /// - `new Fiber($cb)` whose callback is not a statically resolved form.
 fn expr_is_descriptor_invoker_trigger(expr: &Expr) -> bool {
     match &expr.kind {
@@ -1117,9 +1154,12 @@ fn expr_is_descriptor_invoker_trigger(expr: &Expr) -> bool {
 /// take it second (after the source array, pattern, or iterator).
 fn function_call_needs_descriptor_invoker(name: &str, args: &[Expr]) -> bool {
     let callback = match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        // Literal function names also need argument adaptation: a declared PHP `array`
+        // parameter is boxed and cannot receive the regex runtime's raw match array.
+        "preg_replace_callback" => return true,
         "call_user_func" | "call_user_func_array" | "array_map" => args.first(),
         "array_filter" | "array_walk" | "array_walk_recursive" | "array_reduce" | "usort"
-        | "uasort" | "uksort" | "iterator_apply" | "preg_replace_callback" | "array_find"
+        | "uasort" | "uksort" | "iterator_apply" | "array_find"
         | "array_any" | "array_all" => args.get(1),
         "array_udiff" | "array_uintersect" => args.get(2),
         _ => return false,
@@ -1142,6 +1182,7 @@ fn callback_arg_may_be_runtime_dispatch(arg: &Expr) -> bool {
         | ExprKind::FirstClassCallable(_)
         | ExprKind::ArrayLiteral(_)
         | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::ArrayLiteralMixed(_)
         | ExprKind::StringLiteral(_) => false,
         _ => true,
     }
@@ -1230,7 +1271,7 @@ mod tests {
         assert!(link_requirements_for_runtime_features(RuntimeFeatures::none()).is_empty());
     }
 
-    /// Verifies eval requests Magician followed by its standalone BCMath ABI provider.
+    /// Verifies eval requests Magician and shared scalar bridges without an unused MIME provider.
     #[test]
     fn test_eval_runtime_features_require_magician_and_bcmath_bridges() {
         assert_eq!(
@@ -1240,7 +1281,8 @@ mod tests {
             }),
             vec![
                 LinkRequirement::Bridge("elephc_magician"),
-                LinkRequirement::Bridge("elephc_bcmath")
+                LinkRequirement::Bridge("elephc_bcmath"),
+                LinkRequirement::Bridge("elephc_mbstring")
             ]
         );
     }
@@ -1257,7 +1299,8 @@ mod tests {
             vec![
                 LinkRequirement::NativePackage("pcre2"),
                 LinkRequirement::Bridge("elephc_magician"),
-                LinkRequirement::Bridge("elephc_bcmath")
+                LinkRequirement::Bridge("elephc_bcmath"),
+                LinkRequirement::Bridge("elephc_mbstring")
             ]
         );
     }
@@ -1396,6 +1439,14 @@ mod tests {
         );
     }
 
+    /// Literal regex callbacks still need the dispatcher that adapts their declared array parameter.
+    #[test]
+    fn test_runtime_features_include_descriptor_invoker_for_preg_replace_callback_literal() {
+        assert!(features_for(
+            "<?php function replace_match(array $matches): string { return 'x'; } echo preg_replace_callback('/a/', 'replace_match', 'a');"
+        ).descriptor_invoker);
+    }
+
     /// Verifies every static reference form for the custom session-handler API keeps
     /// the runtime callable dispatcher needed by its callback methods.
     #[test]
@@ -1417,14 +1468,7 @@ mod tests {
     #[test]
     fn test_descriptor_invoker_runtime_features_require_elephc_crypto_bridge() {
         assert!(link_requirements_for_runtime_features(RuntimeFeatures {
-            regex: false,
-            mb_strlen: false,
-            phar_archive: false,
             descriptor_invoker: true,
-            eval_bridge: false,
-            eval_scope: false,
-            web: false,
-            pdo_udf: false,
             ..RuntimeFeatures::none()
         })
         .iter()
@@ -1445,7 +1489,8 @@ mod tests {
             }),
             vec![
                 LinkRequirement::Bridge("elephc_magician"),
-                LinkRequirement::Bridge("elephc_bcmath")
+                LinkRequirement::Bridge("elephc_bcmath"),
+                LinkRequirement::Bridge("elephc_mbstring")
             ]
         );
     }
@@ -1466,5 +1511,22 @@ mod tests {
                 LinkRequirement::Bridge("elephc_bcmath")
             ]
         );
+    }
+
+    /// Keeps ordinary mbstring independent while MIME output requests its dedicated provider.
+    #[test]
+    fn test_mbstring_runtime_features_require_mime_provider() {
+        let features = RuntimeFeatures { mbstring: true, ..RuntimeFeatures::none() };
+        assert_eq!(link_requirements_for_runtime_features(features), vec![
+            LinkRequirement::Bridge("elephc_mbstring"),
+        ]);
+        assert!(!features.regex);
+        assert_eq!(link_requirements_for_runtime_features(RuntimeFeatures {
+            mbstring: true,
+            mbstring_mime: true,
+            ..RuntimeFeatures::none()
+        }), vec![
+            LinkRequirement::NativePackage("pcre2"), LinkRequirement::Bridge("elephc_mbstring"),
+        ]);
     }
 }

@@ -11,13 +11,18 @@
 
 mod arrays;
 mod buffers;
-mod callables;
+pub(crate) mod callables;
 /// PHP loose-equality (`==`) walkers for boxed Mixed values, arrays, and objects.
 mod compare;
 /// `ext/curl` easy-handle runtime helpers (`__rt_curl_*`) over the `elephc_curl` bridge.
 mod curl;
 pub(crate) mod data;
 mod diagnostics;
+mod error_handlers;
+mod handler_state;
+/// The last-diagnostic record `error_get_last()` reads.
+pub(crate) mod last_error;
+mod warning_dispatch;
 mod emitters;
 mod bcmath;
 mod eval_bridge;
@@ -37,6 +42,8 @@ mod objects;
 mod pdo;
 mod pointers;
 mod resource_ids;
+mod resource_inventory;
+pub(crate) mod reference_cells;
 /// PHP's `round($num, $precision, $mode)` runtime implementation (`__rt_round_mode`).
 mod round_mode;
 /// Standard PHP library constants, functions, and classes.
@@ -47,6 +54,7 @@ pub(crate) mod spl;
 mod sysv_call_alignment;
 mod strings;
 mod system;
+pub(crate) use system::PCNTL_PENDING_FLAG_SLOT;
 /// zval pack/unpack bridge helpers (elephc values ↔ PHP zval structs).
 mod zval;
 
@@ -69,6 +77,9 @@ pub(crate) use exceptions::UNCAUGHT_EXIT_STATUS;
 /// The allocator's exact size classes: `_heap_small_bins` holds one head per class, and the
 /// `--web` request boundary empties every one of them.
 pub(crate) use arrays::HEAP_SIZE_CLASS_COUNT;
+/// Invokes unary cleanup while accumulating destructor exceptions in the caller's frame slot.
+pub(crate) use exceptions::emit_guarded_cleanup_call;
+pub(crate) use exceptions::RELEASE_SLOT_KINDS;
 /// The PHP object-handle pool: binding a handle at allocation and reading one back.
 /// Every object-allocation site in codegen calls `emit_acquire_object_handle`.
 pub(crate) use objects::{
@@ -84,7 +95,9 @@ pub(crate) use data::{
 };
 /// Emit fixed runtime data section (symbols, constants, type metadata).
 pub(crate) use data::emit_runtime_data_user;
-pub(crate) use data::{is_user_filter_contract_method, is_user_wrapper_contract_method};
+pub(crate) use data::{
+    is_user_filter_contract_method, is_user_wrapper_contract_method, user_wrapper_contract_param_type,
+};
 /// Emit user-program-specific runtime data section.
 pub(crate) use emitters::emit_runtime;
 /// The PHP 8.5 NAN-to-bool coercion probe, reached from `src/codegen/lower_inst` float
@@ -101,5 +114,5 @@ pub(crate) use fibers::{
     FIBER_STACK_SIZE_OFFSET, FIBER_START_ARGS_MAX, FIBER_START_ARGS_OFFSET,
     FIBER_START_ARG_COUNT_OFFSET, FIBER_STATE_NOT_STARTED, FIBER_STATE_RUNNING,
     FIBER_STATE_SUSPENDED, FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET,
-    FIBER_USER_ARG_MAX_OFFSET,
+    FIBER_USER_ARG_MAX_OFFSET, GENERATOR_START_ARGS_MAX, generator_start_arg_offset,
 };

@@ -1,11 +1,11 @@
 ---
-title: "password_hash() — internals"
+title: "password_hash() - internals"
 description: "Compiler internals for password_hash(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 853
+  order: 946
 ---
 
-## `password_hash()` — internals
+## `password_hash()` - internals
 
 ## Where it lives
 

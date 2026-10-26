@@ -50,8 +50,15 @@ pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_nam
         let Some((resolved_name, info)) = resolve_reflection_class(ctx, &current_name) else {
             break;
         };
-        push_unique_method_names(info.methods.keys(), &mut names, &mut seen);
-        push_unique_method_names(info.static_methods.keys(), &mut names, &mut seen);
+        // Sorted: the maps' own order changes from run to run, and these names are interned as
+        // data strings in this order, so an unsorted walk made two builds of one program differ
+        // and defeated the assembler's slice cache.
+        let mut instance: Vec<&String> = info.methods.keys().collect();
+        instance.sort();
+        push_unique_method_names(instance.into_iter(), &mut names, &mut seen);
+        let mut statics: Vec<&String> = info.static_methods.keys().collect();
+        statics.sort();
+        push_unique_method_names(statics.into_iter(), &mut names, &mut seen);
         current = info.parent.clone();
         if current.as_deref() == Some(resolved_name) {
             break;
@@ -78,6 +85,19 @@ pub(super) fn reflection_class_property_names(
     names
 }
 
+/// Sorts members into the position their name has in `order`; a name missing from it goes last.
+///
+/// The positions are indexed once, so ordering stays linear in the number of constants rather
+/// than scanning the whole name list for every member.
+fn sort_by_name_order<T>(members: &mut [T], order: &[String], name: impl Fn(&T) -> &String) {
+    let positions: std::collections::HashMap<&str, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(position, name)| (name.as_str(), position))
+        .collect();
+    members.sort_by_key(|member| positions.get(name(member).as_str()).copied().unwrap_or(usize::MAX));
+}
+
 /// Returns PHP case-sensitive class constant names visible to `ReflectionClass::hasConstant()`.
 pub(super) fn reflection_class_constant_names(
     ctx: &FunctionContext<'_>,
@@ -87,30 +107,70 @@ pub(super) fn reflection_class_constant_names(
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
     if let Some(enum_info) = ctx.module.enum_infos.get(class_name) {
-        for case in &enum_info.cases {
-            push_unique_constant_name(&case.name, &mut names, &mut seen);
-        }
-    }
-    let mut current = Some(class_name.to_string());
-    while let Some(current_name) = current {
-        let Some((resolved_name, current_info)) = resolve_reflection_class(ctx, &current_name)
-        else {
-            break;
-        };
-        for constant in ordered_class_constant_names(current_info) {
-            push_unique_constant_name(constant, &mut names, &mut seen);
-        }
-        for interface_name in &current_info.interfaces {
-            for constant in reflection_interface_constant_names(ctx, interface_name) {
-                push_unique_constant_name(&constant, &mut names, &mut seen);
+        // A user enum records its cases in `constant_order`, interleaved with its constants in
+        // declaration order; only an enum without that record lists its cases first.
+        let ordered = resolve_reflection_class(ctx, class_name).is_some_and(|(_, info)| {
+            enum_info.cases.iter().all(|case| info.constant_order.contains(&case.name))
+        });
+        if !ordered {
+            for case in &enum_info.cases {
+                push_unique_constant_name(&case.name, &mut names, &mut seen);
             }
         }
-        current = current_info.parent.clone();
-        if current.as_deref() == Some(resolved_name) {
-            break;
+    }
+    push_class_constant_names_in_php_order(ctx, class_name, &mut names, &mut seen, 0);
+    names
+}
+
+/// Appends a class's constant names in the order PHP's constants table holds them.
+///
+/// Measured on PHP 8.5.10: the class's own constants in declaration order (trait constants after
+/// them), then its parent's whole list, then each implemented interface's list, keeping the first
+/// occurrence of a name. `ClassInfo::constants` is a map, so iterating it gave a different order
+/// on every build.
+fn push_class_constant_names_in_php_order(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    names: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+    depth: usize,
+) {
+    if depth > ctx.module.class_infos.len() {
+        return;
+    }
+    let Some((resolved_name, info)) = resolve_reflection_class(ctx, class_name) else {
+        return;
+    };
+    for constant in declared_then_remaining(&info.constant_order, info.constants.keys()) {
+        // An ancestor's private constant is not the descendant's.
+        if depth > 0
+            && matches!(info.constant_visibilities.get(constant), Some(Visibility::Private))
+        {
+            continue;
+        }
+        push_unique_constant_name(constant, names, seen);
+    }
+    if let Some(parent) = info.parent.as_deref() {
+        if parent != resolved_name {
+            push_class_constant_names_in_php_order(ctx, parent, names, seen, depth + 1);
         }
     }
-    names
+    for interface_name in &info.interfaces {
+        for constant in reflection_interface_constant_names(ctx, interface_name) {
+            push_unique_constant_name(&constant, names, seen);
+        }
+    }
+}
+
+/// Yields the names of `order` first, then any other key of the map in sorted order, so a
+/// constant missing from the recorded order still appears, deterministically.
+pub(super) fn declared_then_remaining<'a>(
+    order: &'a [String],
+    keys: impl Iterator<Item = &'a String>,
+) -> Vec<&'a String> {
+    let mut remaining: Vec<&String> = keys.filter(|key| !order.contains(key)).collect();
+    remaining.sort();
+    order.iter().chain(remaining).collect()
 }
 
 /// Returns materializable class constant values for `ReflectionClass::getConstants()`.
@@ -144,6 +204,15 @@ pub(super) fn reflection_class_constant_members(
             if seen.contains(constant_name) {
                 continue;
             }
+            // An ancestor's private constant is not the descendant's.
+            if resolved_name != class_name
+                && matches!(
+                    current_info.constant_visibilities.get(constant_name),
+                    Some(Visibility::Private)
+                )
+            {
+                continue;
+            }
             let value_expr = &current_info.constants[constant_name];
             let value =
                 reflection_constant_value(ctx, resolved_name, Some(current_info), value_expr, 0)?;
@@ -159,6 +228,10 @@ pub(super) fn reflection_class_constant_members(
             break;
         }
     }
+    // The values are gathered walking up the hierarchy; the ORDER is PHP's, which puts a
+    // parent's constants before the class's interfaces, so sort by the name order.
+    let order = reflection_class_constant_names(ctx, class_name, _info);
+    sort_by_name_order(&mut members, &order, |member| &member.name);
     Ok(members)
 }
 
@@ -232,7 +305,8 @@ pub(super) fn collect_interface_constant_members(
     let Some(interface_info) = ctx.module.interface_infos.get(interface_name) else {
         return Ok(());
     };
-    for (constant_name, value_expr) in &interface_info.constants {
+    for constant_name in declared_then_remaining(&interface_info.constant_order, interface_info.constants.keys()) {
+        let value_expr = &interface_info.constants[constant_name];
         if seen.contains(constant_name) {
             continue;
         }
@@ -260,6 +334,9 @@ pub(super) fn reflection_trait_constant_members(
             push_unique_constant_member(constant_name, value, &mut members, &mut seen);
         }
     }
+    // `declared_trait_constants` is a map; the trait's declaration order is the name list.
+    let order = reflection_trait_constant_names(ctx, trait_name);
+    sort_by_name_order(&mut members, &order, |member| &member.name);
     Ok(members)
 }
 
@@ -299,6 +376,15 @@ pub(super) fn reflection_class_constant_reflection_members(
         };
         for constant_name in ordered_class_constant_names(current_info) {
             if seen.contains(constant_name) {
+                continue;
+            }
+            // An ancestor's private constant is not the descendant's.
+            if resolved_name != class_name
+                && matches!(
+                    current_info.constant_visibilities.get(constant_name),
+                    Some(Visibility::Private)
+                )
+            {
                 continue;
             }
             let value_expr = &current_info.constants[constant_name];
@@ -343,6 +429,9 @@ pub(super) fn reflection_class_constant_reflection_members(
             break;
         }
     }
+    // Same ordering as `reflection_class_constant_members`: PHP's, not the walk's.
+    let order = reflection_class_constant_names(ctx, class_name, _info);
+    sort_by_name_order(&mut members, &order, |member| &member.name);
     Ok(members)
 }
 
@@ -383,6 +472,7 @@ pub(super) fn reflection_enum_case_members(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+        returns_reference: false,
             prototype_member: None,
             parameters: Vec::new(),
         })
@@ -410,7 +500,8 @@ pub(super) fn collect_interface_constant_reflection_members(
     let Some(interface_info) = ctx.module.interface_infos.get(interface_name) else {
         return Ok(());
     };
-    for (constant_name, value_expr) in &interface_info.constants {
+    for constant_name in declared_then_remaining(&interface_info.constant_order, interface_info.constants.keys()) {
+        let value_expr = &interface_info.constants[constant_name];
         let declaring_interface =
             interface_constant_declaring_interface(interface_info, interface_name, constant_name);
         let is_final = ctx
@@ -475,6 +566,9 @@ pub(super) fn reflection_trait_constant_reflection_members(
             &mut seen,
         );
     }
+    // `declared_trait_constants` is a map; the trait's declaration order is the name list.
+    let order = reflection_trait_constant_names(ctx, trait_name);
+    sort_by_name_order(&mut members, &order, |member| &member.name);
     Ok(members)
 }
 
@@ -511,6 +605,7 @@ pub(super) fn push_unique_constant_reflection_member(
         required_parameter_count: 0,
         is_deprecated: false,
         is_generator: false,
+        returns_reference: false,
         prototype_member: None,
         parameters: Vec::new(),
     });

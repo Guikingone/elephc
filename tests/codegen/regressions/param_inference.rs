@@ -480,6 +480,84 @@ string(5) "A##LE"
     assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
 }
 
+/// The method half of the rule above: a callable argument widens an untyped METHOD parameter too.
+/// One site passing an int (through a `Bag|Some` receiver) and another a closure left `$callable`
+/// at `int`, so `$callable(...)` in the body was refused at compile time; phpoption's
+/// `Some::filter()` was deferred to the interpreter for it. Instance and static sites both.
+#[test]
+fn test_untyped_method_param_called_with_int_then_closure_is_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+class Some {
+    public function __construct(private $value) {}
+    public function filter($callable) { return is_int($callable) ? "int" : ($callable($this->value) ? "yes" : "no"); }
+    public static function check($callable) { return is_int($callable) ? "int" : $callable(3); }
+}
+class Bag {
+    public function filter($key) { return "bag:" . $key; }
+}
+function pick(int $n) { return $n === 1 ? new Bag() : new Some(5); }
+$m = pick($argc);
+echo $m->filter(42), " ", (new Some(5))->filter(fn($v) => $v === 5), " ", (new Some(5))->filter(7), " ";
+echo Some::check(1), " ", Some::check(fn($v) => $v * 2), "\n";
+"#,
+    );
+    assert_eq!(out, "bag:42 yes int int 6\n");
+}
+
+/// A method merely NAMED like the stream-filter contract (`filter`, `onCreate`) is an ordinary
+/// method when the program can never register a filter. The contract keeps the runtime's raw
+/// argument ABI and so the `int` seed of an untyped parameter; a `filter($callback)` only reached
+/// dynamically kept it and `array_filter($items, $callback)` was refused at compile time.
+#[test]
+fn test_filter_named_method_is_ordinary_without_stream_filters() {
+    let out = compile_and_run(
+        r#"<?php
+class Pipeline {
+    public function __construct(private array $items) {}
+    public function filter($callback) { return array_values(array_filter($this->items, $callback)); }
+    public function onCreate($label) { return "created:" . $label; }
+}
+$p = new Pipeline([1, 2, 3, 4]);
+$method = $argc > 5 ? 'nothing' : 'filter';
+echo json_encode($p->$method(fn($v) => $v % 2 === 0)), " ";
+$hook = 'onCreate';
+echo $p->$hook("x"), "\n";
+"#,
+    );
+    assert_eq!(out, "[2,4] created:x\n");
+}
+
+/// A recursive self-call widens its own parameters. The call cannot re-specialize the function
+/// it sits in, so the body kept the first call's `string` for `$key` and the recursive call
+/// converted its array to "Array": Laravel's `data_get()`/`data_forget()` walked the wrong keys.
+#[test]
+fn test_recursive_self_call_widens_the_parameter_it_passes() {
+    let out = compile_and_run(
+        r#"<?php
+function walk($key) {
+    $segments = is_array($key) ? $key : explode('.', $key);
+    $segment = array_shift($segments);
+    return $segments ? $segment . '>' . walk($segments) : $segment;
+}
+function forget(&$target, $key) {
+    $segments = is_array($key) ? $key : explode('.', $key);
+    $segment = array_shift($segments);
+    if ($segments && array_key_exists($segment, $target)) {
+        forget($target[$segment], $segments);
+    } else {
+        unset($target[$segment]);
+    }
+    return $target;
+}
+$a = ['x' => ['y' => 1, 'z' => 2]];
+forget($a, 'x.y');
+echo walk('a.b.c'), " ", json_encode($a), "\n";
+"#,
+    );
+    assert_eq!(out, "a>b>c {\"x\":{\"z\":2}}\n");
+}
+
 /// A recursive untyped function called first with an array and then, from its own body, with the
 /// array's elements (strings, ints, nested arrays) must receive those elements as they are. The
 /// inferred parameter type was a container, and the recursive call narrowed its `mixed` argument

@@ -66,7 +66,7 @@ unsafe fn unserialize_object_inner(
     name_len: u64,
     payload_hash: u64,
 ) -> *mut RuntimeCell {
-    let Ok(name) = (unsafe { abi_name_to_string(name_ptr, name_len) }) else {
+    let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
         return std::ptr::null_mut();
     };
     if name.is_empty() {

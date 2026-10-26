@@ -321,6 +321,24 @@ Captured first-class callable targets (`static::method(...)` and `$obj->method(.
 
 `call_user_func()` and `call_user_func_array()` also accept PHP callable arrays (`[$object, "method"]`, `[ClassName::class, "method"]`) and invokable objects. Dynamic string callback dispatch resolves user functions, declared extern functions, supported builtin wrappers such as `STRLEN`, and public static method strings such as `"Formatter::wrap"`; the matched descriptor's generated invoker receives a boxed argument container, branches on whether it holds an indexed array or associative hash, applies the resolved descriptor signature, and returns a boxed `mixed`. String variables can also be invoked directly as PHP variable functions, for example `$callback = "STRLEN"; echo $callback("hello");`, and they use the same descriptor invoker path for names, defaults, variadics, and by-reference parameter metadata. Callable-array variables and literals can also be invoked directly, for example `$callback = [$object, "wrap"]; echo $callback(value: "ok");` or `([$object, "wrap"])(value: "ok")`, and direct instance-method callable arrays read the receiver stored in the callable array before invoking the descriptor. Objects with public `__invoke()` can also be called directly through descriptor metadata, so `$runner(suffix: "?")` and `(new Runner())(suffix: "?")` apply defaults, named arguments, variadics, and by-reference flags through the same invoker path. Direct callable-array variables and literals may resolve the method or static receiver from runtime strings, so `$method = "wrap"; $callback = [$object, $method]; $callback(...)`, `([$object, $method])(...)`, `$callback = [$class, $method]; ($callback)(...)`, and `([$class, $method])(...)` select the matching public method descriptor at the call site. Public static-method callable arrays use the same descriptor invoker path for direct variable and literal calls, `call_user_func()`, and `call_user_func_array()`, including associative argument containers and positional prefixes before indexed spreads. Public instance-method callable arrays and invokable objects use descriptor invokers for direct `call_user_func()` calls, including single-spread forwarding such as `call_user_func([$object, "method"], ...$args)` and positional prefixes followed by indexed spreads such as `call_user_func([$object, "method"], "head", ...$args)`. They use the same descriptor path for `call_user_func_array()` calls with literal indexed, literal associative, dynamic indexed, dynamic associative, or runtime-opaque `mixed`/union argument containers. Receiver-bound runtime-opaque containers are unboxed at runtime, dispatch by indexed-array versus associative-hash tag, and prepend the receiver as descriptor slot zero before invoking the descriptor adapter. For `call_user_func_array()`, descriptor invokers operate on a cloned Mixed argument container so the caller's `$args` array keeps its original layout after invocation.
 
+A callable array names its method against the CALLING scope, as in PHP. A `protected` or `private` instance method the caller cannot reach is a `TypeError` for the callback builtins (`call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access protected method Box::hidden()`, and the same wording for `call_user_func_array()`, `array_map()`, `array_filter()`, `usort()` and the other callback builtins, each with its own argument number) and an `Error` when the array is called (`$f()`: `Call to protected method Box::hidden() from global scope`, or `from scope Other`); both are catchable. A class that declares `__call()` receives the call instead, for an unreachable and for an unknown method name alike, and `is_callable()` answers true for it. A `private` method of the class a callable is written in resolves on an instance of a subclass (`[$child, 'helper']` inside the parent), and is refused from outside. A literal `[$object, 'method']` whose class is known at compile time is checked by the compiler, so an unreachable method in a callback builtin that cannot take a runtime-selected callable array (`usort()`, `array_walk()` and the like) is thrown as that `TypeError` when the call runs; a callable array held in a variable and handed to such a builtin is a compile error.
+
+A function reached **only** through a dynamic callable returns what it was given. Untyped
+parameters are normally narrowed by the direct call sites the compiler can see; with none, an
+un-hinted body that hands one of them straight back is typed `mixed` rather than guessed at, so
+the value survives the round trip:
+
+```php
+<?php
+function passthrough($value, $unused) { return $value; }
+
+$callback = 'passthrough';
+var_dump(call_user_func($callback, "probe", 9));   // string(5) "probe"
+```
+
+A body that computes its own result keeps its inferred type (`function add($a, $b) { return $a
++ $b; }` still returns `int`), and a declared return type always wins.
+
 ## Global variables
 
 ```php
@@ -479,8 +497,107 @@ $ref[] = "router";               // also reaches $container->services
 ```
 
 Reference returns are supported for object-property targets of any scalar or container
-type — arrays, objects, integers, strings, and floats. Returning a reference to a plain
-local is not meaningful (the local does not outlive the call) and is not supported.
+type: arrays, objects, integers, strings, and floats. A plain local is also supported.
+It is promoted to a managed reference cell that keeps the variable's identity and outlives
+the call, so the caller's alias and any later write through the same variable agree.
+
+A `finally` clause cannot change which reference a pending `return` hands back. The
+reference is captured when the `return` runs, exactly as in PHP, so rebinding the returned
+variable inside a `finally` that falls through has no effect on the caller. A second
+`return` inside the `finally` does replace it.
+
+The caller's reference is published before any of the caller's own post-call cleanup runs,
+so a destructor that throws while the call's argument temporaries, an owning receiver, or
+the previous binding of the target are retired cannot lose the returned reference. A
+`catch` in the same function still sees the referenced value released exactly once.
+
+### Reference-return forms this compiler does not support yet
+
+The forms below are valid PHP. They are rejected at compile time because this compiler
+cannot yet transfer an owning reference cell for them, not because PHP lacks the
+semantics:
+
+- Returning an alias of an array element (`$slot = &$numbers[0]; return $slot;`). That
+  alias addresses storage inside the array's payload, which owns no reference cell of its
+  own, so there is nothing to hand the caller that would keep the element alive.
+- Returning a place that is neither a variable nor a property, such as an array element
+  read or the result of another call. PHP returns a reference to those places; this
+  lowering has no cell to transfer for them.
+- Capturing a reference with `$x = &f()` from a call the compiler cannot resolve to a
+  by-reference return. A named function, a method, a static method, and a closure whose
+  binding is known (including one produced by `Closure::bind`) are all resolved. A call
+  made through a runtime-selected callable, such as a variable holding a function-name
+  string, is not: that path is lowered through the dynamic descriptor invoker, which hands
+  back a copied value rather than the callee's reference cell.
+
+One case cannot be decided at compile time. A function that returns its own by-reference
+parameter has no way to know what the caller bound to it, so a caller that passed an alias
+of an array element is caught at run time instead: the return raises a catchable `Error`,
+`Cannot return a reference to storage that has no independent reference cell`, rather than
+handing back an address the array may free.
+
+The same `Error` is raised when a by-reference function without a declared result type
+falls off the end of a path that returned nothing. A by-reference result is an address
+the caller dereferences and may alias, so that path fails closed instead of handing back
+the null placeholder an ordinary return would use. Declare a result type to have the
+missing return reported at compile time instead.
+
+### Payload agreement between the callee and its caller
+
+The caller dereferences the transferred cell with the representation of the callee's
+**declared result**, so the returned storage has to hold a payload that can be read that
+way.
+
+An ordinary local can be boxed into the declared result's `Mixed` representation before
+its reference cell is created, including a typed array local returned as PHP `array`.
+Storage that is already shared cannot be re-shaped behind the aliases that hold it, so it
+is checked instead of converted. This applies to a by-reference parameter and to an object
+property alike:
+
+```php
+<?php
+class Holder { public int $value = 7; }
+
+// Rejected at compile time: the slot stores a raw int, while a `mixed` result makes the
+// caller read the cell as a boxed value.
+function &slot(Holder $h): mixed { return $h->value; }
+```
+
+Compatible object class types still share the same pointer layout, so returning a property
+holding a subclass instance through a base-typed result is accepted. Container element
+layouts are part of the payload, so an `array` of one element representation cannot be
+returned as an `array` of another.
+
+When the receiver's class is only known at run time (a `mixed` parameter, or the `$this`
+of a closure bound with `Closure::bind`), the decision is made per class at the point of
+return, never for the whole function. A call that lands on a class whose slot is
+compatible gets its reference; a call on a class whose slot is not raises a catchable
+`Error`, `Cannot return a reference to a property whose stored representation differs from
+the declared by-reference result type`, and publishes no pointer at all, so the object and
+every other alias of it are left exactly as they were:
+
+```php
+<?php
+class GoodHolder { public mixed $value = 7; }
+class BadHolder  { public int   $value = 9; }
+function &dynamicSlot(mixed $holder): mixed { return $holder->value; }
+
+$good = new GoodHolder();
+$bad  = new BadHolder();
+$goodAlias = &$good->value;               // makes each property a reference property
+$badAlias  = &$bad->value;
+
+$reference = &dynamicSlot($good);         // 7, aliases $good->value
+try {
+    $refused = &dynamicSlot($bad);
+} catch (Error $error) {
+    echo $bad->value;                     // 9, untouched
+}
+```
+
+Both the compile-time rejection and the run-time `Error` are compiler subset limits, not
+PHP restrictions on reference returns: PHP's references are untyped and have no equivalent
+condition.
 
 ## Variadic functions
 
@@ -591,6 +708,28 @@ show(...$args);                   // 10:20:0
 
 $args = ["b" => 20];
 show(...$args, a: 10);            // 10:20:0
+```
+
+The same mapping applies when the call TARGET is only known at run time — a class
+name in a variable, a method name in a variable, or a static call through a
+variable class:
+
+```php
+<?php
+class Point {
+    public function __construct(public int $x = 0, public int $y = 0) {}
+    public function move(int $x = 0, int $y = 0): string { return "$x,$y"; }
+    public static function origin(int $x = 0, int $y = 0): string { return "$x,$y"; }
+}
+
+$class  = "Point";
+$method = "move";
+$named  = ["y" => 7];
+
+$p = new $class(...$named);       // y: 7, x keeps its default
+echo $p->y;                       // 7
+echo $p->$method(...$named);      // 0,7
+echo $class::origin(...$named);   // 0,7
 ```
 
 ## echo

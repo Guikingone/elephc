@@ -1,8 +1,8 @@
 ---
 title: "mysqli_begin_transaction()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Starts a transaction."
 sidebar:
-  order: 113
+  order: 114
 ---
 
 ## mysqli_begin_transaction()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_begin_transaction(mixed $mysql, int $flags = 0, ?string $name = null): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Starts a transaction.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -25,7 +25,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

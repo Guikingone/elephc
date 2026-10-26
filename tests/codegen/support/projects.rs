@@ -34,6 +34,7 @@ fn generate_project_asm(
     program: &elephc::parser::ast::Program,
     check_result: &elephc::types::CheckResult,
     source_path: &Path,
+    included_files: &[std::path::PathBuf],
     heap_size: usize,
     gc_stats: bool,
     heap_debug: bool,
@@ -50,6 +51,12 @@ fn generate_project_asm(
     let mut ir_module = lower_and_validate_ir_for_codegen_fixture(
         program, check_result, source_path, source_catalog,
     );
+    // `get_included_files()` lists the entry file first, then every statically resolved include.
+    ir_module.included_files = std::iter::once(source_path)
+        .chain(included_files.iter().map(std::path::PathBuf::as_path))
+        .map(|path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+        .map(|path| path.display().to_string())
+        .collect();
     ir_module.declared_class_source_files = sources.autoload.class_likes;
     ir_module.declared_function_source_files = sources.autoload.functions;
     ir_module.declared_class_source_files.extend(sources.included.class_likes);
@@ -64,7 +71,7 @@ fn generate_project_asm(
     );
     let exported_functions = HashMap::new();
     let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
-    let user_asm = elephc::codegen::generate_user_asm_from_ir_with_options(
+    let generated_user_asm = elephc::codegen::generate_user_asm_from_ir_with_options_and_features(
         &ir_module,
         gc_stats,
         false, // counters
@@ -79,9 +86,11 @@ fn generate_project_asm(
         elephc::codegen::WebIsolation::Worker,
         None, // spill: fixtures are small enough to stay in memory
     )
-    .expect("EIR backend codegen failed for project fixture")
-    .into_string();
-    let runtime_features = ir_module.required_runtime_features;
+    .expect("EIR backend codegen failed for project fixture");
+    let mut runtime_features = ir_module.required_runtime_features;
+    runtime_features.handler_state |= generated_user_asm.handler_state;
+    runtime_features.object_clone |= generated_user_asm.object_clone;
+    let user_asm = generated_user_asm.asm.into_string();
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);
     (user_asm, runtime_asm, runtime_features)
@@ -187,6 +196,15 @@ pub(crate) fn compile_cli_file_and_run_with_flags(source: &str, flags: &[&str]) 
     compile_cli_file_and_run_with_native_and_flags(source, &[], false, flags)
 }
 
+/// Compiles a CLI fixture once with flags and executes each requested argument vector.
+pub(crate) fn compile_cli_file_and_run_with_flags_per_argv(
+    source: &str,
+    flags: &[&str],
+    argvs: &[&[&str]],
+) -> Vec<String> {
+    compile_cli_file_and_run_with_native_and_flags_per_argv(source, &[], false, flags, argvs)
+}
+
 /// Compiles a CLI fixture with arbitrary compiler FLAGS and asserts compilation FAILS.
 ///
 /// The real-CLI counterpart to `compile_cli_file_and_run_with_flags`: exercises the same
@@ -229,6 +247,20 @@ fn compile_cli_file_and_run_with_native_and_flags(
     managed_pcre2: bool,
     flags: &[&str],
 ) -> String {
+    compile_cli_file_and_run_with_native_and_flags_per_argv(
+        source, defines, managed_pcre2, flags, &[&[]],
+    )
+    .remove(0)
+}
+
+/// Shares CLI compilation while preserving each run's arguments and success assertion.
+fn compile_cli_file_and_run_with_native_and_flags_per_argv(
+    source: &str,
+    defines: &[&str],
+    managed_pcre2: bool,
+    flags: &[&str],
+    argvs: &[&[&str]],
+) -> Vec<String> {
     let dir = make_cli_test_dir("elephc_cli_test");
 
     let php_path = dir.join("main.php");
@@ -254,14 +286,18 @@ fn compile_cli_file_and_run_with_native_and_flags(
     );
 
     let bin_path = dir.join("main");
-    let output = run_binary(&bin_path, &dir);
-    assert!(
-        output.status.success(),
-        "CLI-compiled binary exited with error"
-    );
+    let outputs = argvs.iter().map(|args| {
+        let output = run_binary_with_args(&bin_path, &dir, args);
+        assert!(
+            output.status.success(),
+            "CLI-compiled binary exited with error for {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        String::from_utf8(output.stdout).unwrap()
+    }).collect();
 
     let _ = fs::remove_dir_all(&dir);
-    String::from_utf8(output.stdout).unwrap()
+    outputs
 }
 
 /// Compiles a multi-file project through the real `elephc` CLI and runs the binary.
@@ -313,6 +349,17 @@ pub(crate) fn compile_cli_files_and_run_with_compile_stderr(
     files: &[(&str, &str)],
     main_file: &str,
 ) -> (String, String) {
+    let (compile_stderr, stdout, _) =
+        compile_cli_files_and_run_with_compile_and_run_stderr(files, main_file);
+    (compile_stderr, stdout)
+}
+
+/// Like [`compile_cli_files_and_run_with_compile_stderr`], but also returns the BINARY's stderr,
+/// which is where a compiled program writes php's warnings (php itself writes them to stdout).
+pub(crate) fn compile_cli_files_and_run_with_compile_and_run_stderr(
+    files: &[(&str, &str)],
+    main_file: &str,
+) -> (String, String, String) {
     let dir = make_cli_test_dir("elephc_cli_project");
 
     for (path, content) in files {
@@ -339,7 +386,11 @@ pub(crate) fn compile_cli_files_and_run_with_compile_stderr(
     );
 
     let _ = fs::remove_dir_all(&dir);
-    (compile_stderr, String::from_utf8(output.stdout).unwrap())
+    (
+        compile_stderr,
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
 }
 
 // Compiles a PHP source string and runs the resulting binary, asserting that it
@@ -402,9 +453,14 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");
+    // Mirrors `pipeline::compile`: the object-cast prelude is injected AFTER autoloading, so a
+    // `(object)` cast that only appears in an autoloaded class file is still detected.
+    let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)
+        .expect("object-cast prelude injection failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
+    let resolved = elephc::lazy_static_defaults::apply(resolved);
     let resolved = elephc::optimize::fold_constants(resolved);
     let error = match elephc::types::check_with_target(&resolved, target()) {
         Ok(_) => panic!("source unexpectedly passed type checking"),
@@ -422,6 +478,15 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
 /// Provides the Compile and run files helper used by the projects module.
 pub(crate) fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
     compile_and_run_files_with_defines(files, main_file, &[])
+}
+
+/// Compiles a multi-file fixture once and checks every requested argument vector.
+pub(crate) fn compile_and_run_files_per_argv(
+    files: &[(&str, &str)],
+    main_file: &str,
+    argvs: &[&[&str]],
+) -> Vec<String> {
+    compile_and_run_files_with_defines_per_argv(files, main_file, &[], argvs)
 }
 
 // Compiles a multi-file PHP project and runs the binary, asserting it fails at runtime.
@@ -457,7 +522,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
     let define_set = HashSet::new();
     let ast = elephc::conditional::apply(ast, &define_set);
-    let (resolved, _, included_sources) = elephc::resolver::resolve_collecting_includes_with_defines_and_sources(
+    let (resolved, included_files, included_sources) = elephc::resolver::resolve_collecting_includes_with_defines_and_sources(
         ast, base_dir, &define_set,
     ).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
@@ -465,11 +530,12 @@ pub(crate) fn compile_and_run_files_expect_failure(
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
+    let resolved = elephc::lazy_static_defaults::apply(resolved);
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized =
-        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names());
+        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let optimized = elephc::optimize::prune_constant_control_flow(
         optimized,
         check_result.local_binding_decision_spans(),
@@ -490,6 +556,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
         &optimized,
         &check_result,
         &php_path,
+        &included_files,
         8_388_608,
         false,
         false,
@@ -520,6 +587,16 @@ pub(crate) fn compile_and_run_files_with_defines(
     main_file: &str,
     defines: &[&str],
 ) -> String {
+    compile_and_run_files_with_defines_per_argv(files, main_file, defines, &[&[]]).remove(0)
+}
+
+/// Shares project resolution and linking between ordinary and multi-run fixture helpers.
+fn compile_and_run_files_with_defines_per_argv(
+    files: &[(&str, &str)],
+    main_file: &str,
+    defines: &[&str],
+    argvs: &[&[&str]],
+) -> Vec<String> {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -545,18 +622,34 @@ pub(crate) fn compile_and_run_files_with_defines(
     let ast = elephc::conditional::apply(ast, &define_set);
     let (autoload_registry, ast) = elephc::autoload::Registry::build(base_dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
-    let (resolved, _, included_sources) = elephc::resolver::resolve_collecting_includes_with_defines_and_sources(
+    let (resolved, included_files, included_sources) = elephc::resolver::resolve_collecting_includes_with_defines_and_sources(
         ast, base_dir, &define_set,
     ).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    // Mirrors `pipeline::compile`: the entry file's own interfaces get their activation event
+    // here and nowhere else. Without it every entry interface stayed inactive, so a class the
+    // interpreter declared at run time could not implement one (`interface_unavailable`).
+    let resolved = elephc::autoload::activate_entry_interface_declarations(
+        resolved,
+        &php_path.canonicalize().unwrap_or_else(|_| php_path.clone()),
+    );
     let (resolved, autoloaded_files, autoload_sources) =
         elephc::autoload::run_collecting_included_with_defines_and_sources(
             resolved, base_dir, &autoload_registry, &define_set,
         ).expect("autoload failed");
+    // Mirrors `pipeline::compile`: the object-cast prelude is injected AFTER autoloading, so a
+    // `(object)` cast that only appears in an autoloaded class file is still detected.
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    // Mirrors `pipeline::compile`'s compat-preludes phase: a hash context used only by an
+    // autoloaded class receives the hash prelude after autoloading.
+    let resolved = elephc::hash_prelude::inject_late_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)
+        .expect("object-cast prelude injection failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
+    let resolved = elephc::lazy_static_defaults::apply(resolved);
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
     // Mirrors `pipeline::compile`'s `conditional-functions` phase: a function declared inside
     // `if (!function_exists(...))` binds when the statement runs, through a variant group.
@@ -564,6 +657,7 @@ pub(crate) fn compile_and_run_files_with_defines(
     // runs failed here with "Call to undefined function".
     let resolved =
         elephc::conditional_functions::bind_conditional_declarations(resolved, target());
+    let resolved = elephc::conditional_classes::hoist_unique_conditional_class_likes(resolved);
     // ALSO mirrors `pipeline::compile`, and it has to. `Registry::build` above CONSUMED every
     // `spl_autoload_register` call it could collect and stripped it from the AST, so the checker
     // cannot rediscover that this program registers a loader — the pipeline hands the answer in,
@@ -578,7 +672,7 @@ pub(crate) fn compile_and_run_files_with_defines(
     )
     .expect("type check failed");
     let optimized =
-        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names());
+        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let optimized = elephc::optimize::prune_constant_control_flow(
         optimized,
         check_result.local_binding_decision_spans(),
@@ -599,6 +693,7 @@ pub(crate) fn compile_and_run_files_with_defines(
         &optimized,
         &check_result,
         &php_path,
+        &included_files,
         8_388_608,
         false,
         false,
@@ -614,16 +709,20 @@ pub(crate) fn compile_and_run_files_with_defines(
         link_requirements_for_runtime_features(&check_result, runtime_features);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
-    let elephc_out = assemble_and_run(
+    let outputs = assemble_and_run_capture_per_argv(
         &user_asm,
         &runtime_obj_for_asm(&runtime_asm),
         &dir,
         &required_libraries,
         &default_link_paths(),
         &[],
+        argvs,
     );
     let _ = fs::remove_dir_all(&dir);
-    elephc_out
+    outputs.into_iter().zip(argvs).map(|(output, args)| {
+        assert!(output.success, "project binary failed for {args:?}: {}", output.stderr);
+        output.stdout
+    }).collect()
 }
 
 // Returns true if compilation of a multi-file PHP project fails (type-check or earlier).
@@ -723,6 +822,7 @@ pub(crate) fn check_files_diagnostics(
             // and a future option must not break this build merely by existing.
             elephc::types::CheckOptions {
                 strict_locals,
+                lint: true,
                 ..Default::default()
             },
         )
@@ -790,6 +890,15 @@ pub(crate) fn compile_files_fails_with_defines(
 // Used for tests that verify runtime behavior with specific input (e.g., read(), fgets).
 /// Provides the Compile and run with stdin helper used by the projects module.
 pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
+    compile_and_run_with_stdin_mode(source, stdin_data, false)
+}
+
+/// Runs with a regular file on descriptor zero, so stdin seek behavior is exercised too.
+pub(crate) fn compile_and_run_with_seekable_stdin(source: &str, stdin_data: &str) -> String {
+    compile_and_run_with_stdin_mode(source, stdin_data, true)
+}
+
+fn compile_and_run_with_stdin_mode(source: &str, stdin_data: &str, seekable: bool) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -800,7 +909,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let synthetic_main = dir.join("test.php");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
-    let (resolved, _, included_sources) = elephc::resolver::resolve_collecting_includes_with_defines_and_sources(
+    let (resolved, included_files, included_sources) = elephc::resolver::resolve_collecting_includes_with_defines_and_sources(
         ast, &dir, &HashSet::new(),
     ).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
@@ -808,11 +917,12 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
+    let resolved = elephc::lazy_static_defaults::apply(resolved);
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized =
-        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names());
+        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let optimized = elephc::optimize::prune_constant_control_flow(
         optimized,
         check_result.local_binding_decision_spans(),
@@ -833,6 +943,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
         &optimized,
         &check_result,
         &synthetic_main,
+        &included_files,
         8_388_608,
         false,
         false,
@@ -885,8 +996,15 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     } else {
         Command::new(&bin_path)
     };
+    let input = if seekable {
+        let path = dir.join("stdin.data");
+        fs::write(&path, stdin_data).expect("write stdin fixture");
+        std::process::Stdio::from(fs::File::open(path).expect("open stdin fixture"))
+    } else {
+        std::process::Stdio::piped()
+    };
     let mut child = cmd
-        .stdin(std::process::Stdio::piped())
+        .stdin(input)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()

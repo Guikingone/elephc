@@ -11,14 +11,18 @@ use super::*;
 
 /// Lowers a plain PHP local assignment.
 pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, span: Span) {
+    crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
     // PHP allows compound assignment on an undefined variable (`$x += 1`),
     // treating the undefined variable as null/0 with a warning. The type
     // checker injects the variable as `Void` and emits a warning. At the
     // lowering level, we must initialize the local slot to null/0 before
     // the compound read so the runtime does not read garbage from the stack.
+    // A superglobal is always defined: seeding it here wrote null over the request's `$_SERVER`
+    // the first time a function ran `$_SERVER += $_ENV` (Symfony's `Dotenv::populate()`).
     if is_compound_assignment_self_read(value, name, span)
         && !ctx.has_local_slot(name)
         && !crate::globals_array::is_alias(name)
+        && !crate::superglobals::is_superglobal(name)
     {
         let null_value = ctx.builder.emit_const_null();
         let null_lowered = LoweredValue { value: null_value, ir_type: IrType::I64 };
@@ -226,12 +230,18 @@ pub(super) fn contextualize_local_assignment(
 ) -> (LoweredValue, PhpType) {
     let source_ty = ctx.builder.value_php_type(lowered.value);
     let source_repr = source_ty.codegen_repr();
+    let lowered = crate::ir_lower::ownership::copy_assignment_value(ctx, lowered, Some(span));
+
     let contextual_ty = if crate::superglobals::is_superglobal(name) {
         crate::superglobals::superglobal_type()
     } else {
         ctx.local_type(name)
     };
     let contextual_repr = contextual_ty.codegen_repr();
+    if contextual_ty.is_php_array() {
+        let converted = coerce_typed_assign_value(ctx, lowered, &contextual_ty, span);
+        return (converted, contextual_ty);
+    }
     let has_loop_contract = local_has_loop_storage_contract(ctx, name, &contextual_ty);
 
     // A first assignment precedes the loop whose contract was computed from the final checker
@@ -345,6 +355,13 @@ pub(super) fn local_has_loop_storage_contract(
 /// - `$a = &$arr[idx]` binds the local to the indexed-array element's inline storage.
 pub(super) fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, source: &Expr, span: Span) {
     match &source.kind {
+        ExprKind::Variable(source_name)
+            if crate::superglobals::is_superglobal(source_name)
+                && target != source_name
+                && !crate::superglobals::is_superglobal(target) =>
+        {
+            ctx.bind_superglobal_ref_alias(target, source_name, Some(span));
+        }
         ExprKind::Variable(source_name) => {
             let fiber_start_sig = ctx.fiber_start_sig_for_local(source_name);
             ctx.alias_local_ref_cell(target, source_name, Some(span));
@@ -352,11 +369,23 @@ pub(super) fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, 
                 ctx.bind_fiber_start_sig(target, sig);
             }
         }
+        // `$obj->prop = &$_SERVER`, which the parser spells as a copy plus this reverse bind: the
+        // property takes the superglobal's cell instead of the superglobal adopting the property's.
+        ExprKind::PropertyAccess { object, property } if crate::superglobals::is_superglobal(target) => {
+            let object = lower_expr(ctx, object);
+            if ctx.builder.insertion_block_is_terminated() {
+                return;
+            }
+            ctx.bind_property_to_superglobal_cell(object, property, target, Some(span));
+        }
         ExprKind::PropertyAccess { .. } => {
             crate::ir_lower::expr::lower_ref_assign_property(ctx, target, source, span);
         }
         ExprKind::DynamicPropertyAccess { .. } => {
             crate::ir_lower::expr::lower_ref_assign_dynamic_property(ctx, target, source, span);
+        }
+        ExprKind::StaticPropertyAccess { .. } => {
+            crate::ir_lower::expr::lower_ref_assign_static_property(ctx, target, source, span);
         }
         ExprKind::FunctionCall { .. }
         | ExprKind::MethodCall { .. }

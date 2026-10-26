@@ -1,16 +1,16 @@
 ---
-title: "chr() — internals"
+title: "chr() - internals"
 description: "Compiler internals for chr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 796
+  order: 828
 ---
 
-## `chr()` — internals
+## `chr()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/chr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/chr.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -28,7 +28,7 @@ sidebar:
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (0 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary

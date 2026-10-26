@@ -188,6 +188,7 @@ pub(super) fn lower_preg_replace_callback_closure(
         callback,
         &[PhpType::Array(Box::new(PhpType::Str))],
         None,
+        None,
         *is_static,
     ))
 }
@@ -234,7 +235,19 @@ pub(super) fn lower_xml_handler_setter_args(
     let hints = crate::builtins::xml::handler_param_hints(name);
     args.iter()
         .enumerate()
-        .map(|(index, arg)| lower_xml_handler_setter_arg(ctx, sig, &hints, index, arg))
+        .map(|(index, arg)| {
+            let value = lower_xml_handler_setter_arg(ctx, sig, &hints, index, arg);
+            if index + 1 < args.len()
+                && !sig.is_some_and(|sig| {
+                    sig.ref_params.get(index).copied().unwrap_or(false)
+                })
+            {
+                let lowered = lowered_value_from_id(ctx, value);
+                root_evaluated_call_argument(ctx, lowered, arg.span).value
+            } else {
+                value
+            }
+        })
         .collect()
 }
 
@@ -315,7 +328,18 @@ pub(super) fn lower_xml_handler_setter_named_args(
             }
             None => lower_call_source_arg(ctx, source_arg),
         };
-        source_values.push(value);
+        if source_index + 1 < plan.source_args.len()
+            && !planned.is_some_and(|(param_idx, _)| {
+                sig.ref_params.get(param_idx).copied().unwrap_or(false)
+            })
+        {
+            let lowered = lowered_value_from_id(ctx, value);
+            source_values.push(
+                root_evaluated_call_argument(ctx, lowered, source_arg.span).value,
+            );
+        } else {
+            source_values.push(value);
+        }
     }
     plan.regular_args
         .iter()
@@ -393,6 +417,7 @@ fn lower_xml_handler_closure(
             arg,
             hint,
             None,
+            None,
             *is_static,
         )
         .value,
@@ -449,8 +474,15 @@ pub(super) fn lower_json_decode_args(
     let source = persist_call_arg_if_string(ctx, source, args[0].span);
     let mut operands = Vec::with_capacity(args.len());
     operands.push(source.value);
-    for arg in &args[1..] {
-        operands.push(lower_expr(ctx, arg).value);
+    for (offset, arg) in args[1..].iter().enumerate() {
+        let value = lower_expr(ctx, arg);
+        // Depth and flags (operands 2 and 3) are integers to the decoder; a boxed value is cast.
+        let value = if offset >= 1 && value.ir_type != IrType::I64 {
+            coerce_to_int_at_span(ctx, value, Some(arg.span))
+        } else {
+            value
+        };
+        operands.push(value.value);
     }
     operands
 }

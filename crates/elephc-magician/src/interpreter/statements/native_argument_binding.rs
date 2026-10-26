@@ -6,17 +6,32 @@
 //!
 //! Key details:
 //! - Named, variadic, typed, and degraded by-value reference modes share one binder.
+//! - A generated method or constructor bridge is called DIRECTLY, with one argument per physical
+//!   parameter, so this binder both binds the PHP-visible signature and materializes the
+//!   compiler-internal slots that bridge takes: the hidden actual-argument count, and the hidden
+//!   surplus collector (whose first element is that same count when a visible regular carries a
+//!   default). Free functions do not come through here: they reach an eval-registered descriptor
+//!   INVOKER, which synthesizes those slots itself from a container of only the supplied
+//!   arguments, so their registration drops the hidden slots entirely.
+//! - Which physical slots are hidden comes from the EXPLICIT `NativeCallableShape` the generated
+//!   bridge registers, not from a spelling convention: the shape states the PHP-visible regular
+//!   count, the true required count, and whether the variadic slot is source-declared. Hidden
+//!   slots additionally register an empty name, which keeps them unreachable by a named argument
+//!   and invisible to Reflection even if a caller reached this code with no shape at all.
 
 use super::*;
 
 /// Binds native AOT callable args using the selected by-reference degradation mode.
 pub(super) fn bind_native_callable_bound_args_with_mode(
     signature: Option<NativeCallableSignature>,
-    args: Vec<EvaluatedCallArg>,
+    mut args: Vec<EvaluatedCallArg>,
     by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
+    // The caller owns evaluated operands. Only defaults, coercions, and variadic
+    // containers allocated by this binder belong to the native activation.
+    for arg in &mut args { arg.value = arg.value.borrowed(); }
     let Some(signature) = signature else {
         return positional_evaluated_bound_args(None, args, by_ref_mode, context, values);
     };
@@ -41,11 +56,10 @@ pub(super) fn positional_evaluated_bound_args(
     if args.iter().any(|arg| arg.name.is_some()) {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let mut bound_args = args
+    let bound_args = args
         .into_iter()
         .enumerate()
         .map(|(index, arg)| {
-            let owned = arg.owned;
             let ref_target = match signature {
                 Some(signature) => native_parameter_ref_target(
                     signature,
@@ -60,18 +74,11 @@ pub(super) fn positional_evaluated_bound_args(
                 value: arg.value,
                 ref_target,
                 variadic_ref_targets: Vec::new(),
-                owned,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
     if let Some(signature) = signature {
-        apply_native_callable_bound_arg_types(signature, &mut bound_args, context, values)?;
-        copy_native_call_user_func_by_value_ref_args(
-            signature,
-            &mut bound_args,
-            by_ref_mode,
-            values,
-        )?;
+        return finish_native_argument_binding(signature, bound_args, &[], by_ref_mode, context, values);
     }
     Ok(bound_args)
 }
@@ -81,27 +88,6 @@ pub(in crate::interpreter) fn native_bound_arg_values(
     args: &[BoundMethodArg],
 ) -> Vec<RuntimeCellHandle> {
     args.iter().map(|arg| arg.value).collect()
-}
-
-/// Releases the bound-argument cells the caller still owed once the callee has been handed them.
-///
-/// A spread element comes out of `array_get` owned (`mixed_array_get.rs`: every successful return
-/// is an owned `Mixed*`) while the generated bridge only borrows what it is handed, so the debt
-/// outlives the call and is paid here. A callee that hands one of those cells back as its result
-/// transfers the reference to the caller instead, so a returned handle is never released.
-pub(in crate::interpreter) fn release_owned_bound_args(
-    bound_args: &[BoundMethodArg],
-    returned: Option<RuntimeCellHandle>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    for bound_arg in bound_args {
-        if !bound_arg.owned || Some(bound_arg.value) == returned {
-            continue;
-        }
-        eval_release_value(context, values, bound_arg.value)?;
-    }
-    Ok(())
 }
 
 /// Returns whether native argument write-back has any caller storage to update.
@@ -115,6 +101,42 @@ pub(in crate::interpreter) fn native_bound_args_require_writeback(
         .any(|arg| arg.ref_target.is_some() || !arg.variadic_ref_targets.is_empty())
 }
 
+/// Releases only binder-owned defaults/coercions/variadics after reference writeback.
+pub(in crate::interpreter) fn release_native_bound_args(
+    args: &[BoundMethodArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let mut result = Ok(());
+    for arg in args {
+        for (key, _) in &arg.variadic_ref_targets {
+            let released = release_expr_result(*key, context, values);
+            if result.is_ok() { result = released; }
+        }
+        let released = release_expr_result(arg.value, context, values);
+        if result.is_ok() { result = released; }
+    }
+    result
+}
+
+/// Preserves a native result while releasing the activation's internal argument owners.
+pub(super) fn finish_native_bound_call(
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    args: &[BoundMethodArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let released = release_native_bound_args(args, context, values);
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = release_expr_result(value, context, values);
+            Err(status)
+        }
+        (Ok(value), Ok(())) => Ok(value),
+    }
+}
+
 /// Writes native AOT by-reference argument cells back to their eval caller targets.
 pub(in crate::interpreter) fn write_back_native_callable_ref_args(
     bound_args: &[BoundMethodArg],
@@ -123,14 +145,99 @@ pub(in crate::interpreter) fn write_back_native_callable_ref_args(
 ) -> Result<(), EvalStatus> {
     for bound_arg in bound_args {
         if let Some(target) = bound_arg.ref_target.as_ref() {
-            write_back_method_ref_target(target, bound_arg.value, context, values)?;
+            write_back_native_ref_target(target, bound_arg.value, context, values)?;
         }
         for (key, target) in &bound_arg.variadic_ref_targets {
             let value = values.array_get(bound_arg.value, *key)?;
-            write_back_method_ref_target(target, value, context, values)?;
+            let written = write_back_native_ref_target(target, value, context, values);
+            let released = release_expr_result(value, context, values);
+            written.and(released)?;
         }
     }
     Ok(())
+}
+
+/// Acquires a caller-scope owner before a native activation releases a coerced reference argument.
+fn write_back_native_ref_target(
+    target: &EvalReferenceTarget,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let EvalReferenceTarget::Variable { scope, name } = target else {
+        return write_back_method_ref_target(target, value, context, values);
+    };
+    let Some(scope) = (unsafe { scope.live_mut() }) else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if visible_scope_cell(context, scope, name) == Some(value) {
+        return Ok(());
+    }
+    let retained = values.retain(value)?;
+    let replaced = match set_owned_scope_cell(context, scope, name.clone(), retained, values) {
+        Ok(replaced) => replaced,
+        Err(status) => {
+            let _ = eval_release_value(context, values, retained);
+            return Err(status);
+        }
+    };
+    for cell in replaced { eval_release_value(context, values, cell)?; }
+    Ok(())
+}
+
+/// Returns the argument count PHP reports for this call, which is what `func_num_args()` sees.
+///
+/// PHP fills the gap before the greatest supplied regular parameter with defaults and counts that
+/// slot's index plus one, then adds the surplus positional arguments. An unknown NAMED argument,
+/// which only a source-declared variadic can absorb, is not counted: it is keyed by its name.
+fn native_actual_argument_count(
+    signature: &NativeCallableSignature,
+    variadic_index: Option<usize>,
+    args: &[EvaluatedCallArg],
+) -> usize {
+    let regular_count = signature.visible_regular_param_count();
+    let mut next_positional = 0usize;
+    let mut highest_regular = 0usize;
+    let mut positional_surplus = 0usize;
+    for arg in args {
+        if let Some(name) = arg.name.as_deref() {
+            if let Some(position) = native_regular_param_index(signature, variadic_index, name) {
+                highest_regular = highest_regular.max(position + 1);
+            }
+            continue;
+        }
+        if next_positional < regular_count {
+            highest_regular = highest_regular.max(next_positional + 1);
+            next_positional += 1;
+        } else {
+            positional_surplus += 1;
+        }
+    }
+    highest_regular + positional_surplus
+}
+
+/// Writes the actual argument count into the hidden collector's first element.
+///
+/// `values.int` hands back an owner this binder holds; the collector retains its own on insert,
+/// so the local owner is released immediately and only the collector's survives into the call.
+fn stage_hidden_collector_count(
+    bound_args: &mut [Option<BoundMethodArg>],
+    variadic_index: Option<usize>,
+    actual_count: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let count = values.int(actual_count as i64)?;
+    let key = match values.int(0) {
+        Ok(key) => key,
+        Err(status) => {
+            let _ = values.release(count);
+            return Err(status);
+        }
+    };
+    // `bind_native_variadic_arg` releases the key itself when there is no writeback target.
+    let inserted = bind_native_variadic_arg(bound_args, variadic_index, key, count, None, values);
+    let released = values.release(count);
+    inserted.and(released)
 }
 
 /// Binds native AOT callable args and fills omitted defaults from metadata.
@@ -143,106 +250,177 @@ pub(super) fn bind_native_signature_args(
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
     let mut bound_args = vec![None; signature.param_count()];
     let variadic_index = native_callable_variadic_index(signature);
+    let regular_count = signature.visible_regular_param_count();
+    let collector_needs_count = signature.collector_needs_count();
+    let hidden_argc_index = signature.hidden_argc_index();
+    let actual_count = native_actual_argument_count(signature, variadic_index, &args);
     let mut next_positional = 0;
     let mut next_variadic_index = 0_i64;
 
-    if let Some(index) = variadic_index {
-        let array = values.array_new(args.len())?;
-        bound_args[index] = Some(BoundMethodArg {
-            value: array,
-            ref_target: None,
-            variadic_ref_targets: Vec::new(),
-            owned: false,
-        });
-    }
-
-    for arg in args {
-        if let Some(name) = arg.name {
-            bind_native_named_signature_arg(
-                signature,
-                variadic_index,
-                &mut bound_args,
-                &name,
-                arg.value,
-                arg.ref_target,
-                arg.owned,
-                by_ref_mode,
-                values,
-            )?;
-        } else if let Some((overflow, owned)) = bind_native_positional_signature_arg(
-            signature,
-            &mut bound_args,
-            variadic_index,
-            &mut next_positional,
-            &mut next_variadic_index,
-            arg.value,
-            arg.ref_target,
-            arg.owned,
-            by_ref_mode,
-            values,
-        )? {
-            // The callable has no slot left for this one. It never joins `bound_args`, so the
-            // release that runs after the call will not see it and this is its only owner.
-            if owned {
-                eval_release_value(context, values, overflow)?;
+    // A default is the callee's own value, never the caller's argument, so php does not type-check
+    // it (`= null` even makes a declared type implicitly nullable): remember which slots were
+    // defaulted and leave them out of the parameter-type coercion below.
+    let mut defaulted = vec![false; bound_args.len()];
+    let filled = (|| {
+        if let Some(index) = variadic_index {
+            let array = values.array_new(args.len())?;
+            bound_args[index] = Some(BoundMethodArg {
+                value: array,
+                ref_target: None,
+                variadic_ref_targets: Vec::new(),
+            });
+            if collector_needs_count {
+                // The hidden collector's element 0 is the count; the surplus starts at 1, which
+                // is exactly what the rewritten `func_get_args()` body slices off.
+                stage_hidden_collector_count(&mut bound_args, variadic_index, actual_count, values)?;
+                next_variadic_index = 1;
             }
         }
-    }
+        if let Some(index) = hidden_argc_index {
+            bound_args[index] = Some(BoundMethodArg {
+                value: values.int(actual_count as i64)?,
+                ref_target: None,
+                variadic_ref_targets: Vec::new(),
+            });
+        }
 
-    let mut defaulted = vec![false; bound_args.len()];
-    for (position, value) in bound_args.iter_mut().enumerate() {
-        if Some(position) == variadic_index {
-            continue;
+        for arg in args {
+            if let Some(name) = arg.name {
+                bind_native_named_signature_arg(
+                    signature,
+                    variadic_index,
+                    &mut bound_args,
+                    &name,
+                    arg.value,
+                    arg.ref_target,
+                    by_ref_mode,
+                    values,
+                )?;
+            } else if let Some(overflow) = bind_native_positional_signature_arg(
+                signature,
+                &mut bound_args,
+                variadic_index,
+                regular_count,
+                &mut next_positional,
+                &mut next_variadic_index,
+                arg.value,
+                arg.ref_target,
+                by_ref_mode,
+                values,
+            )? {
+                // The callable has no slot left for this one. It never joins `bound_args`, so the
+                // release that runs after the call will not see it; a borrowed value stays with its
+                // owner and an owned one has no other.
+                release_expr_result(overflow, context, values)?;
+            }
         }
-        if value.is_some() {
-            continue;
-        }
-        defaulted[position] = true;
-        if position < signature.required_param_count() {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        let Some(default) = signature.param_default(position) else {
-            return Err(EvalStatus::RuntimeFatal);
-        };
-        *value = Some(BoundMethodArg {
-            value: materialize_native_callable_default(default, context, values)?,
-            ref_target: None,
-            variadic_ref_targets: Vec::new(),
-            owned: true,
-        });
-    }
 
-    let mut bound_args = bound_args
-        .into_iter()
-        .collect::<Option<Vec<_>>>()
-        .ok_or(EvalStatus::RuntimeFatal)?;
-    apply_native_callable_bound_arg_types_except(
-        signature,
-        &mut bound_args,
-        &defaulted,
-        context,
-        values,
-    )?;
-    copy_native_call_user_func_by_value_ref_args(
-        signature,
-        &mut bound_args,
-        by_ref_mode,
-        values,
-    )?;
-    Ok(bound_args)
+        for (position, value) in bound_args.iter_mut().enumerate() {
+            if Some(position) == variadic_index {
+                continue;
+            }
+            if value.is_some() {
+                continue;
+            }
+            if position >= regular_count {
+                // Every hidden slot was materialized above. Reaching one here would mean the
+                // registered frame shape disagrees with the bridge's physical parameter list,
+                // and calling it with a hole would corrupt the callee's activation.
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            if position < signature.required_param_count() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let default_value = match signature.param_default(position) {
+                Some(default) => materialize_native_callable_default(default, context, values)?,
+                None => materialize_compiled_native_callable_default(
+                    signature
+                        .compiled_param_default(position)
+                        .ok_or(EvalStatus::RuntimeFatal)?,
+                )?,
+            };
+            *value = Some(BoundMethodArg {
+                value: default_value,
+                ref_target: None,
+                variadic_ref_targets: Vec::new(),
+            });
+            defaulted[position] = true;
+        }
+
+        Ok(())
+    })();
+    let bound_args = bound_args.into_iter().flatten().collect::<Vec<_>>();
+    if let Err(status) = filled {
+        let _ = release_native_bound_args(&bound_args, context, values);
+        return Err(status);
+    }
+    finish_native_argument_binding(signature, bound_args, &defaulted, by_ref_mode, context, values)
 }
 
-/// Applies registered native AOT parameter types after argument binding and default filling.
-pub(super) fn apply_native_callable_bound_arg_types(
+/// Calls one compiler-emitted, zero-argument helper that returns an owned boxed Mixed default.
+///
+/// Registration accepts only helpers lowered from finite side-effect-free literal trees. Those
+/// helpers may allocate strings or nested arrays, but they cannot dispatch PHP code or raise a
+/// PHP Throwable across the Rust stack. A null return remains fatal instead of fabricating a PHP
+/// value after an allocation failure. The returned Mixed owner joins `bound_args`, whose ordinary
+/// coercion-error, later-binding-error, normal-return, and exceptional cleanup paths release it.
+fn materialize_compiled_native_callable_default(
+    callback: usize,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if callback == 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let callback: unsafe extern "C" fn() -> *mut crate::value::RuntimeCell =
+        unsafe { std::mem::transmute(callback) };
+    let value = unsafe { callback() };
+    if value.is_null() {
+        Err(EvalStatus::RuntimeFatal)
+    } else {
+        Ok(RuntimeCellHandle::from_raw(value))
+    }
+}
+
+#[cfg(test)]
+mod compiled_default_tests {
+    use super::*;
+
+    /// Returns a non-null opaque cell identity without dereferencing it.
+    unsafe extern "C" fn compiled_default_stub() -> *mut crate::value::RuntimeCell {
+        std::ptr::dangling_mut::<crate::value::RuntimeCell>()
+    }
+
+    /// A compiled fallback enters binding as an owned Mixed cell, never as a borrowed sentinel.
+    #[test]
+    fn compiled_default_callback_returns_an_owned_mixed_cell() {
+        let callback = compiled_default_stub as *const () as usize;
+        let value =
+            materialize_compiled_native_callable_default(callback).expect("compiled default");
+        assert_eq!(value.as_ptr(), std::ptr::dangling_mut());
+        assert!(!value.is_borrowed());
+        assert_eq!(materialize_compiled_native_callable_default(0), Err(EvalStatus::RuntimeFatal));
+    }
+}
+
+/// Applies type coercion and reference degradation, reclaiming partial binding on errors.
+fn finish_native_argument_binding(
     signature: &NativeCallableSignature,
-    bound_args: &mut [BoundMethodArg],
+    mut args: Vec<BoundMethodArg>,
+    defaulted: &[bool],
+    by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    apply_native_callable_bound_arg_types_except(signature, bound_args, &[], context, values)
+) -> Result<Vec<BoundMethodArg>, EvalStatus> {
+    let bound = apply_native_callable_bound_arg_types_except(signature, &mut args, defaulted, context, values)
+        .and_then(|()| copy_native_call_user_func_by_value_ref_args(signature, &mut args, by_ref_mode, values));
+    if let Err(status) = bound {
+        let _ = release_native_bound_args(&args, context, values);
+        return Err(status);
+    }
+    Ok(args)
 }
 
-/// [`apply_native_callable_bound_arg_types`], leaving the positions `defaulted` marks alone.
+/// Applies registered native AOT parameter types after argument binding and default filling,
+/// leaving the positions `defaulted` marks alone.
 ///
 /// A default is the callee's own value, never the caller's argument, so php does not type-check
 /// it -- `= null` even makes a declared type implicitly nullable. Coercing it anyway refused
@@ -266,9 +444,9 @@ pub(super) fn apply_native_callable_bound_arg_types_except(
         if signature.param_variadic(position) {
             apply_native_callable_variadic_arg_type(param_type, bound_arg, context, values)?;
         } else {
-            let coerced =
-                eval_method_parameter_value(param_type, bound_arg.value, context, values)?;
-            settle_coerced_bound_arg(bound_arg, coerced, values)?;
+            let original = bound_arg.value;
+            bound_arg.value = eval_method_parameter_value(param_type, original, context, values)?;
+            if bound_arg.value != original { release_expr_result(original, context, values)?; }
         }
     }
     Ok(())
@@ -284,9 +462,20 @@ pub(super) fn apply_native_callable_variadic_arg_type(
     let len = values.array_len(bound_arg.value)?;
     for position in 0..len {
         let key = values.array_iter_key(bound_arg.value, position)?;
-        let value = values.array_get(bound_arg.value, key)?;
-        let value = eval_method_parameter_value(param_type, value, context, values)?;
-        bound_arg.value = values.array_set(bound_arg.value, key, value)?;
+        let updated = (|| {
+            let original = values.array_get(bound_arg.value, key)?;
+            let coerced = eval_method_parameter_value(param_type, original, context, values);
+            let inserted = coerced.and_then(|value| {
+                let inserted = values.array_set(bound_arg.value, key, value);
+                if value != original { release_expr_result(value, context, values)?; }
+                inserted
+            });
+            let released = release_expr_result(original, context, values);
+            inserted.and_then(|array| released.map(|()| array))
+        })();
+        let released = release_expr_result(key, context, values);
+        bound_arg.value = updated?;
+        released?;
     }
     pack_native_string_variadic(param_type, bound_arg, values)?;
     pack_native_object_variadic(param_type, bound_arg, values)
@@ -331,7 +520,6 @@ fn pack_native_object_variadic(
     // Nothing else references the boxed tail built by the binder, and the packed one is this
     // call's to release once the callee has been handed it.
     let previous = std::mem::replace(&mut bound_arg.value, packed);
-    bound_arg.owned = true;
     values.release(previous)?;
     Ok(())
 }
@@ -375,7 +563,6 @@ fn pack_native_string_variadic(
     // Nothing else references the boxed tail built by the binder, and the packed one is this
     // call's to release once the callee has been handed it.
     let previous = std::mem::replace(&mut bound_arg.value, packed);
-    bound_arg.owned = true;
     values.release(previous)?;
     Ok(())
 }
@@ -400,8 +587,9 @@ pub(super) fn copy_native_call_user_func_by_value_ref_args(
         if !signature.param_by_ref(param_index) || bound_arg.ref_target.is_some() {
             continue;
         }
-        let copy = copy_native_call_user_func_by_value_ref_arg(bound_arg.value, values)?;
-        settle_coerced_bound_arg(bound_arg, copy, values)?;
+        let original = bound_arg.value;
+        bound_arg.value = copy_native_call_user_func_by_value_ref_arg(original, values)?;
+        if !original.is_borrowed() { values.release(original)?; }
     }
     Ok(())
 }
@@ -439,28 +627,23 @@ pub(super) fn native_callable_variadic_index(signature: &NativeCallableSignature
 
 /// Binds one positional native AOT argument to a fixed slot or variadic array.
 ///
-/// Returns the argument BACK, with its ownership flag, when the callable has no slot left for it.
-/// PHP accepts extra positional arguments to a userland function -- they are simply not bound to
-/// a parameter, reachable only through `func_get_args()` -- and refusing them here turned an
-/// ordinary call into a runtime fatal. Symfony's route loading is exactly that call:
-/// `ObjectLoader::load()` invokes `$loaderObject->$method($this, $this->env)` against
-/// `MicroKernelTrait::loadRoutes(LoaderInterface $loader)`, which declares ONE parameter.
-///
-/// The extra value does not reach the compiled body's `func_get_args()`, which is fixed at
-/// compile time; dropping it is what the callee can actually observe.
+/// `regular_count` is the number of PHP-visible non-variadic parameters, which is NOT the
+/// variadic slot's physical index whenever a hidden count parameter sits between them. Using the
+/// physical index here is what let a caller's second argument land in the hidden count slot.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn bind_native_positional_signature_arg(
     signature: &NativeCallableSignature,
     bound_args: &mut [Option<BoundMethodArg>],
     variadic_index: Option<usize>,
+    regular_count: usize,
     next_positional: &mut usize,
     next_variadic_index: &mut i64,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
-    owned: bool,
     by_ref_mode: EvalByRefBindingMode<'_>,
     values: &mut impl RuntimeValueOps,
-) -> Result<Option<(RuntimeCellHandle, bool)>, EvalStatus> {
-    if variadic_index.is_some_and(|index| *next_positional >= index) {
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if variadic_index.is_some() && *next_positional >= regular_count {
         let key = values.int(*next_variadic_index)?;
         *next_variadic_index = next_variadic_index
             .checked_add(1)
@@ -473,14 +656,15 @@ pub(super) fn bind_native_positional_signature_arg(
             key,
             value,
             ref_target,
-            owned,
             values,
         )?;
         return Ok(None);
     }
     let param_index = *next_positional;
-    if param_index >= bound_args.len() {
-        return Ok(Some((value, owned)));
+    if param_index >= regular_count || param_index >= bound_args.len() {
+        // PHP accepts extra positional arguments to a userland function: they are simply not bound
+        // to a parameter. The caller releases the value it gets back.
+        return Ok(Some(value));
     }
     if bound_args[param_index].is_some() {
         return Err(EvalStatus::RuntimeFatal);
@@ -491,13 +675,16 @@ pub(super) fn bind_native_positional_signature_arg(
         value,
         ref_target,
         variadic_ref_targets: Vec::new(),
-        owned,
     });
     *next_positional += 1;
     Ok(None)
 }
 
-/// Binds one named native AOT argument to a fixed non-variadic slot.
+/// Binds one named native AOT argument to a fixed slot, or to a source variadic under its name.
+///
+/// A hidden slot can never be selected here: `native_regular_param_index` searches only the
+/// registered PHP-visible regular prefix, and a hidden slot also registers an EMPTY name that no
+/// PHP parameter name can equal.
 pub(super) fn bind_native_named_signature_arg(
     signature: &NativeCallableSignature,
     variadic_index: Option<usize>,
@@ -505,7 +692,6 @@ pub(super) fn bind_native_named_signature_arg(
     name: &str,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
-    owned: bool,
     by_ref_mode: EvalByRefBindingMode<'_>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -524,9 +710,17 @@ pub(super) fn bind_native_named_signature_arg(
             value,
             ref_target,
             variadic_ref_targets: Vec::new(),
-            owned,
         });
         return Ok(());
+    }
+    // PHP absorbs an unknown named argument into a SOURCE-declared variadic, keeping its string
+    // key in the collected array. A frame that only carries the hidden collector declares no
+    // variadic as far as the program is concerned, so it still refuses the name.
+    if signature.source_variadic_index().is_some() {
+        let key = values.string(name)?;
+        let ref_target =
+            native_parameter_ref_target(signature, variadic_index, ref_target, by_ref_mode, values)?;
+        return bind_native_variadic_arg(bound_args, variadic_index, key, value, ref_target, values);
     }
     Err(EvalStatus::RuntimeFatal)
 }
@@ -575,6 +769,10 @@ pub(super) fn native_callable_param_warning_name(
 }
 
 /// Returns the matching non-variadic native parameter index for one named arg.
+///
+/// The search is bounded by the registered PHP-visible regular count, so a compiler-internal slot
+/// can never be selected by name even if it somehow carried one. The empty name a hidden slot
+/// registers is a second, independent guard rather than the mechanism.
 pub(super) fn native_regular_param_index(
     signature: &NativeCallableSignature,
     variadic_index: Option<usize>,
@@ -583,6 +781,7 @@ pub(super) fn native_regular_param_index(
     signature
         .param_names()
         .iter()
+        .take(signature.visible_regular_param_count())
         .enumerate()
         .position(|(index, param)| Some(index) != variadic_index && param == name)
 }
@@ -594,20 +793,16 @@ pub(super) fn bind_native_variadic_arg(
     key: RuntimeCellHandle,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
-    owned: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let index = variadic_index.ok_or(EvalStatus::RuntimeFatal)?;
     let bound = bound_args[index].as_mut().ok_or(EvalStatus::RuntimeFatal)?;
-    let array = values.array_set(bound.value, key, value)?;
+    let inserted = values.array_set(bound.value, key, value);
+    if ref_target.is_none() || inserted.is_err() { values.release(key)?; }
+    let array = inserted?;
     bound.value = array;
     if let Some(ref_target) = ref_target {
         bound.variadic_ref_targets.push((key, ref_target));
-    }
-    // `__elephc_eval_value_array_set` increfs the value before the setter consumes it, so the
-    // variadic array now holds its own reference and any release the caller owed is settled here.
-    if owned {
-        values.release(value)?;
     }
     Ok(())
 }

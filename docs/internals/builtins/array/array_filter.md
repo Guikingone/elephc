@@ -1,16 +1,16 @@
 ---
-title: "array_filter() — internals"
+title: "array_filter() - internals"
 description: "Compiler internals for array_filter(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 15
 ---
 
-## `array_filter()` — internals
+## `array_filter()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_filter.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_filter.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -26,7 +26,7 @@ sidebar:
 - **Validation**: `checker_hook`
 - **Result type source**: `shared`
 - **Result ownership**: `fresh`
-- **Effects**: `static (16 declared effects)`
+- **Effects**: `static (18 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_filter(array $array, callable $callback = null, int $mode = 0): array
+function array_filter(array $array, ?callable $callback = null, int $mode = 0): array
 ```
 
 ## What the type checker enforces

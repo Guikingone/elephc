@@ -148,6 +148,7 @@ fn contextual_closure_sig(
         declared_params,
         variadic: variadic.clone(),
         deprecation: None,
+        is_generator: false,
     }))
 }
 

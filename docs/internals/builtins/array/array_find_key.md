@@ -1,11 +1,11 @@
 ---
-title: "array_find_key() — internals"
+title: "array_find_key() - internals"
 description: "Compiler internals for array_find_key(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 17
 ---
 
-## `array_find_key()` — internals
+## `array_find_key()` - internals
 
 ## Where it lives
 

@@ -204,6 +204,30 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("language constructs", out)
         self.assertIn("`isset()`", out)
 
+    def test_construct_route_behind_a_baseline_function_counts_in_its_module_row(self):
+        """`exit()` is a language construct to the compiler but a function to PHP since 8.4.
+
+        The baseline therefore lists it under Core, and the row must count it like any
+        other route: excluding it made Core read 60 / 62 for two functions a compiled
+        program can call. `isset` stays in the constructs sentence because PHP never
+        lists it.
+        """
+        baseline = json.loads(json.dumps(BASELINE))
+        baseline["extensions"].append("core")
+        baseline["functions"]["exit"] = "core"
+        baseline["functions"]["die"] = "core"
+        reg = [
+            public("exit", module="core", aot_kind="language-construct"),
+            public("die", module="core", aot_kind="language-construct"),
+            public("isset", module="core", aot_kind="language-construct"),
+        ]
+        code, out = run_gen(registry=reg, baseline=baseline)
+        self.assertEqual(code, 0)
+        self.assertIn("| `core` | 2 / 2 · 100% | - | - |", out)
+        self.assertIn("elephc implements 1 PHP language constructs", out)
+        self.assertIn("`isset()`", out)
+        self.assertNotIn("`exit()`, `isset()`", out)
+
     def test_elephc_only_builtin_renders_in_beyond_php(self):
         code, out = run_gen(registry=[public("strlen"), public("clamp", module="elephc")])
         self.assertEqual(code, 0)
@@ -280,6 +304,22 @@ class ValidationTests(unittest.TestCase):
 
 
 class RenderTests(unittest.TestCase):
+    def test_registry_prelude_and_rewrite_routes_all_count_as_compiled_functions(self):
+        """#768: AOT coverage counts all three routes, but eval counts only its binding."""
+        baseline = dict(BASELINE, functions={
+            "registry_fn": "standard", "prelude_fn": "standard", "rewrite_fn": "standard",
+        })
+        reg = [
+            public("registry_fn", aot_kind="registry"),
+            public("prelude_fn", aot_kind="prelude", eval_supported=False),
+            public("rewrite_fn", aot_kind="name-resolver-rewrite", eval_supported=False),
+        ]
+        code, out = run_gen(registry=reg, baseline=baseline)
+        self.assertEqual(code, 0)
+        self.assertIn("| `standard` | 3 / 3 · 100% |", out)
+        self.assertIn("- `standard` functions: 3 / 1", out)
+        self.assertNotIn("Most of that is one gap rather than several.", out)
+
     def test_counts_and_determinism(self):
         reg = [public("strlen"), public("strrev", eval_supported=False)]
         symbols = {
@@ -295,7 +335,7 @@ class RenderTests(unittest.TestCase):
         # standard: functions 2 of 3, classes 1 of 2, constants 1 of 2; pcre: functions 0 of 1,
         # no classes, constants 1 of 1.
         self.assertIn("| `standard` | 2 / 3 · 67% | 1 / 2 · 50% | 1 / 2 · 50% |", first)
-        self.assertIn("| `pcre` | 0 / 1 · 0% | — | 1 / 1 · 100% |", first)
+        self.assertIn("| `pcre` | 0 / 1 · 0% | - | 1 / 1 · 100% |", first)
         self.assertIn("functions **2 / 4**", first)
         self.assertIn("classes **1 / 2**", first)
         self.assertIn("constants **2 / 3**", first)

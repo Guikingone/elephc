@@ -245,6 +245,31 @@ they do not expect `/etc/ssl`, and the bridge does not probe for PEM files after
 `curl_version_info()` advertises `AppleSecTrust`. The same native verification
 applies independently to an HTTPS proxy connection.
 
+How that path is verified in CI is worth knowing, because the two iOS rows can
+be checked to different depths. The required `Curl iOS Compile & Link` job
+builds the whole native chain with the real Xcode toolchain and proves the
+archive is the SecTrust build — `AppleSecTrust` in its strings,
+`SecTrustCreateWithCertificates` among its undefined symbols — then links the
+complete host/native/bridge graph for device and Simulator. It does not perform
+a transfer.
+
+A separate opt-in workflow, `iOS curl live`, boots a Simulator and performs one
+real HTTPS GET on `ios-sim-arm64` against the linked libcurl with no CA option
+set, so SecTrust is what decides. It runs weekly and on demand rather than on
+every push, because it reaches the public internet.
+
+That transfer is driven from the **application host's C code**, not from the
+PHP half, and the reason is structural rather than convenience. An iOS build is
+a library: `elephc_init()` runs no top-level statements, and an exported
+function that reached curl would be refused by the export gate, which requires
+every export to be recoverable at the host boundary. So the PHP side of the
+fixture settles which archives are linked and the host side exercises them.
+elephc's own PHP curl surface is covered at run time by the Linux and macOS
+codegen shards instead.
+
+`ios-arm64` cannot be run in CI at all — it needs signing, provisioning and
+hardware — so compile/link evidence is the whole story there.
+
 An explicit CA setting remains explicit on iOS. `CURLOPT_CAINFO`,
 `CURLOPT_CAPATH`, or `$CURL_CA_BUNDLE` disables the automatic SecTrust path for
 that hop and verifies against the supplied file/directory instead. To combine a
@@ -507,10 +532,18 @@ despite the name, php-src forwards it straight to libcurl unchanged, and elephc 
 the same: it is an ordinary `long` option, and real libcurl implements the
 header-in-body behavior on its own.
 
-> **Divergence:** that stdout write goes straight to file descriptor 1, so
-> `ob_start()` does **not** capture it the way php's does. Wrap the transfer in
-> `CURLOPT_RETURNTRANSFER` (or a `CURLOPT_WRITEFUNCTION`) if you need the body as a
-> string.
+That write travels the same output funnel as `echo`, so `ob_start()` captures it
+exactly as php's does:
+
+```php
+$ch = curl_init('https://example.com');
+ob_start();
+curl_exec($ch);
+$html = ob_get_clean();   // the body, as in php
+```
+
+Nested buffers, `ob_get_length()`, `ob_end_clean()` and the `--web` response capture
+all see the body the same way.
 
 ### Stream options
 
@@ -616,6 +649,15 @@ while (true) {
     echo curl_multi_getcontent($info["handle"]);
 }
 ```
+
+`$still_running` has to be **seeded with an int**, as it is above. php.net's
+examples often write `$running = null`, which php-src accepts because
+`curl_multi_exec()` is an internal function; here it is a `curl_multi_exec(…, int
+&$still_running)` written in elephc-PHP, and a by-reference parameter writes back
+through the caller's variable rather than coercing it on the way in. A `null`
+seed is rejected at compile time, with the fix in the message — the same rule
+php-src applies to a *userland* `int &$x`, which throws
+`TypeError: …must be of type int, null given`.
 
 `curl_multi_get_handles()` (PHP 8.5) returns the attached handles in attachment
 order.

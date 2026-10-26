@@ -2,7 +2,7 @@
 title: "error_clear_last()"
 description: "Implemented by the compiler-injected error-handling prelude."
 sidebar:
-  order: 941
+  order: 1036
 ---
 
 ## error_clear_last()
@@ -22,7 +22,7 @@ Implemented by the compiler-injected error-handling prelude.
 - **Compiled (AOT)**: supported through the compiler-injected error_handling prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

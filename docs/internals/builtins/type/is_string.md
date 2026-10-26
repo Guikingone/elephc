@@ -1,16 +1,16 @@
 ---
-title: "is_string() — internals"
+title: "is_string() - internals"
 description: "Compiler internals for is_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 938
+  order: 1033
 ---
 
-## `is_string()` — internals
+## `is_string()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_string.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_string.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

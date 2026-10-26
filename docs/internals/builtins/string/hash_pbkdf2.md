@@ -1,11 +1,11 @@
 ---
-title: "hash_pbkdf2() — internals"
+title: "hash_pbkdf2() - internals"
 description: "Compiler internals for hash_pbkdf2(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 813
+  order: 845
 ---
 
-## `hash_pbkdf2()` — internals
+## `hash_pbkdf2()` - internals
 
 ## Where it lives
 

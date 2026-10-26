@@ -1,16 +1,16 @@
 ---
-title: "opcache_get_configuration() — internals"
+title: "opcache_get_configuration() - internals"
 description: "Compiler internals for opcache_get_configuration(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 641
+  order: 661
 ---
 
-## `opcache_get_configuration()` — internals
+## `opcache_get_configuration()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/opcache_prelude/build.rs`:128](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L128) (`opcache_get_configuration`)
+- **Lowering**: [`src/opcache_prelude/build.rs`:204](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L204) (`opcache_get_configuration`)
 - **Function symbol**: `opcache_get_configuration()`
 
 
@@ -38,7 +38,7 @@ function opcache_get_configuration(): array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

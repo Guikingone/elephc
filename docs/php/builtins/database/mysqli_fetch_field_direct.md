@@ -1,8 +1,8 @@
 ---
 title: "mysqli_fetch_field_direct()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns metadata for one column of a result by index."
 sidebar:
-  order: 132
+  order: 133
 ---
 
 ## mysqli_fetch_field_direct()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_fetch_field_direct(mixed $result, int $index): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns metadata for one column of a result by index.
 
 **Parameters**:
 - `$result` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

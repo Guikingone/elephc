@@ -1,16 +1,16 @@
 ---
-title: "get_debug_type() — internals"
+title: "get_debug_type() - internals"
 description: "Compiler internals for get_debug_type(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 918
+  order: 1012
 ---
 
-## `get_debug_type()` — internals
+## `get_debug_type()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/get_debug_type.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/get_debug_type.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

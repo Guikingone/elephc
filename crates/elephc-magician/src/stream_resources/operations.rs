@@ -12,6 +12,33 @@
 use super::*;
 
 impl EvalStreamResources {
+    /// Returns every PHP resource incarnation, retaining closed entries as `Unknown`.
+    pub(crate) fn resource_entries(&self) -> Vec<(i64, &'static str)> {
+        let mut entries = self
+            .resource_types
+            .iter()
+            .map(|(payload, resource_type)| {
+                let visible_type = if self.is_live(*payload) {
+                    *resource_type
+                } else {
+                    "Unknown"
+                };
+                (*payload, visible_type)
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|(payload, _)| *payload);
+        entries
+    }
+
+    /// Returns the current PHP type name for one eval-owned resource payload.
+    pub(crate) fn resource_type(&self, payload: i64) -> Option<&'static str> {
+        let original = self.resource_types.get(&payload).copied()?;
+        Some(if self.is_live(payload) {
+            original
+        } else {
+            "Unknown"
+        })
+    }
 
     /// Removes a stream resource from the table, closing its file handle.
     pub(crate) fn close(&mut self, id: i64) -> bool {
@@ -73,6 +100,8 @@ impl EvalStreamResources {
             filter_resources,
             hash_contexts,
             process_children,
+            process_handles,
+            resource_types: _,
             socket_listeners,
             stream_contexts,
             streams,
@@ -94,6 +123,7 @@ impl EvalStreamResources {
             || hash_contexts.contains_key(&id)
             || stream_contexts.contains_key(&id)
             || process_children.contains_key(&id)
+            || process_handles.contains_key(&id)
             || {
                 #[cfg(feature = "curl")]
                 {
@@ -138,6 +168,7 @@ impl EvalStreamResources {
     pub(crate) fn open_filter_resource(&mut self) -> i64 {
         let id = self.take_next_id();
         self.filter_resources.insert(id);
+        self.resource_types.insert(id, "stream filter");
         id
     }
 
@@ -189,7 +220,10 @@ impl EvalStreamResources {
 
     /// Returns the persisted options for a stream context resource.
     pub(crate) fn stream_context_options(&self, id: i64) -> Option<RuntimeCellHandle> {
-        self.stream_contexts.get(&id).and_then(|context| context.options)
+        self.stream_contexts
+            .get(&id)
+            .and_then(|context| context.options)
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Replaces persisted options for a stream context resource.
@@ -418,6 +452,24 @@ impl EvalStreamResources {
         length: Option<usize>,
         offset: Option<i64>,
     ) -> Option<Vec<u8>> {
+        // Payload zero is the host's reserved STDIN, outside the eval-owned id namespace.
+        // Read through a duplicate so eval and native calls share the cursor but not ownership.
+        if id == 0 {
+            let mut input = duplicate_standard_descriptor(0).ok()?;
+            if let Some(offset) = offset.filter(|offset| *offset >= 0) {
+                if let Err(error) = input.seek(SeekFrom::Start(offset as u64)) {
+                    if error.raw_os_error() != Some(libc::ESPIPE) {
+                        return None;
+                    }
+                }
+            }
+            let mut bytes = Vec::new();
+            match length {
+                Some(length) => (&mut input).take(length as u64).read_to_end(&mut bytes).ok()?,
+                None => input.read_to_end(&mut bytes).ok()?,
+            };
+            return Some(bytes);
+        }
         if let Some(offset) = offset {
             if !self.seek(id, offset, 0) {
                 return None;

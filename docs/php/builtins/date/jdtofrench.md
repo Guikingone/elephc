@@ -1,8 +1,8 @@
 ---
 title: "jdtofrench()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Converts a Julian Day count into a French Republican date string."
 sidebar:
-  order: 242
+  order: 243
 ---
 
 ## jdtofrench()
@@ -11,7 +11,7 @@ sidebar:
 function jdtofrench(int $julian_day): string
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Converts a Julian Day count into a French Republican date string.
 
 **Parameters**:
 - `$julian_day` (`int`)
@@ -23,7 +23,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

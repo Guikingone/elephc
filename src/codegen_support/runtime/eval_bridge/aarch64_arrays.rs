@@ -186,6 +186,8 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save the normalized key low word
     emitter.instruction("str x2, [sp, #16]");                                   // save the normalized key high word
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed array receiver for tag dispatch
+    emitter.instruction("bl __rt_mixed_deref");                                 // inspect the current array held by a persistent reference
+    emitter.instruction("str x0, [sp, #0]");                                    // retain the concrete receiver for the remaining lookup
     emitter.instruction("cbz x0, __elephc_eval_value_array_key_exists_false");  // null handles do not contain array keys
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed Mixed runtime tag
     emitter.instruction("cmp x9, #4");                                          // tag 4 = indexed array
@@ -238,6 +240,8 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // establish a stable iterator-key frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the boxed array receiver while walking the container
     emitter.instruction("str x1, [sp, #8]");                                    // save the requested zero-based foreach position
+    emitter.instruction("bl __rt_mixed_deref");                                 // inspect the current array held by a persistent reference
+    emitter.instruction("str x0, [sp, #0]");                                    // retain the concrete receiver for the remaining lookup
     emitter.instruction("cbz x0, __elephc_eval_value_array_iter_key_null");     // null handles produce a null key
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed Mixed runtime tag
     emitter.instruction("cmp x9, #4");                                          // tag 4 = indexed array
@@ -264,7 +268,7 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("mov x1, xzr");                                         // cursor 0 starts at the hash head entry
     emitter.label("__elephc_eval_value_array_iter_key_assoc_loop");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the hash pointer before advancing the hash iterator
-    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next insertion-order hash key
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // fetch the next insertion-order hash key
     emitter.instruction("cmn x0, #1");                                          // did the iterator report the done sentinel?
     emitter.instruction("b.eq __elephc_eval_value_array_iter_key_null");        // out-of-range positions produce a null key
     emitter.instruction("ldr x10, [sp, #24]");                                  // load the current insertion-order position
@@ -319,6 +323,9 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the boxed array Mixed cell to Rust
 
     label_c_global(emitter, "__elephc_eval_value_array_len");
+    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve caller linkage for borrowed dereferencing
+    emitter.instruction("bl __rt_mixed_deref");                                 // count elements in the current referenced array
+    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore caller linkage before the leaf count branches
     emitter.instruction("cbz x0, __elephc_eval_value_array_len_zero");          // null handles have no iterable eval elements
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed Mixed runtime tag
     emitter.instruction("cmp x9, #4");                                          // tag 4 = indexed array
@@ -425,7 +432,7 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("mov x1, xzr");                                         // cursor 0 starts at the property hash head entry
     emitter.label("__elephc_eval_value_object_property_iter_key_loop");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the hash pointer before advancing the iterator
-    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next insertion-order property key
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // fetch the next insertion-order property key
     emitter.instruction("cmn x0, #1");                                          // did the iterator report the done sentinel?
     emitter.instruction("b.eq __elephc_eval_value_object_property_iter_key_null"); // out-of-range positions produce a null key
     emitter.instruction("ldr x10, [sp, #24]");                                  // load the current insertion-order property position

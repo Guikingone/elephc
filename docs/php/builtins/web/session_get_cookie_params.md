@@ -1,8 +1,8 @@
 ---
 title: "session_get_cookie_params()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Returns the session cookie's lifetime, path, domain, and flags."
 sidebar:
-  order: 960
+  order: 1051
 ---
 
 ## session_get_cookie_params()
@@ -11,7 +11,7 @@ sidebar:
 function session_get_cookie_params(): array
 ```
 
-Implemented by the compiler-injected web prelude.
+Returns the session cookie's lifetime, path, domain, and flags.
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -18,6 +18,7 @@ mod handler_ipc;
 mod isolated_worker;
 mod multipart;
 mod probe_route;
+mod request_env;
 mod request_state;
 mod server;
 mod shared_listener;

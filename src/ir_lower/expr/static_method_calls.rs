@@ -20,20 +20,40 @@ pub(super) fn lower_static_method_call(
     // An argument the checker PROVED cannot bind. php decides this when the call runs, so the
     // build stands and the call site throws php's own `TypeError` -- see
     // `ThrowAccessKind::ArgumentType`.
-    if let Some(message) = ctx
+    if let Some((class_name, message)) = ctx
         .throw_access_sites
         .get(&(ctx.loop_storage_scope.clone(), expr.span))
         .and_then(|info| match &info.kind {
-            crate::types::ThrowAccessKind::ArgumentType { message } => Some(message.clone()),
+            crate::types::ThrowAccessKind::ArgumentType { message } => {
+                Some(("TypeError", message.clone()))
+            }
+            // A `self::`/`parent::` call to a method the class lacks: php's `Error` when it runs.
+            crate::types::ThrowAccessKind::UndefinedMethod { message } => {
+                Some(("Error", message.clone()))
+            }
             _ => None,
         })
     {
         return crate::ir_lower::stmt::lower_throw_access_class_expr(
             ctx,
-            "TypeError",
+            class_name,
             &message,
             expr.span,
         );
+    }
+    if let Some(call) = crate::types::late_static_dispatch::static_receiver_instance_method_call(
+        ctx.classes,
+        ctx.current_class.as_deref(),
+        !ctx.local_slots.contains_key("this"),
+        receiver,
+        method,
+        args,
+        expr.span,
+    ) {
+        return lower_expr(ctx, &call);
+    }
+    if let Some(value) = lower_scoped_parent_call(ctx, receiver, method, args, expr) {
+        return value;
     }
     if let Some(value) = lower_late_static_dispatch_ladder(ctx, receiver, method, args, expr) {
         return value;
@@ -64,12 +84,96 @@ pub(super) fn lower_static_method_call(
             return lower_expr(ctx, &args[0]);
         }
     }
+    // `Closure::fromCallable($value)` of a gradual (`mixed`) value in a closed-world build: the
+    // callable normalization every callable-typed boundary already uses turns the value into a
+    // callable descriptor (a Closure here), raising php's TypeError when it is not callable.
+    if crate::closed_world::is_enabled() {
+        if let StaticReceiver::Named(name) = receiver {
+            if name.trim_start_matches('\\') == "Closure"
+                && php_symbol_key(method) == "fromcallable"
+                && args.len() == 1
+                && !matches!(args[0].kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_))
+                && matches!(
+                    materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr(),
+                    PhpType::Mixed | PhpType::Union(_)
+                )
+            {
+                use crate::synthetic_class::{e_binop, e_call, e_new, e_not, e_str, e_var, s_if, s_throw};
+                // A plain variable is read twice as it is; any other expression is evaluated once
+                // into a scratch local first.
+                let plain = matches!(args[0].kind, ExprKind::Variable(_));
+                const SCRATCH: &str = "__elephc_closure_source";
+                let value_name = match &args[0].kind {
+                    ExprKind::Variable(name) if plain => name.clone(),
+                    _ => SCRATCH.to_string(),
+                };
+                let callable_value_name: &str = value_name.as_str();
+                if !plain {
+                    let source = Stmt::new(
+                        StmtKind::Assign { name: SCRATCH.to_string(), value: args[0].clone() },
+                        expr.span,
+                    );
+                    super::super::stmt::lower_stmt(ctx, &source);
+                }
+                // php raises a TypeError for anything it cannot make a Closure of. A two-element
+                // array is left to the conversion below: it resolves the method with this call's
+                // scope, as php does, while the run-time `is_callable()` sees public methods only
+                // (`[$this, 'getEnv']` names a protected method Symfony's container converts).
+                let refuse = |message: Expr| s_throw(e_new("TypeError", vec![message]));
+                let pair = e_binop(
+                    e_call("is_array", vec![e_var(callable_value_name)]),
+                    crate::parser::ast::BinOp::And,
+                    e_binop(
+                        e_call("count", vec![e_var(callable_value_name)]),
+                        crate::parser::ast::BinOp::StrictEq,
+                        crate::synthetic_class::e_int(2),
+                    ),
+                );
+                let guard = s_if(
+                        e_binop(
+                            e_not(e_call("is_callable", vec![e_var(callable_value_name)])),
+                            crate::parser::ast::BinOp::And,
+                            e_not(pair),
+                        ),
+                    vec![s_if(
+                            e_call("is_string", vec![e_var(callable_value_name)]),
+                        vec![refuse(e_binop(
+                            e_binop(
+                                e_str("Failed to create closure from callable: function \""),
+                                crate::parser::ast::BinOp::Concat,
+                                        e_var(callable_value_name),
+                            ),
+                            crate::parser::ast::BinOp::Concat,
+                            e_str("\" not found or invalid function name"),
+                        ))],
+                        vec![],
+                        Some(vec![refuse(e_str("Failed to create closure from callable: no array or string given"))]),
+                    )],
+                    vec![],
+                    None,
+                );
+                super::super::stmt::lower_stmt(ctx, &guard);
+                let value = lower_expr(ctx, &e_var(callable_value_name));
+                let callable = crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
+                    ctx,
+                    value,
+                    &PhpType::Callable,
+                    Some(expr.span),
+                );
+                // The normalization retains the payload it extracts from the boxed value; this
+                // result claims that lease so its consumer releases it.
+                ctx.builder.set_value_ownership(callable.value, Ownership::Owned);
+                return callable;
+            }
+        }
+    }
     // `Closure::bind($closure, $newThis [, $scope])` — static form of bindTo.
     if let StaticReceiver::Named(name) = receiver {
         if name.trim_start_matches('\\') == "Closure"
             && php_symbol_key(method) == "bind"
             && !args.is_empty()
         {
+            let args = &*crate::types::call_args::closure_bind_args_with_object_scope(args);
             let saved_class = ctx.current_class.clone();
             if let Some(scope) = closure_bind_scope_class(ctx, args) {
                 ctx.current_class = Some(scope);
@@ -86,41 +190,119 @@ pub(super) fn lower_static_method_call(
                 None => {}
             }
             let closure = lower_expr(ctx, &args[0]);
-            // A closure read back from a static property or an array is boxed; the bind op takes
-            // a descriptor, and handing it the box segfaulted. Narrow it the way a `callable`
-            // parameter boundary does.
-            let closure = crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
-                ctx,
-                closure,
-                &PhpType::Callable,
-                Some(args[0].span),
-            );
+            // Only the literal is lowered in the bind's scope. Left in place, the scope leaked
+            // into the rest of the enclosing body: Symfony's `ContractsTrait::doGet()` binds a
+            // closure to `CacheItem::class` and then lowered its own `$this->computing` as if
+            // written inside `CacheItem`.
             ctx.take_bound_closure_this_class();
             ctx.take_bound_closure_this_gradual();
             ctx.current_class = saved_class;
-            ctx.take_pending_static_callable_result();
+            if let (Some(new_this), Some(scope)) = (args.get(1), args.get(2)) {
+                if let Some(plan) = plan_scoped_closure_bind(ctx, &args[0], scope) {
+                    return lower_planned_scoped_closure_bind(
+                        ctx, plan, closure, new_this, scope, expr,
+                    );
+                }
+            }
+            // A dynamic eval can replace the local with a Magician-owned Closure object. Its
+            // boxed payload is not an AOT closure descriptor, so feeding it to ClosureBind would
+            // make `__rt_closure_bind` interpret the object header as descriptor metadata. Route
+            // runtime-shaped bind targets through the eval bridge, which understands both eval
+            // Closure objects and native callable cells.
+            if ctx.has_eval_barrier()
+                && matches!(
+                    ctx.builder.value_php_type(closure.value).codegen_repr(),
+                    PhpType::Mixed | PhpType::Union(_)
+                )
+            {
+                let mut operands = vec![closure.value];
+                operands.extend(args.iter().skip(1).map(|arg| lower_expr(ctx, arg).value));
+                let data = ctx.intern_string("Closure::bind");
+                return ctx.emit_value(
+                    Op::EvalStaticMethodCall,
+                    operands,
+                    Some(Immediate::Data(data)),
+                    PhpType::Mixed,
+                    Op::EvalStaticMethodCall.default_effects(),
+                    Some(expr.span),
+                );
+            }
+            // Callable identity invalidation widens an escaped closure local to boxed Mixed
+            // storage. ClosureBind consumes the descriptor payload, not the Mixed-cell address,
+            // so normalize it at the same boundary as bindTo() before publishing operand roots.
+            let closure = if matches!(
+                ctx.builder.value_php_type(closure.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            ) {
+                unbox_callable_param_storage(ctx, closure, Some(args[0].span))
+            } else {
+                closure
+            };
+            let result_staging = prepublish_call_result(ctx, &PhpType::Callable, expr.span);
+            let (closure, closure_owner) = root_owned_call_operand(ctx, closure, args[0].span);
             let new_this = match args.get(1) {
                 Some(arg) => lower_expr(ctx, arg),
                 None => lower_null(ctx, expr),
             };
-            if let Some(scope_arg) = args.get(2) {
-                let scope_value = lower_expr(ctx, scope_arg);
-                if ctx.value_is_owning_temporary(scope_value) {
-                    crate::ir_lower::ownership::release_if_owned(
-                        ctx,
-                        scope_value,
-                        Some(scope_arg.span),
+            // A suspension or other opaque writer can widen a global receiver to Mixed even
+            // though the explicit scope still proves the object representation expected by
+            // `__rt_closure_bind`. Passing the Mixed-cell address as `$this` would box that cell
+            // as an object pointer, so detach its object payload before rooting the operand.
+            let new_this = match args.get(2).and_then(|scope| {
+                static_callable_class_name(ctx, scope).and_then(|requested| {
+                    lookup_folded_name(ctx.classes.keys(), requested.trim_start_matches('\\'))
+                })
+            }) {
+                Some(scope)
+                    if matches!(
+                        ctx.builder.value_php_type(new_this.value).codegen_repr(),
+                        PhpType::Mixed | PhpType::Union(_)
+                    ) =>
+                {
+                    let receiver_type = PhpType::Object(scope);
+                    let unboxed = ctx.emit_owned_value(
+                        Op::MixedUnbox,
+                        vec![new_this.value],
+                        None,
+                        receiver_type.clone(),
+                        Op::mixed_unbox_effects(&receiver_type),
+                        args.get(1).map(|arg| arg.span).or(Some(expr.span)),
                     );
+                    release_coerced_source_if_owned(
+                        ctx,
+                        new_this,
+                        args.get(1).map(|arg| arg.span).or(Some(expr.span)),
+                    );
+                    unboxed
                 }
+                _ => new_this,
+            };
+            let (new_this, receiver_owner) = root_owned_call_operand(
+                ctx,
+                new_this,
+                args.get(1).map_or(expr.span, |arg| arg.span),
+            );
+            // The scope, when it is not a literal the specialization above already consumed, is
+            // resolved at RUN time and stamped into the bound copy's hidden scope capture.
+            let scope = lower_runtime_bind_scope(ctx, args.get(2));
+            let bound = emit_closure_bind_with_scope(
+                ctx,
+                closure.value,
+                new_this.value,
+                scope.as_ref().map(|scope| (scope.class_id, scope.value.value)),
+                expr,
+            );
+            if let Some(scope) = scope {
+                scope.release(ctx);
             }
-            let inline_scope_only = matches!(args[0].kind, ExprKind::Closure { .. })
-                && args
-                    .get(1)
-                    .is_some_and(|new_this| matches!(new_this.kind, ExprKind::Null));
-            if inline_scope_only {
-                return closure;
+            stage_call_result(ctx, result_staging.as_ref(), bound, expr.span);
+            if let Some(slot) = receiver_owner {
+                retire_owned_call_operand(ctx, slot, expr.span);
             }
-            return emit_closure_bind(ctx, closure.value, new_this.value, expr);
+            if let Some(slot) = closure_owner {
+                retire_owned_call_operand(ctx, slot, expr.span);
+            }
+            return take_prepublished_call_result(ctx, result_staging, bound, expr.span);
         }
     }
 
@@ -136,6 +318,20 @@ pub(super) fn lower_static_method_call(
     if matches!(receiver, StaticReceiver::Named(_)) && plain_positional_call_args(args) {
         if let Some(class_name) = static_receiver_class_name(ctx, receiver) {
             if !ctx.classes.contains_key(class_name.as_str()) {
+                // A closed world has no autoloader or interpreter that could supply the class:
+                // a class that is neither compiled nor a builtin simply does not exist, which is
+                // php's own `Class "X" not found` Error.
+                if crate::closed_world::is_enabled()
+                    && !ctx.enums.contains_key(class_name.as_str())
+                    && !ctx.interfaces.contains_key(class_name.as_str())
+                    && elephc_builtin_contract::lookup_class(class_name.as_str().trim_start_matches('\\')).is_none()
+                {
+                    return super::late_bound_call::lower_closed_world_class_not_found(
+                        ctx,
+                        class_name.as_str(),
+                        expr,
+                    );
+                }
                 ctx.declare_eval_context_local();
                 let operands = lower_args_with_signature(ctx, None, args);
                 let name = format!("{}::{}", class_name, dispatch_method);
@@ -167,10 +363,13 @@ pub(super) fn lower_static_method_call(
     // callable-array bridge takes the whole argument array, spreads and all -- PHP's own meaning
     // for it. Laravel's `Stringable::trim()` is `Str::trim(...array_merge([$this->value],
     // func_get_args()))` and every call died on `Class "Illuminate\Support\Str" not found`.
-    if matches!(receiver, StaticReceiver::Named(_))
-        && !plain_positional_call_args(args)
-        && !crate::types::call_args::has_named_args(args)
-    {
+    //
+    // Named arguments take the same route: an array key that is a string IS php's named
+    // argument for `call_user_func_array`. `Str::ascii()` calls
+    // `ASCII::to_ascii($value, $language, replace_single_chars_only: false)` on a class the
+    // autoloader supplies, and a named-argument call to a class unknown at compile time was
+    // compiled into a `Class "..." not found` fatal that never reached the autoloader.
+    if matches!(receiver, StaticReceiver::Named(_)) && !plain_positional_call_args(args) {
         if let Some(class_name) = static_receiver_class_name(ctx, receiver) {
             if !ctx.classes.contains_key(class_name.as_str()) {
                 ctx.declare_eval_context_local();
@@ -181,7 +380,26 @@ pub(super) fn lower_static_method_call(
                     ]),
                     expr.span,
                 );
-                let arguments = Expr::new(ExprKind::ArrayLiteral(args.to_vec()), expr.span);
+                let arguments = if crate::types::call_args::has_named_args(args) {
+                    let entries = args
+                        .iter()
+                        .map(|arg| match &arg.kind {
+                            ExprKind::Spread(inner) => {
+                                crate::parser::ast::ArrayEntry::Spread(inner.as_ref().clone())
+                            }
+                            ExprKind::NamedArg { name, value } => {
+                                crate::parser::ast::ArrayEntry::Keyed(
+                                    Expr::new(ExprKind::StringLiteral(name.clone()), arg.span),
+                                    value.as_ref().clone(),
+                                )
+                            }
+                            _ => crate::parser::ast::ArrayEntry::Value(arg.clone()),
+                        })
+                        .collect();
+                    Expr::new(ExprKind::ArrayLiteralMixed(entries), expr.span)
+                } else {
+                    Expr::new(ExprKind::ArrayLiteral(args.to_vec()), expr.span)
+                };
                 let rewritten = Expr::new(
                     ExprKind::FunctionCall {
                         name: crate::names::Name::unqualified("call_user_func_array"),
@@ -203,13 +421,10 @@ pub(super) fn lower_static_method_call(
         .as_ref()
         .map(|(call_args, _)| call_args.as_slice())
         .unwrap_or(call_args);
-    let operands = lower_user_args_with_signature(ctx, sig.as_ref(), call_args);
-    let operands =
-        coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
-    // `parent::__construct(...)` enters a constructor exactly like `new` does, and carries the
-    // same source-arity marker: `lower_user_args_with_signature` appends it to every user call.
-    let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
-    let data = ctx.intern_string(&name);
+    // The result type and the alias summary are decided by the receiver and the method alone, so
+    // they are resolved up front: the reference lease and the ordinary owned result both need
+    // their staging published BEFORE any argument expression runs, and the result staging has to
+    // be declared with the exact type the call is emitted with.
     let result_type = sig
         .as_ref()
         .map(|signature| normalize_value_php_type(signature.return_type.clone()))
@@ -230,6 +445,28 @@ pub(super) fn lower_static_method_call(
         }
         _ => result_type,
     };
+    let return_alias = static_method_return_arg_alias(ctx, receiver, dispatch_method);
+    // A by-reference-returning static method transfers a lease that must outlive this caller's
+    // argument cleanup, so its staging is published before the arguments are evaluated.
+    let reference_staging = begin_reference_return_call(ctx, sig.as_ref(), expr.span);
+    let result_staging = prepublish_user_call_result(
+        ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
+    );
+    begin_call_argument_evaluation(ctx);
+    let operands = lower_user_args_with_signature(ctx, sig.as_ref(), call_args);
+    let mut operands =
+        coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
+    let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
+    let data = ctx.intern_string(&name);
+    let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+    let roots = root_user_call_operands(
+        ctx,
+        &mut operands,
+        sig.as_ref(),
+        &return_alias,
+        &result_type,
+        expr.span,
+    );
     let call = ctx.emit_value(
         Op::StaticMethodCall,
         operands.clone(),
@@ -238,19 +475,167 @@ pub(super) fn lower_static_method_call(
         Op::StaticMethodCall.default_effects(),
         Some(expr.span),
     );
-    let return_alias = static_method_return_arg_alias(ctx, receiver, dispatch_method);
-    release_owned_call_arg_temporaries_with_signature(
+    ctx.invalidate_callable_ref_argument_locals(sig.as_ref(), &operands);
+    let call = finish_reference_return_call(
+        ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
+    );
+    stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+    release_owned_call_arg_temporaries_with_roots(
         ctx,
         &operands,
         Some(call.value),
         &return_alias,
         sig.as_ref(),
+        &roots,
         expr.span,
     );
+    retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
     if let Some((_, plans)) = prepared {
         ref_place_args::write_back_ref_place_args(ctx, plans);
     }
-    call
+    finish_reference_return_value(ctx, call, reference_staging, expr.span)
+}
+
+/// Lowers `parent::method()` written in a closure whose class has no parent.
+///
+/// php resolves `parent` against the scope the closure is BOUND to (`$f->bindTo($object, $scope)`),
+/// so the target is the method of the scope's parent class, called without virtual dispatch and
+/// with `$this` forwarded. The scope is only known when the closure runs: it is the hidden scope
+/// capture, read through `self::class` (`Op::ClosureScopeClassName`). The call becomes a ladder
+/// over the classes that can be somebody's parent and have the method, keyed on
+/// `get_parent_class(self::class)`; each arm is an ordinary `Parent::method()` call, which the
+/// closure body may make because it carries the scope capture and a bound `$this`
+/// (`closure_forwards_this_to_any_class`). It ends in php's own error when no arm matches, so a
+/// scope with no parent behaves as php does. The checker types the call `mixed`.
+fn lower_scoped_parent_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if !matches!(receiver, StaticReceiver::Parent)
+        || !ctx.local_slots.contains_key(crate::names::CLOSURE_SCOPE_LOCAL)
+    {
+        return None;
+    }
+    let current = ctx.current_class.as_ref()?;
+    if ctx.classes.get(current)?.parent.is_some() {
+        return None;
+    }
+    let key = php_symbol_key(method);
+    // An arm is only emitted for a method that can take THIS call's positional arguments. php
+    // checks the count when the call runs, so a class whose `m` needs more (Symfony's
+    // `AbstractAdapter::get(string $key, callable $callback, ...)` beside the parameter bag's
+    // `get(string $name)`) merely throws if the scope ever resolves there -- but its arm made the
+    // backend refuse the whole closure ("method call ... with 3 operands for 6 physical ... ABI
+    // params"), which handed `Descriptor` and its subclasses to the interpreter. Spread or named
+    // arguments are left to the ordinary call checks.
+    let positional = (!args.iter().any(|arg| {
+        matches!(arg.kind, ExprKind::Spread(_) | ExprKind::NamedArg { .. })
+    }))
+    .then_some(args.len());
+    let accepts = |sig: &crate::types::FunctionSig| {
+        let Some(count) = positional else {
+            return true;
+        };
+        let regular = crate::types::call_args::regular_param_count(sig);
+        let required = sig
+            .defaults
+            .iter()
+            .take(regular)
+            .take_while(|default| default.is_none())
+            .count();
+        count >= required && (sig.variadic.is_some() || count <= regular)
+    };
+    let mut parents: Vec<&String> = ctx
+        .classes
+        .values()
+        .filter_map(|info| info.parent.as_ref())
+        .collect();
+    parents.sort();
+    parents.dedup();
+    let targets: Vec<String> = parents
+        .into_iter()
+        .filter(|parent| {
+            ctx.classes.get(*parent).is_some_and(|info| {
+                let callable = |visibility: Option<&Visibility>| visibility != Some(&Visibility::Private);
+                (info.methods.get(&key).is_some_and(|sig| accepts(sig))
+                    && !info.abstract_methods.contains(&key)
+                    && callable(info.method_visibilities.get(&key)))
+                    || (info.static_methods.get(&key).is_some_and(|sig| accepts(sig))
+                        && !info.abstract_static_methods.contains(&key)
+                        && callable(info.static_method_visibilities.get(&key)))
+            })
+        })
+        .cloned()
+        .collect();
+    let span = expr.span;
+    let message = Expr::new(
+        ExprKind::StringLiteral("Cannot access \"parent\" when current class scope has no parent".to_string()),
+        span,
+    );
+    let error = Expr::new(
+        ExprKind::NewObject {
+            class_name: crate::names::Name::unqualified("Error"),
+            args: vec![message],
+        },
+        span,
+    );
+    let mut ladder = Expr::new(ExprKind::Throw(Box::new(error)), span);
+    for target in targets.iter().rev() {
+        let scope_parent = Expr::new(
+            ExprKind::FunctionCall {
+                name: crate::names::Name::unqualified("get_parent_class"),
+                args: vec![Expr::new(
+                    ExprKind::ClassConstant { receiver: StaticReceiver::Self_ },
+                    span,
+                )],
+            },
+            span,
+        );
+        let condition = Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(scope_parent),
+                op: crate::parser::ast::BinOp::StrictEq,
+                right: Box::new(Expr::new(ExprKind::StringLiteral(target.clone()), span)),
+            },
+            span,
+        );
+        let call = Expr::new(
+            ExprKind::StaticMethodCall {
+                receiver: StaticReceiver::Named(crate::names::Name::from_parts(
+                    crate::names::NameKind::FullyQualified,
+                    target.split('\\').map(str::to_string).collect(),
+                )),
+                method: method.to_string(),
+                args: args.to_vec(),
+            },
+            span,
+        );
+        ladder = Expr::new(
+            ExprKind::Ternary {
+                condition: Box::new(condition),
+                then_expr: Box::new(call),
+                else_expr: Box::new(ladder),
+            },
+            span,
+        );
+    }
+    let value = lower_expr(ctx, &ladder);
+    let value_ty = ctx.builder.value_php_type(value.value);
+    if matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return Some(value);
+    }
+    Some(ctx.box_value_as_mixed(value, value_ty, Some(span)))
+}
+
+/// Returns whether this body is a rebindable closure with a bound `$this`, which may forward that
+/// `$this` to an instance method of any class through `Class::method()` syntax.
+pub(super) fn closure_forwards_this_to_any_class(ctx: &LoweringContext<'_, '_>) -> bool {
+    ctx.local_slots.contains_key(crate::names::CLOSURE_SCOPE_LOCAL)
+        && ctx.local_slots.contains_key("this")
 }
 
 /// Lowers `static::method()` for a method only DESCENDANTS of the current class declare.
@@ -363,12 +748,115 @@ fn lower_late_static_dispatch_ladder(
     Some(ctx.box_value_as_mixed(value, value_ty, Some(span)))
 }
 
+/// Lowers a `Closure::bind()` / `bindTo()` scope argument to its RUNTIME class id.
+///
+/// The compile-time paths (`closure_bind_scope_class`, `plan_scoped_closure_bind`) only see a
+/// scope they can name statically, and a closure VALUE built elsewhere keeps its compiled lexical
+/// scope no matter what they find. A scope given as a string held in a variable, a parameter, or
+/// an object whose class is only known at run time was simply dropped, so private members
+/// reached through the rebound closure still raised "Cannot access private property".
+///
+/// Returns the scope's class id (`-1` when no compiled class has that name) together with the
+/// scope value itself, or `None` when there is no scope to resolve: an absent or literal-`null`
+/// argument, or a type that is neither a class name nor an object. A closure literal bound to a
+/// literal class was also compiled inside that class; stamping it again is a harmless repeat of
+/// the same scope.
+///
+/// The scope value rides along as `closure_bind`'s fourth operand: when no compiled class has the
+/// name, the class may still be one the interpreter declared, and only the value can name it. The
+/// CALLER releases it once the bind is emitted.
+///
+/// The scope expression is evaluated here exactly once, in source order after `$newThis`; the
+/// lookup cannot throw.
+pub(super) fn lower_runtime_bind_scope(
+    ctx: &mut LoweringContext<'_, '_>,
+    scope_expr: Option<&Expr>,
+) -> Option<RuntimeBindScope> {
+    let scope_expr = scope_expr?;
+    if matches!(scope_expr.kind, ExprKind::Null) {
+        return None;
+    }
+    let scope = lower_expr(ctx, scope_expr);
+    let scope_type = ctx.builder.value_php_type(scope.value).codegen_repr();
+    if !matches!(
+        scope_type,
+        PhpType::Str | PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)
+    ) {
+        if ctx.value_is_owning_temporary(scope) {
+            crate::ir_lower::ownership::release_if_owned(ctx, scope, Some(scope_expr.span));
+        }
+        return None;
+    }
+    let class_id = ctx.emit_value(
+        Op::ClassNameToId,
+        vec![scope.value],
+        None,
+        PhpType::Int,
+        Op::ClassNameToId.default_effects(),
+        Some(scope_expr.span),
+    );
+    Some(RuntimeBindScope {
+        class_id: class_id.value,
+        value: scope,
+        span: scope_expr.span,
+    })
+}
+
+/// A `Closure::bind()` scope resolved at run time: see [`lower_runtime_bind_scope`].
+pub(super) struct RuntimeBindScope {
+    /// `Int` class id, `-1` when no compiled class has the name.
+    pub(super) class_id: crate::ir::ValueId,
+    /// The scope value itself, still owned by the caller.
+    pub(super) value: LoweredValue,
+    /// Where the scope argument was written.
+    pub(super) span: crate::span::Span,
+}
+
+impl RuntimeBindScope {
+    /// Retires the scope value once `closure_bind` has read it, when the call owns it.
+    ///
+    /// Only an owning temporary is released. `release_if_owned` itself releases unconditionally,
+    /// and a scope read straight from a variable is a BORROW: in a program with `eval`, Symfony's
+    /// `Closure::bind($fn, $kernel, $kernel::class)` reads the global `$kernel`, and releasing that
+    /// load dropped one reference of the kernel on every bind. The `ContainerBuilder` it held was
+    /// then freed while still in use, and `lint:container` read another array out of the freed
+    /// memory as a service's method calls ("method Twig\Environment::() does not exist").
+    pub(super) fn release(self, ctx: &mut LoweringContext<'_, '_>) {
+        if ctx.value_is_owning_temporary(self.value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, self.value, Some(self.span));
+        }
+    }
+}
+
+/// Emits `closure_bind`, with the run-time scope class id and the scope value itself as optional
+/// third and fourth operands.
+pub(super) fn emit_closure_bind_with_scope(
+    ctx: &mut LoweringContext<'_, '_>,
+    closure: crate::ir::ValueId,
+    new_this: crate::ir::ValueId,
+    scope: Option<(crate::ir::ValueId, crate::ir::ValueId)>,
+    expr: &Expr,
+) -> LoweredValue {
+    let mut operands = vec![closure, new_this];
+    if let Some((class_id, value)) = scope {
+        operands.extend([class_id, value]);
+    }
+    ctx.emit_value(
+        Op::ClosureBind,
+        operands,
+        None,
+        PhpType::Callable,
+        Op::ClosureBind.default_effects(),
+        Some(expr.span),
+    )
+}
+
 /// Resolves a statically knowable `Closure::bind()` visibility scope for closure lowering.
 ///
 /// The runtime descriptor only needs the rebound receiver, but `self`, `parent`, private members,
 /// and static properties inside the closure are lexical constructs that must be resolved while
 /// its EIR body is built. Dynamic scope expressions remain gradual and keep the enclosing scope.
-fn closure_bind_scope_class(
+pub(super) fn closure_bind_scope_class(
     ctx: &LoweringContext<'_, '_>,
     args: &[Expr],
 ) -> Option<String> {
@@ -557,36 +1045,32 @@ pub(super) fn lower_static_method_descriptor_call(
     let wrapper_sig = sig
         .as_ref()
         .map(crate::codegen::callable_dispatch::static_method_runtime_wrapper_sig);
-    let target = CallableTarget::StaticMethod {
-        receiver: receiver.clone(),
-        method: method.to_string(),
-    };
-    let descriptor = lower_first_class_callable(ctx, &target, expr);
-    let mut operands = Vec::with_capacity(args.len() + 1);
-    operands.push(descriptor.value);
-    operands.extend(lower_args_with_signature(ctx, wrapper_sig.as_ref(), args));
     let result_type = sig
         .as_ref()
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
         .unwrap_or_else(|| fallback_expr_type(expr));
-    let result = ctx.emit_value(
+    let target = CallableTarget::StaticMethod {
+        receiver: receiver.clone(),
+        method: method.to_string(),
+    };
+    let result_staging = prepublish_call_result(ctx, &result_type, expr.span);
+    let descriptor = lower_first_class_callable(ctx, &target, expr);
+    let (descriptor, descriptor_owner) = root_owned_call_operand(ctx, descriptor, expr.span);
+    let mut operands = vec![descriptor.value];
+    operands.extend(lower_args_with_signature(ctx, wrapper_sig.as_ref(), args));
+    let result = emit_descriptor_invoker_value(
+        ctx,
         Op::ExprCall,
         operands,
         callable_profile_immediate(),
         result_type,
-        Op::ExprCall.default_effects(),
-        Some(expr.span),
+        expr.span,
     );
-    release_descriptor_after_call(ctx, descriptor, expr);
-    result
-}
-
-/// Drops the descriptor a static-method descriptor call built for itself: the invoker only
-/// borrows it, so `$f()` over a local `['Class', 'method']` left one block per call.
-fn release_descriptor_after_call(ctx: &mut LoweringContext<'_, '_>, descriptor: LoweredValue, expr: &Expr) {
-    if ctx.value_is_owning_temporary(descriptor) {
-        crate::ir_lower::ownership::release_if_owned(ctx, descriptor, Some(expr.span));
+    stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
+    if let Some(slot) = descriptor_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
     }
+    take_prepublished_call_result(ctx, result_staging, result, expr.span)
 }
 
 /// Lowers a static-method descriptor call when operands have already been evaluated.
@@ -598,28 +1082,38 @@ pub(super) fn lower_static_method_descriptor_value_call(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let sig = static_method_implementation_signature(ctx, receiver, method).cloned();
-    let target = CallableTarget::StaticMethod {
-        receiver: receiver.clone(),
-        method: method.to_string(),
-    };
-    let descriptor = lower_first_class_callable(ctx, &target, expr);
-    let mut operands = Vec::with_capacity(args.len() + 1);
-    operands.push(descriptor.value);
-    operands.extend(args);
     let result_type = sig
         .as_ref()
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
         .unwrap_or_else(|| fallback_expr_type(expr));
-    let result = ctx.emit_value(
+    let target = CallableTarget::StaticMethod {
+        receiver: receiver.clone(),
+        method: method.to_string(),
+    };
+    let result_staging = prepublish_call_result(ctx, &result_type, expr.span);
+    let descriptor = lower_first_class_callable(ctx, &target, expr);
+    let (descriptor, descriptor_owner) = root_owned_call_operand(ctx, descriptor, expr.span);
+    let mut operands = Vec::with_capacity(args.len() + 1);
+    operands.push(descriptor.value);
+    operands.extend(args);
+    let result = emit_descriptor_invoker_value(
+        ctx,
         Op::ExprCall,
         operands,
         callable_profile_immediate(),
         result_type,
-        Op::ExprCall.default_effects(),
-        Some(expr.span),
+        expr.span,
     );
-    release_descriptor_after_call(ctx, descriptor, expr);
-    Some(result)
+    stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
+    if let Some(slot) = descriptor_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+    Some(take_prepublished_call_result(
+        ctx,
+        result_staging,
+        result,
+        expr.span,
+    ))
 }
 
 /// Returns the conservative return-to-argument alias summary for static dispatch.
@@ -745,6 +1239,9 @@ fn named_receiver_is_current_or_ancestor(
     let StaticReceiver::Named(name) = receiver else {
         return false;
     };
+    if closure_forwards_this_to_any_class(ctx) {
+        return true;
+    }
     let target = name.as_str().trim_start_matches('\\');
     let Some(mut current) = ctx.current_class.as_deref() else {
         return false;
@@ -765,7 +1262,7 @@ fn named_receiver_is_current_or_ancestor(
 }
 
 /// Resolves a static receiver to a concrete class name when lexical metadata is available.
-pub(super) fn static_receiver_class_name(
+pub(crate) fn static_receiver_class_name(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
 ) -> Option<String> {

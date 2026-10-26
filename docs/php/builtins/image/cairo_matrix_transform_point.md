@@ -1,8 +1,8 @@
 ---
 title: "cairo_matrix_transform_point()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Applies a matrix to a point and returns the transformed [x, y] pair."
 sidebar:
-  order: 432
+  order: 433
 ---
 
 ## cairo_matrix_transform_point()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_matrix_transform_point(mixed $matrix, float $x, float $y): array
 ```
 
-Implemented by the compiler-injected image prelude.
+Applies a matrix to a point and returns the transformed [x, y] pair.
 
 **Parameters**:
 - `$matrix` (`mixed`)
@@ -25,7 +25,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

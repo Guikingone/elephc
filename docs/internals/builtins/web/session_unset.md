@@ -1,16 +1,16 @@
 ---
-title: "session_unset() — internals"
+title: "session_unset() - internals"
 description: "Compiler internals for session_unset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 972
+  order: 1063
 ---
 
-## `session_unset()` — internals
+## `session_unset()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:2972](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L2972) (`session_unset`)
+- **Lowering**: [`src/web_prelude/build.rs`:3145](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3145) (`session_unset`)
 - **Function symbol**: `session_unset()`
 
 
@@ -38,7 +38,7 @@ function session_unset(): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

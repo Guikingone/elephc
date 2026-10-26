@@ -21,6 +21,30 @@ use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
 use super::super::Checker;
 
 impl Checker {
+    /// Retypes a null-initialised untyped property that is lent to an untyped by-reference
+    /// parameter (`proc_open($cmd, $spec, $this->pipes)` with `protected $pipes = null;`).
+    ///
+    /// The callee may store any value through the reference, so the property can no longer be
+    /// described by its `null` default: it becomes gradual (`mixed`) storage, exactly as an
+    /// `$this->pipes = <anything>` assignment elsewhere in the class would make it. Without this a
+    /// read after the call (`foreach ($this->pipes ...)`, `array_search($x, $this->pipes)`) was
+    /// checked against `null` and refused. Properties that already hold a concrete type, and
+    /// declared (typed) properties, are left alone: the callee's write is then a type error PHP
+    /// itself would raise.
+    pub(crate) fn widen_null_property_bound_to_untyped_ref(
+        &mut self,
+        class_name: &str,
+        property: &str,
+    ) {
+        let holds_only_null = self.classes.get(class_name).is_some_and(|info| {
+            info.visible_property_index(property)
+                .is_some_and(|slot| info.properties[slot].1 == PhpType::Void)
+        });
+        if holds_only_null {
+            properties::refine_object_property_type(self, class_name, property, &PhpType::Mixed);
+        }
+    }
+
     /// Type-checks the parser-generated `$array[$index][] = $value` sequence when
     /// an empty indexed base needs its element type auto-vivified to an array.
     ///
@@ -330,8 +354,11 @@ impl Checker {
             StmtKind::PropertyArrayPush { property, .. }
             | StmtKind::PropertyArrayAssign { property, .. }
             | StmtKind::StaticPropertyArrayPush { property, .. }
-            | StmtKind::StaticPropertyArrayAssign { property, .. }
-            | StmtKind::StaticPropertyElementRefAssign { property, .. } => {
+            | StmtKind::StaticPropertyArrayAssign { property, .. } => {
+                Self::purge_property_narrowings_for_property(env, property);
+                self.record_property_array_write_narrowing(stmt, env);
+            }
+            StmtKind::StaticPropertyElementRefAssign { property, .. } => {
                 Self::purge_property_narrowings_for_property(env, property)
             }
             StmtKind::NestedArrayAssign { target, .. } => {

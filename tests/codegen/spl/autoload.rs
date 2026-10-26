@@ -698,17 +698,22 @@ echo $ok ? "true" : "false";
     assert_eq!(out, "true");
 }
 
-/// Verifies SPL autoload unregister returns true.
+/// Verifies SPL autoload unregister answers like php: true only for a registered loader.
 #[test]
 fn test_spl_autoload_unregister_returns_true() {
-    // spl_autoload_unregister returns true after removing a registered autoloader.
+    // php 8.5: true when the loader was registered, false once it is gone, false for a loader
+    // that was never registered (the old expectation of `true` there was a stub's answer).
     let out = compile_and_run(
         r#"<?php
-$ok = spl_autoload_unregister(function($name) {});
-echo $ok ? "true" : "false";
+$loader = function($name) {};
+spl_autoload_register($loader);
+$ok = spl_autoload_unregister($loader);
+$again = spl_autoload_unregister($loader);
+$never = spl_autoload_unregister(function($name) {});
+echo $ok ? "true" : "false", ",", $again ? "true" : "false", ",", $never ? "true" : "false";
 "#,
     );
-    assert_eq!(out, "true");
+    assert_eq!(out, "true,false,false");
 }
 
 /// Verifies registering one array loader twice, from compiled code, keeps ONE registration.
@@ -2698,6 +2703,57 @@ echo $value->tag();
     assert_eq!(out, "resolved");
 }
 
+/// Verifies `class_alias()` accepts a `Name::class` constant as the original class (issue #849).
+///
+/// `Original::class` is a compile-time constant string, so PHP accepts it wherever a literal
+/// class name is accepted; it used to be refused as a "runtime" call shape.
+#[test]
+fn test_class_alias_accepts_class_name_constants() {
+    let out = compile_and_run(
+        r#"<?php
+class Original {
+    public function tag(): string { return "orig"; }
+}
+class_alias(Original::class, 'AliasName');
+$a = new AliasName();
+echo $a->tag(), ":", ($a instanceof Original) ? "yes" : "no", ":", ($a instanceof AliasName) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "orig:yes:yes");
+}
+
+/// Verifies `Name::class` arguments of `class_alias()` resolve exactly as PHP compiles them:
+/// through a `use` import, through a namespace alias prefix, against the current namespace, and
+/// fully qualified, with a `__NAMESPACE__ .` concatenation for the alias name.
+///
+/// Also pins that a global alias name declared from a file using the statement form of
+/// `namespace` is created in the global namespace (a string class name is always fully
+/// qualified), where it used to be declared inside the surrounding namespace instead.
+/// Expected output is PHP 8.5.10's.
+#[test]
+fn test_class_alias_class_constants_resolve_namespace_and_imports() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Lib\Log;
+class Logger { public function name(): string { return "logger"; } }
+
+namespace App;
+use Lib\Log\Logger;
+use Lib\Log as L;
+class Local { public function name(): string { return "local"; } }
+class_alias(Logger::class, 'GlobalLogger');
+class_alias(L\Logger::class, 'App\ViaQualified');
+class_alias(Local::class, __NAMESPACE__ . '\LocalAlias');
+class_alias(\Lib\Log\Logger::class, \App\FullyAlias::class);
+echo (new \GlobalLogger())->name(), ":";
+echo (new ViaQualified())->name(), ":";
+echo (new LocalAlias())->name(), ":";
+echo (new FullyAlias())->name();
+"#,
+    );
+    assert_eq!(out, "logger:logger:local:logger");
+}
+
 /// Verifies PSR-4 empty prefix root namespace.
 #[test]
 fn test_psr4_empty_prefix_root_namespace() {
@@ -2939,4 +2995,215 @@ fn test_an_autoloaded_file_scope_guard_sees_the_interface_it_implements() {
         "main.php",
     );
     assert_eq!(out, "widget:1");
+}
+
+/// Verifies an autoloaded class file that declares its class twice under
+/// `if (method_exists(Base::class, 'm')) { ... } else { ... }` is compiled with the branch php
+/// takes, the method being found on an ancestor interface or missing altogether.
+///
+/// Symfony's `TwigExtraBundle` asks `method_exists(KernelInterface::class, 'getShareDir')`; left
+/// undecided, the file went to the runtime autoloader with a "declares it inside a run-time
+/// condition" warning. Value-checked against `php -n`, which prints `share|old`.
+#[test]
+fn test_an_autoloaded_method_exists_guard_picks_the_declaration_php_takes() {
+    let guarded = |class: &str, probe: &str| {
+        format!(
+            "<?php\nnamespace App;\n\nif (method_exists(Kernel::class, '{probe}')) {{\n    class {class} {{ public function v(): string {{ return 'share'; }} }}\n}} else {{\n    class {class} {{ public function v(): string {{ return 'old'; }} }}\n}}\n"
+        )
+    };
+    let (stderr, out) = compile_cli_files_and_run_with_compile_stderr(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#),
+            (
+                "src/BaseKernel.php",
+                "<?php\nnamespace App;\ninterface BaseKernel { public function getShareDir(): string; }\n",
+            ),
+            ("src/Kernel.php", "<?php\nnamespace App;\ninterface Kernel extends BaseKernel {}\n"),
+            ("src/Bundle.php", &guarded("Bundle", "getShareDir")),
+            ("src/Legacy.php", &guarded("Legacy", "getNothing")),
+            (
+                "main.php",
+                "<?php\necho (new App\\Bundle())->v(), '|', (new App\\Legacy())->v(), \"\\n\";\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "share|old\n");
+    assert!(!stderr.contains("run-time condition"), "{stderr}");
+}
+
+/// Verifies Symfony's `OrderedHashMap` shape stays compiled and keeps php's references: the map
+/// builds its iterator with `new It($this->elements, $this->keys, $this->cursors)` for
+/// by-reference promoted parameters, and the iterator shares a typed `int` property with an
+/// element (`$this->cursors[$id] = &$this->cursor`). Both files used to be handed to the runtime
+/// autoloader ("a native call cannot keep linked"), which a closed world cannot do.
+/// Value-checked against `php -n`.
+#[test]
+fn test_by_ref_promoted_constructor_over_properties_stays_compiled() {
+    let iterator = "<?php\nnamespace Map;\nclass It implements \\Iterator {\n    private int $cursor = 0;\n    private int $id;\n    public function __construct(private array &$elements, private array &$keys, private array &$cursors) {\n        $this->id = \\count($cursors);\n        $this->cursors[$this->id] = &$this->cursor;\n    }\n    public function __destruct() { array_splice($this->cursors, $this->id, 1); }\n    public function current(): mixed { return $this->elements[$this->keys[$this->cursor]]; }\n    public function key(): mixed { return $this->keys[$this->cursor]; }\n    public function next(): void { ++$this->cursor; }\n    public function rewind(): void { $this->cursor = 0; }\n    public function valid(): bool { return isset($this->keys[$this->cursor]); }\n}\n";
+    let map = "<?php\nnamespace Map;\nclass Ordered implements \\IteratorAggregate {\n    private array $elements = [];\n    private array $keys = [];\n    private array $cursors = [];\n    public function set(string $k, int $v): void { if (!isset($this->elements[$k])) { $this->keys[] = $k; } $this->elements[$k] = $v; }\n    public function remove(string $k): void {\n        $pos = array_search($k, $this->keys, true);\n        unset($this->elements[$k]);\n        array_splice($this->keys, $pos, 1);\n        foreach ($this->cursors as $i => $cursor) { if ($cursor >= $pos) { --$this->cursors[$i]; } }\n    }\n    public function getIterator(): \\Traversable { return new It($this->elements, $this->keys, $this->cursors); }\n}\n";
+    let (stderr, out) = compile_cli_files_and_run_with_compile_stderr(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"Map\\":"src/"}}}"#),
+            ("src/It.php", iterator),
+            ("src/Ordered.php", map),
+            (
+                "main.php",
+                "<?php\n$m = new Map\\Ordered();\n$m->set('a', 1); $m->set('b', 2); $m->set('c', 3);\nforeach ($m as $k => $v) { echo \"$k=$v,\"; if ($k === 'a') { $m->set('d', 4); $m->remove('b'); } }\necho \"\\n\";\nforeach ($m as $k => $v) { foreach ($m as $k2 => $v2) { echo $k, $k2, ' '; } }\necho \"\\n\";\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "a=1,c=3,d=4,\naa ac ad ca cc cd da dc dd \n");
+    assert!(!stderr.contains("is not compiled"), "{stderr}");
+}
+
+/// Verifies PDO reached only from an autoloaded class (Doctrine DBAL's `PDO::connect()` under
+/// symfony/demo) gets the PDO classes: the early prelude gate sees the entry program alone, and
+/// the static factory became a call to a class the closed world does not define.
+/// Value-checked against `php`, which prints `Pdo\Sqlite|2`.
+#[test]
+fn test_pdo_named_only_by_an_autoloaded_class_is_declared() {
+    let (stderr, out) = compile_cli_files_and_run_with_compile_stderr(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"Db\\":"src/"}}}"#),
+            (
+                "src/Driver.php",
+                "<?php\nnamespace Db;\nfinal class Driver {\n    public static function connect(): \\PDO { return \\PDO::connect('sqlite::memory:'); }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$pdo = Db\\Driver::connect();\necho get_class($pdo), '|', $pdo->query('select 1+1')->fetchColumn(), \"\\n\";\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "Pdo\\Sqlite|2\n", "{stderr}");
+}
+
+/// Verifies a PSR-4 autoloaded class keeps its PHP attributes and its file's `strict_types`.
+///
+/// The autoload pass rebuilt every statement of a loaded file and the rebuild dropped the
+/// statement's metadata: a class's `#[...]` attributes live on its declaring statement, so
+/// `ReflectionClass::getAttributes()` answered nothing for every Composer-loaded class (every
+/// Symfony console command lost its `#[AsCommand]` name), and the file's `declare(strict_types=1)`
+/// was replaced by the entry file's mode. Expected output from php 8.5.
+#[test]
+fn test_psr4_autoloaded_class_keeps_attributes_and_strict_types() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/AsCommand.php",
+                "<?php\nnamespace App;\n#[\\Attribute(\\Attribute::TARGET_CLASS)]\nclass AsCommand { public function __construct(public string $name = '') {} }\n",
+            ),
+            (
+                "src/AboutCommand.php",
+                "<?php\ndeclare(strict_types=1);\nnamespace App;\n/** Doc. */\n#[AsCommand(name: 'about')]\nclass AboutCommand {\n    public static function half(int $n): int { return intdiv($n, 2); }\n    public static function strict(): string { try { return (string) self::half(\"8\"); } catch (\\TypeError $e) { return 'TypeError'; } }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$r = new ReflectionClass(App\\AboutCommand::class);\n$a = $r->getAttributes(App\\AsCommand::class);\necho count($a), ':', $a[0]->newInstance()->name, ':', App\\AboutCommand::strict();\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "1:about:TypeError");
+}
+
+
+/// Files of the two file-scope-effect fixtures below: `Window.php` echoes when it is loaded,
+/// `Plain.php` only aliases, and `autoload.php` is the runtime loader a Composer project
+/// registers through `vendor/autoload.php`.
+fn file_scope_effect_fixture(main: &'static str) -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("composer.json", r#"{"autoload":{"psr-4":{"P\\":"src/"}}}"#),
+        (
+            "src/Window.php",
+            "<?php\nnamespace P;\nclass Window {\n    public static function size(): int { return 3; }\n}\necho \"window-init|\";\n",
+        ),
+        (
+            "src/Plain.php",
+            "<?php\nnamespace P;\nclass Plain {\n    public function name(): string { return 'plain'; }\n}\nif (!\\class_exists(Legacy::class, false)) {\n    \\class_alias(Plain::class, Legacy::class);\n}\n",
+        ),
+        (
+            "autoload.php",
+            "<?php\nspl_autoload_register(function (string $class): void {\n    if (str_starts_with($class, 'P\\\\')) {\n        require __DIR__ . '/src/' . substr($class, 2) . '.php';\n    }\n});\n",
+        ),
+        ("main.php", main),
+    ]
+}
+
+/// A class file whose file-scope code has an effect, reached only from a function body, runs
+/// that code when the class is first used -- here after `start|plain|` -- and not at boot.
+///
+/// Spliced among the declarations, `Window.php`'s echo ran before the entry's first statement;
+/// psysh's `Hoa/ConsoleWindow.php` (`Console::advancedInteraction();`, which shells out to `stty`)
+/// killed every Laravel artisan command that way. Reference values captured from php 8.5.10.
+#[test]
+fn test_effectful_class_file_reached_from_a_body_runs_its_file_scope_code_on_first_use() {
+    let files = file_scope_effect_fixture(
+        "<?php\nrequire __DIR__ . '/autoload.php';\nfunction size(): int { return P\\Window::size(); }\necho \"start|\";\necho (new P\\Plain())->name(), \"|\";\necho size(), size();\necho \"end\";\n",
+    );
+    let out = compile_cli_files_and_run(&files, "main.php");
+    assert_eq!(out, "start|plain|window-init|33end");
+}
+
+/// The same file named by executable file-scope code keeps its compiled splice point, which is
+/// where php's autoloader would run it.
+#[test]
+fn test_effectful_class_file_named_at_file_scope_stays_compiled_in_place() {
+    let files = file_scope_effect_fixture(
+        "<?php\nrequire __DIR__ . '/autoload.php';\necho \"start|\";\necho (new P\\Plain())->name(), \"|\";\necho P\\Window::size();\necho \"|end\";\n",
+    );
+    let out = compile_cli_files_and_run(&files, "main.php");
+    assert_eq!(out, "start|plain|window-init|3|end");
+}
+
+/// A function declared after the class in a file an `spl_autoload_register` callback requires is
+/// callable once the class is used: statically, through a string callable named by the class,
+/// and from eval'd code. The resolver leaves the function's binding inside the callback, which
+/// the compiled program never runs for a class it already declared.
+#[test]
+fn test_function_declared_in_an_autoloaded_class_file_is_callable() {
+    let files = [
+        (
+            "src/Ext.php",
+            "<?php\nnamespace Lib\\Ext;\nfinal class Ext {\n    public function tests(): array { return ['root' => 'Lib\\Ext\\is_root']; }\n}\nfunction is_root(int $x): bool { return $x === 0; }\n",
+        ),
+        (
+            "main.php",
+            "<?php\nspl_autoload_register(function ($c) {\n    if ($c === 'Lib\\Ext\\Ext') { require __DIR__ . '/src/Ext.php'; }\n});\n$t = (new Lib\\Ext\\Ext())->tests();\necho \\Lib\\Ext\\is_root(0) ? 'yes' : 'no', \"|\";\necho call_user_func($t['root'], 1) ? 'yes' : 'no', \"|\";\n$code = 'return \\Lib\\Ext\\is_root(0) ? \"yes\" : \"no\";';\necho eval($argc > 0 ? $code : 'return \"\";');\n",
+        ),
+    ];
+    let out = compile_cli_files_and_run(&files, "main.php");
+    assert_eq!(out, "yes|no|yes");
+}
+
+/// Verifies `spl_autoload_functions()` reports the request's runtime registrations.
+///
+/// PHP keeps ONE autoload queue per request. A compiled registration goes through the shared
+/// bridge and an interpreted one through the interpreter's context, so the compiled call must ask
+/// the interpreter instead of answering a static placeholder list: Symfony's `PhpDumper`
+/// `getAutoloadFile()` walks `spl_autoload_functions()` looking for the Composer loader, and an
+/// empty answer suppressed the generated `App_KernelProdContainer.preload.php` on every
+/// `cache:warmup`.
+#[test]
+fn test_spl_autoload_functions_reports_runtime_registrations() {
+    let out = compile_and_run(
+        r#"<?php
+final class ProbeLoader { public function load(string $class): void {} }
+$loader = new ProbeLoader();
+var_export(spl_autoload_register([$loader, 'load']));
+echo "|", count(spl_autoload_functions()), "|";
+$fns = spl_autoload_functions();
+echo get_debug_type($fns[0]), "|", $fns[0][1], "|";
+$code = 'spl_autoload_register(function (string $c): void {}); echo count(spl_autoload_functions());';
+echo eval($argc > 0 ? $code : 'echo 0;');
+"#,
+    );
+    assert_eq!(out, "true|1|array|load|2");
 }

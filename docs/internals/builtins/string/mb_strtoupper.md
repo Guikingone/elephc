@@ -1,16 +1,16 @@
 ---
-title: "mb_strtoupper() — internals"
+title: "mb_strtoupper() - internals"
 description: "Compiler internals for mb_strtoupper(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 840
+  order: 927
 ---
 
-## `mb_strtoupper()` — internals
+## `mb_strtoupper()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_strtoupper.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_strtoupper.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -26,9 +26,9 @@ sidebar:
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
 - **Result ownership**: `fresh`
-- **Effects**: `static (3 declared effects)`
-- **Requirements**: `static (2 requirements)`
-- **Callable policy**: `dynamic`
+- **Effects**: `static (17 declared effects)`
+- **Requirements**: `static (1 requirements)`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
@@ -49,9 +49,8 @@ function mb_strtoupper(string $string, ?string $encoding = null): string
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/mb_strtoupper.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_strtoupper.rs) (`eval_builtin!`)
-- **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `capability-dependent`.
-- **Dispatch hooks**: `direct`, `values`
+- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(24)`).
+- **Dispatch hooks**: _none_ (shared runtime dispatch)
 
 ## Cross-references
 

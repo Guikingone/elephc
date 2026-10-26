@@ -157,6 +157,68 @@ pub struct Value {
 `Callable`, `Str`, and refcounted heap values can be owned even when their
 storage type is not `Heap(...)`. Ownership is a separate value property.
 
+Because the element and key/value types "stay in `php_type`", an array literal's stamp is
+load-bearing: `ArrayGet`/`HashGet` read an element back in the shape the container's
+`php_type` claims. A stamp that does not match what was actually stored is not a lost
+optimization but a miscompile — a container stamped `array<string, int>` over a hash really
+holding `array<string>` returns the inner array's pointer read back as an integer.
+
+Two functions compute that stamp, `array_literal_element_type_for_ir` for an indexed literal
+and `assoc_array_literal_value_type_for_ir` for an associative one, and both must stay
+context-aware for every element shape they can meet — including a nested array literal, which
+they each type by recursing into the same pair of functions. The context-free
+`infer_expr_type_syntactic` is only a last-resort fallback: it cannot see a local's type and
+answers `Int` for any variable, so reaching it for an element that a local reaches through
+fabricates the stamp. Keep the two functions' element-shape arms in step; an arm present in
+one and missing in the other is a bug that only shows up in the nesting order that routes
+through the incomplete one.
+### Array Literal Element Types
+`Array(inner)` and `AssocArray { key, value }` carry an element type in
+`php_type`, and array-literal lowering converts every element it inserts to match
+that stamp. The stamp is load-bearing: a wrong one does not produce a
+diagnostic, it produces a conversion.
+`array_literal_element_type_for_ir` and its associative twin
+`assoc_array_literal_value_type_for_ir` decide it per element:
+| element expression | source of the element type |
+|---|---|
+| a nested array literal | the nested literal's own stamp, recursively |
+| a spread | the spread source's element type, widened to `Mixed` when it is `Void`/`Never` |
+| a local variable | `ctx.local_types` |
+| a constant or class constant | the resolved constant/enum-case metadata |
+| a call to a user or extern function | `ctx.functions` / `ctx.extern_functions`, the declared return type |
+| a call to a **builtin** | `ctx.builtin_call_types`, keyed by the call's own span |
+| a method, static-method, property, or element read | the matching `*_expr_type_for_ir` resolver |
+| anything else | `infer_expr_type_syntactic` |
+The builtin row is the one with a history. A builtin is in neither function map,
+so before issue #1096 it fell through to `infer_expr_type_syntactic`, which
+answers a call from a hand-written allowlist of builtin names and returns `Int`
+for every name it does not list. `[array_slice($a, 0, 2)]` was stamped
+`array<int>`; lowering converted the returned array to match, and `(int)` of a
+non-empty array is `1`, so the element read back as `int(1)` with no warning.
+The same fallback made every `bool`-returning builtin outside the allowlist
+`int(1)`/`int(0)`. Adding one non-call element widened the merge and hid it.
+The checker has already asked the registry contract about that exact call and
+recorded the answer under the call's own span, which is the node lowering is
+looking at. Keying on the span is safe here for the reason it is *not* safe for a
+callable: `call_user_func($f, ...)` records the OUTER call's span, so a different
+callee can sit under it — see "Two maps of builtin call results" in
+[the type checker](the-type-checker.md). A synthesized node (line `0`) keeps the
+syntactic fallback rather than risk sharing a key with an unrelated prelude call.
+A **scalar** result is taken precisely; anything else is stamped `Mixed`. That map
+holds the *checker's* type, while the value the call produces is typed by
+`resolve_registry_builtin_result_type`, which overrides the checker for a `Declared`
+or `Shared` result contract and re-derives its own for a `Checked` one whose runtime
+target rejects the checked type against the operands it was really given. A stamp
+that disagrees is harmless only where the push CONVERTS, and
+`coerce_array_literal_element_to_storage_type` converts exactly `Int`, `Bool`,
+`Float` and `Str`; a heap stamp is stored as-is. `array_map()`'s hook answers
+`array<int>` for a callback declared `: int` while its EIR result is a boxed `Mixed`
+cell, so taking the checked type verbatim read that box's header as an array.
+`Mixed` is the one element type that is right whatever the call's own contract
+answers — a concrete value is boxed into it on the way in, a `Mixed` value is stored
+as-is — and it is what a literal mixing a builtin call with a plain element already
+merged to.
+
 ### Parsed Type Expressions
 
 `TypeExpr` maps into `PhpType` during type checking before EIR lowering. EIR
@@ -323,6 +385,44 @@ Ownership operations:
 Strings are not modeled as generic heap pointers because their ABI is `(ptr,
 len)`, but string ownership still participates in validator checks.
 
+### Store disciplines
+
+A store instruction either *moves* its value operand into the slot or leaves the
+slot holding something the operand does not own. Lowering has to know which,
+because the two need opposite EIR around the store:
+
+| Discipline | What the backend does | What lowering emits |
+|---|---|---|
+| **Moving store** | The slot keeps the operand's own pointer. | An owning temporary is moved in as-is; a borrowed value gets an `Acquire` first, or the slot dangles once the borrow's owner releases. |
+| **Independent-value store** | The slot gets something of its own -- a fresh box, a retained pointer, or a payload word read out of the operand. | An owning temporary gets a `Release` after the store, or its reference is never consumed and leaks; a borrowed value is left alone, or the extra retain leaks on top of the slot's. |
+
+Which one applies is a property of the *pair* of representations, not of the
+slot alone. A store is an independent-value store when it crosses the
+boxed/unboxed boundary in either direction:
+
+- **Boxing** (concrete value into a Mixed/Union slot): `__rt_mixed_from_value`
+  retains the child into a new cell.
+- **Narrowing** (Mixed value into a `Str`, `Int`, `Bool`, `Float`, `Object`, or
+  tagged-scalar slot): the cast reads a payload out of the box
+  (`__rt_mixed_cast_int` and friends), `__rt_str_persist` copies the string, and
+  the object arm increfs the unboxed pointer on its own. Nothing that lands in
+  the slot holds the box.
+
+Container element writes follow the same question, answered per helper rather
+than per slot type:
+
+| Helper | Discipline |
+|---|---|
+| `__rt_array_set_mixed`, `__rt_array_push_refcounted` | Independent: the value is incref'd into the element unconditionally. |
+| `__rt_array_set_*` from a concrete value into a Mixed-element array | Moving: codegen boxes first, and the boxing path releases the box it made. |
+| `__rt_hash_set` | Moving when the value can hand over its own reference (`value_can_own_mixed_box_source`), independent otherwise. |
+
+Getting the pair wrong is silent: the program's output is unchanged, and only
+`--gc-stats` or `--heap-debug` shows the drift. Issue #1041 was one of each --
+a typed static property narrowed a `+=` result out of its box without releasing
+it, and a property array element retained one without releasing it -- both one
+40-byte Mixed cell per execution.
+
 Borrowed property and indexed-read results may be stabilized with a provisional
 `Acquire` before an owning receiver is released. Its consumer must either
 transfer that owner or emit a matching `Release`; scalar casts and calls with a
@@ -349,13 +449,93 @@ independent, explicit argument-alias, and may-alias storage, including scratch-b
 results that are not fresh heap blocks. That contract feeds direct-call cleanup,
 optimizer reasoning, and summaries for source wrappers.
 
+### A reference cell must be as wide as what the callee may write
+
+`InvokerRefArg` aliases a caller local so a callee can write back through it. The
+cell is the local's own frame storage, which keeps the write cheap and keeps every
+alias of the local in agreement — but it also means the callee writes at the
+slot's declared type. Whether that is sound depends on which by-reference form
+the argument is bound to, and the two forms differ:
+
+- A NAMED by-reference parameter (`function f(&$v)`) declares what it writes, and
+  the checker holds the caller's local to a compatible type. Both sides agree on
+  the representation, so the local keeps concrete storage and the marker points
+  straight at it.
+- A by-reference VARIADIC tail (`function f(&...$items)`) declares nothing. The
+  callee writes through `$items[n]`, an untyped element of an `array<mixed>`, so
+  PHP lets it store a value of any type into a local currently holding something
+  else. `$p = 1; f($p);` against `$items[0] = "s"` is ordinary PHP.
+
+Pointing the marker at concrete storage in the second case is silent corruption
+rather than a diagnostic: the string is written into a slot sized and typed for an
+`I64`, and the next read hands back the string's pointer as an integer. So the
+variadic form promotes the local to a boxed `Mixed` reference cell BEFORE taking
+its address (`promote_local_mixed_ref_cell`, the same helper `PDO::bindColumn()`
+and `bindParam()` use), and the callee's write lands in storage wide enough for
+whatever it chose.
+
+The widening is confined to that form deliberately. Applying it to a named
+by-reference parameter hands the callee a box pointer where it expects the value
+itself, which is the same corruption with the sides reversed. `src/ir_lower/expr/descriptor_args.rs`
+keeps the two entry points separate for that reason, and only the by-reference
+variadic tail in `src/ir_lower/expr/variadic_args.rs` reaches the widening one.
+
+The cell also OWNS what it holds, the same way a plain slot does, so a write
+through it has to release the occupant it replaces. The callee's `$items[n] = ...`
+does not reach `__rt_array_set_mixed`, which does exactly that for an ordinary
+slot: the element is an invoker ref-cell marker, so the array setter recognises
+the marker tag and transfers the fresh boxed Mixed handle straight into the
+caller's cell (`emit_mixed_array_set_ref_marker_writeback_*` in
+`src/codegen/lower_inst/arrays.rs`). That hand-written transfer was a bare store,
+which orphaned the previous box and the payload it pinned on every call — one
+block per call in the reported shape, two once the replaced value was itself a
+heap string. It now reads the old handle, stores the new one, and releases the
+old, in that order: releasing first would free the box a self-assignment is about
+to store back.
+
+The concrete-source arm of the same write-back still does not release its
+occupant. It is selected by any non-`Mixed` source tag, and for a `Str`-tagged
+cell the occupant can be a `.rodata` pointer that the ownership analysis knows not
+to free and this slot-typed cleanup does not model, so releasing there would trade
+a leak for a free of read-only memory. That reason does not cover the array- and
+object-tagged cells the same arm also serves, which do own heap storage and do
+still leak it; releasing those needs the tag-aware `__rt_heap_free_safe` treatment
+rather than a blanket decref, and is left for its own change.
+
+A third gap bounds both: this write-back emitter is reached only when the assigned
+value was freshly boxed at the store, which is every CONCRETE source type. A
+`Mixed` or union-typed right-hand side (`$items[0] = $m;`, or `$items[0] =
+$items[1];`) skips it and calls `__rt_array_set_mixed` directly, and that helper
+has no marker-tag check: it decrefs the slot's occupant — the marker itself — and
+stores an ordinary box, severing the alias so the caller never sees the write. It
+is memory-safe, because `__rt_mixed_free_deep` routes the marker's tag to a
+box-only free and never follows the payload into the caller's frame, but it is a
+silent semantic divergence from PHP.
+
+Non-string by-value lifetime-tracked compiled PHP returns also carry an internal
+ownership marker in `x15` on AArch64 or `r11` on x86_64. A `Call` result with
+`MaybeOwned` metadata spills the marker immediately, and a forwarding epilogue
+restores it after cleanup. Descriptor invokers consume the marker by retaining a
+borrowed result or transferring an owned result into the boxed return cell. This
+is a private compiler protocol; the public C ABI still returns one owned raw
+cell and exposes no ownership marker. Typed string returns keep their dedicated
+persist and ownership-transfer boxing path and do not consume this marker.
+
 ## Effects
 
 Each instruction and terminator carries an `Effects` summary. The builder
 assigns a conservative opcode or semantic-descriptor default; after the complete
 module is lowered, an effect-refinement fixed point may replace the summary on
-explicitly refinable direct calls, instance calls, and property reads. Final
+explicitly refinable direct calls, named static calls (including inherited
+implementations), instance calls, and property reads. Forwarding static receivers
+and unresolved closure, descriptor, or pipe targets retain conservative defaults
+until their target is proven by a lowering-specific contract. Final
 effects are immutable after validation and remain PHP-observable.
+
+Caller-visible summaries omit `ConcatReset`: it restores frame-private scratch
+bookkeeping rather than PHP state. The instruction itself retains `writes_global`
+so intra-function passes preserve its ordering. Genuine PHP-global writes,
+output, allocation, and exception effects continue to flow into call summaries.
 
 ```rust
 pub struct Effects {
@@ -585,6 +765,28 @@ All mutating operations must preserve copy-on-write. The builder emits
 `ArrayEnsureUnique`/`HashEnsureUnique` before mutation unless prior ownership
 proofs make it unnecessary.
 
+`ArrayCloneShallow` also carries the one aliasing case a by-reference builtin cannot
+resolve at runtime: a `$replacement` that IS the receiver. `array_splice($a, 1, 1, $a)`
+lowers both arguments to loads of the same slot, so the backend would pass one pointer
+twice and the insertion would re-read slots the removal had already overwritten
+(`[1,2,3]` came back as `[1,1,1,3]` instead of PHP's `[1,1,2,3,3]`, issue #676).
+`ir_lower::expr::array_splice::snapshot_array_splice_self_replacement` decides that on the LOWERED
+OPERANDS, which are already in parameter order, and emits an `ArrayCloneShallow` for the
+replacement operand before the call — codegen then sees two distinct arrays and a call
+that cannot alias pays no runtime compare. Operands rather than source arguments because
+every spelling then costs one test: positional, named in any order, and a named
+`$replacement` with `$length` omitted all arrive at the same operand slot, and so do the
+hidden temporaries a property, a static property or a container element is rewritten
+into. Two loads of one local slot — or one ref cell, which is how a by-reference
+parameter reaches the caller's array — are the same array, and a `&$x` binding is
+followed through the function's `AliasLocalRefCell` instructions, an over-approximation
+whose only cost when wrong is a redundant copy. The clone is an owned value, so the
+ordinary temporary-release machinery frees it; the rewrite runs before the
+receiver-widening one so the copy holds the pre-splice payload rather than a re-boxed
+version of it. `codegen::lower_inst::arrays::lower_array_clone_shallow` is the backend
+side, and this is its first user: until issue #676 the opcode was declared and validated
+but never emitted, so every target rejected it as an unsupported feature.
+
 With a typed result, `ArrayGetForWrite` and `HashGetForWrite` are also the read
 side of that rule for a container element that is about to be mutated through an
 alias — today, the source of a by-reference `foreach` (issue #580). Unlike the
@@ -637,14 +839,31 @@ reference cell by `$r = &$o->x` — there the container lives inside the cell, s
 split reads and republishes through the cell and every alias of the reference sees
 the result.
 
-The receiver has to be reachable through stable backing storage: a variable or
-`$this`, optionally followed by a chain of plain declared object properties
-(`$o->inner->x`). Proving only that the syntactic ROOT is a variable is not enough,
-because an intermediate step can be a `get` hook or a `__get` returning a fresh
-object; the read drops its receiver as soon as it takes the borrow, which would
-free the container the loop is about to iterate. Dynamic property names, hooked
-properties, `Mixed` and nullable receivers, packed fields, and receivers over a
-temporary all keep the retaining read.
+The receiver has to outlive the loop, because the borrowed container's only owner
+is the property slot inside it. A receiver that names stable backing storage does
+that by itself: a variable or `$this`, optionally followed by a chain of plain
+declared object properties (`$o->inner->x`). Any OTHER receiver is a temporary the
+loop borrows through — an array element (`$arr[0]->x`), a call result
+(`$o->get()->x`), an intermediate `get` hook or `__get` returning a fresh object —
+and dropping it when the read takes its borrow frees the container the loop is
+about to iterate. Those receivers are held by the loop instead, released on the
+exit block and, through the loop frame, on every `break`, `return` and `throw`
+that skips it (issue #690). The gate is therefore about LIFETIME, not about
+spelling; `Mixed` and nullable receivers, packed fields and hooked or undeclared
+property slots still keep the retaining read.
+
+A runtime-named property (`$o->$n`) takes the same path once its name has folded
+to a literal, which is the ordinary case: the slot the backend resolves is the one
+the static spelling reaches. A name still unresolved at lowering time keeps the
+retaining read, because the backend's slot resolution needs it.
+
+A receiver that is null at RUN TIME — an element read that missed, whose result
+still carries the element's declared type — raises PHP's
+`Attempt to modify property "x" on null` `Error` rather than being dereferenced.
+That is not a detail of the split: PHP evaluates a by-reference `foreach` source
+in a WRITE context, where a null receiver is fatal instead of the warning a plain
+read produces. It is also what lets the read describe the property's SLOT type
+instead of a nullable read type, since this path never answers null.
 
 The frontend gate in `src/ir_lower/expr/property_fetch_for_write.rs` and the lowering in
 `src/codegen/lower_inst/objects/property_fetch_for_write.rs` classify slots from the same `ClassInfo`
@@ -692,6 +911,18 @@ drifting apart silently.
 Class, interface, trait, enum, packed-class, property, method, constant, and
 attribute declarations primarily contribute metadata to the module. Method and
 closure bodies lower as normal `Function` values.
+
+For a closure whose body is exactly `return <expr>;`,
+`direct_closure_return_expr_type` in `src/ir_lower/function.rs` determines the
+return storage type before lowering that body. When the expression is a direct
+user-function call, it looks up the callee in the `functions` signature map
+instead of taking `infer_expr_type_syntactic`'s `Int` fallback. It then uses
+`eir_user_function_return_type`, the same resolver as ordinary call lowering.
+For an inferred array or associative-array return, that resolver widens the
+element or value type to `Mixed` whenever the callee has any untyped,
+by-value parameter, even if the returned container does not use that parameter.
+This keeps the closure's return slot aligned with ordinary call lowering.
+Builtin calls use the checker's result recorded for their call span.
 
 ### Calls and Callables
 
@@ -1041,7 +1272,7 @@ definitions (block parameters and instruction results) untouched.
 
 ### Identity Arithmetic Folding
 
-The first registered transform (`src/ir_passes/identity_arith.rs`) folds
+The identity arithmetic transform (`src/ir_passes/identity_arith.rs`) folds
 algebraic identities on integer and float arithmetic/bitwise operations using
 two dominance-safe, validator-clean rewrites:
 
@@ -1061,7 +1292,7 @@ dead value is never used as a replacement target.
 
 ### Peephole Patterns
 
-The second registered transform (`src/ir_passes/peephole/`) applies local
+The peephole transform (`src/ir_passes/peephole/`) applies local
 rewrites to the shape of lowered EIR. Each pattern collects rewrite intents into
 a shared accumulator (a fold-to-operand RAUW map, instructions to neutralize, and
 `str_concat` instructions to convert to interned `const_str`), and a single apply
@@ -1095,9 +1326,17 @@ phase commits them, sharing `replace_all_uses`, `resolve_chains`, and
   `persistent` so cleanup never frees the literal. Nested concats converge across
   driver sweeps.
 
+### Scalar Promotion Pass
+
+After the peephole pass, `src/ir_passes/mem2reg.rs` promotes eligible scalar
+PHP locals into SSA values. It replaces their loads and stores, and passes
+loop-carried or joined values through block parameters and incoming branch
+arguments. The eligibility and register-allocation boundaries are described in
+[Scalar Local Promotion](#scalar-local-promotion).
+
 ### Immutable Integer-Local Loads
 
-The third registered transform (`src/ir_passes/immutable_local_loads.rs`) refines
+The immutable-local transform (`src/ir_passes/immutable_local_loads.rs`) refines
 the effect of a concrete integer `load_local` from a frame read to `pure` only
 when the slot cannot change for the lifetime of the function. It accepts two
 closed-world cases:
@@ -1121,9 +1360,10 @@ out of both the analysis and its debug-build validation.
 
 ### Checked Integer Sink Specialization
 
-The fourth registered transform (`src/ir_passes/checked_int_sink.rs`) removes the
-transient Mixed allocation from checked integer add, subtract, and multiply when
-the producer's complete use graph observes only a PHP integer. It rewrites
+The checked integer sink transform (`src/ir_passes/checked_int_sink.rs`)
+removes the transient Mixed allocation from checked integer add, subtract,
+and multiply when the producer's complete use graph observes only a PHP
+integer. It rewrites
 `ichecked_add`/`ichecked_sub`/`ichecked_mul` to the corresponding
 `ichecked_*_to_int` operation, changes the result to non-owning `I64`, redirects
 integer casts to that value, and removes the now-redundant acquire/release
@@ -1143,9 +1383,15 @@ recomputes the operation as a double and applies the shared PHP float-to-int
 conversion, so removing the box does not change PHP's overflow semantics. The
 typed opcode is implemented for macOS AArch64, Linux AArch64, and Linux x86_64.
 
+### Boxed Numeric Chain Fusion
+
+`src/ir_passes/checked_numeric_chain.rs` fuses compatible checked arithmetic
+chains that are consumed only as integers, avoiding intermediate Mixed boxes.
+It runs after checked integer sink specialization and before constant folding.
+
 ### Constant Folding
 
-The fifth registered transform (`src/ir_passes/const_fold.rs`) folds operations
+The constant folding transform (`src/ir_passes/const_fold.rs`) folds operations
 whose operands are all compile-time constants into a single `const_*`
 instruction, rewriting the instruction in place and keeping its result value id
 (no use-rewrite needed). A single forward scan over the instruction table tracks
@@ -1174,9 +1420,10 @@ instruction elimination.
 
 ### Common Subexpression Elimination
 
-The sixth registered transform (`src/ir_passes/cse.rs`) removes a pure
-computation whose identical predecessor already dominates it, redirecting the
-redundant result to the earlier value (RAUW) and neutralizing it to `nop`. It
+The common subexpression elimination transform (`src/ir_passes/cse.rs`)
+removes a pure computation whose identical predecessor already dominates it,
+redirecting the redundant result to the earlier value (RAUW) and neutralizing
+it to `nop`. It
 covers per-block and cross-block redundancy in one dominator-tree value-numbering
 traversal: a scoped hash table maps each pure instruction's key
 `(op, result type, immediate, canonicalized operands)` to the value that first
@@ -1204,9 +1451,9 @@ redirect unsound — the same restriction branch simplification uses. CSE uses t
 
 ### Loop-Invariant Code Motion
 
-The seventh registered transform (`src/ir_passes/licm.rs`) moves a pure computation
-whose operands do not change across a loop out of the loop body into the loop
-preheader, so it runs once instead of per iteration. It builds the
+The loop-invariant code motion transform (`src/ir_passes/licm.rs`) moves a pure
+computation whose operands do not change across a loop out of the loop body into
+the loop preheader, so it runs once instead of per iteration. It builds the
 [loop forest](#loop-analysis) on the [dominator tree](#dominance-analysis), then
 for each loop grows the invariant set to a fixed point: an instruction is
 invariant when each operand is defined by another instruction being hoisted from
@@ -1224,13 +1471,13 @@ in several nested loops reaches the outermost preheader in one run. Instructions
 are relocated between blocks' instruction lists and their result `ValueDef`s
 (block + index) are recomputed once at the end so the value table matches the new
 layout. Loops without a detected preheader, and functions with exception
-handlers, are skipped. (PHP loop variables live in local slots reloaded through
-impure `load_local`, so an invariant source expression is not yet hoistable; the
-pass's reach grows as more values flow as SSA across loops.)
+handlers, are skipped. Scalar locals promoted to SSA can now expose invariant
+expressions across loop back edges; remaining slot-backed values retain their
+memory-read restrictions.
 
 ### Dead Instruction Elimination
 
-The eighth registered transform (`src/ir_passes/dead_inst.rs`) removes
+The dead instruction elimination transform (`src/ir_passes/dead_inst.rs`) removes
 result-producing instructions whose values are not live over the CFG and whose
 effect metadata says they are pure. It computes liveness with successor live-in
 sets, initializes each block's backward walk with those live-out values plus
@@ -1246,7 +1493,7 @@ through the fixed-point pass driver after liveness is recomputed.
 
 ### Dead Store Elimination
 
-The ninth registered transform (`src/ir_passes/dead_store.rs`) removes
+The dead store elimination transform (`src/ir_passes/dead_store.rs`) removes
 `store_local` instructions whose stored value is never read on any path before
 the slot is overwritten or the function exits. Unlike dead instruction
 elimination, which works at SSA-value granularity, this pass reasons about local
@@ -1291,7 +1538,7 @@ instruction elimination on a later driver sweep.
 
 ### Branch Simplification
 
-The tenth registered transform (`src/ir_passes/branch_simplify.rs`) prunes the
+The branch simplification transform (`src/ir_passes/branch_simplify.rs`) prunes the
 CFG in three ways:
 
 - **Constant-condition folding** — a `cond_br` whose condition resolves to a
@@ -1404,11 +1651,11 @@ disjoint. `LoopInfo` additionally answers `innermost_loop`, `loop_depth`,
 `is_loop_header`, and `back_edges` per block/function.
 
 A **preheader** is detected as the unique reachable out-of-loop predecessor of
-the header whose only successor is the header. PHP loops lower to slot-based CFGs
-(the loop variable lives in a local slot, not a block parameter), so the init
-block that branches into the header is a natural preheader; when entry into the
-loop is shared between blocks or conditional, no preheader exists and an
-optimization that needs one inserts it.
+the header whose only successor is the header. PHP loops initially lower to
+slot-based CFGs, and scalar promotion may later add header parameters and
+back-edge arguments. The init block that branches into the header is a natural
+preheader; when entry into the loop is shared between blocks or conditional, no
+preheader exists, so passes either skip the loop or create one when needed.
 
 ## AST Lowering Catalogue
 
@@ -1626,6 +1873,23 @@ Then it materializes:
 - source-map comments
 - instruction comments at the repository-required column
 
+## Scalar Local Promotion
+
+`src/ir_passes/mem2reg.rs` replaces repeated `load_local` and `store_local`
+instructions on eligible PHP scalar locals with SSA values. It adds block
+parameters where values live into a CFG join or loop header, and each incoming
+edge supplies its predecessor's current value. Loads that can run before any
+explicit store remain in memory. Definite-store analysis starts from the
+greatest fixed point, so a value written before a loop remains eligible when
+the back edge only reads it.
+
+Promotion requires ordinary integer, boolean, or float local storage with only
+plain load/store accesses. Address escapes, by-reference uses, global and static
+slots, refcounted values, nonstandard slot operations, eval scope access, and
+functions with implicit exception-handler edges stay slot-backed. This pass runs
+in the fixed-point EIR optimizer before register allocation. Both `--ir-opt=off`
+and `--regalloc=stack` remain available for comparison.
+
 ## Register Allocation
 
 The `src/ir_passes/` module runs a linear-scan register allocator
@@ -1648,7 +1912,8 @@ The pass has four stages:
 4. **Frame integration** (`codegen/frame.rs`): the allocation is stored in
    the frame layout, each used callee-saved register gets a save slot, and the
    value-access chokepoints (`load_value_to_result`, `load_value_to_reg`,
-   `store_result_value`) read and write registers instead of slots.
+   `store_result_value`) read and write registers instead of slots. Scalar
+   block parameters and their branch arguments can also receive register homes.
 
 ### Caller-saved reuse for non-call-crossing intervals
 
@@ -1658,7 +1923,8 @@ emits a call or touches a caller-saved register — is *call-free* and prefers a
 **caller-saved** register, which needs no prologue save/restore. A value that
 does live across a clobber point uses a **callee-saved** register, which survives
 calls. `src/ir_passes/clobber.rs` holds the audited allowlist of volatile-safe
-opcodes (constants, integer/float arithmetic, comparisons, scalar conversions);
+opcodes (constants, integer/float arithmetic, comparisons, scalar conversions,
+and statement-boundary concat resets);
 it is safe-by-default, so an unlisted opcode merely forgoes the caller-saved
 optimization rather than risking a clobbered value. The caller-saved pools are
 disjoint from every register those volatile-safe lowerings touch:
@@ -1667,6 +1933,11 @@ disjoint from every register those volatile-safe lowerings touch:
 |---|---|---|---|---|
 | Caller-saved | `x12`–`x15` | `d16`–`d23` | `rsi`,`rdi`,`r8`,`r9` | `xmm2`–`xmm7` |
 | Callee-saved | `x21`–`x28` | `d8`–`d14` | `rbx` | (none) |
+
+An edge carrying a lifetime-tracked block parameter may call a runtime retain
+while copying its arguments. The predecessor terminator and destination entry
+therefore count as clobber points. Scalar values carried alongside that heap
+parameter use callee-saved registers or spill slots until the copy completes.
 
 This is especially valuable on x86_64, where the callee-saved integer pool is
 just `rbx` and there are no callee-saved XMM registers at all: call-free integer
@@ -1684,10 +1955,17 @@ registers.
 The prologue saves and the epilogue restores exactly the callee-saved registers
 the allocator used; caller-saved registers need neither.
 
-The first cut register-allocates only single-word `NonHeap` scalars (`I64`,
-`F64`) that are neither block parameters nor branch arguments, keeping the
-slot-based block-parameter moves and the ownership/GC cleanup paths unchanged.
+Only single-word `NonHeap` scalars (`I64`, `F64`) are register-eligible,
+including live block parameters and branch arguments. Unused block parameters
+stay spilled: edge copies still write them, and their zero-length intervals
+would otherwise allow them to share and overwrite a live parameter's register
+at the same block entry.
+
 Generators and functions containing exception handlers fall back to all-spilled.
+The allocator's reachability and liveness use explicit terminator edges, so they
+can omit a scalar's uses after a catch or finally block. Stack homes preserve
+those values until the analyses account for implicit exception edges, including
+parameters introduced by inlining rather than local promotion.
 
 ## Phase 02 Implementation Contract
 

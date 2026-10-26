@@ -56,6 +56,7 @@ pub(in crate::interpreter) struct EvalArraySortEntry {
 pub(in crate::interpreter) fn eval_array_sort_replacement(
     name: &str,
     array: RuntimeCellHandle,
+    flags: i64,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut entries = match name {
@@ -67,7 +68,13 @@ pub(in crate::interpreter) fn eval_array_sort_replacement(
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
     if matches!(name, "ksort" | "krsort") {
-        eval_array_regular_key_sort_entries(&mut entries, name == "krsort", values)?;
+        let mode = super::key_sort_flags::eval_key_sort_mode(flags);
+        let descending = name == "krsort";
+        if mode == super::key_sort_flags::EvalKeySortMode::Regular {
+            eval_array_regular_key_sort_entries(&mut entries, descending, values)?;
+        } else {
+            eval_array_flagged_key_sort_entries(&mut entries, mode, descending, values)?;
+        }
     } else {
         entries.sort_by(|left, right| {
             let order = eval_array_sort_key_cmp(&left.sort_key, &right.sort_key);
@@ -105,6 +112,39 @@ pub(in crate::interpreter) fn eval_array_regular_key_sort_entries(
                 entries[index + 1].source_key,
             )?;
             if (descending && comparison < 0) || (!descending && comparison > 0) {
+                entries.swap(index, index + 1);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Stably orders eval array keys under the comparison PHP's `$flags` selected.
+///
+/// The pass mirrors `eval_array_regular_key_sort_entries`: a comparison that needs `values`
+/// cannot run inside `slice::sort_by`, and swapping only on a strict inversion keeps equal keys
+/// in their insertion order, which is what PHP's stable sort does in both directions.
+pub(in crate::interpreter) fn eval_array_flagged_key_sort_entries(
+    entries: &mut [EvalArraySortEntry],
+    mode: super::key_sort_flags::EvalKeySortMode,
+    descending: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for pass in 0..entries.len() {
+        let upper = entries.len().saturating_sub(pass + 1);
+        for index in 0..upper {
+            let comparison = super::key_sort_flags::eval_key_sort_compare(
+                mode,
+                entries[index].source_key,
+                entries[index + 1].source_key,
+                values,
+            )?;
+            let inverted = if descending {
+                comparison == std::cmp::Ordering::Less
+            } else {
+                comparison == std::cmp::Ordering::Greater
+            };
+            if inverted {
                 entries.swap(index, index + 1);
             }
         }
@@ -412,7 +452,7 @@ pub(in crate::interpreter) fn eval_array_sort_replacement_with_flags(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let domain = flags & !EVAL_SORT_FLAG_CASE;
     if domain == EVAL_SORT_REGULAR || !eval_array_sort_takes_flags(name) {
-        return eval_array_sort_replacement(name, array, values);
+        return eval_array_sort_replacement(name, array, flags, values);
     }
     let by_key = matches!(name, "krsort" | "ksort");
     let case_fold = flags & EVAL_SORT_FLAG_CASE != 0;
@@ -474,24 +514,16 @@ pub(in crate::interpreter) fn eval_array_sort_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (array_arg, flags_arg) = match args {
-        [array_arg] => (array_arg, None),
-        [array_arg, flags_arg] if eval_array_sort_takes_flags(name) && !flags_arg.is_spread() => {
-            (array_arg, Some(flags_arg))
-        }
-        _ => return Err(EvalStatus::RuntimeFatal),
-    };
-    let (array, target) =
-        eval_array_sort_direct_arg(std::slice::from_ref(array_arg), context, scope, values)?;
-    let flags = match flags_arg {
-        Some(flags_arg) => {
-            let flags = eval_expr(flags_arg.value(), context, scope, values)?;
-            eval_int_value(flags, values)?
-        }
-        None => EVAL_SORT_REGULAR,
-    };
+    let (array, target, flags) =
+        eval_array_sort_direct_args(name, args, context, scope, values)?;
 
-    let replacement = eval_array_sort_replacement_with_flags(name, array, flags, values)?;
+    // `ksort`/`krsort` take their `$flags` through the key-sort modes; the value sorts take them as
+    // a single comparison domain (`SORT_NUMERIC`, `SORT_STRING`, `SORT_NATURAL`, ...).
+    let replacement = if flags != 0 && !matches!(name, "ksort" | "krsort") {
+        eval_array_sort_replacement_with_flags(name, array, flags, values)?
+    } else {
+        eval_array_sort_replacement(name, array, flags, values)?
+    };
     let result = values.bool_value(true)?;
     eval_write_direct_ref_target(&target, replacement, context, values, None)?;
     Ok(result)
@@ -508,4 +540,83 @@ pub(in crate::interpreter) fn eval_array_sort_direct_arg(
         return Err(EvalStatus::RuntimeFatal);
     };
     super::mutation::eval_array_mutation_lvalue_arg(arg, context, scope, values)
+}
+
+/// Extracts the receiver and, for a key sort, PHP's optional `$flags` word.
+///
+/// Arguments are evaluated in SOURCE order, so `ksort(flags: f(), array: $a)` runs `f()` before
+/// it binds `$a`, exactly as the written order says.
+fn eval_array_sort_direct_args(
+    name: &str,
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, EvalReferenceTarget, i64), EvalStatus> {
+    if !matches!(name, "ksort" | "krsort") {
+        // The value sorts take one optional `$flags`, positionally: a comparison domain.
+        let (array_arg, flags_arg) = match args {
+            [array_arg] => (array_arg, None),
+            [array_arg, flags_arg] if eval_array_sort_takes_flags(name) && !flags_arg.is_spread() => {
+                (array_arg, Some(flags_arg))
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        };
+        let (array, target) =
+            eval_array_sort_direct_arg(std::slice::from_ref(array_arg), context, scope, values)?;
+        let flags = match flags_arg {
+            Some(flags_arg) => {
+                let flags = eval_expr(flags_arg.value(), context, scope, values)?;
+                eval_int_value(flags, values)?
+            }
+            None => EVAL_SORT_REGULAR,
+        };
+        return Ok((array, target, flags));
+    }
+
+    let mut receiver = None;
+    let mut flags = None;
+    let mut positional = 0;
+    let mut saw_named = false;
+    for arg in args {
+        if arg.is_spread() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let parameter = if let Some(name) = arg.name() {
+            saw_named = true;
+            name
+        } else {
+            if saw_named {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let parameter = match positional {
+                0 => "array",
+                1 => "flags",
+                _ => return Err(EvalStatus::RuntimeFatal),
+            };
+            positional += 1;
+            parameter
+        };
+        match parameter {
+            "array" => {
+                if receiver.is_some() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                receiver = Some(super::mutation::eval_array_mutation_lvalue_arg(
+                    arg, context, scope, values,
+                )?);
+            }
+            "flags" => {
+                if flags.is_some() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                let value = eval_expr(arg.value(), context, scope, values)?;
+                flags = Some(eval_int_value(value, values)?);
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        }
+    }
+
+    let (array, target) = receiver.ok_or(EvalStatus::RuntimeFatal)?;
+    Ok((array, target, flags.unwrap_or(0)))
 }

@@ -96,6 +96,19 @@ pub(super) fn lower_strict_eq(
         emit_pointer_compare(ctx, lhs, rhs, is_equal)?;
         return store_if_result(ctx, inst);
     }
+    if matches!(
+        (&lhs_ty, &rhs_ty),
+        (PhpType::Object(_) | PhpType::Callable | PhpType::Iterable, PhpType::Void)
+            | (PhpType::Void, PhpType::Object(_) | PhpType::Callable | PhpType::Iterable)
+    ) {
+        // A statically object-typed slot can still hold null at runtime (an untyped property
+        // declared `= null` whose only assignments are objects). `=== null` must then test the
+        // pointer against both null encodings (zero slot, scalar null sentinel) instead of
+        // folding to false.
+        let object = if lhs_ty == PhpType::Void { rhs } else { lhs };
+        emit_object_null_compare(ctx, object, is_equal)?;
+        return store_if_result(ctx, inst);
+    }
     if lhs_ty != rhs_ty {
         emit_bool_literal(ctx, !is_equal);
         return store_if_result(ctx, inst);
@@ -148,6 +161,37 @@ fn emit_array_eq_call(
             if !is_equal {
                 ctx.emitter.instruction("xor rax, 1");                          // invert recursive strict equality for PHP !==
             }
+        }
+    }
+    Ok(())
+}
+
+/// Tests a pointer-like operand against PHP null: a zeroed slot and the runtime null sentinel
+/// both encode null for an object-shaped value.
+pub(in crate::codegen::lower_inst) fn emit_object_null_compare(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    is_equal: bool,
+) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x9", 0x7fff_ffff_ffff_fffe);
+            ctx.emitter.instruction("cmp x0, #0");                              // is the pointer slot zeroed
+            ctx.emitter.instruction("ccmp x0, x9, #4, ne");                     // otherwise compare against the null sentinel
+            ctx.emitter.instruction(&format!("cset x0, {}", if is_equal { "eq" } else { "ne" })); // materialize the null test
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "r10", 0x7fff_ffff_ffff_fffe);
+            ctx.emitter.instruction("test rax, rax");                           // is the pointer slot zeroed
+            ctx.emitter.instruction("sete cl");                                 // remember the zero encoding of null
+            ctx.emitter.instruction("cmp rax, r10");                            // compare against the null sentinel
+            ctx.emitter.instruction("sete al");                                 // remember the sentinel encoding of null
+            ctx.emitter.instruction("or al, cl");                               // either encoding is PHP null
+            if !is_equal {
+                ctx.emitter.instruction("xor al, 1");                           // invert for !==
+            }
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the result register
         }
     }
     Ok(())

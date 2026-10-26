@@ -55,11 +55,18 @@ pub unsafe extern "C" fn __elephc_eval_dynamic_object_class_name(object: *const 
         let Some(context) = owner.as_ref() else {
             return none;
         };
-        let Some((_, class)) = context.dynamic_object_declaring_class(identity) else {
-            return none;
-        };
-        let name = intern_class_name(class.name().trim_start_matches('\\'));
-        ElephcEvalClassName { ptr: name.as_ptr(), len: name.len() as u64 }
+        if let Some((_, class)) = context.dynamic_object_declaring_class(identity) {
+            let name = intern_class_name(class.name().trim_start_matches('\\'));
+            return ElephcEvalClassName { ptr: name.as_ptr(), len: name.len() as u64 };
+        }
+        // An interpreter-made `Closure` is carried by a native object whose class id names
+        // `stdClass`; its owner knows it as a closure, so `get_debug_type($closure)` in a body
+        // without an eval context of its own answers `Closure`, as php does.
+        if context.closure_object_target(identity).is_some() {
+            let name = intern_class_name("Closure");
+            return ElephcEvalClassName { ptr: name.as_ptr(), len: name.len() as u64 };
+        }
+        none
     })
     .unwrap_or(none)
 }
@@ -193,6 +200,32 @@ const MEMBER_LOOKUP_PROPERTY_EXISTS: u64 = 1;
 const CLASS_RELATION_IMPLEMENTS: u64 = 0;
 const CLASS_RELATION_PARENTS: u64 = 1;
 const CLASS_RELATION_USES: u64 = 2;
+
+/// Resolves an object's owning eval context before falling back to the active caller context.
+/// Dynamic classes can use native stdClass payloads, so ownership lookup precedes class tables.
+///
+/// # Safety
+/// `object` must be null or a live boxed object and `ctx` null or a valid context handle.
+/// The returned context is borrowed from its existing request host.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_object_context(
+    ctx: *mut ElephcEvalContext, object: *mut RuntimeCell,
+) -> *mut ElephcEvalContext {
+    std::panic::catch_unwind(|| {
+        if object.is_null() { return std::ptr::null_mut(); }
+        let object = RuntimeCellHandle::from_raw(object).borrowed();
+        let mut values = ElephcRuntimeOps::new();
+        let owner = values.object_identity(object).ok().and_then(|identity| {
+            crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
+        });
+        let resolved = owner.unwrap_or(ctx);
+        match unsafe { resolved.as_ref() } {
+            Some(context) if context.abi_version() == ABI_VERSION => resolved,
+            _ => std::ptr::null_mut(),
+        }
+    }).unwrap_or(std::ptr::null_mut())
+}
 
 /// Resolves `get_class()` or `get_parent_class()` against eval dynamic objects.
 ///
@@ -380,7 +413,7 @@ unsafe fn eval_object_class_name_inner(
     match interpreter::execute_context_object_class_name(
         context,
         lookup,
-        RuntimeCellHandle::from_raw(object_or_class),
+        RuntimeCellHandle::from_raw(object_or_class).borrowed(),
         &mut values,
     ) {
         Ok(result) => write_outcome(EvalOutcome::Value(result), out).code(),
@@ -439,7 +472,7 @@ unsafe fn eval_class_relation_inner(
     let status = match interpreter::execute_context_class_relation(
         context,
         lookup,
-        RuntimeCellHandle::from_raw(target),
+        RuntimeCellHandle::from_raw(target).borrowed(),
         &mut values,
     ) {
         Ok(result) => write_outcome(EvalOutcome::Value(result), out).code(),
@@ -530,7 +563,7 @@ unsafe fn eval_object_is_a_inner(
     let traced_subject = trace.then(|| eval_object_is_a_trace_subject(object, context, &mut values));
     let result = interpreter::execute_context_object_is_a(
         context,
-        object,
+        object.borrowed(),
         &target,
         exclude_self != 0,
         &mut values,
@@ -619,8 +652,8 @@ unsafe fn eval_object_is_a_dynamic_inner(
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_object_is_a_dynamic(
         context,
-        RuntimeCellHandle::from_raw(object),
-        RuntimeCellHandle::from_raw(target),
+        RuntimeCellHandle::from_raw(object).borrowed(),
+        RuntimeCellHandle::from_raw(target).borrowed(),
         exclude_self != 0,
         &mut values,
     ) {
@@ -672,8 +705,8 @@ unsafe fn eval_member_exists_inner(
     match interpreter::execute_context_member_exists(
         context,
         lookup,
-        RuntimeCellHandle::from_raw(target),
-        RuntimeCellHandle::from_raw(member),
+        RuntimeCellHandle::from_raw(target).borrowed(),
+        RuntimeCellHandle::from_raw(member).borrowed(),
         &mut values,
     ) {
         Ok(result) => i32::from(result),

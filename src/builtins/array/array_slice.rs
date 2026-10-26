@@ -15,13 +15,14 @@
 //!   selected window — something elephc's dense indexed representation cannot express.
 //! - The result shape depends on an argument VALUE, not on argument types, so it must travel on
 //!   the `Checked` contract: a `Shared` resolver is re-run by `semantics::lower_registry_call`
-//!   with `args: &[]` and could not see the flag there. A boxed `Mixed`/`Union` source therefore
-//!   reports `array<mixed>` — the exact layout `lower_mixed_array_slice` materializes — rather
-//!   than a bare `Mixed`, which is also PHP-accurate because `array_slice()` always returns an
-//!   array. A key-preserving gradual source uses a mixed-key/mixed-value associative result,
+//!   with `args: &[]` and could not see the flag there. A boxed `Mixed`/`Union` source reports the
+//!   boxed PHP array type, because its payload may be a list or a hash: `lower_mixed_array_slice`
+//!   renumbers a list, keeps a hash's string keys, and boxes whichever storage it built.
+//!   `RuntimeFnId::ArraySlice::fallback_result_type` covers call sites with no checked type: an
+//!   associative source keeps its layout, a boxed source gets the boxed PHP array type (the one
+//!   the callable wrapper pins), and an indexed source keeps `array<mixed>`.
+//!   A key-preserving gradual source uses a mixed-key/mixed-value associative result,
 //!   materialized by the PHP compatibility prelude without guessing an indexed slot layout.
-//!   `RuntimeFnId::ArraySlice::fallback_result_type` supplies the indexed layout for synthetic
-//!   call sites with no checked type.
 //! - The checked type below is a CHECKER type: call-site specialization narrows an untyped
 //!   parameter (`function top($scores)`) that EIR still lowers under the boxed-`Mixed` ABI
 //!   contract, so the type recorded here can be narrower than the operand the slice helper
@@ -37,9 +38,42 @@ use crate::types::PhpType;
 builtin! {
     contract: "array_slice",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArraySlice,
-    ),
+    semantics: array_slice_semantics(),
+}
+
+/// The pure `array_slice` summary, widened when an argument still needs php's conversion.
+///
+/// A float offset or length is converted at the call: `2.5` raises the "loses precision"
+/// deprecation and `NAN` throws a `TypeError`. Without `MAY_THROW` the call's operand owners
+/// were retired before it, so the array literal handed to `array_slice([1, 2], 0, NAN)` leaked
+/// when the TypeError unwound. Integer arguments over a typed array keep the pure summary.
+fn array_slice_effects(
+    input: &crate::builtins::semantics::BuiltinSemanticInput<'_>,
+) -> crate::ir::Effects {
+    let base = crate::ir::RuntimeFnId::ArraySlice.effects();
+    let converts = |ty: &PhpType| {
+        matches!(
+            ty.codegen_repr(),
+            PhpType::Float | PhpType::Str | PhpType::Mixed | PhpType::Union(_)
+        )
+    };
+    let source_unchecked = input
+        .arg_types
+        .first()
+        .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)));
+    if source_unchecked || input.arg_types.iter().skip(1).take(2).any(converts) {
+        base | crate::ir::Effects::MAY_THROW | crate::ir::Effects::MAY_WARN
+    } else {
+        base
+    }
+}
+
+/// `array_slice`'s descriptor with the argument-dependent throw summary.
+const fn array_slice_semantics() -> crate::builtins::semantics::BuiltinSemantics {
+    let mut semantics =
+        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::ArraySlice);
+    semantics.effects = crate::builtins::semantics::BuiltinEffects::Shared(array_slice_effects);
+    semantics
 }
 
 /// Reads a literal `preserve_keys` flag, returning `None` when the argument is not a literal.
@@ -61,7 +95,8 @@ fn literal_preserve_keys(flag: Option<&Expr>) -> Option<bool> {
 ///
 /// Without `preserve_keys` a slice preserves the input array shape, so the (array-or-assoc)
 /// first-argument type is returned unchanged and a boxed `Mixed`/`Union` first argument yields
-/// `array<mixed>`. With a literal `preserve_keys: true` an indexed source keeps the integer keys of
+/// the boxed PHP array type, since its payload may be a list or a hash. With a literal
+/// `preserve_keys: true` an indexed source keeps the integer keys of
 /// the selected window, which is an `AssocArray` keyed by `Int`; a source that is already associative
 /// keeps its own shape because narrowing a hash preserves its keys. Non-array first arguments and
 /// a non-literal flag are rejected. A key-preserving boxed `Mixed` source yields a gradual
@@ -98,7 +133,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 value: Box::new(PhpType::Mixed),
             });
         }
-        return Ok(PhpType::Array(Box::new(PhpType::Mixed)));
+        return Ok(PhpType::php_array());
     }
     if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
         return Err(CompileError::new(

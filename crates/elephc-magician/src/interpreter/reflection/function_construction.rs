@@ -43,9 +43,8 @@ pub(super) fn eval_reflection_closure_invoke_method_new(
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let argument = EvaluatedCallArg {
         name: None,
-        value: closure,
+        value: closure.borrowed(),
         ref_target: None,
-        owned: false,
     };
     eval_reflection_callable_new(vec![argument], true, context, values)
 }
@@ -71,10 +70,25 @@ fn eval_reflection_callable_new(
         .as_ref()
         .map(|target| target.lookup_name.clone())
         .unwrap_or_else(|| requested_name.trim_start_matches('\\').to_ascii_lowercase());
+    // A first-class callable built from a METHOD resolves to that method, never to a global
+    // function that shares its bare name: `$this->dump(...)` in Symfony's `YamlExtension` sits
+    // next to var-dumper's global `dump(...$vars)`, and the by-name fallback below made
+    // `(new \ReflectionMethod($closure, '__invoke'))->getParameters()` answer with the global
+    // function's single variadic instead of the method's three parameters.
+    let method_target = eval_reflection_closure_target_method(
+        callable_target.as_ref().map(|target| &target.target),
+        context,
+        values,
+    );
     let metadata_closure = callable_target
         .as_ref()
         .and_then(|target| target.metadata_closure.clone())
-        .or_else(|| context.closure(&lookup_name).cloned());
+        .or_else(|| {
+            method_target
+                .is_none()
+                .then(|| context.closure(&lookup_name).cloned())
+                .flatten()
+        });
     if let Some(closure) = metadata_closure {
         let function = closure.function();
         let required_parameter_count = eval_reflection_required_parameter_count(
@@ -105,17 +119,38 @@ fn eval_reflection_callable_new(
             values,
         )
         .and_then(|object| {
-            eval_reflection_attach_callable_target(
-                    invoke_method,
+            let object = eval_reflection_attach_callable_target(
+                invoke_method,
                 object,
                 closure_target,
                 args[0],
                 context,
                 values,
-            )
+            )?;
+            // The closure may belong to another eval context (the one that evaluated its
+            // literal), which this context's by-name lookups cannot see; its own record is
+            // the authority for the declaring file and line range.
+            if !invoke_method {
+                if let Some(location) = closure.function().source_location() {
+                    let file = closure
+                        .declaring_call_site()
+                        .and_then(|site| site.3.clone())
+                        .unwrap_or_else(|| context.eval_file_magic());
+                    eval_reflection_write_source_slots(
+                        object,
+                        "ReflectionFunction",
+                        &file,
+                        location,
+                        context,
+                        values,
+                    )?;
+                }
+            }
+            Ok(object)
         })
         .map(Some);
     }
+    if method_target.is_none() {
     if let Some(function) = context.function(&lookup_name).cloned() {
         let required_parameter_count = eval_reflection_required_parameter_count(
             function.parameter_defaults(),
@@ -159,14 +194,33 @@ fn eval_reflection_callable_new(
     if let Some(function) = context.native_function(&lookup_name) {
         let reflected_name = requested_name.trim_start_matches('\\');
         let required_parameter_count = function.required_param_count();
-        let parameters = eval_reflection_native_function_parameters(reflected_name, &function);
+        let mut parameters = eval_reflection_native_function_parameters(reflected_name, &function);
+        // A compiled method closure (`$command->__invoke(...)`) arrives as a descriptor named
+        // `Class::method`; its native record carries no attributes, so the method's and its
+        // parameters' come from the AOT registry -- Symfony's InvokableCommand reads its
+        // `#[Option]`/`#[Argument]` parameters through exactly this reflector.
+        let mut method_attributes = Vec::new();
+        if let Some((class_name, method_name)) = reflected_name.split_once("::") {
+            method_attributes =
+                eval_reflection_aot_method_attributes(class_name, class_name, method_name, context);
+            for (index, parameter) in parameters.iter_mut().enumerate() {
+                if parameter.attributes.is_empty() {
+                    parameter.attributes = eval_reflection_aot_method_attributes(
+                        class_name,
+                        class_name,
+                        &format!("{}#{}", method_name, index),
+                        context,
+                    );
+                }
+            }
+        }
         let return_type_metadata = function
             .return_type()
             .and_then(eval_reflection_parameter_type_metadata);
         return eval_reflection_callable_object_result(
             invoke_method,
             reflected_name,
-            &[],
+            &method_attributes,
             &parameters,
             return_type_metadata.as_ref(),
             required_parameter_count,
@@ -185,6 +239,7 @@ fn eval_reflection_callable_new(
         })
         .map(Some);
     }
+    }
     // A first-class callable built from a METHOD -- `$obj(...)`, `$obj->m(...)`, `Cls::m(...)`
     // -- has no entry in any FUNCTION table, so all three lookups above miss it and the
     // no-parameter fallback below used to claim it. PHP reflects such a Closure with the
@@ -193,9 +248,7 @@ fn eval_reflection_callable_new(
     // -- it reads `(new \ReflectionFunction($controller(...)))->getParameters()` -- resolve
     // zero arguments for an invokable-object controller, so the controller call then bound
     // nothing to a required parameter.
-    if let Some((declaring_class, method_name)) =
-        eval_reflection_closure_target_method(closure_target.as_ref(), context, values)
-    {
+    if let Some((declaring_class, method_name)) = method_target {
         let method_metadata =
             match eval_reflection_method_metadata(&declaring_class, &method_name, context) {
                 Some(method_metadata) => Some(method_metadata),
@@ -230,6 +283,23 @@ fn eval_reflection_callable_new(
             .map(Some);
         }
     }
+    if eval_builtin_uses_owned_arguments(&lookup_name) {
+        let object = values.new_object("ReflectionFunction")?;
+        let result = eval_native_constructor_with_evaluated_args(
+            "ReflectionFunction", object, positional_args(args), context, values,
+        ).and_then(|()| values.object_identity(object));
+        return match result {
+            Ok(identity) => {
+                // Keep native reflection metadata while routing invocation through the shared eval binding.
+                context.register_eval_reflection_function(identity, &lookup_name);
+                Ok(Some(object))
+            }
+            Err(status) => {
+                let _ = eval_release_value(context, values, object);
+                Err(status)
+            }
+        };
+    }
     if closure_target.is_some() {
         return eval_reflection_callable_object_result(
             invoke_method,
@@ -262,6 +332,16 @@ fn eval_reflection_callable_new(
                 values,
             )
             .map(Some);
+        }
+        // A name no function table knows is php's catchable ReflectionException, not an
+        // unsupported construct: VarDumper's ExceptionCaster reflects every trace frame's
+        // function name -- `{closure}` among them -- and relies on catching it.
+        if !invoke_method && values.type_tag(args[0])? == EVAL_TAG_STRING {
+            return eval_throw_reflection_exception(
+                &format!("Function {}() does not exist", requested_name.trim_start_matches('\\')),
+                context,
+                values,
+            );
         }
     }
     Ok(None)
@@ -343,7 +423,15 @@ fn eval_reflection_builtin_type_spec(ty: &elephc_builtin_contract::TypeSpec) -> 
         TypeSpec::Mixed => "mixed".to_string(),
         TypeSpec::Array => "array".to_string(),
         TypeSpec::Callable => "callable".to_string(),
+        TypeSpec::Object => "object".to_string(),
+        TypeSpec::False => "false".to_string(),
+        TypeSpec::Null => "null".to_string(),
         TypeSpec::Nullable(inner) => format!("?{}", eval_reflection_builtin_type_spec(inner)?),
+        TypeSpec::Union(members) => members
+            .iter()
+            .map(eval_reflection_builtin_type_spec)
+            .collect::<Option<Vec<_>>>()?
+            .join("|"),
         TypeSpec::Void | TypeSpec::Ptr => return None,
     })
 }
@@ -358,6 +446,8 @@ fn eval_reflection_builtin_default(default: &elephc_builtin_contract::DefaultSpe
         DefaultSpec::Float(value) => EvalExpr::Const(EvalConst::Float(*value)),
         DefaultSpec::Str(value) => EvalExpr::Const(EvalConst::String((*value).to_string())),
         DefaultSpec::IntMax => EvalExpr::Const(EvalConst::Int(i64::MAX)),
+        // The profile-selected mask is whatever the program's `E_ALL` constant names.
+        DefaultSpec::ErrorAll => EvalExpr::ConstFetch("E_ALL".to_string()),
         DefaultSpec::EmptyArray => EvalExpr::Array(Vec::new()),
         DefaultSpec::Constant(name) => EvalExpr::ConstFetch((*name).to_string()),
         DefaultSpec::Expr(_) | DefaultSpec::ClassConstant { .. } => return None,
@@ -450,6 +540,33 @@ fn eval_reflection_function_callable_target_arg(
                             metadata_closure: captured_context.closure(&lookup_name).cloned(),
                             lookup_name,
                             target,
+                        }));
+                    }
+                }
+                // The adapter wraps an ARRAY callable: compiled `$callback(...)` on
+                // `[$provider, 'boot']`, where the provider's class was declared at run time.
+                // php's `$callback(...)` is a Closure over that method, so `new
+                // ReflectionFunction($callback(...))` reflects the method; a bare array is not a
+                // Closure and keeps falling through to the name reading below. Laravel's
+                // `Container::getClassForCallable()` asks exactly this of every service
+                // provider's `boot` -- and reached it as soon as `is_callable()` answered
+                // truthfully for an interpreted class the frame's context already knew.
+                if values.is_array_like(captured)? {
+                    if let Ok(callable) = eval_callable(captured.borrowed(), context, values) {
+                        let mut target = eval_closure_object_target_from_callable(callable);
+                        // The normalizer hands the receiver over OWNED; the adapter's own
+                        // capture keeps the object alive for as long as the reflection can
+                        // name it, and the targets of Closure objects are stored borrowed too.
+                        let receiver = target.receiver_mut().copied();
+                        if let Some(receiver) = receiver {
+                            release_expr_result(receiver, context, values)?;
+                        }
+                        let lookup_name = eval_reflection_function_closure_target_name(&target);
+                        return Ok(Some(EvalReflectionFunctionCallableArg {
+                            display_name: lookup_name.clone(),
+                            lookup_name,
+                            target,
+                            metadata_closure: None,
                         }));
                     }
                 }
@@ -586,6 +703,9 @@ pub(super) fn eval_reflection_attach_function_callable_target(
             values.property_set(object, "__callable", source)
         })?;
     }
+    // The owner was materialized before its closure target existed, so a compiled closure's
+    // `START:END:FILE` record (reached only through that target) was not yet readable.
+    eval_reflection_store_native_source_slots(object, EVAL_REFLECTION_OWNER_FUNCTION, context, values)?;
     Ok(object)
 }
 
@@ -608,16 +728,33 @@ pub(super) fn eval_reflection_native_function_parameters(
     function_name: &str,
     function: &NativeFunction,
 ) -> Vec<EvalReflectionParameterMetadata> {
-    let parameter_names = eval_reflection_native_function_parameter_names(function);
+    // Only the PHP-visible slots: a compiler-internal one (the hidden `func_get_args()`
+    // collector, a hidden argument count) is not a parameter php would report.
+    let visible = function.frame_shape().visible_param_indexes();
+    let all_names = eval_reflection_native_function_parameter_names(function);
+    let all_types = eval_reflection_native_function_parameter_types(function);
+    let all_defaults = eval_reflection_native_function_parameter_defaults(function);
+    let parameter_names = visible
+        .iter()
+        .map(|index| all_names.get(*index).cloned().unwrap_or_default())
+        .collect::<Vec<_>>();
     let parameter_count = parameter_names.len();
     let parameter_attributes = vec![Vec::new(); parameter_count];
-    let parameter_types = eval_reflection_native_function_parameter_types(function);
-    let parameter_defaults = eval_reflection_native_function_parameter_defaults(function);
-    let parameter_is_by_ref = (0..parameter_count)
-        .map(|index| function.param_by_ref(index))
+    let parameter_types = visible
+        .iter()
+        .map(|index| all_types.get(*index).cloned().flatten())
         .collect::<Vec<_>>();
-    let parameter_is_variadic = (0..parameter_count)
-        .map(|index| function.param_variadic(index))
+    let parameter_defaults = visible
+        .iter()
+        .map(|index| all_defaults.get(*index).cloned().flatten())
+        .collect::<Vec<_>>();
+    let parameter_is_by_ref = visible
+        .iter()
+        .map(|index| function.param_by_ref(*index))
+        .collect::<Vec<_>>();
+    let parameter_is_variadic = visible
+        .iter()
+        .map(|index| function.param_variadic(*index))
         .collect::<Vec<_>>();
     eval_reflection_function_parameters(
         function_name,
@@ -700,6 +837,13 @@ fn eval_reflection_callable_object_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if !invoke_method {
+        // A first-class callable built from a method (`$obj(...)`, `$obj->m(...)`, `Cls::m(...)`)
+        // arrives as a descriptor named `Class::method` (or `object::method`); php reports just
+        // the method name. A `{closure:...}` name legitimately contains `::` and is kept whole.
+        let function_name = match function_name.rsplit_once("::") {
+            Some((_, method)) if !function_name.starts_with('{') && !method.is_empty() => method,
+            _ => function_name,
+        };
         return eval_reflection_function_object_result(
             function_name,
             attributes,

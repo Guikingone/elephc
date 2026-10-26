@@ -160,6 +160,19 @@ pub(crate) fn nullable_int_requires_runtime_param_guard(
         && actual.codegen_repr() == PhpType::TaggedScalar
 }
 
+/// Returns whether `ty` is php's `?int` (`int|null`), whatever storage the target gives it.
+pub(crate) fn is_nullable_int(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Union(members) => {
+            members.iter().any(|member| *member == PhpType::Int)
+                && members
+                    .iter()
+                    .all(|member| matches!(member, PhpType::Int | PhpType::Void))
+        }
+        _ => false,
+    }
+}
+
 /// How a declared parameter binds an argument whose type does not already match.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ParamBinding {
@@ -600,6 +613,7 @@ fn literal_php_type(kind: &ExprKind) -> Option<PhpType> {
 pub(crate) fn scalar_param_cast(expected: &PhpType, actual: &PhpType) -> Option<CastType> {
     if matches!(actual.codegen_repr(), PhpType::Object(_))
         && param_accepts_weak_string_coercion(expected)
+        && !union_admits_object_as_is(expected, actual)
     {
         // The checker only admits this path after proving that the concrete object implements
         // `Stringable`. Lowering deliberately consumes that proof instead of duplicating class
@@ -611,6 +625,31 @@ pub(crate) fn scalar_param_cast(expected: &PhpType, actual: &PhpType) -> Option<
         ParamBinding::Cast(target) => Some(target),
         _ => None,
     }
+}
+
+/// Whether a union holds the object unchanged, so PHP never reaches its `string` arm.
+///
+/// PHP coerces an argument only when no member accepts it as it is. Doctrine's
+/// `ParameterTypeInferer::inferType(): ParameterType|ArrayParameterType|int|string` returns
+/// `ArrayParameterType::INTEGER`; the `string` member made every return a string cast, and the
+/// enum case died with `could not be converted to string` on every symfony/demo query with an
+/// `IN (:ids)` list.
+fn union_admits_object_as_is(expected: &PhpType, actual: &PhpType) -> bool {
+    let PhpType::Object(actual_class) = actual.codegen_repr() else {
+        return false;
+    };
+    let actual_class = actual_class.trim_start_matches('\\');
+    let PhpType::Union(members) = expected else {
+        return false;
+    };
+    members.iter().any(|member| match member {
+        PhpType::Mixed => true,
+        PhpType::Object(name) => {
+            let name = name.trim_start_matches('\\');
+            name.eq_ignore_ascii_case(actual_class) || name.eq_ignore_ascii_case("object")
+        }
+        _ => false,
+    })
 }
 
 /// Returns whether a declared parameter contains a `string` arm that PHP may select through

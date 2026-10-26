@@ -10,7 +10,9 @@
 //!
 //! Key details:
 //! - Each fixture runs under `--heap-debug` and asserts `leak summary: clean`, so an
-//!   unreleased separated copy or an unreleased synthetic local shows up as a leak.
+//!   unreleased separated copy or an unreleased synthetic local shows up as a leak. That holds
+//!   for the static-property fixtures too: static storage is released when the process exits,
+//!   so a value written back into a static property ends clean like any other.
 //! - The aliased fixtures also assert PHP's copy-on-write result, because an over-release of
 //!   the pre-sort array would surface as a use-after-free in the alias rather than as a leak.
 //! - Expected stdout values are real `LC_ALL=C php` 8.4 output for the same fixtures.
@@ -23,25 +25,6 @@ fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Asserts the program printed `expected` and left exactly `blocks` live, all of them owned by a
-/// static property.
-///
-/// A write-back into a static property hands the property a reference it keeps, and nothing
-/// releases static storage when the process ends, so these fixtures cannot end clean. Asserting
-/// that they did was how a write-back that left the property pointing at freed storage passed
-/// for so long: the double release is silent in a process that is exiting anyway, and fatal
-/// under `--web`, where the request boundary releases the same pointer again.
-fn assert_static_live(out: crate::support::ProgramOutput, expected: &str, blocks: usize) {
-    assert_eq!(out.stdout, expected, "stderr: {}", out.stderr);
-    let summary = format!("HEAP DEBUG: leak summary: live_blocks={}", blocks);
-    assert!(
-        out.stderr.contains(&summary),
-        "expected only the static property's value ({} blocks) to remain live, got: {}",
-        blocks,
         out.stderr
     );
 }
@@ -87,7 +70,8 @@ echo implode(",", $b->items), "|", implode(",", $copy);
 
 /// A static-property load is a borrowed pointer, so the synthetic local has to retain it
 /// before the sort separates a copy; otherwise the write-back frees the aliased original.
-/// The sorted array then stays live in the property for the rest of the process.
+/// The sorted array stays live in the property until static storage is released at exit, so a
+/// write-back that left the property pointing at freed storage shows up as a double release.
 #[test]
 fn test_sort_on_aliased_static_property_keeps_the_sorted_array_live() {
     let out = compile_and_run_with_heap_debug(
@@ -98,7 +82,7 @@ sort(B::$items);
 echo implode(",", B::$items), "|", implode(",", $copy);
 "#,
     );
-    assert_static_live(out, "1,2,3|3,1,2", 1);
+    assert_clean(out, "1,2,3|3,1,2");
 }
 
 /// A nested container element receiver, where the write-back goes through `hash_set` rather
@@ -167,7 +151,7 @@ echo "|", implode(",", Box::$shared), "|", implode(",", $sharedCopy);
 echo "|", implode(",", $map["slot"]);
 "#,
     );
-    assert_static_live(out, "K|1,2,3|1|4,5|4|7,8", 3);
+    assert_clean(out, "K|1,2,3|1|4,5|4|7,8");
 }
 
 /// Declared reference parameters adapt gradual caller storage in both directions: a boxed value

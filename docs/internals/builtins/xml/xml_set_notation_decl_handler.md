@@ -1,16 +1,16 @@
 ---
-title: "xml_set_notation_decl_handler() — internals"
+title: "xml_set_notation_decl_handler() - internals"
 description: "Compiler internals for xml_set_notation_decl_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 996
+  order: 1084
 ---
 
-## `xml_set_notation_decl_handler()` — internals
+## `xml_set_notation_decl_handler()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/xml/xml_set_notation_decl_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/xml/xml_set_notation_decl_handler.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -15,8 +15,8 @@ use crate::types::traits::FlattenedClass;
 
 use super::super::super::Checker;
 use super::super::validation::{
-    build_method_sig, matches_global_builtin_attribute, validate_override_signature,
-    visibility_rank,
+    build_method_sig, matches_global_builtin_attribute, method_contract_is_source,
+    validate_override_signature, visibility_rank,
 };
 use super::state::ClassBuildState;
 use super::{collect_attribute_args, collect_attribute_names};
@@ -133,6 +133,10 @@ fn apply_static_method(
         }
     }
     if let Some(parent_sig) = state.static_sigs.get(&method_key) {
+        let parent_is_source = state
+            .static_method_declaring_classes
+            .get(&method_key)
+            .is_none_or(|owner| method_contract_is_source(checker, owner, &method_key, true));
         validate_override_signature(
             checker,
             class,
@@ -142,6 +146,7 @@ fn apply_static_method(
                 .late_static_static_method_returns
                 .get(&method_key),
             true,
+            parent_is_source,
         )?;
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, true)
@@ -218,7 +223,10 @@ fn apply_instance_method(
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
+    let internal_exception_override = injected_exception_final_override(class, method, &method_key);
+    let inherited_declaring_class = state.method_declaring_classes.get(&method_key).cloned();
     let mut sig = build_method_sig(checker, method, &class.name)?;
+    demote_array_access_offset_get_reference(class, &method_key, &mut sig);
     if state.final_static_methods.contains(&method_key) {
         return Err(final_method_error(
             state
@@ -232,7 +240,7 @@ fn apply_instance_method(
     if state.static_sigs.contains_key(&method_key) {
         return Err(method_kind_error(class, method));
     }
-    if state.final_methods.contains(&method_key) {
+    if state.final_methods.contains(&method_key) && !internal_exception_override {
         return Err(final_method_error(
             state
                 .method_declaring_classes
@@ -260,14 +268,21 @@ fn apply_instance_method(
         }
     }
     if let Some(parent_sig) = state.method_sigs.get(&method_key) {
-        validate_override_signature(
-            checker,
-            class,
-            method,
-            parent_sig,
-            state.late_static_method_returns.get(&method_key),
-            false,
-        )?;
+        if !internal_exception_override {
+            let parent_is_source = state
+                .method_declaring_classes
+                .get(&method_key)
+                .is_none_or(|owner| method_contract_is_source(checker, owner, &method_key, false));
+            validate_override_signature(
+                checker,
+                class,
+                method,
+                parent_sig,
+                state.late_static_method_returns.get(&method_key),
+                false,
+                parent_is_source,
+            )?;
+        }
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, false)
     {
@@ -290,10 +305,24 @@ fn apply_instance_method(
     // `mixed`: `Twig\Node::__construct(array $nodes = [], ...)` turned every
     // `ConstantExpression::__construct($value, int $lineno)` call into "parameter $value
     // expects Array(Mixed)".
-    if method_key != "__construct" {
+    // A BUILTIN ancestor's declaration is not adopted: an untyped override of
+    // `DateTime::add(DateInterval $interval)` (Carbon's `add($unit, $value = 1, ...)`) is called
+    // directly with strings and ints, which the adopted `DateInterval` storage refused, and the
+    // whole Carbon class was left to the interpreter. Ancestor-typed sites still reach such an
+    // override with the right representation through the class-id ladder
+    // (`override_arity::wider_override_classes`, `stores_site_params_differently`).
+    let ancestor_is_source = state
+        .method_declaring_classes
+        .get(&method_key)
+        .is_none_or(|owner| method_contract_is_source(checker, owner, &method_key, false));
+    if method_key != "__construct" && ancestor_is_source {
         if let Some(parent_sig) = state.method_sigs.get(&method_key) {
             adopt_ancestor_parameter_storage(&mut sig, parent_sig);
             adopt_ancestor_return_storage(&mut sig, parent_sig);
+        }
+    } else if method_key != "__construct" {
+        if let Some(parent_sig) = state.method_sigs.get(&method_key) {
+            widen_undeclared_override_parameters(&mut sig, parent_sig);
         }
     }
     state.method_sigs.insert(method_key.clone(), sig);
@@ -311,14 +340,19 @@ fn apply_instance_method(
     state
         .method_visibilities
         .insert(method_key.clone(), method.visibility.clone());
-    if method.is_final {
+    if method.is_final || internal_exception_override {
         state.final_methods.insert(method_key.clone());
     } else {
         state.final_methods.remove(&method_key);
     }
+    let declaring_class = if internal_exception_override {
+        inherited_declaring_class.unwrap_or_else(|| class.name.clone())
+    } else {
+        class.name.clone()
+    };
     state
         .method_declaring_classes
-        .insert(method_key.clone(), class.name.clone());
+        .insert(method_key.clone(), declaring_class);
     state
         .method_attribute_names
         .insert(method_key.clone(), collect_attribute_names(&method.attributes));
@@ -343,6 +377,22 @@ fn apply_instance_method(
 }
 
 /// Constructs a `CompileError` for overriding a `final` method.
+/// Allows the compiler-injected PDOException getCode body to model its internal SQLSTATE
+/// behavior while retaining the inherited final flag and declaring class. Source declarations
+/// with the same class or method name never receive this exception.
+fn injected_exception_final_override(
+    class: &FlattenedClass,
+    method: &ClassMethod,
+    method_key: &str,
+) -> bool {
+    class.span.line == 0
+        && class.span.col == 0
+        && method.span.line == 0
+        && method.span.col == 0
+        && php_symbol_key(&class.name) == "pdoexception"
+        && method_key == "getcode"
+}
+
 fn final_method_error(declaring_class: String, method: &ClassMethod) -> CompileError {
     CompileError::new(
         method.span,
@@ -502,5 +552,57 @@ fn adopt_ancestor_parameter_storage(
         if let Some(declared) = sig.declared_params.get_mut(index) {
             *declared = true;
         }
+    }
+}
+
+/// Declares `mixed` every untyped override parameter whose BUILTIN ancestor declares a type.
+///
+/// The parameter is reached both by direct calls on the subclass (Carbon's `add('day', 3)`) and,
+/// through the class-id ladder, by sites typed against the builtin (`DateTime::add($interval)`).
+/// Inferring it from the direct calls alone fabricated `string`, and the `DateInterval` branch
+/// of the same body was refused. PHP reads an untyped parameter as `mixed`, which holds both.
+fn widen_undeclared_override_parameters(
+    sig: &mut crate::types::FunctionSig,
+    ancestor: &crate::types::FunctionSig,
+) {
+    for (index, (name, _)) in ancestor.params.iter().enumerate() {
+        if ancestor.variadic.as_deref() == Some(name.as_str()) {
+            break;
+        }
+        if sig.declared_params.get(index).copied().unwrap_or(true)
+            || !ancestor.declared_params.get(index).copied().unwrap_or(false)
+            || sig.ref_params.get(index).copied().unwrap_or(false)
+        {
+            continue;
+        }
+        if let Some((_, param_ty)) = sig.params.get_mut(index) {
+            *param_ty = crate::types::PhpType::Mixed;
+        }
+        if let Some(declared) = sig.declared_params.get_mut(index) {
+            *declared = true;
+        }
+    }
+}
+
+/// Returns `&offsetGet()` of an `ArrayAccess` class by value.
+///
+/// `ArrayAccess::offsetGet()` is declared by value, and every `$obj[$k]` read dispatches through
+/// that contract; a reference-returning implementation (Monolog's `LogRecord::&offsetGet()`)
+/// would hand those call sites a reference cell where they expect the value, which the method
+/// ABI adapter cannot bridge. Compiling the implementation by value keeps every read correct;
+/// only writes through the returned reference (`$rec['extra']['k'] = …`) stay local.
+fn demote_array_access_offset_get_reference(
+    class: &FlattenedClass,
+    method_key: &str,
+    sig: &mut crate::types::FunctionSig,
+) {
+    if sig.by_ref_return
+        && method_key == "offsetget"
+        && class
+            .implements
+            .iter()
+            .any(|name| name.trim_start_matches('\\').eq_ignore_ascii_case("ArrayAccess"))
+    {
+        sig.by_ref_return = false;
     }
 }

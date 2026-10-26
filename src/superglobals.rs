@@ -244,7 +244,7 @@ pub fn seed_cli_populated_superglobals(
 fn seed_for(name: &str) -> Vec<crate::parser::ast::Stmt> {
     use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
     use crate::synthetic_class::{
-        e_bool, e_call, e_index, e_int, e_str, e_var, s_array_assign, s_assign,
+        e_bool, e_call, e_str, e_var, s_array_assign, s_assign,
     };
 
     let span = crate::span::Span::synthetic();

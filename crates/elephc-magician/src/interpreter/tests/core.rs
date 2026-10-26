@@ -10,6 +10,43 @@
 use super::super::*;
 use super::support::*;
 
+/// A nested eval throw from a catch still runs finally before reaching an outer catch.
+#[test]
+fn execute_program_runs_finally_after_catch_calls_throwing_eval() {
+    let program = parse_fragment(br#"
+try {
+    try { throw new Exception("first"); }
+    catch (Throwable $first) { eval('throw new Exception("second");'); }
+    finally { echo "finally|"; }
+} catch (Throwable $second) { return 2; }
+"#).expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("execute nested throw");
+    assert_eq!(values.output, "finally|");
+    assert_eq!(values.get(result), FakeValue::Int(2));
+    assert!(context.take_pending_throw().is_none());
+}
+
+/// Returning from finally consumes the pending nested-eval throw instead of bypassing the finalizer.
+#[test]
+fn execute_program_finally_return_overrides_throw_from_catch_call() {
+    let program = parse_fragment(br#"
+try { throw new Exception("first"); }
+catch (Throwable $first) { eval('throw new Exception("second");'); }
+finally { return 3; }
+"#).expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("finally overrides the catch call's throw");
+    assert_eq!(values.get(result), FakeValue::Int(3));
+    assert!(context.take_pending_throw().is_none());
+}
+
 /// Verifies assignment writes a named scope entry and return reads it back.
 #[test]
 fn execute_program_stores_and_returns_scope_value() {
@@ -120,17 +157,18 @@ fn execute_program_catches_throwable_without_variable_inside_eval() {
     let mut values = FakeOps::default();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
-    // The message argument is released once the exception holds it, so the thrown object is
-    // not necessarily the FIRST release; it has to be among them.
-    let releases = values.releases.clone();
-    assert!(
-        releases
-            .iter()
-            .any(|released| values.type_tag(*released) == Ok(EVAL_TAG_OBJECT)),
-        "unbound catch should release the thrown object"
-    );
+    let released_tags = values.releases.clone().into_iter()
+        .map(|cell| values.type_tag(cell)).collect::<Vec<_>>();
 
     assert_eq!(scope.visible_cell("caught"), None);
+    // The first two are the `file` string and `line` int the Throwable captures at allocation
+    // (`initialize_native_throwable_source`): each is a temporary the property write retains,
+    // so it is released once written. Then the constructor operand, then the exception.
+    assert_eq!(
+        released_tags,
+        vec![Ok(EVAL_TAG_STRING), Ok(EVAL_TAG_INT), Ok(EVAL_TAG_STRING), Ok(EVAL_TAG_OBJECT)],
+        "the source temporaries, the constructor operand and the unbound exception each release their own cell"
+    );
     assert_eq!(values.get(result), FakeValue::Int(9));
 }
 /// Verifies eval `catch (Exception)` matches thrown exception objects.
@@ -279,15 +317,16 @@ fn execute_program_finally_return_overrides_uncaught_throw() {
     let mut values = FakeOps::default();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
-    let releases = values.releases.clone();
-    assert!(
-        releases
-            .iter()
-            .any(|released| values.type_tag(*released) == Ok(EVAL_TAG_OBJECT)),
-        "overridden throw should be released"
-    );
+    let released_tags = values.releases.clone().into_iter()
+        .map(|cell| values.type_tag(cell)).collect::<Vec<_>>();
 
     assert_eq!(values.get(result), FakeValue::Int(2));
+    // `file` and `line` are the temporaries the Throwable's source capture writes and releases.
+    assert_eq!(
+        released_tags,
+        vec![Ok(EVAL_TAG_STRING), Ok(EVAL_TAG_INT), Ok(EVAL_TAG_STRING), Ok(EVAL_TAG_OBJECT)],
+        "finally releases the overridden exception after its constructor operand"
+    );
 }
 /// Verifies eval `finally` runs before an uncaught throw leaves the fragment.
 #[test]
@@ -438,12 +477,17 @@ fn execute_program_include_uses_call_site_and_returns_file_result() {
     let path = dir.join("piece.php");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create include fixture directory");
+    // PHP resolves the included file's path, so `__DIR__`/`__FILE__` carry the canonical form.
+    // `std::env::temp_dir()` on macOS spells the same directory through the `/var` symlink, so the
+    // fixture must compare against the resolved paths or it asserts a spelling PHP never reports.
+    let canonical_dir = std::fs::canonicalize(&dir).expect("resolve fixture directory");
+    let canonical_path = canonical_dir.join("piece.php");
     std::fs::write(
             &path,
             format!(
                 r#"<?php echo (__DIR__ === "{}" ? "D" : "d"); echo (__FILE__ === "{}" ? "F" : "f"); $x = $x + 1; return $x;"#,
-                dir.to_string_lossy(),
-                path.to_string_lossy()
+                canonical_dir.to_string_lossy(),
+                canonical_path.to_string_lossy()
             ),
         )
         .expect("write include fixture");

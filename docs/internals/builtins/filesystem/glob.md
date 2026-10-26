@@ -1,16 +1,16 @@
 ---
-title: "glob() — internals"
+title: "glob() - internals"
 description: "Compiler internals for glob(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 289
+  order: 290
 ---
 
-## `glob()` — internals
+## `glob()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/glob.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/glob.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

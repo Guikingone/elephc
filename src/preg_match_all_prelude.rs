@@ -26,7 +26,7 @@
 use crate::parser::ast::{BinOp, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_array_assoc, e_binop, e_bool, e_call, e_index, e_int, e_null, e_str, e_ternary, e_var, function,
-    e_not as e_unary_not, internal_declarations, s_array_assign, s_array_push, s_assign, s_break, s_expr, s_foreach, s_if,
+    e_not as e_unary_not, php_semantics_declarations, s_array_assign, s_array_push, s_assign, s_break, s_expr, s_foreach, s_if,
     s_return, s_while,
 };
 /// Reserved helper for `preg_match_all()` calls that pass `$flags` (and possibly `$offset`).
@@ -38,7 +38,7 @@ const PREG_UNMATCHED_AS_NULL: i64 = 512;
 
 /// Returns the `preg_match_all()` flags declaration for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| vec![preg_match_all_flags()])
+    php_semantics_declarations(|| vec![preg_match_all_flags()])
 }
 
 fn has_flag(flag: i64) -> crate::parser::ast::Expr {
@@ -86,6 +86,13 @@ fn preg_match_all_flags() -> Stmt {
                 ),
             ),
             s_assign("sets", e_array(Vec::new())),
+            // Seeded as a hash for the reason each row is: marks are keyed by match number and
+            // skip matches without one, so the column is not necessarily a list.
+            s_assign("marks", e_array_assoc(vec![(e_str("__elephc_row"), e_int(0))])),
+            s_expr(e_call(
+                "unset",
+                vec![e_index(e_var("marks"), e_str("__elephc_row"))],
+            )),
             s_assign("len", e_call("strlen", vec![e_var("subject")])),
             // A negative offset counts from the end of the subject, as in `preg_match()`.
             s_assign(
@@ -140,6 +147,21 @@ fn preg_match_all_flags() -> Stmt {
                         vec![e_index(e_var("set"), e_str("__elephc_row"))],
                     )),
                     s_foreach(e_var("keys"), None, "k", group_into_set()),
+                    // A `(*MARK:name)` verb adds a trailing `MARK` key to the row (SET order) and
+                    // a `MARK` column indexed by match number (PATTERN order).
+                    s_if(
+                        e_call("array_key_exists", vec![e_str("MARK"), e_var("m")]),
+                        vec![
+                            s_array_assign("set", e_str("MARK"), e_index(e_var("m"), e_str("MARK"))),
+                            s_array_assign(
+                                "marks",
+                                e_call("count", vec![e_var("sets")]),
+                                e_index(e_var("m"), e_str("MARK")),
+                            ),
+                        ],
+                        Vec::new(),
+                        None,
+                    ),
                     s_array_push("sets", e_var("set")),
                     s_assign("start", e_index(e_index(e_var("m"), e_int(0)), e_int(1))),
                     s_assign(
@@ -235,6 +257,12 @@ fn pattern_order() -> Vec<Stmt> {
                 ),
                 s_array_assign("out", e_var("k"), e_var("col")),
             ],
+        ),
+        s_if(
+            e_binop(e_call("count", vec![e_var("marks")]), BinOp::Gt, e_int(0)),
+            vec![s_array_assign("out", e_str("MARK"), e_var("marks"))],
+            Vec::new(),
+            None,
         ),
         s_assign("matches", e_var("out")),
     ]

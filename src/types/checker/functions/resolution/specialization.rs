@@ -42,7 +42,25 @@ impl Checker {
                     .iter()
                     .any(|variant| self.resolving_functions.contains(variant))
             });
-        if self.resolving_functions.contains(name) || resolving_variant_group {
+        if resolving_variant_group {
+            return Ok(false);
+        }
+        if self.resolving_functions.contains(name) {
+            // A recursive self-call cannot re-specialize the declaration it is inside, but the
+            // types it passes still belong to the parameters: record them for the re-run, and
+            // widen the provisional signature so this call and later ones are checked against it.
+            if self.fn_decls.contains_key(name) {
+                if let Some(widened) =
+                    self.respecialized_param_types_for_call(name, &stored_sig, args, caller_env)?
+                {
+                    if widened != stored_sig.params {
+                        if let Some(sig) = self.functions.get_mut(name) {
+                            sig.params = widened.clone();
+                        }
+                        self.recursive_param_widenings.insert(name.to_string(), widened);
+                    }
+                }
+            }
             return Ok(false);
         }
 
@@ -143,6 +161,22 @@ impl Checker {
             .unwrap_or(0);
         let tail_spread_keeps_keys =
             self.variadic_tail_spread_keeps_keys(args, stored_regular_count, caller_env);
+        // An untyped parameter's first specialization replaces the `Int` placeholder; every later
+        // one joins with what earlier calls taught, as the variadic tail below does. Adopting only
+        // the first left `call_user_func(any(...), true)` after `call_user_func(any(...), 1.5)`
+        // binding `true` through a `float` parameter: `float(1)` where php returns `bool(true)`.
+        let mut first_seen = Vec::new();
+        if let Some(stored_sig) = self.functions.get(name) {
+            let regular_param_count = crate::types::call_args::regular_param_count(stored_sig);
+            for idx in 0..regular_param_count {
+                first_seen.push(
+                    !self
+                        .param_specialization_seen
+                        .contains(&(name.to_string(), idx)),
+                );
+            }
+        }
+        let mut taught = Vec::new();
         if let Some(stored_sig) = self.functions.get_mut(name) {
             let regular_param_count = crate::types::call_args::regular_param_count(stored_sig);
             let mut seen_idx = 0usize;
@@ -156,10 +190,22 @@ impl Checker {
                         .get(seen_idx)
                         .copied()
                         .unwrap_or(false)
-                    && stored_sig.params[seen_idx].1 == PhpType::Int
-                    && *actual_ty != PhpType::Int
+                    && !stored_sig.ref_params.get(seen_idx).copied().unwrap_or(false)
                 {
-                    stored_sig.params[seen_idx].1 = actual_ty.clone();
+                    let current = &stored_sig.params[seen_idx].1;
+                    // The joins mirror the direct-call respecialization's: `never` teaches
+                    // nothing, and `null` only where it has a tagged representation.
+                    let joinable = !matches!(actual_ty, PhpType::Never)
+                        && (!matches!(actual_ty, PhpType::Void)
+                            || crate::codegen::sentinels::null_repr_is_tagged());
+                    if first_seen.get(seen_idx).copied().unwrap_or(false) {
+                        if *current == PhpType::Int && *actual_ty != PhpType::Int {
+                            stored_sig.params[seen_idx].1 = actual_ty.clone();
+                        }
+                    } else if joinable && current != actual_ty {
+                        stored_sig.params[seen_idx].1 = Self::union_param_type(current, actual_ty);
+                    }
+                    taught.push(seen_idx);
                 }
                 seen_idx += 1;
             }
@@ -218,6 +264,9 @@ impl Checker {
                 self.param_specialization_seen.insert(key);
             }
         }
+        for idx in taught {
+            self.param_specialization_seen.insert((name.to_string(), idx));
+        }
         Ok(())
     }
 
@@ -254,6 +303,39 @@ impl Checker {
                         _ => PhpType::Mixed,
                     };
                     changed |= self.widen_variadic_element(name, stored_sig, &mut param_types, source_elem);
+                } else {
+                    // A spread over regular parameters binds an unknown number of them (an int
+                    // key by position, a string key by name), so each remaining undeclared
+                    // parameter receives some element of the source. Leaving them alone kept the
+                    // first call's specialization: `g(...$ints)` then `g(...$mixed)` compiled the
+                    // second call against `int` parameters and read a string as `0`.
+                    let source_elem = match self.infer_type(inner, caller_env)?.codegen_repr() {
+                        PhpType::Array(elem) => *elem,
+                        PhpType::AssocArray { value, .. } => *value,
+                        _ => PhpType::Mixed,
+                    };
+                    for index in seen_idx..regular_param_count {
+                        let declared = stored_sig.declared_params.get(index).copied().unwrap_or(false);
+                        let by_ref = stored_sig.ref_params.get(index).copied().unwrap_or(false);
+                        if declared
+                            || by_ref
+                            || matches!(source_elem, PhpType::Never | PhpType::Void)
+                        {
+                            continue;
+                        }
+                        let key = (name.to_string(), index);
+                        let seen = self.param_specialization_seen.contains(&key);
+                        let widened = if param_types[index].1 == PhpType::Int && !seen {
+                            self.param_specialization_seen.insert(key);
+                            source_elem.clone()
+                        } else {
+                            Self::union_param_type(&param_types[index].1, &source_elem)
+                        };
+                        if param_types[index].1 != widened {
+                            param_types[index].1 = widened;
+                            changed = true;
+                        }
+                    }
                 }
                 continue;
             }
@@ -261,10 +343,7 @@ impl Checker {
                 if let Some((param_name, _)) = param_types.get(seen_idx) {
                     if let Some(sig) = self.resolve_expr_callable_sig(arg, caller_env)? {
                         let key = (name.to_string(), param_name.clone());
-                        if self.callable_param_sigs.get(&key) != Some(&sig) {
-                            self.callable_param_sigs.insert(key, sig);
-                            changed = true;
-                        }
+                        changed |= self.record_callable_param_sig(key, arg.span, sig);
                     }
                 }
             }
@@ -272,12 +351,24 @@ impl Checker {
                 if let Some((param_name, _)) = param_types.get(seen_idx) {
                     if let Some(sig) = self.resolve_expr_callable_array_sig(arg, caller_env)? {
                         let key = (name.to_string(), param_name.clone());
-                        if self.callable_param_sigs.get(&key) != Some(&sig) {
-                            self.callable_param_sigs.insert(key, sig);
-                            changed = true;
-                        }
+                        changed |= self.record_callable_param_sig(key, arg.span, sig);
                     }
                 }
+            }
+            let undeclared_ref_param = seen_idx < regular_param_count
+                && stored_sig.ref_params.get(seen_idx).copied().unwrap_or(false)
+                && !stored_sig
+                    .declared_params
+                    .get(seen_idx)
+                    .copied()
+                    .unwrap_or(false);
+            if undeclared_ref_param {
+                if param_types[seen_idx].1 != PhpType::Mixed {
+                    param_types[seen_idx].1 = PhpType::Mixed;
+                    changed = true;
+                }
+                seen_idx += 1;
+                continue;
             }
             // A DECLARED `array` hint is generic: it resolves to `Array(Mixed)` and is then
             // specialized to the first call site's concrete element type. That narrowing has to be
@@ -327,13 +418,15 @@ impl Checker {
                 let seen = self.param_specialization_seen.contains(&key);
                 if Self::is_generic_array_hint(&param_types[seen_idx].1)
                     && !seen
-                    && matches!(actual_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    && is_specializable_array_argument(&actual_ty)
                 {
                     // Discard the generic `array` hint exactly once, mirroring the `Int` fallback
                     // below: adopt the first call's concrete array type so an all-`array<int>`
                     // parameter is not immediately polluted back to `array<mixed>` by unioning with
-                    // its own declaration. The seen set marks the discard, so every LATER call
-                    // widens instead of re-adopting — which is the whole point.
+                    // its own declaration. Exact PHP `array` arguments are a packed/hash union, not
+                    // `Array(Mixed)`; adopting that union keeps by-reference `array` parameters
+                    // array-typed instead of widening to `Mixed`. The seen set marks the discard,
+                    // so every LATER call widens instead of re-adopting.
                     self.param_specialization_seen.insert(key);
                     let specialized = Self::specialize_generic_array_param_hint(
                         &param_types[seen_idx].1,
@@ -377,6 +470,27 @@ impl Checker {
                 changed |= self.widen_variadic_element(name, stored_sig, &mut param_types, actual_elem);
             }
             seen_idx += 1;
+        }
+
+        if !variadic_param_is_by_ref(stored_sig)
+            && function_variadic_tail_needs_iterable(
+            args,
+            stored_sig,
+            regular_param_count,
+            caller_env,
+        )
+        {
+            if let Some(variadic_name) = stored_sig.variadic.as_deref() {
+                if let Some(variadic_index) = param_types
+                    .iter()
+                    .position(|(param_name, _)| param_name == variadic_name)
+                {
+                    if param_types[variadic_index].1 != PhpType::Iterable {
+                        param_types[variadic_index].1 = PhpType::Iterable;
+                        changed = true;
+                    }
+                }
+            }
         }
 
         Ok(changed.then_some(param_types))
@@ -428,6 +542,16 @@ impl Checker {
     }
 }
 
+/// Returns whether a call argument can specialize a generic `array` parameter.
+///
+/// Concrete packed and associative arrays are adopted as-is. Exact PHP `array` is a two-member
+/// packed/hash union whose codegen representation is Mixed; treating that union as an array
+/// shape lets `specialize_generic_array_param_hint` keep the array contract instead of
+/// `union_param_type` widening it to Mixed.
+fn is_specializable_array_argument(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || ty.is_php_array()
+}
+
 /// Returns true when a call argument is an array whose elements are callable descriptors.
 fn is_callable_array_type(ty: &PhpType) -> bool {
     match ty {
@@ -448,6 +572,52 @@ fn variadic_param_is_by_ref(sig: &FunctionSig) -> bool {
         .and_then(|index| sig.ref_params.get(index))
         .copied()
         .unwrap_or(false)
+}
+
+/// Returns whether a function's variadic container must preserve string keys at runtime.
+fn function_variadic_tail_needs_iterable(
+    args: &[Expr],
+    sig: &FunctionSig,
+    regular_param_count: usize,
+    env: &TypeEnv,
+) -> bool {
+    if sig.variadic.is_none() {
+        return false;
+    }
+    if args.iter().any(|arg| {
+        matches!(
+            &arg.kind,
+            ExprKind::Spread(inner) if function_spread_source_keeps_runtime_keys(inner, env)
+        )
+    }) {
+        return true;
+    }
+    args.iter().any(|arg| {
+        matches!(
+            &arg.kind,
+            ExprKind::NamedArg { name, .. }
+                if !sig
+                    .params
+                    .iter()
+                    .take(regular_param_count)
+                    .any(|(param_name, _)| param_name == name)
+        )
+    })
+}
+
+/// Returns whether a spread source can carry string keys into a variadic function tail.
+fn function_spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(name) => matches!(
+            env.get(name),
+            Some(PhpType::AssocArray { .. } | PhpType::Iterable)
+        ),
+        ExprKind::ArrayLiteralAssoc(_) => true,
+        _ => matches!(
+            crate::types::checker::infer_expr_type_syntactic(expr),
+            PhpType::AssocArray { .. } | PhpType::Iterable
+        ),
+    }
 }
 
 /// Extracts parameter types from a generic `param_types` list, mapping them to the

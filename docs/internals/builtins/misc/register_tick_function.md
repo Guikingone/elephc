@@ -1,17 +1,17 @@
 ---
-title: "register_tick_function() — internals"
+title: "register_tick_function() - internals"
 description: "Compiler internals for register_tick_function(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 692
+  order: 718
 ---
 
-## `register_tick_function()` — internals
+## `register_tick_function()` - internals
 
 ## Where it lives
 
-- **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
+- **Lowering**: unavailable for this backend.
+- **Function symbol**: none.
 
 
 ## Semantic descriptor
@@ -28,7 +28,7 @@ _No compiled lowering: this surface is intentionally eval-only._
 function register_tick_function(mixed $callback, ...$args): bool
 ```
 
-## What the type checker enforces
+## Signature constraints
 
 - **Arity**: takes exactly 1 argument.
 - **Variadic**: collects excess arguments into `$args`.

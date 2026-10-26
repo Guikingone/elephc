@@ -79,6 +79,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save key_lo
     emitter.instruction("str x2, [sp, #16]");                                   // save key_hi
     emitter.instruction("str x3, [sp, #40]");                                   // save whether this read should emit PHP offset warnings
+    emitter.instruction("bl __rt_mixed_deref");                                 // read the current array held by any reference wrapper
+    emitter.instruction("str x0, [sp, #0]");                                    // save the concrete receiver for later dispatch
 
     emitter.instruction("cbz x0, __rt_mixed_array_get_null_container");         // null Mixed pointers behave as PHP null receivers
     emitter.instruction("ldr x9, [x0]");                                        // load tag from mixed[0]
@@ -395,9 +397,43 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // pass boxed offset as argument 1
     emitter.instruction("ldr x0, [sp, #0]");                                    // pass unboxed receiver as argument 0
     emitter.instruction("ldr x11, [x0]");                                       // reload class id, clobbered across the boxing call
+    emitter.instruction("str x11, [sp, #40]");                                  // keep the class id to box a narrowed return (the warning flag is spent)
     abi::emit_symbol_address(emitter, "x12", "_class_offsetget_ptrs");
     emitter.instruction("ldr x12, [x12, x11, lsl #3]");                         // re-resolve offsetGet for the same class
     emitter.instruction("blr x12");                                             // read through PHP's ArrayAccess::offsetGet
+    // -- box a narrowed return (`offsetGet(): self`, `: string`, ...) like a Mixed one --
+    emitter.instruction("ldr x11, [sp, #40]");                                  // reload the receiver's class id
+    abi::emit_symbol_address(emitter, "x12", "_class_offsetget_ret_tags");
+    emitter.instruction("ldr x9, [x12, x11, lsl #3]");                          // raw return tag + 1 (0 = already a boxed cell)
+    emitter.instruction("cbz x9, __rt_mixed_array_get_php_result");            // a Mixed return is the owned cell to hand back
+    emitter.instruction("sub x9, x9, #1");                                      // recover the runtime value tag
+    emitter.instruction("cmp x9, #1");                                          // a string return already sits in x1/x2
+    emitter.instruction("b.eq __rt_mixed_array_get_php_box_result");
+    emitter.instruction("cmp x9, #2");                                          // a float return sits in d0
+    emitter.instruction("b.ne __rt_mixed_array_get_php_word_result");
+    emitter.instruction("fmov x1, d0");                                         // move the float bits into the payload register
+    emitter.instruction("b __rt_mixed_array_get_php_box_result");
+    emitter.label("__rt_mixed_array_get_php_word_result");
+    emitter.instruction("mov x1, x0");                                          // the one-word payload (int, bool, container, object)
+    emitter.label("__rt_mixed_array_get_php_box_result");
+    emitter.instruction("str x9, [sp, #40]");                                   // keep the tag to give the method's own result back
+    emitter.instruction("str x1, [sp, #16]");                                   // keep the raw payload (key_hi is spent)
+    emitter.instruction("mov x0, x9");                                          // value tag for the boxing helper
+    emitter.instruction("bl __rt_mixed_from_value");                            // box it (the box retains or persists its own copy)
+    emitter.instruction("str x0, [sp, #0]");                                    // stash the owned box
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the raw tag
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the raw payload
+    emitter.instruction("cmp x9, #1");                                          // the method's string result is its own copy
+    emitter.instruction("b.ne __rt_mixed_array_get_php_not_string_result");
+    emitter.instruction("bl __rt_heap_free_safe");                              // validated free: scratch or static strings are left alone
+    emitter.instruction("b __rt_mixed_array_get_php_result_boxed");
+    emitter.label("__rt_mixed_array_get_php_not_string_result");
+    emitter.instruction("cmp x9, #4");                                          // containers and objects carry the method's reference
+    emitter.instruction("b.lo __rt_mixed_array_get_php_result_boxed");          // scalars own nothing
+    emitter.instruction("bl __rt_decref_any");                                  // the box holds its own reference now
+    emitter.label("__rt_mixed_array_get_php_result_boxed");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the owned box
+    emitter.label("__rt_mixed_array_get_php_result");
     emitter.instruction("str x0, [sp, #0]");                                    // stash the owned result; the receiver is done
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the boxed offset
     emitter.instruction("bl __rt_decref_mixed");                                // a PHP method BORROWS its argument, so this frame frees the box
@@ -486,6 +522,10 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save key_lo
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save key_hi
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save whether this read should emit PHP offset warnings
+    emitter.instruction("mov rax, rdi");                                        // pass the possibly referenced receiver
+    emitter.instruction("call __rt_mixed_deref");                               // read the current array held by any reference wrapper
+    emitter.instruction("mov rdi, rax");                                        // restore the concrete receiver argument
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the concrete receiver for later dispatch
 
     emitter.instruction("test rdi, rdi");                                       // null Mixed → null
     emitter.instruction("je __rt_mixed_array_get_null_container");              // null Mixed pointers behave as PHP null receivers
@@ -789,9 +829,47 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, rax");                                        // pass boxed offset as argument 1
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass unboxed receiver as argument 0
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // reload class id, clobbered across the boxing call
+    emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // keep the class id to box a narrowed return (the warning flag is spent)
     emitter.instruction("lea r12, [rip + _class_offsetget_ptrs]");              // dense ArrayAccess::offsetGet table
     emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");                  // re-resolve offsetGet for the same class
     emitter.instruction("call r12");                                            // read through PHP's ArrayAccess::offsetGet
+    // -- box a narrowed return (`offsetGet(): self`, `: string`, ...) like a Mixed one --
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the receiver's class id
+    emitter.instruction("lea r12, [rip + _class_offsetget_ret_tags]");          // dense raw-return-shape table
+    emitter.instruction("mov r10, QWORD PTR [r12 + r11 * 8]");                  // raw return tag + 1 (0 = already a boxed cell)
+    emitter.instruction("test r10, r10");                                       // a Mixed return is the owned cell to hand back
+    emitter.instruction("jz __rt_mixed_array_get_php_result");
+    emitter.instruction("sub r10, 1");                                          // recover the runtime value tag
+    emitter.instruction("cmp r10, 1");                                          // a string return sits in rax/rdx
+    emitter.instruction("jne __rt_mixed_array_get_php_not_str_result");
+    emitter.instruction("mov rdi, rax");                                        // string pointer as the payload low word
+    emitter.instruction("mov rsi, rdx");                                        // string length as the payload high word
+    emitter.instruction("jmp __rt_mixed_array_get_php_box_result");
+    emitter.label("__rt_mixed_array_get_php_not_str_result");
+    emitter.instruction("cmp r10, 2");                                          // a float return sits in xmm0
+    emitter.instruction("jne __rt_mixed_array_get_php_word_result");
+    emitter.instruction("movq rdi, xmm0");                                      // move the float bits into the payload register
+    emitter.instruction("jmp __rt_mixed_array_get_php_box_result");
+    emitter.label("__rt_mixed_array_get_php_word_result");
+    emitter.instruction("mov rdi, rax");                                        // the one-word payload (int, bool, container, object)
+    emitter.label("__rt_mixed_array_get_php_box_result");
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // keep the tag to give the method's own result back
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // keep the raw payload (key_hi is spent)
+    emitter.instruction("mov rax, r10");                                        // value tag for the boxing helper
+    emitter.instruction("call __rt_mixed_from_value");                          // box it (the box retains or persists its own copy)
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // stash the owned box
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the raw payload
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 1");                         // the method's string result is its own copy
+    emitter.instruction("jne __rt_mixed_array_get_php_not_string_result");
+    emitter.instruction("call __rt_heap_free_safe");                            // validated free: scratch or static strings are left alone
+    emitter.instruction("jmp __rt_mixed_array_get_php_result_boxed");
+    emitter.label("__rt_mixed_array_get_php_not_string_result");
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 4");                         // containers and objects carry the method's reference
+    emitter.instruction("jb __rt_mixed_array_get_php_result_boxed");            // scalars own nothing
+    emitter.instruction("call __rt_decref_any");                                // the box holds its own reference now
+    emitter.label("__rt_mixed_array_get_php_result_boxed");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the owned box
+    emitter.label("__rt_mixed_array_get_php_result");
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // stash the owned result; the receiver is done
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the boxed offset
     emitter.instruction("call __rt_decref_mixed");                              // a PHP method BORROWS its argument, so this frame frees the box

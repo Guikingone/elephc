@@ -10,6 +10,8 @@
 //!   PHP-visible cursor of their own.
 
 use super::*;
+use crate::errors::EvalStatus;
+use crate::interpreter::RuntimeValueOps;
 
 /// Hands out the request-wide registration order of SPL autoload callbacks.
 ///
@@ -42,14 +44,46 @@ fn next_autoload_registration_sequence(prepend: bool) -> i64 {
 }
 
 impl ElephcEvalContext {
-    /// Retains the foreign owner metadata needed to invoke one exported PCNTL handler callable.
+    /// Pins one foreign callable cell and the context metadata needed to invoke it.
     pub(crate) fn retain_pcntl_foreign_callable(
         &mut self,
         callback: RuntimeCellHandle,
         owner: pcntl_runtime::EvalPcntlContextLease,
-    ) {
+        values: &mut impl RuntimeValueOps,
+    ) -> Result<(), EvalStatus> {
+        let identity = callback.as_ptr() as usize;
+        if self.pcntl_foreign_callables.contains_key(&identity) {
+            return Ok(());
+        }
+        let retained = values.retain(callback)?;
         self.pcntl_foreign_callables
-            .insert(callback.as_ptr() as usize, owner);
+            .insert(identity, (retained, owner));
+        Ok(())
+    }
+
+    /// Propagates foreign callable metadata to an independently copied PHP value.
+    pub(crate) fn copy_pcntl_foreign_callable(
+        &mut self,
+        source: RuntimeCellHandle,
+        target: RuntimeCellHandle,
+        values: &mut impl RuntimeValueOps,
+    ) -> Result<(), EvalStatus> {
+        let source = source.as_ptr() as usize;
+        let target_identity = target.as_ptr() as usize;
+        if source == target_identity || self.pcntl_foreign_callables.contains_key(&target_identity) {
+            return Ok(());
+        }
+        let Some(owner) = self
+            .pcntl_foreign_callables
+            .get(&source)
+            .map(|(_, owner)| owner.clone())
+        else {
+            return Ok(());
+        };
+        let retained = values.retain(target)?;
+        self.pcntl_foreign_callables
+            .insert(target_identity, (retained, owner));
+        Ok(())
     }
 
     /// Returns the retained owner lease for a PCNTL callable exported into this context.
@@ -59,6 +93,18 @@ impl ElephcEvalContext {
     ) -> Option<&pcntl_runtime::EvalPcntlContextLease> {
         self.pcntl_foreign_callables
             .get(&(callback.as_ptr() as usize))
+            .map(|(_, owner)| owner)
+    }
+
+    /// Releases every cell pin before dropping its foreign context lease.
+    pub(crate) fn release_pcntl_foreign_callables(
+        &mut self,
+        values: &mut impl RuntimeValueOps,
+    ) {
+        for (_, (callback, owner)) in std::mem::take(&mut self.pcntl_foreign_callables) {
+            let _ = values.release(callback);
+            drop(owner);
+        }
     }
 
     /// Returns true when this lowercase PHP name resolves to a dynamic or native function.
@@ -100,7 +146,9 @@ impl ElephcEvalContext {
     /// an activation still on the stack sees what a deeper one wrote.
     pub fn static_local(&self, function_name: &str, name: &str) -> Option<RuntimeCellHandle> {
         let scope = super::request_statics::request_static_scope_ptr();
-        unsafe { scope.as_ref() }?.visible_cell(&Self::static_slot_name(function_name, name))
+        unsafe { scope.as_ref() }?
+            .visible_cell(&Self::static_slot_name(function_name, name))
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Returns the scope holding every `static` slot, for alias reads and writes.
@@ -166,6 +214,7 @@ impl ElephcEvalContext {
             normalize_class_name(class_name),
             name.to_string(),
         ))
+        .map(RuntimeCellHandle::borrowed)
     }
 
     /// Stores one eval static property cell and returns any replaced distinct cell.
@@ -220,6 +269,7 @@ impl ElephcEvalContext {
         self.class_constants
             .get(&(normalize_class_name(class_name), name.to_string()))
             .copied()
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Stores one eval class constant cell and returns any replaced distinct cell.
@@ -292,12 +342,6 @@ impl ElephcEvalContext {
             .compiler_included(path.as_ref())
     }
 
-    /// Registers an opened source once, without a context-local shadow copy.
-    pub fn mark_included_file(&mut self, path: impl Into<std::path::PathBuf>) {
-        self.include_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-            .mark(path.into());
-    }
-
     /// Pushes whether the next interpreter program originates from an actual include file.
     pub fn push_include_execution(&mut self, is_include: bool) {
         self.include_execution_stack.push(is_include);
@@ -319,6 +363,152 @@ impl ElephcEvalContext {
             .insert(normalize_class_name(name))
     }
 
+    /// Registers an opened source once, without a context-local shadow copy.
+    ///
+    /// The set of included sources is the request's shared state; the separate list here
+    /// records first inclusion, so `get_included_files()` does not reconstruct a lexical order
+    /// on reads. The main script may already have been seeded without joining the once set.
+    pub fn mark_included_file(&mut self, path: impl Into<std::path::PathBuf>) {
+        let path = path.into();
+        let first = !self.has_included_file(&path);
+        self.include_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+            .mark(path.clone());
+        let key = path.to_string_lossy().into_owned();
+        if first && self.included_main_file.as_deref() != Some(key.as_str()) {
+            self.included_file_order.push(key);
+        }
+    }
+
+    /// Seeds the first nonempty call site once, independently of earlier include entries.
+    ///
+    /// A nested include temporarily changes `call_file`, so subsequent call sites
+    /// must never reorder the inventory. Keep the seed out of the once set to
+    /// preserve that set's existing behavior, including explicitly including main.
+    fn seed_main_included_file(&mut self) {
+        if self.call_file.is_empty() || self.included_main_file.is_some() {
+            return;
+        }
+        if let Some(position) = self.included_file_order.iter().position(|name| name == &self.call_file) {
+            self.included_file_order.remove(position);
+        }
+        self.included_file_order.insert(0, self.call_file.clone());
+        self.included_main_file = Some(self.call_file.clone());
+    }
+
+    /// Returns the stable main entry followed by files in first-inclusion order.
+    pub(crate) fn included_file_names(&self) -> Vec<String> {
+        self.included_file_order.clone()
+    }
+
+    /// Returns the current error reporting mask, replacing it when a new mask is supplied.
+    pub(crate) fn update_error_reporting(&mut self, replacement: Option<i64>) -> i64 {
+        let previous = self.error_reporting;
+        if let Some(replacement) = replacement {
+            self.error_reporting = replacement;
+        }
+        previous
+    }
+
+    /// Returns the current error reporting mask without mutating it.
+    pub(crate) const fn error_reporting_mask(&self) -> i64 {
+        self.error_reporting
+    }
+
+    /// Installs an eval user error handler and returns the previously active handler.
+    pub(crate) fn push_error_handler(
+        &mut self,
+        replacement: Option<EvalErrorHandlerState>,
+    ) -> Option<EvalErrorHandlerState> {
+        let previous = self.error_handler;
+        self.error_handler_stack.push(previous);
+        self.error_handler = replacement;
+        previous
+    }
+
+    /// Restores the previous eval user error handler and returns the discarded current handler.
+    pub(crate) fn restore_error_handler_state(
+        &mut self,
+    ) -> Option<EvalErrorHandlerState> {
+        let discarded = self.error_handler.take();
+        self.error_handler = self.error_handler_stack.pop().flatten();
+        discarded
+    }
+
+    /// Returns the currently active eval user error handler.
+    pub(crate) const fn error_handler_state(&self) -> Option<EvalErrorHandlerState> {
+        self.error_handler
+    }
+
+    /// Temporarily removes the active handler without changing its restoration stack.
+    pub(crate) fn suspend_error_handler(&mut self) -> Option<EvalErrorHandlerState> {
+        self.error_handler.take()
+    }
+
+    /// Restores a suspended handler unless its callback installed a replacement.
+    pub(crate) fn resume_error_handler(
+        &mut self,
+        suspended: EvalErrorHandlerState,
+    ) -> Option<EvalErrorHandlerState> {
+        if self.error_handler.is_none() {
+            self.error_handler = Some(suspended);
+            None
+        } else {
+            Some(suspended)
+        }
+    }
+
+    /// Installs an eval uncaught-exception handler and returns the previous handler.
+    pub(crate) fn push_exception_handler(
+        &mut self,
+        replacement: Option<RuntimeCellHandle>,
+    ) -> Option<RuntimeCellHandle> {
+        let previous = self.exception_handler;
+        self.exception_handler_stack.push(previous);
+        self.exception_handler = replacement;
+        previous
+    }
+
+    /// Restores the previous eval exception handler and returns the discarded handler.
+    pub(crate) fn restore_exception_handler_state(&mut self) -> Option<RuntimeCellHandle> {
+        let discarded = self.exception_handler.take();
+        self.exception_handler = self.exception_handler_stack.pop().flatten();
+        discarded
+    }
+
+    /// Returns the currently active eval uncaught-exception handler without transferring ownership.
+    pub(crate) const fn exception_handler_state(&self) -> Option<RuntimeCellHandle> {
+        self.exception_handler
+    }
+
+    /// Returns active eval call frames from the current frame to the outermost frame.
+    pub(crate) fn backtrace_frames(&self) -> Vec<EvalBacktraceFrame> {
+        let mut frames = Vec::new();
+        for depth in 0..=self.function_args_stack.len() {
+            frames.extend(self.eval_backtrace_boundaries.iter()
+                .filter(|(position, _)| *position == depth)
+                .map(|(_, frame)| frame.clone()));
+            if let Some(frame) = self.function_args_stack.get(depth) {
+                frames.push(frame.clone());
+            }
+        }
+        frames.reverse();
+        frames
+    }
+
+    /// Records an eval boundary without changing func_* argument introspection scope.
+    pub(crate) fn push_eval_backtrace_boundary(&mut self) {
+        let (file, _, line, _) = self.call_site();
+        let frame = EvalBacktraceFrame::new("eval".to_string(),
+            EvalFunctionArgsFrame::new(Vec::new(), 0, Vec::new()), file, line,
+            None, None, None);
+        self.eval_backtrace_boundaries.push((self.function_args_stack.len(), frame));
+    }
+
+    /// Removes an eval boundary after successful execution or an interpreted throwable.
+    pub(crate) fn pop_eval_backtrace_boundary(&mut self) {
+        self.eval_backtrace_boundaries.pop();
+    }
+
     /// Stores the non-owned global scope handle used by eval `global` aliases.
     pub fn set_global_scope(&mut self, scope: *mut ElephcEvalScope) -> bool {
         if scope.is_null() {
@@ -335,6 +525,57 @@ impl ElephcEvalContext {
     /// Returns the non-owned global scope handle for eval `global` aliases.
     pub fn global_scope_ptr(&self) -> Option<*mut ElephcEvalScope> {
         self.global_scope
+    }
+
+    /// Refreshes request globals at a native-to-eval boundary and publishes changes on return.
+    ///
+    /// A context imported for a runtime-declared class may have no originating eval frame.
+    /// Its module transfer hooks still describe the live native globals; give those hooks an
+    /// owned scope rather than letting a method seed a detached copy from the environment.
+    pub(crate) fn with_native_global_sync<R>(
+        &mut self,
+        execute: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let transfer = self.native_global_sync.map(|hooks| {
+            let scope = match self.global_scope {
+                Some(scope) => scope,
+                None => {
+                    let scope = Box::into_raw(Box::new(ElephcEvalScope::new()));
+                    self.global_scope = Some(scope);
+                    self.owns_global_scope = true;
+                    scope
+                }
+            };
+            (hooks, scope)
+        });
+        if let Some((hooks, scope)) = transfer {
+            unsafe { (hooks.native_to_eval)(scope) };
+        }
+        let result = execute(self);
+        if let Some((hooks, scope)) = transfer {
+            unsafe { (hooks.eval_to_native)(scope) };
+        }
+        result
+    }
+
+    /// Publishes interpreted globals before native code and refreshes them on return.
+    ///
+    /// This is the reverse boundary of `with_native_global_sync`. A native constructor can
+    /// mutate request globals too; retaining the pre-call scope snapshot would undo those
+    /// writes when control eventually returns through the outer native-to-eval boundary.
+    pub(crate) fn with_eval_global_sync<R>(
+        &mut self,
+        execute: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let transfer = self.native_global_sync.zip(self.global_scope_ptr());
+        if let Some((hooks, scope)) = transfer {
+            unsafe { (hooks.eval_to_native)(scope) };
+        }
+        let result = execute(self);
+        if let Some((hooks, scope)) = transfer {
+            unsafe { (hooks.native_to_eval)(scope) };
+        }
+        result
     }
 
     /// Reports whether this context has no retained SPL autoload callbacks.
@@ -569,6 +810,56 @@ impl ElephcEvalContext {
         self.function_stack.last().map(String::as_str)
     }
 
+    /// Pushes PHP argument-introspection metadata for a free-function activation.
+    pub(crate) fn push_function_args(&mut self, frame: EvalFunctionArgsFrame) {
+        self.push_function_args_with_backtrace(frame, None, None, false);
+    }
+
+    /// Pushes PHP argument metadata together with method or bound-closure backtrace metadata.
+    pub(crate) fn push_function_args_with_backtrace(
+        &mut self,
+        frame: EvalFunctionArgsFrame,
+        class_name: Option<String>,
+        object: Option<RuntimeCellHandle>,
+        is_static: bool,
+    ) {
+        let function = self
+            .current_function()
+            .unwrap_or_default()
+            .trim_start_matches('\\')
+            .to_string();
+        let function = class_name
+            .as_ref()
+            .and_then(|_| function.rsplit_once("::").map(|(_, method)| method.to_string()))
+            .unwrap_or(function);
+        let (file, _, line, _) = self.call_site();
+        let call_type = class_name
+            .as_ref()
+            .map(|_| if is_static { "::" } else { "->" });
+        self.function_args_stack.push(EvalBacktraceFrame::new(
+            function,
+            frame,
+            file,
+            line,
+            class_name,
+            object,
+            call_type,
+        ));
+    }
+
+    /// Pops activation metadata and transfers its retained snapshot cells for release.
+    pub(crate) fn pop_function_args(&mut self) -> Vec<RuntimeCellHandle> {
+        self.function_args_stack.pop()
+            .map(EvalBacktraceFrame::into_argument_cells).unwrap_or_default()
+    }
+
+    /// Returns PHP argument-introspection metadata for the active callable.
+    pub(crate) fn current_function_args(&self) -> Option<&EvalFunctionArgsFrame> {
+        self.function_args_stack
+            .last()
+            .map(EvalBacktraceFrame::arguments)
+    }
+
     /// Pushes the eval class whose method is currently executing.
     pub fn push_class_scope(&mut self, name: impl Into<String>) {
         self.class_stack.push(name.into());
@@ -581,7 +872,43 @@ impl ElephcEvalContext {
 
     /// Returns the current eval class scope, if execution is inside a method.
     pub fn current_class_scope(&self) -> Option<&str> {
-        self.class_stack.last().map(String::as_str)
+        self.class_stack
+            .last()
+            .and_then(|name| (!name.is_empty()).then_some(name.as_str()))
+    }
+
+    /// Starts one readonly reinitialization phase for a newly cloned object.
+    pub(crate) fn begin_clone_initialization(&mut self, identity: u64) {
+        self.clone_reinitialized_properties
+            .insert(identity, HashSet::new());
+    }
+
+    /// Starts the post-hook readonly reinitialization phase for clone property overrides.
+    pub(crate) fn restart_clone_initialization(&mut self, identity: u64) {
+        if let Some(properties) = self.clone_reinitialized_properties.get_mut(&identity) {
+            properties.clear();
+        }
+    }
+
+    /// Ends readonly reinitialization for one cloned object.
+    pub(crate) fn end_clone_initialization(&mut self, identity: u64) {
+        self.clone_reinitialized_properties.remove(&identity);
+    }
+
+    /// Returns whether the object is inside either readonly clone reinitialization phase.
+    pub(crate) fn clone_initialization_is_active(&self, identity: u64) -> bool {
+        self.clone_reinitialized_properties.contains_key(&identity)
+    }
+
+    /// Consumes one property's single readonly rewrite allowance in the active phase.
+    pub(crate) fn consume_clone_reinitialization(
+        &mut self,
+        identity: u64,
+        property: &str,
+    ) -> bool {
+        self.clone_reinitialized_properties
+            .get_mut(&identity)
+            .is_some_and(|properties| properties.insert(property.to_string()))
     }
 
     /// Renders the whole class-scope stack, innermost last, for a diagnostic.
@@ -623,7 +950,9 @@ impl ElephcEvalContext {
 
     /// Returns the current late-static-bound eval class scope, if execution is inside a method.
     pub fn current_called_class_scope(&self) -> Option<&str> {
-        self.called_class_stack.last().map(String::as_str)
+        self.called_class_stack
+            .last()
+            .and_then(|name| (!name.is_empty()).then_some(name.as_str()))
     }
 
     /// Returns a dynamic called-class override for a generated/AOT frame entering eval.
@@ -839,11 +1168,15 @@ impl ElephcEvalContext {
     }
 
     /// Updates the source file, directory, and line for the current eval call site.
+    ///
+    /// The first nonempty site seeds main once; temporary include sites and their
+    /// restoration never change the order subsequently reported by file inventories.
     pub fn set_call_site(&mut self, file: impl Into<String>, dir: impl Into<String>, line: i64) {
         self.call_file = file.into();
         self.call_dir = dir.into();
         self.call_line = line;
         self.file_magic_override = None;
+        self.seed_main_included_file();
     }
 
     /// Moves the current line without disturbing the file or directory it belongs to.
@@ -880,6 +1213,33 @@ impl ElephcEvalContext {
     /// Returns the source directory associated with the current eval call site.
     pub fn call_dir(&self) -> &str {
         &self.call_dir
+    }
+
+    /// Makes the call site the eval'd code itself, php's `FILE(LINE) : eval()'d code` at line 1.
+    ///
+    /// php reports code inside `eval()` as a file of its own whose lines count from the
+    /// fragment's first line: a warning says `in x.php(3) : eval()'d code on line 2`, a frame
+    /// called from there carries that file and line, and so do `__FILE__`/`__LINE__`. The
+    /// fragment's `SourceLine` markers move the line from here. Returns the site to hand back to
+    /// [`Self::leave_eval_code_site`]; a context with no file (a bare bridge call) is left alone.
+    pub fn enter_eval_code_site(&mut self) -> (String, String, i64, Option<String>) {
+        let previous = self.call_site();
+        let name = self.eval_file_magic();
+        if !name.is_empty() {
+            self.call_file = name.clone();
+            self.call_line = 1;
+            self.file_magic_override = Some(name);
+        }
+        previous
+    }
+
+    /// Restores the site [`Self::enter_eval_code_site`] replaced, without reseeding main.
+    pub fn leave_eval_code_site(&mut self, previous: (String, String, i64, Option<String>)) {
+        let (file, dir, line, file_magic) = previous;
+        self.call_file = file;
+        self.call_dir = dir;
+        self.call_line = line;
+        self.file_magic_override = file_magic;
     }
 
     /// Returns PHP's `__FILE__` string for code currently running inside eval.

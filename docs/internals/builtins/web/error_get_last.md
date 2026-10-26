@@ -1,16 +1,16 @@
 ---
-title: "error_get_last() — internals"
+title: "error_get_last() - internals"
 description: "Compiler internals for error_get_last(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 942
+  order: 1037
 ---
 
-## `error_get_last()` — internals
+## `error_get_last()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/error_handling_prelude.rs`:535](https://github.com/illegalstudio/elephc/blob/main/src/error_handling_prelude.rs#L535) (`error_get_last`)
+- **Lowering**: [`src/error_handling_prelude.rs`:121](https://github.com/illegalstudio/elephc/blob/main/src/error_handling_prelude.rs#L121) (`error_get_last`)
 - **Function symbol**: `error_get_last()`
 
 
@@ -38,7 +38,7 @@ function error_get_last(): ?array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

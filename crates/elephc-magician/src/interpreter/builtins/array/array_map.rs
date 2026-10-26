@@ -28,11 +28,12 @@ pub(in crate::interpreter) fn eval_array_map_declared_call(
 /// Dispatches evaluated-argument eval calls for the `array_map` array builtin.
 pub(in crate::interpreter) fn eval_array_map_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some((callback, arrays)) = evaluated_args.split_first() else { return Err(EvalStatus::RuntimeFatal); };
-    eval_array_map_result(*callback, arrays, context, values)
+    eval_array_map_result_from_scope(*callback, arrays, lexical_scope, context, values)
 }
 
 /// Evaluates PHP `array_map()` for one or more arrays and an optional callback.
@@ -51,16 +52,6 @@ pub(in crate::interpreter) fn eval_builtin_array_map(
         evaluated_arrays.push(eval_expr(array, context, scope, values)?);
     }
     eval_array_map_result_from_scope(callback, &evaluated_arrays, Some(scope), context, values)
-}
-
-/// Maps one eval array with PHP key preservation for the one-array form.
-pub(in crate::interpreter) fn eval_array_map_result(
-    callback: RuntimeCellHandle,
-    arrays: &[RuntimeCellHandle],
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_array_map_result_from_scope(callback, arrays, None, context, values)
 }
 
 /// Maps one or more eval arrays with optional lexical scope for callback names.
@@ -83,26 +74,43 @@ fn eval_array_map_result_from_scope(
     let callback = if values.is_null(callback)? {
         None
     } else {
-        Some(eval_callable_with_optional_scope(
+        Some(eval_callable_for_probe(
             callback,
             context,
             lexical_scope,
             values,
         )?)
     };
-    let len = values.array_len(*array)?;
-    let mut result = values.assoc_new(len)?;
-    for position in 0..len {
-        let key = values.array_iter_key(*array, position)?;
-        let value = values.array_get(*array, key)?;
-        let mapped = if let Some(callback) = callback.as_ref() {
-            eval_evaluated_callable_with_values(callback, vec![value], context, values)?
-        } else {
-            value
-        };
-        result = values.array_set(result, key, mapped)?;
-    }
-    Ok(result)
+    // A callable array's receiver read (`[$object, 'method']`) is an owner the dispatch
+    // borrows for the whole walk; it is released once, after the last callback.
+    let (callback, callback_receiver) = match callback {
+        Some((callback, receiver)) => (Some(callback), receiver),
+        None => (None, None),
+    };
+    let result = (|| -> Result<RuntimeCellHandle, EvalStatus> {
+        let len = values.array_len(*array)?;
+        let mut result = values.assoc_new(len)?;
+        for position in 0..len {
+            let key = values.array_iter_key(*array, position)?;
+            let value = values.array_get(*array, key)?;
+            let mapped = if let Some(callback) = callback.as_ref() {
+                let mapped =
+                    eval_evaluated_callable_with_values(callback, vec![value], context, values)?;
+                // The callback borrows its arguments; the element read is still this frame's.
+                values.release(value)?;
+                mapped
+            } else {
+                value
+            };
+            result = values.array_set(result, key, mapped)?;
+            // `array_set` retains what it stores, so this iteration's key and mapped value are
+            // still owned here: keeping them leaked three cells per element.
+            values.release(key)?;
+            values.release(mapped)?;
+        }
+        Ok(result)
+    })();
+    eval_release_callable_receiver(result, callback_receiver, values)
 }
 
 /// Maps multiple eval arrays with optional lexical scope for callback names.
@@ -119,42 +127,64 @@ fn eval_array_map_variadic_result_from_scope(
     let callback = if values.is_null(callback)? {
         None
     } else {
-        Some(eval_callable_with_optional_scope(
+        Some(eval_callable_for_probe(
             callback,
             context,
             lexical_scope,
             values,
         )?)
     };
-    let mut lengths = Vec::with_capacity(arrays.len());
-    let mut max_len = 0;
-    for array in arrays {
-        let len = values.array_len(*array)?;
-        max_len = max_len.max(len);
-        lengths.push(len);
-    }
-
-    let mut result = values.array_new(max_len)?;
-    for position in 0..max_len {
-        let mut callback_args = Vec::with_capacity(arrays.len());
-        for (array, len) in arrays.iter().zip(lengths.iter()) {
-            let value = if position < *len {
-                let key = values.array_iter_key(*array, position)?;
-                values.array_get(*array, key)?
-            } else {
-                values.null()?
-            };
-            callback_args.push(value);
+    // A callable array's receiver read (`[$object, 'method']`) is an owner the dispatch
+    // borrows for the whole walk; it is released once, after the last callback.
+    let (callback, callback_receiver) = match callback {
+        Some((callback, receiver)) => (Some(callback), receiver),
+        None => (None, None),
+    };
+    let result = (|| -> Result<RuntimeCellHandle, EvalStatus> {
+        let mut lengths = Vec::with_capacity(arrays.len());
+        let mut max_len = 0;
+        for array in arrays {
+            let len = values.array_len(*array)?;
+            max_len = max_len.max(len);
+            lengths.push(len);
         }
-        let mapped = if let Some(callback) = callback.as_ref() {
-            eval_evaluated_callable_with_values(callback, callback_args, context, values)?
-        } else {
-            eval_array_map_zipped_row(callback_args, values)?
-        };
-        let key = values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        result = values.array_set(result, key, mapped)?;
-    }
-    Ok(result)
+
+        let mut result = values.array_new(max_len)?;
+        for position in 0..max_len {
+            let mut callback_args = Vec::with_capacity(arrays.len());
+            for (array, len) in arrays.iter().zip(lengths.iter()) {
+                let value = if position < *len {
+                    let key = values.array_iter_key(*array, position)?;
+                    let value = values.array_get(*array, key)?;
+                    values.release(key)?;
+                    value
+                } else {
+                    values.null()?
+                };
+                callback_args.push(value);
+            }
+            let mapped = if let Some(callback) = callback.as_ref() {
+                let mapped = eval_evaluated_callable_with_values(
+                    callback,
+                    callback_args.clone(),
+                    context,
+                    values,
+                )?;
+                for arg in callback_args {
+                    values.release(arg)?;
+                }
+                mapped
+            } else {
+                eval_array_map_zipped_row(callback_args, values)?
+            };
+            let key = values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+            result = values.array_set(result, key, mapped)?;
+            values.release(key)?;
+            values.release(mapped)?;
+        }
+        Ok(result)
+    })();
+    eval_release_callable_receiver(result, callback_receiver, values)
 }
 
 /// Builds one row for `array_map(null, $a, $b, ...)`.
@@ -166,6 +196,9 @@ pub(in crate::interpreter) fn eval_array_map_zipped_row(
     for (index, value) in values_row.into_iter().enumerate() {
         let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
         row = values.array_set(row, key, value)?;
+        // The row retains what it stores; the key and the element owner are released.
+        values.release(key)?;
+        values.release(value)?;
     }
     Ok(row)
 }

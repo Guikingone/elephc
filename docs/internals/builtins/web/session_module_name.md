@@ -1,16 +1,16 @@
 ---
-title: "session_module_name() — internals"
+title: "session_module_name() - internals"
 description: "Compiler internals for session_module_name(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 962
+  order: 1053
 ---
 
-## `session_module_name()` — internals
+## `session_module_name()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3652](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3652) (`session_module_name`)
+- **Lowering**: [`src/web_prelude/build.rs`:3825](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3825) (`session_module_name`)
 - **Function symbol**: `session_module_name()`
 
 
@@ -38,7 +38,7 @@ function session_module_name(?string $module = null): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

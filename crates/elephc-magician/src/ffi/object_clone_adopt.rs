@@ -2,8 +2,9 @@
 //! Registers a clone compiled code made of an eval-declared object with the source's context.
 //!
 //! Called from:
-//! - Generated code, through the pointer installed in `_elephc_eval_object_clone_fn`, right
-//!   after a compiled `clone` of an object whose class it cannot see.
+//! - Generated code, through the pointer installed in `_elephc_eval_object_clone_adopt_fn`, right
+//!   after a compiled `clone` of an object whose class it cannot see. (`_elephc_eval_object_clone_fn`
+//!   is the separate clone OPERATION hook, offered every object before the clone.)
 //!
 //! Key details:
 //! - The compiled clone copies the native layout, which for an eval-declared class is its

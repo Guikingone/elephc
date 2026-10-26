@@ -138,6 +138,7 @@ pub(crate) use host_directory_process::{
     lower_gethostbyaddr, lower_getprotobyname, lower_getprotobynumber, lower_getservbyname,
     lower_getservbyport, lower_opendir, lower_readdir, lower_closedir,
     lower_rewinddir, lower_popen, lower_pclose, lower_fsockopen,
+    lower_elephc_stream_fd, lower_elephc_fd_to_stream,
     lower_file, lower_realpath, lower_realpath_cache_get, lower_realpath_cache_size,
 };
 pub(crate) use phar_write::{
@@ -169,7 +170,7 @@ pub(crate) use stat_ops::{
 pub(super) use boxing_helpers::box_owned_string_or_false_result;
 pub(super) use boxing_helpers::box_readline_result;
 pub(super) use resource_handles::load_stream_fd_to_result;
-pub(super) use string_validation::load_string_to_result;
+pub(in crate::codegen::lower_inst) use string_validation::load_string_to_result;
 
 /// Emits a literal `file_get_contents("phar://...")` payload through compile-time PHAR extraction.
 ///

@@ -19,6 +19,8 @@
 //!   removes a store of a *different* value whose result is never observed.
 //! - Stores are neutralized to `nop` rather than physically removed, keeping the
 //!   instruction/value tables stable for the validator and later passes.
+//! - Dynamic eval observes the PHP frame without explicit slot operands, so its
+//!   functions keep all scalar stores.
 
 use std::collections::{HashMap, HashSet};
 
@@ -71,6 +73,9 @@ impl IrPass for DeadStore {
 /// makes the slot ineligible because it could read or alias the slot in a way this
 /// pass does not model.
 fn eligible_slots(function: &Function, data: &DataPool) -> HashSet<LocalSlotId> {
+    if super::local_scope::has_dynamic_eval(function) {
+        return HashSet::new();
+    }
     let mut eligible: HashSet<LocalSlotId> = function
         .locals
         .iter()
@@ -170,6 +175,7 @@ fn immediate_slots(immediate: Option<&Immediate>) -> Vec<LocalSlotId> {
     match immediate {
         Some(Immediate::LocalSlot(slot)) => vec![*slot],
         Some(Immediate::LocalSlotPair { first, second }) => vec![*first, *second],
+        Some(Immediate::IterStart(metadata)) => metadata.local_slots().collect(),
         _ => Vec::new(),
     }
 }

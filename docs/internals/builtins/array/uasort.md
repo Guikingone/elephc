@@ -1,16 +1,16 @@
 ---
-title: "uasort() — internals"
+title: "uasort() - internals"
 description: "Compiler internals for uasort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 81
+  order: 82
 ---
 
-## `uasort()` — internals
+## `uasort()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/uasort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/uasort.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

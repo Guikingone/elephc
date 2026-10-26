@@ -14,6 +14,40 @@
 
 use super::*;
 
+/// Packed-or-hash storage reflects as one PHP type, with composite type methods called after narrowing.
+#[test]
+fn test_reflection_function_array_storage_has_one_php_type() {
+    let out = compile_and_run(
+        r#"<?php
+function reflectArrayType(array $items): array { return $items; }
+function reflectNullableArrayType(?array $items): ?array { return $items; }
+function reflectUnionArrayType(array|string $items): array|string { return $items; }
+$plain = new ReflectionFunction("reflectArrayType");
+$nullable = new ReflectionFunction("reflectNullableArrayType");
+$union = new ReflectionFunction("reflectUnionArrayType");
+echo get_class($plain->getParameters()[0]->getType()), ":", $plain->getParameters()[0]->getType(),
+    ":", $plain->getReturnType(), "|";
+echo get_class($nullable->getParameters()[0]->getType()), ":", $nullable->getParameters()[0]->getType(),
+    ":", $nullable->getReturnType(), "|";
+$parameterType = $union->getParameters()[0]->getType();
+$returnType = $union->getReturnType();
+echo get_class($parameterType), ":";
+if ($parameterType instanceof ReflectionUnionType) {
+    echo count($parameterType->getTypes());
+} else {
+    echo "not-parameter-union";
+}
+echo ":";
+if ($returnType instanceof ReflectionUnionType) {
+    echo count($returnType->getTypes());
+} else {
+    echo "not-return-union";
+}
+"#,
+    );
+    assert_eq!(out, "ReflectionNamedType:array:array|ReflectionNamedType:?array:?array|ReflectionUnionType:2:2");
+}
+
 /// Verifies AOT `ReflectionFunction` exposes function-abstract predicate metadata.
 #[test]
 fn test_reflection_function_reports_aot_function_abstract_predicates() {
@@ -79,7 +113,8 @@ echo ($plain->hasReturnType() ? "P" : "p") . ":";
 echo $plain->getReturnType() === null ? "Q" : "q";
 "#,
     );
-    assert_eq!(out, "T:int:N:B:int:2:intBstringB:never:n:B:p:Q");
+    // php 8.5 agrees: `int|string` lists `string` before `int`.
+    assert_eq!(out, "T:int:N:B:int:2:stringBintB:never:n:B:p:Q");
 }
 
 /// Verifies every concrete reflection type is a subtype of the abstract ReflectionType parent.
@@ -283,4 +318,360 @@ echo (new ReflectionFunction("reflect_function_invoke_inferred"))->invoke("A", "
 "#,
     );
     assert_eq!(out, "AB");
+}
+
+/// Verifies `returnsReference()` reports the declaration instead of a baked `false`.
+///
+/// It was registered with `builtin_reflection_constant_false_bool_method`, so it answered `false`
+/// for every callable — including `function &f()`, where PHP answers `true` (#1231). Every
+/// sibling predicate that can vary is property-backed; this one now is too, reading
+/// `__returns_reference` off the same `FunctionSig::by_ref_return` the member is built from.
+///
+/// No static method is among the rows: a by-reference return of a `static` local is refused by
+/// the lowering ("this compiler can transfer only a local it can promote to a managed reference
+/// cell in place"), so such a declaration cannot be compiled to reflect on.
+#[test]
+fn test_returns_reference_reports_the_declaration() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public $v = 1; }
+
+function &getv(Box $o) { return $o->v; }
+function plain(Box $o) { return $o->v; }
+
+class RefHolder {
+    public $w = 2;
+    public function &get() { return $this->w; }
+    public function plain() { return $this->w; }
+}
+
+echo (new ReflectionFunction('getv'))->returnsReference() ? "y" : "n";
+echo (new ReflectionFunction('plain'))->returnsReference() ? "y" : "n";
+echo (new ReflectionMethod('RefHolder', 'get'))->returnsReference() ? "y" : "n";
+echo (new ReflectionMethod('RefHolder', 'plain'))->returnsReference() ? "y" : "n";
+"#,
+    );
+
+    assert_eq!(out, "ynyn");
+}
+
+/// Verifies the listing path agrees with the constructed one.
+///
+/// `getMethods()` builds its entries through a different path than `new ReflectionMethod(...)`,
+/// and a flag threaded through only one of them is how the two come to disagree about the same
+/// declaration — which is the shape this issue is an instance of.
+#[test]
+fn test_listed_and_constructed_returns_reference_agree() {
+    let out = compile_and_run(
+        r#"<?php
+class RefHolder {
+    public $w = 2;
+    public function &get() { return $this->w; }
+    public function plain() { return $this->w; }
+}
+
+$listed = [];
+foreach ((new ReflectionClass('RefHolder'))->getMethods() as $m) {
+    $listed[$m->getName()] = $m->returnsReference();
+}
+echo $listed['get'] ? "y" : "n";
+echo $listed['plain'] ? "y" : "n";
+echo (new ReflectionMethod('RefHolder', 'get'))->returnsReference() === $listed['get'] ? "same" : "differs";
+"#,
+    );
+
+    assert_eq!(out, "ynsame");
+}
+
+/// Verifies an interface's `function &m()` declaration reports through every path.
+///
+/// Interface methods are built by their own constructor, which wrote a baked `false` into both
+/// records it makes even though its signature carries `by_ref_return`: the listed method, which
+/// `getMethods()` and `new ReflectionMethod(...)` both read, and the declaring-function record a
+/// parameter's `getDeclaringFunction()` reads. Entries are keyed by name because the listing
+/// order of an interface's `getMethods()` is not what this asserts.
+#[test]
+fn test_interface_method_returns_reference_reports_the_declaration() {
+    let out = compile_and_run(
+        r#"<?php
+interface RefContract {
+    public function &byRef(int $n): array;
+    public function byVal(): array;
+}
+
+$listed = [];
+foreach ((new ReflectionClass('RefContract'))->getMethods() as $m) {
+    $listed[$m->getName()] = $m->returnsReference();
+}
+echo $listed['byRef'] ? "y" : "n";
+echo $listed['byVal'] ? "y" : "n";
+$byRef = new ReflectionMethod('RefContract', 'byRef');
+echo $byRef->returnsReference() ? "y" : "n";
+echo (new ReflectionMethod('RefContract', 'byVal'))->returnsReference() ? "y" : "n";
+$params = $byRef->getParameters();
+$declaring = $params[0]->getDeclaringFunction();
+echo $declaring->returnsReference() ? "y" : "n";
+"#,
+    );
+
+    assert_eq!(out, "ynyny");
+}
+
+/// Verifies a trait's `function &m()` declaration reports through the trait itself (#1259).
+///
+/// A method reflected on the trait reads the trait's own signature, which EIR lowering built with
+/// a baked `by_ref_return: false`; the class that uses the trait always reported the declaration.
+/// Expected output measured on PHP 8.5.10.
+#[test]
+fn test_trait_method_returns_reference_reports_the_declaration() {
+    let out = compile_and_run(
+        r#"<?php
+trait RefTrait {
+    public $w = 2;
+    public function &get() { return $this->w; }
+    public function plain() { return $this->w; }
+}
+class UsesRefTrait { use RefTrait; }
+
+echo (new ReflectionMethod('RefTrait', 'get'))->returnsReference() ? "y" : "n";
+echo (new ReflectionMethod('RefTrait', 'plain'))->returnsReference() ? "y" : "n";
+echo (new ReflectionMethod('UsesRefTrait', 'get'))->returnsReference() ? "y" : "n";
+echo (new ReflectionMethod('UsesRefTrait', 'plain'))->returnsReference() ? "y" : "n";
+$listed = [];
+foreach ((new ReflectionClass('RefTrait'))->getMethods() as $m) {
+    $listed[$m->getName()] = $m->returnsReference();
+}
+echo $listed['get'] ? "y" : "n";
+echo $listed['plain'] ? "y" : "n";
+"#,
+    );
+
+    assert_eq!(out, "ynynyn");
+}
+
+/// Verifies a property's `&get` hook reports `returnsReference()` like PHP (#1261, #1429).
+///
+/// Hook `ReflectionMethod` records carried a baked `false`; they now follow the hook declaration,
+/// for a concrete `&get` body, through `getHooks()`, and for an abstract `&get` contract, while a
+/// plain `get`, a `set`, and a virtual `get` still report `false`. Expected output measured on
+/// PHP 8.5.10.
+#[test]
+fn test_property_hook_returns_reference_follows_get_by_ref() {
+    let out = compile_and_run(
+        r#"<?php
+class HookedBox {
+    public array $items = [] { &get { return $this->items; } }
+    public int $count { get => count($this->items); }
+    public string $name = "" { get => $this->name; set => $value; }
+}
+abstract class AbstractRefBox { abstract public array $items { &get; } }
+
+echo (new ReflectionProperty('HookedBox', 'items'))->getHook(PropertyHookType::Get)->returnsReference() ? "y" : "n";
+echo (new ReflectionProperty('HookedBox', 'count'))->getHook(PropertyHookType::Get)->returnsReference() ? "y" : "n";
+echo (new ReflectionProperty('HookedBox', 'name'))->getHook(PropertyHookType::Get)->returnsReference() ? "y" : "n";
+echo (new ReflectionProperty('HookedBox', 'name'))->getHook(PropertyHookType::Set)->returnsReference() ? "y" : "n";
+foreach ((new ReflectionProperty('HookedBox', 'items'))->getHooks() as $hook) {
+    echo $hook->returnsReference() ? "y" : "n";
+}
+echo (new ReflectionProperty('AbstractRefBox', 'items'))->getHook(PropertyHookType::Get)->returnsReference() ? "y" : "n";
+"#,
+    );
+
+    assert_eq!(out, "ynnnyy");
+}
+
+/// Verifies a Reflection object codegen builds INSIDE another one can be stringified.
+///
+/// `ReflectionParameter::getDeclaringFunction()` hands back a `ReflectionFunction` that codegen
+/// allocates while it builds the parameter; nothing in the program ever names the class. Its
+/// methods were never lowered, its vtable held null, and every implicit `__toString` on it jumped
+/// to address zero (#1229); `sprintf("%s")` read the class metadata instead and reported the
+/// object as not convertible. The program deliberately never constructs a `ReflectionFunction`
+/// nor calls a method on `$f`: either would pull the class in and hide the defect. It asserts
+/// the type and class of each result, not the rendered text, which is PR #1120's subject.
+#[test]
+fn test_declaring_function_object_stringifies_without_naming_its_class() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new ReflectionParameter("strlen", "string");
+$f = $p->getDeclaringFunction();
+echo get_class($f), "|";
+echo gettype((string) $f), "|";
+echo gettype("" . $f), "|";
+echo gettype("{$f}"), "|";
+echo gettype(strval($f)), "|";
+echo strlen($f) >= 0 ? "len" : "bad", "|";
+echo gettype(sprintf("%s", $f));
+"#,
+    );
+
+    assert_eq!(out, "ReflectionFunction|string|string|string|string|len|string");
+}
+
+/// Verifies the declaring METHOD object of a parameter can be stringified the same way.
+///
+/// The declaring function of a method's parameter is a `ReflectionMethod`, the second class the
+/// same codegen slot can hold (#1229).
+#[test]
+fn test_declaring_method_object_stringifies_without_naming_its_class() {
+    let out = compile_and_run(
+        r#"<?php
+class DeclaringMethodHost { public function run(int $a) {} }
+$p = new ReflectionParameter(["DeclaringMethodHost", "run"], 0);
+$f = $p->getDeclaringFunction();
+echo get_class($f), "|", gettype((string) $f);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionMethod|string");
+}
+
+/// Verifies a parameter's declaring CLASS object can be stringified.
+///
+/// `ReflectionParameter::getDeclaringClass()` is typed `mixed` like the declaring function, and
+/// codegen builds its `ReflectionClass` the same way (#1229).
+#[test]
+fn test_parameter_declaring_class_object_stringifies_without_naming_its_class() {
+    let out = compile_and_run(
+        r#"<?php
+class DeclaringClassHost { public function run(int $a) {} }
+$p = new ReflectionParameter(["DeclaringClassHost", "run"], 0);
+$c = $p->getDeclaringClass();
+echo get_class($c), "|", gettype((string) $c);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionClass|string");
+}
+
+/// Verifies an enum case's enum object can be stringified.
+///
+/// `ReflectionEnumUnitCase::getEnum()` returns a `ReflectionEnum` codegen builds from the case's
+/// `__enum` slot, the last materializer of the #1229 family.
+#[test]
+fn test_enum_case_enum_object_stringifies_without_naming_its_class() {
+    let out = compile_and_run(
+        r#"<?php
+enum MaterializedEnumHost { case A; }
+$case = new ReflectionEnumUnitCase(MaterializedEnumHost::class, "A");
+$e = $case->getEnum();
+echo get_class($e), "|", gettype((string) $e);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionEnum|string");
+}
+
+/// Verifies the declaring function reached through `call_user_func()` can be stringified.
+///
+/// The call lowers to a callable descriptor invoke, not a `MethodCall`, so a rule that only
+/// watched direct calls missed it and the #1229 crash survived on this route.
+#[test]
+fn test_declaring_function_through_call_user_func_stringifies() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new ReflectionParameter("strlen", "string");
+$f = call_user_func([$p, "getDeclaringFunction"]);
+echo get_class($f), "|", gettype((string) $f);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionFunction|string");
+}
+
+/// Verifies the declaring function reached through a first-class callable can be stringified.
+///
+/// A first-class callable keeps its target as `object::getdeclaringfunction`, so the getter's
+/// name is only visible behind that qualifier (#1229).
+#[test]
+fn test_declaring_function_through_first_class_callable_stringifies() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new ReflectionParameter("strlen", "string");
+$getter = $p->getDeclaringFunction(...);
+$f = $getter();
+echo get_class($f), "|", gettype((string) $f);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionFunction|string");
+}
+
+/// Verifies a getter name formed from literal fragments still lowers its companion object.
+///
+/// The complete getter does not appear in string data: the method name is assembled by runtime
+/// concatenation, so reachability must combine literal fragments before giving up (#1252).
+#[test]
+fn test_declaring_function_through_concatenated_dynamic_method_name_stringifies() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new ReflectionParameter("strlen", "string");
+$getter = "get" . "DeclaringFunction";
+$f = $p->$getter();
+echo get_class($f), "|", gettype((string) $f);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionFunction|string");
+}
+
+/// Verifies the legacy parameter class getter lowers its materialized result without naming it.
+#[test]
+fn test_reflection_parameter_class_getter_object_lowers_without_explicit_type_name() {
+    let out = compile_and_run(
+        r#"<?php
+class GetterClassDependency {}
+function getterClassSurface(GetterClassDependency $value): void {}
+$parameter = new ReflectionParameter("getterClassSurface", "value");
+$class = $parameter->getClass();
+echo get_class($class), ":", gettype((string) $class);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionClass:string");
+}
+
+/// Verifies type objects returned by Reflection getters need no explicit type-name references.
+///
+/// These slots contain freshly materialized `ReflectionType` objects, but the PHP program never
+/// names their concrete synthetic classes or narrows by `instanceof` (#1252).
+#[test]
+fn test_reflection_type_getter_objects_lower_without_explicit_type_names() {
+    let out = compile_and_run(
+        r#"<?php
+interface GetterTypeA {}
+interface GetterTypeB {}
+class GetterTypeBoth implements GetterTypeA, GetterTypeB {}
+function getterTypeSurface(int|string $value, GetterTypeA&GetterTypeB $both): int|string { return $value; }
+class GetterTypeProperty { public int|string $value; }
+$parameterUnion = (new ReflectionParameter("getterTypeSurface", "value"))->getType();
+$parameterIntersection = (new ReflectionParameter("getterTypeSurface", "both"))->getType();
+$returnType = (new ReflectionFunction("getterTypeSurface"))->getReturnType();
+$settableType = (new ReflectionProperty(GetterTypeProperty::class, "value"))->getSettableType();
+foreach ([$parameterUnion, $parameterIntersection, $returnType, $settableType] as $type) {
+    echo get_class($type), ":", gettype((string) $type), "|";
+}
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "ReflectionUnionType:string|ReflectionIntersectionType:string|ReflectionUnionType:string|ReflectionUnionType:string|"
+    );
+}
+
+/// Verifies the declaring function reached through a method name held in a variable can be
+/// stringified — the third route that is not a literal `MethodCall` (#1229).
+#[test]
+fn test_declaring_function_through_dynamic_method_name_stringifies() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new ReflectionParameter("strlen", "string");
+$getter = "getDeclaringFunction";
+$f = $p->$getter();
+echo get_class($f), "|", gettype((string) $f);
+"#,
+    );
+
+    assert_eq!(out, "ReflectionFunction|string");
 }

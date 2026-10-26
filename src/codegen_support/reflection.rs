@@ -12,13 +12,59 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use crate::ir::Function;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
-use crate::types::{AttrArgEntry, AttrArgValue, AttrKey, ClassInfo};
+use crate::types::{
+    collect_attribute_args, collect_attribute_names, AttrArgEntry, AttrArgValue, AttrKey,
+    ClassInfo, FunctionSig,
+};
 
 /// Borrowed attribute-name/argument metadata from a reflection-visible source.
 pub(crate) type AttributeMetadataSource<'a> =
     (&'a [String], &'a [Option<Vec<AttrArgEntry>>]);
+
+/// Owned attribute-name/argument metadata, for a source only reachable through AST groups.
+pub(crate) type OwnedAttributeMetadata = (Vec<String>, Vec<Option<Vec<AttrArgEntry>>>);
+
+/// Returns the attribute lists declared on the parameters of `signature`, one per parameter that
+/// carries any. `ReflectionParameter::getAttributes()` reads the same groups, so a factory built
+/// from these is the one its `newInstance()` dispatches to.
+pub(crate) fn parameter_attribute_metadata(signature: &FunctionSig) -> Vec<OwnedAttributeMetadata> {
+    signature
+        .param_attributes
+        .iter()
+        .filter(|groups| !groups.is_empty())
+        .map(|groups| (collect_attribute_names(groups), collect_attribute_args(groups)))
+        .collect()
+}
+
+/// Returns the reflection-visible attribute metadata of the lowered top-level functions: each
+/// function's own attributes and its parameters'. Both factory consumers (the synthetic
+/// `ReflectionAttribute` bodies and the attribute-array emitter) build from this one list, so
+/// they number the factories identically.
+pub(crate) fn function_attribute_metadata(functions: &[Function]) -> Vec<OwnedAttributeMetadata> {
+    let mut sources = Vec::new();
+    for function in functions {
+        if !function.attribute_names.is_empty() {
+            sources.push((function.attribute_names.clone(), function.attribute_args.clone()));
+        }
+        if let Some(signature) = &function.signature {
+            sources.extend(parameter_attribute_metadata(signature));
+        }
+    }
+    sources
+}
+
+/// Borrows owned attribute metadata in the shape the factory collectors take.
+pub(crate) fn borrow_attribute_metadata(
+    owned: &[OwnedAttributeMetadata],
+) -> Vec<AttributeMetadataSource<'_>> {
+    owned
+        .iter()
+        .map(|(names, args)| (names.as_slice(), args.as_slice()))
+        .collect()
+}
 
 #[derive(Clone)]
 /// Factory record for compile-time reflection attribute metadata.
@@ -50,9 +96,9 @@ pub(crate) fn resolve_class_name<'a>(
 }
 
 /// Scans every class in `classes` and collects all distinct class-level,
-/// method-level, property-level, and constant-level attribute name/argument
-/// pairs into a sorted vector of `ReflectionAttributeFactory` records with
-/// sequential ids.
+/// method-level, method-parameter-level, property-level, and constant-level
+/// attribute name/argument pairs into a sorted vector of
+/// `ReflectionAttributeFactory` records with sequential ids.
 pub(crate) fn collect_attribute_factories(
     classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Vec<ReflectionAttributeFactory> {
@@ -102,6 +148,17 @@ pub(crate) fn collect_attribute_factories_with_extra(
                 collect_from_attribute_lists(classes, names, args, &mut unique);
             }
         }
+        // Method parameters carry attributes too; without a factory their `newInstance()`
+        // falls through to `null`.
+        for signature in class_info
+            .methods
+            .values()
+            .chain(class_info.static_methods.values())
+        {
+            for (names, args) in parameter_attribute_metadata(signature) {
+                collect_from_attribute_lists(classes, &names, &args, &mut unique);
+            }
+        }
     }
     for (names, args) in extra_attrs {
         collect_from_attribute_lists(classes, names, args, &mut unique);
@@ -121,25 +178,44 @@ pub(crate) fn collect_attribute_factories_with_extra(
         .collect()
 }
 
-/// Returns the factory id for an attribute, considering classes plus extra
-/// metadata sources such as top-level function attributes retained by EIR.
-pub(crate) fn attribute_factory_id_with_extra(
-    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
-    extra_attrs: &[AttributeMetadataSource<'_>],
-    attr_name: &str,
-    attr_args: &[AttrArgEntry],
-) -> i64 {
-    // Non-class attributes are registered under their raw name (see
-    // `collect_from_attribute_lists`), so fall back to it when the name does
-    // not resolve to a real class.
-    let lookup_name = resolve_class_name(classes, attr_name)
-        .map(|resolved| resolved.to_string())
-        .unwrap_or_else(|| attr_name.to_string());
-    collect_attribute_factories_with_extra(classes, extra_attrs)
-        .into_iter()
-        .find(|factory| factory.class_name == lookup_name && factory.args == attr_args)
-        .map(|factory| factory.id)
-        .unwrap_or(0)
+/// The attribute factory ids of one program, keyed by resolved attribute name and captured
+/// arguments.
+///
+/// Numbering the factories walks every class and every lowered function, so a caller that
+/// materializes several attributes builds this table once and looks each attribute up in it,
+/// instead of renumbering the whole program per attribute.
+pub(crate) struct AttributeFactoryIds<'a> {
+    classes: &'a crate::fast_hash::FastMap<String, ClassInfo>,
+    ids: HashMap<(String, Vec<AttrArgEntry>), i64>,
+}
+
+impl<'a> AttributeFactoryIds<'a> {
+    /// Numbers the factories of `classes` plus `extra_attrs` exactly as the synthetic
+    /// `ReflectionAttribute` bodies do, so the ids agree with `newInstance()`'s dispatch.
+    pub(crate) fn new(
+        classes: &'a crate::fast_hash::FastMap<String, ClassInfo>,
+        extra_attrs: &[AttributeMetadataSource<'_>],
+    ) -> Self {
+        let ids = collect_attribute_factories_with_extra(classes, extra_attrs)
+            .into_iter()
+            .map(|factory| ((factory.class_name, factory.args), factory.id))
+            .collect();
+        Self { classes, ids }
+    }
+
+    /// Returns the factory id of one attribute, or `0` when no factory matches it.
+    pub(crate) fn id(&self, attr_name: &str, attr_args: &[AttrArgEntry]) -> i64 {
+        // Non-class attributes are registered under their raw name (see
+        // `collect_from_attribute_lists`), so fall back to it when the name does
+        // not resolve to a real class.
+        let lookup_name = resolve_class_name(self.classes, attr_name)
+            .map(|resolved| resolved.to_string())
+            .unwrap_or_else(|| attr_name.to_string());
+        self.ids
+            .get(&(lookup_name, attr_args.to_vec()))
+            .copied()
+            .unwrap_or(0)
+    }
 }
 
 /// Builds the synthetic `ReflectionAttribute::newInstance()` body using class
@@ -158,26 +234,30 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
         if !factory.resolvable {
             continue;
         }
+        let args = positional_constructor_args(classes, &factory)
+            .unwrap_or_else(|| {
+                factory
+                    .args
+                    .iter()
+                    .map(|entry| match &entry.key {
+                        // Named attribute arguments must construct with
+                        // named-argument semantics, not positionally.
+                        Some(crate::types::AttrKey::Str(name)) => Expr::new(
+                            ExprKind::NamedArg {
+                                name: name.clone(),
+                                value: Box::new(attr_arg_expr(&entry.value)),
+                            },
+                            span,
+                        ),
+                        _ => attr_arg_expr(&entry.value),
+                    })
+                    .collect()
+            });
         let then_body = vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::NewObject {
                     class_name: name_from_canonical(&factory.class_name),
-                    args: factory
-                        .args
-                        .iter()
-                        .map(|entry| match &entry.key {
-                            // Named attribute arguments must construct with
-                            // named-argument semantics, not positionally.
-                            Some(crate::types::AttrKey::Str(name)) => Expr::new(
-                                ExprKind::NamedArg {
-                                    name: name.clone(),
-                                    value: Box::new(attr_arg_expr(&entry.value)),
-                                },
-                                span,
-                            ),
-                            _ => attr_arg_expr(&entry.value),
-                        })
-                        .collect(),
+                    args,
                 },
                 span,
             ))),
@@ -189,6 +269,57 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
     body.push(missing_attribute_class_guard(span));
     body.push(runtime_attribute_new_instance_fallback(span));
     body
+}
+
+/// Places a factory's named arguments by the constructor's parameter order.
+///
+/// Every factory branch is one synthetic `new C(...)` at `Span::dummy()`, and named arguments
+/// are normalized per call SPAN, so all the branches shared one placement: `#[Route('/p',
+/// name: 'n', requirements: [...])]` bound `'n'` to the parameter the FIRST branch put there,
+/// and every Symfony route whose attribute names its arguments out of declaration order --
+/// `defaults:` before `requirements:` -- threw a TypeError in `newInstance()` and vanished from
+/// the router. Resolved here instead, against the declared signature: a parameter skipped by
+/// name takes its declared default. Answers `None` (keep the named form) when a name is not a
+/// declared parameter or a skipped one has no default.
+fn positional_constructor_args(
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
+    factory: &ReflectionAttributeFactory,
+) -> Option<Vec<Expr>> {
+    let mut positional = Vec::new();
+    let mut named: Vec<(String, &AttrArgEntry)> = Vec::new();
+    for entry in &factory.args {
+        match &entry.key {
+            Some(crate::types::AttrKey::Str(name)) => named.push((name.clone(), entry)),
+            _ if named.is_empty() => positional.push(attr_arg_expr(&entry.value)),
+            _ => return None,
+        }
+    }
+    if named.is_empty() {
+        return Some(positional);
+    }
+    let signature = classes
+        .get(factory.class_name.trim_start_matches('\\'))?
+        .methods
+        .get("__construct")?;
+    if signature.variadic.is_some() {
+        return None;
+    }
+    let index_of = |name: &str| signature.params.iter().position(|(param, _)| param == name);
+    let last = named
+        .iter()
+        .map(|(name, _)| index_of(name))
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .max()?;
+    for index in positional.len()..=last {
+        let param = &signature.params[index].0;
+        if let Some((_, entry)) = named.iter().find(|(name, _)| name == param) {
+            positional.push(attr_arg_expr(&entry.value));
+        } else {
+            positional.push(signature.defaults.get(index)?.clone()?);
+        }
+    }
+    Some(positional)
 }
 
 /// Throws php's `Error: Attribute class "X" not found` when the attribute names no class.

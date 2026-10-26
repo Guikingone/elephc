@@ -1,16 +1,16 @@
 ---
-title: "__elephc_curl_multi_select() — internals"
+title: "__elephc_curl_multi_select() - internals"
 description: "Compiler internals for __elephc_curl_multi_select(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1075
+  order: 1165
 ---
 
-## `__elephc_curl_multi_select()` — internals
+## `__elephc_curl_multi_select()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_multi_select.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_multi_select.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,8 +48,8 @@ function __elephc_curl_multi_select(mixed $multi, int $timeout_ms): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

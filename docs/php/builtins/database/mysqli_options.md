@@ -1,8 +1,8 @@
 ---
 title: "mysqli_options()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Sets a connection option before connecting."
 sidebar:
-  order: 156
+  order: 157
 ---
 
 ## mysqli_options()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_options(mixed $mysql, int $option, mixed $value): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Sets a connection option before connecting.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -25,7 +25,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

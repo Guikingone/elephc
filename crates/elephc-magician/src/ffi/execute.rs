@@ -223,8 +223,12 @@ unsafe fn execute_parsed_eval(
     // whatever lay below the eval.
     let frame = EvalCallFrame::function("eval", None, context);
     context.push_call_frame(frame);
+    context.push_eval_backtrace_boundary();
+    let previous_site = context.enter_eval_code_site();
     let outcome =
         interpreter::execute_program_outcome_with_context(context, program, scope, &mut values);
+    context.leave_eval_code_site(previous_site);
+    context.pop_eval_backtrace_boundary();
     context.pop_call_frame();
     match outcome {
         Ok(outcome) => {

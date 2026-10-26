@@ -1,16 +1,16 @@
 ---
-title: "session_create_id() — internals"
+title: "session_create_id() - internals"
 description: "Compiler internals for session_create_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 955
+  order: 1046
 ---
 
-## `session_create_id()` — internals
+## `session_create_id()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3243](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3243) (`session_create_id`)
+- **Lowering**: [`src/web_prelude/build.rs`:3416](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3416) (`session_create_id`)
 - **Function symbol**: `session_create_id()`
 
 
@@ -38,7 +38,7 @@ function session_create_id(string $prefix = ''): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

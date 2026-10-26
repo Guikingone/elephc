@@ -1841,6 +1841,192 @@ web_deferred_metadata_construct();
     assert!(response.ends_with("ok"), "response: {response:?}");
 }
 
+/// Verifies a first-class method callable built by interpreted code is safe on the next request.
+///
+/// The closure's receiver edge is recorded in a process-wide registry keyed by the closure
+/// object's address. The object and its receiver form a cycle, so nothing releases the entry
+/// before the arena is wiped. The next request's closure lands at the same address, the stale
+/// entry is "replaced", and its children are released -- by then they are that request's live
+/// receiver. Laravel's `LoadConfiguration` does this with `$app->environment(...)`; its worker
+/// died on the second or third request with heap corruption, "Target class [app] does not
+/// exist" or "A facade root has not been set".
+#[test]
+fn web_interpreted_method_callable_survives_the_next_request() {
+    let dir = make_test_dir("web_method_callable_edge");
+    fs::write(
+        dir.join("boot.php"),
+        r#"<?php
+final class WebEdgeRepo
+{
+    public ?Closure $detector = null;
+
+    public function __construct(private array $items) {}
+
+    public function get(string $key, string $default): string
+    {
+        return $this->items[$key] ?? $default;
+    }
+}
+
+final class WebEdgeBoot
+{
+    public function bootstrap(array $items): string
+    {
+        $config = new WebEdgeRepo($items);
+        $config->detector = $config->get(...);
+        return ($config->detector)('env', 'production') . ':' . $config->get('name', 'none');
+    }
+}
+"#,
+    )
+    .expect("write runtime-loaded bootstrap fixture");
+    // The include path is only known at run time, so the classes are interpreted.
+    let src = r#"<?php
+function web_edge_load(string $path): void { include $path; }
+web_edge_load(__DIR__ . '/' . ($_GET['f'] ?? 'boot') . '.php');
+$out = [];
+for ($i = 0; $i < 4; $i++) {
+    $out[] = (new WebEdgeBoot())->bootstrap(['env' => 'local' . $i, 'name' => 'demo']);
+}
+echo implode(',', $out);
+"#;
+    let bin = compile_web_with_flags(&dir, src, "app", &["--heap-debug"]);
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let responses: Vec<String> = (0..4).map(|_| http_get(&addr, "/")).collect();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let expected = "local0:demo,local1:demo,local2:demo,local3:demo";
+    for (index, response) in responses.iter().enumerate() {
+        assert!(
+            response.ends_with(expected),
+            "request {} body: {:?}",
+            index + 1,
+            response
+        );
+    }
+}
+
+/// Verifies a `putenv()` lasts one request, as php restores the environment at request end.
+///
+/// The compiled `putenv` also copied its `NAME=value` string into the request heap and gave libc
+/// that pointer, which libc keeps: once the next request reused the heap, the environment pointed
+/// at someone else's bytes. Laravel's Dotenv `putenv()`s every `.env` entry on every request.
+#[test]
+fn web_putenv_does_not_outlive_its_request() {
+    let dir = make_test_dir("web_putenv_request_scope");
+    let src = r#"<?php
+echo var_export(getenv('ELEPHC_WEB_PUTENV_PROBE'), true), '|';
+putenv('ELEPHC_WEB_PUTENV_PROBE=request-' . str_repeat('x', 40));
+$pad = [];
+for ($i = 0; $i < 32; $i++) { $pad[] = str_repeat('p', 40 + $i); }
+echo getenv('ELEPHC_WEB_PUTENV_PROBE'), '|', count($pad);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let responses: Vec<String> = (0..3).map(|_| http_get(&addr, "/")).collect();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let expected = format!("false|request-{}|32", "x".repeat(40));
+    for (index, response) in responses.iter().enumerate() {
+        assert!(
+            response.ends_with(&expected),
+            "request {} body: {:?}",
+            index + 1,
+            response
+        );
+    }
+}
+
+/// Verifies each request starts from php's default timezone, as `php -S` does.
+///
+/// Two request-boundary leaks met here. The environment restore removed the `TZ=UTC` the runtime
+/// had applied for the first request, so later requests parsed local wall-clock strings in the
+/// machine's own zone while still reporting UTC (symfony/demo's post dates showed an hour early
+/// after the first page). And a request's `date_default_timezone_set()` carried into the next one.
+/// The timestamps below are zone-dependent, so both leaks change the response.
+#[test]
+fn web_default_timezone_is_request_scoped() {
+    let dir = make_test_dir("web_timezone_request_scope");
+    let src = r#"<?php
+if (isset($_GET['set'])) {
+    date_default_timezone_set($_GET['set']);
+}
+$d = new DateTimeImmutable('2023-02-12 17:48:59');
+echo date_default_timezone_get(), '|', $d->getTimestamp(), '|', date('H:i T', 1676224139);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let responses: Vec<String> = ["/", "/", "/?set=Europe/Paris", "/"]
+        .iter()
+        .map(|path| http_get(&addr, path))
+        .collect();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let expected = [
+        "UTC|1676224139|17:48 UTC",
+        "UTC|1676224139|17:48 UTC",
+        "Europe/Paris|1676220539|18:48 CET",
+        "UTC|1676224139|17:48 UTC",
+    ];
+    for (index, (response, expected)) in responses.iter().zip(expected).enumerate() {
+        assert!(
+            response.ends_with(expected),
+            "request {} body: {:?}",
+            index + 1,
+            response
+        );
+    }
+}
+
+/// An eval'd call into a compiled function runs the eval-to-native global sync, which stores the
+/// eval scope's `$argc`/`$argv` boxes in program global storage no PHP code names. The web reset
+/// never cleared that storage, so the second request's sync released the first request's box
+/// after the arena reset had reclaimed it, and the heap-debug worker died on every other request.
+#[test]
+fn web_eval_native_call_global_sync_is_request_scoped() {
+    let dir = make_test_dir("web_eval_native_global_sync");
+    let src = r#"<?php
+final class Holder {
+    public function __construct(private string $n) {}
+    public function name(): string { return $this->n; }
+}
+final class State {
+    public static $held = null;
+}
+function keep($h): bool
+{
+    State::$held = $h;
+    return true;
+}
+eval('return keep(new Holder("fresh"));');
+echo State::$held->name();
+"#;
+    let bin = compile_web_with_flags(&dir, src, "app", &["--heap-debug"]);
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let responses: Vec<String> = (0..4).map(|_| http_get(&addr, "/")).collect();
+    let _ = child.kill();
+    let _ = child.wait();
+    for (index, response) in responses.iter().enumerate() {
+        assert!(
+            response.ends_with("fresh"),
+            "request {} body: {:?}",
+            index + 1,
+            response
+        );
+    }
+}
+
 /// Verifies $_GET is parsed from the query string, with percent-decoding.
 #[test]
 fn web_get_superglobal_parsed() {
@@ -1875,6 +2061,136 @@ fn web_post_superglobal_parsed() {
     let _ = child.kill();
     let _ = child.wait();
     assert!(resp.ends_with("alice:s@fe"), "body: {:?}", resp);
+}
+
+/// Issue #513: a urlencoded POST body far past the old ~73 KB ceiling reaches the handler.
+///
+/// The worker used to die with `heap memory exhausted` and an empty response (curl exit 52)
+/// somewhere past 73 KB, *before* the handler ran -- so an application-level size check never
+/// got the chance to reject the request itself. The threshold was fixed: identical at an 8 MB
+/// and a 64 MB heap, which is what made it a parser limit rather than a heap one.
+///
+/// 300 KB here is four times the old ceiling and still the default 8 MB heap, and the handler
+/// is what answers. Measured while revalidating: 74 KB, 100 KB, 200 KB and 300 KB all round-trip
+/// at 8 MB, and a 4 MB body round-trips at 64 MB -- so what is left scales with the heap the way
+/// the issue asked for.
+#[test]
+fn web_post_body_past_the_old_parser_ceiling_reaches_the_handler() {
+    let dir = make_test_dir("web_post_large");
+    let src = "<?php echo 'len=' . strlen((string) ($_POST['body'] ?? ''));";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let body = format!("body={}", "a".repeat(300_000));
+    let resp = http_request(
+        &addr,
+        "POST",
+        "/",
+        &[("Content-Type", "application/x-www-form-urlencoded")],
+        &body,
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("len=300000"), "body: {:?}", resp);
+}
+
+/// Issue #510, raised in review on the CLI regression: the reported corruption was seen across
+/// repeated `--web` requests, so the `--web` lifecycle needs its own coverage.
+///
+/// `$x = substr($x, ...)` on a non-literal buffer returned eight bytes of allocator metadata in
+/// front of otherwise correct text, and they changed on every request -- which is what pointed
+/// at the worker's reused heap rather than at the expression. A one-shot native program
+/// repeats the operation but never repeats request setup, teardown, or worker reuse.
+///
+/// One worker, so every request lands on the same process and the same heap, and the response
+/// is compared byte for byte each time: the failure was never in the length.
+#[test]
+fn web_substr_self_reassignment_is_stable_across_requests() {
+    let dir = make_test_dir("web_substr_alias");
+    let src = r#"<?php
+function body(): string { return "private function foo() {}
+"; }
+
+class Paste {
+    public function __construct(public string $body) {}
+}
+
+$code = body();
+$code = substr($code, 0, -1);
+
+$p = new Paste("second body here
+");
+$t = $p->body;
+$t = substr($t, 0, -1);
+
+echo $code, "|", $t, "|", strlen($code);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let mut seen = Vec::new();
+    for _ in 0..8 {
+        seen.push(http_request(&addr, "GET", "/", &[], ""));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    for (i, resp) in seen.iter().enumerate() {
+        assert!(
+            resp.ends_with("private function foo() {}|second body here|25"),
+            "request {i} came back corrupted: {resp:?}"
+        );
+    }
+}
+
+/// Follow-up for #1129: the same #510 shape under `--web-isolation=request`.
+///
+/// The fixture above serves every request from ONE long-lived worker, which is the lifecycle
+/// the corruption was reported on. `request` isolation is the opposite end: the broker hands
+/// each request to a handler process that exits when it is done, so the heap the self-aliasing
+/// store runs against is fresh every time and the request-teardown path runs eight times
+/// instead of once. Measured during #1017 and never added to the suite.
+///
+/// The response is compared byte for byte, leading token included: the failure was eight bytes
+/// of allocator metadata in front of correct text, never a wrong length.
+#[test]
+fn web_substr_self_reassignment_is_stable_under_request_isolation() {
+    let dir = make_test_dir("web_substr_alias_request");
+    let src = r#"<?php
+function body(): string { return "private function foo() {}
+"; }
+
+class Paste {
+    public function __construct(public string $body) {}
+}
+
+$code = body();
+$code = substr($code, 0, -1);
+
+$p = new Paste("second body here
+");
+$t = $p->body;
+$t = substr($t, 0, -1);
+
+echo $code, "|", $t, "|", strlen($code);
+"#;
+    let bin = compile_isolated_web(&dir, src, "app", "request");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server_with_args(&bin, &addr, "1", &["--handler-concurrency", "2"]);
+    let mut seen = Vec::new();
+    for _ in 0..8 {
+        seen.push(http_request(&addr, "GET", "/", &[], ""));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    for (i, resp) in seen.iter().enumerate() {
+        assert!(
+            resp.ends_with("private function foo() {}|second body here|25"),
+            "request {i} came back corrupted: {resp:?}"
+        );
+    }
 }
 
 /// Verifies echoing a superglobal value directly (a boxed Mixed string) reaches
@@ -2382,6 +2698,148 @@ fn web_gc_stats_are_emitted_per_request() {
         assert!(allocs.parse::<u64>().is_ok(), "invalid allocation count: {}", line);
         assert!(frees.parse::<u64>().is_ok(), "invalid free count: {}", line);
     }
+}
+
+/// Reloading unchanged and unset typed superglobals must not grow retained storage across requests.
+#[test]
+fn web_eval_superglobal_reload_releases_replaced_owners() {
+    let dir = make_test_dir("web_eval_superglobal_owners");
+    let started = Instant::now();
+    eprintln!("web eval superglobal owners: compiling web and eval fixture");
+    let source = r#"<?php
+$snapshot = $_GET;
+$code = '$_GET = $_GET; // ' . $_GET['token'];
+$rounds = (int) $_GET['rounds'];
+for ($i = 0; $i < $rounds; $i++) { eval($code); }
+echo $_GET['token'], ":", $snapshot['token'], "|";
+$remove = 'unset($_GET); // ' . $snapshot['token'];
+eval($remove);
+unset($snapshot); unset($code); unset($remove);
+echo "cleared";
+"#;
+    let bin = compile_web_with_flags(&dir, source, "app", &["--gc-stats"]);
+    eprintln!("web eval superglobal owners: fixture compiled in {:?}", started.elapsed());
+    let addr = format!("127.0.0.1:{}", free_port());
+    let stderr_path = dir.join("server.stderr");
+    let stderr_file = fs::File::create(&stderr_path).expect("create server stderr capture");
+    let mut child = ServerGuard::new(Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1"])
+        .stderr(Stdio::from(stderr_file))
+        .spawn().expect("spawn eval superglobal server"));
+    wait_until_ready(&addr);
+    for rounds in [1, 2, 4, 8] {
+        let request_started = Instant::now();
+        let response = http_get_with_timeout(&addr, &format!("/?token=owned&rounds={rounds}"), Duration::from_secs(10))
+            .expect("superglobal reload request must complete");
+        assert!(response.ends_with("owned:owned|cleared"), "response: {response:?}");
+        eprintln!(
+            "web eval superglobal owners: rounds={rounds} completed in {:?}",
+            request_started.elapsed(),
+        );
+    }
+    child.kill().expect("stop eval superglobal server");
+    child.wait().expect("reap eval superglobal server");
+    let stderr = fs::read_to_string(stderr_path).expect("read allocation counters");
+    let live = stderr.lines().filter_map(|line| line.strip_prefix("GC: allocs="))
+        .map(|line| {
+            let (allocs, frees) = line.split_once(" frees=").expect("well-formed GC counters");
+            allocs.parse::<i64>().unwrap() - frees.parse::<i64>().unwrap()
+        }).collect::<Vec<_>>();
+    assert_eq!(live.len(), 4, "{stderr}");
+    // Warm up once, then require stable live storage despite increasing reload counts.
+    assert_eq!(live[1], live[2], "{stderr}");
+    assert_eq!(live[2], live[3], "{stderr}");
+}
+
+/// Native and eval handler owners, stacks, and reporting masks do not survive a request.
+#[test]
+fn web_resets_core_handlers_between_requests() {
+    let dir = make_test_dir("web_core_handler_reset");
+    let started = Instant::now();
+    eprintln!("web Core handler reset: compiling web and eval fixture");
+    let src = r#"<?php
+if (isset($_GET['first'])) {
+    $capture = 'old';
+    set_error_handler(function($level, $message) use ($capture) { echo $capture; return true; });
+    set_exception_handler(function($e) use ($capture) { echo $capture; });
+    $source = 'function webEvalError($level, $message) { echo "stale"; return true; }
+function webEvalException($e) { echo "stale"; }
+set_error_handler("webEvalError");
+set_exception_handler("webEvalException");' . ' // ' . $_GET['first'];
+    eval($source);
+    error_reporting(0);
+    echo 'registered';
+    return;
+}
+echo error_reporting() === E_ALL ? 'mask:' : 'bad:';
+echo set_error_handler(null) === null ? 'error:' : 'bad:';
+echo set_exception_handler(null) === null ? 'exception:' : 'bad:';
+restore_error_handler(); restore_error_handler(); restore_error_handler();
+restore_exception_handler(); restore_exception_handler(); restore_exception_handler();
+error_reporting(0);
+trigger_error('new request', E_USER_WARNING);
+echo 'clean';
+"#;
+    let bin = compile_web(&dir, src, "app");
+    eprintln!("web Core handler reset: fixture compiled in {:?}", started.elapsed());
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get_with_timeout(&addr, "/?first=1", Duration::from_secs(10))
+        .expect("handler registration request must complete");
+    let second = http_get_with_timeout(&addr, "/", Duration::from_secs(10))
+        .expect("first handler-reset request must complete");
+    let third = http_get_with_timeout(&addr, "/", Duration::from_secs(10))
+        .expect("second handler-reset request must complete");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("registered"), "first response: {first:?}");
+    for response in [second, third] {
+        assert!(response.ends_with("mask:error:exception:clean"), "response: {response:?}");
+    }
+}
+
+/// Verifies each request starts with default GC controls and no leaked stream lock.
+#[test]
+fn web_resets_gc_state_and_closes_unreachable_resources_between_requests() {
+    let dir = make_test_dir("web_gc_resource_reset");
+    let src = r#"<?php
+class WebGcResourceCycle {
+    public $self = null;
+    public $handle = null;
+}
+$lockPath = __DIR__ . "/request.lock";
+if (isset($_GET["first"])) {
+    gc_disable();
+    $cycle = new WebGcResourceCycle();
+    $cycle->self = $cycle;
+    unset($cycle);
+    gc_collect_cycles();
+
+    $resourceCycle = new WebGcResourceCycle();
+    $resourceCycle->self = $resourceCycle;
+    $resourceCycle->handle = fopen($lockPath, "w+");
+    flock($resourceCycle->handle, LOCK_EX);
+    unset($resourceCycle);
+    $status = gc_status();
+    echo !gc_enabled() && $status["runs"] > 0 ? "dirty" : "bad";
+    return;
+}
+$handle = fopen($lockPath, "r+");
+$locked = flock($handle, LOCK_EX | LOCK_NB);
+$status = gc_status();
+echo gc_enabled() && $status["runs"] === 0 && $status["collected"] === 0 ? "clean:" : "bad:";
+echo $locked ? "unlocked" : "leaked";
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_request(&addr, "GET", "/?first=1", &[], "");
+    let second = http_request(&addr, "GET", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("dirty"), "first response: {first:?}");
+    assert!(second.ends_with("clean:unlocked"), "second response: {second:?}");
 }
 
 /// Verifies a request body over --max-body-size is rejected with 413, and a body
@@ -3290,6 +3748,39 @@ fn web_multipart_post_and_files() {
     assert!(resp.ends_with("hello|up.txt|text/plain|12"), "multipart parse: {:?}", resp);
 }
 
+/// php fills `$_POST` only for a POST request, and `request_parse_body()` (php 8.4) parses the
+/// body of PUT / PATCH / DELETE instead: urlencoded and multipart bodies parse, any other (or
+/// no) content type throws `RequestParseBodyException`. symfony/http-foundation's
+/// `Request::createFromGlobals()` calls it for every non-POST body method.
+/// Expected output verified against php 8.5 (`php -S`).
+#[test]
+fn web_request_parse_body_for_put_patch_delete() {
+    let dir = make_test_dir("web_request_parse_body");
+    let src = "<?php try { [$p, $f] = request_parse_body(); \
+        echo json_encode([$p, array_map(fn($x) => [$x['name'], $x['full_path'], $x['type'], $x['size']], $f), $_POST]); } \
+        catch (RequestParseBodyException $e) { echo get_class($e), ': ', $e->getMessage(); }";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let urlenc = [("Content-Type", "application/x-www-form-urlencoded")];
+    let put = http_request(&addr, "PUT", "/", &urlenc, "a=1&b%5B%5D=2");
+    let patch = http_request(&addr, "PATCH", "/", &[("Content-Type", "APPLICATION/X-WWW-FORM-URLENCODED; charset=utf-8")], "a=1");
+    let delete = http_request(&addr, "DELETE", "/", &[], "");
+    let json = http_request(&addr, "PUT", "/", &[("Content-Type", "application/json")], "{}");
+    let multipart_body = "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nv\r\n\
+        --B\r\nContent-Disposition: form-data; name=\"f\"; filename=\"n.txt\"\r\n\
+        Content-Type: text/plain\r\n\r\nfile body\r\n--B--\r\n";
+    let multipart = http_request(&addr, "PUT", "/", &[("Content-Type", "multipart/form-data; boundary=B")], multipart_body);
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(put.ends_with(r#"[{"a":"1","b":["2"]},[],[]]"#), "put: {:?}", put);
+    assert!(patch.ends_with(r#"[{"a":"1"},[],[]]"#), "patch: {:?}", patch);
+    assert!(delete.ends_with("RequestParseBodyException: Request does not provide a content type"), "delete: {:?}", delete);
+    assert!(json.ends_with(r#"RequestParseBodyException: Content-Type "application/json" is not supported"#), "json: {:?}", json);
+    assert!(multipart.ends_with(r#"[{"a":"v"},{"f":["n.txt","n.txt","text\/plain",9]},[]]"#), "multipart: {:?}", multipart);
+}
+
 /// Verifies an uploaded file can be READ back via file_get_contents on its
 /// tmp_name. This exercises both A5 and the multi-bridge link fix: a dynamic
 /// file_get_contents pulls in the TLS bridge, which must co-link with the web
@@ -3758,4 +4249,182 @@ if (($_GET['r'] ?? '1') === '1') {
     assert!(second.ends_with("ZZfalse"), "second: {:?}", second);
     assert!(third.ends_with("first:false"), "third: {:?}", third);
     assert!(fourth.ends_with("ZZfalse"), "fourth: {:?}", fourth);
+}
+
+/// Issue #887: a client that completes its headers and then STALLS on the declared body is
+/// terminated by `--body-read-timeout` in the DEFAULT worker isolation, answering 408.
+///
+/// The worker configured only a header-read timeout, so the body had no deadline: a size cap
+/// bounds the bytes that arrive, never the connection's lifetime, and enough such
+/// connections exhaust a worker's descriptors and task slots. The flag that would have set a
+/// deadline was itself rejected in this isolation mode.
+///
+/// THE REQUEST IS DELIBERATELY KEEP-ALIVE. A `Connection: close` in the REQUEST would make
+/// the client's own EOF indistinguishable from the server releasing the connection, so the
+/// half of the fix that matters for exhaustion — the 408 carrying `Connection: close`
+/// instead of leaving a timed-out connection parked in the pool — would go unproven.
+#[test]
+fn web_worker_body_read_timeout_terminates_a_stalled_body() {
+    let dir = make_test_dir("web_body_read_timeout_stall");
+    let bin = compile_web(&dir, "<?php echo \"never\";", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server_with_args(&bin, &addr, "1", &["--body-read-timeout", "1"]);
+
+    // Headers announce a body that never arrives, on a connection the client never offers
+    // to close.
+    let mut stream = TcpStream::connect(&addr).unwrap();
+    // A read deadline well past the server's: without it, a regression that never closes
+    // the connection would hang this test instead of failing it.
+    stream
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    let head = format!(
+        "POST / HTTP/1.1\r\nHost: {}\r\nContent-Length: 1024\r\n\r\n",
+        addr
+    );
+    stream.write_all(head.as_bytes()).unwrap();
+    stream.flush().unwrap();
+
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_body_read_timeout_closed(&response, "a stalled body");
+}
+
+/// The same deadline covers a client that sends the body SLOWLY rather than not at all —
+/// partial frames keep arriving, so any per-frame idle check would be satisfied while the
+/// connection still never completes.
+#[test]
+fn web_worker_body_read_timeout_terminates_a_slow_trickle() {
+    let dir = make_test_dir("web_body_read_timeout_trickle");
+    let bin = compile_web(&dir, "<?php echo \"never\";", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server_with_args(&bin, &addr, "1", &["--body-read-timeout", "1"]);
+
+    let mut stream = TcpStream::connect(&addr).unwrap();
+    // Set before the trickle: once the server has closed, the socket no longer accepts the
+    // option at all (`EINVAL`), and the deadline is only useful if it is already in place.
+    stream
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    let head = format!(
+        "POST / HTTP/1.1\r\nHost: {}\r\nContent-Length: 4096\r\n\r\n",
+        addr
+    );
+    stream.write_all(head.as_bytes()).unwrap();
+    stream.flush().unwrap();
+    // Trickle well past the deadline without ever reaching Content-Length.
+    for _ in 0..20 {
+        if stream.write_all(b"x").is_err() {
+            break;
+        }
+        let _ = stream.flush();
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_body_read_timeout_closed(&response, "a trickled body");
+}
+
+/// Asserts the 408 a body-read timeout produces, INCLUDING the `Connection: close` that
+/// releases the connection.
+///
+/// Both halves are load-bearing and neither implies the other. The status line is what only
+/// the timeout produces — a client-side close cannot fabricate it. The header is the half
+/// that answers the exhaustion the issue is about: a 408 on a keep-alive connection that
+/// stays parked has freed nothing. `isolated_worker.rs` already did this for pool and
+/// request isolation, which is why the assertion is worth pinning rather than assuming.
+fn assert_body_read_timeout_closed(response: &str, what: &str) {
+    assert!(
+        response.starts_with("HTTP/1.1 408"),
+        "{what} must be answered with 408; response was {response:?}"
+    );
+    let headers = response
+        .split_once("\r\n\r\n")
+        .map(|(head, _)| head)
+        .unwrap_or(response)
+        .to_ascii_lowercase();
+    assert!(
+        headers.contains("connection: close"),
+        "{what} must be answered with a server-directed close, not left keep-alive; \
+         response was {response:?}"
+    );
+}
+
+/// A body that arrives WITHIN the deadline is unaffected: the timeout must bound the stalled
+/// case without truncating a legitimate upload.
+#[test]
+fn web_worker_body_read_timeout_leaves_a_prompt_body_alone() {
+    let dir = make_test_dir("web_body_read_timeout_ok");
+    let bin = compile_web(
+        &dir,
+        "<?php echo strlen(file_get_contents(\"php://input\"));",
+        "app",
+    );
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server_with_args(&bin, &addr, "1", &["--body-read-timeout", "10"]);
+
+    let mut stream = TcpStream::connect(&addr).unwrap();
+    let payload = "y".repeat(64);
+    let req = format!(
+        "POST / HTTP/1.1\r\nHost: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        addr,
+        payload.len(),
+        payload
+    );
+    stream.write_all(req.as_bytes()).unwrap();
+    stream.flush().unwrap();
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let response = normalize_complete_http_response(response);
+    assert!(
+        response.starts_with("HTTP/1.1 200") && response.ends_with("64"),
+        "a prompt body must be served normally; response was {response:?}"
+    );
+}
+
+/// Verifies a superglobal that is still aliased by a local survives the mutating builtins.
+///
+/// Under `--web` the superglobals are concrete hashes behind a global symbol. `ksort()`,
+/// `array_pop()`, `asort()` and `krsort()` split a shared hash through a CONSUMING copy-on-write
+/// helper, and the global write-back then retired the previous hash a second time, so
+/// `$copy = $_GET; ksort($_GET);` left `$copy` pointing at freed memory: its `count()` came
+/// back as a garbage integer. Each line below is real PHP output for the same program.
+#[test]
+fn aliased_superglobal_survives_mutating_builtins() {
+    let dir = make_test_dir("web_aliased_superglobal");
+    let src = r#"<?php
+$copy = $_GET; ksort($_GET);
+echo count($copy), "|", count($_GET), "|", implode(",", array_keys($_GET)), "\n";
+$c2 = $_GET; $last = array_pop($_GET);
+echo count($c2), "|", count($_GET), "|", $last, "\n";
+$c5 = $_GET; asort($_GET);
+echo count($c5), "|", count($_GET), "\n";
+$c6 = $_GET; krsort($_GET);
+echo count($c6), "|", implode(",", array_keys($_GET)), "\n";
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/?a=1&b=2&c=3");
+    let r2 = http_get(&addr, "/?a=1&b=2&c=3");
+    let _ = child.kill();
+    let _ = child.wait();
+    let expected = "3|3|a,b,c\n3|2|3\n2|2\n2|b,a\n";
+    assert!(r1.ends_with(expected), "first response body: {:?}", r1);
+    assert!(r2.ends_with(expected), "second response body: {:?}", r2);
 }

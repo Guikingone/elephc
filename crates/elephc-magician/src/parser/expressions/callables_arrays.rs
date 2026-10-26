@@ -423,9 +423,6 @@ fn collect_arrow_expr_variables(expr: &EvalExpr, names: &mut Vec<String>) {
                         collect_arrow_expr_variables(key, names);
                         collect_arrow_expr_variables(value, names);
                     }
-                    EvalArrayElement::Spread(value) => {
-                        collect_arrow_expr_variables(value, names);
-                    }
                 }
             }
         }

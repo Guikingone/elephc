@@ -289,6 +289,8 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emit_heap_defragment_aarch64(emitter);
 
     // -- fatal error: heap memory exhausted --
+    // Cross-helper callers use the shared entry; allocator conditionals stay local.
+    emitter.label_shared("__rt_heap_allocation_failed");
     // `__rt_cstr`/`__rt_cstr2` are SEPARATE atoms and have to reach this block by name. Under
     // macOS dead stripping an ordinary `label()` is renamed to an `L`-local, which is not a
     // symbol at all, so that cross-atom branch is not a relocation the linker can follow: the
@@ -727,6 +729,8 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emit_heap_defragment_x86_64(emitter);
 
     // -- fatal error: heap memory exhausted --
+    // Keep the same non-returning recovery entry on every target.
+    emitter.label_shared("__rt_heap_allocation_failed");
     // `__rt_cstr`/`__rt_cstr2` are SEPARATE atoms and have to reach this block by name. Under
     // macOS dead stripping an ordinary `label()` is renamed to an `L`-local, which is not a
     // symbol at all, so that cross-atom branch is not a relocation the linker can follow: the
@@ -780,7 +784,33 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::platform::{Platform, Target};
+    use crate::codegen_support::platform::{AppleVariant, Platform, Target};
+
+    /// Cross-helper allocation failure has an unconditional shared entry on every target.
+    #[test]
+    fn heap_allocation_failure_shared_entry_keeps_local_branches() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            emitter.dead_strip = true;
+            emit_heap_alloc(&mut emitter);
+            let internal = emitter.take_internal_labels();
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_heap_allocation_failed:\n__rt_heap_exhausted:\n"));
+            assert!(!internal.contains("__rt_heap_allocation_failed"));
+            if target.platform == Platform::MacOS {
+                assert!(internal.contains("__rt_heap_exhausted"));
+                assert!(asm.contains(".alt_entry __rt_heap_allocation_failed\n"));
+            }
+            assert!(asm.contains(crate::codegen_support::cdylib::BOUNDARY_STATUS));
+            assert!(asm.contains("__rt_throw_current"));
+        }
+    }
 
     /// Verifies the AArch64 allocator rejects payload sizes that cannot be
     /// represented by its 32-bit block-size header before any metadata write.

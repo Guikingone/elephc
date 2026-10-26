@@ -1,16 +1,16 @@
 ---
-title: "jdtounix() — internals"
+title: "jdtounix() - internals"
 description: "Compiler internals for jdtounix(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 246
+  order: 247
 ---
 
-## `jdtounix()` — internals
+## `jdtounix()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:831](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L831) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:854](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L854) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

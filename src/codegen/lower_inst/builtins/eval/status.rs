@@ -9,13 +9,209 @@
 
 use super::*;
 
+/// Preserves an escaping eval Throwable while allowing committed scope changes to be reloaded.
+pub(super) fn prepare_eval_scope_reload(ctx: &mut FunctionContext<'_>) {
+    let thrown = ctx.next_label("eval_reload_captured_throwable");
+    let ready = ctx.next_label("eval_reload_scope_ready");
+    let result = abi::int_result_reg(ctx.emitter);
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    abi::emit_store_to_sp(ctx.emitter, scratch, EVAL_RELOAD_THROWABLE_OFFSET);
+    emit_branch_if_eval_status(ctx, EVAL_STATUS_UNCAUGHT_THROWABLE, &thrown);
+    emit_eval_status_check(ctx);
+    abi::emit_jump(ctx.emitter, &ready);
+    ctx.emitter.label(&thrown);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, EVAL_RESULT_ERROR_OFFSET);
+    abi::emit_call_label(ctx.emitter, "__rt_throwable_take_boxed");
+    abi::emit_store_to_sp(ctx.emitter, result, EVAL_RELOAD_THROWABLE_OFFSET);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    abi::emit_store_to_sp(ctx.emitter, scratch, EVAL_RESULT_ERROR_OFFSET);
+    ctx.emitter.label(&ready);
+}
+
+/// Roots both outcome owners if scope conversion itself throws before writeback can finish.
+pub(super) fn protect_eval_reload_owners(ctx: &mut FunctionContext<'_>) {
+    let address = abi::tertiary_scratch_reg(ctx.emitter);
+    for (owner, record) in [
+        (EVAL_RELOAD_THROWABLE_OFFSET, EVAL_RELOAD_THROW_OWNER_OFFSET),
+        (EVAL_TEMP_CELL_OFFSET, EVAL_RELOAD_VALUE_OWNER_OFFSET),
+    ] {
+        abi::emit_temporary_stack_address(ctx.emitter, address, owner);
+        abi::emit_link_call_operand_owner_at_stack(ctx.emitter, address, false, record);
+    }
+}
+
+/// Propagates an accumulated Throwable only after all synchronized locals and globals are current.
+pub(super) fn finish_eval_scope_reload(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter.comment("finish guarded eval scope writeback");
+    abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, EVAL_RELOAD_VALUE_OWNER_OFFSET);
+    abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, EVAL_RELOAD_THROW_OWNER_OFFSET);
+    let done = ctx.next_label("eval_reload_without_throwable");
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, EVAL_RELOAD_THROWABLE_OFFSET);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+    // Cleanup can replace a successful eval return, so retire that otherwise-unobserved owner too.
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, EVAL_TEMP_CELL_OFFSET);
+    scope_reload::retire_eval_replacement_owner(
+        ctx.emitter, &PhpType::Mixed, Some(EVAL_RELOAD_THROWABLE_OFFSET),
+    );
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, EVAL_RELOAD_THROWABLE_OFFSET);
+    abi::emit_store_reg_to_symbol(ctx.emitter, result, "_exc_value", 0);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_BRIDGE_STACK_BYTES);
+    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
+    ctx.emitter.label(&done);
+}
+
 /// Emits a fatal diagnostic when the eval bridge reports any non-zero status.
+///
+/// A module that shares its throwables sends every non-zero status to ONE helper
+/// (`_eir_shared_eval_status_fail`) with the site's error cell: the inlined switch below was
+/// ~30 instructions at each of the Symfony demo's eval-bridge sites, 25 M instructions in all.
 pub(super) fn emit_eval_status_check(ctx: &mut FunctionContext<'_>) {
+    if let Some(helper) = crate::codegen::shared_eval_status::shared_label(ctx) {
+        let ok_label = ctx.next_label("eval_status_ok");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &ok_label);
+        let error_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, error_reg, EVAL_RESULT_ERROR_OFFSET);
+        abi::emit_call_label(ctx.emitter, helper);
+        ctx.emitter.label(&ok_label);
+        return;
+    }
+    emit_eval_status_dispatch(ctx, |ctx| {
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_ERROR_OFFSET);
+    });
+}
+
+/// [`emit_eval_status_check`] for a call that boxed operands for the bridge.
+///
+/// The bridge BORROWS the cells this frame boxed (receiver, arguments, the argument pack), so a
+/// non-zero status -- an uncaught Throwable above all -- has to release them before it unwinds:
+/// the normal path releases them right after the check, and the throwing path used to skip that,
+/// leaking the receiver's reference for good. Measured: a `ReflectionClass` built from a runtime
+/// class name keeps its whole member graph (18 blocks) when `getMethod()` of an unknown method
+/// throws, and every later throw leaks another one.
+///
+/// With the module's shared status helper the site only passes the cells' address and a bit mask
+/// of their eight-byte slots (`_eir_shared_eval_status_fail_cells` releases them, then takes the
+/// ordinary failure path), so the cost per site is a few instructions, not a release per cell.
+pub(super) fn emit_eval_status_check_releasing(ctx: &mut FunctionContext<'_>, boxed: &[usize]) {
+    if boxed.is_empty() {
+        emit_eval_status_check(ctx);
+        return;
+    }
+    let mask = boxed.iter().try_fold(0u64, |mask, offset| {
+        (offset % 8 == 0 && offset / 8 < 64).then(|| mask | (1u64 << (offset / 8)))
+    });
+    if let (Some(mask), Some(helper)) = (mask, crate::codegen::shared_eval_status::shared_cells_label(ctx)) {
+        let ok_label = ctx.next_label("eval_status_ok");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &ok_label);
+        let target = ctx.emitter.target;
+        abi::emit_load_temporary_stack_slot(
+            ctx.emitter,
+            abi::int_arg_reg_name(target, 1),
+            EVAL_RESULT_ERROR_OFFSET,
+        );
+        abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(target, 2), 0);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 3), mask as i64);
+        abi::emit_call_label(ctx.emitter, helper);
+        ctx.emitter.label(&ok_label);
+        return;
+    }
+    let ok_label = ctx.next_label("eval_status_ok_released");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &ok_label);
+    // The status is parked across the releases; the error cell stays in its stack slot.
+    emit_release_eval_boxed_operands_keeping_int_answer(ctx, boxed);
+    emit_eval_status_check(ctx);
+    ctx.emitter.label(&ok_label);
+}
+
+/// Body of `_eir_shared_eval_status_fail_cells`: status in the integer result register, the site's
+/// error cell, the address of its boxed cells and their slot bit mask in the next three argument
+/// registers. Releases every marked cell, then enters the ordinary failure helper; never returns.
+pub(in crate::codegen) fn emit_shared_eval_status_fail_cells_body(
+    ctx: &mut FunctionContext<'_>,
+    fail_label: &str,
+) -> Result<()> {
+    let lp = ctx.next_label("eval_fail_cells_loop");
+    let done = ctx.next_label("eval_fail_cells_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #48");                         // mask, base, status, error cell
+            ctx.emitter.instruction("str x3, [sp]");                            // remaining cells
+            ctx.emitter.instruction("str x2, [sp, #8]");                        // address of slot 0
+            ctx.emitter.instruction("str x0, [sp, #16]");                       // the status
+            ctx.emitter.instruction("str x1, [sp, #24]");                       // the site's error cell
+            ctx.emitter.label(&lp);
+            ctx.emitter.instruction("ldr x3, [sp]");                            // remaining cells
+            ctx.emitter.instruction(&format!("cbz x3, {done}"));                // all released
+            ctx.emitter.instruction("rbit x4, x3");                             // lowest marked slot, found from the other end
+            ctx.emitter.instruction("clz x4, x4");                              // its index
+            ctx.emitter.instruction("sub x5, x3, #1");                          // clear that bit
+            ctx.emitter.instruction("and x3, x3, x5");                          // remaining cells without it
+            ctx.emitter.instruction("str x3, [sp]");                            // keep them across the release
+            ctx.emitter.instruction("ldr x9, [sp, #8]");                        // address of slot 0
+            ctx.emitter.instruction("ldr x0, [x9, x4, lsl #3]");                // the boxed cell
+            ctx.emitter.instruction("bl __rt_decref_mixed");                    // release what the site boxed for the bridge
+            ctx.emitter.instruction(&format!("b {lp}"));                        // next cell
+            ctx.emitter.label(&done);
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // the status again
+            ctx.emitter.instruction("ldr x1, [sp, #24]");                       // the error cell again
+            ctx.emitter.instruction("add sp, sp, #48");                         // drop the scratch slots
+            ctx.emitter.instruction(&format!("bl {fail_label}"));               // the ordinary failure path; never returns
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 48");                             // mask, base, status, error cell
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rcx");                // remaining cells
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // address of slot 0
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // the status
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rsi");           // the site's error cell
+            ctx.emitter.label(&lp);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // remaining cells
+            ctx.emitter.instruction("test rax, rax");                           // any left?
+            ctx.emitter.instruction(&format!("jz {done}"));                     // all released
+            ctx.emitter.instruction("bsf rcx, rax");                            // index of the lowest marked slot
+            ctx.emitter.instruction("lea rdx, [rax - 1]");                      // clear that bit
+            ctx.emitter.instruction("and rax, rdx");                            // remaining cells without it
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // keep them across the release
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // address of slot 0
+            ctx.emitter.instruction("mov rax, QWORD PTR [rdx + rcx * 8]");      // the boxed cell
+            ctx.emitter.instruction("call __rt_decref_mixed");                  // release what the site boxed for the bridge
+            ctx.emitter.instruction(&format!("jmp {lp}"));                      // next cell
+            ctx.emitter.label(&done);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // the status again
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");           // the error cell again
+            ctx.emitter.instruction("add rsp, 48");                             // drop the scratch slots
+            ctx.emitter.instruction(&format!("call {fail_label}"));             // the ordinary failure path; never returns
+        }
+    }
+    Ok(())
+}
+
+/// The module's one copy of the non-zero status switch. Status in the integer result register,
+/// the site's eval error cell in the second integer argument register; never returns.
+pub(in crate::codegen) fn emit_shared_eval_status_fail_body(
+    ctx: &mut FunctionContext<'_>,
+) -> Result<()> {
+    emit_eval_status_dispatch(ctx, |ctx| {
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        let error_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, error_reg)); // take the site's eval error cell
+    });
+    Ok(())
+}
+
+/// The status switch itself; `load_error_cell` puts the eval error cell in the result register.
+fn emit_eval_status_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    load_error_cell: impl Fn(&mut FunctionContext<'_>),
+) {
     let ok_label = ctx.next_label("eval_status_ok");
     let parse_error_label = ctx.next_label("eval_status_parse_error");
     let throwable_label = ctx.next_label("eval_status_throwable");
     let unsupported_label = ctx.next_label("eval_status_unsupported");
     let escaping_pcntl_label = ctx.next_label("eval_status_escaping_pcntl_callable");
+    let user_fatal_label = ctx.next_label("eval_status_user_fatal");
     abi::emit_branch_if_int_result_zero(ctx.emitter, &ok_label);
     emit_branch_if_eval_status(ctx, EVAL_STATUS_PARSE_ERROR, &parse_error_label);
     emit_branch_if_eval_status(ctx, EVAL_STATUS_UNCAUGHT_THROWABLE, &throwable_label);
@@ -25,15 +221,19 @@ pub(super) fn emit_eval_status_check(ctx: &mut FunctionContext<'_>) {
         EVAL_STATUS_ESCAPING_PCNTL_CALLABLE,
         &escaping_pcntl_label,
     );
+    emit_branch_if_eval_status(ctx, EVAL_STATUS_USER_FATAL, &user_fatal_label);
     emit_eval_bridge_fatal_exit(ctx, EVAL_STATUS_RUNTIME_FATAL);
     ctx.emitter.label(&parse_error_label);
     emit_eval_parse_error_exit(ctx);
     ctx.emitter.label(&throwable_label);
-    emit_eval_throw_current(ctx);
+    load_error_cell(ctx);
+    emit_eval_take_and_throw(ctx);
     ctx.emitter.label(&unsupported_label);
     emit_eval_bridge_fatal_exit(ctx, EVAL_STATUS_UNSUPPORTED);
     ctx.emitter.label(&escaping_pcntl_label);
     emit_eval_bridge_fatal_exit(ctx, EVAL_STATUS_ESCAPING_PCNTL_CALLABLE);
+    ctx.emitter.label(&user_fatal_label);
+    abi::emit_exit(ctx.emitter, 255);
     ctx.emitter.label(&ok_label);
 }
 
@@ -54,13 +254,12 @@ pub(super) fn emit_branch_if_eval_status(ctx: &mut FunctionContext<'_>, status: 
     }
 }
 
-/// Publishes an eval-thrown Throwable and enters the normal runtime unwinder.
-pub(super) fn emit_eval_throw_current(ctx: &mut FunctionContext<'_>) {
+/// Transfers the eval-owned Throwable box already in the result register into native exception
+/// ownership, then unwinds.
+fn emit_eval_take_and_throw(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_ERROR_OFFSET);
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    let object_reg = eval_mixed_unbox_low_payload_reg(ctx);
-    abi::emit_store_reg_to_symbol(ctx.emitter, object_reg, "_exc_value", 0);
+    abi::emit_call_label(ctx.emitter, "__rt_throwable_take_boxed");
+    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_exc_value", 0);
     abi::emit_call_label(ctx.emitter, "__rt_throw_current");
 }
 

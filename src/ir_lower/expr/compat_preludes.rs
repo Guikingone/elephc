@@ -31,28 +31,55 @@ pub(super) fn lower_single_arg_assert(
     ))
 }
 
-/// Routes PHP's two-argument `array_reduce()` form to the boxed-carry prelude helper.
-pub(super) fn lower_default_initial_array_reduce(
+/// Lowers `unpack('H*name', $data)` as `['name' => bin2hex($data)]`, boxed like `unpack()`'s
+/// `array|false` result.
+///
+/// `H*` reads the whole string as high-nibble-first hexadecimal, which is exactly `bin2hex()`, and
+/// it cannot fail. The backend's `unpack()` covers the integer directives only, so league/uri's
+/// `IPv6\Converter::expandIp()` (`unpack('H*hex', inet_pton($ip))`) was refused, and that one
+/// refusal sent its file to the interpreter and cost the Symfony demo a whole second compile.
+/// An unnamed `H*` keys the value `1`, as php does.
+pub(super) fn lower_unpack_whole_hex(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    if php_symbol_key(name.trim_start_matches('\\')) != "array_reduce"
+    if php_symbol_key(name.trim_start_matches('\\')) != "unpack"
         || args.len() != 2
         || crate::types::call_args::has_named_args(args)
         || args.iter().any(is_spread_arg)
     {
         return None;
     }
-    Some(lower_function_call(
-        ctx,
-        &crate::names::Name::unqualified(
-            crate::array_reduce_prelude::ARRAY_REDUCE_DEFAULT_NAME,
-        ),
-        args,
-        expr,
-    ))
+    let ExprKind::StringLiteral(format) = &args[0].kind else {
+        return None;
+    };
+    let field = format.strip_prefix("H*")?;
+    if !field.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_') {
+        return None;
+    }
+    let key = if field.is_empty() {
+        Expr::new(ExprKind::IntLiteral(1), expr.span)
+    } else {
+        Expr::new(ExprKind::StringLiteral(field.to_string()), expr.span)
+    };
+    let hex = Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("bin2hex"),
+            args: vec![Expr::new(
+                ExprKind::Cast {
+                    target: crate::parser::ast::CastType::String,
+                    expr: Box::new(args[1].clone()),
+                },
+                args[1].span,
+            )],
+        },
+        expr.span,
+    );
+    let array = Expr::new(ExprKind::ArrayLiteralAssoc(vec![(key, hex)]), expr.span);
+    let value = lower_expr(ctx, &array);
+    Some(ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span)))
 }
 
 /// Routes `is_callable($value, $syntax_only[, &$name])` to the prelude, keeping the one-argument
@@ -69,49 +96,16 @@ pub(super) fn lower_is_callable_with_options(
 ) -> Option<LoweredValue> {
     if php_symbol_key(name.trim_start_matches('\\')) != "is_callable"
         || !matches!(args.len(), 2 | 3)
-        || crate::types::call_args::has_named_args(args)
         || args.iter().any(is_spread_arg)
     {
         return None;
     }
+    // Named arguments (`is_callable($value, syntax_only: true)`, nette/utils `Validators`) are
+    // left to the user-call path: the helper's parameters carry php's own names.
     Some(lower_function_call(
         ctx,
         &crate::names::Name::unqualified(crate::is_callable_prelude::IS_CALLABLE_EXT_NAME),
         args,
-        expr,
-    ))
-}
-
-/// Routes `get_class_vars($class)` to `crate::class_vars_prelude`, adding the calling scope.
-///
-/// php filters non-public properties by the class the call is made FROM; that is the function's
-/// lexical class, known here and nowhere at run time, so it travels as a second argument.
-pub(super) fn lower_get_class_vars(
-    ctx: &mut LoweringContext<'_, '_>,
-    name: &str,
-    args: &[Expr],
-    expr: &Expr,
-) -> Option<LoweredValue> {
-    if php_symbol_key(name.trim_start_matches('\\')) != "get_class_vars"
-        || args.len() != 1
-        || args.iter().any(is_spread_arg)
-    {
-        return None;
-    }
-    let class = match &args[0].kind {
-        ExprKind::NamedArg { value, .. } => value.as_ref().clone(),
-        _ => args[0].clone(),
-    };
-    let scope = ctx
-        .current_class
-        .as_deref()
-        .map(|class| class.trim_start_matches('\\').to_ascii_lowercase())
-        .unwrap_or_default();
-    let scope = Expr::new(ExprKind::StringLiteral(scope), expr.span);
-    Some(lower_function_call(
-        ctx,
-        &crate::names::Name::unqualified(crate::class_vars_prelude::GET_CLASS_VARS_NAME),
-        &[class, scope],
         expr,
     ))
 }
@@ -159,6 +153,124 @@ pub(super) fn lower_backend_gap_builtin_shape(
                 crate::backend_gap_prelude::RSORT_MIXED_NAME
             }),
             args,
+            expr,
+        ));
+    }
+    // A one-argument `min()` / `max()` over a gradual operand goes to `crate::min_max_prelude`:
+    // the native form reads a typed array. The helper's own body never calls either builtin.
+    if matches!(builtin.as_str(), "min" | "max")
+        && single_value_arg.is_some_and(|arg| {
+            matches!(
+                materialized_expr_type_for_merge(ctx, arg).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            )
+        })
+    {
+        let mut helper_args = args.to_vec();
+        helper_args.push(Expr::new(ExprKind::BoolLiteral(builtin == "max"), expr.span));
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(crate::min_max_prelude::MIN_MAX_MIXED_NAME),
+            &helper_args,
+            expr,
+        ));
+    }
+    // `max(...$values)` / `min(...$values)` over a list of boxed or gradual elements -- doctrine/dbal's
+    // `max(...array_map(mb_strlen(...), $column['values']))` -- has no native lowering: the spread
+    // reaches the array form with an `array<mixed>` operand. The helper takes the spread flag so php's
+    // argument-count rules still hold (an empty spread has no argument at all; a single element is
+    // that one argument, which must itself be an array).
+    if matches!(builtin.as_str(), "min" | "max") && args.len() == 1 {
+        if let ExprKind::Spread(inner) = &args[0].kind {
+            if matches!(
+                materialized_expr_type_for_merge(ctx, inner).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            ) || matches!(
+                materialized_expr_type_for_merge(ctx, inner).codegen_repr(),
+                PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+            ) {
+                let helper_args = vec![
+                    inner.as_ref().clone(),
+                    Expr::new(ExprKind::BoolLiteral(builtin == "max"), expr.span),
+                    Expr::new(ExprKind::BoolLiteral(true), expr.span),
+                ];
+                return Some(lower_function_call(
+                    ctx,
+                    &crate::names::Name::unqualified(crate::min_max_prelude::MIN_MAX_MIXED_NAME),
+                    &helper_args,
+                    expr,
+                ));
+            }
+        }
+    }
+    // `count($value, COUNT_RECURSIVE)` over a receiver that can hold nested arrays goes to
+    // `crate::count_recursive_prelude`: indexed storage is untagged, so the native total cannot
+    // tell a nested array from a scalar slot and the lowering refuses such a receiver.
+    if builtin == "count"
+        && args.len() == 2
+        && !args.iter().any(is_spread_arg)
+        && !args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
+        && count_receiver_can_nest(&materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr())
+    {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(crate::count_recursive_prelude::COUNT_RECURSIVE_NAME),
+            args,
+            expr,
+        ));
+    }
+    // `array_fill_keys()` over keys known only at run time goes to `crate::array_fill_keys_prelude`:
+    // the native lowering reads int or string keys. The helper's own body never calls it.
+    if builtin == "array_fill_keys"
+        && args.len() == 2
+        && !args.iter().any(is_spread_arg)
+        && !args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
+        && match materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr() {
+            PhpType::Array(element) => {
+                matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+            }
+            PhpType::AssocArray { value, .. } => {
+                matches!(value.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+            }
+            PhpType::Mixed | PhpType::Union(_) => true,
+            _ => false,
+        }
+    {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(
+                crate::array_fill_keys_prelude::ARRAY_FILL_KEYS_MIXED_NAME,
+            ),
+            args,
+            expr,
+        ));
+    }
+    // A `string` first argument of a math builtin goes through `crate::numeric_string_arg_prelude`
+    // first: the native lowerings read an int or a float. The helper returns the number, so the
+    // re-entered builtin call no longer matches this arm.
+    if crate::numeric_string_arg_prelude::NUMERIC_ARG_BUILTINS.contains(&builtin.as_str())
+        && !args.is_empty()
+        && !args.iter().any(is_spread_arg)
+        && !matches!(args[0].kind, ExprKind::NamedArg { .. })
+        && materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr() == PhpType::Str
+    {
+        let mut converted_args = args.to_vec();
+        converted_args[0] = Expr::new(
+            ExprKind::FunctionCall {
+                name: crate::names::Name::unqualified(
+                    crate::numeric_string_arg_prelude::NUMERIC_STRING_ARG_NAME,
+                ),
+                args: vec![
+                    args[0].clone(),
+                    Expr::new(ExprKind::StringLiteral(builtin.clone()), Span::dummy()),
+                ],
+            },
+            Span::dummy(),
+        );
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(builtin.as_str()),
+            &converted_args,
             expr,
         ));
     }
@@ -214,24 +326,6 @@ pub(super) fn lower_backend_gap_builtin_shape(
             ctx,
             &crate::names::Name::unqualified(crate::implode_prelude::IMPLODE_VALUES_NAME),
             &call_args,
-            expr,
-        ));
-    }
-    // `array_sum()` / `array_product()` over anything but a list of ints or floats: the boxed
-    // folds only add integers, so a float in a mixed list or hash was truncated or lost.
-    if matches!(builtin.as_str(), "array_sum" | "array_product")
-        && args.len() == 1
-        && !numeric_fold_is_native(&materialized_expr_type_for_merge(ctx, &args[0]))
-    {
-        let helper = if builtin == "array_sum" {
-            crate::array_sum_prelude::ARRAY_SUM_VALUES_NAME
-        } else {
-            crate::array_sum_prelude::ARRAY_PRODUCT_VALUES_NAME
-        };
-        return Some(lower_function_call(
-            ctx,
-            &crate::names::Name::unqualified(helper),
-            args,
             expr,
         ));
     }
@@ -316,22 +410,6 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
-    // `array_any()` / `array_all()` go to the PHP helpers wholesale: php hands the predicate the
-    // value AND the key, over any array, and the native runtime walks a dense list passing only the
-    // value. `src/array_find_prelude.rs` has the helpers.
-    if matches!(builtin.as_str(), "array_any" | "array_all" | "array_find") && args.len() == 2 {
-        let helper = match builtin.as_str() {
-            "array_any" => crate::array_find_prelude::ARRAY_ANY_NAME,
-            "array_all" => crate::array_find_prelude::ARRAY_ALL_NAME,
-            _ => crate::array_find_prelude::ARRAY_FIND_NAME,
-        };
-        return Some(lower_function_call(
-            ctx,
-            &crate::names::Name::unqualified(helper),
-            args,
-            expr,
-        ));
-    }
     // php's multi-array `array_map()` walks the arrays in parallel by position; the native
     // runtime maps one array, so two or more go to the prelude helper.
     if builtin == "array_map"
@@ -386,32 +464,6 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
-    // A callback the lowering cannot recover a native pointer for -- a boxed callable in a local,
-    // a parameter, a property -- has no static binding for the array runtime, so the whole call
-    // goes to the PHP helper, which calls it the way php does. `twig/twig`'s
-    // `CoreExtension::filter($env, $isSandboxed, $array, $arrow)` forwards an untyped parameter.
-    if builtin == "array_filter"
-        && (2..=3).contains(&args.len())
-        && matches!(
-            materialized_expr_type_for_merge(ctx, &args[1]).codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_)
-        )
-    {
-        let mut helper_args = vec![args[0].clone(), args[1].clone()];
-        helper_args.push(match args.get(2) {
-            Some(mode) => mode.clone(),
-            // php's default mode: the value is the callback's only argument.
-            None => Expr::new(ExprKind::IntLiteral(0), expr.span),
-        });
-        return Some(lower_function_call(
-            ctx,
-            &crate::names::Name::unqualified(
-                crate::array_filter_prelude::ARRAY_FILTER_CALLBACK_NAME,
-            ),
-            &helper_args,
-            expr,
-        ));
-    }
     // `preg_match_all()` with `$flags` goes to the prelude helper: the native capture helper
     // builds pattern order and ignores the flags. `src/preg_match_all_prelude.rs` has the
     // measurement. A NAMED argument keeps the native path, whose binder places it.
@@ -424,6 +476,20 @@ pub(super) fn lower_backend_gap_builtin_shape(
             Some(offset) => offset.clone(),
             None => Expr::new(ExprKind::IntLiteral(0), expr.span),
         });
+        // The helper's `&$matches` is gradual, and the checker widens a user call's by-reference
+        // locals to match -- but it typed this call as the BUILTIN, so a `$matches = [];` written
+        // first kept its `array<never>` and every later `$match[2][0]` read the filled rows as
+        // nothing: Symfony's `RouteCompiler::compilePattern()` built `{^(?P<>[^/]++)/greet/\{name\}$}`
+        // for `/greet/{name}`. Box the local first, as the checker's widening would have.
+        if let ExprKind::Variable(name) = &args[2].kind {
+            if ctx.local_slots.contains_key(name)
+                && ctx.local_type(name).codegen_repr() != PhpType::Mixed
+            {
+                let local = ctx.load_local(name, Some(args[2].span));
+                let boxed = ctx.box_value_as_mixed(local, PhpType::Mixed, Some(args[2].span));
+                ctx.store_call_argument_local(name, boxed, PhpType::Mixed, Some(args[2].span));
+            }
+        }
         return Some(lower_function_call(
             ctx,
             &crate::names::Name::unqualified(
@@ -480,6 +546,34 @@ pub(super) fn lower_backend_gap_builtin_shape(
     }
     // The three-argument `array_column()` re-keys its result from the data, which is a hash the
     // backend has no lowering for. The prelude helper answers it in PHP.
+    // Object rows and list rows have no native column reader either; the same helper answers
+    // the two-argument form with a null index key, which keeps php's sequential keys.
+    // So do an int column key (league/commonmark's `array_column($match, 0)` over preg offset
+    // pairs) and rows the native reader cannot walk (lists, or rows typed only as empty arrays),
+    // which `codegen::lower_inst::builtins::arrays::column` refuses.
+    if builtin == "array_column"
+        && args.len() == 2
+        && !args.iter().any(is_spread_arg)
+        && !args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
+        && (crate::builtins::array_column_rows_need_generic_helper(
+            &materialized_expr_type_for_merge(ctx, &args[0]),
+        ) || materialized_expr_type_for_merge(ctx, &args[1]).codegen_repr() != PhpType::Str
+            || !native_array_column_reads_rows(&materialized_expr_type_for_merge(ctx, &args[0])))
+    {
+        let mut with_index = args.to_vec();
+        with_index.push(crate::parser::ast::Expr::new(
+            crate::parser::ast::ExprKind::Null,
+            expr.span,
+        ));
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(
+                crate::backend_gap_prelude::ARRAY_COLUMN_INDEXED_NAME,
+            ),
+            &with_index,
+            expr,
+        ));
+    }
     if builtin == "array_column" && args.len() == 3 {
         return Some(lower_function_call(
             ctx,
@@ -489,6 +583,35 @@ pub(super) fn lower_backend_gap_builtin_shape(
             args,
             expr,
         ));
+    }
+    // The native pad helper copies 8-byte slots of a list and fills with a value of the list's
+    // own representation; anything else goes through `crate::array_pad_prelude`.
+    if builtin == "array_pad"
+        && args.len() == 3
+        && !args.iter().any(is_spread_arg)
+        && !crate::types::call_args::has_named_args(args)
+    {
+        let source = materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr();
+        let pad = materialized_expr_type_for_merge(ctx, &args[2]).codegen_repr();
+        let native = match &source {
+            PhpType::Array(element) => {
+                let element = element.codegen_repr();
+                element == pad
+                    && (matches!(
+                        element,
+                        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable
+                    ) || element.is_refcounted())
+            }
+            _ => false,
+        };
+        if !native {
+            return Some(lower_function_call(
+                ctx,
+                &crate::names::Name::unqualified(crate::array_pad_prelude::ARRAY_PAD_VALUES_NAME),
+                args,
+                expr,
+            ));
+        }
     }
     if builtin == "array_reverse" && args.len() == 1 {
         return Some(lower_function_call(
@@ -500,12 +623,20 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
+    // A gradual needle is routed whatever the haystack's static type: the native search compares a
+    // gradual needle against nothing (`array_search($parameter, array_keys($this->parameters))` in
+    // illuminate/routing was refused "array_search needle PHP type Mixed"), and a call result such
+    // as `array_keys()` is typed `mixed` by the merge view even though it lowers to `array<mixed>`.
     if builtin == "array_search"
         && (2..=3).contains(&args.len())
-        && !matches!(
+        && !args.iter().any(is_spread_arg)
+        && (matches!(
+            materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        ) || !matches!(
             materialized_expr_type_for_merge(ctx, &args[1]).codegen_repr(),
             PhpType::Mixed | PhpType::Union(_)
-        )
+        ))
         && (args.len() == 3
             || matches!(
                 materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr(),
@@ -590,8 +721,16 @@ pub(super) fn lower_backend_gap_builtin_shape(
         });
         if let (Some(receiver), Some(last)) = (receiver, args.last()) {
             if let ExprKind::Spread(spread) = &last.kind {
-                if matches!(receiver.kind, ExprKind::Variable(_))
-                    && args[..args.len() - 1].iter().all(|arg| !is_spread_arg(arg))
+                // A property or element receiver reaches the helper's `&$array` through the
+                // by-reference place rewrite (`ref_place_args`), which reads it once and writes
+                // the result back: `array_unshift($box->values, 'first', ...$extra)`.
+                if matches!(
+                    receiver.kind,
+                    ExprKind::Variable(_)
+                        | ExprKind::PropertyAccess { .. }
+                        | ExprKind::StaticPropertyAccess { .. }
+                        | ExprKind::ArrayAccess { .. }
+                ) && args[..args.len() - 1].iter().all(|arg| !is_spread_arg(arg))
                 {
                     let leading = Expr::new(
                         ExprKind::ArrayLiteral(args[1..args.len() - 1].to_vec()),
@@ -609,32 +748,6 @@ pub(super) fn lower_backend_gap_builtin_shape(
                 }
             }
         }
-    }
-    if builtin == "array_slice" {
-        let gradual_length = args.get(2).is_some_and(|length| {
-            matches!(
-                materialized_expr_type_for_merge(ctx, length).codegen_repr(),
-                PhpType::TaggedScalar | PhpType::Mixed | PhpType::Union(_)
-            )
-        });
-        if !(2..=4).contains(&args.len())
-            || !match materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr() {
-                PhpType::Array(element) => {
-                    element.codegen_repr() == PhpType::Mixed || gradual_length
-                }
-                PhpType::AssocArray { .. } => true,
-                PhpType::Mixed | PhpType::Union(_) => true,
-                _ => false,
-            }
-        {
-            return None;
-        }
-        return Some(lower_function_call(
-            ctx,
-            &crate::names::Name::unqualified(crate::backend_gap_prelude::ARRAY_SLICE_NAME),
-            args,
-            expr,
-        ));
     }
     if builtin == "pack" {
         let Some(Expr {
@@ -683,6 +796,13 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
+    // `uasort`/`uksort` keep the keys, which a list has no storage for: the slot permuter behind a
+    // list renumbered them, and `uksort` even compared the values (`[1, 3, 2]` came out `321`
+    // instead of php's `2 => 2, 1 => 3, 0 => 1`). Promote the local to a hash first, as
+    // `asort` does; the hash then takes the key-preserving prelude helper below.
+    if matches!(builtin.as_str(), "uasort" | "uksort") && args.len() == 2 {
+        super::array_builtin_args::promote_indexed_local_to_hash(ctx, &args[0]);
+    }
     let gradual_sort_operand = || {
         matches!(
             materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr(),
@@ -692,7 +812,7 @@ pub(super) fn lower_backend_gap_builtin_shape(
             PhpType::Array(element)
                 if matches!(
                     element.codegen_repr(),
-                    PhpType::Mixed | PhpType::Union(_) | PhpType::Array(_) | PhpType::Object(_)
+                    PhpType::Mixed | PhpType::Union(_) | PhpType::Array(_)
                 )
         )
     };
@@ -709,58 +829,28 @@ pub(super) fn lower_backend_gap_builtin_shape(
         ("asort", 1) if gradual_sort_operand() => {
             Some(crate::backend_gap_prelude::ASORT_MIXED_NAME)
         }
+        ("natsort" | "natcasesort", 1) if gradual_sort_operand() => {
+            let call = crate::natsort_gradual_prelude::uasort_call(
+                &args[0],
+                builtin == "natcasesort",
+                expr.span,
+            );
+            return Some(lower_expr(ctx, &call));
+        }
         _ => None,
     };
     if let Some(helper) = gradual_sort_helper {
+        let wrapped;
+        let args = match runtime_named_comparator_wrapper(ctx, args) {
+            Some(with_closure) => {
+                wrapped = with_closure;
+                &wrapped[..]
+            }
+            None => args,
+        };
         return Some(lower_function_call(
             ctx,
             &crate::names::Name::unqualified(helper),
-            args,
-            expr,
-        ));
-    }
-    if builtin == "array_fill_keys"
-        && args.len() == 2
-        && matches!(
-            materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_)
-        )
-    {
-        return Some(lower_function_call(
-            ctx,
-            &crate::names::Name::unqualified(
-                crate::backend_gap_prelude::ARRAY_FILL_KEYS_MIXED_NAME,
-            ),
-            args,
-            expr,
-        ));
-    }
-    // The native reducer carries an 8-byte INTEGER accumulator, so only an `int` initial carry
-    // may take it. Any other carry — a closure, a string, an array, an object — goes to the
-    // boxed-carry helper, which is php's own definition of `array_reduce()`. Laravel's middleware
-    // `Pipeline::then()` reduces with a CLOSURE carry, and that value came back boxed as an int.
-    // The same holds for the SOURCE: the native reducer walks a packed array of 8-byte or string
-    // slots, so a hash, a gradual value or `mixed` elements take the helper too.
-    let native_reduce_source = |ctx: &LoweringContext<'_, '_>| {
-        matches!(
-            materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr(),
-            PhpType::Array(element)
-                if !matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        )
-    };
-    if builtin == "array_reduce"
-        && args.len() == 3
-        && (!native_reduce_source(&*ctx)
-            || !matches!(
-                materialized_expr_type_for_merge(ctx, &args[2]).codegen_repr(),
-                PhpType::Int
-            ))
-    {
-        return Some(lower_function_call(
-            ctx,
-            &crate::names::Name::unqualified(
-                crate::array_reduce_prelude::ARRAY_REDUCE_DEFAULT_NAME,
-            ),
             args,
             expr,
         ));
@@ -784,11 +874,148 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
+    // `str_replace()` over a gradual search or replace: see `crate::str_replace_count_prelude`.
+    if builtin == "str_replace"
+        && args.len() == 3
+        && !crate::types::call_args::has_named_args(args)
+        && !args.iter().any(is_spread_arg)
+        && args[..2].iter().any(|arg| {
+            match materialized_expr_type_for_merge(ctx, arg).codegen_repr() {
+                PhpType::Mixed | PhpType::Union(_) | PhpType::AssocArray { .. } => true,
+                PhpType::Array(element) => element.codegen_repr() != PhpType::Str,
+                _ => false,
+            }
+        })
+    {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(
+                crate::str_replace_count_prelude::STR_REPLACE_COUNT_NAME,
+            ),
+            args,
+            expr,
+        ));
+    }
+    // `fputcsv()` with a field list the native writer cannot render -- anything but an array of
+    // strings: ints, floats, bools and null fields, or a gradual array -- takes the same prelude
+    // as the long forms, which converts each field as php does.
+    if builtin == "fputcsv"
+        && (2..=4).contains(&args.len())
+        && !crate::types::call_args::has_named_args(args)
+        && !args.iter().any(is_spread_arg)
+        && !matches!(
+            materialized_expr_type_for_merge(ctx, &args[1]).codegen_repr(),
+            PhpType::Array(element) if element.codegen_repr() == PhpType::Str
+        )
+        && !ctx
+            .builder
+            .function()
+            .name
+            .eq_ignore_ascii_case(crate::csv_prelude::FPUTCSV_FULL_NAME)
+    {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(crate::csv_prelude::FPUTCSV_FULL_NAME),
+            args,
+            expr,
+        ));
+    }
+    // `stream_select()` goes to `crate::stream_select_prelude`; the helper's own call of the native
+    // select (over flattened descriptor lists) must stay native or it would recurse forever.
+    let inside_stream_select = ctx
+        .builder
+        .function()
+        .name
+        .eq_ignore_ascii_case(crate::stream_select_prelude::STREAM_SELECT_NAME);
+    // The closed-world autoload chain: `crate::backend_gap_prelude::AUTOLOAD_CHAIN_SRC` holds the
+    // loaders instead of the interpreter. Declared exactly when the program names the chain.
+    if crate::closed_world::is_enabled()
+        && !crate::types::call_args::has_named_args(args)
+        && !args.iter().any(is_spread_arg)
+        && ctx.module_declares_function(crate::backend_gap_prelude::AUTOLOAD_CALL_NAME)
+    {
+        let chain_helper = match (builtin.as_str(), args.len()) {
+            ("spl_autoload_register", 0..=3) => Some(crate::backend_gap_prelude::AUTOLOAD_REGISTER_NAME),
+            ("spl_autoload_unregister", 1) => Some(crate::backend_gap_prelude::AUTOLOAD_UNREGISTER_NAME),
+            ("spl_autoload_functions", 0) => Some(crate::backend_gap_prelude::AUTOLOAD_FUNCTIONS_NAME),
+            ("spl_autoload_call", 1) => Some(crate::backend_gap_prelude::AUTOLOAD_CALL_NAME),
+            _ => None,
+        };
+        if let Some(helper) = chain_helper {
+            return Some(lower_function_call(
+                ctx,
+                &crate::names::Name::unqualified(helper),
+                args,
+                expr,
+            ));
+        }
+        // `class_exists($name)` and its siblings load through the chain on a miss: ask natively
+        // first (compiled classes and the probe-only ones answer there), then run the loaders
+        // and ask again. The helper's own probes must stay native or it would recurse.
+        let kind = match builtin.as_str() {
+            "class_exists" => Some(0),
+            "interface_exists" => Some(1),
+            "trait_exists" => Some(2),
+            "enum_exists" => Some(3),
+            _ => None,
+        };
+        let inside_chain = ctx
+            .builder
+            .function()
+            .name
+            .to_ascii_lowercase()
+            .starts_with("__elephc_autoload");
+        if let Some(kind) = kind {
+            let simple_name = args.first().is_some_and(|name| {
+                matches!(
+                    name.kind,
+                    ExprKind::Variable(_) | ExprKind::StringLiteral(_) | ExprKind::ClassConstant { .. }
+                )
+            });
+            let autoloads = match args.len() {
+                1 => true,
+                2 => matches!(args[1].kind, ExprKind::BoolLiteral(true)),
+                _ => false,
+            };
+            if !inside_chain && !ctx.autoload_hook_active() && simple_name && autoloads {
+                let retry = Expr::new(
+                    ExprKind::FunctionCall {
+                        name: crate::names::Name::unqualified(
+                            crate::backend_gap_prelude::AUTOLOAD_RETRY_NAME,
+                        ),
+                        args: vec![
+                            args[0].clone(),
+                            Expr::new(ExprKind::IntLiteral(kind), expr.span),
+                        ],
+                    },
+                    expr.span,
+                );
+                let either = Expr::new(
+                    ExprKind::BinaryOp {
+                        left: Box::new(expr.clone()),
+                        op: crate::parser::ast::BinOp::Or,
+                        right: Box::new(retry),
+                    },
+                    expr.span,
+                );
+                let previous = ctx.set_autoload_hook_active(true);
+                let value = lower_expr(ctx, &either);
+                ctx.set_autoload_hook_active(previous);
+                return Some(value);
+            }
+        }
+    }
     let helper = match (builtin.as_str(), args.len()) {
+        ("stream_select", 4..=5) if !inside_stream_select => {
+            crate::stream_select_prelude::STREAM_SELECT_NAME
+        }
         ("levenshtein", 2) => crate::backend_gap_prelude::LEVENSHTEIN_TWO_ARG_NAME,
         ("strip_tags", 1) => crate::backend_gap_prelude::STRIP_TAGS_ONE_ARG_NAME,
-        ("is_countable", 1) => crate::backend_gap_prelude::IS_COUNTABLE_NAME,
         ("random_bytes", 1) => crate::backend_gap_prelude::RANDOM_BYTES_NAME,
+        ("str_replace", 4) => crate::str_replace_count_prelude::STR_REPLACE_COUNT_NAME,
+        ("exec", 1..=3) => crate::exec_prelude::EXEC_FULL_NAME,
+        ("fputcsv", 5..=6) => crate::csv_prelude::FPUTCSV_FULL_NAME,
+        ("fgetcsv", 4..=5) => crate::csv_prelude::FGETCSV_FULL_NAME,
         ("escapeshellarg", 1) => crate::backend_gap_prelude::ESCAPESHELLARG_NAME,
         ("str_getcsv", 1..=4) => crate::backend_gap_prelude::STR_GETCSV_NAME,
         ("cli_set_process_title" | "setproctitle", 1) => {
@@ -825,11 +1052,16 @@ pub(super) fn lower_variadic_array_replace(
     if key != "array_replace" && key != "array_replace_recursive" {
         return None;
     }
-    if args.len() <= 2 || crate::types::call_args::has_named_args(args) {
+    if args.len() == 2 || args.is_empty() || crate::types::call_args::has_named_args(args) {
         return None;
     }
     if args.iter().any(is_spread_arg) {
         return None;
+    }
+    // One array replaces nothing: php returns it as it is. The two-operand backend helpers have
+    // no one-operand form, so the call failed to build ("array_replace expected 2 args, got 1").
+    if args.len() == 1 {
+        return Some(lower_expr(ctx, &args[0]));
     }
     let callee = crate::names::Name::unqualified(name.trim_start_matches('\\'));
     let mut folded = args[0].clone();
@@ -906,6 +1138,33 @@ pub(super) fn lower_gradual_array_merge(
         3 => crate::array_merge_prelude::GRADUAL_ARRAY_MERGE_THREE_NAME,
         5 => crate::array_merge_prelude::GRADUAL_ARRAY_MERGE_FIVE_NAME,
         6 => crate::array_merge_prelude::GRADUAL_ARRAY_MERGE_SIX_NAME,
+        // Four operands (illuminate/queue's `array_merge([get_class($q)], class_parents($q) ?: [],
+        // class_implements($q) ?: [], class_uses_recursive($q))`) and seven or more have no
+        // fixed-arity wrapper. `array_merge` is associative -- integer keys renumber in order and
+        // string keys keep the last value either way -- so the call folds left through the
+        // two-operand helper, evaluating every operand once and in source order.
+        count if count >= 4 => {
+            let pair = crate::names::Name::unqualified(
+                crate::array_merge_prelude::GRADUAL_ARRAY_MERGE_NAME,
+            );
+            let mut folded = Expr::new(
+                ExprKind::FunctionCall {
+                    name: pair.clone(),
+                    args: vec![args[0].clone(), args[1].clone()],
+                },
+                expr.span,
+            );
+            for next in &args[2..] {
+                folded = Expr::new(
+                    ExprKind::FunctionCall {
+                        name: pair.clone(),
+                        args: vec![folded, next.clone()],
+                    },
+                    expr.span,
+                );
+            }
+            return Some(lower_expr(ctx, &folded));
+        }
         _ => return None,
     };
     Some(lower_function_call(
@@ -916,13 +1175,81 @@ pub(super) fn lower_gradual_array_merge(
     ))
 }
 
-/// Returns whether `array_sum()` / `array_product()` can fold this operand natively: only a list
-/// of ints, the one shape the runtime folds sum without losing anything (a float list was refused
-/// at compile time).
-fn numeric_fold_is_native(array_ty: &PhpType) -> bool {
+/// Rewrites a sort's comparator held in a string variable (`usort($a, $name)`) into
+/// `fn ($l, $r) => $name($l, $r)` for the prelude sort helpers.
+///
+/// Their `callable $callback` parameter expects a callable descriptor, and the synthesized call
+/// skips the checker that refuses a runtime string there for user functions: the string went in
+/// as is and the helper's `$callback(...)` jumped into the string's bytes (SIGBUS). A variable
+/// call on the string is supported, so the closure resolves the name at runtime exactly as
+/// `$name($l, $r)` would. Returns `None` when the comparator is not a string variable.
+fn runtime_named_comparator_wrapper(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Vec<Expr>> {
+    use crate::synthetic_class::{closure, e_var, s_return};
+    let callback = args.get(1)?;
+    let ExprKind::Variable(name) = &callback.kind else {
+        return None;
+    };
+    if ctx.local_type(name).codegen_repr() != PhpType::Str {
+        return None;
+    }
+    let call = Expr::new(
+        ExprKind::ExprCall {
+            callee: Box::new(e_var(name)),
+            args: vec![e_var("__elephc_left"), e_var("__elephc_right")],
+        },
+        callback.span,
+    );
+    let mut comparator = closure()
+        .param_untyped("__elephc_left")
+        .param_untyped("__elephc_right")
+        .captures(name)
+        .body(vec![s_return(call)])
+        .build();
+    comparator.span = callback.span;
+    let mut rewritten = args.to_vec();
+    rewritten[1] = comparator;
+    Some(rewritten)
+}
+
+/// Returns whether a `count($value, $mode)` receiver can hold nested arrays the native total
+/// cannot see: a gradual value, or a collection whose element is a container, a gradual value or
+/// an object.
+fn count_receiver_can_nest(receiver: &PhpType) -> bool {
+    let element = match receiver {
+        PhpType::Mixed | PhpType::Union(_) => return true,
+        PhpType::Array(element) => element,
+        PhpType::AssocArray { value, .. } => value,
+        _ => return false,
+    };
     matches!(
-        array_ty.codegen_repr(),
-        PhpType::Array(element) if element.codegen_repr() == PhpType::Int
+        element.codegen_repr(),
+        PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Iterable
+            | PhpType::Object(_)
+    )
+}
+
+/// Returns whether the native `array_column()` reader walks rows of this collection type.
+///
+/// It reads associative rows, or boxed ones it checks at run time, from an indexed or associative
+/// outer collection, or a boxed collection; this is
+/// `codegen::lower_inst::builtins::arrays::column::array_column_source_value_type`'s acceptance.
+fn native_array_column_reads_rows(array_ty: &PhpType) -> bool {
+    let row = match array_ty.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => return true,
+        PhpType::Array(row) => row,
+        PhpType::AssocArray { value, .. } => value,
+        _ => return true,
+    };
+    matches!(
+        row.codegen_repr(),
+        PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
     )
 }
 

@@ -342,6 +342,24 @@ foreach ($a as $key => $value) { echo $key, "=", $value, ";"; }
     assert_eq!(out, "true:1:2=3;1=2;0=1;");
 }
 
+/// Keeps the promoted local's boxed owner alive when EIR subsequently releases its argument.
+#[test]
+fn test_krsort_promoted_local_keeps_boxed_owner_after_argument_cleanup() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [1, 2, 3];
+echo krsort($a) ? "true:" : "false:";
+echo $a[0], ":";
+$copy = $a;
+$a[0] = 99;
+echo $copy[0], ":", $a[0], ":";
+foreach ($copy as $key => $value) { echo $key, "=", $value, ";"; }
+"#,
+    );
+    assert_eq!(out.stdout, "true:1:1:99:2=3;1=2;0=1;", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// `krsort()` on a statically empty indexed array stays accepted, because an empty receiver
 /// is trivially representable in either direction.
 #[test]
@@ -382,5 +400,185 @@ foreach ($b as $k => $v) { echo $k, $v; }
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected clean heap, got: {}",
         out.stderr
+    );
+}
+
+// --- Issue #1072: the REINDEXING sorts, whose keys the static type stops describing -------
+//
+// `sort()`/`rsort()` renumber a hash to `0..n-1`, but the receiver keeps its declared key type
+// across the by-reference call: the checker pins a reference alias root there rather than
+// retyping it. Everything below is written at top level, or over a hash LITERAL inside a
+// function, on purpose -- promoting `[]` to a hash inside a function body is a separate
+// use-after-free, and a fixture that hit it would be exercising that bug instead of this one.
+
+/// Issue #1072 repro: `array_keys()` after `sort()` on a string-keyed hash SEGFAULTED.
+///
+/// The key materializer trusted the declared `Str` key type and persisted
+/// `__rt_hash_iter_next`'s `key_hi == -1` integer sentinel as a string length, which is a read
+/// at `ptr[-1]`. It now dispatches on the runtime key form, the way the `Mixed` key type
+/// already did, and the result type widens to `Array<Mixed>` so an integer key has somewhere
+/// to go.
+#[test]
+fn test_issue_1072_array_keys_after_sort_on_a_promoted_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$h = [];
+$h["b"] = 2; $h["a"] = 1;
+sort($h);
+var_dump(array_keys($h));
+echo implode(",", array_keys($h)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [0]=>\n  int(0)\n  [1]=>\n  int(1)\n}\n0,1\n"
+    );
+}
+
+/// `rsort()` is the same reindexing shape, and string VALUES reach it too -- the crash was
+/// about the keys, so the value type must not change the answer.
+#[test]
+fn test_issue_1072_array_keys_after_reindexing_sorts_of_a_literal_hash() {
+    let out = compile_and_run(
+        r#"<?php
+function literal_sort(): string { $h = ["b" => 2, "a" => 1]; sort($h); return implode(",", array_keys($h)); }
+function literal_rsort(): string { $h = ["d" => 4, "c" => 3]; rsort($h); return implode(",", array_keys($h)); }
+function literal_strings(): string { $h = ["b" => "y", "a" => "x"]; sort($h); return implode(",", array_keys($h)); }
+echo literal_sort(), ";", literal_rsort(), ";", literal_strings();
+"#,
+    );
+    assert_eq!(out, "0,1;0,1;0,1");
+}
+
+/// Control: the sorts that KEEP their keys must still answer with the string keys.
+///
+/// `asort()`/`ksort()` only relink the chain, so their `array_keys()` answer is unchanged by
+/// the runtime dispatch. This is what pins the fix to *reading* the key form rather than
+/// assuming every hash key became an integer.
+#[test]
+fn test_array_keys_after_a_key_preserving_sort_stays_string_keyed() {
+    let out = compile_and_run(
+        r#"<?php
+function sorted_values(): string { $h = ["b" => 2, "a" => 1]; asort($h); return implode(",", array_keys($h)); }
+function sorted_keys(): string { $h = ["b" => 2, "a" => 1]; ksort($h); return implode(",", array_keys($h)); }
+function untouched(): string { $h = ["b" => 2, "a" => 1]; return implode(",", array_keys($h)); }
+echo sorted_values(), ";", sorted_keys(), ";", untouched();
+"#,
+    );
+    assert_eq!(out, "a,b;a,b;b,a");
+}
+
+/// Control: a hash carrying BOTH key forms renders each as itself, which only a runtime
+/// dispatch can do.
+#[test]
+fn test_array_keys_on_a_mixed_key_hash_keeps_each_key_form() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["b" => 2, 5 => 1];
+var_dump(array_keys($h));
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [0]=>\n  string(1) \"b\"\n  [1]=>\n  int(5)\n}\n"
+    );
+}
+
+/// The keys are boxed now, so they have to be released: repeating `array_keys()` over both a
+/// key-preserving and a reindexed hash must leave a clean heap, or the fix trades a crash for
+/// a leak.
+#[test]
+fn test_issue_1072_repeated_array_keys_leaves_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$kept = ["b" => 2, "a" => 1];
+$sorted = ["d" => 4, "c" => 3];
+sort($sorted);
+$n = 0;
+for ($i = 0; $i < 50; $i++) { $n = $n + count(array_keys($kept)) + count(array_keys($sorted)); }
+echo $n;
+"#,
+    );
+    assert_eq!(out.stdout, "200", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Review follow-up: `array_keys()` on a statically `array<mixed>` receiver was a hard codegen
+/// error, not a working program.
+///
+/// Same root cause as the sorts above, one step earlier: an `array<mixed>` value can be
+/// HASH-backed at run time -- `lower_dynamic_mixed_array_keys` exists to branch on that -- so
+/// its keys can be strings and an `Array<Int>` result has nowhere to put them. The backend
+/// refused the pair outright, which made `array_keys()` over an ordinary heterogeneous literal
+/// fail to compile with "array_keys associative key PHP type Mixed into result PHP type Int".
+#[test]
+fn test_array_keys_on_a_heterogeneous_indexed_literal() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, "b", 2.5];
+var_dump(array_keys($a));
+echo implode(",", array_keys($a)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [0]=>\n  int(0)\n  [1]=>\n  int(1)\n  [2]=>\n  int(2)\n}\n0,1,2\n"
+    );
+}
+
+/// `usort` on a hash discards the keys and renumbers the sorted values from 0, as php does
+/// (`0,1|1,2` under php 8.5). It used to be a backend refusal naming the `AssocArray` type.
+#[test]
+fn test_usort_renumbers_an_associative_receiver() {
+    let out = compile_and_run(
+        r#"<?php $h = ["b" => 2, "a" => 1]; usort($h, fn($x, $y) => $x <=> $y); echo implode(",", array_keys($h)), "|", implode(",", $h);"#,
+    );
+    assert_eq!(out, "0,1|1,2");
+}
+
+/// Follow-up for #1187: `natsort` and `array_multisort` cannot reach a hash at all.
+///
+/// #1099 made `array_keys()` read a hash key's RUNTIME form, and `sort`/`rsort` are covered
+/// above. The sorts named in the follow-up ride the same materialization path: `usort` does
+/// (`test_usort_renumbers_an_associative_receiver`), and so does `natsort`, which sorts a hash
+/// through `crate::natsort_gradual_prelude` and KEEPS its string keys, as php does.
+/// `array_multisort` still refuses an associative receiver in the checker; that refusal is pinned
+/// by `test_error_array_multisort_rejects_an_associative_receiver` in
+/// `tests/error_tests/array_builtins.rs`.
+#[test]
+fn test_natsort_keeps_the_keys_of_an_associative_receiver() {
+    let out = compile_and_run(
+        r#"<?php $h = ["b" => "img10", "a" => "img2"]; natsort($h); echo implode(",", array_keys($h)), "|", implode(",", $h), "\n";"#,
+    );
+    assert_eq!(out, "a,b|img2,img10\n");
+}
+
+/// `natsort()`/`natcasesort()` over a gradual array -- a decoded document, an `: array` method's
+/// result -- sort it like php, keys kept. The checker refused the operand, so Symfony's
+/// `debug:container`, which natsorts the service ids a private `: array` method returned, could
+/// not be compiled.
+#[test]
+fn test_natsort_and_natcasesort_over_a_gradual_array() {
+    let out = compile_and_run(
+        r#"<?php
+$m = json_decode('{"a":"img12","b":"img10","c":"IMG2","d":"img1"}', true);
+natsort($m);
+echo json_encode($m), "|";
+$m = json_decode('{"a":"img12","b":"img10","c":"IMG2","d":"img1"}', true);
+natcasesort($m);
+echo json_encode($m), "|";
+function ids(): array { return ["svc10", "svc9", "svc1"]; }
+$ids = ids();
+natsort($ids);
+echo implode(",", $ids), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"c\":\"IMG2\",\"d\":\"img1\",\"b\":\"img10\",\"a\":\"img12\"}|{\"d\":\"img1\",\"c\":\"IMG2\",\"b\":\"img10\",\"a\":\"img12\"}|svc1,svc9,svc10\n"
     );
 }

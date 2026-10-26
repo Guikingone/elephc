@@ -37,9 +37,10 @@ pub(super) fn collect_activation_registry_names(module: &Module) -> ActivationRe
         .chain(module.runtime_callable_invokers.iter())
     {
         for instruction in &function.instructions {
-            let Some(Immediate::ClassLikeActivation { kind, name, .. }) = &instruction.immediate else {
+            let Some(Immediate::ClassLikeActivation(activation)) = &instruction.immediate else {
                 continue;
             };
+            let (kind, name) = (&activation.kind, &activation.name);
             if *kind == ClassLikeKind::Interface {
                 if let Some(name) = module.data.strings.get(name.as_raw() as usize) {
                     interfaces.insert(php_symbol_key(name));
@@ -73,9 +74,9 @@ mod tests {
         builder.set_entry(entry);
         builder.position_at_end(entry);
         for (kind, name) in [(ClassLikeKind::Interface, interface), (ClassLikeKind::Interface, interface), (ClassLikeKind::Class, class)] {
-            builder.emit(Op::ClassLikeActivate, vec![], Some(Immediate::ClassLikeActivation {
-                source: SourceId::from_raw(0), site: Span::dummy(), kind, name,
-            }), IrType::Void, PhpType::Void, Ownership::NonHeap);
+            builder.emit(Op::ClassLikeActivate, vec![], Some(Immediate::class_like_activation(
+                SourceId::from_raw(0), Span::dummy(), kind, name,
+            )), IrType::Void, PhpType::Void, Ownership::NonHeap);
         }
         builder.terminate(Terminator::Return { value: None });
         module.add_function(function);

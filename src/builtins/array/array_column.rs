@@ -9,6 +9,8 @@
 //!   runtime-known. The result preserves a known associative value type and otherwise becomes
 //!   `array<mixed>`. Other shapes are rejected. A check hook is required because the return type
 //!   depends on the inferred argument type.
+//!   Concrete associative rows preserve their value type in the indexed result; declared PHP
+//!   arrays use runtime row lookup and return indexed Mixed cells.
 //! - Arity (exactly 2 arguments) is validated by the registry's `check_arity` before
 //!   the hook fires; the inline arity check from the legacy arm is not reproduced here.
 //!   Note elephc only supports the 2-argument form (`array`, `column_key`).
@@ -31,6 +33,7 @@ builtin! {
 /// associative rows preserve their value type; gradual rows produce `array<mixed>`. Other
 /// shapes are rejected. The argument is re-inferred here to drive the return type; the registry
 /// already inferred every argument once for side effects, and arity (exactly 2) is pre-validated.
+/// Declared PHP arrays require runtime row lookup and return Mixed elements.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     if cx.args.len() == 3 {
@@ -40,6 +43,17 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         for arg in &cx.args[1..] {
             cx.checker.infer_type(arg, cx.env)?;
         }
+        return Ok(PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        });
+    }
+    if ty.is_php_array() {
+        return Ok(PhpType::Array(Box::new(PhpType::Mixed)));
+    }
+    if rows_need_generic_helper(&ty) {
+        // Object rows (an enum's `cases()`) and list rows (`array_column($errors, 0)`) are read by
+        // the prelude helper, which lowering routes them to with a null index key.
         return Ok(PhpType::AssocArray {
             key: Box::new(PhpType::Mixed),
             value: Box::new(PhpType::Mixed),
@@ -69,4 +83,17 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "array_column() first argument must be array",
         )),
     }
+}
+
+/// Whether a two-argument `array_column()` over `ty` needs the generic prelude helper: an indexed
+/// array whose rows are objects or lists, which the native column reader cannot address.
+pub(crate) fn rows_need_generic_helper(ty: &PhpType) -> bool {
+    if ty.is_php_array() {
+        return false;
+    }
+    matches!(
+        ty,
+        PhpType::Array(inner)
+            if matches!(**inner, PhpType::Object(_) | PhpType::Array(_))
+    )
 }

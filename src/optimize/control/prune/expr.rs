@@ -9,7 +9,7 @@
 //! - Loop exits, empty bodies, and effectful conditions must be handled before removing structural statements.
 
 use super::super::*;
-use super::statements::{prune_block, prune_stmt};
+use super::statements::prune_stmt;
 
 /// Recursively rewrites an expression tree, pruning constant subexpressions while
 /// preserving side effects. Applies to all expression variants including literals,
@@ -85,6 +85,11 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         ExprKind::ArrayReference(value) => {
             ExprKind::ArrayReference(Box::new(prune_expr(*value)))
         }
+        ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
+            entries.into_iter()
+                .map(|entry| entry.map_exprs(prune_expr))
+                .collect(),
+        ),
         ExprKind::Match {
             subject,
             arms,
@@ -142,7 +147,10 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             variadic_by_ref,
             variadic_type,
             return_type,
-            body: prune_block(body),
+            body: crate::optimize::generator_bodies::rewrite_preserving_yield(
+                body,
+                prune_block,
+            ),
             is_arrow,
             is_static,
             captures,
@@ -310,6 +318,13 @@ pub(crate) fn expr_has_side_effects(expr: &Expr) -> bool {
 /// Creation resolves a callable immediately and can fail even if never invoked.
 /// Static class lookup can also execute an autoloader with observable effects.
 pub(crate) fn callable_target_effect(target: &CallableTarget) -> Effect {
+    // A registry builtin always resolves, so naming one (`strlen(...)`) cannot fail on its own;
+    // a user function may be undefined at that point and still reports a throw.
+    if let CallableTarget::Function(name) = target {
+        if crate::builtins::registry::lookup(name.as_str()).is_some() {
+            return Effect::PURE;
+        }
+    }
     let mut effect = match target {
         CallableTarget::Function(_) => Effect::PURE,
         CallableTarget::StaticMethod { .. } => Effect {

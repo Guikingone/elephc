@@ -1,8 +1,8 @@
 ---
 title: "exif_tagname()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the name of an EXIF tag index."
 sidebar:
-  order: 463
+  order: 464
 ---
 
 ## exif_tagname()
@@ -11,7 +11,7 @@ sidebar:
 function exif_tagname(int $index): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the name of an EXIF tag index.
 
 **Parameters**:
 - `$index` (`int`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

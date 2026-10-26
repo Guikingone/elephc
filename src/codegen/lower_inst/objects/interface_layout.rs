@@ -154,14 +154,25 @@ pub(super) fn uninitialized_property_marker_offsets(class_info: &ClassInfo) -> V
 
 /// Collects the slot offsets of object-owned reference properties, whose ref-cells the
 /// object allocates at construction and releases on destruction.
-pub(super) fn owned_reference_property_offsets(class_info: &ClassInfo) -> Vec<usize> {
+pub(super) fn owned_reference_property_offsets(
+    class_info: &ClassInfo,
+) -> Vec<(usize, PhpType, bool)> {
     class_info
         .properties
         .iter()
         .enumerate()
-        .filter_map(|(index, _)| {
+        .filter_map(|(index, (property, php_type))| {
+            // Per SLOT, not per name: a child redeclaring an ancestor's private `$p` has two `p`
+            // slots, and the name-keyed set describes only the child's. The ancestor's slot owns
+            // its cell when the ancestor's `$r = &$this->p` promoted it, and a constructor that
+            // skipped its allocation left a null cell for that method to write through.
             if class_info.property_slot_is_owned_reference(index) {
-                Some(8 + index * 16)
+                let starts_uninitialized = class_info.property_slot_is_declared(index, property)
+                    && class_info
+                        .defaults
+                        .get(index)
+                        .is_some_and(|default| default.is_none());
+                Some((8 + index * 16, php_type.clone(), starts_uninitialized))
             } else {
                 None
             }

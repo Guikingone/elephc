@@ -26,6 +26,7 @@ fn emit_mixed_to_string_wrapper(target: Target) -> String {
             capture_types: Vec::new(),
             descriptor_prefix_types: Vec::new(),
             descriptor_return_type: None,
+            invocation_scope_class_id: -1,
         },
     );
     emitter.output()

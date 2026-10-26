@@ -1,16 +1,16 @@
 ---
-title: "iconv_get_encoding() — internals"
+title: "iconv_get_encoding() - internals"
 description: "Compiler internals for iconv_get_encoding(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 820
+  order: 852
 ---
 
-## `iconv_get_encoding()` — internals
+## `iconv_get_encoding()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/iconv_get_encoding.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/iconv_get_encoding.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -61,10 +61,9 @@ pub(in crate::interpreter) fn eval_invokable_callable_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let temporary = eval_method_receiver_is_temporary(object);
-    let object = eval_expr(object, context, scope, values)?;
-    let result = eval_first_class_callable_from_value(object, context, scope, values);
-    eval_method_call_with_temporary_receiver_cleanup(object, temporary, result, context, values)
+    with_eval_operands(&[object], context, scope, values, |args, context, scope, values| {
+        eval_first_class_callable_from_value(args[0].borrowed(), context, scope, values)
+    })
 }
 
 /// Normalizes an already evaluated `EXPR(...)` first-class-callable value into its `Closure`.
@@ -112,14 +111,11 @@ pub(in crate::interpreter) fn eval_method_callable_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let temporary = eval_method_receiver_is_temporary(object);
-    let object = eval_expr(object, context, scope, values)?;
-    let result = (|| {
+    with_eval_operands(&[object], context, scope, values, |args, context, scope, values| {
         let method = eval_dynamic_member_name(method, context, scope, values)?;
-        let target = eval_method_callable_target(object, method, context, values)?;
+        let target = eval_method_callable_target(args[0].borrowed(), method, context, values)?;
         eval_closure_object_expr(target, context, values)
-    })();
-    eval_method_call_with_temporary_receiver_cleanup(object, temporary, result, context, values)
+    })
 }
 
 /// Validates and builds the retained target for an object method first-class callable.
@@ -172,12 +168,16 @@ fn eval_method_callable_target(
                 values,
             );
         }
+        // The Closure keeps the scope it was created in: access was checked above, and a later
+        // call from outside the class (compiled `($this->factory)(...)` on a container's
+        // `$this->getService(...)`) must reach the protected method all the same. Dispatch runs
+        // the call under this class scope (`with_closure_method_scope`).
         return Ok(EvalClosureObjectTarget::ObjectMethod {
             object,
             method: method_name,
             called_class: Some(called_class_name),
             native_class: None,
-            bridge_scope: None,
+            bridge_scope: Some(declaring_class),
         });
     }
     if let Some(parent) = context.class_native_parent_name(&called_class_name) {

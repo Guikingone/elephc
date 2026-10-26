@@ -284,3 +284,47 @@ echo (int) class_exists('EntryWidget');
     );
     assert_eq!(out, "1:1:1:1");
 }
+
+/// A class declared under `if (!class_exists(...))` in an INCLUDED file used to be stripped with
+/// the file's unconditional declarations and lost outright (Carbon's `DatePeriodBase`).
+#[test]
+fn test_included_guarded_class_declaration_is_kept() {
+    let out = compile_cli_files_and_run(&[
+        ("main.php", r#"<?php
+namespace Lib;
+require __DIR__.'/base.php';
+class Period extends PeriodBase {}
+echo (new Period())->flavor(), ':', (int) class_exists(PeriodBase::class, false);
+"#),
+        ("base.php", r#"<?php
+namespace Lib;
+if (!class_exists(PeriodBase::class, false)) {
+    class PeriodBase { public function flavor(): string { return 'base'; } }
+}
+"#),
+    ], "main.php");
+    assert_eq!(out, "base:1");
+}
+
+/// `require COND ? 'a.php' : 'b.php';` with static branches joins the closed world like an `if`,
+/// and a version guard over `PHP_VERSION` (string against float) or `PHP_VERSION_ID` is decided
+/// at compile time, so only the live branch's class declaration remains.
+#[test]
+fn test_ternary_require_version_guard_selects_one_guarded_class() {
+    let out = compile_cli_files_and_run(&[
+        ("main.php", r#"<?php
+namespace Lib;
+require PHP_VERSION < 8.2
+    ? __DIR__.'/lazy/Old.php'
+    : __DIR__.'/lazy/New.php';
+require \PHP_VERSION_ID < 80200 ? __DIR__.'/lazy/OldB.php' : __DIR__.'/lazy/NewB.php';
+class Period extends PeriodBase {}
+echo (new Period())->flavor(), ':', (new OtherBase())->flavor();
+"#),
+        ("lazy/Old.php", "<?php namespace Lib; if (!class_exists(PeriodBase::class, false)) { class PeriodBase { public function flavor(): string { return 'old'; } } }"),
+        ("lazy/New.php", "<?php namespace Lib; if (!class_exists(PeriodBase::class, false)) { class PeriodBase { public function flavor(): string { return 'new'; } } }"),
+        ("lazy/OldB.php", "<?php namespace Lib; if (!class_exists(OtherBase::class, false)) { class OtherBase { public function flavor(): string { return 'oldb'; } } }"),
+        ("lazy/NewB.php", "<?php namespace Lib; if (!class_exists(OtherBase::class, false)) { class OtherBase { public function flavor(): string { return 'newb'; } } }"),
+    ], "main.php");
+    assert_eq!(out, "new:newb");
+}

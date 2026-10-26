@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Context creation also preserves regex-provider and PHP-profile registration.
+//! - Core and user global constants are seeded through separate bridge registries so
+//!   PHP's `Core` / `user` categories stay exact inside eval.
 
 use super::*;
 
@@ -116,7 +118,12 @@ pub(in crate::codegen) fn emit_shared_eval_registration_helper(
     shared: &mut crate::codegen::shared_state::SharedCodegenState,
     regalloc_linear: bool,
 ) -> Result<()> {
-    if !module_needs_eval_registration(module) {
+    if !module.required_runtime_features.eval_bridge {
+        return Ok(());
+    }
+    let has_helper = module_needs_eval_registration(module);
+    emit_eval_register_module_entry(module, emitter, has_helper);
+    if !has_helper {
         return Ok(());
     }
     let mut function = crate::ir::Function::new(
@@ -135,6 +142,7 @@ pub(in crate::codegen) fn emit_shared_eval_registration_helper(
         emitter.target,
         regalloc_linear,
         false,
+        false,
     );
     let mut ctx = FunctionContext::new(
         module, &function, emitter, data, shared, layout, false, false, false, None,
@@ -146,6 +154,85 @@ pub(in crate::codegen) fn emit_shared_eval_registration_helper(
     drop(ctx);
     shared.preset_eval_registration_helper(EVAL_REGISTRATION_LABEL.to_string());
     Ok(())
+}
+
+/// C symbol through which the eval runtime runs the module registration on a context it made.
+pub(in crate::codegen) const EVAL_REGISTER_MODULE_ENTRY: &str =
+    "__elephc_eval_register_module_metadata";
+
+/// Emits `__elephc_eval_register_module_metadata(ctx)`, the C-ABI door to the registration helper.
+///
+/// The AOT metadata snapshot every context without registration of its own syncs from — the
+/// fallback contexts a null-handle bridge call makes, the shared null-handle context — is
+/// published by the registration helper, and that helper used to run only when a compiled body
+/// built its OWN eval context. A compiled `new $class(...)` that reaches the bridge before any
+/// `eval()` passes a null handle, so its fallback context synced nothing: no constructor
+/// signature, no hidden-collector binding, and the constructor bridge refused the one-argument
+/// call on arity. Symfony's router builds `CompiledUrlMatcher` exactly that way, and every route
+/// answered "No route found". The runtime now calls this entry once when it finds no snapshot.
+///
+/// The magician links against this symbol unconditionally, so it is defined for every module that
+/// links the bridge; one with no body that builds a context has nothing to register and returns.
+/// Rust is the caller, so the entry keeps the callee-saved registers the generated helper uses.
+fn emit_eval_register_module_entry(
+    module: &Module,
+    emitter: &mut crate::codegen::emit::Emitter,
+    has_helper: bool,
+) {
+    emitter.blank();
+    emitter.comment("--- eval bridge: module registration entry ---");
+    let symbol = module.target.extern_symbol(EVAL_REGISTER_MODULE_ENTRY);
+    emitter.label_global(&symbol);
+    if !has_helper {
+        emitter.instruction("ret");                                             // nothing in this module builds an eval context
+        return;
+    }
+    match module.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("stp x29, x30, [sp, #-160]!");                  // open a frame for the C-ABI registration entry
+            emitter.instruction("mov x29, sp");                                 // anchor the entry frame
+            emitter.instruction("stp x19, x20, [sp, #16]");                     // keep the Rust caller's callee-saved x19/x20
+            emitter.instruction("stp x21, x22, [sp, #32]");                     // keep the Rust caller's callee-saved x21/x22
+            emitter.instruction("stp x23, x24, [sp, #48]");                     // keep the Rust caller's callee-saved x23/x24
+            emitter.instruction("stp x25, x26, [sp, #64]");                     // keep the Rust caller's callee-saved x25/x26
+            emitter.instruction("stp x27, x28, [sp, #80]");                     // keep the Rust caller's callee-saved x27/x28
+            emitter.instruction("stp d8, d9, [sp, #96]");                       // keep the Rust caller's callee-saved d8/d9
+            emitter.instruction("stp d10, d11, [sp, #112]");                    // keep the Rust caller's callee-saved d10/d11
+            emitter.instruction("stp d12, d13, [sp, #128]");                    // keep the Rust caller's callee-saved d12/d13
+            emitter.instruction("stp d14, d15, [sp, #144]");                    // keep the Rust caller's callee-saved d14/d15
+            abi::emit_call_label(emitter, EVAL_REGISTRATION_LABEL);
+            emitter.instruction("ldp d14, d15, [sp, #144]");                    // restore the caller's d14/d15
+            emitter.instruction("ldp d12, d13, [sp, #128]");                    // restore the caller's d12/d13
+            emitter.instruction("ldp d10, d11, [sp, #112]");                    // restore the caller's d10/d11
+            emitter.instruction("ldp d8, d9, [sp, #96]");                       // restore the caller's d8/d9
+            emitter.instruction("ldp x27, x28, [sp, #80]");                     // restore the caller's x27/x28
+            emitter.instruction("ldp x25, x26, [sp, #64]");                     // restore the caller's x25/x26
+            emitter.instruction("ldp x23, x24, [sp, #48]");                     // restore the caller's x23/x24
+            emitter.instruction("ldp x21, x22, [sp, #32]");                     // restore the caller's x21/x22
+            emitter.instruction("ldp x19, x20, [sp, #16]");                     // restore the caller's x19/x20
+            emitter.instruction("ldp x29, x30, [sp], #160");                    // close the entry frame
+            emitter.instruction("ret");                                         // registration published the module snapshot
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // open a frame for the C-ABI registration entry
+            emitter.instruction("mov rbp, rsp");                                // anchor the entry frame
+            emitter.instruction("push rbx");                                    // keep the Rust caller's callee-saved rbx
+            emitter.instruction("push r12");                                    // keep the Rust caller's callee-saved r12
+            emitter.instruction("push r13");                                    // keep the Rust caller's callee-saved r13
+            emitter.instruction("push r14");                                    // keep the Rust caller's callee-saved r14
+            emitter.instruction("push r15");                                    // keep the Rust caller's callee-saved r15
+            emitter.instruction("sub rsp, 8");                                  // realign the stack to 16 bytes for the call
+            abi::emit_call_label(emitter, EVAL_REGISTRATION_LABEL);
+            emitter.instruction("add rsp, 8");                                  // drop the alignment pad
+            emitter.instruction("pop r15");                                     // restore the caller's r15
+            emitter.instruction("pop r14");                                     // restore the caller's r14
+            emitter.instruction("pop r13");                                     // restore the caller's r13
+            emitter.instruction("pop r12");                                     // restore the caller's r12
+            emitter.instruction("pop rbx");                                     // restore the caller's rbx
+            emitter.instruction("pop rbp");                                     // close the entry frame
+            emitter.instruction("ret");                                         // registration published the module snapshot
+        }
+    }
 }
 
 /// Emits the single module-wide body that registers all generated eval metadata.
@@ -171,6 +258,8 @@ fn emit_eval_registration_helper(
     abi::store_at_offset(ctx.emitter, context_arg, EVAL_CONTEXT_HELPER_LOCAL_OFFSET);
     register_eval_regex_provider(ctx);
     register_eval_declared_symbols(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET);
+    register_eval_native_global_constants(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET)?;
+    register_eval_native_user_constants(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET);
     register_eval_native_functions(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET)?;
     register_eval_native_method_signatures(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET);
     load_eval_context_local_to_arg(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET, 0);
@@ -179,6 +268,15 @@ fn emit_eval_registration_helper(
     let register = ctx.emitter.target.extern_symbol("__elephc_eval_context_set_global_sync_hooks");
     abi::emit_call_label(ctx.emitter, &register);
     publish_eval_aot_metadata(ctx, EVAL_CONTEXT_HELPER_LOCAL_OFFSET);
+    // The runtime's `__rt_closure_bind` is shared by eval-free programs, so it reaches the
+    // generated adapter wrapper through a slot the first eval context fills.
+    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        scratch,
+        crate::codegen::eval_callable_helpers::EVAL_CALLBACK_WRAPPER_LABEL,
+    );
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_elephc_eval_wrap_callback_fn", 0);
     abi::emit_frame_restore(ctx.emitter, EVAL_CONTEXT_HELPER_FRAME_SIZE);
     abi::emit_return(ctx.emitter);
     emit_eval_global_sync_helper(ctx, &native_to_eval, true)?;
@@ -201,8 +299,12 @@ fn emit_eval_global_sync_helper(
     let globals = eval_sync_globals(ctx);
     if native_to_eval {
         flush_eval_global_scope(ctx, &globals)?;
+        // The flush is a borrowed snapshot, not an interpreted write: a native call made from
+        // the fragment can replace and release the native cell, so an untouched entry must not
+        // be replayed at the eval-to-native boundary.
+        emit_clear_eval_global_scope_dirty(ctx);
     } else {
-        reload_eval_global_scope(ctx, &globals)?;
+        reload_eval_global_scope(ctx, &globals, None)?;
     }
     abi::emit_frame_restore(ctx.emitter, frame_size);
     abi::emit_return(ctx.emitter);
@@ -219,8 +321,444 @@ fn publish_eval_aot_metadata(ctx: &mut FunctionContext<'_>, context_offset: usiz
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 
+/// Registers the AOT Core constant inventory with a newly allocated eval context.
+pub(super) fn register_eval_native_global_constants(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+) -> Result<()> {
+    let user_names = ctx
+        .module
+        .user_defined_constants
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut entries = ctx
+        .module
+        .global_constants
+        .iter()
+        .filter(|(name, _)| !user_names.contains(*name))
+        .map(|(name, (value, ty))| (name.clone(), value.clone(), ty.clone()))
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    for (name, value, ty) in entries {
+        register_eval_native_global_constant(ctx, context_offset, &name, &value, &ty)?;
+    }
+    Ok(())
+}
+
+/// Emits one scalar AOT constant registration call with its exact PHP runtime type.
+fn register_eval_native_global_constant(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    name: &str,
+    value: &ExprKind,
+    ty: &PhpType,
+) -> Result<()> {
+    let (kind, word, string_value) = eval_native_global_constant_abi_value(value, ty)?;
+    register_eval_native_scalar_constant(
+        ctx,
+        context_offset,
+        name,
+        kind,
+        word,
+        string_value.as_deref(),
+        "__elephc_eval_register_native_global_constant",
+    );
+    Ok(())
+}
+
+/// Registers the AOT user-declared constant inventory with a newly allocated eval context.
+///
+/// User constants stay in their own bridge registry so eval reports them under PHP's `user`
+/// category instead of `Core`. A value AOT itself cannot materialize is skipped rather than
+/// failing the compile; see `eval_native_user_constant_value`.
+pub(super) fn register_eval_native_user_constants(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+) {
+    let user_names = ctx
+        .module
+        .user_defined_constants
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut entries = ctx
+        .module
+        .global_constants
+        .iter()
+        .filter(|(name, _)| user_names.contains(*name))
+        .map(|(name, (value, ty))| (name.clone(), value.clone(), ty.clone()))
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    for (name, value, ty) in entries {
+        let Some(encoded) = eval_native_user_constant_value(&value, &ty) else {
+            continue;
+        };
+        register_eval_native_user_constant(ctx, context_offset, &name, &encoded);
+    }
+}
+
+/// Emits one user-constant registration call for a scalar or array constant value.
+fn register_eval_native_user_constant(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    name: &str,
+    value: &EvalNativeUserConstantValue,
+) {
+    match value {
+        EvalNativeUserConstantValue::Scalar {
+            kind,
+            word,
+            string_value,
+        } => register_eval_native_scalar_constant(
+            ctx,
+            context_offset,
+            name,
+            *kind,
+            *word,
+            string_value.as_deref(),
+            "__elephc_eval_register_native_user_constant",
+        ),
+        EvalNativeUserConstantValue::Array(elements) => {
+            register_eval_native_user_constant_array(ctx, context_offset, name, elements)
+        }
+    }
+}
+
+/// Emits one array-valued user-constant registration call with its encoded element spec.
+fn register_eval_native_user_constant_array(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    name: &str,
+    elements: &[EvalNativeCallableArrayDefaultElement],
+) {
+    let spec = encode_eval_native_array_default_elements(elements);
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    emit_eval_constant_name_args(ctx, name);
+    let (spec_label, spec_len) = ctx.data.add_string(&spec);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        &spec_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        spec_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_user_constant_array");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one scalar constant registration call against the requested bridge symbol.
+///
+/// The Core and user registries share this kind/payload ABI shape; only the callee differs.
+fn register_eval_native_scalar_constant(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    name: &str,
+    kind: i64,
+    word: i64,
+    string_value: Option<&str>,
+    symbol_name: &str,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    emit_eval_constant_name_args(ctx, name);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        kind,
+    );
+    if let Some(string_value) = string_value {
+        let (value_label, value_len) = ctx.data.add_string(string_value.as_bytes());
+        abi::emit_symbol_address(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 4),
+            &value_label,
+        );
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 5),
+            value_len as i64,
+        );
+    } else {
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 4),
+            word,
+        );
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 5),
+            0,
+        );
+    }
+    let symbol = ctx.emitter.target.extern_symbol(symbol_name);
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Materializes one constant name into the shared name pointer/length argument pair.
+fn emit_eval_constant_name_args(ctx: &mut FunctionContext<'_>, name: &str) {
+    let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        &name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        name_len as i64,
+    );
+}
+
+/// Encodes one prescanned scalar constant for the eval registration ABI.
+pub(super) fn eval_native_global_constant_abi_value(
+    value: &ExprKind,
+    ty: &PhpType,
+) -> Result<(i64, i64, Option<String>)> {
+    match value {
+        ExprKind::Null => Ok((NATIVE_GLOBAL_CONSTANT_NULL, 0, None)),
+        ExprKind::BoolLiteral(value) => Ok((
+            NATIVE_GLOBAL_CONSTANT_BOOL,
+            i64::from(*value),
+            None,
+        )),
+        ExprKind::IntLiteral(value) if matches!(ty, PhpType::Resource(_)) => {
+            Ok((NATIVE_GLOBAL_CONSTANT_RESOURCE, *value, None))
+        }
+        ExprKind::IntLiteral(value) => Ok((NATIVE_GLOBAL_CONSTANT_INT, *value, None)),
+        ExprKind::FloatLiteral(value) => Ok((
+            NATIVE_GLOBAL_CONSTANT_FLOAT,
+            value.to_bits() as i64,
+            None,
+        )),
+        ExprKind::StringLiteral(value) => Ok((
+            NATIVE_GLOBAL_CONSTANT_STRING,
+            0,
+            Some(value.clone()),
+        )),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => {
+                Ok((NATIVE_GLOBAL_CONSTANT_INT, value.wrapping_neg(), None))
+            }
+            ExprKind::FloatLiteral(value) => Ok((
+                NATIVE_GLOBAL_CONSTANT_FLOAT,
+                (-value).to_bits() as i64,
+                None,
+            )),
+            other => Err(CodegenIrError::unsupported(format!(
+                "eval native global constant expression {:?}",
+                other
+            ))),
+        },
+        other => Err(CodegenIrError::unsupported(format!(
+            "eval native global constant expression {:?}",
+            other
+        ))),
+    }
+}
+
+/// Installs this binary's OPcache configuration in the eval bridge, which governs the
+/// runtime script cache for dynamically included files.
+///
+/// The runtime cannot derive these values: `--ini` is a compile-time flag, so the
+/// effective directive set exists only in the compiler. The bridge defaults to a
+/// DISABLED cache, so a binary that never reaches this call — and every consumer
+/// linking the archive without elephc's codegen — keeps the uncached behaviour.
+///
+/// CALLED FROM THE PROLOGUE, not from here. This used to run lazily at the first
+/// `ensure_eval_context`, which made the cache's configuration depend on whether the
+/// program had already executed an `eval()` — so `opcache_compile_file()` answered `false`
+/// before the first one and `true` after, and `opcache_get_configuration()['blacklist']`
+/// was empty then populated, for the same binary and the same directives. php-src
+/// configures OPcache at startup, before a line of user code runs, and
+/// `crate::codegen::frame` now does the same.
+pub(crate) fn configure_eval_opcache(ctx: &mut FunctionContext<'_>) {
+    let version_id = crate::codegen::compile_php_version().version_id();
+    let overrides = crate::codegen_support::ini_overrides();
+    let config = crate::opcache::runtime_cache::runtime_cache_config(
+        version_id,
+        crate::codegen_support::compile_is_web_sapi(),
+        &overrides,
+    );
+    let arguments = [
+        i64::from(config.enabled),
+        i64::from(config.validate_timestamps),
+        config.revalidate_freq as i64,
+        config.max_file_size as i64,
+        config.memory_consumption as i64,
+        // THE RUNTIME TIER'S SHARE of the hash: the prime capacity minus the scripts compiled
+        // into this binary, which php-src caches before any dynamic include and which hold a
+        // slot each. MEASURED with `max_accelerated_files=200` (223 slots) and an absolute
+        // entry path: reference admits 222 dynamic scripts beside the entry, 221 beside the
+        // entry and one static `require`; elephc admitted 223 and reported more cached scripts
+        // than `max_cached_keys`. (A RELATIVE entry path costs reference one more key — an
+        // elephc binary has no invocation path, so the resolved form is the model.)
+        config
+            .max_accelerated_files
+            .saturating_sub(crate::codegen_support::opcache_manifest_len() as u64) as i64,
+    ];
+    for (index, value) in arguments.into_iter().enumerate() {
+        let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, index);
+        abi::emit_load_int_immediate(ctx.emitter, arg_reg, value);
+    }
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_configure_opcache");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    configure_eval_opcache_file_cache(ctx, &config);
+}
+
+/// Installs the accelerator diagnostic channel and triggers php-src's startup validation
+/// of `opcache.file_cache`.
+///
+/// A SECOND call, not four more arguments on the one above, because that one already
+/// spends all six integer argument registers x86_64 provides — a seventh would need a
+/// stack slot the emitter cannot express. It is emitted immediately after, because the
+/// validation reads the enabled flag the first call installs.
+///
+/// The bridge fatals (and exits 254) on a bad directory exactly as reference PHP's
+/// startup does, so this call can terminate the process before the program runs.
+fn configure_eval_opcache_file_cache(
+    ctx: &mut FunctionContext<'_>,
+    config: &crate::opcache::runtime_cache::RuntimeCacheConfig,
+) {
+    let (file_cache_label, file_cache_len) = ctx.data.add_string(config.file_cache.as_bytes());
+    let (error_log_label, error_log_len) = ctx.data.add_string(config.error_log.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &file_cache_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        file_cache_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        i64::from(config.file_cache_read_only),
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        config.log_verbosity_level,
+    );
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        &error_log_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        error_log_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_configure_opcache_file_cache");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    load_eval_opcache_blacklist(ctx, config);
+    configure_eval_opcache_swapped_directives(ctx, config);
+}
+
+/// Loads `opcache.blacklist_filename`, the paths that run but are never cached.
+///
+/// A THIRD call for the same reason there is a second one: the two above already spend
+/// every integer argument register. Emitted AFTER the file-cache call because a directive
+/// value matching no file logs through the accelerator channel that call installs.
+///
+/// Skipped entirely when the directive is unset, which is the overwhelmingly common case —
+/// the bridge would return immediately, so the call would be pure code size.
+fn load_eval_opcache_blacklist(
+    ctx: &mut FunctionContext<'_>,
+    config: &crate::opcache::runtime_cache::RuntimeCacheConfig,
+) {
+    if config.blacklist_filename.is_empty() {
+        return;
+    }
+    let (label, len) = ctx.data.add_string(config.blacklist_filename.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_opcache_load_blacklist");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// `opcache.file_update_protection`, as the bridge's `swap_directive` addresses it.
+///
+/// The id is a wire contract with `elephc_magician::script_cache::config`; it is matched
+/// by number across the C ABI, so it may never be reordered.
+const OPCACHE_DIRECTIVE_FILE_UPDATE_PROTECTION: i64 = 2;
+
+/// Whether `opcache.restrict_api` denies this binary's OPcache API calls, as the bridge's
+/// `swap_directive` addresses it. A compile-time verdict (see
+/// `opcache_prelude::restrict_api_denies`), never an `ini_set()` target — reference makes the
+/// directive `PHP_INI_SYSTEM`, and the prelude only maps the three `PHP_INI_ALL` ones to ids.
+const OPCACHE_DIRECTIVE_API_RESTRICTED: i64 = 3;
+
+/// Carries the settings that did not fit either configure call's argument budget.
+///
+/// Both calls above spend all six integer argument registers x86_64 SysV provides, so
+/// rather than a third fixed-shape call this reuses the same id/value setter `ini_set()`
+/// uses at run time — one symbol serving the initial install and every later change.
+fn configure_eval_opcache_swapped_directives(
+    ctx: &mut FunctionContext<'_>,
+    config: &crate::opcache::runtime_cache::RuntimeCacheConfig,
+) {
+    emit_opcache_directive_swap(
+        ctx,
+        OPCACHE_DIRECTIVE_FILE_UPDATE_PROTECTION,
+        config.file_update_protection,
+    );
+    emit_opcache_directive_swap(
+        ctx,
+        OPCACHE_DIRECTIVE_API_RESTRICTED,
+        i64::from(crate::codegen_support::opcache_api_restricted()),
+    );
+}
+
+/// Emits one compiled-install `__elephc_eval_opcache_swap_directive` call.
+///
+/// Passes `as_override = 0`: this is the value `--ini` baked, not an `ini_set()`, so it
+/// writes the base configuration and leaves any override in place.
+fn emit_opcache_directive_swap(ctx: &mut FunctionContext<'_>, id: i64, value: i64) {
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), id);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        value,
+    );
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_opcache_swap_directive");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
 /// Registers managed PCRE2 shim callbacks when regex is enabled for this binary.
 pub(super) fn register_eval_regex_provider(ctx: &mut FunctionContext<'_>) {
+    if ctx.module.required_runtime_features.mbregex {
+        abi::emit_call_label(ctx.emitter, "__rt_mbregex_init");
+    }
     if !ctx.module.required_runtime_features.regex {
         return;
     }

@@ -33,6 +33,8 @@
 //! - Hash removal uses INCREF semantics balanced by `__rt_hash_unset`: the tail value is
 //!   boxed with a retain and `__rt_hash_unset` then releases the hash's own reference,
 //!   so the net owner is the returned box while the entry is unlinked/tombstoned/counted.
+//! - `__rt_hash_pop` rewinds the hash's next automatic index when it removes the key the last
+//!   automatic append used, as php's `array_pop()` does: `$a[] = x` after the pop reuses it.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -295,10 +297,7 @@ pub fn emit_hash_pop(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x0, #32]");                                   // x9 = insertion-order tail slot index
     emitter.instruction("cmn x9, #1");                                          // is the hash empty (tail == -1)?
     emitter.instruction("b.eq __rt_hash_pop_empty");                            // an empty hash pops boxed null
-    emitter.instruction("mov x10, #64");                                        // hash entry stride in bytes
-    emitter.instruction("mul x11, x9, x10");                                    // byte offset of the tail slot
-    emitter.instruction("add x11, x0, x11");                                    // advance from the hash base to the tail slot
-    emitter.instruction("add x11, x11, #40");                                   // skip the 40-byte hash header to the tail entry
+    super::hash_layout::emit_entry_address(emitter, "x11", "x0", "x9");
     emitter.instruction("ldr x12, [x11, #8]");                                  // x12 = tail key lo word
     emitter.instruction("ldr x13, [x11, #16]");                                 // x13 = tail key hi word (-1 marks an integer key)
     emitter.instruction("str x12, [sp, #8]");                                   // save the tail key lo word across helper calls
@@ -307,13 +306,13 @@ pub fn emit_hash_pop(emitter: &mut Emitter) {
     emitter.instruction("ldr x4, [x11, #32]");                                  // x4 = tail value hi word
     emitter.instruction("ldr x5, [x11, #40]");                                  // x5 = tail value runtime tag
     emitter.instruction("cmp x5, #7");                                          // is the entry already a boxed Mixed cell?
-    emitter.instruction("b.eq __rt_hash_pop_boxed");                            // retain the stored Mixed cell rather than reboxing
+    emitter.instruction("b.eq __rt_hash_pop_retain_stored_box");                            // retain the stored Mixed cell rather than reboxing
     emitter.instruction("mov x0, x5");                                          // mixed_from_value tag argument
     emitter.instruction("mov x1, x3");                                          // mixed_from_value payload lo argument
     emitter.instruction("mov x2, x4");                                          // mixed_from_value payload hi argument
     emitter.instruction("bl __rt_mixed_from_value");                            // box the typed tail value with a retain
     emitter.instruction("b __rt_hash_pop_have_removed");                        // continue to the unset step
-    emitter.label("__rt_hash_pop_boxed");
+    emitter.label("__rt_hash_pop_retain_stored_box");
     emitter.instruction("mov x0, x3");                                          // move the stored Mixed cell into the retain register
     emitter.instruction("bl __rt_incref");                                      // retain it so the returned box owns a reference
     emitter.label("__rt_hash_pop_have_removed");
@@ -323,6 +322,9 @@ pub fn emit_hash_pop(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the tail key hi word
     emitter.instruction("bl __rt_hash_unset");                                  // release the hash's own value reference, unlink, tombstone, count--
     emitter.instruction("str x0, [sp, #0]");                                    // persist the (unchanged, already-unique) hash pointer
+    emitter.instruction("ldr x12, [sp, #8]");                                   // reload the popped key lo word
+    emitter.instruction("ldr x13, [sp, #16]");                                  // reload the popped key hi word
+    super::hash_next_index::rewind_after_pop(emitter, "x0", "x12", "x13", "__rt_hash_pop");
     emitter.instruction("b __rt_hash_pop_ret");                                 // converge on the shared return path
     emitter.label("__rt_hash_pop_empty");
     emitter.instruction("mov x0, #8");                                          // runtime value tag 8 = null
@@ -355,10 +357,7 @@ fn emit_hash_pop_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rax + 32]");                        // r9 = insertion-order tail slot index
     emitter.instruction("cmp r9, -1");                                          // is the hash empty (tail == -1)?
     emitter.instruction("je __rt_hash_pop_empty");                              // an empty hash pops boxed null
-    emitter.instruction("mov r10, r9");                                         // copy the tail slot index before scaling it
-    emitter.instruction("shl r10, 6");                                          // convert the tail slot index into a 64-byte entry offset
-    emitter.instruction("add r10, rax");                                        // advance from the hash base to the tail slot
-    emitter.instruction("add r10, 40");                                         // skip the 40-byte hash header to the tail entry
+    super::hash_layout::emit_entry_address(emitter, "r10", "rax", "r9");
     emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // r11 = tail key lo word
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the tail key lo word across helper calls
     emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // r11 = tail key hi word (-1 marks an integer key)
@@ -367,11 +366,11 @@ fn emit_hash_pop_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [r10 + 32]");                       // rsi = tail value hi word (mixed_from_value hi arg)
     emitter.instruction("mov r11, QWORD PTR [r10 + 40]");                       // r11 = tail value runtime tag
     emitter.instruction("cmp r11, 7");                                          // is the entry already a boxed Mixed cell?
-    emitter.instruction("je __rt_hash_pop_boxed");                              // retain the stored Mixed cell rather than reboxing
+    emitter.instruction("je __rt_hash_pop_retain_stored_box");                              // retain the stored Mixed cell rather than reboxing
     emitter.instruction("mov rax, r11");                                        // mixed_from_value tag argument
     emitter.instruction("call __rt_mixed_from_value");                          // box the typed tail value with a retain
     emitter.instruction("jmp __rt_hash_pop_have_removed");                      // continue to the unset step
-    emitter.label("__rt_hash_pop_boxed");
+    emitter.label("__rt_hash_pop_retain_stored_box");
     emitter.instruction("mov rax, rdi");                                        // move the stored Mixed cell into the retain register
     emitter.instruction("call __rt_incref");                                    // retain it so the returned box owns a reference
     emitter.label("__rt_hash_pop_have_removed");
@@ -381,6 +380,9 @@ fn emit_hash_pop_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the tail key hi word
     emitter.instruction("call __rt_hash_unset");                               // release the hash's own value reference, unlink, tombstone, count--
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // persist the (unchanged, already-unique) hash pointer
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the popped key lo word
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the popped key hi word
+    super::hash_next_index::rewind_after_pop(emitter, "rax", "r10", "r9", "__rt_hash_pop");
     emitter.instruction("jmp __rt_hash_pop_ret");                               // converge on the shared return path
     emitter.label("__rt_hash_pop_empty");
     emitter.instruction("mov rax, 8");                                          // runtime value tag 8 = null
@@ -706,7 +708,10 @@ pub fn emit_hash_shift(emitter: &mut Emitter) {
     // -- free the old table block (all keys/values already transferred) --
     emitter.label("__rt_hash_shift_free");
     emitter.instruction("ldr x0, [sp, #0]");                                    // old table pointer
-    emitter.instruction("bl __rt_heap_free");                                   // shallow-free the old table block
+    emitter.instruction("ldr x0, [x0, #40]");                                   // the header owns its entry storage as a separate allocation
+    emitter.instruction("bl __rt_heap_free");                                   // release the old entry storage once every owner has moved
+    emitter.instruction("ldr x0, [sp, #0]");                                    // old table pointer
+    emitter.instruction("bl __rt_heap_free");                                   // shallow-free the old table header
     emitter.instruction("ldr x0, [sp, #8]");                                    // x0 = rebuilt destination table
     emitter.instruction("ldr x1, [sp, #16]");                                   // x1 = removed boxed value
     emitter.instruction("ldp x29, x30, [sp, #64]");                            // restore frame pointer and return address
@@ -810,7 +815,10 @@ fn emit_hash_shift_x86_64(emitter: &mut Emitter) {
     // -- free the old table block (all keys/values already transferred) --
     emitter.label("__rt_hash_shift_free");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // old table pointer
-    emitter.instruction("call __rt_heap_free");                                 // shallow-free the old table block
+    emitter.instruction("mov rax, QWORD PTR [rax + 40]");                       // the header owns its entry storage as a separate allocation
+    emitter.instruction("call __rt_heap_free");                                 // release the old entry storage once every owner has moved
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // old table pointer
+    emitter.instruction("call __rt_heap_free");                                 // shallow-free the old table header
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // rax = rebuilt destination table
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // rdx = removed boxed value
     emitter.instruction("add rsp, 64");                                         // release the rebuild spill slots

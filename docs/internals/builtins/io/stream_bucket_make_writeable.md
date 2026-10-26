@@ -1,16 +1,16 @@
 ---
-title: "stream_bucket_make_writeable() — internals"
+title: "stream_bucket_make_writeable() - internals"
 description: "Compiler internals for stream_bucket_make_writeable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 371
+  order: 372
 ---
 
-## `stream_bucket_make_writeable()` — internals
+## `stream_bucket_make_writeable()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_bucket_make_writeable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_bucket_make_writeable.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

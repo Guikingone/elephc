@@ -73,8 +73,18 @@ pub fn preload_declarations(
         crate::source::finalize_physical_program(parsed, preload_path, source_mode, defines)?;
     let preload_dir = preload_path.parent().unwrap_or(base_dir);
     let mut requires = include_statements(&parsed);
-    let (unit_functions, include_units) = compile_file_units(&parsed, preload_dir, defines);
+    let (unit_functions, mut include_units) = compile_file_units(&parsed, preload_dir, defines);
     requires.extend(unit_functions);
+    let (directory_requires, directory_units, directory_unit_functions) =
+        preload_directory_closure(preload_path, preload_dir, defines, &include_units);
+    requires.extend(directory_requires);
+    requires.extend(directory_unit_functions);
+    include_units.extend(directory_units);
+    // The classes the script itself names -- Symfony's generated
+    // `App_Kernel*Container.preload.php` lists them as `$classes[] = '…';` after its requires --
+    // join the first pass like the requires do. Only requires reach `resolved`, so a scan of it
+    // alone never saw them, and a script made of nothing but that list returned here empty.
+    requires.extend(named_class_requires(&[&parsed], autoload, &HashSet::new()));
     if requires.is_empty() {
         return Ok(PreloadedDeclarations::default());
     }
@@ -82,7 +92,7 @@ pub fn preload_declarations(
     // failing the build: php's autoloader still loads its classes at run time, as it does for
     // any class the preload file did not name.
     let _skip_unparseable = crate::resolver::skip_unparseable_includes();
-    let (resolved, _, sources) =
+    let (resolved, first_pass_files, sources) =
         crate::resolver::resolve_collecting_includes_with_defines_and_sources(
             requires,
             preload_dir,
@@ -93,11 +103,15 @@ pub fn preload_declarations(
         .into_iter()
         .map(|(name, path)| (crate::names::php_symbol_key(name.trim_start_matches('\\')), path))
         .collect();
-    // The classes are named INSIDE the graph, not in the entry script: elephc's own preload file
-    // requires Symfony's generated one, and that is where the 121 `$classes[] = '…';` lines live.
-    // So the search runs over the RESOLVED program, and whatever it finds is resolved in a second
-    // pass whose declarations are de-duplicated against the first.
-    let named = named_class_requires(&resolved, autoload);
+    // A file the script requires can name classes too (a wrapper script requiring Symfony's), so
+    // the RESOLVED program is searched as well, and whatever it finds is resolved in a second pass
+    // whose declarations are de-duplicated against the first. A named file the first pass already
+    // took (one the script named itself, or a class file under the preload directory, which
+    // `preload_directory_closure` requires) is not required again: the second pass's declarations
+    // come back wrapped in the resolver's namespace block, where the de-duplication cannot see
+    // them, and the class would be declared twice.
+    let first_pass_files: HashSet<PathBuf> = first_pass_files.into_iter().collect();
+    let named = named_class_requires(&[&resolved], autoload, &first_pass_files);
     let resolved = if named.is_empty() {
         resolved
     } else {
@@ -121,7 +135,7 @@ pub fn preload_declarations(
     let mut compiled_whole = Vec::new();
     collect_fully_declared_sources(&resolved, &mut compiled_whole);
     Ok(PreloadedDeclarations {
-        declarations: retain_declarations(resolved),
+        declarations: first_declaration_of_each_name(retain_declarations(resolved)),
         compiled_whole,
         include_units,
         class_files,
@@ -196,6 +210,178 @@ fn compile_file_units(
     (functions, units)
 }
 
+/// The PHP files living next to the preload script, joined to the closed world.
+///
+/// A framework writes its preload script into the directory of its compiled artifacts -- Symfony
+/// generates `var/cache/<env>/App_Kernel*Container.preload.php` beside the container stub, its
+/// `bundles.php`, the routing caches and the dumped Twig templates -- and then `require`s those
+/// artifacts at run time through paths it computes, which no static walk can follow. php compiles
+/// each of them on first use; a binary that links no interpreter has to have compiled them
+/// already. So every `.php` file under the preload script's directory joins the build:
+///
+/// - a file that is nothing but declarations (a dumped template class) is required like a file
+///   the script names, so its symbols are compiled and a later `include` of it runs nothing;
+/// - a file an include unit can run (the container stub, `return [...]` caches; see
+///   [`unit_file_is_eligible`]) becomes a unit, so the runtime include of its path runs compiled
+///   code and hands back its value;
+/// - anything else is left alone, exactly as before.
+///
+/// The walk is sorted, so two builds of one tree compile the same program.
+fn preload_directory_closure(
+    preload_path: &Path,
+    preload_dir: &Path,
+    defines: &HashSet<String>,
+    known_units: &[crate::ir::IncludeUnit],
+) -> (Program, Vec<crate::ir::IncludeUnit>, Program) {
+    let mut files = Vec::new();
+    collect_php_files(preload_dir, &mut files);
+    files.sort();
+    let preload_canonical = preload_path.canonicalize().ok();
+    let span = Span::dummy();
+    let mut declaration_files = Vec::new();
+    let mut units: Vec<crate::ir::IncludeUnit> = Vec::new();
+    let mut unit_functions = Vec::new();
+    // The files a unit includes itself. Symfony's container stub is a unit whose
+    // `elseif (!include __DIR__.'/ContainerX/App_Kernel…Container.php')` loads the container class
+    // behind a `class_exists(…, false)` guard, and a cache directory keeps the stubs of earlier
+    // builds next to the live one. Requiring such a class file here as well declared it twice --
+    // once from this closure, once from the stub's include -- and failed the build with
+    // "Duplicate class declaration" over a stale container php never loads twice. The unit's
+    // include already takes the file's declarations into the program.
+    let mut unit_included: HashSet<PathBuf> = HashSet::new();
+    for path in files {
+        let Ok(canonical) = path.canonicalize() else {
+            continue;
+        };
+        if Some(&canonical) == preload_canonical.as_ref()
+            || known_units.iter().any(|unit| unit.canonical_path == canonical)
+        {
+            continue;
+        }
+        match classify_directory_file(&canonical, defines) {
+            DirectoryFile::Declarations => declaration_files.push(canonical),
+            DirectoryFile::Unit(program) => {
+                crate::parser::ast::visit::walk_nodes(&program, &mut |node| {
+                    let path: &Expr = match node {
+                        crate::parser::ast::visit::Node::Stmt(Stmt {
+                            kind: StmtKind::Include { path, .. },
+                            ..
+                        }) => path,
+                        crate::parser::ast::visit::Node::Expr(Expr {
+                            kind: ExprKind::IncludeValue { path, .. },
+                            ..
+                        }) => path,
+                        _ => return,
+                    };
+                    if let Some(target) = fold_literal_path(path)
+                        .and_then(|target| Path::new(&target).canonicalize().ok())
+                    {
+                        unit_included.insert(target);
+                    }
+                });
+                let function = unit_function_name(&canonical);
+                unit_functions.push(unit_function_decl(&function, &canonical, span));
+                units.push(crate::ir::IncludeUnit { canonical_path: canonical, function });
+            }
+            DirectoryFile::Other => {}
+        }
+    }
+    let requires = declaration_files
+        .into_iter()
+        .filter(|canonical| !unit_included.contains(canonical))
+        .map(|canonical| {
+            Stmt::new(
+                StmtKind::Include {
+                    path: Expr::new(
+                        ExprKind::StringLiteral(canonical.display().to_string()),
+                        span,
+                    ),
+                    once: true,
+                    required: true,
+                },
+                span,
+            )
+        })
+        .collect();
+    (requires, units, unit_functions)
+}
+
+/// How [`preload_directory_closure`] treats one file.
+enum DirectoryFile {
+    /// Only declarations: compiled like a preloaded file.
+    Declarations,
+    /// Runnable as an include unit; carries the parsed file.
+    Unit(Program),
+    /// Neither: left to its includer, as before.
+    Other,
+}
+
+/// Parses `path` once and decides how the directory closure treats it.
+fn classify_directory_file(path: &Path, defines: &HashSet<String>) -> DirectoryFile {
+    let Ok(content) = crate::source::read_physical_source(path) else {
+        return DirectoryFile::Other;
+    };
+    let mode = crate::source::SourceMode::from_path(path);
+    let Ok(tokens) = crate::lexer::tokenize_with_mode(&content, mode) else {
+        return DirectoryFile::Other;
+    };
+    let Ok(parsed) = crate::parser::parse_with_mode(&tokens, mode) else {
+        return DirectoryFile::Other;
+    };
+    let Ok(program) = crate::source::finalize_physical_program(parsed, path, mode, defines) else {
+        return DirectoryFile::Other;
+    };
+    if unit_body_is_eligible(&program) {
+        DirectoryFile::Unit(program)
+    } else if !program.is_empty() && top_level_is_only_declarations(&program) {
+        DirectoryFile::Declarations
+    } else {
+        DirectoryFile::Other
+    }
+}
+
+/// Whether a freshly parsed file holds nothing but declarations (`namespace`/`use` allowed).
+fn top_level_is_only_declarations(body: &[Stmt]) -> bool {
+    let mut declares = false;
+    for stmt in body {
+        match &stmt.kind {
+            StmtKind::ClassDecl { .. }
+            | StmtKind::InterfaceDecl { .. }
+            | StmtKind::TraitDecl { .. }
+            | StmtKind::EnumDecl { .. }
+            | StmtKind::FunctionDecl { .. } => declares = true,
+            StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => {}
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
+                if !top_level_is_only_declarations(body) {
+                    return false;
+                }
+                declares = true;
+            }
+            _ => return false,
+        }
+    }
+    declares
+}
+
+/// Appends every `.php` file under `dir`, recursively.
+fn collect_php_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
+            collect_php_files(&path, out);
+        } else if kind.is_file() && path.extension().is_some_and(|ext| ext == "php") {
+            out.push(path);
+        }
+    }
+}
+
+
 /// Appends the argument of every `opcache_compile_file(<one argument>)` statement.
 fn collect_compile_file_targets(body: &[Stmt], out: &mut Vec<(Expr, Span)>) {
     for stmt in body {
@@ -232,6 +418,142 @@ fn collect_compile_file_targets(body: &[Stmt], out: &mut Vec<(Expr, Span)>) {
     }
 }
 
+/// Compiles a unit for every `include`/`require` in the program whose path is a literal file
+/// that can run as its own function (`unit_file_is_eligible`), wherever the include sits.
+///
+/// The resolver inlines a top-level literal include, but one inside a function or a method stays
+/// a run-time include: `Composer\InstalledVersions::getInstalled()` does
+/// `self::$installed = require __DIR__ . '/installed.php';`. Off the closed world the interpreter
+/// ran that file; a binary with no interpreter has to have compiled it. The unit is the same one a
+/// preload's `opcache_compile_file()` gets, so the runtime include table answers it the same way.
+/// `known` are the units already planned (the preload's), which are not built twice.
+pub fn literal_include_units(
+    program: &[Stmt],
+    defines: &HashSet<String>,
+    known: &[crate::ir::IncludeUnit],
+) -> Result<(Program, Vec<crate::ir::IncludeUnit>), CompileError> {
+    let mut targets: Vec<(Expr, Span)> = Vec::new();
+    crate::parser::ast::visit::walk_nodes(program, &mut |node| match node {
+        crate::parser::ast::visit::Node::Expr(expr) => match &expr.kind {
+            ExprKind::IncludeValue { path, .. } => targets.push(((**path).clone(), expr.span)),
+            // What the resolver leaves for an include it did not inline: the path, then the flags.
+            ExprKind::FunctionCall { name, args }
+                if name.as_str().trim_start_matches('\\') == crate::names::DYNAMIC_INCLUDE_FUNCTION =>
+            {
+                if let Some(path) = args.first() {
+                    targets.push((path.clone(), expr.span));
+                }
+            }
+            _ => {}
+        },
+        crate::parser::ast::visit::Node::Stmt(stmt) => {
+            if let StmtKind::Include { path, .. } = &stmt.kind {
+                targets.push((path.clone(), stmt.span));
+            }
+        }
+    });
+    let mut paths: Vec<(PathBuf, Span)> = Vec::new();
+    for (argument, span) in targets {
+        let Some(literal) = fold_literal_path(&argument) else {
+            continue;
+        };
+        // A relative path is resolved against the include path and the working directory when
+        // it runs, which a compile-time name cannot stand for.
+        let path = Path::new(&literal);
+        if !path.is_absolute() {
+            continue;
+        }
+        if let Ok(canonical) = path.canonicalize() {
+            paths.push((canonical, span));
+        }
+    }
+    units_for_paths(paths, defines, known)
+}
+
+/// Compiles a unit for every constant data file of the project (`<?php return [...];`).
+///
+/// A closed-world binary answers a run-time include only from what it compiled, and a framework
+/// computes many of those paths when it runs: Symfony's kernel requires
+/// `$this->getBundlesPath()`, the intl polyfills require
+/// `__DIR__.'/Resources/unidata/'.$name.'.php'` through a variable. No static reading of the
+/// include site can name the file, and the alternative is php's "Failed opening required" fatal.
+/// The files themselves are easy to know: one whose whole top level is a `return` of a constant
+/// expression (`unit_file_is_eligible`) runs the same as a function, so each becomes a unit and
+/// the include table answers it wherever the path came from. A cheap textual check skips the
+/// rest of the tree before anything is parsed.
+pub fn project_data_units(
+    project_root: &Path,
+    defines: &HashSet<String>,
+    known: &[crate::ir::IncludeUnit],
+) -> Result<(Program, Vec<crate::ir::IncludeUnit>), CompileError> {
+    let mut files = Vec::new();
+    collect_php_files(project_root, &mut files);
+    files.sort();
+    let paths = files
+        .into_iter()
+        .filter(|path| starts_with_return(path))
+        .filter_map(|path| path.canonicalize().ok())
+        .map(|path| (path, Span::dummy()))
+        .collect();
+    units_for_paths(paths, defines, known)
+}
+
+/// Whether the first statement of a PHP file is a `return`, after its open tag, comments,
+/// `declare` and `namespace`/`use` lines: the only shape `unit_file_is_eligible` can admit.
+fn starts_with_return(path: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let Some(rest) = text.trim_start().strip_prefix("<?php") else {
+        return false;
+    };
+    let mut rest = rest;
+    loop {
+        rest = rest.trim_start();
+        if let Some(after) = rest.strip_prefix("//").or_else(|| rest.strip_prefix('#')) {
+            rest = after.split_once('\n').map_or("", |(_, tail)| tail);
+        } else if let Some(after) = rest.strip_prefix("/*") {
+            rest = after.split_once("*/").map_or("", |(_, tail)| tail);
+        } else if ["namespace ", "use ", "declare("].iter().any(|kw| rest.starts_with(kw)) {
+            rest = rest.split_once(';').map_or("", |(_, tail)| tail);
+        } else {
+            break;
+        }
+    }
+    rest.strip_prefix("return").is_some_and(|tail| tail.starts_with([' ', '(', '[', '\n', '\t']))
+}
+
+/// Builds and resolves one unit per eligible path that `known` does not already cover.
+fn units_for_paths(
+    paths: Vec<(PathBuf, Span)>,
+    defines: &HashSet<String>,
+    known: &[crate::ir::IncludeUnit],
+) -> Result<(Program, Vec<crate::ir::IncludeUnit>), CompileError> {
+    let mut functions = Vec::new();
+    let mut units: Vec<crate::ir::IncludeUnit> = Vec::new();
+    for (canonical, span) in paths {
+        if known.iter().chain(units.iter()).any(|unit| unit.canonical_path == canonical)
+            || !unit_file_is_eligible(&canonical, defines)
+        {
+            continue;
+        }
+        let function = unit_function_name(&canonical);
+        functions.push(unit_function_decl(&function, &canonical, span));
+        units.push(crate::ir::IncludeUnit { canonical_path: canonical, function });
+    }
+    if functions.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    // Resolved like the preload's units: the resolver inlines each unit's `require` of its file,
+    // so the function returns the file's value instead of including it again at run time.
+    let base_dir = units[0].canonical_path.parent().unwrap_or(Path::new("/")).to_path_buf();
+    let (resolved, _, _) = crate::resolver::resolve_collecting_includes_with_defines_and_sources(
+        functions, &base_dir, defines,
+    )?;
+    Ok((crate::name_resolver::resolve(resolved)?, units))
+}
+
 /// Folds a path built from string literals and `.`; `__DIR__` is a literal by this point.
 fn fold_literal_path(expr: &Expr) -> Option<String> {
     match &expr.kind {
@@ -253,20 +575,16 @@ fn fold_literal_path(expr: &Expr) -> Option<String> {
 /// the calling class (`self`, `static`, `$this`, a closure's bound scope), declares a symbol, or
 /// includes another file -- which are exactly the ways an include's scope shows through.
 fn unit_file_is_eligible(path: &Path, defines: &HashSet<String>) -> bool {
-    let Ok(content) = crate::source::read_physical_source(path) else {
-        return false;
-    };
+    parse_physical_file(path, defines).is_some_and(|program| unit_body_is_eligible(&program))
+}
+
+/// Parses one file of the tree the way an include of it would, or `None` when it does not parse.
+pub(crate) fn parse_physical_file(path: &Path, defines: &HashSet<String>) -> Option<Program> {
+    let content = crate::source::read_physical_source(path).ok()?;
     let mode = crate::source::SourceMode::from_path(path);
-    let Ok(tokens) = crate::lexer::tokenize_with_mode(&content, mode) else {
-        return false;
-    };
-    let Ok(parsed) = crate::parser::parse_with_mode(&tokens, mode) else {
-        return false;
-    };
-    let Ok(program) = crate::source::finalize_physical_program(parsed, path, mode, defines) else {
-        return false;
-    };
-    unit_body_is_eligible(&program)
+    let tokens = crate::lexer::tokenize_with_mode(&content, mode).ok()?;
+    let parsed = crate::parser::parse_with_mode(&tokens, mode).ok()?;
+    crate::source::finalize_physical_program(parsed, path, mode, defines).ok()
 }
 
 /// The statement-level half of [`unit_file_is_eligible`].
@@ -279,10 +597,34 @@ fn unit_body_is_eligible(body: &[Stmt]) -> bool {
         match &stmt.kind {
             StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => {}
             StmtKind::Return(Some(value)) if unit_expr_is_eligible(value) => returned = true,
+            // Guards around the value (`if (!class_exists(...)) { class_alias(...); }`): control
+            // flow and calls over eligible expressions observe nothing of the caller either.
+            other if unit_guard_statement_is_eligible(other) => {}
             _ => return false,
         }
     }
     returned
+}
+
+/// A statement that may precede the final `return` of a unit: an `if` chain, a call statement,
+/// or a bare `return;`, built only from eligible expressions.
+fn unit_guard_statement_is_eligible(kind: &StmtKind) -> bool {
+    let block_ok = |body: &[Stmt]| body.iter().all(|stmt| unit_guard_statement_is_eligible(&stmt.kind));
+    match kind {
+        StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
+            unit_expr_is_eligible(condition)
+                && block_ok(then_body)
+                && elseif_clauses
+                    .iter()
+                    .all(|(condition, body)| unit_expr_is_eligible(condition) && block_ok(body))
+                && else_body.as_deref().is_none_or(block_ok)
+        }
+        StmtKind::ExprStmt(expr) => unit_expr_is_eligible(expr),
+        StmtKind::Include { path, .. } => unit_expr_is_eligible(path),
+        StmtKind::Return(None) => true,
+        StmtKind::Return(Some(value)) => unit_expr_is_eligible(value),
+        _ => false,
+    }
 }
 
 /// The expression-level half of [`unit_file_is_eligible`]: an allow-list, so a construct it does
@@ -305,6 +647,19 @@ fn unit_expr_is_eligible(expr: &Expr) -> bool {
             .all(|(key, value)| unit_expr_is_eligible(key) && unit_expr_is_eligible(value)),
         ExprKind::NewObject { args, .. } => args.iter().all(unit_expr_is_eligible),
         ExprKind::Negate(inner) | ExprKind::Not(inner) => unit_expr_is_eligible(inner),
+        ExprKind::FunctionCall { args, .. } => args.iter().all(unit_expr_is_eligible),
+        // A static closure without captures that names no calling class: its body is its own
+        // scope (`return static function (array $context) { return new Kernel(...); }`).
+        // The check reads the body's debug form for the receiver variants, as WHOLE words: a
+        // substring test also matched class names (`StaticEnvVarLoader` in framework-bundle's
+        // `Resources/config/secrets.php`) and kept every such config file out of the build.
+        ExprKind::Closure { is_static: true, captures, body, .. } if captures.is_empty() => {
+            let text = format!("{body:?}");
+            !["This", "Self_", "Static", "Parent", "ThisExpr"]
+                .iter()
+                .any(|word| contains_whole_word(&text, word))
+        }
+        ExprKind::IncludeValue { path, .. } => unit_expr_is_eligible(path),
         ExprKind::BinaryOp { left, right, .. } => {
             unit_expr_is_eligible(left) && unit_expr_is_eligible(right)
         }
@@ -319,6 +674,16 @@ fn unit_expr_is_eligible(expr: &Expr) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether `word` occurs in `text` with no identifier character on either side.
+fn contains_whole_word(text: &str, word: &str) -> bool {
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    text.match_indices(word).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + word.len()..].chars().next();
+        !before.is_some_and(is_ident) && !after.is_some_and(is_ident)
+    })
 }
 
 /// Names a unit after its canonical path, so the same file always gets the same function.
@@ -366,7 +731,7 @@ fn unit_function_decl(name: &str, canonical: &Path, span: Span) -> Stmt {
 fn collect_fully_declared_sources(body: &[Stmt], out: &mut Vec<std::path::PathBuf>) {
     for stmt in body {
         match &stmt.kind {
-            StmtKind::IncludeOnceGuard { source_path, body } => {
+            StmtKind::IncludeOnceGuard { source_path, body, .. } => {
                 if is_entirely_declarations(body) {
                     out.push(source_path.clone());
                 }
@@ -418,9 +783,15 @@ fn is_entirely_declarations(body: &[Stmt]) -> bool {
 ///
 /// Only a literal that the autoloader can resolve becomes a require; anything else is left alone,
 /// so a preload script full of ordinary strings costs nothing.
-fn named_class_requires(program: &[Stmt], autoload: &crate::autoload::Registry) -> Program {
+fn named_class_requires(
+    programs: &[&[Stmt]],
+    autoload: &crate::autoload::Registry,
+    already_included: &HashSet<PathBuf>,
+) -> Program {
     let mut names = Vec::new();
-    collect_string_literals(program, &mut names);
+    for program in programs {
+        collect_string_literals(program, &mut names);
+    }
     let mut seen = HashSet::new();
     let mut requires = Vec::new();
     for name in names {
@@ -431,6 +802,12 @@ fn named_class_requires(program: &[Stmt], autoload: &crate::autoload::Registry) 
         let Some(path) = autoload.psr4().lookup(trimmed) else {
             continue;
         };
+        if path
+            .canonicalize()
+            .is_ok_and(|canonical| already_included.contains(&canonical))
+        {
+            continue;
+        }
         let path = path.display().to_string();
         if !seen.insert(path.clone()) {
             continue;
@@ -530,11 +907,94 @@ fn retain_declarations_in(body: Program, out: &mut Program) {
             | StmtKind::EnumDecl { .. }
             | StmtKind::FunctionDecl { .. }
             | StmtKind::ConstDecl { .. } => out.push(stmt),
+            // A function declared in a file the resolver included is renamed to a private variant
+            // symbol, and these two statements are what bind the PUBLIC name to it: the group
+            // emits the dispatcher, the mark stores the variant's address into it. Dropping them
+            // while keeping the declaration left a body nothing could call -- Symfony's
+            // `twig_is_root_form()`, declared after `FormExtension`, was undefined for every
+            // caller. php binds such a function while preloading, so the binding belongs here.
+            StmtKind::FunctionVariantGroup { .. } | StmtKind::FunctionVariantMark { .. } => {
+                out.push(stmt)
+            }
             StmtKind::NamespaceBlock { body, .. }
             | StmtKind::Synthetic(body)
             | StmtKind::IncludeOnceGuard { body, .. } => retain_declarations_in(body, out),
+            // A guarded declaration survives php's preload whenever its guard held at startup.
+            // Keep the guard with only its declarations: folding settles a target-decided one
+            // (symfony/polyfill-php86's `if (\PHP_VERSION_ID < 80600) { enum SortDirection {} }`
+            // stub, which this filter used to drop whole), and `conditional_classes` lifts what
+            // a runtime condition still guards. Executable statements stay dropped.
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } if guard_needs_no_dropped_statement(&condition)
+                && elseif_clauses
+                    .iter()
+                    .all(|(condition, _)| guard_needs_no_dropped_statement(condition)) =>
+            {
+                let then_body = retain_declarations(then_body);
+                let elseif_clauses: Vec<_> = elseif_clauses
+                    .into_iter()
+                    .map(|(condition, body)| (condition, retain_declarations(body)))
+                    .collect();
+                let else_body = else_body.map(retain_declarations);
+                let declares = !then_body.is_empty()
+                    || elseif_clauses.iter().any(|(_, body)| !body.is_empty())
+                    || else_body.as_ref().is_some_and(|body| !body.is_empty());
+                if declares {
+                    out.push(Stmt {
+                        kind: StmtKind::If {
+                            condition,
+                            then_body,
+                            elseif_clauses,
+                            else_body,
+                        },
+                        ..stmt
+                    });
+                }
+            }
             _ => {}
         }
+    }
+}
+
+/// Whether a guard's condition can be evaluated without any statement the preload filter drops.
+///
+/// Only literals, constants, operators and symbol-existence probes over literal names qualify:
+/// Carbon's `require $transMethod->hasReturnType() ? A : B` becomes a guard over a variable the
+/// filter removed, and keeping it left the condition reading an undefined `$transMethod`.
+fn guard_needs_no_dropped_statement(condition: &Expr) -> bool {
+    match &condition.kind {
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::ConstRef(_)
+        | ExprKind::ClassConstant { .. } => true,
+        ExprKind::Not(inner) | ExprKind::Negate(inner) => guard_needs_no_dropped_statement(inner),
+        ExprKind::BinaryOp { left, right, .. } => {
+            guard_needs_no_dropped_statement(left) && guard_needs_no_dropped_statement(right)
+        }
+        ExprKind::FunctionCall { name, args } => {
+            let probe = name.last_segment().is_some_and(|base| {
+                [
+                    "class_exists",
+                    "interface_exists",
+                    "trait_exists",
+                    "enum_exists",
+                    "function_exists",
+                    "defined",
+                    "extension_loaded",
+                ]
+                .iter()
+                .any(|probe| base.eq_ignore_ascii_case(probe))
+            });
+            probe && args.iter().all(guard_needs_no_dropped_statement)
+        }
+        _ => false,
     }
 }
 
@@ -563,6 +1023,22 @@ fn collect_declared_names(body: &[Stmt], out: &mut HashSet<String>) {
             StmtKind::NamespaceBlock { body, .. }
             | StmtKind::Synthetic(body)
             | StmtKind::IncludeOnceGuard { body, .. } => collect_declared_names(body, out),
+            // A guarded declaration is still the program's declaration of that name: the guard
+            // `retain_declarations` keeps must not be declared a second time beside it.
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                collect_declared_names(then_body, out);
+                for (_, body) in elseif_clauses {
+                    collect_declared_names(body, out);
+                }
+                if let Some(body) = else_body {
+                    collect_declared_names(body, out);
+                }
+            }
             _ => {}
         }
     }
@@ -572,13 +1048,76 @@ fn collect_declared_names(body: &[Stmt], out: &mut HashSet<String>) {
 pub fn without_redeclarations(preloaded: Program, declared: &HashSet<String>) -> Program {
     preloaded
         .into_iter()
+        .filter_map(|mut stmt| match stmt.kind {
+            StmtKind::ClassDecl { ref name, .. }
+            | StmtKind::InterfaceDecl { ref name, .. }
+            | StmtKind::TraitDecl { ref name, .. }
+            | StmtKind::EnumDecl { ref name, .. }
+            | StmtKind::FunctionDecl { ref name, .. }
+            | StmtKind::ConstDecl { ref name, .. } => {
+                (!declared.contains(&declaration_key(name))).then_some(stmt)
+            }
+            // The binding of a variant the entry already declares is the entry's own.
+            StmtKind::FunctionVariantGroup { ref variants, .. } => {
+                (!variants.iter().all(|variant| declared.contains(&declaration_key(variant))))
+                    .then_some(stmt)
+            }
+            StmtKind::FunctionVariantMark { ref variant, .. } => {
+                (!declared.contains(&declaration_key(variant))).then_some(stmt)
+            }
+            // A kept guard (see `retain_declarations_in`) loses the declarations the entry makes
+            // itself, and goes away when nothing is left in it.
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => {
+                let then_body = without_redeclarations(then_body, declared);
+                let elseif_clauses: Vec<_> = elseif_clauses
+                    .into_iter()
+                    .map(|(condition, body)| (condition, without_redeclarations(body, declared)))
+                    .collect();
+                let else_body = else_body.map(|body| without_redeclarations(body, declared));
+                let declares = !then_body.is_empty()
+                    || elseif_clauses.iter().any(|(_, body)| !body.is_empty())
+                    || else_body.as_ref().is_some_and(|body| !body.is_empty());
+                stmt.kind = StmtKind::If {
+                    condition,
+                    then_body,
+                    elseif_clauses,
+                    else_body,
+                };
+                declares.then_some(stmt)
+            }
+            _ => Some(stmt),
+        })
+        .collect()
+}
+
+/// Keeps the first declaration of every name in `program`, in order.
+///
+/// One preload graph can reach the same class file twice: Symfony's preload script requires its
+/// container stub, and the stub also becomes an include unit (`preload_directory_closure`) whose
+/// include of the container class is resolved on its own. The entry program used to hide that,
+/// because the LAST preload's declarations are filtered against an entry that declares them too;
+/// any earlier preload (`--env=dev` beside `--env=prod`) reached the checker with the container
+/// class twice -- "Duplicate class declaration: ContainerX\App_KernelDevContainer".
+///
+/// Only plain declarations take part. A variant group or mark binds a name a declaration beside it
+/// already holds (the renamed body), so filtering them against `seen` would unbind the function,
+/// and a kept guard is its own branch decision.
+pub fn first_declaration_of_each_name(program: Program) -> Program {
+    let mut seen = HashSet::new();
+    program
+        .into_iter()
         .filter(|stmt| match &stmt.kind {
             StmtKind::ClassDecl { name, .. }
             | StmtKind::InterfaceDecl { name, .. }
             | StmtKind::TraitDecl { name, .. }
             | StmtKind::EnumDecl { name, .. }
             | StmtKind::FunctionDecl { name, .. }
-            | StmtKind::ConstDecl { name, .. } => !declared.contains(&declaration_key(name)),
+            | StmtKind::ConstDecl { name, .. } => seen.insert(declaration_key(name)),
             _ => true,
         })
         .collect()
@@ -691,4 +1230,27 @@ pub fn resolve_preload_path(directive: &str, base_dir: &Path) -> Option<PathBuf>
         base_dir.join(candidate)
     };
     Some(candidate.canonicalize().unwrap_or(candidate))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parses a fixture the way `unit_file_is_eligible` does, without a file.
+    fn program(source: &str) -> Program {
+        let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
+        crate::parser::parse(&tokens).expect("fixture must parse")
+    }
+
+    /// A static config closure is a unit even when a class it names contains a receiver word;
+    /// one that really reaches `self`/`static` is not.
+    #[test]
+    fn a_static_closure_naming_a_static_prefixed_class_is_a_unit() {
+        let config = "<?php\nreturn static function ($c) { $c->set('v', StaticEnvVarLoader::class); };";
+        assert!(unit_body_is_eligible(&program(config)));
+        let scoped = "<?php\nreturn static function ($c) { return static::X; };";
+        assert!(!unit_body_is_eligible(&program(scoped)));
+        let selfish = "<?php\nreturn static function ($c) { return self::make(); };";
+        assert!(!unit_body_is_eligible(&program(selfish)));
+    }
 }

@@ -14,7 +14,8 @@ use super::*;
 /// Read off reference PHP with a wrapper that echoes its `$flags`, not inferred from the two
 /// documented `STREAM_URL_STAT_*` constants: PHP also sets an internal no-cache bit (4) that
 /// userland never sees named. The full observed table is
-/// `stat 4 · lstat 5 · filesize 4 · filemtime 4 · file_exists 6 · is_file 6 · is_dir 6 ·
+/// `stat 4 · lstat 5 · filesize 4 · filemtime 4 · fileatime 4 · filectime 4 · fileperms 4 ·
+/// fileowner 4 · filegroup 4 · fileinode 4 · file_exists 6 · is_file 6 · is_dir 6 ·
 /// is_readable 6 · is_writable 6 · is_writeable 6 · is_executable 6`, i.e. NOCACHE everywhere,
 /// plus LINK for `lstat` and QUIET for the predicates. A wrapper that branches on QUIET to
 /// decide whether to warn therefore sees the same value it would under PHP. Each predicate
@@ -225,16 +226,43 @@ fn emit_path_stat_wrapper_dispatch(
     Ok(())
 }
 
-/// Lowers `filesize()` through userspace `url_stat()['size']` before filesystem stat.
+/// `__rt_user_wrapper_url_stat_field` selector for the `size` key (`filesize()`).
+pub(super) const URL_STAT_FIELD_SIZE: usize = 0;
+/// `__rt_user_wrapper_url_stat_field` selector for the `mode` key (`fileperms()` and the
+/// file-type predicates).
+pub(super) const URL_STAT_FIELD_MODE: usize = 1;
+/// `__rt_user_wrapper_url_stat_field` selector for the `mtime` key (`filemtime()`).
+pub(super) const URL_STAT_FIELD_MTIME: usize = 2;
+/// `__rt_user_wrapper_url_stat_field` selector for the `atime` key (`fileatime()`).
+pub(super) const URL_STAT_FIELD_ATIME: usize = 6;
+/// `__rt_user_wrapper_url_stat_field` selector for the `ctime` key (`filectime()`).
+pub(super) const URL_STAT_FIELD_CTIME: usize = 7;
+/// `__rt_user_wrapper_url_stat_field` selector for the `uid` key (`fileowner()`).
+pub(super) const URL_STAT_FIELD_UID: usize = 8;
+/// `__rt_user_wrapper_url_stat_field` selector for the `gid` key (`filegroup()`).
+pub(super) const URL_STAT_FIELD_GID: usize = 9;
+/// `__rt_user_wrapper_url_stat_field` selector for the `ino` key (`fileinode()`).
+pub(super) const URL_STAT_FIELD_INO: usize = 10;
+
+/// Lowers one integer stat getter through userspace `url_stat()[field]` before filesystem stat.
 ///
-/// Both arms of `emit_url_stat_field_or_fallback` now leave an int|false success flag beside the
-/// payload, so a path that cannot be stat'ed boxes PHP `false` instead of the `0` it used to
-/// report — a legitimate size for an empty file, and therefore indistinguishable from success.
-pub(super) fn lower_filesize_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "filesize", 1)?;
+/// Serves `filesize()`, `filemtime()`, `fileatime()`, `filectime()`, `fileperms()`,
+/// `fileowner()`, `filegroup()` and `fileinode()`: PHP asks a registered wrapper's `url_stat()`
+/// for every one of them (with the no-cache flag) and stats the real filesystem only when no
+/// wrapper owns the scheme. Both arms of `emit_url_stat_field_or_fallback` leave an int|false
+/// success flag beside the payload, so a path that cannot be stat'ed boxes PHP `false` instead
+/// of a `0` that would be indistinguishable from a real field value.
+pub(super) fn lower_stat_int_with_wrapper(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    fallback_runtime: &str,
+    field_selector: usize,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, name, 1)?;
     let path = expect_operand(inst, 0)?;
-    load_string_to_result(ctx, path, "filesize")?;
-    emit_url_stat_field_or_fallback(ctx, "__rt_filesize", 0, URL_STAT_FLAGS_NOCACHE);
+    load_string_to_result(ctx, path, name)?;
+    emit_url_stat_field_or_fallback(ctx, fallback_runtime, field_selector, URL_STAT_FLAGS_NOCACHE);
     box_stat_int_or_false_result(ctx);
     store_if_result(ctx, inst)
 }
@@ -250,11 +278,11 @@ pub(super) fn lower_is_file_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &I
 
 /// Emits a wrapper url_stat field lookup with a native filesystem fallback.
 ///
-/// SHARED between `filesize()` (field 0) and `is_file()` (field 1). Both arms leave an int|false
-/// success flag in `x1`/`rdx` next to the payload — `__rt_user_wrapper_url_stat_field` on the
-/// wrapper arm, the runtime helper on the fallback arm. `is_file()` reads the payload register
-/// only, so the flag is inert for it; do not remove it on the assumption that this composer has
-/// one caller.
+/// SHARED between the integer getters (`lower_stat_int_with_wrapper`), the file-type predicates
+/// and the permission predicates. Both arms leave an int|false success flag in `x1`/`rdx` next to
+/// the payload (`__rt_user_wrapper_url_stat_field` on the wrapper arm, the runtime helper on the
+/// fallback arm). The predicates read the payload register only, so the flag is inert for them;
+/// do not remove it on the assumption that only they call this composer.
 pub(super) fn emit_url_stat_field_or_fallback(
     ctx: &mut FunctionContext<'_>,
     fallback_runtime: &str,
@@ -316,19 +344,6 @@ const STAT_FILE_TYPE_MASK: u32 = 0xF000;
 const STAT_TYPE_REGULAR: u32 = 0x8000;
 /// `S_IFDIR`, the file-type bits of a directory.
 const STAT_TYPE_DIRECTORY: u32 = 0x4000;
-
-/// Lowers `filemtime()` through userspace `url_stat()['mtime']` before filesystem stat.
-pub(super) fn lower_filemtime_with_wrapper(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, "filemtime", 1)?;
-    let path = expect_operand(inst, 0)?;
-    load_string_to_result(ctx, path, "filemtime")?;
-    emit_url_stat_field_or_fallback(ctx, "__rt_filemtime", 2, URL_STAT_FLAGS_NOCACHE);
-    box_stat_int_or_false_result(ctx);
-    store_if_result(ctx, inst)
-}
 
 /// Lowers `is_dir()` through userspace `url_stat()['mode']` before filesystem stat.
 pub(super) fn lower_is_dir_with_wrapper(
@@ -421,7 +436,7 @@ fn emit_file_type_wrapper_dispatch(
     file_type: u32,
     name: &str,
 ) {
-    emit_url_stat_field_or_fallback(ctx, fallback_runtime, 1, URL_STAT_FLAGS_QUIET);
+    emit_url_stat_field_or_fallback(ctx, fallback_runtime, URL_STAT_FIELD_MODE, URL_STAT_FLAGS_QUIET);
     let no_wrapper = ctx.next_label(&format!("{}_no_wrapper_adjust", name));
     let done = ctx.next_label(&format!("{}_adjust_done", name));
     match ctx.emitter.target.arch {
@@ -468,6 +483,129 @@ pub(super) fn lower_single_path_wrapper_op(
     load_string_to_result(ctx, path, name)?;
     emit_single_path_wrapper_dispatch(ctx, runtime_label, vtable_slot);
     store_if_result(ctx, inst)
+}
+
+/// Lowers `mkdir(directory, permissions = 0777, recursive = false)`.
+///
+/// Both optional arguments reach the runtime, and both reach a registered stream wrapper
+/// through the two argument slots its `mkdir` vtable entry already takes: the mode, and an
+/// options word carrying PHP's `STREAM_REPORT_ERRORS` (8) plus `STREAM_MKDIR_RECURSIVE` (1)
+/// when requested. Before this they were hard-coded to zero and the native helper hard-coded
+/// mode 0755, so neither PHP argument existed (issue #506).
+///
+/// Measured on PHP 8.5.10 with a userland wrapper: `mkdir("w://d")` calls
+/// `mkdir($path, 511, 8)`, and `mkdir("w://d", 0700, true)` calls `mkdir($path, 448, 9)`.
+pub(super) fn lower_mkdir_wrapper_op(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count_between(inst, "mkdir", 1, 3)?;
+    let path = expect_operand(inst, 0)?;
+    let permissions = (inst.operands.len() > 1)
+        .then(|| expect_operand(inst, 1))
+        .transpose()?;
+    let recursive = (inst.operands.len() > 2)
+        .then(|| expect_operand(inst, 2))
+        .transpose()?;
+    // The two optional arguments are resolved BEFORE the path: unboxing a `Mixed` calls
+    // `__rt_mixed_cast_int`, which clobbers the argument registers the path would be sitting
+    // in. They are parked on the stack and popped once the path is staged.
+    let (mode_reg, recursive_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x3", "x4"),
+        Arch::X86_64 => ("rcx", "r8"),
+    };
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    if let Some(permissions) = permissions {
+        resolve_int_operand_to_result(ctx, permissions, "mkdir permissions")?;
+        abi::emit_push_reg(ctx.emitter, result_reg);
+    }
+    if let Some(recursive) = recursive {
+        resolve_int_operand_to_result(ctx, recursive, "mkdir recursive")?;
+        abi::emit_push_reg(ctx.emitter, result_reg);
+    }
+    load_string_to_result(ctx, path, "mkdir")?;
+    if recursive.is_some() {
+        abi::emit_pop_reg(ctx.emitter, recursive_reg);                          // popped first: staged last
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, recursive_reg, 0);            // PHP's default $recursive, false
+    }
+    if permissions.is_some() {
+        abi::emit_pop_reg(ctx.emitter, mode_reg);
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, mode_reg, 0o777);             // PHP's default $permissions, masked by umask
+    }
+    emit_mkdir_wrapper_dispatch(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Emits `mkdir` wrapper dispatch, forwarding the mode and recursive flag to both paths.
+///
+/// The shape mirrors `emit_single_path_wrapper_dispatch`; it exists separately because that
+/// one passes literal zeros for the wrapper's two argument slots and calls a runtime helper
+/// that takes none.
+fn emit_mkdir_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
+    let wrapper = ctx.next_label("mkdir_wrapper");
+    let after = ctx.next_label("mkdir_after");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #32");                         // reserve scratch across the wrapper probe
+            ctx.emitter.instruction("str x1, [sp, #0]");                        // preserve the path pointer for the chosen helper
+            ctx.emitter.instruction("str x2, [sp, #8]");                        // preserve the path length for the chosen helper
+            ctx.emitter.instruction("str x3, [sp, #16]");                       // preserve the mode across the probe call
+            ctx.emitter.instruction("str x4, [sp, #24]");                       // preserve the recursive flag across the probe call
+            ctx.emitter.instruction("mov x0, x1");                              // pass the path pointer to the wrapper-scheme probe
+            ctx.emitter.instruction("mov x1, x2");                              // pass the path length to the wrapper-scheme probe
+            abi::emit_call_label(ctx.emitter, "__rt_path_is_wrapper");
+            ctx.emitter.instruction("ldr x1, [sp, #0]");                        // restore the path pointer for the chosen helper
+            ctx.emitter.instruction("ldr x2, [sp, #8]");                        // restore the path length for the chosen helper
+            ctx.emitter.instruction("ldr x3, [sp, #16]");                       // restore the mode for the chosen helper
+            ctx.emitter.instruction("ldr x4, [sp, #24]");                       // restore the recursive flag for the chosen helper
+            ctx.emitter.instruction(&format!("cbnz x0, {}", wrapper));          // registered wrapper schemes use userspace path-op dispatch
+            abi::emit_call_label(ctx.emitter, "__rt_mkdir_ex");
+            ctx.emitter.instruction(&format!("b {}", after));                   // skip wrapper path-op after the native helper
+            ctx.emitter.label(&wrapper);
+            ctx.emitter.instruction("mov x0, x1");                              // pass the wrapper path pointer
+            ctx.emitter.instruction("mov x1, x2");                              // pass the wrapper path length
+            ctx.emitter
+                .instruction(&format!("mov x2, #{}", STREAM_WRAPPER_MKDIR_SLOT)); // pass the wrapper vtable slot
+            ctx.emitter.instruction("cmp x4, #0");                              // was recursive creation requested?
+            ctx.emitter.instruction("cset x4, ne");                             // STREAM_MKDIR_RECURSIVE is 1
+            ctx.emitter.instruction("orr x4, x4, #8");                          // STREAM_REPORT_ERRORS, which mkdir() always sets
+            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
+            ctx.emitter.label(&after);
+            ctx.emitter.instruction("add sp, sp, #32");                         // release the wrapper probe scratch
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 32");                             // reserve scratch across the wrapper probe
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the path pointer for the chosen helper
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // preserve the path length for the chosen helper
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rcx");           // preserve the mode across the probe call
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 24], r8");            // preserve the recursive flag across the probe call
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the path pointer to the wrapper-scheme probe
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the path length to the wrapper-scheme probe
+            abi::emit_call_label(ctx.emitter, "__rt_path_is_wrapper");
+            ctx.emitter.instruction("test rax, rax");                           // test whether the path scheme matched a registered wrapper
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // restore the path pointer for the chosen helper
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // restore the path length for the chosen helper
+            ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 16]");           // restore the mode for the chosen helper
+            ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 24]");            // restore the recursive flag for the chosen helper
+            ctx.emitter.instruction(&format!("jnz {}", wrapper));               // registered wrapper schemes use userspace path-op dispatch
+            abi::emit_call_label(ctx.emitter, "__rt_mkdir_ex");
+            ctx.emitter.instruction(&format!("jmp {}", after));                 // skip wrapper path-op after the native helper
+            ctx.emitter.label(&wrapper);
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the wrapper path pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the wrapper path length
+            ctx.emitter
+                .instruction(&format!("mov rdx, {}", STREAM_WRAPPER_MKDIR_SLOT)); // pass the wrapper vtable slot
+            ctx.emitter.instruction("test r8, r8");                             // was recursive creation requested?
+            ctx.emitter.instruction("setne r8b");                               // STREAM_MKDIR_RECURSIVE is 1
+            ctx.emitter.instruction("movzx r8, r8b");                           // widen the flag into the full argument register
+            ctx.emitter.instruction("or r8, 8");                                // STREAM_REPORT_ERRORS, which mkdir() always sets
+            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
+            ctx.emitter.label(&after);
+            ctx.emitter.instruction("add rsp, 32");                             // release the wrapper probe scratch
+        }
+    }
 }
 
 /// Emits wrapper dispatch for a single-path mutation with native fallback.

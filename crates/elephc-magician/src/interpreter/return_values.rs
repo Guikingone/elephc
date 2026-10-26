@@ -24,16 +24,27 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
     match control {
         EvalControl::None => eval_declared_implicit_return_value(return_type, values),
         EvalControl::ReturnVoid => eval_declared_void_return_value(return_type, values),
-        EvalControl::Return(result) => eval_declared_explicit_return_value(
-            return_type,
-            return_owner,
-            called_class_name,
-            result,
-            context,
-            values,
-        ),
+        EvalControl::Return(value) => {
+            // A `return $var;` hands back the SCOPE's cell, and a borrowed handle carries no
+            // owner of its own. `finish_activation_scope` releases every owned local right
+            // after this, so returning the borrowed cell unchanged left the caller holding
+            // freed storage: Symfony's `SodiumVault::list()` returned the list hash, the
+            // activation released the same box, and `count()`/`foreach` then read the
+            // allocator's free-list pointer. Take the same lease the throw path takes.
+            let value = if value.is_borrowed() { values.retain(value)? } else { value };
+            let result = eval_declared_explicit_return_value(
+                return_type,
+                return_owner,
+                called_class_name,
+                value,
+                context,
+                values,
+            );
+            finish_declared_return_value(value, result, context, values)
+        }
         EvalControl::Throw(result) => {
-            context.set_pending_throw(result);
+            let thrown = if result.is_borrowed() { values.retain(result)? } else { result };
+            context.set_pending_throw(thrown);
             Err(EvalStatus::UncaughtThrowable)
         }
         EvalControl::Break(_) | EvalControl::Continue(_) | EvalControl::Goto(_) => {
@@ -51,27 +62,43 @@ pub(in crate::interpreter) fn eval_declared_native_return_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let Some(return_type) = return_type else {
-        return Ok(value);
-    };
-    if eval_declared_return_type_is_void(return_type) {
-        return if values.type_tag(value)? == EVAL_TAG_NULL {
-            Ok(value)
-        } else {
-            Err(EvalStatus::RuntimeFatal)
+    let result = (|| {
+        let Some(return_type) = return_type else {
+            return Ok(value);
         };
+        if eval_declared_return_type_is_void(return_type) {
+            return if values.type_tag(value)? == EVAL_TAG_NULL {
+                Ok(value)
+            } else {
+                Err(EvalStatus::RuntimeFatal)
+            };
+        }
+        if eval_declared_return_type_is_never(return_type) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        eval_declared_return_value(
+            return_type, return_owner, called_class_name, value, context, values,
+        )
+    })();
+    finish_declared_return_value(value, result, context, values)
+}
+
+/// Consumes an owned return cell when type validation rejects it or replaces it with a coerced value.
+fn finish_declared_return_value(
+    original: RuntimeCellHandle,
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !matches!(&result, Ok(value) if *value == original) {
+        if let Err(status) = eval_release_value(context, values, original) {
+            if let Ok(coerced) = result {
+                eval_release_value(context, values, coerced)?;
+            }
+            return Err(status);
+        }
     }
-    if eval_declared_return_type_is_never(return_type) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    eval_declared_return_value(
-        return_type,
-        return_owner,
-        called_class_name,
-        value,
-        context,
-        values,
-    )
+    result
 }
 
 /// Materializes an implicit return according to the declared return type.
@@ -161,11 +188,24 @@ fn eval_declared_return_value(
             return Ok(coerced);
         }
     }
-    // PHP names the callable, says `Return value`, and names both types.
+    // PHP names the callable, says `Return value`, and names both types. A `static` return
+    // type is named by the class it resolved to (`must be of type Child`).
+    let mut expected = eval_declared_type_spelling(return_type);
+    if let Some(called) = called_class_name {
+        expected = expected
+            .split('|')
+            .map(|part| match part {
+                "static" => called.trim_start_matches('\\').to_string(),
+                "?static" => format!("?{}", called.trim_start_matches('\\')),
+                other => other.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("|");
+    }
     let message = format!(
         "{}(): Return value must be of type {}, {} returned",
         context.current_function().unwrap_or_default(),
-        eval_declared_type_spelling(return_type),
+        expected,
         eval_given_type_spelling(value, values)?
     );
     eval_throw_type_error(&message, context, values)
@@ -470,6 +510,12 @@ pub(in crate::interpreter) fn eval_given_type_spelling(
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array".to_string(),
         EVAL_TAG_RESOURCE => "resource".to_string(),
         EVAL_TAG_OBJECT => {
+            // An eval-declared object is carried by a stdClass runtime object; its PHP class is
+            // the one its owning context records. The carrier's name made a `static` return
+            // mismatch read `..., stdClass returned` where php names the class.
+            if let Some(name) = eval_owned_object_class_name(value, values)? {
+                return Ok(name);
+            }
             let name = values.object_class_name(value)?;
             let bytes = values.string_bytes(name)?;
             values.release(name)?;
@@ -477,4 +523,17 @@ pub(in crate::interpreter) fn eval_given_type_spelling(
         }
         _ => "mixed".to_string(),
     })
+}
+
+/// Returns the eval class of an object some eval context owns, or `None` for a native object.
+fn eval_owned_object_class_name(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    let identity = values.object_identity(value)?;
+    let Some(context) = crate::dynamic_destructors::dynamic_object_owner_context(identity) else {
+        return Ok(None);
+    };
+    // SAFETY: the owner registry only hands out live contexts.
+    Ok(unsafe { context.as_ref() }.and_then(|context| context.dynamic_object_class_name(identity)))
 }

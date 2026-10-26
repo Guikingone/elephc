@@ -20,9 +20,6 @@ use crate::codegen_support::{
     platform::Arch,
 };
 
-/// Runtime value tag for string entries stored in associative arrays.
-const STR_TAG: i64 = 1;
-
 /// Emits `__rt_getenv` helper for ARM64 targets (macOS/Linux).
 ///
 /// Converts a PHP string (name ptr in x1, name len in x2) to a C string via

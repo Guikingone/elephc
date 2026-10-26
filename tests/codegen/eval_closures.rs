@@ -8,7 +8,9 @@
 //! - Fixtures compile PHP to native code, enter the eval bridge, and execute
 //!   closure callable paths through elephc-magician.
 
-use crate::support::{compile_and_run, compile_and_run_capture, compile_and_run_files};
+use crate::support::{
+    compile_and_run, compile_and_run_capture, compile_and_run_files, compile_and_run_with_heap_debug,
+};
 
 /// Verifies dynamic foreach references write through to source arrays and survive nested aliases.
 #[test]
@@ -1768,4 +1770,95 @@ $box->describe(1);
 "#,
     );
     assert_eq!(out, "0: => none\n2:x,y => 9\n");
+}
+
+/// Verifies `ReflectionFunction` over compiled closure literals reports the file and the full
+/// line range of the literal: a multi-line function closure, an arrow fn, and a method's closure.
+#[test]
+fn test_reflection_function_of_compiled_closure_reports_file_and_lines() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class K {
+    public function m() {
+        return function () {
+        };
+    }
+}
+function show($label, $c) {
+    $r = new ReflectionFunction($c);
+    $file = (string) $r->getFileName();
+    echo $label, " ", $file === __FILE__ ? "main" : "other", " ", $r->getStartLine(), "-", $r->getEndLine(), "\n";
+}
+$f = function ($x) {
+    return $x + 1;
+};
+$g = fn($y) => $y * 2;
+$h = (new K())->m();
+show("function", $f);
+show("arrow", $g);
+show("method", $h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "function main 13-15\narrow main 16-16\nmethod main 4-5\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "closure reflection leaked: {}",
+        out.stderr
+    );
+}
+
+/// Verifies closures created by eval reflect php's `... : eval()'d code` file and their line
+/// range inside the fragment.
+#[test]
+fn test_reflection_function_of_eval_closure_reports_eval_file_and_lines() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function show($label, $c) {
+    $r = new ReflectionFunction($c);
+    $file = (string) $r->getFileName();
+    echo $label, " ", str_contains($file, "eval()'d code") ? "eval" : "other", " ", $r->getStartLine(), "-", $r->getEndLine(), "\n";
+}
+$e = eval('return function ($a) {
+    return $a;
+};');
+show("eval", $e);
+$e2 = eval('return fn($z) => $z;');
+show("eval-arrow", $e2);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "eval eval 1-3\neval-arrow eval 1-1\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "closure reflection leaked: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a closure from a runtime-included file reflects that file and its real lines.
+///
+/// No leak assertion: any `include` at runtime currently ends with two live blocks (the same
+/// with `return 5;` as the file's body), independent of closures or Reflection.
+#[test]
+fn test_reflection_function_of_included_closure_reports_included_file_and_lines() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function show($label, $c) {
+    $r = new ReflectionFunction($c);
+    $file = (string) $r->getFileName();
+    echo $label, " ", str_contains($file, "rf_inc_") ? "inc" : "other", " ", $r->getStartLine(), "-", $r->getEndLine(), "\n";
+}
+$file = sys_get_temp_dir() . "/rf_inc_" . getmypid() . ".php";
+file_put_contents($file, "<?php\n\n\nreturn function () {\n    return 1;\n};\n");
+$i = include $file;
+show("include", $i);
+unlink($file);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "include inc 4-6\n");
 }

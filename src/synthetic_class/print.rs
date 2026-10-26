@@ -389,6 +389,15 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             expression(index),
             expression(value)
         ),
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => format!(
+            "{indent}{}->{property} = &{};",
+            expression(object),
+            expression(source)
+        ),
         StmtKind::PropertyAssign {
             object,
             property,
@@ -626,6 +635,9 @@ fn return_hint(return_type: &Option<TypeExpr>) -> String {
 }
 
 /// A type expression as PHP source.
+///
+/// The parser uses `TypeExpr::Void` for both standalone `void` and a `null` union member.
+/// Union context selects the PHP spelling that reparses to the same member.
 fn type_expr(ty: &TypeExpr) -> String {
     match ty {
         TypeExpr::Int => "int".to_string(),
@@ -636,10 +648,16 @@ fn type_expr(ty: &TypeExpr) -> String {
         TypeExpr::Void => "void".to_string(),
         TypeExpr::Never => "never".to_string(),
         TypeExpr::Iterable => "iterable".to_string(),
+        TypeExpr::Nullable(inner) if matches!(inner.as_ref(), TypeExpr::Union(_)) => {
+            format!("{}|null", type_expr(inner))
+        }
         TypeExpr::Nullable(inner) => format!("?{}", type_expr(inner)),
         TypeExpr::Union(members) => members
             .iter()
-            .map(type_expr)
+            .map(|member| match member {
+                TypeExpr::Void => "null".to_string(),
+                other => type_expr(other),
+            })
             .collect::<Vec<_>>()
             .join("|"),
         TypeExpr::Ptr(None) => "ptr".to_string(),
@@ -781,6 +799,15 @@ fn render(value: &Expr) -> (String, u8) {
         ExprKind::ArrayLiteral(items) => {
             let rendered: Vec<String> = items.iter().map(expression).collect();
             (format!("[{}]", rendered.join(", ")), ATOM)
+        }
+        ExprKind::Match { subject, arms, default } => {
+            let mut rendered = arms.iter().map(|(labels, value)| {
+                format!("{} => {}", argument_list(labels), expression(value))
+            }).collect::<Vec<_>>();
+            if let Some(default) = default {
+                rendered.push(format!("default => {}", expression(default)));
+            }
+            (format!("match ({}) {{ {} }}", expression(subject), rendered.join(", ")), ATOM)
         }
         ExprKind::ArrayLiteralAssoc(entries) => {
             let rendered: Vec<String> = entries
@@ -984,6 +1011,7 @@ fn truncate(node: impl std::fmt::Debug) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::synthetic_class::{function, t_union};
     use crate::web_prelude::PhpVersion;
 
     /// Removes span payloads so a printed-and-reparsed node compares against the built one on
@@ -1027,6 +1055,25 @@ mod tests {
                 "{label}: {name} changed across the round trip"
             );
         }
+    }
+
+    /// Distinguishes PHP's `null` union member from a standalone `void` return spelling.
+    #[test]
+    fn type_printer_distinguishes_null_union_members_from_void_returns() {
+        let program = vec![
+            function("accept")
+                .param(
+                    "value",
+                    t_union(vec![TypeExpr::Str, TypeExpr::Int, TypeExpr::Void]),
+                )
+                .build(),
+            function("finish").returns(TypeExpr::Void).build(),
+        ];
+
+        let rendered = print_program(&program);
+        assert!(rendered.contains("function accept(string|int|null $value)"));
+        assert!(rendered.contains("function finish(): void"));
+        round_trip("null union and void return spellings", &program);
     }
 
     /// THE PROPERTY THAT MAKES THIS TOOL USABLE AS AN ORACLE: printing a built prelude and
@@ -1080,5 +1127,20 @@ mod tests {
             );
         }
         round_trip("web wrapper", &vec![crate::web_prelude::web_wrap_stmt()]);
+    }
+
+    /// Round-trips nested matches, grouped labels, missing defaults and the empty form.
+    #[test]
+    fn printing_round_trips_match_expressions() {
+        use crate::synthetic_class::{e_call, e_index, e_int, e_match, e_str, s_return};
+        let nested = e_match(e_call("select", vec![]), vec![], None);
+        for default in [None, Some(nested)] {
+            let value = e_match(
+                e_call("subject", vec![]),
+                vec![(vec![e_int(1), e_int(2)], e_str("first"))],
+                default,
+            );
+            round_trip("match expression", &vec![s_return(e_index(value, e_int(0)))]);
+        }
     }
 }

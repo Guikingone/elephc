@@ -1,16 +1,16 @@
 ---
-title: "ucwords() — internals"
+title: "ucwords() - internals"
 description: "Compiler internals for ucwords(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 904
+  order: 998
 ---
 
-## `ucwords()` — internals
+## `ucwords()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/ucwords.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ucwords.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function ucwords(string $string, string $separators = ' \t\r\n\x0c\x0b'): string
+function ucwords(string $string, string $separators = " \t\r\n\x0C\x0B"): string
 ```
 
 ## What the type checker enforces

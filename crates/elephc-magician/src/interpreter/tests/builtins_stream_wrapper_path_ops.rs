@@ -51,7 +51,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "U(pathop://delete-ok)unlink:U(pathop://delete-no)unlinkfalse:M(pathop://dir,511,0)mkdir:M(pathop://tree,449,1)mkdirrecursive:R(pathop://dir,0)rmdirfalse:N(pathop://source,pathop://dest)rename:N(pathop://source2,pathop://dest)callrename"
+        "U(pathop://delete-ok)unlink:U(pathop://delete-no)unlinkfalse:M(pathop://dir,511,8)mkdir:M(pathop://tree,449,9)mkdirrecursive:R(pathop://dir,0)rmdirfalse:N(pathop://source,pathop://dest)rename:N(pathop://source2,pathop://dest)callrename"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

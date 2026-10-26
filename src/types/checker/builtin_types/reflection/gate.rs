@@ -30,6 +30,12 @@ pub(crate) const REFLECTION_CLASS_NAMES: &[&str] = &[
     "ReflectionClassConstant",
     "ReflectionEnumUnitCase",
     "ReflectionEnumBackedCase",
+    // Spelled only through a static call (`ReflectionReference::fromArrayElement(...)`) or as a
+    // parent in `instanceof`/a type, these never reached the gate, and such a program failed
+    // to check with "Undefined class: ReflectionReference".
+    "ReflectionReference",
+    "ReflectionType",
+    "ReflectionFunctionAbstract",
 ];
 
 /// Returns whether `program` can reach any builtin Reflection class.

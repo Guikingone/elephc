@@ -23,6 +23,7 @@ impl ElephcEvalContext {
         }
         self.own_declared_interface_names
             .push(interface.name().to_string());
+        let interface = Arc::new(interface);
         #[cfg(not(test))]
         register_global_eval_interface(&interface);
         self.interfaces.insert(key, interface);
@@ -43,12 +44,13 @@ impl ElephcEvalContext {
     pub fn interface(&self, name: &str) -> Option<&EvalInterface> {
         let key = normalize_class_name(name);
         if let Some(interface) = self.interfaces.get(&key) {
-            return Some(interface);
+            return Some(interface.as_ref());
         }
         let alias = self.class_aliases.get(&key)?;
         (alias.kind == EvalClassAliasKind::Interface)
             .then(|| self.interfaces.get(&normalize_class_name(&alias.target)))
             .flatten()
+            .map(Arc::as_ref)
     }
 
     /// Returns interface names declared through eval or registered from generated metadata.
@@ -82,6 +84,7 @@ impl ElephcEvalContext {
         }
         self.own_declared_trait_names
             .push(trait_decl.name().to_string());
+        let trait_decl = Arc::new(trait_decl);
         #[cfg(not(test))]
         register_global_eval_trait(&trait_decl);
         self.traits.insert(key, trait_decl);
@@ -102,12 +105,13 @@ impl ElephcEvalContext {
     pub fn trait_decl(&self, name: &str) -> Option<&EvalTrait> {
         let key = normalize_class_name(name);
         if let Some(trait_decl) = self.traits.get(&key) {
-            return Some(trait_decl);
+            return Some(trait_decl.as_ref());
         }
         let alias = self.class_aliases.get(&key)?;
         (alias.kind == EvalClassAliasKind::Trait)
             .then(|| self.traits.get(&normalize_class_name(&alias.target)))
             .flatten()
+            .map(Arc::as_ref)
     }
 
     /// Returns trait names declared through eval or registered from generated metadata.
@@ -143,6 +147,7 @@ impl ElephcEvalContext {
             .push(enum_decl.name().trim_start_matches('\\').to_string());
         self.own_declared_class_names
             .push(enum_decl.name().trim_start_matches('\\').to_string());
+        let enum_decl = Arc::new(enum_decl);
         #[cfg(not(test))]
         register_global_eval_enum(&enum_decl);
         self.classes
@@ -165,12 +170,13 @@ impl ElephcEvalContext {
     pub fn enum_decl(&self, name: &str) -> Option<&EvalEnum> {
         let key = normalize_class_name(name);
         if let Some(enum_decl) = self.enums.get(&key) {
-            return Some(enum_decl);
+            return Some(enum_decl.as_ref());
         }
         let alias = self.class_aliases.get(&key)?;
         (alias.kind == EvalClassAliasKind::Enum)
             .then(|| self.enums.get(&normalize_class_name(&alias.target)))
             .flatten()
+            .map(Arc::as_ref)
     }
 
     /// Resolves an enum name or enum alias to the canonical eval enum spelling.
@@ -199,7 +205,7 @@ impl ElephcEvalContext {
             normalize_enum_case_name(case_name),
         );
         if let Some(case) = self.enum_cases.get(&key).copied() {
-            return Some(case);
+            return Some(case.borrowed());
         }
         // An enum declared by ANOTHER context (a class file the autoloader included from a
         // compiled frame gets a context of its own) is imported by `sync_global_eval_classes`,
@@ -207,7 +213,7 @@ impl ElephcEvalContext {
         // reads `TypeIdentifier::INT->value` right after the autoloader declared the enum.
         #[cfg(not(test))]
         if self.enums.contains_key(&key.0) {
-            return global_eval_enum_case(&key.0, &key.1).map(|(case, _)| case);
+            return global_eval_enum_case(&key.0, &key.1).map(|(case, _)| case.borrowed());
         }
         None
     }
@@ -239,11 +245,11 @@ impl ElephcEvalContext {
             normalize_enum_case_name(case_name),
         );
         if let Some(value) = self.enum_case_values.get(&key).copied() {
-            return Some(value);
+            return Some(value.borrowed());
         }
         #[cfg(not(test))]
         if self.enums.contains_key(&key.0) {
-            return global_eval_enum_case(&key.0, &key.1).and_then(|(_, value)| value);
+            return global_eval_enum_case(&key.0, &key.1).and_then(|(_, value)| value).map(RuntimeCellHandle::borrowed);
         }
         None
     }
@@ -356,9 +362,13 @@ impl ElephcEvalContext {
     /// Removes one dynamic object and returns its owned properties plus deferred-free state.
     pub fn forget_dynamic_object(&mut self, identity: u64) -> (Vec<RuntimeCellHandle>, bool) {
         let removed_dynamic_object = self.dynamic_objects.remove(&identity).is_some();
-        self.closure_objects.remove(&identity);
+        // A closure object's metadata outlives its destructor hook (see
+        // `eval_dynamic_destructor`) and is dropped here, once its receiver edges are released,
+        // so its lifetime count is settled here too.
+        let closure_finalizes = self.forget_closure_object(identity);
         self.dynamic_destructing_objects.remove(&identity);
         self.dynamic_destructed_objects.remove(&identity);
+        self.clone_reinitialized_properties.remove(&identity);
         let property_values = self
             .dynamic_property_order
             .remove(&identity)
@@ -380,7 +390,8 @@ impl ElephcEvalContext {
         if let Some(initializer) = self.lazy_ghost_initializers.remove(&identity) {
             property_values.push(initializer);
         }
-        let should_finalize = removed_dynamic_object && self.forget_dynamic_object_owner();
+        let should_finalize =
+            (removed_dynamic_object && self.forget_dynamic_object_owner()) || closure_finalizes;
         (property_values, should_finalize)
     }
 
@@ -395,7 +406,7 @@ impl ElephcEvalContext {
             .get(&(identity, storage_property_name.to_string()))
             .copied()
         {
-            return Some(value);
+            return Some(value.borrowed());
         }
         #[cfg(not(test))]
         {
@@ -512,6 +523,38 @@ impl ElephcEvalContext {
         }
     }
 
+    /// Returns the `index`th cell THIS context owns on behalf of one object, for the native
+    /// cycle collector.
+    ///
+    /// The overlay values, an `ArrayIterator`'s storage and a pending lazy-ghost initializer are
+    /// all references the object holds, released with it by `forget_dynamic_object`, but they
+    /// live here rather than in the object's slots. A collector that cannot see them takes each
+    /// for an external root: `$o->self = $o` on an eval-declared object was never collected.
+    /// Only this context's own entries are answered; a shadow another context keeps stays an
+    /// uncounted (conservative) owner.
+    pub fn dynamic_object_gc_child(&self, identity: u64, index: usize) -> Option<RuntimeCellHandle> {
+        let order = self.dynamic_property_order.get(&identity);
+        let property_count = order.map_or(0, Vec::len);
+        if index < property_count {
+            let name = &order?[index];
+            return self
+                .dynamic_property_values
+                .get(&(identity, name.clone()))
+                .copied();
+        }
+        let mut extra = index - property_count;
+        if let Some(state) = self.array_iterators.get(&identity) {
+            if extra == 0 {
+                return Some(state.storage);
+            }
+            extra -= 1;
+        }
+        if extra == 0 {
+            return self.lazy_ghost_initializers.get(&identity).copied();
+        }
+        None
+    }
+
     /// Removes this context from the process-local dynamic object destructor registry.
     pub fn unregister_dynamic_object_context(&self) {
         crate::ffi::dynamic_destructors::unregister_dynamic_objects_for_context(
@@ -532,11 +575,52 @@ impl ElephcEvalContext {
                 return None;
             }
             let class_key = owner.dynamic_objects.get(&identity)?;
-            self.classes.get(class_key).map(Arc::as_ref)
+            // This context may never have imported the class: a hydrator closure that the
+            // autoloaded `DeepClone` declared writes objects of a class Doctrine's autoloader
+            // declared elsewhere. Missing it here sent `$object->$name = $value` to the native
+            // shell's hash, and the private slot the class reads stayed null ("This ParserResult
+            // lacks both the SqlFinalizer..."). The owner outlives its objects, so its entry does.
+            self.classes
+                .get(class_key)
+                .or_else(|| owner.classes.get(class_key))
+                .map(Arc::as_ref)
         }
         #[cfg(test)]
         {
             None
+        }
+    }
+
+    /// Imports the declarations another context made when this one is about to touch an object of
+    /// a class it has never seen.
+    ///
+    /// `dynamic_object_class` answers such an object from its owner, but every later lookup by
+    /// NAME -- declared properties, visibility, the class chain -- reads this context's own table.
+    /// Without the import, Symfony's polyfill-deepclone hydrator (declared by one autoloaded file)
+    /// wrote a Doctrine `ParserResult` (declared by another) as if `$sqlFinalizer` were undeclared:
+    /// a public dynamic property next to the private slot the class reads, which stayed null.
+    pub fn import_foreign_object_class(&mut self, identity: u64) {
+        if self.dynamic_objects.contains_key(&identity) {
+            return;
+        }
+        #[cfg(not(test))]
+        {
+            let Some(owner) = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
+            else {
+                return;
+            };
+            let Some(owner) = (unsafe { owner.as_ref() }) else {
+                return;
+            };
+            if owner.abi_version() != ABI_VERSION {
+                return;
+            }
+            let Some(class_key) = owner.dynamic_objects.get(&identity) else {
+                return;
+            };
+            if !self.classes.contains_key(class_key) {
+                self.sync_global_eval_classes();
+            }
         }
     }
 
@@ -721,34 +805,92 @@ impl ElephcEvalContext {
     /// Binds one runtime array payload slot to a PHP reference target.
     pub fn bind_array_element_alias(
         &mut self,
-        array_identity: u64,
+        array: RuntimeCellHandle,
         key: EvalArrayReferenceKey,
         target: EvalReferenceTarget,
     ) -> Option<EvalReferenceTarget> {
+        self.prune_retired_array_aliases();
+        let address = array.as_ptr() as usize;
+        let aliases = self.array_element_aliases.entry(address).or_insert_with(|| {
+            let lifetime = crate::ffi::array_references::register_array_reference_cell(
+                address, &self.array_reference_retirements,
+            );
+            EvalArrayReferenceAliases { targets: HashMap::new(), lifetime }
+        });
+        aliases.targets.insert(key, target)
+    }
+
+    /// Returns whether any slot of this runtime array is bound to a PHP reference target.
+    pub fn array_has_element_aliases(&self, array: RuntimeCellHandle) -> bool {
         self.array_element_aliases
-            .insert((array_identity, key), target)
+            .get(&(array.as_ptr() as usize))
+            .is_some_and(|aliases| !aliases.targets.is_empty())
     }
 
     /// Returns the persistent reference target bound to one runtime array payload slot.
     pub fn array_element_alias(
         &self,
-        array_identity: u64,
+        array: RuntimeCellHandle,
         key: &EvalArrayReferenceKey,
     ) -> Option<&EvalReferenceTarget> {
         self.array_element_aliases
-            .get(&(array_identity, key.clone()))
+            .get(&(array.as_ptr() as usize))
+            .filter(|alias| alias.lifetime.is_live())
+            .and_then(|alias| alias.targets.get(key))
     }
 
-    /// Whether any element of the array payload is bound to a PHP reference target.
-    ///
-    /// The slots live in a side table keyed by array identity, which a fresh payload does not
-    /// inherit, so an array that holds references must not be replaced by a copy of itself.
-    pub fn array_has_element_aliases(&self, array_identity: u64) -> bool {
-        !self.array_element_aliases.is_empty()
-            && self
-                .array_element_aliases
-                .keys()
-                .any(|(identity, _)| *identity == array_identity)
+    /// Copies element references into a fresh COW array, omitting an explicitly removed key.
+    pub(crate) fn clone_array_element_aliases(
+        &mut self,
+        source: RuntimeCellHandle,
+        destination: RuntimeCellHandle,
+        removed: Option<&EvalArrayReferenceKey>,
+    ) {
+        self.prune_retired_array_aliases();
+        let targets = self.array_element_aliases.get(&(source.as_ptr() as usize))
+            .filter(|aliases| aliases.lifetime.is_live())
+            .map(|aliases| aliases.targets.iter()
+                .filter(|(key, _)| Some(*key) != removed)
+                .map(|(key, target)| (key.clone(), target.clone()))
+                .collect::<HashMap<_, _>>())
+            .unwrap_or_default();
+        let destination = destination.as_ptr() as usize;
+        self.array_element_aliases.remove(&destination);
+        if !targets.is_empty() {
+            let lifetime = crate::ffi::array_references::register_array_reference_cell(
+                destination, &self.array_reference_retirements,
+            );
+            self.array_element_aliases.insert(destination, EvalArrayReferenceAliases { targets, lifetime });
+        }
+    }
+
+    /// Removes alias and cursor metadata when an array box is retired or reused.
+    pub(crate) fn clear_array_metadata(&mut self, array: RuntimeCellHandle) {
+        let identity = array.as_ptr() as usize;
+        self.array_element_aliases.remove(&identity);
+        self.array_cursors.remove(&identity);
+    }
+
+    /// Copies array references and cursor state to an independently owned array box.
+    pub(crate) fn copy_array_metadata(&mut self, source: RuntimeCellHandle, target: RuntimeCellHandle) {
+        let source_id = source.as_ptr() as usize;
+        let target_id = target.as_ptr() as usize;
+        if source_id == target_id { return; }
+        let cursor = self.array_cursors.get(&source_id).copied();
+        self.clone_array_element_aliases(source, target, None);
+        self.array_cursors.remove(&target_id);
+        if let Some(cursor) = cursor {
+            self.array_cursors.insert(target_id, cursor);
+        }
+    }
+
+    /// Drops only retired allocation records, preserving any newer allocation at the same address.
+    fn prune_retired_array_aliases(&mut self) {
+        for address in self.array_reference_retirements.take() {
+            if self.array_element_aliases.get(&address).is_some_and(|aliases| !aliases.lifetime.is_live()) {
+                self.array_element_aliases.remove(&address);
+            }
+        }
     }
 
     /// Marks one eval object storage slot as initialized.

@@ -1,16 +1,16 @@
 ---
-title: "random_int() — internals"
+title: "random_int() - internals"
 description: "Compiler internals for random_int(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 610
+  order: 611
 ---
 
-## `random_int()` — internals
+## `random_int()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/random_int.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/random_int.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

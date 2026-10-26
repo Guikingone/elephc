@@ -1,16 +1,16 @@
 ---
-title: "lchgrp() — internals"
+title: "lchgrp() - internals"
 description: "Compiler internals for lchgrp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 297
+  order: 298
 ---
 
-## `lchgrp()` — internals
+## `lchgrp()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/lchgrp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/lchgrp.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `dynamic_target`

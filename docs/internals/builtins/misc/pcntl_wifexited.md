@@ -1,16 +1,16 @@
 ---
-title: "pcntl_wifexited() — internals"
+title: "pcntl_wifexited() - internals"
 description: "Compiler internals for pcntl_wifexited(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 676
+  order: 696
 ---
 
-## `pcntl_wifexited()` — internals
+## `pcntl_wifexited()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_wifexited.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_wifexited.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

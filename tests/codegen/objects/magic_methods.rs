@@ -513,12 +513,33 @@ var_dump(empty($x));
 
 /// Compiles and runs the checked-in `examples/magic-methods/main.php` fixture,
 /// exercising every supported magic method end to end.
+///
+/// The expectation is the example's whole stdout, so editing the example without
+/// editing this string fails here. The last four lines are the `__toString()`
+/// contexts: `implode()` renders the object element through the same conversion
+/// the interpolation, concatenation and `(string)` cast beside it use, which is
+/// the shape the boxed-object cast fix restored. Verified byte-identical to host
+/// PHP 8.5.10.
 #[test]
 fn test_example_magic_methods_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/magic-methods/main.php"));
     assert_eq!(
         out,
-        "@nahime\n[missing]\nrole=admin;visits=3;\nnahime:active\nmissing displayName(short)\nactive\ninactive\nstatic create(nahime)\n"
+        concat!(
+            "@nahime\n",
+            "[missing]\n",
+            "role=admin;visits=3;\n",
+            "nahime:active\n",
+            "nahime:self\n",
+            "missing displayName(short)\n",
+            "active\n",
+            "inactive\n",
+            "static create(nahime)\n",
+            "implode: plain, 42, @ada, 2.5, 1\n",
+            "interp:  @ada\n",
+            "concat:  @ada\n",
+            "cast:    @ada\n",
+        )
     );
 }
 
@@ -577,5 +598,135 @@ try {
     assert_eq!(
         out,
         "child-hook|child\nchild-hook|grand\ncallStatic:hook0|base\nyes no\nx+y@child\n1+2@grand\ncallStatic:combine2\nimpl\nError: Call to undefined method Empty_::missing()\n"
+    );
+}
+
+/// `empty($o->p)` through `__isset`/`__get` releases the value `__get` returned once it has
+/// been tested. A `mixed` return is boxed, and that box used to leak on every call.
+#[test]
+fn test_empty_through_magic_get_releases_the_read_value() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class M {
+    public function __isset($n) { return true; }
+    public function __get($n): mixed { return $n === 'a' ? str_repeat('x', 3) : 0; }
+}
+$m = new M();
+$n = 0;
+for ($i = 0; $i < 20; $i++) {
+    if (empty($m->a)) { $n++; }
+    if (empty($m->z)) { $n++; }
+}
+echo $n, "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "20\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A method call on an UNKNOWN receiver (untyped parameter, array element, closure parameter)
+/// reaches `__call()` when the object's class has it but not the method.
+///
+/// The class-id dispatch ladder behind such a call listed only the classes that declare the
+/// method, so `fn ($carry, $e) => $e->getLength()` over Termwind elements died with "Call to
+/// undefined method" instead of Element::__call() forwarding to its styles. Argument side effects
+/// happen once and in order; an object without `__call()` still gets php's own error.
+/// Expected output is real php 8.5 output.
+#[test]
+fn test_unknown_receiver_method_call_falls_back_to_magic_call() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public function __call($n, $a) { return "magic:$n(" . implode(",", $a) . ")"; } }
+class B { public function foo($x = 0) { return "foo$x"; } }
+class C extends A { public function bar() { return "bar"; } }
+class D { }
+function f($o, $x) { return $o->foo($x); }
+function g($o) { return $o->bar(); }
+echo f(new B, 5), "|", f(new A, 6), "|", f(new C, 7), "|", g(new C), "|", g(new A), "\n";
+$items = [new A, new B, new C];
+echo implode(",", array_map(fn ($e) => $e->foo(1), $items)), "\n";
+echo array_reduce($items, fn ($carry, $e) => $carry . $e->foo(2), ''), "\n";
+$n = 0;
+function h($o, &$n) { return $o->foo(++$n, ++$n); }
+echo h(new A, $n), " n=$n\n";
+try { f(new D, 1); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { f(null, 1); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "foo5|magic:foo(6)|magic:foo(7)|bar|magic:bar()\n\
+magic:foo(1),foo1,magic:foo(1)\n\
+magic:foo(2)foo2magic:foo(2)\n\
+magic:foo(1,2) n=2\n\
+Error: Call to undefined method D::foo()\n\
+Error: Call to a member function foo() on null\n"
+    );
+}
+
+/// A property read through an UNKNOWN receiver reaches `__get()` and keeps php's access rules.
+///
+/// The class-id ladder behind `$untyped->name` listed only classes that declare the property, so a
+/// class with `__get()` and no such slot fell into the miss arm and warned `Undefined property`.
+/// `??` consults `__isset()` first when the class declares one and `__get()` otherwise, `isset()`
+/// never calls `__get()`, and a protected slot read from outside the class still raises php's
+/// catchable `Error`. The loop is scaled so a per-read leak cannot hide behind live-at-exit values.
+/// Expected output is real php 8.5 output.
+#[test]
+fn test_unknown_receiver_property_read_reaches_magic_get() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Plain { public $name = 'plain'; protected $secret = 's1'; }
+class Plain2 { public $name = 'plain2'; }
+class Magic { public function __get($n) { return "magic:$n"; } }
+class SubMagic extends Magic {}
+class Gated {
+    public function __isset($n) { return $n === 'yes'; }
+    public function __get($n) { return "gated:$n"; }
+}
+class Hidden {
+    private $name = 'hidden';
+    public function __get($n) { return "hidden-magic:$n"; }
+    public function own($o) { return $o->name; }
+}
+function nameOf($o) { return $o->name; }
+function nameOrDefault($o) { return $o->name ?? 'none'; }
+function hasName($o) { return isset($o->name) ? 'y' : 'n'; }
+function yesOrDefault($o) { return $o->yes ?? 'none'; }
+function secretOf($o) {
+    try { return $o->secret; } catch (Error $e) { return get_class($e) . ':' . $e->getMessage(); }
+}
+$objects = [new Plain, new Plain2, new Magic, new SubMagic, new Gated, new Hidden];
+for ($i = 0; $i < 25; $i++) {
+    $out = [];
+    foreach ($objects as $o) {
+        $out[] = nameOf($o) . '/' . nameOrDefault($o) . '/' . hasName($o) . '/' . yesOrDefault($o);
+    }
+    $out[] = secretOf(new Plain);
+    $out[] = (new Hidden)->own(new Hidden);
+}
+echo implode("\n", $out), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "plain/plain/y/none\n\
+plain2/plain2/y/none\n\
+magic:name/magic:name/n/magic:yes\n\
+magic:name/magic:name/n/magic:yes\n\
+gated:name/none/n/gated:yes\n\
+hidden-magic:name/hidden-magic:name/n/hidden-magic:yes\n\
+Error:Cannot access protected property Plain::$secret\n\
+hidden\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
     );
 }

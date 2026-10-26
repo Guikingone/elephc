@@ -12,6 +12,7 @@ use std::collections::HashSet;
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
+use crate::names::Name;
 use crate::parser::ast::{
     CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
 };
@@ -191,6 +192,10 @@ pub(super) fn parse_closure(
                     ));
                 }
                 *pos += 1;
+                // PHP 8.0 admits a trailing comma: `use ($a, $b,)`.
+                if tokens.get(*pos).map(|(token, _)| token) == Some(&Token::RParen) {
+                    break;
+                }
             }
             let is_ref = if tokens.get(*pos).map(|(token, _)| token) == Some(&Token::Ampersand) {
                 *pos += 1;
@@ -224,6 +229,7 @@ pub(super) fn parse_closure(
     }
     let return_type = parse_optional_closure_return_type(tokens, pos, span)?;
     let body = crate::parser::stmt::parse_executable_block(tokens, pos)?;
+    let span = closure_extent_span(tokens, *pos, span);
     Ok(Expr::new(
         ExprKind::Closure {
             params,
@@ -240,6 +246,26 @@ pub(super) fn parse_closure(
         },
         span,
     ))
+}
+
+/// Widens a closure literal's span to end at the last token its body consumed.
+///
+/// php names a closure `{closure:SCOPE:LINE}` and answers `ReflectionFunction::getEndLine()`
+/// with the line of its closing `}` (or, for an arrow function, of its body's last token); the
+/// point span the literal kept answered the start line for both.
+fn closure_extent_span(tokens: &[SpannedToken], pos: usize, span: Span) -> Span {
+    let Some(last) = pos.checked_sub(1).and_then(|index| tokens.get(index)) else {
+        return span;
+    };
+    if last.1.span.end_line < span.line {
+        return span;
+    }
+    Span {
+        line: span.line,
+        col: span.col,
+        end_line: last.1.span.end_line,
+        end_col: last.1.span.end_col,
+    }
 }
 
 /// Parses a PHP arrow function: `fn(...) => expr`.
@@ -271,6 +297,7 @@ pub(super) fn parse_arrow_closure(
     let body_expr = parse_expr(tokens, pos)?;
     let captures = infer_arrow_captures(&body_expr, &params, variadic.as_ref());
     let body = vec![Stmt::new(StmtKind::Return(Some(body_expr)), span)];
+    let span = closure_extent_span(tokens, *pos, span);
     Ok(Expr::new(
         ExprKind::Closure {
             params,
@@ -344,18 +371,31 @@ fn infer_arrow_captures(
     let mut captures = Vec::new();
     let mut seen = HashSet::new();
     collect_arrow_expr_captures(body_expr, &mut bound, &mut seen, &mut captures);
-    captures.retain(|name| !crate::globals_array::is_alias(name));
+    // Superglobals (and `$GLOBALS`) are visible in every scope, so an arrow function reads them
+    // directly instead of capturing a by-value copy of the enclosing scope's binding. Capturing
+    // `$_SERVER` made the closure re-store the global from its copy on entry, and the
+    // immediately invoked form returned a garbage string.
+    captures.retain(|name| {
+        !crate::globals_array::is_alias(name)
+            && !crate::superglobals::is_superglobal(name)
+            && name != "GLOBALS"
+    });
     captures
 }
 
 /// Records `name` as an arrow capture unless it is bound locally or already recorded.
+///
+/// A compiler-generated temporary is recognised through [`crate::names::is_generated_local_name`],
+/// the one shared predicate, rather than through an `__elephc` spelling. The prefix is forgeable
+/// from source: `$__elephc_tag` is a perfectly legal PHP variable, and filtering on the prefix
+/// silently dropped it from an arrow function's capture list, so the body read an unset variable.
 fn push_arrow_capture(
     name: &str,
     bound: &HashSet<String>,
     seen: &mut HashSet<String>,
     captures: &mut Vec<String>,
 ) {
-    if bound.contains(name) || name.starts_with("__elephc") {
+    if bound.contains(name) || crate::names::is_generated_local_name(name) {
         return;
     }
     if seen.insert(name.to_string()) {
@@ -463,6 +503,13 @@ fn collect_arrow_expr_captures(
             for (key, value) in items {
                 collect_arrow_expr_captures(key, bound, seen, captures);
                 collect_arrow_expr_captures(value, bound, seen, captures);
+            }
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    collect_arrow_expr_captures(expr, bound, seen, captures);
+                }
             }
         }
         ExprKind::Match {
@@ -682,6 +729,13 @@ fn parse_closure_params(
                 } else {
                     None
                 };
+                // `T $x = null` is implicitly `?T` (see `parse_params`).
+                let type_ann = match (type_ann, &default) {
+                    (Some(ty), Some(default)) if matches!(default.kind, ExprKind::Null) => {
+                        Some(crate::parser::stmt::implicitly_nullable_type(ty))
+                    }
+                    (ty, _) => ty,
+                };
                 params.push((name, type_ann, default, is_ref));
             }
             _ => return Err(CompileError::new(span, "Expected parameter variable")),
@@ -692,6 +746,28 @@ fn parse_closure_params(
     }
     *pos += 1;
     Ok((params, variadic, variadic_by_ref, variadic_type))
+}
+
+/// Parses the tail of a function-style call once the name and its opening `(` have been
+/// consumed: `...)` yields the first-class callable for `name`, anything else goes through
+/// the shared argument parser and becomes a `FunctionCall`. Shared by plain named calls and
+/// the PHP 8.5 `clone(...)` function form.
+pub(super) fn parse_function_call_or_callable(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    name: Name,
+) -> Result<Expr, CompileError> {
+    if parse_first_class_callable_parens(tokens, pos)? {
+        Ok(Expr::new(
+            ExprKind::FirstClassCallable(CallableTarget::Function(name)),
+            span,
+        ))
+    } else {
+        let args = parse_args(tokens, pos, span)?;
+        let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+        Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
+    }
 }
 
 /// Parses a named expression that could be a constant reference, function call, buffer_new<T>, ptr_cast<T>, or static/class method access.
@@ -711,6 +787,22 @@ pub(super) fn parse_named_expr(
         && tokens[*pos].0 == Token::LParen
     {
         return super::prefix::parse_legacy_array_literal(tokens, pos, span);
+    }
+    // `exit` and `die` are language constructs whose parentheses are optional: a bare `exit;`
+    // is `exit()`. Read as a name it became a reference to the undefined constant `exit`, which
+    // throws instead of ending the script -- and, since no branch ending in it was terminal,
+    // `if ($u === false) { exit; }` stopped narrowing `$u` for the statements after it.
+    if name.parts.len() == 1
+        && (name.parts[0].eq_ignore_ascii_case("exit") || name.parts[0].eq_ignore_ascii_case("die"))
+        && !(*pos < tokens.len() && tokens[*pos].0 == Token::LParen)
+    {
+        return Ok(Expr::new(
+            ExprKind::FunctionCall {
+                name,
+                args: Vec::new(),
+            },
+            span,
+        ));
     }
     // `buffer_new<>` lexes as the single `<>` token (PHP's `!=` alias).
     if name.parts.len() == 1
@@ -800,16 +892,7 @@ pub(super) fn parse_named_expr(
     }
     if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
         *pos += 1;
-        if parse_first_class_callable_parens(tokens, pos)? {
-            Ok(Expr::new(
-                ExprKind::FirstClassCallable(CallableTarget::Function(name)),
-                span,
-            ))
-        } else {
-            let args = parse_args(tokens, pos, span)?;
-            let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
-            Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
-        }
+        parse_function_call_or_callable(tokens, pos, span, name)
     } else if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
         *pos += 1;
         if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Dollar)) {
@@ -822,6 +905,14 @@ pub(super) fn parse_named_expr(
                 span,
             ));
         }
+        if let Some(expr) = super::calls::parse_braced_static_member(
+            tokens,
+            pos,
+            span,
+            &StaticReceiver::Named(name.clone()),
+        )? {
+            return Ok(expr);
+        }
         let member = match tokens.get(*pos).map(|(token, _)| token) {
             Some(Token::Variable(property)) => {
                 let property = property.clone();
@@ -833,10 +924,6 @@ pub(super) fn parse_named_expr(
                     *pos += 1; // consume '('
                     let dynamic_args = parse_args(tokens, pos, span)?;
                     let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
-                    crate::parser::expr::pratt::reject_named_args_in_dynamic_call(
-                        &dynamic_args,
-                        span,
-                    )?;
                     let receiver = Expr::new(
                         ExprKind::ClassConstant {
                             receiver: StaticReceiver::Named(name),
@@ -844,6 +931,15 @@ pub(super) fn parse_named_expr(
                         span,
                     );
                     let method_expr = Expr::new(ExprKind::Variable(property), span);
+                    if crate::parser::expr::pratt::has_named_args(&dynamic_args) {
+                        let target =
+                            Expr::new(ExprKind::ArrayLiteral(vec![receiver, method_expr]), span);
+                        return Ok(crate::parser::expr::pratt::named_args_dynamic_call(
+                            target,
+                            &dynamic_args,
+                            span,
+                        ));
+                    }
                     let mut call_args =
                         vec![Expr::new(ExprKind::ArrayLiteral(vec![receiver, method_expr]), span)];
                     call_args.extend(dynamic_args);

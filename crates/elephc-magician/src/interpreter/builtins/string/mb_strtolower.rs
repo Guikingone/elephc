@@ -1,17 +1,15 @@
 //! Purpose:
-//! Declarative eval registry entry for PHP's `mb_strtolower()`.
+//! Binds `mb_strtolower` to the shared mbstring engine and neutral PHP contract.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::string` and the declarative direct/values hooks, which
-//!   route the pair through the `Iconv` hook group because the engine lives in `elephc-iconv`.
+//! - The Magician builtin registry.
 //!
 //! Key details:
-//! - Evaluation shares `mb_strtoupper`'s `eval_mb_convert_case_result` with
-//!   `CaseMode::Lower`, so the final-sigma rule and the `ValueError` text are the AOT ones.
+//! - Encoding, Unicode, state, and errors belong to the optional shared engine.
 
 eval_builtin! {
     contract: "mb_strtolower",
     area: String,
-    direct: Iconv,
-    values: Iconv,
+    direct: none,
+    values: none,
 }

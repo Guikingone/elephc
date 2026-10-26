@@ -156,6 +156,19 @@ path cannot locate a sidecar and therefore reject OpenSSL-signed input.
 `getSignature()` returns `['hash' => <uppercase hex>,
 'hash_type' => 'MD5'|'SHA-1'|'SHA-256'|'SHA-512'|'OpenSSL']`.
 
+> **Security note on OpenSSL signing.** The RSA implementation behind
+> `setSignatureAlgorithm(Phar::OPENSSL, …)` carries a known timing side-channel on
+> private-key operations ([RUSTSEC-2023-0071], the Marvin attack), and no fixed release of
+> that crate exists. Recovering a key through it requires an attacker who can submit many
+> chosen inputs to the signing operation **and** measure how long each one takes. Signing a
+> phar is an authoring-time operation on a key the program supplies itself, so elephc
+> exposes no such oracle on its own — but a program that turns phar signing into a remote,
+> attacker-triggerable service would. Sign during a build, not in response to a request.
+> Verification (`getSignature()`, opening a signed archive) uses only the **public** key and
+> is unaffected.
+
+[RUSTSEC-2023-0071]: https://rustsec.org/advisories/RUSTSEC-2023-0071
+
 Metadata persistence covers the same scalar+array subset as
 [`serialize()`/`unserialize()`](system-and-io.md#serialization); object metadata is not
 serialized.
@@ -276,11 +289,13 @@ Supported wrapper methods include `stream_open`, `stream_read`, `stream_write`,
 `stream_set_option`, `stream_cast`, `url_stat`, and the directory methods
 `dir_opendir`, `dir_readdir`, `dir_rewinddir`, and `dir_closedir`.
 
-`url_stat` is consulted by the whole stat family — `stat()`, `lstat()`,
-`file_exists()`, `filesize()`, `filemtime()`, `is_file()`, `is_dir()`,
-`is_readable()`, `is_writable()`, `is_writeable()`, and `is_executable()` — each
-handing the wrapper the same `STREAM_URL_STAT_*` flag values reference PHP
-passes. See [System & I/O](system-and-io.md) for the per-builtin semantics.
+`url_stat` is consulted by the whole stat family: `stat()`, `lstat()`,
+`file_exists()`, the integer getters (`filesize()`, `filemtime()`, `fileatime()`,
+`filectime()`, `fileperms()`, `fileowner()`, `filegroup()`, and `fileinode()`),
+`is_file()`, `is_dir()`, `is_readable()`, `is_writable()`, `is_writeable()`, and
+`is_executable()`. Each one hands the wrapper the same `STREAM_URL_STAT_*` flag
+values reference PHP passes. See [System & I/O](system-and-io.md) for the
+per-builtin semantics.
 
 Wrapper methods should declare return types that match their PHP contracts.
 `stream_stat()` and `url_stat()` are exceptions: declare them without a return
@@ -307,6 +322,19 @@ type, or as `mixed`, when returning associative stat arrays with string keys.
 | `stream_socket_pair()` | `stream_socket_pair(int $domain, int $type, int $protocol): array` | Create a pair of connected socket streams, for example `STREAM_PF_UNIX`, `STREAM_SOCK_STREAM`, `0`. |
 | `popen()` | `popen(string $command, string $mode): resource\|false` | Open a pipe to a process in read (`"r"`) or write (`"w"`) mode. |
 | `pclose()` | `pclose($handle): int` | Close a process pipe and return its termination status. |
+| `proc_open()` | `proc_open(array\|string $command, array $descriptor_spec, &$pipes, ?string $cwd = null, ?array $env_vars = null, ?array $options = null): resource\|false` | Start a process with a descriptor table. `['pipe', 'r'\|'w']`, `['file', path, mode]`, `['null']`, `['redirect', n]`, and a stream resource are supported. An array `$command` runs without a shell (program found through `PATH`); a string runs through `/bin/sh -c`. `$pipes` receives the parent ends as ordinary stream resources, usable with `fread`, `fwrite`, `fgets`, `stream_get_contents`, `stream_select`, `stream_set_blocking`, and `fclose`. `$env_vars` replaces the environment; `$options` is accepted and ignored. |
+| `proc_close()` | `proc_close($process): int` | Close any pipes still open, wait for the child, and return its exit code (the raw wait status when a signal ended it, `-1` when `proc_get_status()` already reaped it). |
+| `proc_get_status()` | `proc_get_status($process): array` | Return `command`, `pid`, `cached`, `running`, `signaled`, `stopped`, `exitcode`, `termsig`, `stopsig` in php 8.5's order. A normal exit is cached and repeated; a signal death is reported once. |
+| `proc_terminate()` | `proc_terminate($process, int $signal = 15): bool` | Send a signal to the child without reaping it. |
+| `proc_nice()` | `proc_nice(int $priority): bool` | Change the priority of the current process through `nice(3)`. |
+
+The `proc_*` family is declared by an injected prelude over the small `elephc_proc`
+bridge (`--with-proc` forces it), so a program that never names one carries none of
+it. The process handle is a stream resource over `/dev/null` whose descriptor keys
+the bridge's status table: `is_resource()` turns false after `proc_close()` exactly as
+in PHP, but `get_resource_type()` answers `stream`, not `process`. PHP warnings from
+`proc_open()` surface as `E_USER_WARNING`, and the family is refused when compiling
+for targets whose sandbox forbids spawning a process.
 
 Socket addresses use `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or
 `udg:///path`. Host names are resolved through the system resolver to IPv4.

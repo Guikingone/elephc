@@ -12,6 +12,19 @@
 
 use crate::support::*;
 
+/// Builtin callable wrappers pass only the arity supported by the typed backend.
+#[test]
+fn test_capped_string_replace_callable_arity_matches_direct_calls() {
+    let out = compile_and_run(r#"<?php
+$replace = str_replace(...);
+$insensitive = str_ireplace(...);
+echo $replace('a', 'b', 'aAa'), '|', $insensitive('a', 'b', 'aAa'), '|';
+echo call_user_func('str_replace', 'a', 'b', 'aAa'), '|';
+echo call_user_func('str_ireplace', 'a', 'b', 'aAa');
+"#);
+    assert_eq!(out, "bAb|bbb|bAb|bbb");
+}
+
 /// Returns true when assembly contains a valid invokable object dispatch path.
 fn asm_has_invokable_object_call(user_asm: &str, class_name: &str) -> bool {
     let eir_method = elephc::names::method_symbol(class_name, "__invoke");
@@ -713,7 +726,10 @@ echo ([$formatter, choose_runtime_literal_method("WRAP")])(suffix: "?");
     let (user_asm, _runtime_asm, _required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
     assert!(
-        user_asm.contains("runtime callable-array literal mixed selector")
+        // The literal may reach the selector through a temporary, which reads it as an ordinary
+        // `array<mixed>`; either selector dispatches through the descriptor invoker.
+        (user_asm.contains("runtime callable-array literal mixed selector")
+            || user_asm.contains("runtime callable-array mixed selector"))
             && user_asm.contains("callable_invoker"),
         "runtime-selected literal instance callable arrays should route through descriptor invokers:\n{}",
         user_asm
@@ -2077,6 +2093,243 @@ echo implode(",", call_user_func_array($f, [$a, 1, 2]));
     assert_eq!(out, "2,3:2,3:2,3:2,3:2,3");
 }
 
+/// Verifies the same dispatch agreement for an ASSOCIATIVE source, whose slice keeps its keys.
+///
+/// `array_slice()`'s result depends on what it was given: an associative source yields an
+/// associative slice, an indexed one an indexed slice. The registry DECLARES `array` for both,
+/// and a first-class or `call_user_func` call site took that declaration instead of the
+/// contract's answer — so lowering saw an associative source arriving at a result typed
+/// `array<mixed>` and refused the call outright, `array_slice of an associative array into
+/// result PHP type Array(Mixed)` (issue #1092). The direct call had been fixed already, which
+/// is what made the forms disagree.
+///
+/// Keys rather than values are compared, because the keys are the whole difference between the
+/// two result shapes: `preserve_keys` renumbers integer keys and leaves string keys alone, so
+/// the int-keyed source is included in both modes to pin that the mode reaches the helper.
+///
+/// Expected output is verbatim `LC_ALL=C php` 8.5.10.
+#[test]
+fn test_array_slice_dispatch_forms_agree_on_an_associative_source() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["a" => 1, "b" => 2, "c" => 3];
+$fn = array_slice(...);
+echo implode(",", array_keys(array_slice($h, 1, 2))), ":";
+echo implode(",", array_keys($fn($h, 1, 2))), ":";
+echo implode(",", array_keys(call_user_func("array_slice", $h, 1, 2))), ":";
+echo implode(",", array_keys($fn($h, 1, 2, true))), ":";
+$ints = [5 => "x", 9 => "y", 12 => "z"];
+echo implode(",", array_keys($fn($ints, 1, 2))), ":";
+echo implode(",", array_keys($fn($ints, 1, 2, true))), "\n";
+"#,
+    );
+    assert_eq!(out, "b,c:b,c:b,c:b,c:0,1:9,12\n");
+}
+
+/// Pins the two `call_user_func()` callback spellings that the first fix for #1092 missed.
+///
+/// The literal-name spelling recorded the contract's answer for lowering; the first-class
+/// callable node and the local bound to one did not, so `call_user_func(array_slice(...),
+/// $assoc, 1, 2)` kept the original refusal while `call_user_func("array_slice", $assoc, 1, 2)`
+/// worked. Both are as resolved as the literal — the checker and lowering read the same
+/// syntax — so both now ask the contract.
+///
+/// Expected output is verbatim `LC_ALL=C php` 8.5.10.
+#[test]
+fn test_call_user_func_resolved_callbacks_slice_an_associative_source() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["a" => 1, "b" => 2, "c" => 3];
+$fn = array_slice(...);
+echo implode(",", array_keys(call_user_func(array_slice(...), $h, 1, 2))), ":";
+echo implode(",", array_keys(call_user_func($fn, $h, 1, 2))), ":";
+echo implode(",", array_keys(call_user_func($fn, $h, 1, 2, true))), "\n";
+"#,
+    );
+    assert_eq!(out, "b,c:b,c:b,c\n");
+}
+
+/// A string-literal callable local naming `array_slice()` keeps an associative slice (#1347).
+///
+/// The checker does not resolve `$fn = "array_slice"`, so no checked type reaches this call, and
+/// lowering fell back to the indexed `array<mixed>` layout: the hash source was refused with
+/// `array_slice of an associative array into result PHP type Array(Mixed)`. The fallback now keeps
+/// a hash source's own layout. Expected output is verbatim PHP 8.5.10.
+#[test]
+fn test_string_callable_array_slice_keeps_an_associative_layout() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["a" => 1, "b" => 2, "c" => 3];
+$fn = "array_slice";
+var_dump($fn($h, 1, 2));
+var_dump($fn($h, 1, 1, true));
+$m = [5 => "x", 7 => "y", 9 => "z"];
+var_dump($fn($m, 1));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "array(2) {\n  [\"b\"]=>\n  int(2)\n  [\"c\"]=>\n  int(3)\n}\n",
+            "array(1) {\n  [\"b\"]=>\n  int(2)\n}\n",
+            "array(2) {\n  [0]=>\n  string(1) \"y\"\n  [1]=>\n  string(1) \"z\"\n}\n",
+        )
+    );
+}
+
+/// Callable dispatch of `array_slice()` over a boxed hash keeps its string keys (#1348).
+///
+/// A string callable given a `mixed` source, and a first-class callable invoked inside a loop
+/// (which goes through the descriptor wrapper with boxed arguments), both reach the boxed-source
+/// slice, which answered an empty array for a hash payload. Expected output is verbatim
+/// PHP 8.5.10.
+#[test]
+fn test_callable_array_slice_of_a_boxed_hash_keeps_string_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(mixed $v): mixed { return $v; }
+$fn = "array_slice";
+echo json_encode($fn(pick(["a" => 1, "b" => 2, "c" => 3]), 1)), "|";
+$g = array_slice(...);
+for ($i = 0; $i < 2; $i++) {
+    echo json_encode($g(pick(["x" => $i, "y" => 2, 4 => 5]), 1)), "|";
+}
+"#,
+    );
+    assert_eq!(out, r#"{"b":2,"c":3}|{"y":2,"0":5}|{"y":2,"0":5}|"#);
+}
+
+/// A first-class callable keeps accepting arguments its direct call's contract refuses by TYPE.
+///
+/// Only a compile-time literal requirement is reported at a first-class call site (#1346).
+/// `array_reverse($mixed)` is refused as a direct call, but the callable ABI takes the boxed
+/// argument and reverses it at run time, so this spelling must keep compiling.
+#[test]
+fn test_first_class_array_reverse_still_accepts_a_boxed_argument() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(): mixed { return [3, 1, 2]; }
+$f = array_reverse(...);
+var_dump($f(pick()));
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [0]=>\n  int(2)\n  [1]=>\n  int(1)\n  [2]=>\n  int(3)\n}\n"
+    );
+}
+
+/// A callable `array_slice()` honors a `$preserve_keys` flag the checker cannot see.
+///
+/// `call_user_func_array($f, $args)` hands its arguments over at run time, so the builtin's
+/// callable wrapper receives the flag as a runtime parameter. The wrapper used to drop it and
+/// always renumbered integer keys: `[5 => "x", 9 => "y"]` sliced at 1 with `true` answered
+/// `[0 => "y"]` instead of `[9 => "y"]`. Hashes with string keys, lists, truthy and falsy
+/// non-bool flags, an omitted flag, and a callable held in an array all keep PHP's keys.
+/// Expected output is verbatim PHP 8.5.10.
+#[test]
+fn test_callable_array_slice_honors_a_runtime_preserve_keys_flag() {
+    let out = compile_and_run(
+        r#"<?php
+$f = array_slice(...);
+$args = [[5 => "x", 9 => "y"], 1, 1, true];
+echo json_encode(call_user_func_array($f, $args)), "|";
+$args[3] = false;
+echo json_encode(call_user_func_array($f, $args)), "|";
+$args = [["a" => 1, 5 => 2, 9 => 3], 1, null, "1"];
+echo json_encode(call_user_func_array($f, $args)), "|";
+$args[3] = 0;
+echo json_encode(call_user_func_array($f, $args)), "|";
+$args = [[10, 20, 30, 40], 1, 2, true];
+echo json_encode(call_user_func_array($f, $args)), "|";
+$args = [[10, 20, 30, 40], -2];
+echo json_encode(call_user_func_array($f, $args)), "|";
+$fns = ["slice" => $f];
+echo json_encode($fns["slice"]([5 => "x", 9 => "y"], 0, 1, true)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"9\":\"y\"}|[\"y\"]|{\"5\":2,\"9\":3}|[2,3]|{\"1\":20,\"2\":30}|[30,40]|{\"5\":\"x\"}\n"
+    );
+}
+
+/// A callable `array_reverse()` honors a `$preserve_keys` flag the checker cannot see.
+///
+/// Like `array_slice()`, its callable wrapper dropped the flag, so `call_user_func_array($r,
+/// [[1, 2, 3], true])` through a runtime argument array answered `[3, 2, 1]` instead of keeping
+/// the keys `2, 1, 0`. The boxed reversal already reads the flag at run time; the wrapper now
+/// forwards it. Expected output is verbatim PHP 8.5.10.
+#[test]
+fn test_callable_array_reverse_honors_a_runtime_preserve_keys_flag() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_reverse(...);
+$args = [[1, 2, 3], true];
+echo json_encode(call_user_func_array($r, $args)), "|";
+$args[1] = false;
+echo json_encode(call_user_func_array($r, $args)), "|";
+$args = [["x" => 1, 5 => [2], 9 => "three"], "1"];
+echo json_encode(call_user_func_array($r, $args)), "|";
+$args[1] = 0;
+echo json_encode(call_user_func_array($r, $args)), "|";
+$fns = ["rev" => $r];
+echo json_encode($fns["rev"]([7, 8], true)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"2\":3,\"1\":2,\"0\":1}|[3,2,1]|{\"9\":\"three\",\"5\":[2],\"x\":1}|{\"0\":\"three\",\"1\":[2],\"x\":1}|{\"1\":8,\"0\":7}\n"
+    );
+}
+
+/// A callable-builtin result map must keep same-coordinate included calls independent.
+#[test]
+fn test_first_class_builtin_result_types_do_not_collide_across_included_files() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire __DIR__ . '/int.php';\nrequire __DIR__ . '/assoc.php';\n$a = first_values();\n$b = second_values();\necho $a[0], $a[1], '|', implode(',', array_keys($b)), '|', $b['b'];\n",
+            ),
+            (
+                "int.php",
+                "<?php\nfunction first_values(): array {\n    $values = [1, 2, 3];\n    return call_user_func(array_slice(...), $values, 1, 2);\n}\n",
+            ),
+            (
+                "assoc.php",
+                "<?php\nfunction second_values(): array {\n    $values = ['a' => 1, 'b' => 2, 'c' => 3];\n    return call_user_func(array_slice(...), $values, 1, 2);\n}\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "23|b,c|2");
+}
+
+/// `call_user_func_array()` reaches the same lowering entry point as `call_user_func()`, so all
+/// three of its resolved callback spellings need the same recording — the existing coverage
+/// used an INDEXED source and a variable callee, which passes for two independent reasons and
+/// masked the gap.
+///
+/// Only a LITERAL argument array is covered, because that is the only shape whose element
+/// expressions lowering can hand to the builtin; a dynamic array keeps the declared type.
+///
+/// Expected output is verbatim `LC_ALL=C php` 8.5.10.
+#[test]
+fn test_call_user_func_array_callbacks_slice_an_associative_source() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["a" => 1, "b" => 2, "c" => 3];
+$fn = array_slice(...);
+echo implode(",", array_keys(call_user_func_array("array_slice", [$h, 1, 2]))), ":";
+echo implode(",", array_keys(call_user_func_array(array_slice(...), [$h, 1, 2]))), ":";
+echo implode(",", array_keys(call_user_func_array($fn, [$h, 1, 2]))), ":";
+echo implode(",", array_keys(call_user_func_array($fn, [$h, 1, 2, true]))), "\n";
+"#,
+    );
+    assert_eq!(out, "b,c:b,c:b,c:b,c\n");
+}
+
 /// Regression: a `bool`-returning builtin dispatched through a variable-held callback name
 /// must return a raw bool, not a boxed Mixed cell.
 ///
@@ -2133,4 +2386,129 @@ echo $h->name;
 "#,
     );
     assert_eq!(out, "hihi|Greeter");
+}
+
+/// `Name::{expr}(args)` names a static method at run time (Carbon's
+/// `static::{'shouldOverflow'.$unit}()`), and the PHP 8.3 `Name::{expr}` reads a class constant;
+/// both used to be parse errors.
+#[test]
+fn test_braced_dynamic_static_member_names() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class BraceA {
+    const FOO = 'foo-a';
+    public static function shouldOverflowYears(): bool { return true; }
+    public static function hello(string $who): string { return static::class . " hi " . $who; }
+    public function check(string $unit): bool { $u = ucfirst($unit) . 's'; return static::{'shouldOverflow' . $u}(); }
+    public function greet(): string { return static::{'hel' . 'lo'}('x'); }
+    public function constant(): string { return static::{'F' . 'OO'}; }
+}
+class BraceB extends BraceA { const FOO = 'foo-b'; }
+var_dump((new BraceA)->check('year'));
+echo (new BraceB)->greet(), "|", (new BraceB)->constant(), "|", BraceA::{'hello'}('y'), "|";
+$c = 'FOO';
+echo BraceB::{$c}, "\n";
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nBraceB hi x|foo-b|BraceA hi y|foo-b\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// Verifies a spread of a STRING-KEYED array binds by name through a dynamic CONSTRUCTOR
+/// (issue #685).
+///
+/// `new $class(...$named)` failed EIR validation:
+///
+///     OperandTypeMismatch { expected: "Heap(Array)", actual: Heap(Hash) }
+///
+/// The argument container was chosen from the SPELLING of the call — written-out named arguments
+/// got the hash, everything else got the indexed array — so a spread, which is not syntactically
+/// named, took the indexed container and the hash source had nowhere to go. The container now
+/// follows what the invoker will find in it: a spread whose operand is an associative array needs
+/// the hash, because those keys bind by name.
+///
+/// A literal `new $c(...["b" => 8])` escaped the bug because the spread is expanded into real
+/// named arguments before lowering; a variable operand cannot be, which is why the fixture always
+/// spreads a variable. The indexed rows are there to pin that the path which already worked still
+/// takes its own route.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_keyed_spread_binds_by_name_through_a_dynamic_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public function __construct($a = 'x', $b = 'y') { echo "$a/$b|"; } }
+$c = "P";
+$one = ["b" => 8];
+$both = ["a" => 1, "b" => 2];
+$ints = [4, 5];
+new $c(...$one);
+new $c(...$both);
+new $c(...$ints);
+new $c(1, ...$one);
+new $c(...["a" => 3], ...$one);
+for ($i = 0; $i < 3; $i++) { new $c(...$one); }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "x/8|1/2|4/5|1/8|3/8|x/8|x/8|x/8|\n");
+}
+
+/// Verifies the same spread binds by name through a dynamic METHOD and a dynamic STATIC target.
+///
+/// Both desugar into a `call_user_func`, whose container was chosen the same way and failed the
+/// same way. They are covered separately from the constructor because they reach a DIFFERENT
+/// builder — the one that also places by-reference argument markers — so a fix to one does not
+/// imply the other.
+#[test]
+fn test_keyed_spread_binds_by_name_through_a_dynamic_method_or_static() {
+    let out = compile_and_run(
+        r#"<?php
+class P {
+    public function m($a = 'x', $b = 'y') { echo "$a/$b|"; }
+    public static function s($a = 'x', $b = 'y') { echo "$a/$b|"; }
+}
+$o = new P();
+$m = "m";
+$c = "P";
+$one = ["b" => 8];
+$both = ["a" => 1, "b" => 2];
+$ints = [4, 5];
+$o->$m(...$one);
+$o->$m(...$both);
+$o->$m(...$ints);
+$o->$m(1, ...$one);
+$c::s(...$one);
+$c::s(...$both);
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "x/8|1/2|4/5|1/8|x/8|1/2|\n");
+}
+
+/// Verifies the binding survives the parameter shapes that decide what the invoker coerces.
+///
+/// A spread that names only SOME parameters has to leave the rest on their defaults, a typed
+/// parameter has to receive an int rather than the boxed cell the container carries, and a string
+/// value has to arrive as a string.
+#[test]
+fn test_keyed_spread_through_a_dynamic_target_binds_partial_and_typed_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+class T { public function __construct($a = 'x', $b = 'y', $d = 'z') { echo "$a/$b/$d|"; } }
+class L { public function __construct(int $a = 1, int $b = 2) { echo $a + $b, "|"; } }
+$t = "T";
+$l = "L";
+$skip = ["d" => 3, "b" => 2];
+$typed = ["b" => 40];
+$strings = ["b" => "s"];
+new $t(...$skip);
+new $l(...$typed);
+new $t(...$strings);
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "x/2/3|41|x/s/z|\n");
 }

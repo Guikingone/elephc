@@ -155,3 +155,25 @@ try {
 serialize() expects exactly 1 argument, 2 given",
     );
 }
+
+/// An object that appears again is written as `r:<n>;` naming the 1-based index of its first
+/// occurrence, where every value takes an index, an `r:` included, and array keys take none.
+///
+/// `php -n` 8.5.6: `a:2:{i:0;O:8:"stdClass":0:{}i:1;r:2;}`, a self-reference
+/// `O:8:"stdClass":1:{s:4:"self";r:1;}`, and a later object after a back-edge
+/// `a:4:{i:0;O:8:"stdClass":0:{}i:1;r:2;i:2;O:8:"stdClass":0:{}i:3;r:4;}`.
+#[test]
+fn serialize_writes_a_back_reference_for_an_object_seen_before() {
+    assert_eq!(
+        out(br#"$o = new stdClass; echo serialize([$o, $o]);"#),
+        "a:2:{i:0;O:8:\"stdClass\":0:{}i:1;r:2;}",
+    );
+    assert_eq!(
+        out(br#"$o = new stdClass; $o->self = $o; echo serialize($o);"#),
+        "O:8:\"stdClass\":1:{s:4:\"self\";r:1;}",
+    );
+    assert_eq!(
+        out(br#"$a = new stdClass; $b = new stdClass; echo serialize([$a, $a, $b, $b]);"#),
+        "a:4:{i:0;O:8:\"stdClass\":0:{}i:1;r:2;i:2;O:8:\"stdClass\":0:{}i:3;r:4;}",
+    );
+}

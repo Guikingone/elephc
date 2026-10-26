@@ -1,8 +1,8 @@
 ---
 title: "session_save_path()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Reads or sets the directory session data is stored in."
 sidebar:
-  order: 967
+  order: 1058
 ---
 
 ## session_save_path()
@@ -11,7 +11,7 @@ sidebar:
 function session_save_path(?string $path = null): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Reads or sets the directory session data is stored in.
 
 **Parameters**:
 - `$path` (`?string`), default `null`, optional
@@ -23,7 +23,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

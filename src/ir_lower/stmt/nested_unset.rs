@@ -808,7 +808,16 @@ fn write_nested_local_element_in_place(
         return false;
     }
 
-    let consumes_child = nested_parent_consumes_child(container.ir_type, &container_ty);
+    // A Mixed-element array consumes only a value it boxes itself; an already-boxed child is
+    // retained by the set (`lower_mixed_array_set_*`), so its temp keeps its own share. Treating
+    // that share as consumed leaked the rewritten element of every `unset($trace[$i]['args'])`
+    // over a `debug_backtrace()` result: the frame hash, its strings and its argument array.
+    let consumes_child = nested_parent_consumes_child(container.ir_type, &container_ty)
+        && !(container.ir_type == IrType::Heap(IrHeapKind::Array)
+            && matches!(
+                ctx.builder.value_php_type(value.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            ));
     write_nested_element_in_place(ctx, container, container_ty, key, value, span);
     consumes_child
 }

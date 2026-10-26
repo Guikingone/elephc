@@ -8,9 +8,8 @@
 //! - Negative offsets are relative to the source length and out-of-range negative writes are no-ops.
 //! - Positive offsets extend the result with ASCII spaces before storing the first replacement byte.
 
-use crate::codegen_support::runtime::strings::concat_scratch::{
-    CONCAT_BUF_CAPACITY, CONCAT_TEMP_HEAP_KIND,
-};
+use crate::codegen_support::runtime::strings::concat_scratch::CONCAT_BUF_CAPACITY;
+use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits the target-specific `__rt_str_set_offset` copy-on-write helper.

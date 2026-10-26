@@ -222,7 +222,11 @@ pub(crate) fn lower_getdate(
 /// caller still holds. These helpers return a freshly allocated hash and then drop
 /// the raw pointer, so the caller's ref has to be released after boxing or the
 /// hash, its keys, and its values stay live after the Mixed cell is freed.
-fn emit_box_hash_pointer_as_assoc_mixed(ctx: &mut FunctionContext<'_>) {
+///
+/// Shared rather than copied: `ob_get_status` had its own version of this without the
+/// release, and leaked nine blocks per call as a result (issue #938). Every builtin that
+/// returns a freshly built hash by raw pointer belongs on this one.
+pub(super) fn emit_box_hash_pointer_as_assoc_mixed(ctx: &mut FunctionContext<'_>) {
     let result = abi::int_result_reg(ctx.emitter);
     emit_scratch_reserve(ctx, 16);
     emit_store_result_to_scratch(ctx, 0);
@@ -491,6 +495,12 @@ fn resolve_integer_arg_to_result(
             load_value_to_first_int_arg(ctx, value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
         }
+        // A numeric string converts by php's weak-mode rules: `mktime(0, 0, 0, 12, 28, $year)`
+        // over a year `explode()`d out of "2024-W05" (symfony/validator `WeekValidator`).
+        PhpType::Str => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
+        }
         ty => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} for PHP type {:?}",
@@ -573,9 +583,9 @@ pub(crate) fn lower_sleep(
 
 /// Lowers `strtotime(datetime[, baseTimestamp])` through the shared parser runtime helper.
 ///
-/// Returns PHP's `int|false`: the `__rt_strtotime` `i64::MIN` parse-failure sentinel is boxed as
-/// `Mixed` `false`, and every other value (including a real `-1` pre-epoch timestamp) is boxed as
-/// a `Mixed` integer, so `=== false`, `=== -1`, and `echo` all observe the distinct results.
+/// Returns PHP's `int|false`: a parse failure (the `__rt_strtotime` success flag is clear) is boxed
+/// as `Mixed` `false`, and every parsed timestamp (including a real `-1` and a real `i64::MIN`) is
+/// boxed as a `Mixed` integer, so `=== false`, `=== -1`, and `echo` all observe distinct results.
 /// Supports PHP's optional `$baseTimestamp`. (The `__elephc_strtotime_raw` alias keeps the plain
 /// `-1` integer shape for the synthetic `DateTime` internals.)
 pub(crate) fn lower_strtotime(
@@ -587,17 +597,16 @@ pub(crate) fn lower_strtotime(
     store_if_result(ctx, inst)
 }
 
-/// Boxes the `__rt_strtotime` integer result into a `Mixed` `int|false` cell: the `i64::MIN`
-/// parse-failure sentinel becomes boxed `false` (runtime tag 3), and any other value becomes a
-/// boxed integer (runtime tag 0), preserving a genuine `-1` timestamp as a distinct integer.
+/// Boxes the `__rt_strtotime` integer result into a `Mixed` `int|false` cell: a cleared success
+/// flag (`x1`/`rdx`) becomes boxed `false` (runtime tag 3), and a parsed timestamp becomes a boxed
+/// integer (runtime tag 0). Deciding on the flag rather than on the value keeps every timestamp an
+/// integer, a genuine `-1` and a genuine `i64::MIN` (`@-9223372036854775808`) included.
 fn emit_box_strtotime_int_or_false(ctx: &mut FunctionContext<'_>) {
     let false_label = ctx.next_label("strtotime_box_false");
     let done_label = ctx.next_label("strtotime_box_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("movz x13, #0x8000, lsl #48");              // load the i64::MIN parse-failure sentinel
-            ctx.emitter.instruction("cmp x0, x13");                             // did the parse fail?
-            ctx.emitter.instruction(&format!("b.eq {}", false_label));          // failure → box PHP false instead of an integer
+            ctx.emitter.instruction(&format!("cbz x1, {}", false_label));       // success flag clear → box PHP false instead of an integer
             ctx.emitter.instruction("mov x1, x0");                              // Mixed payload low word = the parsed timestamp
             ctx.emitter.instruction("mov x2, #0");                              // integer payloads do not use the high word
             ctx.emitter.instruction("mov x0, #0");                              // runtime tag 0 = int
@@ -611,9 +620,8 @@ fn emit_box_strtotime_int_or_false(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("movabs r10, -9223372036854775808");        // load the i64::MIN parse-failure sentinel
-            ctx.emitter.instruction("cmp rax, r10");                            // did the parse fail?
-            ctx.emitter.instruction(&format!("je {}", false_label));            // failure → box PHP false instead of an integer
+            ctx.emitter.instruction("test rdx, rdx");                           // did the parse succeed?
+            ctx.emitter.instruction(&format!("jz {}", false_label));            // success flag clear → box PHP false instead of an integer
             ctx.emitter.instruction("mov rdi, rax");                            // Mixed payload low word = the parsed timestamp
             ctx.emitter.instruction("xor esi, esi");                            // integer payloads do not use the high word
             ctx.emitter.instruction("mov rax, 0");                              // runtime tag 0 = int
@@ -632,15 +640,53 @@ fn emit_box_strtotime_int_or_false(ctx: &mut FunctionContext<'_>) {
 /// Lowers the internal `__elephc_strtotime_raw(datetime[, baseTimestamp])` alias.
 ///
 /// Backs the synthetic `DateTime` constructor and `modify()`. Marshals the same runtime ABI
-/// as `strtotime`, but maps the `i64::MIN` parse-failure sentinel to `-1` so callers store the
-/// timestamp directly as the legacy `-1` in-object failure value.
+/// as `strtotime`, but maps a parse failure to `-1` so callers store the timestamp directly as
+/// the legacy `-1` in-object failure value.
 pub(crate) fn lower_elephc_strtotime_raw(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     emit_strtotime_marshal(ctx, inst, "__elephc_strtotime_raw")?;
-    emit_strtotime_sentinel_to_minus_one(ctx);
+    emit_strtotime_failure_to_minus_one(ctx);
     store_if_result(ctx, inst)
+}
+
+/// Reads an integer field of the last-diagnostic record (`__rt_last_error_int`).
+pub(crate) fn lower_elephc_last_error_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_last_error_int", 1)?;
+    load_last_error_field(ctx, inst, "__elephc_last_error_int field")?;
+    abi::emit_call_label(ctx.emitter, "__rt_last_error_int");
+    store_if_result(ctx, inst)
+}
+
+/// Reads a string field of the last-diagnostic record as an owned copy (`__rt_last_error_str`).
+pub(crate) fn lower_elephc_last_error_str(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_last_error_str", 1)?;
+    load_last_error_field(ctx, inst, "__elephc_last_error_str field")?;
+    abi::emit_call_label(ctx.emitter, "__rt_last_error_str");
+    store_if_result(ctx, inst)
+}
+
+/// Places the record field selector in the first integer argument register.
+fn load_last_error_field(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    context: &str,
+) -> Result<()> {
+    let field = expect_operand(inst, 0)?;
+    resolve_integer_arg_to_result(ctx, field, context)?;
+    abi::emit_reg_move(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        abi::int_result_reg(ctx.emitter),
+    );
+    Ok(())
 }
 
 /// Tests whether a dynamically named AOT class exposes an inherited or declared constructor.
@@ -728,24 +774,22 @@ fn emit_strtotime_marshal(
     Ok(())
 }
 
-/// Maps the `__rt_strtotime` `i64::MIN` parse-failure sentinel to `-1` in the integer result.
+/// Maps a failed `__rt_strtotime` parse (success flag clear) to `-1` in the integer result.
 ///
-/// Keeps `-1` itself usable as a real pre-epoch timestamp: only the sentinel is rewritten, so
-/// the synthetic `DateTime` callers that store the raw integer observe PHP's `false`-on-failure
-/// contract as the legacy `-1` in-object value.
-fn emit_strtotime_sentinel_to_minus_one(ctx: &mut FunctionContext<'_>) {
+/// Keeps `-1` itself usable as a real pre-epoch timestamp: only a failure is rewritten, so the
+/// synthetic `DateTime` callers that store the raw integer observe PHP's `false`-on-failure
+/// contract as the legacy `-1` in-object value, and a parsed `i64::MIN` stays a timestamp.
+fn emit_strtotime_failure_to_minus_one(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("movz x13, #0x8000, lsl #48");              // load the i64::MIN parse-failure sentinel
-            ctx.emitter.instruction("cmp x0, x13");                             // did the parse fail?
             ctx.emitter.instruction("mov x13, #-1");                            // legacy in-object failure value
-            ctx.emitter.instruction("csel x0, x13, x0, eq");                    // sentinel → -1, otherwise keep the timestamp
+            ctx.emitter.instruction("cmp x1, #0");                              // did the parse fail (success flag clear)?
+            ctx.emitter.instruction("csel x0, x13, x0, eq");                    // failure → -1, otherwise keep the timestamp
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("movabs r10, -9223372036854775808");        // load the i64::MIN parse-failure sentinel
-            ctx.emitter.instruction("cmp rax, r10");                            // did the parse fail?
             ctx.emitter.instruction("mov r10, -1");                             // legacy in-object failure value
-            ctx.emitter.instruction("cmove rax, r10");                          // sentinel → -1, otherwise keep the timestamp
+            ctx.emitter.instruction("test rdx, rdx");                           // did the parse fail (success flag clear)?
+            ctx.emitter.instruction("cmovz rax, r10");                          // failure → -1, otherwise keep the timestamp
         }
     }
 }
@@ -757,6 +801,29 @@ pub(crate) fn lower_time(
 ) -> Result<()> {
     super::ensure_arg_count(inst, "time", 0)?;
     abi::emit_call_label(ctx.emitter, "__rt_time");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `getmypid()` through the target's C library `getpid()`.
+///
+/// `getpid()` returns a 32-bit `pid_t`, and neither ABI defines the upper half of the 64-bit
+/// result register for an `int` return, so the id is sign-extended before it is stored as a
+/// PHP integer. The call is made on every evaluation rather than cached, so a `pcntl_fork()`
+/// child reports its own id.
+pub(crate) fn lower_getmypid(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "getmypid", 0)?;
+    ctx.emitter.bl_c("getpid");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sxtw x0, w0");                             // widen the 32-bit pid_t into a 64-bit PHP integer
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("movsxd rax, eax");                         // widen the 32-bit pid_t into a 64-bit PHP integer
+        }
+    }
     store_if_result(ctx, inst)
 }
 
@@ -911,7 +978,7 @@ fn emit_getenv_all_result(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `putenv(assignment)`, dispatching bare names to `unsetenv` and assignments to `putenv`.
+/// Lowers `putenv(assignment)`, rejecting invalid syntax before dispatching to libc.
 pub(crate) fn lower_putenv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -919,6 +986,7 @@ pub(crate) fn lower_putenv(
     super::ensure_arg_count(inst, "putenv", 1)?;
     let assignment = expect_operand(inst, 0)?;
     require_string(ctx.load_value_to_result(assignment)?.codegen_repr(), "putenv assignment")?;
+    emit_putenv_syntax_guard(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_putenv_aarch64(ctx),
         Arch::X86_64 => lower_putenv_x86_64(ctx),
@@ -1066,6 +1134,34 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Raises PHP 8's catchable `ValueError` for an empty assignment or one beginning with `=`.
+fn emit_putenv_syntax_guard(ctx: &mut FunctionContext<'_>) {
+    let invalid = ctx.next_label("putenv_invalid");
+    let valid = ctx.next_label("putenv_valid");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // -- reject invalid environment assignment syntax before libc --
+            ctx.emitter.instruction(&format!("cbz x2, {}", invalid));           // reject an empty assignment before reading its first byte
+            ctx.emitter.instruction("ldrb w3, [x1]");                           // inspect the first assignment byte before any libc call
+            ctx.emitter.instruction("cmp w3, #61");                             // PHP rejects environment names beginning with '='
+            ctx.emitter.instruction(&format!("b.ne {}", valid));                // a nonempty name may proceed to set or unset dispatch
+        }
+        Arch::X86_64 => {
+            // -- reject invalid environment assignment syntax before libc --
+            ctx.emitter.instruction("test rdx, rdx");                           // reject an empty assignment before reading its first byte
+            ctx.emitter.instruction(&format!("jz {}", invalid));                // an empty assignment has no valid environment name
+            ctx.emitter.instruction("cmp BYTE PTR [rax], 61");                  // PHP rejects environment names beginning with '='
+            ctx.emitter.instruction(&format!("jne {}", valid));                 // a nonempty name may proceed to set or unset dispatch
+        }
+    }
+    ctx.emitter.label(&invalid);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "putenv(): Argument #1 ($assignment) must have a valid syntax",
+    );
+    ctx.emitter.label(&valid);
+}
+
 /// Unsets a bare environment name using an allocated C string, frees the copy,
 /// and preserves libc's status across cleanup on every supported target.
 fn lower_putenv_unset(ctx: &mut FunctionContext<'_>) {
@@ -1094,6 +1190,7 @@ fn lower_putenv_aarch64(ctx: &mut FunctionContext<'_>) {
     let done = ctx.next_label("putenv_done");
     let copy_loop = ctx.next_label("putenv_copy");
     let copy_done = ctx.next_label("putenv_copy_done");
+    let out_of_memory = ctx.next_label("putenv_oom");
     ctx.emitter.instruction("mov x3, #0");                                      // start scanning the argument for PHP's assignment separator
     ctx.emitter.label(&scan_loop);
     ctx.emitter.instruction("cmp x3, x2");                                      // a bare name unsets the environment variable
@@ -1109,10 +1206,14 @@ fn lower_putenv_aarch64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("cset x0, eq");                                     // widen libc's zero status into PHP true
     ctx.emitter.instruction(&format!("b {}", done));                            // join the assignment and unset result paths
     ctx.emitter.label(&set_variable);
+    // libc keeps the pointer putenv() receives, so the buffer must outlive the PHP heap: a
+    // `--web` worker wipes that arena between requests, and an arena copy left the environment
+    // pointing at whatever the next request allocated there.
     ctx.emitter.instruction("add x0, x2, #1");                                  // allocate space for the environment string plus trailing null
-    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the source string pointer and length across heap allocation
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the source string pointer and length after heap allocation
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the source string pointer and length across malloc()
+    ctx.emitter.bl_c("malloc");
+    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the source string pointer and length after malloc()
+    ctx.emitter.instruction(&format!("cbz x0, {}", out_of_memory));             // putenv() fails when no buffer could be allocated
     ctx.emitter.instruction("mov x3, x0");                                      // keep the persistent destination buffer for copying and putenv()
     ctx.emitter.instruction("mov x4, #0");                                      // start copying at byte offset zero
     ctx.emitter.label(&copy_loop);
@@ -1128,6 +1229,9 @@ fn lower_putenv_aarch64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.bl_c("putenv");
     ctx.emitter.instruction("cmp x0, #0");                                      // compare libc putenv() status against success
     ctx.emitter.instruction("cset x0, eq");                                     // return true when putenv() accepted the assignment
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip the allocation-failure result
+    ctx.emitter.label(&out_of_memory);
+    ctx.emitter.instruction("mov x0, #0");                                      // report PHP false when malloc() failed
     ctx.emitter.label(&done);
 }
 
@@ -1139,6 +1243,7 @@ fn lower_putenv_x86_64(ctx: &mut FunctionContext<'_>) {
     let done = ctx.next_label("putenv_done");
     let copy_loop = ctx.next_label("putenv_copy");
     let copy_done = ctx.next_label("putenv_copy_done");
+    let out_of_memory = ctx.next_label("putenv_oom");
     ctx.emitter.instruction("mov rcx, 0");                                      // start scanning the argument for PHP's assignment separator
     ctx.emitter.label(&scan_loop);
     ctx.emitter.instruction("cmp rcx, rdx");                                    // a bare name unsets the environment variable
@@ -1155,15 +1260,18 @@ fn lower_putenv_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("movzx rax, al");                                   // widen the boolean byte into the integer result register
     ctx.emitter.instruction(&format!("jmp {}", done));                          // join the assignment and unset result paths
     ctx.emitter.label(&set_variable);
-    ctx.emitter.instruction("sub rsp, 16");                                     // reserve aligned spill space for the source string across heap allocation
+    // libc keeps the pointer putenv() receives; see the AArch64 lowering for why it is malloc()ed.
+    ctx.emitter.instruction("sub rsp, 16");                                     // reserve aligned spill space for the source string across malloc()
     ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the source environment string pointer
     ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                    // save the source environment string length
-    ctx.emitter.instruction("mov rax, rdx");                                    // seed the heap allocation size from the source length
-    ctx.emitter.instruction("add rax, 1");                                      // allocate space for the environment string plus trailing null
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    ctx.emitter.instruction("mov rdi, rdx");                                    // seed the malloc() size from the source length
+    ctx.emitter.instruction("add rdi, 1");                                      // allocate space for the environment string plus trailing null
+    ctx.emitter.bl_c("malloc");
     ctx.emitter.instruction("mov rcx, QWORD PTR [rsp]");                        // restore the source environment string pointer
     ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 8]");                     // restore the source environment string length
     ctx.emitter.instruction("add rsp, 16");                                     // release the temporary source string spill space
+    ctx.emitter.instruction("test rax, rax");                                   // did malloc() return a buffer?
+    ctx.emitter.instruction(&format!("jz {}", out_of_memory));                  // putenv() fails when no buffer could be allocated
     ctx.emitter.instruction("mov r9, rax");                                     // keep the persistent destination buffer for copying and putenv()
     ctx.emitter.instruction("mov r10, 0");                                      // start copying at byte offset zero
     ctx.emitter.label(&copy_loop);
@@ -1180,6 +1288,9 @@ fn lower_putenv_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("cmp rax, 0");                                      // compare libc putenv() status against success
     ctx.emitter.instruction("sete al");                                         // return true when putenv() accepted the assignment
     ctx.emitter.instruction("movzx rax, al");                                   // widen the boolean byte into the integer result register
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the allocation-failure result
+    ctx.emitter.label(&out_of_memory);
+    ctx.emitter.instruction("xor eax, eax");                                    // report PHP false when malloc() failed
     ctx.emitter.label(&done);
 }
 

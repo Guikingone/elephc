@@ -10,9 +10,12 @@
 //! - Both names resolve through `__rt_instanceof_lookup`, and the relation is answered by
 //!   `__rt_exception_matches` against a one-word fake object header holding the source class id,
 //!   the same pair the eval bridge's string branch uses.
-//! - A source naming an INTERFACE answers false: the matcher walks class parents and implemented
-//!   interfaces of a class, and has no interface-to-interface walk.
+//! - A source naming an INTERFACE is answered from `_interface_ancestor_ptrs` (every interface it
+//!   extends, transitively): the matcher walks a class's parents and implemented interfaces only.
+//!   It used to answer false, so `is_a('Symfony\...\ContainerInterface',
+//!   'Psr\Container\ContainerInterface', true)` failed Symfony's `lint:container`.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -49,7 +52,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #8]");                                    // source name length -> lookup string length
     emitter.instruction("bl __rt_instanceof_lookup");                           // resolve the source class name to its class id
     emitter.instruction("cbz x0, __rt_class_name_is_a_false");                  // an unknown source class relates to nothing
-    emitter.instruction("cbnz x2, __rt_class_name_is_a_false");                 // an interface source has no class-parent walk here
+    emitter.instruction("cbnz x2, __rt_class_name_is_a_interface");             // an interface source walks its extended interfaces
     emitter.instruction("str x1, [sp, #40]");                                   // the fake object header: its first word is the class id
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the exact-class exclusion flag
     emitter.instruction("cbz x10, __rt_class_name_is_a_match");                 // is_a() accepts the exact class
@@ -64,6 +67,29 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #32]");                                   // pass the target kind
     emitter.instruction("bl __rt_exception_matches");                           // walk parents and implemented interfaces
     emitter.instruction("b __rt_class_name_is_a_done");                         // keep the matcher's answer
+    emitter.label("__rt_class_name_is_a_interface");
+    emitter.instruction("ldr x11, [sp, #32]");                                  // reload the target kind
+    emitter.instruction("cbz x11, __rt_class_name_is_a_false");                 // an interface is never a class
+    emitter.instruction("ldr x12, [sp, #24]");                                  // reload the target interface id
+    emitter.instruction("cmp x1, x12");                                         // is the source the target interface itself?
+    emitter.instruction("b.ne __rt_class_name_is_a_ancestors");                 // otherwise search what it extends
+    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the exact-class exclusion flag
+    emitter.instruction("cbnz x10, __rt_class_name_is_a_false");                // is_subclass_of() excludes the interface itself
+    emitter.instruction("b __rt_class_name_is_a_true");                         // is_a() accepts the interface itself
+    emitter.label("__rt_class_name_is_a_ancestors");
+    abi::emit_symbol_address(emitter, "x9", "_interface_ancestor_ptrs");         // the per-interface ancestor-list table
+    emitter.instruction("ldr x9, [x9, x1, lsl #3]");                            // this interface's [count, id...] list
+    emitter.instruction("ldr x10, [x9], #8");                                   // the ancestor count, then the first id
+    emitter.label("__rt_class_name_is_a_ancestor_loop");
+    emitter.instruction("cbz x10, __rt_class_name_is_a_false");                 // no ancestor left: the relation does not hold
+    emitter.instruction("ldr x13, [x9], #8");                                   // the next extended interface id
+    emitter.instruction("cmp x13, x12");                                        // is it the target interface?
+    emitter.instruction("b.eq __rt_class_name_is_a_true");                      // the source extends the target
+    emitter.instruction("sub x10, x10, #1");                                    // one ancestor fewer to inspect
+    emitter.instruction("b __rt_class_name_is_a_ancestor_loop");                // keep scanning
+    emitter.label("__rt_class_name_is_a_true");
+    emitter.instruction("mov x0, #1");                                          // the relation holds
+    emitter.instruction("b __rt_class_name_is_a_done");                         // return it
     emitter.label("__rt_class_name_is_a_false");
     emitter.instruction("mov x0, #0");                                          // the relation does not hold
     emitter.label("__rt_class_name_is_a_done");
@@ -95,7 +121,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did the source name resolve?
     emitter.instruction("je __rt_class_name_is_a_false_x");                     // an unknown source class relates to nothing
     emitter.instruction("test rdx, rdx");                                       // did the source name an interface?
-    emitter.instruction("jne __rt_class_name_is_a_false_x");                    // an interface source has no class-parent walk here
+    emitter.instruction("jne __rt_class_name_is_a_interface_x");                // an interface source walks its extended interfaces
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // the fake object header: its first word is the class id
     emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // is the exact class excluded?
     emitter.instruction("je __rt_class_name_is_a_match_x");                     // is_a() accepts the exact class
@@ -110,6 +136,31 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_exception_matches");                         // walk parents and implemented interfaces
     emitter.instruction("movzx eax, al");                                       // the matcher answers in al; widen it to the result
     emitter.instruction("jmp __rt_class_name_is_a_done_x");                     // keep the matcher's answer
+    emitter.label("__rt_class_name_is_a_interface_x");
+    emitter.instruction("cmp QWORD PTR [rbp - 40], 0");                         // is the target a class?
+    emitter.instruction("je __rt_class_name_is_a_false_x");                     // an interface is never a class
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the target interface id
+    emitter.instruction("cmp rdi, rcx");                                        // is the source the target interface itself?
+    emitter.instruction("jne __rt_class_name_is_a_ancestors_x");                // otherwise search what it extends
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // is the exact interface excluded?
+    emitter.instruction("jne __rt_class_name_is_a_false_x");                    // is_subclass_of() excludes the interface itself
+    emitter.instruction("jmp __rt_class_name_is_a_true_x");                     // is_a() accepts the interface itself
+    emitter.label("__rt_class_name_is_a_ancestors_x");
+    abi::emit_symbol_address(emitter, "r9", "_interface_ancestor_ptrs");         // the per-interface ancestor-list table
+    emitter.instruction("mov r9, QWORD PTR [r9 + rdi * 8]");                    // this interface's [count, id...] list
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // the ancestor count
+    emitter.instruction("add r9, 8");                                           // the first extended interface id
+    emitter.label("__rt_class_name_is_a_ancestor_loop_x");
+    emitter.instruction("test r10, r10");                                       // any ancestor left?
+    emitter.instruction("je __rt_class_name_is_a_false_x");                     // no: the relation does not hold
+    emitter.instruction("cmp QWORD PTR [r9], rcx");                             // is this ancestor the target interface?
+    emitter.instruction("je __rt_class_name_is_a_true_x");                      // the source extends the target
+    emitter.instruction("add r9, 8");                                           // the next extended interface id
+    emitter.instruction("sub r10, 1");                                          // one ancestor fewer to inspect
+    emitter.instruction("jmp __rt_class_name_is_a_ancestor_loop_x");            // keep scanning
+    emitter.label("__rt_class_name_is_a_true_x");
+    emitter.instruction("mov eax, 1");                                          // the relation holds
+    emitter.instruction("jmp __rt_class_name_is_a_done_x");                     // return it
     emitter.label("__rt_class_name_is_a_false_x");
     emitter.instruction("xor eax, eax");                                        // the relation does not hold
     emitter.label("__rt_class_name_is_a_done_x");

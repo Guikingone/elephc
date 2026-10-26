@@ -56,7 +56,7 @@ Both implement `DateTimeInterface`. `DateTime` mutates the object in place and r
 
 | Method | Description |
 |---|---|
-| `__construct(string $datetime = "now", ?DateTimeZone $timezone = null)` | Build from `"now"` or a date/time string such as `"2024-01-15 10:30:45"`. With a `$timezone`, the wall-clock string is interpreted in that zone (unless the string carries its own), and that zone becomes the display zone. |
+| `__construct(string $datetime = "now", ?DateTimeZone $timezone = null)` | Build from `"now"` or a date/time string such as `"2024-01-15 10:30:45"`. With a `$timezone`, the wall-clock string is interpreted in that zone (unless the string carries its own), and that zone becomes the display zone. As in PHP, `"now"` and any string that leaves the time of day alone (`"+1 day"`, `"1 hour ago"`, `"last day of next month"`) carry the current microseconds (`format("u")`); a string that sets a time of day (`"today"`, `"tomorrow"`, `"10:00"`, `"@ts"`, a bare date) has none. |
 | `getTimestamp(): int` | UNIX timestamp. |
 | `setTimestamp(int $ts): static` | Set the moment from a UNIX timestamp. |
 | `getMicrosecond(): int` | Sub-second component (0–999999). |

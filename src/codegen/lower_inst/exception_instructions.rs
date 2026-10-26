@@ -18,80 +18,6 @@ pub(super) fn lower_throw_exception(ctx: &mut FunctionContext<'_>, inst: &Instru
     super::super::lower_term::lower_throw_value(ctx, value)
 }
 
-/// Validates a boxed gradual value as a Throwable object and transfers it to the unwinder.
-pub(in crate::codegen) fn lower_mixed_throw_value(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    let throwable_interface_id = ctx
-        .module
-        .interface_infos
-        .iter()
-        .find(|(name, _)| php_symbol_key(name) == php_symbol_key("Throwable"))
-        .map(|(_, info)| info.interface_id)
-        .ok_or_else(|| CodegenIrError::unsupported("missing Throwable interface metadata"))?;
-    let object_label = ctx.next_label("mixed_throw_object");
-    let throwable_label = ctx.next_label("mixed_throw_throwable");
-    let result_reg = abi::int_result_reg(ctx.emitter);
-
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6");
-            ctx.emitter.instruction(&format!("b.eq {}", object_label));
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6");
-            ctx.emitter.instruction(&format!("je {}", object_label));
-        }
-    }
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
-    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
-    exceptions::emit_error(ctx, "Can only throw objects");
-
-    ctx.emitter.label(&object_label);
-    move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        0,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        throwable_interface_id as i64,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        1,
-    );
-    abi::emit_call_label(ctx.emitter, "__rt_exception_matches");
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &throwable_label);
-
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
-    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
-    exceptions::emit_error(
-        ctx,
-        "Cannot throw objects that do not implement Throwable",
-    );
-
-    ctx.emitter.label(&throwable_label);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
-    abi::emit_incref_if_refcounted(
-        ctx.emitter,
-        &PhpType::Object("Throwable".to_string()),
-    );
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
-    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
-    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_exc_value", 0);
-    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
-    Ok(())
-}
-
 /// Lowers a static-message catchable PHP `Error` without evaluating later operands.
 pub(super) fn lower_throw_error(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if !inst.operands.is_empty() {
@@ -129,7 +55,8 @@ pub(super) fn lower_try_push_handler(ctx: &mut FunctionContext<'_>, inst: &Instr
     ctx.emitter.comment("push EIR exception handler");
     abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_handler_top", 0);
     abi::store_at_offset(ctx.emitter, scratch, handler_offset);
-    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    // The catch resumes in this activation; only younger frames may be abandoned.
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_call_frame_top", 0);
     abi::store_at_offset(ctx.emitter, scratch, handler_offset - 8);
     abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_rt_diag_suppression", 0);
     abi::store_at_offset(
@@ -224,5 +151,57 @@ pub(super) fn lower_catch_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction
     abi::emit_load_symbol_to_result(ctx.emitter, "_exc_value", &result_ty);
     ctx.store_result_value(result)?;
     abi::emit_store_zero_to_symbol(ctx.emitter, "_exc_value", 0);
+    Ok(())
+}
+
+/// Registers an owned value in a fixed activation record before evaluating later call arguments.
+pub(super) fn lower_guard_owned(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let token = inst.result.ok_or_else(|| CodegenIrError::invalid_module("owned-value guard needs a token"))?;
+    let offset = ctx.exception_guard_offset(token)?;
+    let ty = ctx.load_value_to_result(value)?.codegen_repr();
+    if !crate::ir::Ownership::php_type_needs_lifetime_tracking(&ty) || ctx.value_php_type(token)? != PhpType::Int {
+        return Err(CodegenIrError::invalid_module("owned-value guard requires a heap owner and integer token"));
+    }
+    let owner = match (ctx.emitter.target.arch, &ty) {
+        (Arch::AArch64, PhpType::Str) => "x1",
+        (Arch::AArch64, _) => "x0",
+        (Arch::X86_64, _) => "rax",
+    };
+    abi::store_at_offset(ctx.emitter, owner,
+        offset - crate::codegen_support::try_handlers::EXCEPTION_GUARD_OWNER_OFFSET);
+    let cleanup = if matches!(ty, PhpType::Callable { .. }) {
+        "__rt_exception_release_callable"
+    } else {
+        "__rt_exception_release_owned"
+    };
+    let scratch = abi::temp_int_reg(ctx.emitter.target);
+    abi::emit_symbol_address(ctx.emitter, scratch, cleanup);
+    abi::store_at_offset(ctx.emitter, scratch, offset - 8);
+    let anchor = expect_operand(inst, 1)?;
+    ctx.load_value_to_result(anchor)?;
+    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), abi::int_result_reg(ctx.emitter));
+    abi::emit_frame_slot_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), offset);
+    abi::emit_call_label(ctx.emitter, "__rt_exception_guard_owned");
+    store_if_result(ctx, inst)
+}
+
+/// Removes a capture guard before normal EIR cleanup releases or transfers its argument owner.
+pub(super) fn lower_unguard_owned(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let token = expect_operand(inst, 0)?;
+    load_value_to_first_int_arg(ctx, token)?;
+    abi::emit_call_label(ctx.emitter, "__rt_exception_unguard_owned");
+    Ok(())
+}
+
+/// Refreshes exceptional indexed or associative array ownership after mutation relocates its payload.
+pub(super) fn lower_update_array_guard(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let token = expect_operand(inst, 1)?;
+    let register = match ctx.emitter.target.arch { Arch::AArch64 => "x10", Arch::X86_64 => "r10" };
+    ctx.load_value_to_reg(token, register)?;
+    ctx.load_value_to_result(array)?;
+    abi::emit_store_to_address(ctx.emitter, abi::int_result_reg(ctx.emitter), register,
+        crate::codegen_support::try_handlers::EXCEPTION_GUARD_OWNER_OFFSET);
     Ok(())
 }

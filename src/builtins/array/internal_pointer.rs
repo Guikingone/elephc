@@ -52,7 +52,7 @@ pub fn check_array_pointer_call(
         ));
     }
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !may_hold_runtime_array(&ty) {
+    if !ty.is_php_array() && !may_hold_runtime_array(&ty) {
         return Err(CompileError::new(
             cx.span,
             &format!("{}() argument must be array", name),
@@ -64,7 +64,11 @@ pub fn check_array_pointer_call(
 /// Returns whether a gradual value can carry an array accepted by the pointer runtime.
 fn may_hold_runtime_array(ty: &PhpType) -> bool {
     match ty {
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => true,
+        // `Never` is the bottom element type a callback's dummy argument takes when the array it
+        // walks has no precise element type (`array_map('current', $rows)`): it stands for
+        // whatever the array holds, and the runtime helpers answer `false`/`null` for a payload
+        // that is not a container.
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Never => true,
         PhpType::Union(members) => members.iter().any(may_hold_runtime_array),
         _ => false,
     }

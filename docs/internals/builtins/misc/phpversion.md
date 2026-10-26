@@ -1,16 +1,16 @@
 ---
-title: "phpversion() — internals"
+title: "phpversion() - internals"
 description: "Compiler internals for phpversion(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 683
+  order: 703
 ---
 
-## `phpversion()` — internals
+## `phpversion()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/phpversion.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/phpversion.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -1,16 +1,16 @@
 ---
-title: "bcadd() — internals"
+title: "bcadd() - internals"
 description: "Compiler internals for bcadd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 566
+  order: 567
 ---
 
-## `bcadd()` — internals
+## `bcadd()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/bcadd.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/bcadd.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

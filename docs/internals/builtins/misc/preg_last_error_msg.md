@@ -1,16 +1,16 @@
 ---
-title: "preg_last_error_msg() — internals"
+title: "preg_last_error_msg() - internals"
 description: "Compiler internals for preg_last_error_msg(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 689
+  order: 710
 ---
 
-## `preg_last_error_msg()` — internals
+## `preg_last_error_msg()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_last_error_msg.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_last_error_msg.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

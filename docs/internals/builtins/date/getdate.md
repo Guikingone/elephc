@@ -1,16 +1,16 @@
 ---
-title: "getdate() — internals"
+title: "getdate() - internals"
 description: "Compiler internals for getdate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 232
+  order: 233
 ---
 
-## `getdate()` — internals
+## `getdate()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/getdate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/getdate.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `signature`
 - **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`

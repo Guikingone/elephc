@@ -21,6 +21,24 @@ use super::program::{
     string_data_name,
 };
 
+/// The Reflection classes whose constructors read the module reflection table: an allocation of
+/// one (or of a user subclass) needs the bodies of the interface methods it implements.
+const TABLE_REFLECTOR_CLASSES: &[&str] = &[
+    "ReflectionClass",
+    "ReflectionObject",
+    "ReflectionEnum",
+    "ReflectionClassConstant",
+    "ReflectionEnumUnitCase",
+    "ReflectionEnumBackedCase",
+    "ReflectionProperty",
+    "ReflectionMethod",
+    "ReflectionParameter",
+    "ReflectionFunction",
+    "ReflectionNamedType",
+    "ReflectionUnionType",
+    "ReflectionIntersectionType",
+];
+
 /// Builtin Reflection classes whose concrete method bodies can be lowered into EIR.
 const BUILTIN_REFLECTION_CLASS_NAMES: &[&str] = &[
     "ReflectionAttribute",
@@ -157,6 +175,53 @@ fn referenced_builtin_reflection_methods(module: &Module) -> BTreeMap<String, BT
                 Op::ObjectNew => {
                     if let Some(class_name) = class_data_name(module, inst) {
                         insert_builtin_reflection_method(module, class_name, "__construct", &mut methods);
+                        // The class reflectors implement `Reflector`: an allocation needs the
+                        // interface's method body even when nothing calls it.
+                        // A user subclass inherits those bodies from the reflector ancestor.
+                        let mut reflector = class_name.trim_start_matches('\\').to_string();
+                        for _ in 0..64 {
+                            if TABLE_REFLECTOR_CLASSES.contains(&reflector.as_str()) {
+                                break;
+                            }
+                            match module
+                                .class_infos
+                                .get(&reflector)
+                                .and_then(|info| info.parent.clone())
+                            {
+                                Some(parent) => reflector = parent.trim_start_matches('\\').to_string(),
+                                None => break,
+                            }
+                        }
+                        if crate::reflection_table::enabled()
+                            && TABLE_REFLECTOR_CLASSES.contains(&reflector.as_str())
+                        {
+                            insert_builtin_reflection_method(
+                                module,
+                                &reflector,
+                                "__construct",
+                                &mut methods,
+                            );
+                            let interfaces = module
+                                .class_infos
+                                .get(&reflector)
+                                .map(|info| info.interfaces.clone())
+                                .unwrap_or_default();
+                            for interface in interfaces {
+                                let required = module
+                                    .interface_infos
+                                    .get(&interface)
+                                    .map(|info| info.method_order.clone())
+                                    .unwrap_or_default();
+                                for method_name in required {
+                                    insert_builtin_reflection_method(
+                                        module,
+                                        &reflector,
+                                        &method_name,
+                                        &mut methods,
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
                 Op::DynamicObjectNew => {
@@ -198,6 +263,18 @@ fn referenced_builtin_reflection_methods(module: &Module) -> BTreeMap<String, BT
                 _ => {}
             }
         }
+    }
+    // `getAttributes()` answers a boxed array, so `->newInstance()` on its elements is a call on a
+    // `mixed` receiver: variadic, hence a callable-descriptor call that names no static class.
+    // The bridge answers it in a default build; a closed-world build lowers the body.
+    if crate::closed_world::is_enabled()
+        && ["ReflectionClass", "ReflectionObject", "ReflectionEnum"].iter().any(|owner| {
+            methods
+                .get(*owner)
+                .is_some_and(|lowered: &BTreeSet<String>| lowered.contains("getattributes"))
+        })
+    {
+        insert_builtin_reflection_method(module, "ReflectionAttribute", "newInstance", &mut methods);
     }
     methods
 }
@@ -278,6 +355,19 @@ fn collect_builtin_reflection_methods_for_receiver_type(
     match receiver_type {
         PhpType::Object(class_name) => {
             insert_builtin_reflection_method(module, class_name, method_name, methods);
+            // A call on a base type (`ReflectionType`, `ReflectionFunctionAbstract`) dispatches to
+            // the override of whichever subclass the object is.
+            let base = class_name.trim_start_matches('\\');
+            for candidate in BUILTIN_REFLECTION_CLASS_NAMES {
+                let derives = module
+                    .class_infos
+                    .get(*candidate)
+                    .and_then(|info| info.parent.as_deref())
+                    .is_some_and(|parent| parent.trim_start_matches('\\') == base);
+                if derives {
+                    insert_builtin_reflection_method(module, candidate, method_name, methods);
+                }
+            }
         }
         PhpType::Union(members) => {
             for member in members {
@@ -328,6 +418,23 @@ fn insert_builtin_reflection_method(
     methods: &mut BTreeMap<String, BTreeSet<String>>,
 ) {
     let Some(canonical) = canonical_builtin_reflection_class_name(class_name) else {
+        // A user class deriving from a Reflection class runs the ancestor's body for every method
+        // it does not override.
+        let method_key = php_method_key(method_name);
+        if let Some(implementation) = module
+            .class_infos
+            .get(class_name.trim_start_matches('\\'))
+            .and_then(|class_info| {
+                class_info
+                    .method_impl_classes
+                    .get(&method_key)
+                    .or_else(|| class_info.static_method_impl_classes.get(&method_key))
+            })
+        {
+            if canonical_builtin_reflection_class_name(implementation).is_some() {
+                insert_builtin_reflection_method(module, implementation, method_name, methods);
+            }
+        }
         return;
     };
     let Some(class_info) = module.class_infos.get(canonical) else {
@@ -386,7 +493,8 @@ fn lower_builtin_reflection_class_methods(
             continue;
         }
         let body = if class_name == "ReflectionAttribute" && method_key == "newinstance" {
-            let function_attrs = function_attribute_sources(module);
+            let owned = crate::codegen::reflection::function_attribute_metadata(&module.functions);
+            let function_attrs = crate::codegen::reflection::borrow_attribute_metadata(&owned);
             generated_body =
                 crate::codegen::reflection::build_attribute_new_instance_body_with_extra(
                     &check_result.classes,
@@ -397,7 +505,8 @@ fn lower_builtin_reflection_class_methods(
             // Materialize captured attribute arguments through the normal array
             // lowering (named arguments and associative arrays included) rather
             // than a bespoke codegen path.
-            let function_attrs = function_attribute_sources(module);
+            let owned = crate::codegen::reflection::function_attribute_metadata(&module.functions);
+            let function_attrs = crate::codegen::reflection::borrow_attribute_metadata(&owned);
             generated_body = crate::codegen::reflection::build_attribute_get_arguments_body_with_extra(
                 &check_result.classes,
                 &function_attrs,
@@ -422,23 +531,6 @@ fn lower_builtin_reflection_class_methods(
     for method in module.class_methods.iter_mut().skip(before) {
         method.flags.is_synthetic = true;
     }
-}
-
-/// Returns reflection-visible top-level function attribute metadata sources.
-fn function_attribute_sources(
-    module: &Module,
-) -> Vec<crate::codegen::reflection::AttributeMetadataSource<'_>> {
-    module
-        .functions
-        .iter()
-        .filter(|function| !function.attribute_names.is_empty())
-        .map(|function| {
-            (
-                function.attribute_names.as_slice(),
-                function.attribute_args.as_slice(),
-            )
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -479,3 +571,4 @@ mod catalog_tests {
         assert_eq!(actual, expected);
     }
 }
+

@@ -270,16 +270,17 @@ echo $runner->run(1);
         !one_asm.contains("_eir_shared_mixed_callable_invoke"),
         "one reachable open Mixed callback site must stay inline"
     );
-    assert_eq!(
+    assert!(
         one_asm
             .lines()
             .filter(|line| {
                 line.contains("runtime_descriptor_release_done")
                     && line.trim_end().ends_with(':')
             })
-            .count(),
-        1,
-        "the inline resolver must join one ownership-aware descriptor release tail"
+            .count()
+            <= 1,
+        "the inline resolver must not duplicate its ownership-aware descriptor release tail \
+         (a statically resolved callback needs none at all)"
     );
     let _ = fs::remove_dir_all(&dir);
 }
@@ -532,4 +533,94 @@ fn test_resource_destructors_follow_the_builtin_that_produces_them() {
 
         let _ = fs::remove_dir_all(&dir);
     }
+}
+
+/// `ReflectionProperty::getRawValue()` delegates to `getValue()` instead of carrying its own copy
+/// of the by-name property load, which the backend expands over every class that declares the
+/// property: with the copy the program emitted a second `getR_mixed_dyn_prop_get_*` ladder per name.
+#[test]
+fn test_reflection_get_raw_value_shares_the_get_value_property_ladder() {
+    let dir = make_cli_test_dir("elephc_get_raw_value_shares_ladder");
+    let (user_asm, _runtime_asm, _required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+class Holder { public int $priority = 7; public string $label = 'x'; }
+$p = new ReflectionProperty(Holder::class, 'priority');
+$h = new Holder;
+echo $p->getValue($h), $p->getRawValue($h), "\n";
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        user_asm.contains("ReflectionProperty__getV_mixed_dyn_prop_get_"),
+        "getValue() lost its by-name property ladder"
+    );
+    assert!(
+        !user_asm.contains("ReflectionProperty__getR_mixed_dyn_prop_get_"),
+        "getRawValue() carries its own by-name property ladder again"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Reads the frame size a compiled function reserves in its prologue (`sub sp, sp, #N` on
+/// AArch64, `sub rsp, N` on x86_64).
+fn prologue_frame_bytes(user_asm: &str, function_marker: &str) -> usize {
+    let start = user_asm
+        .find(function_marker)
+        .unwrap_or_else(|| panic!("no `{function_marker}` in the emitted assembly"));
+    for line in user_asm[start..].lines().take(24) {
+        let line = line.trim();
+        if let Some(bytes) = line.strip_prefix("sub sp, sp, #") {
+            return bytes.parse().expect("frame size immediate");
+        }
+        if let Some(bytes) = line.strip_prefix("sub rsp, ") {
+            return bytes.parse().expect("frame size immediate");
+        }
+    }
+    panic!("no frame reservation after `{function_marker}`");
+}
+
+/// SSA values whose live ranges do not overlap share one stack slot, so a function of many
+/// short-lived temporaries keeps a small frame. Every value used to own a slot (2688 bytes for the
+/// function below, 496 now), which pushed hot locals past the 256-byte reach of the one-instruction
+/// AArch64 `ldur`/`stur` and cost a separate `sub` for each access. Fails when the sharing in
+/// `value_placement::allocate_with` is switched off (`ELEPHC_NO_SLOT_SHARING=1`) or removed.
+#[test]
+fn test_dying_temporaries_share_frame_slots() {
+    let dir = make_cli_test_dir("elephc_slot_sharing");
+    let terms = (1..=40)
+        .map(|n| format!("strlen($a . \"{n}\")"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let source = format!(
+        "<?php\nfunction many(string $a, int $n): int {{\n    return {terms} + $n;\n}}\necho many(\"ab\", 1), \"\\n\";\n"
+    );
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(&source, &dir, 8_388_608, false, false);
+
+    let frame = prologue_frame_bytes(&user_asm, "@fn name=many ");
+    assert!(
+        frame <= 1024,
+        "40 dying string temporaries reserved a {frame}-byte frame; their slots are not shared"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Sharing must not change what the function computes: the same chain, run.
+#[test]
+fn test_dying_temporaries_sharing_slots_keep_the_result() {
+    let terms = (1..=40)
+        .map(|n| format!("strlen($a . \"{n}\")"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let source = format!(
+        "<?php\nfunction many(string $a, int $n): int {{\n    return {terms} + $n;\n}}\necho many(\"ab\", 1), \"\\n\";\n"
+    );
+    // 9 one-digit suffixes: 3 bytes each; 31 two-digit suffixes: 4 bytes each; plus $n = 1.
+    assert_eq!(compile_and_run(&source), "152\n");
 }

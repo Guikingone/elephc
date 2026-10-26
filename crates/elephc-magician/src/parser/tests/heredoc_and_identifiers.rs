@@ -202,9 +202,9 @@ fn parse_fragment_lowers_a_high_byte_escape_to_bytes() {
 /// Verifies a malformed code-point escape is a parse error, as it is for PHP.
 ///
 /// `php -n` 8.5.6 reports `Parse error: Invalid UTF-8 codepoint escape sequence` for
-/// `"\u{}"` and adds `: Codepoint too large` for `"\u{110000}"`. This parser has no wording
-/// of its own for the sequence yet, so it reports the generic unexpected-token failure; what
-/// matters is that the fragment is refused rather than run with invented text.
+/// `"\u{}"` and adds `: Codepoint too large` for `"\u{110000}"`. The lexer reports it as
+/// `EvalParseError::InvalidUtf8`, the kind naming that error; what matters most is that the
+/// fragment is refused rather than run with invented text.
 #[test]
 fn parse_fragment_refuses_a_malformed_code_point_escape() {
     for fragment in [
@@ -213,7 +213,7 @@ fn parse_fragment_refuses_a_malformed_code_point_escape() {
     ] {
         assert_eq!(
             parse_fragment_error(fragment),
-            Err(EvalParseError::UnexpectedToken),
+            Err(EvalParseError::InvalidUtf8),
             "{}",
             String::from_utf8_lossy(fragment)
         );

@@ -292,6 +292,18 @@ fn parse_fragment_accepts_eval_finally_source() {
         }]
     );
 }
+/// An empty finally clause satisfies try syntax, unlike a try with no handler or finalizer.
+#[test]
+fn parse_fragment_accepts_empty_finally_but_rejects_missing_handler() {
+    let program = parse_fragment(b"try { return 1; } finally {}").unwrap();
+    assert_eq!(program.statements(), &[EvalStmt::Try {
+        body: vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(1))))],
+        catches: Vec::new(),
+        finally_body: Vec::new(),
+    }]);
+    assert!(parse_fragment(b"try { return 1; }").is_err());
+}
+
 /// Verifies unset fragments expand variable, array-access, and object-property operands.
 #[test]
 fn parse_fragment_accepts_unset_source() {
@@ -314,16 +326,22 @@ fn parse_fragment_accepts_unset_source() {
             EvalStmt::UnsetVar {
                 name: "y".to_string()
             },
+            EvalStmt::GcCollect,
         ]
     );
 }
-/// Verifies eval fragments reject PHP opening tags.
+/// Verifies eval fragments reject an opening tag in code, and only there.
+///
+/// Reference PHP refuses `eval('<?php echo 1;')` (eval'd code starts in PHP mode) but runs
+/// `eval('echo "<?xml";')`. The refusal used to be a blanket scan for `<?`, which rejected
+/// the second too; the lexer now owns the tags, and a `<?php` in code is a syntax error.
 #[test]
 fn parse_fragment_rejects_opening_tag() {
     assert_eq!(
         parse_fragment_error(b"<?php echo 1;"),
         Err(EvalParseError::PhpOpenTag)
     );
+    assert!(parse_fragment(b"echo \"<?xml\"; echo 'a<?b';").is_ok());
 }
 
 /// Verifies opening-tag bytes inside PHP literals and comments are valid eval content.

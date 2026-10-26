@@ -459,6 +459,69 @@ impl Checker {
         env.insert(key, non_null);
     }
 
+    /// Records that a property holding an array is non-null after a completed element write.
+    ///
+    /// `$this->p[] = $v` and `$this->p[$k] = $v` turn a null property into an array, so the
+    /// storage is an array afterwards whatever it held before: `$this->languages = [];
+    /// $this->languages[] = $l; return $this->languages;` must not read back as `?array`. Only
+    /// array-family declarations are narrowed; an `ArrayAccess` property is left to `offsetSet`.
+    pub(crate) fn record_property_array_write_narrowing(&mut self, stmt: &Stmt, env: &mut TypeEnv) {
+        let place = match &stmt.kind {
+            StmtKind::PropertyArrayPush {
+                object, property, ..
+            }
+            | StmtKind::PropertyArrayAssign {
+                object, property, ..
+            } => Expr::new(
+                ExprKind::PropertyAccess {
+                    object: object.clone(),
+                    property: property.clone(),
+                },
+                stmt.span,
+            ),
+            StmtKind::StaticPropertyArrayPush {
+                receiver, property, ..
+            }
+            | StmtKind::StaticPropertyArrayAssign {
+                receiver, property, ..
+            } => Expr::new(
+                ExprKind::StaticPropertyAccess {
+                    receiver: receiver.clone(),
+                    property: property.clone(),
+                },
+                stmt.span,
+            ),
+            _ => return,
+        };
+        let Some(key) = self.guard_env_key(&place) else {
+            return;
+        };
+        if self
+            .property_guard_receiver_is_unstable(&place, env)
+            .unwrap_or(true)
+        {
+            return;
+        }
+        let Ok(declared) = self.infer_type(&place, env) else {
+            return;
+        };
+        let PhpType::Union(members) = &declared else {
+            return;
+        };
+        if !members.iter().any(|member| matches!(member, PhpType::Void))
+            || !members.iter().all(|member| {
+                matches!(
+                    member,
+                    PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Void
+                )
+            })
+        {
+            return;
+        }
+        let non_null = self.narrow_complement(&declared, &GuardTarget::Exact(PhpType::Void));
+        env.insert(key, non_null);
+    }
+
     /// Drops every synthetic property narrowing from the environment. Called after effects that
     /// may write a property (property assignments, any call — a callee can mutate the object),
     /// and at loop-body entry (a later iteration may observe an earlier iteration's write), so a

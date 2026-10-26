@@ -43,19 +43,9 @@ pub enum EvalClosureObjectTarget {
 }
 
 impl EvalClosureObjectTarget {
-    /// Returns the receiver cell owned by this closure target, when it has one.
-    ///
-    /// A `ForeignContext` wrapper owns no receiver of its own: it only keeps the owning eval
-    /// context alive around the target it wraps, so it answers for that target.
-    pub(crate) fn receiver(&self) -> Option<RuntimeCellHandle> {
-        match self {
-            Self::ForeignContext { target, .. } => target.receiver(),
-            Self::BoundNamed { bound_this, .. } => *bound_this,
-            Self::InvokableObject { object } | Self::ObjectMethod { object, .. } => Some(*object),
-            Self::Named(_) | Self::StaticMethod { .. } => None,
-        }
-    }
 
+    /// Returns the receiver edge borrowed by this target, descending through foreign-context wrappers.
+    ///
     /// Allows closure construction to replace a borrowed receiver with its retained cell.
     pub(crate) fn receiver_mut(&mut self) -> Option<&mut RuntimeCellHandle> {
         match self {

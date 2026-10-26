@@ -84,6 +84,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         return check_multi_array(cx);
     }
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
+    if arr_ty.is_php_array() {
+        check_map_callback(cx, &PhpType::Mixed)?;
+        return Ok(PhpType::php_array());
+    }
     match arr_ty {
         PhpType::Array(elem_ty) => {
             let callback_ret_ty = check_map_callback(cx, elem_ty.as_ref())?;

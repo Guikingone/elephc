@@ -65,41 +65,42 @@ pub(in crate::interpreter) fn eval_builtin_stream_socket_client_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    let (bound, _) = bind_evaluated_ref_builtin_args(
-        &[
-            "address",
-            "error_code",
-            "error_message",
-            "timeout",
-            "flags",
-            "context",
-        ],
-        &evaluated_args,
-        false,
-    )?;
-    let address = required_evaluated_ref_arg(&bound, 0)?;
-    let error_code_target = optional_evaluated_ref_arg(&bound, 1)
-        .map(|arg| arg.ref_target.clone().ok_or(EvalStatus::RuntimeFatal))
-        .transpose()?;
-    let error_message_target = optional_evaluated_ref_arg(&bound, 2)
-        .map(|arg| arg.ref_target.clone().ok_or(EvalStatus::RuntimeFatal))
-        .transpose()?;
-    let (result, error_code, error_message) =
-        eval_stream_socket_client_with_error_result(address.value, context, values)?;
-    super::fsockopen::eval_write_socket_int_output_ref_target(
-        error_code_target.as_ref(),
-        error_code,
-        context,
-        values,
-    )?;
-    super::fsockopen::eval_write_socket_output_ref_target(
-        error_message_target.as_ref(),
-        Some(error_message),
-        context,
-        values,
-    )?;
-    Ok(result)
+    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+        let (bound, _) = bind_evaluated_ref_builtin_args(
+            &[
+                "address",
+                "error_code",
+                "error_message",
+                "timeout",
+                "flags",
+                "context",
+            ],
+            &evaluated_args,
+            false,
+        )?;
+        let address = required_evaluated_ref_arg(&bound, 0)?;
+        let error_code_target = optional_evaluated_ref_arg(&bound, 1)
+            .map(|arg| arg.ref_target.clone().ok_or(EvalStatus::RuntimeFatal))
+            .transpose()?;
+        let error_message_target = optional_evaluated_ref_arg(&bound, 2)
+            .map(|arg| arg.ref_target.clone().ok_or(EvalStatus::RuntimeFatal))
+            .transpose()?;
+        let (result, error_code, error_message) =
+            eval_stream_socket_client_with_error_result(address.value, context, values)?;
+        super::fsockopen::eval_write_socket_int_output_ref_target(
+            error_code_target.as_ref(),
+            error_code,
+            context,
+            values,
+        )?;
+        super::fsockopen::eval_write_socket_output_ref_target(
+            error_message_target.as_ref(),
+            Some(error_message),
+            context,
+            values,
+        )?;
+        Ok(result)
+    })
 }
 
 /// Opens a connected TCP stream resource.

@@ -498,3 +498,123 @@ array(1) {
 "#
     );
 }
+
+
+/// `$r = &$obj->prop[$k]` binds a reference to an element of a declared array property, both
+/// inside the class (Symfony `Translator::trans`: `null === $g = &$this->globalTranslatedParameters
+/// [$locale]`) and from outside it. The checker never promoted the property, so the lowering's
+/// `load_prop_ref_cell` was refused and the whole class was left to the runtime autoloader.
+#[test]
+fn test_reference_to_declared_array_property_element() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class RefPropCache {
+    public array $items = [1, 2, 3];
+    private array $cache = [];
+    private array $base = ['a' => 1];
+    public function get(string $k): array {
+        if (null === $g = &$this->cache[$k]) {
+            $g = $this->base;
+            $g['k'] = $k;
+        }
+        return $g;
+    }
+    public function stmt(string $k): array {
+        $h = &$this->cache[$k . '2'];
+        if ($h === null) { $h = ['s' => $k]; }
+        return $h;
+    }
+    public function dump(): string { return json_encode($this->cache); }
+}
+$t = new RefPropCache;
+for ($i = 0; $i < 3; $i++) {
+    $r = $t->get('x') + $t->get('y');
+    $s = $t->stmt('z');
+    $e = &$t->items[1];
+    $e = $e + 1;
+    unset($e);
+}
+echo json_encode($r), json_encode($s), $t->dump(), json_encode($t->items), "\n";
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "{\"a\":1,\"k\":\"x\"}{\"s\":\"z\"}{\"x\":{\"a\":1,\"k\":\"x\"},\"y\":{\"a\":1,\"k\":\"y\"},\"z2\":{\"s\":\"z\"}}[1,5,3]\n",
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A reference into a nested, auto-vivified array element: the container starts as an empty
+/// literal (or an empty property), so the reference's static type, the vivified intermediate
+/// level and the per-iteration rebind of the hidden element aliases all have to hold. Each shape
+/// used to fatal ("Unsupported operand types"), be refused at compile time, trip the heap
+/// validator, or leave a block behind per loop.
+#[test]
+fn test_reference_into_nested_vivified_array_element() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Store {
+    private array $nested = [];
+    public function nest(string $a, string $b, int $v): void {
+        $cell = &$this->nested[$a][$b];
+        $cell = ($cell ?? 0) + $v;
+    }
+    public function nested(): string { return json_encode($this->nested); }
+}
+function viaLocal(int $n): array {
+    $nested = [];
+    for ($i = 0; $i < $n; $i++) {
+        $cell = &$nested['x']['y'];
+        $cell = ($cell ?? 0) + 2;
+        unset($cell);
+    }
+    return $nested;
+}
+function flat(int $n): array {
+    $nested = [];
+    for ($i = 0; $i < $n; $i++) {
+        $cell = &$nested['y'];
+        $cell = ($cell ?? 0) + 2;
+        unset($cell);
+    }
+    return $nested;
+}
+function preset(int $n): array {
+    $nested = ['x' => ['y' => 0]];
+    for ($i = 0; $i < $n; $i++) {
+        $cell = &$nested['x']['y'];
+        $cell = ($cell ?? 0) + 2;
+        unset($cell);
+    }
+    return $nested;
+}
+function cast(int $n): array {
+    $nested = [];
+    for ($i = 0; $i < $n; $i++) {
+        $cell = &$nested['x']['y'];
+        $cell = (int) $cell + 2;
+        unset($cell);
+    }
+    return $nested;
+}
+$s = new Store;
+for ($i = 0; $i < 30; $i++) {
+    $s->nest('x', 'y', 2);
+    $s->nest('x', 'z', 1);
+}
+echo $s->nested(), "\n";
+echo json_encode(viaLocal(30)), json_encode(flat(30)), json_encode(preset(30)), json_encode(cast(30)), "\n";
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "{\"x\":{\"y\":60,\"z\":30}}\n{\"x\":{\"y\":60}}{\"y\":60}{\"x\":{\"y\":60}}{\"x\":{\"y\":60}}\n",
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

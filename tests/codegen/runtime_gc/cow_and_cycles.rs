@@ -60,7 +60,8 @@ echo $b["x"];
 }
 
 /// Verifies that growing an array through an alias does not affect the source.
-/// Compiles `$a = [1]; $b = $a; $b[4] = 5;` and asserts count and values.
+/// Compiles `$a = [1]; $b = $a; $b[4] = 5;` and asserts count and values. php answers `1215`:
+/// the grown copy holds two elements (keys 0 and 4), not five, so `count($b)` is 2.
 #[test]
 fn test_cow_array_growth_after_alias_keeps_source_unchanged() {
     let out = compile_and_run(
@@ -74,7 +75,7 @@ echo $a[0];
 echo $b[4];
 "#,
     );
-    assert_eq!(out, "1515");
+    assert_eq!(out, "1215");
 }
 
 /// Verifies that `array_push` on a COW alias does not mutate the source array.
@@ -300,8 +301,10 @@ build_and_drop(false);
     assert!(exhaustive.success, "program failed: {}", exhaustive.stderr);
     let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
     let (exhaustive_allocs, exhaustive_frees) = parse_gc_stats(&exhaustive.stderr);
-    assert_eq!(baseline_allocs, exhaustive_allocs);
-    assert_eq!(baseline_frees, exhaustive_frees);
+    // The conditional function also owns boxed untyped arguments. Compare live
+    // allocations so those balanced argument costs cannot mask a leaked local.
+    assert_eq!(baseline_allocs, baseline_frees, "baseline leaks its local array");
+    assert_eq!(exhaustive_allocs, exhaustive_frees, "conditional cleanup leaks storage");
 }
 
 /// Verifies that a nested associative alias survives outer and inner unset.
@@ -325,6 +328,10 @@ echo $nums[1];
 /// Verifies that a self-referential object cycle is reclaimed by GC with the same
 /// alloc/free counts as an acyclic reference. Confirms cycle collection does not
 /// leak or over-collect compared to the acyclic baseline.
+///
+/// Both programs request the collection with `gc_collect_cycles()`: like php, `unset()` only
+/// buffers a possible root and the collector runs when the buffer fills (see
+/// `__rt_gc_safepoint`), so the reclamation is asked for rather than assumed at the `unset()`.
 #[test]
 fn test_gc_collect_cycles_reclaims_object_self_cycle() {
     let acyclic = compile_and_run_with_gc_stats(
@@ -332,6 +339,7 @@ fn test_gc_collect_cycles_reclaims_object_self_cycle() {
 class Node { public $next = null; }
 $n = new Node();
 unset($n);
+gc_collect_cycles();
 "#,
     );
     assert!(
@@ -346,6 +354,7 @@ class Node { public $next = null; }
 $n = new Node();
 $n->next = $n;
 unset($n);
+gc_collect_cycles();
 "#,
     );
     assert!(cyclic.success, "cyclic program failed: {}", cyclic.stderr);
@@ -354,8 +363,11 @@ unset($n);
     let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
     assert_eq!(acyclic.stdout, "");
     assert_eq!(cyclic.stdout, "");
-    assert_eq!(acyclic_allocs, cyclic_allocs);
-    assert_eq!(acyclic_frees, cyclic_frees);
+    // Each program balances on its own: the cyclic one is reclaimed completely (no leak, nothing
+    // freed twice). The two need not allocate the SAME number of blocks -- the optimizer narrows
+    // `Node::$next` differently once a program stores an object into it.
+    assert_eq!(acyclic_allocs, acyclic_frees, "acyclic baseline leaked");
+    assert_eq!(cyclic_allocs, cyclic_frees, "the cycle was not fully reclaimed");
 }
 
 /// Verifies that a cycle between an array and an object (`$a = [$n]; $n->next = $a`)
@@ -370,6 +382,7 @@ $n = new Node();
 $a = [$n];
 unset($a);
 unset($n);
+gc_collect_cycles();
 "#,
     );
     assert!(
@@ -386,6 +399,7 @@ $a = [$n];
 $n->next = $a;
 unset($a);
 unset($n);
+gc_collect_cycles();
 "#,
     );
     assert!(cyclic.success, "cyclic program failed: {}", cyclic.stderr);
@@ -394,8 +408,11 @@ unset($n);
     let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
     assert_eq!(acyclic.stdout, "");
     assert_eq!(cyclic.stdout, "");
-    assert_eq!(acyclic_allocs, cyclic_allocs);
-    assert_eq!(acyclic_frees, cyclic_frees);
+    // Each program balances on its own: the cyclic one is reclaimed completely (no leak, nothing
+    // freed twice). The two need not allocate the SAME number of blocks -- the optimizer narrows
+    // `Node::$next` differently once a program stores an object into it.
+    assert_eq!(acyclic_allocs, acyclic_frees, "acyclic baseline leaked");
+    assert_eq!(cyclic_allocs, cyclic_frees, "the cycle was not fully reclaimed");
 }
 
 /// Verifies that forming a two-element cycle from indexed int arrays (`$a[0] = $b;
@@ -477,8 +494,8 @@ unset($b);
     assert_eq!(cyclic_frees, acyclic_frees + 1);
 }
 
-/// Verifies that a cycle between two Mixed hashes (`$a["peer"] = $b; $b["peer"] = $a`)
-/// allocates 1 extra slot for boxed Mixed conversion compared to the acyclic case.
+/// Verifies that the second hash assignment separates shared storage into one header
+/// and one entry allocation, and releases both extra owners compared to the one-way case.
 #[test]
 fn test_cow_hash_assignment_detaches_before_forming_cycle() {
     let acyclic = compile_and_run_with_gc_stats(
@@ -512,8 +529,8 @@ unset($b);
     let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
     assert_eq!(acyclic.stdout, "");
     assert_eq!(cyclic.stdout, "");
-    assert_eq!(cyclic_allocs, acyclic_allocs + 1);
-    assert_eq!(cyclic_frees, acyclic_frees + 1);
+    assert_eq!(cyclic_allocs, acyclic_allocs + 2);
+    assert_eq!(cyclic_frees, acyclic_frees + 2);
 }
 
 /// Verifies that a cycle between a Mixed-hash and an object (`$h = ["node" => $n];
@@ -528,6 +545,7 @@ $n = new Node();
 $h = ["node" => $n];
 unset($h);
 unset($n);
+gc_collect_cycles();
 "#,
     );
     assert!(
@@ -544,6 +562,7 @@ $h = ["node" => $n];
 $n->next = $h;
 unset($h);
 unset($n);
+gc_collect_cycles();
 "#,
     );
     assert!(cyclic.success, "cyclic program failed: {}", cyclic.stderr);
@@ -552,6 +571,9 @@ unset($n);
     let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
     assert_eq!(acyclic.stdout, "");
     assert_eq!(cyclic.stdout, "");
-    assert_eq!(acyclic_allocs, cyclic_allocs);
-    assert_eq!(acyclic_frees, cyclic_frees);
+    // Each program balances on its own: the cyclic one is reclaimed completely (no leak, nothing
+    // freed twice). The two need not allocate the SAME number of blocks -- the optimizer narrows
+    // `Node::$next` differently once a program stores an object into it.
+    assert_eq!(acyclic_allocs, acyclic_frees, "acyclic baseline leaked");
+    assert_eq!(cyclic_allocs, cyclic_frees, "the cycle was not fully reclaimed");
 }

@@ -1,16 +1,16 @@
 ---
-title: "preg_match() — internals"
+title: "preg_match() - internals"
 description: "Compiler internals for preg_match(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 767
+  order: 799
 ---
 
-## `preg_match()` — internals
+## `preg_match()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_match.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -28,7 +28,7 @@ sidebar:
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary

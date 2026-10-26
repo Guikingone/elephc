@@ -35,12 +35,19 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // class-name pointer -> strtolower pointer input
     emitter.instruction("ldr x2, [sp, #24]");                                   // class-name length -> strtolower length input
     emitter.instruction("bl __rt_strtolower");                                  // lowercase the class-name query for PHP lookup
+    emitter.instruction("str x1, [sp, #72]");                                   // keep the owned lowered class copy for release after the search
     emitter.instruction("mov x0, x1");                                          // lowered class-name pointer -> sorted-search arg0
     emitter.instruction("mov x1, x2");                                          // class-name length -> sorted-search arg1
     abi::emit_symbol_address(emitter, "x2", "_member_exists_table");
     abi::emit_load_symbol_to_reg(emitter, "x3", "_member_exists_table_count", 0);
     emitter.instruction("mov x4, #64");                                         // member-registry rows are 64 bytes wide
     emitter.instruction("bl __rt_sorted_name_search");                          // resolve the class row, or return null
+    // -- strtolower returns an OWNED copy; the class copy is done once the row is found --
+    emitter.instruction("str x0, [sp, #56]");                                   // preserve the row pointer across the copy release
+    emitter.instruction("ldr x0, [sp, #72]");                                   // reload the owned lowered class copy
+    emitter.instruction("bl __rt_decref_any");                                  // release the lowered class copy
+    emitter.instruction("str xzr, [sp, #72]");                                  // no owned lowered copy is outstanding now
+    emitter.instruction("ldr x0, [sp, #56]");                                   // restore the row pointer
     emitter.instruction("cbz x0, __rt_member_exists_aarch64_miss");             // an unknown class cannot expose the member
 
     emitter.instruction("ldr x4, [sp, #48]");                                   // reload the list-kind selector
@@ -71,6 +78,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #32]");                                   // method-name pointer -> strtolower input
     emitter.instruction("ldr x2, [sp, #40]");                                   // method-name length -> strtolower input
     emitter.instruction("bl __rt_strtolower");                                  // normalize the case-insensitive method query
+    emitter.instruction("str x1, [sp, #72]");                                   // remember the owned lowered method copy for release at exit
     emitter.instruction("str x1, [sp, #16]");                                   // save normalized query pointer
     emitter.instruction("str x2, [sp, #24]");                                   // save normalized query length
     emitter.instruction("b __rt_member_exists_aarch64_scan");
@@ -104,6 +112,10 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #1");                                          // return true for the matched member
 
     emitter.label("__rt_member_exists_aarch64_done");
+    emitter.instruction("str x0, [sp, #56]");                                   // preserve the answer across the copy release
+    emitter.instruction("ldr x0, [sp, #72]");                                   // reload any owned lowered method copy (null when none)
+    emitter.instruction("bl __rt_decref_any");                                  // release it; a null pointer is ignored
+    emitter.instruction("ldr x0, [sp, #56]");                                   // restore the answer
     emitter.instruction("ldp x29, x30, [sp], #80");                             // restore the caller frame and release spills
     emitter.instruction("ret");                                                 // return the boolean in x0
 }
@@ -126,12 +138,19 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // class-name pointer -> strtolower pointer input
     emitter.instruction("mov rdx, rsi");                                        // class-name length -> strtolower length input
     emitter.instruction("call __rt_strtolower");                                // lowercase the class-name query for PHP lookup
+    emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // keep the owned lowered class copy for release after the search
     emitter.instruction("mov rdi, rax");                                        // lowered class-name pointer -> sorted-search arg0
     emitter.instruction("mov rsi, rdx");                                        // class-name length -> sorted-search arg1
     abi::emit_symbol_address(emitter, "rdx", "_member_exists_table");
     abi::emit_load_symbol_to_reg(emitter, "rcx", "_member_exists_table_count", 0);
     emitter.instruction("mov r8, 64");                                          // member-registry rows are 64 bytes wide
     emitter.instruction("call __rt_sorted_name_search");                        // resolve the class row, or return null
+    // -- strtolower returns an OWNED copy; the class copy is done once the row is found --
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the row pointer across the copy release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // reload the owned lowered class copy
+    emitter.instruction("call __rt_decref_any");                                // release the lowered class copy
+    emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // no owned lowered copy is outstanding now
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // restore the row pointer
     emitter.instruction("test rax, rax");                                       // did the class lookup find a row?
     emitter.instruction("jz __rt_member_exists_x86_64_miss");                   // an unknown class cannot expose the member
 
@@ -163,6 +182,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // method-name pointer -> strtolower input
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // method-name length -> strtolower input
     emitter.instruction("call __rt_strtolower");                                // normalize the case-insensitive method query
+    emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // remember the owned lowered method copy for release at exit
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save normalized query pointer
     emitter.instruction("mov QWORD PTR [rbp - 72], rdx");                       // save normalized query length
     emitter.instruction("jmp __rt_member_exists_x86_64_scan");
@@ -197,6 +217,10 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, 1");                                          // return true for the matched member
 
     emitter.label("__rt_member_exists_x86_64_done");
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the answer across the copy release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // reload any owned lowered method copy (null when none)
+    emitter.instruction("call __rt_decref_any");                                // release it; a null pointer is ignored
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // restore the answer
     emitter.instruction("mov rsp, rbp");                                        // discard spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the boolean in rax

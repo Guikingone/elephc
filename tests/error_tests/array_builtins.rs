@@ -9,6 +9,32 @@
 
 use super::*;
 
+/// A literal non-array receiver of `array_splice()` is still rejected at compile time, while a
+/// `mixed` value returned from an `array` function is checked at run time (php throws a
+/// TypeError there and so does elephc).
+#[test]
+fn test_declared_array_splice_defers_mixed_array_return_to_runtime() {
+    expect_error(
+        "<?php $values = 7; array_splice($values, 0, 1);",
+        "array_splice() first argument must be array",
+    );
+    expect_no_error(
+        "<?php function notAnArray(mixed $value): array { return $value; } notAnArray(7);",
+    );
+}
+
+/// php rejects a non-array merge operand with a TypeError when the call runs; elephc now compiles
+/// the call and raises the same TypeError at run time instead of refusing it at compile time.
+#[test]
+fn test_php_array_merge_non_array_operands_throw_at_runtime() {
+    expect_no_error(
+        "<?php function bad(array $items): array { return array_merge($items, 7); } bad([1]);",
+    );
+    expect_no_error(
+        "<?php function bad(array $items): array { return array_merge(7, $items); } bad([1]);",
+    );
+}
+
 // Verifies that a heterogeneous associative array with string and integer values widens to `mixed` without error.
 /// Verifies that assoc array mixed type checks.
 #[test]
@@ -60,21 +86,6 @@ fn test_error_array_reverse_wrong_args() {
     );
 }
 
-/// Verifies `array_reverse()` still refuses a run-time `preserve_keys` over a GRADUAL source.
-///
-/// A container whose shape is known statically now resolves the flag at run time: both arms are
-/// emitted and the branch picks one. An indexed array reverses to an array or an integer-keyed
-/// hash; a hash reverses to a hash either way, its `false` arm being the key-preserving reverse
-/// followed by `__rt_hash_reindex`. A value only known to be an array at run time has no two arms
-/// to emit, and answers with the gradual wording it already used for a literal `true`.
-#[test]
-fn test_error_array_reverse_non_literal_preserve_keys() {
-    expect_error(
-        "<?php $t = $argc > 0; $a = json_decode('[1,2]', true); array_reverse($a, $t);",
-        "array_reverse() cannot preserve keys for a gradual array type in AOT mode",
-    );
-}
-
 /// Verifies `array_chunk()` still rejects a run-time `preserve_keys` over a non-array source.
 ///
 /// Every ARRAY shape now resolves the flag: a dense source emits both arms and branches between
@@ -86,6 +97,23 @@ fn test_error_array_chunk_non_literal_preserve_keys() {
     expect_error(
         "<?php $t = $argc > 0; array_chunk('not an array', 1, $t);",
         "array_chunk() preserve_keys argument must be a literal bool in AOT mode",
+    );
+}
+
+/// Verifies `array_chunk()` still rejects a NON-array receiver at compile time.
+///
+/// The accepted receiver set was widened to include associative arrays, so the arm that refuses
+/// everything else is the one thing left guarding the builtin's contract. Pinning it here keeps
+/// a later widening from quietly turning a scalar receiver into a runtime surprise.
+#[test]
+fn test_error_array_chunk_non_array_receiver() {
+    expect_error(
+        "<?php array_chunk(\"nope\", 2);",
+        "array_chunk() first argument must be array",
+    );
+    expect_error(
+        "<?php array_chunk(5, 2);",
+        "array_chunk() first argument must be array",
     );
 }
 
@@ -129,22 +157,39 @@ fn test_error_array_slice_non_literal_preserve_keys() {
     );
 }
 
-/// Verifies a key-preserving `array_slice()` of a boxed array is rejected, not miscompiled.
-///
-/// The key-preserving helper copies the source header's `value_type` into the result hash, so
-/// the element layout has to be known statically.
+/// Every first-class spelling of `array_slice()` accepts a non-literal `preserve_keys` flag, as
+/// php does; the compiled programs produce the same output as php.
 #[test]
-fn test_error_array_slice_preserve_keys_boxed_source() {
-    expect_error(
-        r#"<?php $m = json_decode("[1,2,3]"); array_slice($m, 1, 2, true);"#,
-        "array_slice() preserve_keys requires a statically known array type",
-    );
+fn test_first_class_array_slice_accepts_non_literal_preserve_keys() {
+    for call in [
+        "$f = array_slice(...); $f([1, 2], 0, 1, $t);",
+        "call_user_func(array_slice(...), [1, 2], 0, 1, $t);",
+        "$f = array_slice(...); call_user_func($f, [1, 2], 0, 1, $t);",
+        "call_user_func_array(array_slice(...), [[1, 2], 0, 1, $t]);",
+        "$f = array_slice(...); for ($i = 0; $i < 2; $i++) { $f([1, 2], 0, 1, $t); }",
+    ] {
+        expect_no_error(&format!("<?php $t = $argc > 0; {call}"));
+    }
+}
+
+/// A key-preserving `array_slice()` of a boxed array (a `json_decode()` result) is valid php;
+/// elephc now compiles it and the program output matches php.
+#[test]
+fn test_array_slice_preserve_keys_accepts_boxed_source() {
+    expect_no_error(r#"<?php $m = json_decode("[1,2,3]"); array_slice($m, 1, 2, true);"#);
 }
 
 /// Verifies that error array sum wrong args.
 #[test]
 fn test_error_array_sum_wrong_args() {
     expect_error("<?php array_sum();", "array_sum() takes exactly 1 argument");
+}
+
+/// Boxed aggregate support retains static diagnostics for definite non-array arguments.
+#[test]
+fn test_error_numeric_array_aggregates_reject_known_scalar_arguments() {
+    expect_error("<?php array_sum(42);", "array_sum() argument must be array");
+    expect_error("<?php array_product(\"invalid\");", "array_product() argument must be array");
 }
 
 /// Verifies that error array search wrong args.
@@ -257,16 +302,38 @@ fn test_error_array_values_wrong_args() {
     );
 }
 
+/// Accepting a `mixed` receiver (issue #630) must not open the door to a statically known
+/// non-array: a literal scalar can never succeed and stays a compile error for `array_values()`,
+/// `array_flip()` and `in_array()`. A union-typed parameter is only checked at run time.
+#[test]
+fn test_mixed_receiver_array_builtins_reject_literal_non_arrays() {
+    expect_error(
+        "<?php array_values(42);",
+        "array_values() argument must be array",
+    );
+    expect_error(
+        "<?php array_flip(\"s\");",
+        "array_flip() argument must be array",
+    );
+    expect_error(
+        "<?php in_array(1, 5);",
+        "in_array() second argument must be array",
+    );
+    // A scalar-or-string union parameter is checked at run time (php throws a TypeError when the
+    // call runs).
+    expect_no_error("<?php function pick(int|string $v): void { array_values($v); } pick(1);");
+}
+
 /// Verifies that error sort wrong args.
 #[test]
 fn test_error_sort_wrong_args() {
-    expect_error("<?php sort();", "sort() takes exactly 1 argument");
+    expect_error("<?php sort();", "sort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error rsort wrong args.
 #[test]
 fn test_error_rsort_wrong_args() {
-    expect_error("<?php rsort();", "rsort() takes exactly 1 argument");
+    expect_error("<?php rsort();", "rsort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error isset wrong args.
@@ -323,7 +390,7 @@ fn test_error_by_ref_builtin_parameter_refuses_a_value_with_no_storage() {
 fn test_error_array_unique_wrong_args() {
     expect_error(
         "<?php array_unique();",
-        "array_unique() takes exactly 1 argument",
+        "array_unique() takes 1 or 2 arguments",
     );
 }
 
@@ -415,6 +482,13 @@ fn test_error_count_wrong_args() {
     expect_error("<?php count();", "count() takes 1 or 2 arguments");
 }
 
+/// Verifies PHP's `sizeof()` alias exposes the same one-required, one-optional arity as `count()`.
+/// The diagnostic names the canonical function, so only the arity wording is asserted.
+#[test]
+fn test_error_sizeof_wrong_args() {
+    expect_error("<?php sizeof();", "takes 1 or 2 arguments");
+}
+
 /// Verifies that error array diff wrong args.
 #[test]
 fn test_error_array_diff_wrong_args() {
@@ -466,13 +540,13 @@ fn test_error_array_rand_wrong_args() {
 /// Verifies that error asort wrong args.
 #[test]
 fn test_error_asort_wrong_args() {
-    expect_error("<?php asort();", "asort() takes exactly 1 argument");
+    expect_error("<?php asort();", "asort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error arsort wrong args.
 #[test]
 fn test_error_arsort_wrong_args() {
-    expect_error("<?php arsort();", "arsort() takes exactly 1 argument");
+    expect_error("<?php arsort();", "arsort() takes 1 or 2 arguments");
 }
 
 /// Verifies that `ksort()` rejects calls outside its one-to-two argument signature.
@@ -488,7 +562,40 @@ fn test_error_ksort_wrong_args() {
 /// Verifies that error krsort wrong args.
 #[test]
 fn test_error_krsort_wrong_args() {
-    expect_error("<?php krsort();", "krsort() takes exactly 1 argument");
+    expect_error("<?php krsort();", "krsort() takes 1 or 2 arguments");
+}
+
+/// Verifies the key sorts reject a third argument, so `$flags` did not open the arity up.
+#[test]
+fn test_error_key_sort_rejects_third_argument() {
+    expect_error(
+        "<?php $a = ['b' => 1]; ksort($a, SORT_STRING, 1);",
+        "ksort() takes 1 or 2 arguments",
+    );
+    expect_error(
+        "<?php $a = ['b' => 1]; krsort($a, SORT_STRING, 1);",
+        "krsort() takes 1 or 2 arguments",
+    );
+}
+
+/// Verifies the key sorts reject a `$flags` argument bound under the wrong parameter name.
+#[test]
+fn test_error_key_sort_rejects_unknown_named_argument() {
+    expect_error(
+        "<?php $a = ['b' => 1]; ksort($a, sort_flags: SORT_STRING);",
+        "sort_flags",
+    );
+}
+
+/// Boxed PHP array support does not relax the receiver contract for scalar locals.
+#[test]
+fn test_error_key_sort_scalar_receiver() {
+    for name in ["ksort", "krsort"] {
+        expect_error(
+            &format!("<?php $value = 7; {name}($value);"),
+            &format!("{name}() argument must be array"),
+        );
+    }
 }
 
 /// Verifies that error natsort wrong args.
@@ -515,6 +622,19 @@ fn test_error_array_column_wrong_args() {
     );
 }
 
+/// A literal scalar receiver of `array_column()` is rejected at compile time; a `mixed` receiver is
+/// checked at run time, where php and elephc both throw a TypeError for a non-array.
+#[test]
+fn test_array_column_rejects_literal_scalar_and_defers_mixed_receivers() {
+    expect_error(
+        "<?php array_column(42, 'id');",
+        "array_column() first argument must be array",
+    );
+    expect_no_error(
+        "<?php function readColumn(mixed $value): array { return array_column($value, 'id'); } readColumn(42);",
+    );
+}
+
 /// Verifies that error array map wrong args.
 #[test]
 fn test_error_array_map_wrong_args() {
@@ -524,20 +644,23 @@ fn test_error_array_map_wrong_args() {
     );
 }
 
-/// Verifies that error array filter wrong args.
+/// Filtering accepts one to three arguments, including an omitted callback.
 #[test]
 fn test_error_array_filter_wrong_args() {
-    expect_error(
-        r#"<?php array_filter();"#,
-        "array_filter() takes 1 to 3 arguments",
-    );
+    for source in ["<?php array_filter();", "<?php array_filter([], null, 0, 1);"] {
+        expect_error(source, "array_filter() takes 1 to 3 arguments");
+    }
 }
 
-/// Verifies that `array_reduce()` requires its array and callback arguments.
+/// Reduction requires a callback but its initial value is optional.
 #[test]
 fn test_error_array_reduce_wrong_args() {
     expect_error(
         r#"<?php array_reduce([]);"#,
+        "array_reduce() takes 2 or 3 arguments",
+    );
+    expect_error(
+        r#"<?php array_reduce([], "fn", null, 1);"#,
         "array_reduce() takes 2 or 3 arguments",
     );
 }
@@ -547,7 +670,7 @@ fn test_error_array_reduce_wrong_args() {
 fn test_error_array_walk_wrong_args() {
     expect_error(
         r#"<?php array_walk([]);"#,
-        "array_walk() takes exactly 2 arguments",
+        "array_walk() takes 2 or 3 arguments",
     );
 }
 
@@ -569,7 +692,9 @@ fn test_error_uasort_wrong_args() {
     expect_error(r#"<?php uasort([]);"#, "uasort() takes exactly 2 arguments");
 }
 
-/// Verifies that error usort first class callable wrong arity.
+/// A first-class callable comparator declaring fewer parameters than usort passes. php ignores
+/// the surplus argument for a userland method; elephc still refuses it (bead "usort callback
+/// surplus arguments").
 #[test]
 fn test_error_usort_first_class_callable_wrong_arity() {
     expect_error(
@@ -584,9 +709,10 @@ $bad = new BadComparator();
 $values = [2, 1];
 usort($values, $bad->cmp(...));
 "#,
-        "Method BadComparator::cmp expects 1 arguments, got 2",
+        "usort() callback expects 1 arguments, got 2",
     );
 }
+
 
 /// Verifies that error list unpack non array.
 #[test]
@@ -612,6 +738,30 @@ fn test_error_call_user_func_array_wrong_args() {
 fn test_error_spread_non_array() {
     expect_error(
         "<?php $x = 5; $y = [...$x];",
+        "Spread operator requires an array",
+    );
+}
+
+/// Verifies that an object the checker can PROVE is not Traversable stays rejected statically.
+///
+/// Lowering does carry a runtime guard for this case, but a program whose source says the value
+/// can never be unpacked is refused at compile time, exactly like the scalar case below. The
+/// runtime guard is still covered where it belongs, through a `mixed` source
+/// (`tests/codegen/runtime_gc/descriptor_unpack_keys.rs`).
+#[test]
+fn test_spread_still_rejects_a_proven_non_traversable_object() {
+    expect_error(
+        "<?php class Plain { public int $value = 1; } function add(int $first, int $second): int { return $first + $second; } echo add(...new Plain());",
+        "Spread operator requires an array",
+    );
+}
+
+/// Verifies the narrowness of that widening: a scalar source stays rejected, so accepting
+/// Traversable did not turn the spread check into a no-op.
+#[test]
+fn test_spread_still_rejects_a_scalar_source() {
+    expect_error(
+        "<?php function add(int $first, int $second): int { return $first + $second; } $n = 5; echo add(...$n);",
         "Spread operator requires an array",
     );
 }
@@ -688,22 +838,18 @@ fn test_error_array_key_last_non_array() {
     );
 }
 
-/// Verifies that array_replace() with a single argument reports an arity error.
+/// `array_replace()` is variadic in php, so a single argument is valid and returns that array;
+/// elephc now compiles it and matches php.
 #[test]
-fn test_error_array_replace_wrong_args() {
-    expect_error(
-        "<?php $a = [\"k\" => 1]; array_replace($a);",
-        "array_replace() takes exactly 2 arguments",
-    );
+fn test_array_replace_accepts_single_argument() {
+    expect_no_error("<?php $a = [\"k\" => 1]; array_replace($a);");
 }
 
-/// Verifies that array_replace_recursive() with a single argument reports an arity error.
+/// `array_replace_recursive()` is variadic in php, so a single argument is valid and returns that
+/// array; elephc now compiles it and matches php.
 #[test]
-fn test_error_array_replace_recursive_wrong_args() {
-    expect_error(
-        "<?php $a = [\"k\" => 1]; array_replace_recursive($a);",
-        "array_replace_recursive() takes exactly 2 arguments",
-    );
+fn test_array_replace_recursive_accepts_single_argument() {
+    expect_no_error("<?php $a = [\"k\" => 1]; array_replace_recursive($a);");
 }
 
 /// Verifies that array_diff_assoc() with a single argument reports an arity error.
@@ -715,22 +861,13 @@ fn test_error_array_diff_assoc_wrong_args() {
     );
 }
 
-/// Verifies that array_intersect_assoc() rejects string-element indexed arrays (scalar indexed
-/// inputs are supported; string/heap element indexed inputs are a follow-up).
+/// Verifies that array_intersect_assoc() still rejects a statically scalar operand. An indexed
+/// array of strings is accepted now: it lowers through the gradual helper.
 #[test]
-fn test_error_array_intersect_assoc_string_indexed_unsupported() {
+fn test_error_array_intersect_assoc_scalar_operand() {
     expect_error(
-        "<?php array_intersect_assoc([\"a\", \"b\"], [\"a\"]);",
+        "<?php array_intersect_assoc(1, [\"a\"]);",
         "array_intersect_assoc() arguments must be associative arrays or indexed arrays of scalars",
-    );
-}
-
-/// Verifies that array_merge_recursive() with a single argument reports an arity error.
-#[test]
-fn test_error_array_merge_recursive_wrong_args() {
-    expect_error(
-        "<?php $a = [\"k\" => 1]; array_merge_recursive($a);",
-        "array_merge_recursive() takes exactly 2 arguments",
     );
 }
 
@@ -775,7 +912,7 @@ fn test_error_array_all_non_array() {
 fn test_error_array_walk_recursive_wrong_args() {
     expect_error(
         "<?php function f($x) {} $a = [[1]]; array_walk_recursive($a);",
-        "array_walk_recursive() takes exactly 2 arguments",
+        "array_walk_recursive() takes 2 or 3 arguments",
     );
 }
 
@@ -793,8 +930,21 @@ fn test_error_array_udiff_wrong_args() {
 fn test_error_array_uintersect_non_array() {
     expect_error(
         "<?php function c($a, $b) { return 0; } array_uintersect(5, [2], \"c\");",
-        "array_uintersect() first argument must be array",
+        "array_uintersect() argument #1 must be array",
     );
+}
+
+/// Comparator set operations identify whichever array operand is invalid.
+#[test]
+fn test_error_array_set_comparators_non_array_operand_positions() {
+    for builtin in ["array_udiff", "array_uintersect"] {
+        for (arguments, position) in [("5, [2]", 1), ("[1], 5", 2)] {
+            expect_error(
+                &format!("<?php function c($a, $b) {{ return 0; }} {builtin}({arguments}, \"c\");"),
+                &format!("{builtin}() argument #{position} must be array"),
+            );
+        }
+    }
 }
 
 /// Verifies that array_multisort() with a single argument reports an arity error.
@@ -818,6 +968,33 @@ fn test_error_array_multisort_non_array() {
     expect_error(
         "<?php $a = [1, 2]; array_multisort($a, 5);",
         "array_multisort(): Argument #2 ($array2) could not be passed by reference",
+    );
+}
+
+/// Dynamic cells defer layout validation, but known hashes and scalar locals still fail checking.
+#[test]
+fn test_error_array_multisort_known_non_indexed_storage() {
+    for source in [
+        "<?php $a = ['k' => 1]; $b = ['j' => 2]; array_multisort($a, $b);",
+        "<?php $a = [1, 2]; $b = 5; array_multisort($a, $b);",
+    ] {
+        expect_error(source, "array_multisort() arguments must be indexed arrays");
+    }
+}
+
+/// Verifies that `array_multisort()` refuses an ASSOCIATIVE receiver.
+///
+/// Follow-up for #1187, which expected `array_multisort()` to renumber a hash's keys to
+/// `0..n-1` and ride the same runtime-key materialization `array_keys()` gained in #1099. It
+/// never gets that far: the arguments must be indexed arrays, so there is no reindexed hash
+/// for `array_keys()` to read. (Reference PHP would not renumber either — it KEEPS string
+/// keys and only re-indexes numeric ones.) The sibling backend refusals for `usort` and
+/// `natsort` are pinned in `tests/codegen/arrays/key_sort.rs`.
+#[test]
+fn test_error_array_multisort_rejects_an_associative_receiver() {
+    expect_error(
+        r#"<?php $h = ["b" => 2, "a" => 1]; $t = ["x" => "B", "y" => "A"]; array_multisort($h, $t);"#,
+        "array_multisort() arguments must be indexed arrays",
     );
 }
 
@@ -976,16 +1153,19 @@ fn test_error_array_pointer_literal_receiver() {
 }
 
 /// Verifies a builtin lowered through a dedicated EIR shape says so when handed a spread, instead
-/// of letting the mismatch surface as an internal operand-count error. `array_map()` needs its
-/// callback named at compile time, so the array it would unpack cannot stand in for it.
+/// of letting the mismatch surface as an internal operand-count error. `array_combine()` needs its
+/// operands named at compile time, so the array it would unpack cannot stand in for them.
+/// (`array_map()`, `array_intersect()`, `range()` and `array_merge_recursive()` are not examples
+/// any more: `crate::array_gradual_prelude` carries a helper that dispatches on the run-time
+/// operand count.)
 #[test]
-fn test_error_array_map_rejects_spread_arguments() {
+fn test_error_array_combine_rejects_spread_arguments() {
     expect_error(
         r#"<?php
-$spec = [static fn (int $n): int => $n * 2, [1, 2, 3]];
-var_dump(array_map(...$spec));
+$spec = [["a", "b"], [1, 2]];
+var_dump(array_combine(...$spec));
 "#,
-        "array_map() cannot take a spread argument",
+        "array_combine() cannot take a spread argument",
     );
 }
 

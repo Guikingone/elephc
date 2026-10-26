@@ -80,31 +80,32 @@ pub(in crate::interpreter) fn eval_builtin_parse_str_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated = eval_call_arg_values(args, context, scope, values)?;
-    if evaluated.len() != 2 {
-        return eval_throw_argument_count_error(
-            &format!(
-                "parse_str() expects exactly 2 arguments, {} given",
-                evaluated.len()
-            ),
+    with_eval_call_arguments(args, context, scope, values, |evaluated, context, _, values| {
+        if evaluated.len() != 2 {
+            return eval_throw_argument_count_error(
+                &format!(
+                    "parse_str() expects exactly 2 arguments, {} given",
+                    evaluated.len()
+                ),
+                context,
+                values,
+            );
+        }
+        let (bound, _) = bind_evaluated_ref_builtin_args(&["string", "result"], &evaluated, false)?;
+        let source = required_evaluated_ref_arg(&bound, 0)?.value;
+        let output = required_evaluated_ref_arg(&bound, 1)?;
+        let target = output.ref_target.clone().ok_or(EvalStatus::RuntimeFatal)?;
+        let source_bytes = eval_require_string_arg(source, "parse_str", 1, "string", context, values)?;
+        let result = eval_parse_str_result(&source_bytes, values)?;
+        eval_write_direct_ref_target(
+            &target,
+            result,
             context,
             values,
-        );
-    }
-    let (bound, _) = bind_evaluated_ref_builtin_args(&["string", "result"], &evaluated, false)?;
-    let source = required_evaluated_ref_arg(&bound, 0)?.value;
-    let output = required_evaluated_ref_arg(&bound, 1)?;
-    let target = output.ref_target.clone().ok_or(EvalStatus::RuntimeFatal)?;
-    let source_bytes = eval_require_string_arg(source, "parse_str", 1, "string", context, values)?;
-    let result = eval_parse_str_result(&source_bytes, values)?;
-    eval_write_direct_ref_target(
-        &target,
-        result,
-        context,
-        values,
-        Some(ScopeCellOwnership::Owned),
-    )?;
-    values.null()
+            Some(ScopeCellOwnership::Owned),
+        )?;
+        values.null()
+    })
 }
 
 /// Parses the default PHP query-string grammar into a fresh associative result array.

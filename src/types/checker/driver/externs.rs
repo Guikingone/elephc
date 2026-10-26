@@ -9,7 +9,6 @@
 //! - Phase order controls diagnostics, available declarations, required libraries, and function-local environments.
 
 use crate::errors::CompileError;
-use crate::names::php_symbol_key;
 use crate::parser::ast::{Program, StmtKind};
 use crate::types::{
     ctype_stack_size, ctype_to_php_type, packed_type_size, ExternClassInfo, ExternFieldInfo,
@@ -124,6 +123,7 @@ impl Checker {
             declared_params: vec![true; php_params.len()],
             variadic: None,
             deprecation: None,
+            is_generator: false,
         };
         self.functions.insert(name.to_string(), sig);
         self.extern_functions.insert(

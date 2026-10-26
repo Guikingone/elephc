@@ -12,22 +12,30 @@
 
 mod array_pointer_scan;
 mod builtin_datetime;
+mod clone_overrides;
 mod context;
+mod diagnostics;
 mod effect_refinement;
 mod effects_lookup;
+mod entry_locals;
 mod expr;
 mod fibers;
 mod function;
 pub(crate) mod gradual_coercions;
 /// The padding-thunk symbol codegen calls for a dynamic `new` that omits defaulted arguments.
-pub(crate) use function::dynamic_constructor_thunk_name;
+pub(crate) use clone_overrides::driver_function_name as clone_override_driver_function_name;
+pub(crate) use function::{dynamic_constructor_thunk_name, dynamic_constructor_thunk_owner};
+pub(crate) use function::eval_native_default_helper_name;
+pub(crate) use function::{lower_array_merge_callable, lower_boxed_usort_callable};
 mod ownership;
 mod program;
+mod property_initializers;
 mod reflection;
 mod stmt;
+mod throwable_constructors;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub(crate) use expr::body_contains_eval_call;
 /// Whether an op writes its string result into the shared concat scratch arena.
@@ -37,7 +45,10 @@ pub(crate) use expr::body_contains_eval_call;
 pub(crate) use expr::body_writes_local;
 pub(crate) use expr::cast_string_needs_owned_persist;
 pub(crate) use expr::runtime_call_string_is_fresh;
-pub(crate) use expr::string_op_uses_scratch_storage;
+#[allow(unused_imports)] // used by the binary's pipeline only
+pub(crate) use program::module_runs_interpreted_code;
+#[allow(unused_imports)] // used by the binary's pipeline only
+pub(crate) use program::{closed_world_bridge_reasons, module_has_dynamic_include};
 
 use std::fmt;
 use std::path::Path;
@@ -112,6 +123,12 @@ pub enum LoweringError {
         /// The lowered module the failures were found in.
         module: Box<crate::ir::Module>,
     },
+    /// A PHP shape this lowering deliberately refuses, reported as a source diagnostic.
+    ///
+    /// Lowering refuses instead of emitting code whenever the selected path cannot honor an
+    /// ABI contract, most notably a reference binding that would otherwise treat an ordinary
+    /// result value as a raw reference-cell pointer.
+    Unsupported(crate::errors::CompileError),
 }
 
 impl fmt::Display for LoweringError {
@@ -121,8 +138,19 @@ impl fmt::Display for LoweringError {
             LoweringError::Validation(err) | LoweringError::InvalidBodies { first: err, .. } => {
                 write!(f, "EIR validation failed: {:?}", err)
             }
+            LoweringError::Unsupported(err) => write!(
+                f,
+                "unsupported EIR lowering at {}:{}: {}",
+                err.span.line, err.span.col, err.message
+            ),
         }
     }
+}
+
+/// Records that some class file was handed to the runtime autoloader, so the interpreter will
+/// declare classes the compiled program never saw (see `program::CLASS_FILES_DEFERRED`).
+pub fn set_class_files_deferred(deferred: bool) {
+    program::CLASS_FILES_DEFERRED.store(deferred, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Turns on collection of every body that fails EIR validation (see

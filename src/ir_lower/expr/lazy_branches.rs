@@ -47,7 +47,7 @@ pub(super) fn lower_null_coalesce(
 
     ctx.builder.position_at_end(default_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    store_expr_into_temp(ctx, &temp_name, result_type.clone(), default, expr.span);
+    store_branch_expr_into_temp(ctx, &temp_name, result_type.clone(), default, expr.span);
     release_discarded_branch_value(ctx, value, expr.span);
     let default_reachable = !ctx.builder.insertion_block_is_terminated();
     let default_initialized = ctx.initialized_slots_snapshot();
@@ -78,6 +78,9 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         return value;
     }
     if let ExprKind::ArrayAccess { array, index } = &value.kind {
+        if let Some(probed) = lower_array_access_offset_exists_coalesce(ctx, array, index, value) {
+            return probed;
+        }
         return lower_array_access_with_missing_warning(ctx, array, index, value, false);
     }
     if let Some(value) = lower_known_missing_property_probe(ctx, value) {
@@ -91,11 +94,26 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
     // that can be in that state is read the way `isset()` reads it. Every other property keeps
     // the ordinary path and its exact slot type.
     if let ExprKind::PropertyAccess { object, property } = &value.kind {
+        // The left operand of `??` is one of php's silent probes, exactly like `isset()`: a name
+        // this scope may not reach answers the DEFAULT rather than raising, and a name that was
+        // never created answers it without an `Undefined property` warning. A receiver whose
+        // class is only known at run time needs the runtime-name form to carry that mode.
+        let needs_probe = property_probe_needs_runtime_name_form(ctx, object);
         let object = lower_expr(ctx, object);
         if property_can_be_uninitialized(ctx, object.value, property) {
             return lower_initialized_property_value(ctx, object, property, value);
         }
+        if needs_probe {
+            // `??` is the one silent probe that php still routes through `__get`.
+            return super::property_access::lower_property_fetch_mode_from_value(
+                ctx, object, property, PropertyFetchMode::Coalesce, value,
+            );
+        }
         return lower_property_get_from_value(ctx, object, property, Op::PropGet, value);
+    }
+    if let ExprKind::DynamicPropertyAccess { object, property } = &value.kind {
+        // `$o->{$k} ?? $d` asks `__isset` and then `__get`, like the static-name form above.
+        return lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Coalesce, value);
     }
     // A typed STATIC property starts uninitialized the same way, and its guard lives in the
     // backend rather than in an operation the lowering could branch on — so `??` needs its own
@@ -514,7 +532,7 @@ pub(super) fn lower_short_ternary(
 
     ctx.builder.position_at_end(default_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    store_expr_into_temp(ctx, &temp_name, result_type, default, expr.span);
+    store_branch_expr_into_temp(ctx, &temp_name, result_type, default, expr.span);
     release_discarded_branch_value(ctx, value, expr.span);
     let default_reachable = !ctx.builder.insertion_block_is_terminated();
     let default_initialized = ctx.initialized_slots_snapshot();
@@ -540,4 +558,146 @@ pub(super) fn release_discarded_branch_value(
     if ctx.value_needs_release_after_retaining_store(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
+}
+
+/// Lowers `$object[$k] ?? ...` over an `ArrayAccess` receiver the way php does: `offsetExists($k)`
+/// first, and `offsetGet($k)` only when that answered true. The plain quiet read called
+/// `offsetGet` alone, so a container whose `offsetGet` RESOLVES the key (Laravel's
+/// `$this->app['session'] ?? null`) answered for keys `offsetExists` denies, and the read of a
+/// `mixed` receiver came back as `int(0)` in a closure.
+///
+/// Only a receiver that can be read twice without effect takes this form (a variable or a
+/// property chain over one, with a side-effect-free offset): the receiver is evaluated once and
+/// both calls go through it. Any other shape keeps the quiet read.
+fn lower_array_access_offset_exists_coalesce(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    fn repeatable(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
+            ExprKind::PropertyAccess { object, .. } => repeatable(object),
+            _ => false,
+        }
+    }
+    if !repeatable(array) || crate::optimize::expr_has_side_effects(index) {
+        return None;
+    }
+    let receiver = lower_subscript_receiver_silently(ctx, array);
+    let receiver_ty = ctx.builder.value_php_type(receiver.value);
+    let statically_array_access = type_satisfies_array_access_for_ir(ctx, &receiver_ty);
+    let maybe_array_access = matches!(receiver_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && !receiver_ty_is_nullable_only(&receiver_ty)
+        && super::native_isset::program_may_hold_array_access_objects(ctx);
+    if !(statically_array_access || maybe_array_access) {
+        return Some(lower_array_access_from_receiver(ctx, receiver, index, expr, false));
+    }
+    // The receiver is read by `offsetExists` and then by `offsetGet`, and each call consumes the
+    // reference it is handed: a second reference, pinned before the first call, serves the second.
+    let pin = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(
+        ctx,
+        receiver,
+        Some(expr.span),
+    );
+    let temp_name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let data = ctx.intern_class_name("ArrayAccess");
+    let is_array_access = ctx.emit_value(
+        Op::InstanceOf,
+        vec![receiver.value],
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::InstanceOf.default_effects(),
+        Some(expr.span),
+    );
+    let split_initialized = ctx.initialized_slots_snapshot();
+    let access_block = ctx.builder.create_named_block("coalesce.array_access", Vec::new());
+    let plain_block = ctx.builder.create_named_block("coalesce.array_plain", Vec::new());
+    let get_block = ctx.builder.create_named_block("coalesce.array_get", Vec::new());
+    let missing_block = ctx.builder.create_named_block("coalesce.array_missing", Vec::new());
+    let merge = ctx.builder.create_named_block("coalesce.array_merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_array_access.value,
+        then_target: access_block,
+        then_args: Vec::new(),
+        else_target: plain_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(access_block);
+    let exists = lower_method_call_with_receiver(
+        ctx,
+        receiver,
+        "offsetExists",
+        &[index.clone()],
+        Op::MethodCall,
+        expr,
+    );
+    let exists = ctx.truthy_consuming(exists, Some(expr.span));
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: exists.value,
+        then_target: get_block,
+        then_args: Vec::new(),
+        else_target: missing_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(get_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
+    let got = lower_method_call_with_receiver(
+        ctx,
+        pin,
+        "offsetGet",
+        &[index.clone()],
+        Op::MethodCall,
+        expr,
+    );
+    store_value_into_temp(ctx, &temp_name, PhpType::Mixed, got, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(missing_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
+    crate::ir_lower::ownership::release_if_owned(ctx, pin, Some(expr.span));
+    let null = lower_boxed_null(ctx, expr);
+    store_value_into_temp(ctx, &temp_name, PhpType::Mixed, null, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(plain_block);
+    ctx.restore_initialized_slots(split_initialized);
+    crate::ir_lower::ownership::release_if_owned(ctx, pin, Some(expr.span));
+    let read = lower_array_access_from_receiver(ctx, receiver, index, expr, false);
+    store_value_into_temp(ctx, &temp_name, PhpType::Mixed, read, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    Some(take_owned_temp(ctx, &temp_name, expr.span))
+}
+
+/// Whether a type holds nothing but `null`-like members.
+fn receiver_ty_is_nullable_only(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Void | PhpType::Never => true,
+        PhpType::Union(members) => members.iter().all(|m| matches!(m, PhpType::Void | PhpType::Never)),
+        _ => false,
+    }
+}
+
+/// `store_expr_into_temp` for an expression that runs on ONE path of a conditional expression
+/// (`?:`/`??` default, a ternary branch, a `match` arm).
+///
+/// A local the branch stores (`$c[0] ?: $c = 'z'`, `$f ? ($c = 'z') : 1`) leaves the merge typed by
+/// its slot's storage, as an `&&`/`||` operand does (`join_short_circuit_operand_types`). The
+/// branch's own view used to survive the merge, so the code after it read a slot the untaken path
+/// had left holding an array as a string ("Array to string conversion", `is_array()` false).
+pub(super) fn store_branch_expr_into_temp(
+    ctx: &mut LoweringContext<'_, '_>,
+    temp_name: &str,
+    result_type: PhpType,
+    branch: &Expr,
+    span: crate::span::Span,
+) {
+    let saved_types = ctx.local_types_snapshot();
+    store_expr_into_temp(ctx, temp_name, result_type, branch, span);
+    super::unary_logic::join_short_circuit_operand_types(ctx, saved_types);
 }

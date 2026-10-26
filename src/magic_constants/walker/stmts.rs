@@ -42,8 +42,9 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         StmtKind::FunctionVariantMark { name, variant } => {
             StmtKind::FunctionVariantMark { name, variant }
         }
-        StmtKind::IncludeOnceGuard { source_path, body } => StmtKind::IncludeOnceGuard {
+        StmtKind::IncludeOnceGuard { source_path, required, body } => StmtKind::IncludeOnceGuard {
             source_path,
+            required,
             body: walk_program(body, pass),
         },
         StmtKind::Echo(e) => StmtKind::Echo(walk_expr(e, pass)),

@@ -1,11 +1,11 @@
 ---
-title: "array_udiff_uassoc() — internals"
+title: "array_udiff_uassoc() - internals"
 description: "Compiler internals for array_udiff_uassoc(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 51
 ---
 
-## `array_udiff_uassoc()` — internals
+## `array_udiff_uassoc()` - internals
 
 ## Where it lives
 

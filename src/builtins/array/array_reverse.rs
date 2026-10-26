@@ -7,13 +7,16 @@
 //! Key details:
 //! - PHP's signature is `array_reverse(array $array, bool $preserve_keys = false)`; both the
 //!   positional and the `preserve_keys:` named form are accepted.
-//! - `preserve_keys` CHANGES THE RESULT SHAPE, so it must be a literal in AOT mode (same rule as
-//!   `class_exists()`'s autoload flag). With `false` the result is the input array type; with
+//! - For concrete indexed storage, `preserve_keys` changes the result shape and must be literal.
+//!   Boxed PHP array declarations preserve either shape and accept runtime flags.
+//!   With `false` the concrete result is the input array type; with
 //!   `true` an indexed `array<T>` becomes `AssocArray { key: Int, value: T }`, because PHP keeps
-//!   the original integer keys while reversing the iteration order — something elephc's dense
+//!   the original integer keys while reversing the iteration order, something elephc's dense
 //!   indexed representation cannot express.
 //! - Gradual storage is accepted for the default form and narrowed at the helper boundary;
-//!   `check` still rejects statically non-array arguments and computes the result shape.
+//!   `check` still rejects statically non-array arguments and computes the result shape. A
+//!   gradual source with a key-preserving (or run-time) flag answers `mixed` and
+//!   lowers through `crate::array_gradual_prelude`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -34,12 +37,18 @@ builtin! {
 /// input array/assoc type is returned unchanged. With a literal `true` an indexed array keeps its
 /// integer keys in reversed insertion order, which is an `AssocArray` keyed by `Int`; a source
 /// that is already associative keeps its own shape because reordering a hash preserves its keys.
+/// Boxed PHP arrays keep their declared type and accept a runtime flag. Concrete storage
+/// requires a literal flag. Arity and argument inference run through the registry's common path.
 /// A `Mixed` input or a union containing an array member is accepted: lowering routes it
 /// through the runtime-validating compatibility helper, which rejects a non-array runtime
-/// variant, while the checker keeps the array member as the result type. Statically non-array
-/// arguments and a non-literal flag are rejected. Arity is pre-validated and every argument
-/// has already been inferred once by the registry's common path.
+/// variant, while the checker keeps the array member as the result type. A literal flag is
+/// still required for concrete storage; a run-time flag on an indexed source answers the union
+/// of the two arms.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    let boxed = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    if boxed.is_php_array() {
+        return Ok(boxed);
+    }
     // `None` means the flag is only known at run time. Twig's
     // `CoreExtension::reverse($charset, $item, $preserveKeys = false)` forwards an UNTYPED
     // parameter straight into the call, which no caller makes literal.
@@ -73,17 +82,20 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             (ty, true)
         }
         _ => {
-            return Err(CompileError::new(
+            return Err(CompileError::aot_literal_required(
                 cx.span,
                 "array_reverse() argument must be array",
             ))
         }
     };
     if preserve.unwrap_or(true) && gradual {
-        return Err(CompileError::new(
-            cx.span,
-            "array_reverse() cannot preserve keys for a gradual array type in AOT mode",
-        ));
+        // A gradual source has no statically known arms to emit, so `array_reverse($mixed, true)`
+        // answers `mixed` -- the marker the lowering redirects on, because a declared `array`
+        // source answers a declared array and keeps the native boxed path -- and lowers through
+        // `crate::array_gradual_prelude`, whose helper reverses the keys the run-time value
+        // actually has (the flag may be a run-time value too) and raises php's `TypeError` for a
+        // non-array.
+        return Ok(PhpType::Mixed);
     }
     let Some(preserve) = preserve else {
         // Both shapes are possible, so the call answers with their union and the backend picks the

@@ -7,18 +7,16 @@
 //!
 //! Key details:
 //! - Refcounted values require balanced retain/release behavior around borrowed and owned temporaries.
+//! - Local reference-cell retirement must finish freeing the cell before a payload destructor escapes.
 
 use crate::codegen_support::callable_descriptor;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::types::PhpType;
 
-use super::calls::{emit_call_label, emit_pop_reg, emit_push_reg};
-use super::frame::{emit_load_from_address, load_at_offset, store_at_offset};
-use super::registers::{
-    float_result_reg, int_result_reg, secondary_scratch_reg, string_result_regs,
-};
-use super::emit_reg_move;
+use super::calls::emit_call_label;
+use super::frame::{load_at_offset, store_at_offset};
+use super::registers::{float_result_reg, int_result_reg, string_result_regs};
 use crate::codegen_support::sentinels::tagged_scalar_tag_reg;
 
 /// Stores the current result value (in result registers) of the given type at a stack frame offset.
@@ -66,10 +64,8 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 
 /// Retains a refcounted result value before it is reused or overwritten.
 ///
-/// If `ty` is a refcounted heap value or callable descriptor, emits a retain call after
-/// preserving the heap pointer in a temporary slot. The target architecture dictates
-/// register preservation conventions: AArch64 uses a pre-decrement stack store, while
-/// x86_64 uses a 16-byte aligned push/pop pair to maintain SysV ABI alignment.
+/// If `ty` is a refcounted heap value or callable descriptor, emits a retain call. The helper
+/// preserves the heap pointer in `x0`/`rax`, so no save around the call is needed.
 pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     if matches!(ty, PhpType::Callable) {
         callable_descriptor::emit_retain_current_descriptor(emitter);
@@ -78,14 +74,10 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     if ty.is_refcounted() {
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction("str x0, [sp, #-16]!");                     // preserve heap pointer across incref helper call
-                emitter.instruction("bl __rt_incref");                          // retain shared heap value before creating a new owner
-                emitter.instruction("ldr x0, [sp], #16");                       // restore original heap pointer after incref
+                emitter.instruction("bl __rt_incref");                          // retain shared heap value before creating a new owner; the helper preserves x0
             }
             Arch::X86_64 => {
-                emit_push_reg(emitter, "rax"); // preserve the heap pointer in a 16-byte temporary slot to keep the SysV stack aligned across the helper call
-                emitter.instruction("call __rt_incref");                        // retain shared heap value before creating a new owner
-                emit_pop_reg(emitter, "rax"); // restore the original heap pointer after the aligned incref helper call
+                emitter.instruction("call __rt_incref");                        // retain shared heap value before creating a new owner; the helper preserves rax
             }
         }
     }
@@ -103,71 +95,76 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
 /// - `Callable` → `__rt_callable_descriptor_release`
 /// - Non-refcounted types → no-op
 pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
-    match ty {
-        PhpType::Mixed | PhpType::Union(_) => {
-            emit_call_label(emitter, "__rt_decref_mixed"); // release mixed cell reference
-        }
-        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
-            emit_call_label(emitter, "__rt_decref_any"); // release generic PHP array storage after possible hash promotion
-        }
-        PhpType::Array(_) => {
-            emit_call_label(emitter, "__rt_decref_array"); // release indexed array reference
-        }
-        PhpType::AssocArray { .. } => {
-            emit_call_label(emitter, "__rt_decref_hash"); // release associative array reference
-        }
-        PhpType::Object(_) => {
-            emit_call_label(emitter, "__rt_decref_object"); // release object reference
-        }
-        PhpType::Iterable => {
-            emit_call_label(emitter, "__rt_decref_any"); // release the erased iterable payload by inspecting its heap kind
-        }
-        PhpType::Callable => {
-            callable_descriptor::emit_release_current_descriptor(emitter);
-        }
-        _ => {}
+    if let Some(entry) = refcount_release_helper(ty) {
+        emit_call_label(emitter, entry);
     }
 }
 
-/// Releases the payload of a local reference-counted cell and the cell itself.
-///
-/// Pushes `cell_reg` as a temporary, then:
-/// - For `PhpType::Str`: loads the string payload and calls `__rt_heap_free_safe`.
-/// - For other refcounted types: loads the heap pointer and calls `emit_decref_if_refcounted`.
-/// Pops the preserved cell pointer and calls `__rt_heap_free` to release the cell.
-/// Used during function epilogue for local variables that held borrowed or owned refs.
-pub fn emit_release_local_ref_cell(emitter: &mut Emitter, cell_reg: &str, value_ty: &PhpType) {
-    emit_reg_move(emitter, int_result_reg(emitter), cell_reg);
-    emit_call_label(emitter, "__rt_ref_cell_release_claim");
-    // `emit_branch_if_int_result_zero` uses the numeric `1f` label internally on AArch64 to
-    // widen the conditional branch. Keep this outer skip on a distinct numeric label so the
-    // zero result cannot accidentally fall through into final-owner destruction.
-    emit_branch_if_int_result_zero(emitter, "2f");
-    emit_push_reg(emitter, int_result_reg(emitter)); // preserve the final-owner cell pointer while releasing its payload
-    match value_ty.codegen_repr() {
-        PhpType::Str => {
-            let cell_reg = secondary_scratch_reg(emitter);
-            emit_reg_move(emitter, cell_reg, int_result_reg(emitter));
-            emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
-            emit_call_label(emitter, "__rt_heap_free_safe"); // release the owned string payload stored inside the local reference cell
-        }
-        ty if ty.is_refcounted() => {
-            let cell_reg = secondary_scratch_reg(emitter);
-            emit_reg_move(emitter, cell_reg, int_result_reg(emitter));
-            emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
-            emit_decref_if_refcounted(emitter, &ty);
-        }
-        PhpType::Callable => {
-            let cell_reg = secondary_scratch_reg(emitter);
-            emit_reg_move(emitter, cell_reg, int_result_reg(emitter));
-            emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
-            callable_descriptor::emit_release_current_descriptor(emitter);
-        }
-        _ => {}
+/// Releases a typed owner without escaping cleanup, leaving the newly-caught flag in the result.
+pub fn emit_decref_preserving_exception(emitter: &mut Emitter, ty: &PhpType) {
+    if let Some(entry) = refcount_release_helper(ty) {
+        emit_unary_cleanup_preserving_exception(emitter, entry, int_result_reg(emitter));
     }
-    emit_pop_reg(emitter, int_result_reg(emitter)); // restore the owned reference cell pointer for heap release
-    emit_call_label(emitter, "__rt_heap_free"); // release the local reference cell itself
-    emitter.label("2");
+}
+
+/// Calls unary cleanup, accumulating its exception and returning whether this call caught one.
+pub fn emit_unary_cleanup_preserving_exception(emitter: &mut Emitter, entry: &str, payload: &str) {
+    let arg0 = super::int_arg_reg_name(emitter.target, 0);
+    let arg1 = super::int_arg_reg_name(emitter.target, 1);
+    super::emit_reg_move(emitter, arg1, payload);
+    super::emit_symbol_address(emitter, arg0, entry);
+    emit_call_label(emitter, "__rt_cleanup_preserve_exception");
+}
+
+/// Selects the unary release helper for one concrete or boxed heap representation.
+pub(crate) fn refcount_release_helper(ty: &PhpType) -> Option<&'static str> {
+    match ty {
+        PhpType::Mixed | PhpType::Union(_) => Some("__rt_decref_mixed"),
+        // A generic `array<mixed>` may have been promoted to hash storage at run time, so its
+        // release inspects the heap kind instead of assuming an indexed header.
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => Some("__rt_decref_any"),
+        PhpType::Array(_) => Some("__rt_decref_array"),
+        PhpType::AssocArray { .. } => Some("__rt_decref_hash"),
+        PhpType::Object(_) => Some("__rt_decref_object"),
+        PhpType::Iterable => Some("__rt_decref_any"),
+        PhpType::Callable => Some("__rt_callable_descriptor_release"),
+        _ => None,
+    }
+}
+
+/// Releases one tracked local reference-cell owner and its payload when ownership ends.
+///
+/// The runtime contains payload exceptions, frees the cell, then propagates the exception.
+/// Scalar payloads use a null release entry; strings and heap values use their typed helper.
+pub fn emit_release_local_ref_cell(emitter: &mut Emitter, cell_reg: &str, value_ty: &PhpType) {
+    emit_local_ref_cell_cleanup(emitter, cell_reg, value_ty, false);
+}
+
+/// Retires a local reference cell during unwinding and leaves destructor exceptions pending.
+pub fn emit_release_local_ref_cell_preserving_exception(
+    emitter: &mut Emitter,
+    cell_reg: &str,
+    value_ty: &PhpType,
+) {
+    emit_local_ref_cell_cleanup(emitter, cell_reg, value_ty, true);
+}
+
+/// Stages the release entry, cell owner and propagation mode for one bounded cell retirement.
+fn emit_local_ref_cell_cleanup(emitter: &mut Emitter, cell_reg: &str, value_ty: &PhpType, defer_throw: bool) {
+    let entry = match value_ty.codegen_repr() {
+        PhpType::Str => Some("__rt_heap_free_safe"),
+        ty => refcount_release_helper(&ty),
+    };
+    let arg0 = super::int_arg_reg_name(emitter.target, 0);
+    let arg1 = super::int_arg_reg_name(emitter.target, 1);
+    super::emit_reg_move(emitter, arg1, cell_reg);
+    emit_load_int_immediate(emitter, super::int_arg_reg_name(emitter.target, 2), i64::from(defer_throw));
+    if let Some(entry) = entry {
+        super::emit_symbol_address(emitter, arg0, entry);
+    } else {
+        emit_load_int_immediate(emitter, arg0, 0);
+    }
+    emit_call_label(emitter, "__rt_local_ref_cell_release");
 }
 
 /// Loads a value of the given type from a stack frame offset into result registers.
@@ -225,11 +222,11 @@ pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
             emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // test whether the integer result is zero
                 "test {}, {}",
                 int_result_reg(emitter),
                 int_result_reg(emitter)
-            )); // test whether the coerced integer truthiness result is zero
+            ));
             emitter.instruction(&format!("je {}", label));                      // branch when the coerced integer truthiness result is zero
         }
     }
@@ -249,12 +246,27 @@ pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
             emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // test whether the integer result is nonzero
                 "test {}, {}",
                 int_result_reg(emitter),
                 int_result_reg(emitter)
-            )); // test whether the coerced integer truthiness result is non-zero
+            ));
             emitter.instruction(&format!("jne {}", label));                     // branch when the coerced integer truthiness result is non-zero
+        }
+    }
+}
+
+/// Branches to the target when the previous compare was equal, using the wider unconditional
+/// AArch64 branch range instead of the ±1 MiB conditional-branch range.
+pub fn emit_branch_if_equal_wide(emitter: &mut Emitter, label: &str) {
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            emitter.instruction("b.ne 1f");                                     // skip the transfer when the previous compare was unequal
+            emitter.instruction(&format!("b {label}"));                         // take the equal edge with the wider branch range
+            emitter.label("1");                                                // resume after the conditional transfer
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("je {label}"));                        // x86_64 conditional branches already cover the generated function size
         }
     }
 }
@@ -350,24 +362,21 @@ pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
                 let uval = value as u64;
                 emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF)); // seed the low 16 bits of the wider immediate value
                 if (uval >> 16) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(
-                        // patch bits 16-31 of the wider immediate value
+                    emitter.instruction(&format!(                               // patch bits 16-31 of the wider immediate value
                         "movk {}, #0x{:x}, lsl #16",
                         reg,
                         (uval >> 16) & 0xFFFF
                     ));
                 }
                 if (uval >> 32) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(
-                        // patch bits 32-47 of the wider immediate value
+                    emitter.instruction(&format!(                               // patch bits 32-47 of the wider immediate value
                         "movk {}, #0x{:x}, lsl #32",
                         reg,
                         (uval >> 32) & 0xFFFF
                     ));
                 }
                 if (uval >> 48) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(
-                        // patch bits 48-63 of the wider immediate value
+                    emitter.instruction(&format!(                               // patch bits 48-63 of the wider immediate value
                         "movk {}, #0x{:x}, lsl #48",
                         reg,
                         (uval >> 48) & 0xFFFF

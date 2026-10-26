@@ -18,6 +18,18 @@ fn test_array_literal_and_count() {
     assert_eq!(out, "3");
 }
 
+/// Verifies `sizeof()` is PHP's `count()` alias, including case-insensitive and named `$mode`.
+#[test]
+fn test_sizeof_alias_of_count() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3, 4, 5, 6];
+echo sizeof($a), "|", SIZEOF($a, mode: COUNT_NORMAL), "|", \sizeof($a, COUNT_RECURSIVE);
+"#,
+    );
+    assert_eq!(out, "6|6|6");
+}
+
 /// Compiles `[10, 20, 30]` and accesses elements at literal indices 0, 1, 2.
 #[test]
 fn test_array_access() {
@@ -1047,27 +1059,30 @@ foreach ($a as $v) { echo var_export($v, true), ","; }
     assert_eq!(mixed, "2,'9',10,");
 }
 
-/// Verifies Mixed sorting rejects nested arrays instead of silently treating them as equal.
+/// Verifies Mixed sorting orders nested arrays instead of silently treating them as equal.
 ///
-/// `__rt_php_compare` currently implements full PHP ordering only for scalars and
-/// null. The sort guard must inspect the whole array before mutation so even a
-/// single unsupported value produces an explicit runtime diagnostic.
+/// `__rt_php_compare` implements full PHP ordering only for scalars and null, so a list holding
+/// arrays goes through the gradual sort prelude (`__elephc_sort_mixed_compare`), which orders
+/// them as php does: by element count, then element by element. php 8.5 prints
+/// `[[],[1],[2]]|[[2],[1],[]]`. This test used to pin a runtime refusal
+/// (`sort_rejects_runtime_typed_non_scalar_elements`); the gradual sort that replaced the
+/// refusal left the arrays UNSORTED.
 #[test]
-fn sort_rejects_runtime_typed_non_scalar_elements() {
-    let error = compile_and_run_expect_failure(
+fn sort_orders_runtime_typed_array_elements_like_php() {
+    let out = compile_and_run(
         r#"<?php
 $decoded = json_decode("[[2],[1],[]]", true);
 $values = [];
 foreach ($decoded as $value) {
     $values[] = $value;
 }
+$descending = $values;
 sort($values);
+rsort($descending);
+echo json_encode($values), "|", json_encode($descending);
 "#,
     );
-    assert!(
-        error.contains("sorting Mixed arrays containing non-scalar values is not supported"),
-        "unexpected runtime diagnostic: {error}"
-    );
+    assert_eq!(out, "[[],[1],[2]]|[[2],[1],[]]");
 }
 
 /// Verifies array keys.
@@ -1557,6 +1572,26 @@ fn test_array_values() {
 fn test_die() {
     let out = compile_and_run("<?php echo \"before\"; die(); echo \"after\";");
     assert_eq!(out, "before");
+}
+
+/// `exit` and `die` without parentheses end the script like their call forms, and a branch
+/// ending in one is terminal for narrowing. Both were read as the undefined constant `exit`:
+/// the script threw instead of stopping, and `$u` stayed `mixed|false` after the guard, so
+/// indexing it was refused at compile time.
+#[test]
+fn test_bare_exit_and_die_end_the_script_and_narrow_the_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function check(mixed $u): string { if ($u === false) { die; } return $u[0]; }
+echo check(["a"]), "|";
+$u = unserialize('a:1:{i:0;s:1:"x";}');
+if ($u === false) { echo "false"; exit; }
+echo $u[0], "|";
+EXIT;
+echo "after";
+"#,
+    );
+    assert_eq!(out, "a|x|");
 }
 
 // --- Nested control flow ---
@@ -2384,4 +2419,30 @@ echo DateF::run('date'), " ", DateF::run('yes'), "\n";
 "#,
     );
     assert_eq!(out, "[exists date][exists date]-ab [exists yes][exists yes]-AB\n");
+}
+
+/// A nested literal that mixes a concatenation with call results frees every call string.
+///
+/// `ok($i)` is inlined at the call site, so its string reaches the outer array literal through the
+/// inliner's continuation parameter instead of a call result. The Mixed element box must still take
+/// that string over; otherwise each iteration strands the callee's copy. The loop is scaled so a
+/// per-iteration leak cannot hide behind a value that is still live at exit.
+#[test]
+fn test_nested_array_literal_mixing_concat_and_call_results_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function ok(int $i): string { return 'v' . $i; }
+for ($i = 0; $i < 40; $i++) {
+    $q = [ok($i), ['x' . $i, ok($i)], ok($i + 1)];
+}
+echo count($q), "|", $q[0], "|", $q[1][0], "|", $q[1][1], "|", $q[2], "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "3|v39|x39|v39|v40\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
 }

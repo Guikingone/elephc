@@ -11,3 +11,6 @@
 mod access;
 mod constructors;
 mod methods;
+mod reflection_filters;
+
+pub(crate) use methods::php_declared_type_spelling;

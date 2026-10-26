@@ -24,9 +24,9 @@
 //!   eligible: moving that load is what makes local-backed invariant arithmetic
 //!   available in the preheader.
 //! - Hoisting needs a preheader to move into. The loop analysis detects an
-//!   existing one (PHP loops lower to slot-based CFGs whose init block is a
-//!   natural preheader); loops without a detected preheader are skipped rather
-//!   than have one synthesized here.
+//!   existing one (the loop init block is commonly a natural preheader even
+//!   after scalar promotion adds block arguments); loops without a detected
+//!   preheader are skipped rather than have one synthesized here.
 //! - Loops are processed innermost-first and moves are applied immediately, so a
 //!   value hoisted to an inner preheader (which lies in the enclosing loop) can
 //!   be hoisted again to the outer preheader in the same run when it is invariant

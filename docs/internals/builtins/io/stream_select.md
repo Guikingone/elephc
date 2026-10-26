@@ -1,16 +1,16 @@
 ---
-title: "stream_select() — internals"
+title: "stream_select() - internals"
 description: "Compiler internals for stream_select(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 392
+  order: 393
 ---
 
-## `stream_select()` — internals
+## `stream_select()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_select.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_select.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -275,8 +275,8 @@ fn test_string_empty_falsy() {
 
 // --- Bug fix: compound assignment in for-loop update ---
 
-/// EC-2 (#485): mb_ereg_match() — start-anchored regex match, reusing the PCRE2 engine and
-/// enforcing the start-anchor via regmatch[0].rm_so == 0. Verified vs PHP 8.5: it is a prefix
+/// Verifies the shared mbregex engine anchors matching at the subject start.
+/// PHP 8.5 treats the operation as a prefix
 /// match at offset 0 (`'ab'`/`'abc'` = true, `'bc'`/`'abc'` = false); `\z` forces end-anchoring.
 #[test]
 fn test_mb_ereg_match_start_anchored() {
@@ -523,6 +523,30 @@ echo json_encode($a2), "\n", json_encode($b2), "\n", json_encode($c2), "\n";
             "{\"0\":\"\\/greet\\/Bob\",\"1\":\"Bob\",\"MARK\":\"22\"}\n",
             "{\"0\":[\"\\/greet\\/Bob\",0],\"1\":[\"Bob\",7],\"MARK\":\"22\"}\n",
             "[\"\\/plain\"]\n",
+        )
+    );
+}
+
+/// `PREG_OFFSET_CAPTURE` and `PREG_PATTERN_ORDER` carry the MARK verb as well: a plain string key
+/// on a single match, and a `MARK` column indexed by match number when several match.
+///
+/// Oracle: `php -n` prints the asserted lines.
+#[test]
+fn test_pcre_mark_verb_reaches_offset_capture_and_pattern_order_arrays() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+preg_match('{(a)(*:A)|(b)(*:B)}', 'ab', $a, PREG_OFFSET_CAPTURE);
+preg_match_all('{(a)(*:A)|(b)(*:B)}', 'ab', $b, PREG_PATTERN_ORDER | PREG_OFFSET_CAPTURE);
+preg_match_all('{(a)(*:A)|(b)}', 'ab', $c, PREG_PATTERN_ORDER | PREG_OFFSET_CAPTURE);
+echo json_encode($a), "\n", json_encode($b), "\n", json_encode($c), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "{\"0\":[\"a\",0],\"1\":[\"a\",0],\"MARK\":\"A\"}\n",
+            "{\"0\":[[\"a\",0],[\"b\",1]],\"1\":[[\"a\",0],[\"\",-1]],\"2\":[[\"\",-1],[\"b\",1]],\"MARK\":[\"A\",\"B\"]}\n",
+            "{\"0\":[[\"a\",0],[\"b\",1]],\"1\":[[\"a\",0],[\"\",-1]],\"2\":[[\"\",-1],[\"b\",1]],\"MARK\":[\"A\"]}\n",
         )
     );
 }

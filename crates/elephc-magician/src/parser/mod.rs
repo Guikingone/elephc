@@ -8,8 +8,8 @@
 //! - `crate::interpreter` tests and nested eval execution paths.
 //!
 //! Key details:
-//! - PHP eval fragments are statement fragments and must not include opening
-//!   `<?` / `<?php` tags.
+//! - PHP eval fragments start in PHP mode: an opening `<?php` / `<?=` tag is legal only after a
+//!   `?>` has switched to inline HTML (`eval('?>' . $template)`), never in PHP mode.
 //! - File and directory metadata are supplied by the eval context at execution time.
 
 mod cursor;
@@ -72,7 +72,7 @@ pub fn parse_source_file(code: &[u8]) -> Result<EvalProgram, EvalParseDiagnostic
 /// alike, and a web SAPI emits it as inline HTML like any other text before `<?php` (measured on
 /// 8.5.10). Advancing the cursor rather than slicing keeps `source_line` counting PHYSICAL lines,
 /// which is what php reports: a `throw` on line 3 of a shebang file is reported on line 3.
-fn leading_shebang_end(code: &[u8]) -> usize {
+pub(crate) fn leading_shebang_end(code: &[u8]) -> usize {
     if !code.starts_with(b"#!") || !crate::eval_php_profile::eval_skips_leading_shebang() {
         return 0;
     }
@@ -183,6 +183,20 @@ fn skip_one_newline(code: &[u8], start: usize) -> usize {
 /// does; the failures detected before the parser sees a token are reported at the fragment's
 /// last line, which is where PHP reports an unterminated literal too.
 pub fn parse_fragment(code: &[u8]) -> Result<EvalProgram, EvalParseDiagnostic> {
+    parse_fragment_with(code, false)
+}
+
+/// Parses an eval fragment the interpreter will run, with `SourceLine` markers.
+///
+/// Eval'd code has lines of its own, counted from the fragment's first line, and php reports
+/// them (`x.php(3) : eval()'d code on line 2`); the markers are what move the line. The plain
+/// `parse_fragment` keeps the marker-free tree its structural callers and tests compare.
+pub fn parse_eval_fragment(code: &[u8]) -> Result<EvalProgram, EvalParseDiagnostic> {
+    parse_fragment_with(code, true)
+}
+
+/// Shared body of the two fragment entry points.
+fn parse_fragment_with(code: &[u8], track_lines: bool) -> Result<EvalProgram, EvalParseDiagnostic> {
     if contains_php_open_tag(code) {
         return Err(EvalParseDiagnostic::at_source_end(
             EvalParseError::PhpOpenTag,
@@ -193,5 +207,25 @@ pub fn parse_fragment(code: &[u8]) -> Result<EvalProgram, EvalParseDiagnostic> {
     let source = normalize_binary_source(code);
     let tokens = tokenize(&source)
         .map_err(|error| EvalParseDiagnostic::at_source_end(error, code, "end of file"))?;
-    Parser::new(tokens, code.len()).parse_program()
+    let parser = Parser::new(tokens, code.len());
+    if track_lines { parser.tracking_source_lines() } else { parser }.parse_program()
+}
+
+/// Parses a token stream assembled by the caller, ending in an EOF token.
+///
+/// An included file's stream is built from several blocks and the inline HTML between them
+/// (`crate::script_cache::segments::parse_script`), and has to reach the grammar as one
+/// program so that a block may span the tags. `source_len` is the whole file's length.
+pub(crate) fn parse_tokens(
+    tokens: Vec<crate::lexer::Token>,
+    source_len: usize,
+) -> Result<EvalProgram, EvalParseError> {
+    // An included file is a FILE: its statements carry `SourceLine` markers exactly as
+    // `parse_source_file` gives them. Without them every line inside the file reported the
+    // line its function was entered on, so a Twig template's `getTrace()` frame named the
+    // `block_*` method line and Symfony UX's live-component ids came out different from php's.
+    Parser::new(tokens, source_len)
+        .tracking_source_lines()
+        .parse_program()
+        .map_err(|diagnostic| diagnostic.error())
 }

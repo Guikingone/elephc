@@ -61,6 +61,7 @@ fn materialize_dynamic_target_class_name(
         PhpType::Mixed | PhpType::Union(_) => {
             materialize_mixed_target_class_name(ctx, target, name)?;
         }
+        PhpType::Callable => emit_closure_class_name_query(ctx),
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} target PHP type {:?} with dynamic member name",
@@ -80,6 +81,7 @@ fn materialize_mixed_target_class_name(
     let object_label = ctx.next_label("member_exists_dynamic_object");
     let string_label = ctx.next_label("member_exists_dynamic_string");
     let ready_label = ctx.next_label("member_exists_dynamic_target_ready");
+    let closure_label = ctx.next_label("member_exists_dynamic_closure");
     ctx.load_value_to_result(target)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
@@ -88,12 +90,16 @@ fn materialize_mixed_target_class_name(
             ctx.emitter.instruction(&format!("b.eq {}", object_label));
             ctx.emitter.instruction("cmp x0, #1");                              // boxed string targets already carry a class-name query
             ctx.emitter.instruction(&format!("b.eq {}", string_label));
+            ctx.emitter.instruction("cmp x0, #10");                             // a boxed callable is a Closure object
+            ctx.emitter.instruction(&format!("b.eq {}", closure_label));
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, 6");                              // boxed object targets resolve through their runtime class id
             ctx.emitter.instruction(&format!("je {}", object_label));
             ctx.emitter.instruction("cmp rax, 1");                              // boxed string targets already carry a class-name query
             ctx.emitter.instruction(&format!("je {}", string_label));
+            ctx.emitter.instruction("cmp rax, 10");                             // a boxed callable is a Closure object
+            ctx.emitter.instruction(&format!("je {}", closure_label));
         }
     }
     super::super::exceptions::emit_type_error(
@@ -111,6 +117,10 @@ fn materialize_mixed_target_class_name(
         Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // object payload becomes get_class input
     }
     super::types::emit_dynamic_object_class_name(ctx, name);
+    abi::emit_jump(ctx.emitter, &ready_label);
+
+    ctx.emitter.label(&closure_label);
+    emit_closure_class_name_query(ctx);
     abi::emit_jump(ctx.emitter, &ready_label);
 
     ctx.emitter.label(&string_label);
@@ -153,4 +163,13 @@ fn call_member_exists_registry(ctx: &mut FunctionContext<'_>, name: &str) {
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_member_exists");
+}
+
+/// Queries the member registry as for an object of class `Closure`: a callable value is one.
+fn emit_closure_class_name_query(ctx: &mut FunctionContext<'_>) {
+    push_member_target_kind(ctx, 1);
+    let (label, length) = ctx.data.add_string(b"Closure");
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, length as i64);
 }

@@ -1,8 +1,8 @@
 ---
 title: "imagecolorstotal()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns how many colors a palette image holds."
 sidebar:
-  order: 492
+  order: 493
 ---
 
 ## imagecolorstotal()
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorstotal(mixed $image): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns how many colors a palette image holds.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

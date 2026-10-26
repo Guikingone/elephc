@@ -162,6 +162,7 @@ impl Checker {
         // retype both consult and which `--strict-locals` does not switch off (the kill is
         // mode-independent). Installed before the early return below for exactly that reason.
         self.body_contains_eval = facts.contains_eval;
+        self.program_contains_eval |= facts.contains_eval;
 
         // This visit RE-DECIDES every assignment site in this body, so a decision a SUPERSEDED
         // walk recorded for one of them is dropped first. The checker walks a body more than
@@ -1216,6 +1217,13 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
             for (key, value) in items {
                 collect_expr(checker, key, depth, facts);
                 collect_expr(checker, value, depth, facts);
+            }
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries {
+                for expr in entry.exprs() {
+                    collect_expr(checker, expr, depth, facts);
+                }
             }
         }
         ExprKind::ArrayAccess { array, index } => {

@@ -14,10 +14,11 @@ mod operators;
 mod oop;
 mod stmt;
 mod types;
+pub(crate) mod visit;
 
 pub use expr::{
-    is_compound_assignment_self_read, CallableTarget, CastType, Expr, ExprKind, InstanceOfTarget,
-    MagicConstant, StaticReceiver,
+    is_compound_assignment_self_read, ArrayEntry, CallableTarget, CastType, Expr, ExprKind,
+    InstanceOfTarget, MagicConstant, StaticReceiver,
 };
 pub use ffi::{CType, ExternField, ExternParam, PackedField};
 pub use operators::BinOp;
@@ -35,6 +36,10 @@ pub use types::TypeExpr;
 /// `crate::ir_lower::stmt::nested_append`). It lives here, on the AST, because it is the shared
 /// contract between those two — and it must not be reused by any other desugar, or that
 /// recognizer would claim statements it does not own.
+///
+/// The minted name also carries `crate::names::GENERATED_LOCAL_MARKER` as a suffix, which is
+/// what keeps it out of `get_defined_vars()` and eval scope synchronization; the prefix match
+/// here is unaffected by that suffix.
 pub const NESTED_APPEND_TEMP_PREFIX: &str = "__elephc_napp_";
 
 /// Name prefix of the hidden local `$values[$key] = &$object->property` binds to the property's
@@ -45,3 +50,17 @@ pub const NESTED_APPEND_TEMP_PREFIX: &str = "__elephc_napp_";
 /// something the native backend lays out (the element read back null), so the class that writes it
 /// is handed to the runtime autoloader (or the build is refused) instead of miscompiling.
 pub const ARRAY_PROPERTY_REF_TEMP_PREFIX: &str = "__elephc_refsrc_";
+/// Attribute the include rewrite puts on the `break` an included file's `return` becomes.
+///
+/// `resolver::engine_includes::confine_nested_returns` turns each `return` of an included file
+/// into a `break` out to a `do { … } while (false)` wrapper. A `return` inside a `finally` is
+/// legal PHP — it ends the file and discards any pending exception or return — but a `break` out
+/// of a `finally` is not, and the checker refuses it. This marks the breaks that are really
+/// returns, so the checker lets exactly those leave a `finally`.
+///
+/// UNFORGEABLE by construction: the parser rejects attributes on every non-declaration
+/// statement, so no hand-written `break` can carry one. Lowering needs no change: a `finally`
+/// body is duplicated at each exit and lowered after its frame is popped, so a jump out of it
+/// skips the exceptional copy's rethrow — the same path a function's `return` in `finally`
+/// already takes.
+pub const INCLUDE_RETURN_BREAK_ATTRIBUTE: &str = "__elephc_include_return";

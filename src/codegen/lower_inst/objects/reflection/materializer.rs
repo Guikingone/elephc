@@ -406,6 +406,91 @@ pub(super) fn emit_reflection_lazy_parameters(
     )
 }
 
+/// Returns the label of the shared extras filler of one table-built class reflector, emitting the
+/// helper first when the module has none yet, without calling it.
+///
+/// The filler takes the reflector in the integer result register and stores what the module
+/// reflection table cannot hold as data; see `emit_reflection_class_extras`.
+pub(super) fn reflection_class_extras_label(
+    ctx: &mut FunctionContext<'_>,
+    owner: ReflectionOwnerKind,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+    lazy_members: bool,
+    in_table: TableValues,
+) -> Result<String> {
+    let name = metadata.reflected_name.clone().unwrap_or_default();
+    let key = ReflectionMaterializerKey::Extras { owner: owner.clone(), name };
+    if let Some(label) = ctx.shared.reflection.materializer_label(&key) {
+        return Ok(label);
+    }
+    let checkpoint = ctx.shared.reflection.materializer_checkpoint();
+    let label = ctx.next_label("reflection_class_extras");
+    let done_label = ctx.next_label("reflection_class_extras_done");
+    ctx.shared
+        .reflection
+        .reserve_materializer(key, label.clone());
+    abi::emit_jump(ctx.emitter, &done_label);
+    let result = emit_shared_object_helper(
+        ctx.module,
+        ctx.emitter,
+        ctx.data,
+        ctx.shared,
+        &label,
+        class_name,
+        &format!("--- shared {} extras filler ---", class_name),
+        |helper_ctx| {
+            emit_reflection_class_extras(helper_ctx, owner, class_name, metadata, lazy_members, in_table)
+        },
+    );
+    if let Err(error) = result {
+        ctx.shared
+            .reflection
+            .rollback_materializers(checkpoint);
+        return Err(error);
+    }
+    ctx.emitter.label(&done_label);
+    Ok(label)
+}
+
+/// Returns the label of the shared extras filler of one table-built member reflector (a class
+/// constant, an enum case, a property or a method), emitting the helper first when the module has
+/// none yet, without calling it. `identity` is `Declaring::member`; `body` stores what the member
+/// row cannot hold as data into the reflector held in the integer result register.
+pub(super) fn member_extras_label(
+    ctx: &mut FunctionContext<'_>,
+    owner: ReflectionOwnerKind,
+    class_name: &str,
+    identity: &str,
+    body: impl FnOnce(&mut FunctionContext<'_>) -> Result<()>,
+) -> Result<String> {
+    let key = ReflectionMaterializerKey::Extras { owner, name: identity.to_string() };
+    if let Some(label) = ctx.shared.reflection.materializer_label(&key) {
+        return Ok(label);
+    }
+    let checkpoint = ctx.shared.reflection.materializer_checkpoint();
+    let label = ctx.next_label("reflection_member_extras");
+    let done_label = ctx.next_label("reflection_member_extras_done");
+    ctx.shared.reflection.reserve_materializer(key, label.clone());
+    abi::emit_jump(ctx.emitter, &done_label);
+    let result = emit_shared_object_helper(
+        ctx.module,
+        ctx.emitter,
+        ctx.data,
+        ctx.shared,
+        &label,
+        class_name,
+        &format!("--- shared {} member extras filler ---", class_name),
+        body,
+    );
+    if let Err(error) = result {
+        ctx.shared.reflection.rollback_materializers(checkpoint);
+        return Err(error);
+    }
+    ctx.emitter.label(&done_label);
+    Ok(label)
+}
+
 /// Returns the label of one shared slot filler, emitting the helper first when the module has
 /// none yet: it clears `<slot>_filler` in the reflector held in the integer result register, then
 /// runs `body` to build the slot.

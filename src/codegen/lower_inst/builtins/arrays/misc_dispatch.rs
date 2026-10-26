@@ -49,6 +49,11 @@ pub(crate) fn lower_range(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     let step = inst.operands.get(2).copied();
     require_range_endpoint(ctx.value_php_type(start)?, "start")?;
     require_range_endpoint(ctx.value_php_type(end)?, "end")?;
+    // Two string endpoints are a CHARACTER range (`range('a', 'e')`), which this integer
+    // constructor cannot build; one string against a number is a numeric string php converts.
+    if ctx.value_php_type(start)? == PhpType::Str && ctx.value_php_type(end)? == PhpType::Str {
+        return Err(CodegenIrError::unsupported("range between two string endpoints"));
+    }
     if let Some(step) = step {
         require_range_endpoint(ctx.value_php_type(step)?, "step")?;
     }
@@ -142,19 +147,29 @@ pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     super::super::ensure_arg_count(inst, "array_pop", 1)?;
     let array = expect_operand(inst, 0)?;
     match ctx.value_php_type(array)?.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => {
+        PhpType::Mixed => {
+            return boxed_mutation::lower_boxed_array_take(ctx, inst, array, false);
+        }
+        PhpType::Union(_) => {
             return pop_shift_dynamic::lower_array_pop_dynamic(ctx, inst, array);
         }
         PhpType::AssocArray { .. } => {
-            return pop_shift_dynamic::lower_assoc_array_pop(ctx, inst, array);
+            return boxed_mutation::lower_assoc_array_pop(ctx, inst, array);
         }
         _ => {}
     }
     let elem_ty = array_pop_element_type(ctx.value_php_type(array)?)?;
     require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
+    // A load out of a Mixed-widened local carries a detached owner of its own, so the slot's box
+    // still owns the array the split below consumes from. Retiring that box first lets the
+    // publish install the only box; without it `array_pop()` on such a local left the superseded
+    // box (and the array behind it) unreleased on every call.
+    if matches!(receiver, ReceiverPlace::Local(_)) {
+        receiver.prepare_consuming_storeback(ctx, array)?;
+    }
     ensure_unique_array_pop_source(ctx, array)?;
-    receiver.store_back_value(ctx, array)?;
+    receiver.store_back_after_consuming_split(ctx, array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_array_pop_aarch64(ctx, array, &elem_ty)?,
         Arch::X86_64 => lower_array_pop_x86_64(ctx, array, &elem_ty)?,
@@ -207,6 +222,12 @@ pub(crate) fn lower_rsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 /// Indexed arrays have no separate key storage, so they keep using the slot permuter.
 pub(crate) fn lower_asort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "asort", 1, 2)?;
+    let array = expect_operand(inst, 0)?;
+    if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
+        return super::boxed_mutation::lower_boxed_array_value_sort(
+            ctx, inst, array, "asort", "__rt_hash_asort",
+        );
+    }
     if sort_receiver_is_hash(ctx, inst)? {
         return lower_hash_link_sort(ctx, inst, "__rt_hash_asort");
     }
@@ -217,6 +238,12 @@ pub(crate) fn lower_asort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 /// Lowers `arsort()`, routing hash receivers to the descending insertion-order value sorter.
 pub(crate) fn lower_arsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "arsort", 1, 2)?;
+    let array = expect_operand(inst, 0)?;
+    if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
+        return super::boxed_mutation::lower_boxed_array_value_sort(
+            ctx, inst, array, "arsort", "__rt_hash_arsort",
+        );
+    }
     if sort_receiver_is_hash(ctx, inst)? {
         return lower_hash_link_sort(ctx, inst, "__rt_hash_arsort");
     }
@@ -338,6 +365,8 @@ pub(super) fn lower_array_edge_key(
 pub(super) fn require_array_like_operand(ty: PhpType, name: &str) -> Result<()> {
     match ty.codegen_repr() {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => Ok(()),
+        // A named-argument variadic's raw list or hash pointer; the runtime reads the heap kind.
+        PhpType::Iterable if name == "array_is_list" => Ok(()),
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name, other

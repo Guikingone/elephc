@@ -1,8 +1,8 @@
 ---
 title: "mysqli_fetch_field()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns metadata for the next column of a result."
 sidebar:
-  order: 131
+  order: 132
 ---
 
 ## mysqli_fetch_field()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_fetch_field(mixed $result): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns metadata for the next column of a result.
 
 **Parameters**:
 - `$result` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

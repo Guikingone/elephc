@@ -17,7 +17,8 @@ pub(super) fn lower_reflection_class_new_instance(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    if ctx.web {
+    // A closed-world build has no interpreter whose context a dynamic `new` could need.
+    if ctx.web && !crate::closed_world::is_enabled() {
         ctx.declare_eval_context_local();
     }
     let args = reflection_class_new_instance_args(args);
@@ -29,22 +30,48 @@ pub(super) fn lower_reflection_class_new_instance(
         return lower_reflection_class_new_instance_unsupported(ctx, expr);
     }
     let class_name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
-    let mut operands = vec![class_name.value];
-    operands.extend(lower_args_with_signature(
+    let result_type = PhpType::Mixed;
+    let result_staging = prepublish_user_call_result(
         ctx,
         constructor_sig.as_ref(),
-        &args,
-    ));
-    let instance = ctx.emit_value(
+        &ReturnArgAlias::None,
+        &result_type,
+        expr.span,
+    );
+    begin_call_argument_evaluation(ctx);
+    let mut arg_values = lower_args_with_signature(ctx, constructor_sig.as_ref(), &args);
+    let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
+    let roots = root_user_call_operands(
+        ctx,
+        &mut arg_values,
+        constructor_sig.as_ref(),
+        &ReturnArgAlias::None,
+        &result_type,
+        expr.span,
+    );
+    let mut operands = vec![class_name.value];
+    operands.extend(arg_values.iter().copied());
+    let object = ctx.emit_value(
         Op::DynamicObjectNewMixed,
         operands,
         None,
-        PhpType::Mixed,
+        result_type,
         Op::DynamicObjectNewMixed.default_effects(),
         Some(expr.span),
     );
+    stage_call_result(ctx, result_staging.as_ref(), object, expr.span);
+    release_owned_call_arg_temporaries_with_roots(
+        ctx,
+        &arg_values,
+        None,
+        &ReturnArgAlias::None,
+        constructor_sig.as_ref(),
+        &roots,
+        expr.span,
+    );
+    retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     release_reflected_class_name(ctx, class_name, expr);
-    instance
+    take_prepublished_call_result(ctx, result_staging, object, expr.span)
 }
 
 /// Releases the class name a `newInstance*()` lowering read from the reflector.

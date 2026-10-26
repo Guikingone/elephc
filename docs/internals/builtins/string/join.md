@@ -1,16 +1,16 @@
 ---
-title: "join() — internals"
+title: "join() - internals"
 description: "Compiler internals for join(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 833
+  order: 865
 ---
 
-## `join()` — internals
+## `join()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/join.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/join.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -25,8 +25,8 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `signature`
 - **Result type source**: `declared`
-- **Result ownership**: `independent`
-- **Effects**: `static (14 declared effects)`
+- **Result ownership**: `fresh`
+- **Effects**: `shared`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`

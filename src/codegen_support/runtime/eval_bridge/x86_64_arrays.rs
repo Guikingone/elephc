@@ -190,6 +190,10 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the normalized key low word
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the normalized key high word
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the boxed array receiver for tag dispatch
+    emitter.instruction("mov rax, rdi");                                        // pass the potentially referenced array receiver
+    emitter.instruction("call __rt_mixed_deref");                               // inspect the current array held by a persistent reference
+    emitter.instruction("mov rdi, rax");                                        // restore the concrete receiver argument
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // retain the concrete receiver for the remaining lookup
     emitter.instruction("test rdi, rdi");                                       // null handles do not contain array keys
     emitter.instruction("jz __elephc_eval_value_array_key_exists_false");       // report false for null runtime cells
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed Mixed runtime tag
@@ -242,6 +246,10 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // reserve slots for receiver, target position, hash pointer, and counter
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the boxed array receiver while walking the container
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested zero-based foreach position
+    emitter.instruction("mov rax, rdi");                                        // pass the potentially referenced array receiver
+    emitter.instruction("call __rt_mixed_deref");                               // inspect the current array held by a persistent reference
+    emitter.instruction("mov rdi, rax");                                        // restore the concrete receiver argument
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // retain the concrete receiver for the remaining lookup
     emitter.instruction("test rdi, rdi");                                       // null handles produce a null key
     emitter.instruction("jz __elephc_eval_value_array_iter_key_null");          // branch to boxed null for null runtime cells
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed Mixed runtime tag
@@ -269,7 +277,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("xor esi, esi");                                        // cursor 0 starts at the hash head entry
     emitter.label("__elephc_eval_value_array_iter_key_assoc_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the hash pointer before advancing the hash iterator
-    emitter.instruction("call __rt_hash_iter_next");                            // fetch the next insertion-order hash key
+    emitter.instruction("call __rt_hash_iter_next_value");                      // fetch the next insertion-order hash key
     emitter.instruction("cmp rax, -1");                                         // did the iterator report the done sentinel?
     emitter.instruction("je __elephc_eval_value_array_iter_key_null");          // out-of-range positions produce a null key
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // load the current insertion-order position
@@ -325,6 +333,11 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the boxed array Mixed cell to Rust
 
     label_c_global(emitter, "__elephc_eval_value_array_len");
+    emitter.instruction("push rbp");                                            // preserve linkage and align borrowed dereferencing
+    emitter.instruction("mov rax, rdi");                                        // pass the potentially referenced array
+    emitter.instruction("call __rt_mixed_deref");                               // count elements in the current referenced array
+    emitter.instruction("pop rbp");                                             // restore caller linkage before leaf count branches
+    emitter.instruction("mov rdi, rax");                                        // inspect the concrete array cell
     emitter.instruction("test rdi, rdi");                                       // null handles have no iterable eval elements
     emitter.instruction("jz __elephc_eval_value_array_len_zero");               // report empty length for null runtime cells
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed Mixed runtime tag
@@ -431,7 +444,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("xor esi, esi");                                        // cursor 0 starts at the property hash head entry
     emitter.label("__elephc_eval_value_object_property_iter_key_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the hash pointer before advancing the iterator
-    emitter.instruction("call __rt_hash_iter_next");                            // fetch the next insertion-order property key
+    emitter.instruction("call __rt_hash_iter_next_value");                      // fetch the next insertion-order property key
     emitter.instruction("cmp rax, -1");                                         // did the iterator report the done sentinel?
     emitter.instruction("je __elephc_eval_value_object_property_iter_key_null"); // out-of-range positions produce a null key
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // load the current insertion-order property position

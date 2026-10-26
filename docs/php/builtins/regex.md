@@ -9,7 +9,7 @@ sidebar:
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
-| [`mb_ereg_match()`](./regex/mb_ereg_match.md) | `(string $pattern, string $subject, ?string $options = null): bool` | `bool` | ✓ | ✓ |
+| [`mb_ereg_match()`](./regex/mb_ereg_match.md) | `(string $pattern, string $string, ?string $options = null): bool` | `bool` | ✓ | ✓ |
 | [`preg_match()`](./regex/preg_match.md) | `(string $pattern, string $subject, array $matches = null, int $flags = 0, int $offset = 0): int` | `int` | ✓ | ✓ |
 | [`preg_match_all()`](./regex/preg_match_all.md) | `(string $pattern, string $subject, mixed $matches = null, int $flags = 0, int $offset = 0): int` | `int` | ✓ | ✓ |
 | [`preg_replace()`](./regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject, int $limit = -1, mixed $count = null): string` | `string` | ✓ | ✓ |

@@ -34,6 +34,14 @@ fn expect_curl_error(src: &str, needle: &str) {
     );
 }
 
+/// Asserts `src` compiles. php binds a `curl_*` function's `CurlHandle` parameter when the call
+/// RUNS and throws `TypeError` there, so a statically wrong handle is not a compile error; the
+/// call throws php's `curl_exec(): Argument #1 ($handle) must be of type CurlHandle, string given`.
+fn expect_curl_compiles(src: &str) {
+    let result = check_source(src);
+    assert!(result.is_ok(), "php defers this to a run-time TypeError; got: {result:?}");
+}
+
 /// PHP's `CurlHandle` is `final`: a session object is minted by `curl_init()` and by
 /// nothing else, so a user class cannot extend it.
 #[test]
@@ -65,7 +73,7 @@ fn curl_setopt_rejects_wrong_arity() {
 /// which is the earliest point elephc can tell the difference.
 #[test]
 fn curl_exec_rejects_a_non_handle() {
-    expect_curl_error(r#"<?php curl_exec("not a handle");"#, "curl_exec");
+    expect_curl_compiles(r#"<?php curl_exec("not a handle");"#);
 }
 
 /// `curl_init()` accepts an optional URL string; passing an int is a type error.
@@ -74,25 +82,18 @@ fn curl_init_rejects_a_non_string_url() {
     expect_curl_error("<?php $ch = curl_init(42);", "curl_init");
 }
 
-/// `curl_setopt()`'s first parameter is typed `CurlHandle`, so passing an int is a
-/// compile-time type error naming that class — the earliest point elephc can tell the
-/// difference, and the same guard every other `curl_*` wrapper carries.
+/// `curl_setopt()`'s first parameter is typed `CurlHandle`, so passing an int is a `TypeError`
+/// at run time (php never refuses it at compile time); the program still compiles.
 #[test]
 fn curl_setopt_rejects_wrong_handle_type() {
-    expect_curl_error(
-        r#"<?php curl_setopt(1, CURLOPT_URL, "http://127.0.0.1/");"#,
-        "CurlHandle",
-    );
+    expect_curl_compiles(r#"<?php curl_setopt(1, CURLOPT_URL, "http://127.0.0.1/");"#);
 }
 
 /// `curl_getinfo()`'s handle parameter is typed the same way, so the wrong-handle
-/// diagnostic is not a `curl_setopt()`-only accident.
+/// `TypeError` is not a `curl_setopt()`-only accident.
 #[test]
 fn curl_getinfo_rejects_wrong_handle_type() {
-    expect_curl_error(
-        r#"<?php curl_getinfo("nope");"#,
-        "CurlHandle",
-    );
+    expect_curl_compiles(r#"<?php curl_getinfo("nope");"#);
 }
 
 /// `CurlMultiHandle` is `final` and not user-constructible, exactly like `CurlHandle`:
@@ -120,12 +121,9 @@ fn curl_multi_exec_requires_the_still_running_argument() {
 /// time — the same guard the easy surface carries.
 #[test]
 fn curl_multi_functions_reject_a_non_handle() {
-    expect_curl_error(
-        r#"<?php $r = 0; curl_multi_exec("nope", $r);"#,
-        "CurlMultiHandle",
-    );
-    expect_curl_error(r#"<?php curl_multi_errno(42);"#, "CurlMultiHandle");
-    expect_curl_error(r#"<?php curl_multi_select("nope");"#, "CurlMultiHandle");
+    expect_curl_compiles(r#"<?php $r = 0; curl_multi_exec("nope", $r);"#);
+    expect_curl_compiles(r#"<?php curl_multi_errno(42);"#);
+    expect_curl_compiles(r#"<?php curl_multi_select("nope");"#);
 }
 
 /// `curl_multi_add_handle()` takes its easy handle as `mixed` (see `curl_prelude`'s header
@@ -184,12 +182,9 @@ fn curl_share_setopt_rejects_wrong_arity() {
 /// time — the same guard the easy/multi surfaces carry.
 #[test]
 fn curl_share_functions_reject_a_non_handle() {
-    expect_curl_error(
-        r#"<?php curl_share_setopt("nope", CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);"#,
-        "CurlShareHandle",
-    );
-    expect_curl_error(r#"<?php curl_share_errno(42);"#, "CurlShareHandle");
-    expect_curl_error(r#"<?php curl_share_close([]);"#, "CurlShareHandle");
+    expect_curl_compiles(r#"<?php curl_share_setopt("nope", CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);"#);
+    expect_curl_compiles(r#"<?php curl_share_errno(42);"#);
+    expect_curl_compiles(r#"<?php curl_share_close([]);"#);
 }
 
 /// `curl_share_errno()` takes exactly one argument.
@@ -199,6 +194,59 @@ fn curl_share_errno_rejects_wrong_arity() {
         "<?php $sh = curl_share_init(); curl_share_errno($sh, 1);",
         "curl_share_errno",
     );
+}
+
+/// Issue #892: `curl_multi_exec()`'s by-reference `$still_running` seeded with `null`
+/// reached the EIR backend as `unsupported EIR backend feature: icmp for PHP type Void`,
+/// positionless, on the FIRST use of the variable after the call.
+///
+/// The cause is not curl-specific and neither is the fix: `types_compatible` accepts
+/// `null` for `int` — correct for a by-VALUE parameter, which PHP coerces — and that
+/// acceptance short-circuited every later by-reference check, so the argument was admitted
+/// with the caller's local still typed `Void` while the callee wrote an int through the
+/// reference. `$running > 0` then lowered an integer compare on a null.
+///
+/// The recovery half of the message is asserted too, because "expects Int, got Void" alone
+/// would leave a user staring at a line php-src runs without complaint.
+#[test]
+fn curl_multi_exec_rejects_a_null_seeded_still_running() {
+    expect_curl_error(
+        "<?php
+         $mh = curl_multi_init();
+         $running = null;
+         do {
+             $status = curl_multi_exec($mh, $running);
+         } while ($running > 0 && $status == CURLM_OK);
+         echo $running;",
+        "parameter $still_running expects Int, got Void",
+    );
+    expect_curl_error(
+        "<?php
+         $mh = curl_multi_init();
+         $running = null;
+         curl_multi_exec($mh, $running);",
+        "initialize it (for example `= 0`), or declare BOTH the parameter and the variable nullable",
+    );
+}
+
+/// The shape the diagnostic points at compiles, so the recovery it prints is real.
+///
+/// Seeding with `0` is what every `curl_multi_exec()` example in `docs/php/curl.md` does.
+/// `null` is php-src's INTERNAL-function laxity, which a prelude written in elephc-PHP does
+/// not inherit: measured on 8.5.10, the same `null` handed to a USERLAND `int &$x` is a
+/// `TypeError`.
+#[test]
+fn curl_multi_exec_accepts_an_int_seeded_still_running() {
+    check_source(
+        "<?php
+         $mh = curl_multi_init();
+         $running = 0;
+         do {
+             $status = curl_multi_exec($mh, $running);
+         } while ($running > 0 && $status == CURLM_OK);
+         echo $running;",
+    )
+    .expect("an int-seeded $still_running must compile");
 }
 
 /// `curl_share_init_persistent()` / `CurlSharePersistentHandle` are PHP 8.5 SURFACE ONLY,

@@ -43,8 +43,16 @@ pub(super) fn lower_reflection_property_value_call(
                     expr,
                 );
             }
-            let (_, property, _) = reflection_property_instance_target(ctx, object_expr)?;
-            lower_reflection_property_get_value(ctx, &property, args, expr)
+            let (declaring_class, property, property_ty) =
+                reflection_property_any_instance_target(ctx, object_expr)?;
+            lower_reflection_property_get_value(
+                ctx,
+                &declaring_class,
+                &property,
+                property_ty,
+                args,
+                expr,
+            )
         }
         "getrawvalue" => {
             if let Some((declaring_class, property, property_ty)) =
@@ -83,8 +91,16 @@ pub(super) fn lower_reflection_property_value_call(
                     expr,
                 );
             }
-            let (_, property, _) = reflection_property_instance_target(ctx, object_expr)?;
-            lower_reflection_property_set_value(ctx, &property, args, expr)
+            let (declaring_class, property, property_ty) =
+                reflection_property_any_instance_target(ctx, object_expr)?;
+            lower_reflection_property_set_value(
+                ctx,
+                &declaring_class,
+                &property,
+                property_ty,
+                args,
+                expr,
+            )
         }
         "setrawvalue" | "setrawvaluewithoutlazyinitialization" => {
             if let Some((declaring_class, property, _)) =
@@ -103,12 +119,11 @@ pub(super) fn lower_reflection_property_value_call(
             {
                 return lower_reflection_property_set_raw_value(ctx, &property, args, expr);
             }
-            lower_reflection_property_set_runtime_raw_value(
-                ctx,
-                reflection_property,
-                args,
-                expr,
-            )
+            // A property known only at run time goes through the method body, as `setValue()`
+            // does: the inline dynamic write carried no declaring-class scope, so it stored
+            // nothing into a private property and refused a protected one -- Doctrine's
+            // `RawValuePropertyAccessor` hydrates every entity property this way.
+            None
         }
         "isinitialized" => {
             if let Some((declaring_class, property, _)) =
@@ -207,49 +222,34 @@ fn lower_reflection_property_get_runtime_raw_value(
     ))
 }
 
-/// Lowers a raw reflected-property write whose property name is known only at runtime.
-fn lower_reflection_property_set_runtime_raw_value(
-    ctx: &mut LoweringContext<'_, '_>,
-    reflection_property: LoweredValue,
-    args: &[Expr],
-    expr: &Expr,
-) -> Option<LoweredValue> {
-    let (object_arg, value_arg) = reflection_property_set_value_args(args)?;
-    let object = lower_reflection_property_object_argument(ctx, &object_arg, expr);
-    let object = box_generic_object_for_dynamic_property(ctx, object, expr.span);
-    let value = lower_expr(ctx, &value_arg);
-    let property = lower_reflection_property_runtime_name(ctx, reflection_property, expr);
-    ctx.emit_void(
-        Op::DynamicPropSet,
-        vec![object.value, property.value, value.value],
-        None,
-        Op::DynamicPropSet.default_effects(),
-        Some(expr.span),
-    );
-    if ctx.value_is_owning_temporary(property) {
-        crate::ir_lower::ownership::release_if_owned(ctx, property, Some(expr.span));
-    }
-    if ctx.value_is_owning_temporary(object) {
-        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
-    }
-    Some(lower_null(ctx, expr))
-}
-
 /// Lowers `ReflectionProperty::getValue($object)` to a direct property read.
 pub(super) fn lower_reflection_property_get_value(
     ctx: &mut LoweringContext<'_, '_>,
+    declaring_class: &str,
     property: &str,
+    property_ty: PhpType,
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let object_arg = reflection_property_get_value_arg(args)?;
+    if !reflection_property_physical_receiver_is_compatible(ctx, &object_arg, declaring_class) {
+        return None;
+    }
     let object = lower_expr(ctx, &object_arg);
-    Some(lower_property_get_from_value(
+    let slot = reflection_property_physical_ref(ctx, declaring_class, property)?;
+    let result = ctx.emit_value(
+        Op::PropGet,
+        vec![object.value],
+        Some(slot),
+        property_ty,
+        Op::PropGet.default_effects(),
+        Some(expr.span),
+    );
+    Some(stabilize_borrowed_result_and_release_receiver(
         ctx,
         object,
-        property,
-        Op::PropGet,
-        expr,
+        result,
+        expr.span,
     ))
 }
 
@@ -270,19 +270,53 @@ pub(super) fn lower_reflection_property_get_raw_value(
 /// Lowers `ReflectionProperty::setValue($object, $value)` to a direct property write.
 pub(super) fn lower_reflection_property_set_value(
     ctx: &mut LoweringContext<'_, '_>,
+    declaring_class: &str,
     property: &str,
+    property_ty: PhpType,
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let (object_arg, value_arg) = reflection_property_set_value_args(args)?;
-    let target = Expr::new(
-        ExprKind::PropertyAccess {
-            object: Box::new(object_arg),
-            property: property.to_string(),
-        },
+    if !reflection_property_physical_receiver_is_compatible(ctx, &object_arg, declaring_class) {
+        return None;
+    }
+    let object = lower_expr(ctx, &object_arg);
+    // The store only borrows its receiver; an owning receiver temporary (a local load carries
+    // one) must be retired afterwards, as `lower_property_assign` does, or the object leaks.
+    let receiver_is_owning = ctx.value_is_owning_temporary(object);
+    let value = lower_expr(ctx, &value_arg);
+    let value = crate::ir_lower::stmt::contextualize_property_array_value(
+        ctx,
+        value,
+        &value_arg,
+        &property_ty,
         expr.span,
     );
-    lower_non_local_assignment_write(ctx, &target, &value_arg, expr.span);
+    let value = crate::ir_lower::stmt::coerce_typed_assign_value(
+        ctx,
+        value,
+        &property_ty,
+        expr.span,
+    );
+    let slot = reflection_property_physical_ref(ctx, declaring_class, property)?;
+    let pins = pin_in_flight_owners(ctx, &[object.value, value.value], expr.span);
+    ctx.emit_void(
+        Op::PropSet,
+        vec![object.value, value.value],
+        Some(slot),
+        Op::PropSet.default_effects(),
+        Some(expr.span),
+    );
+    unpin_in_flight_owners(ctx, pins, expr.span);
+    crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
+        ctx,
+        &property_ty,
+        value,
+        expr.span,
+    );
+    if receiver_is_owning {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
+    }
     Some(lower_null(ctx, expr))
 }
 
@@ -302,6 +336,44 @@ pub(super) fn lower_reflection_property_set_raw_value(
         expr.span,
     );
     Some(lower_null(ctx, expr))
+}
+
+/// Identifies a reflected instance property by its physical layout slot.
+///
+/// Only statically resolved ReflectionProperty calls emit this immediate. Ordinary source
+/// property access continues to carry a name and therefore remains subject to scope checks.
+fn reflection_property_physical_ref(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+) -> Option<Immediate> {
+    let info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    let index = info.visible_property_index(property)?;
+    Some(Immediate::ReflectionPropertyRef {
+        class: u32::try_from(info.class_id).ok()?,
+        property: u32::try_from(index).ok()?,
+    })
+}
+
+/// Returns whether an instance-property reflection call can safely name one physical slot.
+///
+/// Runtime-shaped and incompatible receivers must stay on ReflectionProperty's ordinary method
+/// path, which performs the existing runtime object checks and name dispatch. The physical
+/// immediate is reserved for a concrete receiver whose layout is proven to contain the reflected
+/// class's prefix.
+fn reflection_property_physical_receiver_is_compatible(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    declaring_class: &str,
+) -> bool {
+    let object_ty = match &object.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        _ => infer_expr_type_syntactic(object),
+    };
+    let PhpType::Object(receiver_class) = object_ty.codegen_repr() else {
+        return false;
+    };
+    class_extends_class(ctx, &receiver_class, declaring_class)
 }
 
 /// Lowers `ReflectionProperty::isInitialized($object)` to a direct slot probe.
@@ -469,31 +541,6 @@ pub(super) fn reflection_property_named_optional_object_arg(args: &[Expr]) -> Op
         }
     }
     Some(object)
-}
-
-/// Resolves an inline `new ReflectionProperty(Known::class, "prop")` instance property target.
-pub(super) fn reflection_property_instance_target(
-    ctx: &LoweringContext<'_, '_>,
-    object_expr: &Expr,
-) -> Option<(String, String, PhpType)> {
-    let (class_name, property) = reflection_property_reflected_target(ctx, object_expr)?;
-    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
-    if class_info
-        .static_properties
-        .iter()
-        .any(|(name, _)| name == &property)
-    {
-        return None;
-    }
-    if class_info.property_visibilities.get(&property) != Some(&Visibility::Public) {
-        return None;
-    }
-    let (_, (_, property_ty)) = class_info.visible_property(&property)?;
-    Some((
-        class_name,
-        property,
-        normalize_value_php_type(property_ty.codegen_repr()),
-    ))
 }
 
 /// Resolves a known non-static ReflectionProperty target without enforcing visibility.

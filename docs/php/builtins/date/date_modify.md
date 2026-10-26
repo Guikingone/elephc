@@ -1,8 +1,8 @@
 ---
 title: "date_modify()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Applies a relative modifier such as \"+1 day\" to a DateTime."
 sidebar:
-  order: 216
+  order: 217
 ---
 
 ## date_modify()
@@ -11,7 +11,7 @@ sidebar:
 function date_modify(mixed $object, string $modifier): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Applies a relative modifier such as "+1 day" to a DateTime.
 
 **Parameters**:
 - `$object` (`mixed`)
@@ -24,7 +24,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

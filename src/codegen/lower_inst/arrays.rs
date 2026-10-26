@@ -23,8 +23,14 @@ use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
+use super::receiver_place::ReceiverPlace;
 use super::{expect_operand, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
+
+#[cfg(test)]
+mod element_address_tests;
+#[cfg(test)]
+mod promotion_owner_tests;
 
 /// Lowers indexed-array allocation through the shared runtime constructor.
 pub(super) fn lower_array_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -120,7 +126,14 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
         )));
     }
     let array = expect_operand(inst, 0)?;
-    indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
+    // The conversion dispatches on the runtime heap kind, so a hash operand takes the
+    // `__rt_hash_to_mixed` arm whatever its static type says. Laravel Prompts' `autocomplete()`
+    // spreads `get_defined_vars()` (a hash) into a constructor: refusing it here left the
+    // helper file to the runtime autoloader.
+    let array_ty = ctx.value_php_type(array)?;
+    if !matches!(array_ty, PhpType::AssocArray { .. }) {
+        indexed_array_element_type(&array_ty, inst)?;
+    }
     require_array_to_mixed_result(&inst.result_php_type.codegen_repr(), inst)?;
     let done = ctx.next_label("array_to_mixed_done");
     match ctx.emitter.target.arch {
@@ -173,6 +186,59 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
     store_if_result(ctx, inst)
 }
 
+/// Lowers an indexed array's copy into a fresh owner.
+///
+/// `__rt_array_clone_shallow` byte-copies scalar payloads, re-persists string payloads for the
+/// new owner and retains refcounted children, so the result is an independent array that the
+/// caller owns and the temporary-release machinery frees.
+///
+/// Null and in-band null-container-sentinel inputs pass through unconverted, on the same
+/// reasoning as `lower_array_to_mixed`: the helper dereferences the source header immediately,
+/// so the sentinel has to be filtered here rather than helper-side.
+pub(super) fn lower_array_clone_shallow(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expects exactly one operand",
+            inst.op.name()
+        )));
+    }
+    let array = expect_operand(inst, 0)?;
+    require_indexed_array(ctx.value_php_type(array)?.codegen_repr(), inst)?;
+    require_indexed_array(inst.result_php_type.codegen_repr(), inst)?;
+    let done = ctx.next_label("array_clone_shallow_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // -- reject the two pointers the clone helper cannot dereference --
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.emitter.instruction(&format!("cbz x0, {}", done));              // null containers have no header or slots to clone
+            abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp x0, x9");                              // does the array carry the in-band null-container sentinel?
+            ctx.emitter.instruction(&format!("b.eq {}", done));                 // missed-read sentinels pass through uncloned
+
+            // -- copy the array into an owner of its own --
+            abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");
+        }
+        Arch::X86_64 => {
+            // -- reject the two pointers the clone helper cannot dereference --
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.emitter.instruction("mov rax, rdi");                            // default to passing null/sentinel containers through uncloned
+            ctx.emitter.instruction("test rdi, rdi");                           // null containers have no header or slots to clone
+            ctx.emitter.instruction(&format!("je {}", done));                   // keep the null container as the passthrough result
+            abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp rdi, r10");                            // does the array carry the in-band null-container sentinel?
+            ctx.emitter.instruction(&format!("je {}", done));                   // missed-read sentinels pass through uncloned
+
+            // -- copy the array into an owner of its own --
+            abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");
+        }
+    }
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
 /// Normalizes either supported PHP array storage kind to associative hash storage.
 pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 1 {
@@ -184,9 +250,22 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
     let array = expect_operand(inst, 0)?;
     require_php_array(ctx.value_php_type(array)?.codegen_repr(), inst)?;
     let result_value_ty = require_array_to_hash_result(&inst.result_php_type.codegen_repr(), inst)?;
+    let mut retired_source_box = false;
+    if let Some(slot) = source_load_local_slot(ctx, array)? {
+        // A late whole-frame widening can make this concrete LoadLocal unbox an owned child from
+        // Mixed storage even though lowering emitted no ReleaseLocalSlot before the conversion.
+        // Retire that outer box now, while the retained child keeps the source alive. Raw array
+        // slots take the no-op branch, so ArrayToHash remains the sole consumer of their owner.
+        retired_source_box = ctx.mutated_source_local_owner_is_boxed(slot, array)?;
+        ctx.release_mutated_source_local_owner(slot, array)?;
+    }
     // `Immediate::Bool(true)` marks a local promotion that MOVES the slot's reference into the
-    // conversion (`LoweringContext::emit_local_array_to_hash_move`).
+    // conversion (`LoweringContext::emit_local_array_to_hash_move`). A retired box leaves the
+    // load's retained child as the only reference -- the slot was zeroed, so the release the
+    // lowering emits after the conversion finds nothing -- and the conversion must consume it:
+    // `$a = [1, 2]; unset($a[0]); unset($a);` leaked the indexed array.
     let release_source = matches!(inst.immediate, Some(Immediate::Bool(true)))
+        || retired_source_box
         || ctx.value_can_transfer_ownership_to_consumer(array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -410,10 +489,22 @@ pub(super) fn lower_mixed_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
     let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, scratch_reg);
     let type_error_label = ctx.next_label("mixed_to_hash_type_error");
+    // A builtin argument boundary names its parameter (`array_values(): Argument #1 ($array)`);
+    // any other boundary keeps php's anonymous `Value`.
+    let subject = match inst.immediate {
+        Some(crate::ir::Immediate::Data(data)) => ctx
+            .module
+            .data
+            .strings
+            .get(data.as_raw() as usize)
+            .cloned()
+            .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?,
+        _ => "Value".to_string(),
+    };
     super::builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
         ctx,
         &type_error_label,
-        &|given| format!("Value must be of type array, {} given", given),
+        &|given| format!("{subject} must be of type array, {} given", given),
     );
     if list_result {
         ctx.emitter.label(&indexed);
@@ -553,14 +644,16 @@ pub(super) fn separate_get_for_write_receiver(
     array: ValueId,
     helper: &str,
 ) -> Result<()> {
-    let Some(slot) = source_load_local_slot(ctx, array)? else {
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
+    let Some(slot) = receiver.slot() else {
         return Ok(());
     };
+    receiver.reload_local_value(ctx, array)?;
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(array, arg_reg)?;
     abi::emit_call_label(ctx.emitter, helper);
     ctx.store_result_value(array)?;
-    ctx.store_value_to_local(slot, array)?;
+    ctx.store_container_writeback_to_local(slot, array)?;
     ctx.writeback_global_array_source(array)
 }
 
@@ -627,25 +720,471 @@ fn lower_array_get_in_mode(
     }
 }
 
-/// Lowers `LoadArrayElemRefCell`: computes the address of an indexed-array element's inline
-/// storage and returns it as a single-word cell pointer. The caller binds a local to this
-/// pointer non-owning (`$b =& $a[0]`); subsequent stores through the local write directly to
-/// the array element, and reads of `$a[0]` observe the same cell. Out-of-bounds or negative
-/// indices produce a null pointer (the bind then aliases a null cell, matching PHP's
-/// undefined-element reference behavior). The array must remain live while the alias is used.
+/// Lowers `LoadArrayElemRefCell` to an addressable element cell.
+///
+/// Concrete receivers select inline indexed storage or a runtime-promoted hash. A boxed Mixed
+/// receiver is first split away from its aliases (`separate_shared_mixed_array_receiver`) and
+/// then normalized to a Mixed-entry hash, updating that unique box in place, so recursive
+/// nested-source preparation always returns a managed tag-11 cell rather than retaining an
+/// interior indexed slot as though it were heap-owned.
 pub(super) fn lower_load_array_elem_ref_cell(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    let create_missing = inst.op == Op::LoadArrayElemRefCell;
     let array = expect_operand(inst, 0)?;
     let index = expect_operand(inst, 1)?;
     let array_ty = ctx.value_php_type(array)?;
+    if create_missing
+        && matches!(array_ty.codegen_repr(), PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed)
+    {
+        let receiver = ReceiverPlace::resolve(ctx, array)?;
+        receiver.require_writable("runtime-shaped array element reference")?;
+        receiver.reload_local_value(ctx, array)?;
+        receiver.prepare_consuming_storeback(ctx, array)?;
+        ctx.load_value_to_result(array)?;
+        super::iterators::convert_loaded_indexed_source_to_hash(ctx);
+        ctx.store_result_value(array)?;
+        receiver.store_back_container_writeback(ctx, array)?;
+        return lower_hash_elem_ref_cell(ctx, inst, array, index, true);
+    }
+    if matches!(array_ty.codegen_repr(), PhpType::AssocArray { .. }) {
+        return lower_hash_elem_ref_cell(ctx, inst, array, index, create_missing);
+    }
+    if matches!(array_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        let receiver = ReceiverPlace::resolve(ctx, array)?;
+        receiver.reload_local_value(ctx, array)?;
+        separate_shared_mixed_array_receiver(ctx, &receiver, array)?;
+        return match ctx.emitter.target.arch {
+            Arch::AArch64 => lower_load_mixed_array_elem_ref_cell_aarch64(
+                ctx, inst, array, index, create_missing,
+            ),
+            Arch::X86_64 => lower_load_mixed_array_elem_ref_cell_x86_64(
+                ctx, inst, array, index, create_missing,
+            ),
+        };
+    }
     let elem_ty = indexed_array_element_type(&array_ty, inst)?;
     let elem_size = ref_cell_element_size(&elem_ty.codegen_repr());
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_load_array_elem_ref_cell_aarch64(ctx, inst, array, index, elem_size),
         Arch::X86_64 => lower_load_array_elem_ref_cell_x86_64(ctx, inst, array, index, elem_size),
     }
+}
+
+/// Resolves a writable hash entry, inserting boxed null when the key is absent.
+///
+/// The receiver is separated and republished before exposing its entry. Insertion may grow the
+/// table, so that replacement is published a second time before the final lookup promotes the
+/// entry to a persistent tag-11 reference cell.
+fn lower_hash_elem_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    hash: ValueId,
+    key: ValueId,
+    create_missing: bool,
+) -> Result<()> {
+    let receiver = ReceiverPlace::resolve(ctx, hash)?;
+    receiver.require_writable("hash element reference")?;
+    receiver.reload_local_value(ctx, hash)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            lower_hash_elem_ref_cell_aarch64(ctx, hash, key, &receiver, create_missing)?
+        }
+        Arch::X86_64 => {
+            lower_hash_elem_ref_cell_x86_64(ctx, hash, key, &receiver, create_missing)?
+        }
+    }
+    store_ref_cell_pointer_result(ctx, inst)
+}
+
+/// Resolves a writable hash entry reference on AArch64.
+fn lower_hash_elem_ref_cell_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    receiver: &ReceiverPlace,
+    create_missing: bool,
+) -> Result<()> {
+    let found = ctx.next_label("hash_elem_ref_found");
+    let done = ctx.next_label("hash_elem_ref_done");
+    receiver.prepare_consuming_storeback(ctx, hash)?;
+    ctx.load_value_to_reg(hash, "x0")?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+    ctx.store_result_value(hash)?;
+    receiver.store_back_container_writeback(ctx, hash)?;
+    super::hashes::materialize_hash_key_aarch64(ctx, key)?;
+    ctx.load_value_to_reg(hash, "x0")?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    ctx.emitter.instruction(&format!("cbnz x4, {found}"));                      // skip insertion when the requested key already exists
+
+    if create_missing {
+        receiver.reprepare_consuming_storeback(ctx, hash)?;
+        crate::codegen::literal_defaults::emit_boxed_null_literal_to_result(ctx);
+        abi::emit_push_reg(ctx.emitter, "x0");
+        super::hashes::materialize_hash_key_aarch64_after_first(ctx, key)?;
+        abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+        ctx.load_value_to_reg(hash, "x0")?;
+        abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        abi::emit_pop_reg(ctx.emitter, "x3");
+        ctx.emitter.instruction("mov x4, xzr");                                 // boxed null occupies only the low hash payload word
+        abi::emit_load_int_immediate(ctx.emitter, "x5", runtime_value_tag(&PhpType::Mixed) as i64);
+        abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        ctx.store_result_value(hash)?;
+        receiver.store_back_container_writeback(ctx, hash)?;
+        super::hashes::materialize_hash_key_aarch64_after_first(ctx, key)?;
+        ctx.load_value_to_reg(hash, "x0")?;
+        abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    } else {
+        super::hashes::emit_undefined_hash_key_warning_aarch64(ctx, key)?;
+        abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+        ctx.emitter.instruction(&format!("b {done}"));                          // a foreach source miss does not create an entry
+    }
+
+    ctx.emitter.label(&found);
+    ctx.emitter.instruction("add x0, x4, #24");                                 // address the entry's low value word for reference promotion
+    abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Resolves a writable hash entry reference on x86_64.
+fn lower_hash_elem_ref_cell_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    receiver: &ReceiverPlace,
+    create_missing: bool,
+) -> Result<()> {
+    let found = ctx.next_label("hash_elem_ref_found");
+    let done = ctx.next_label("hash_elem_ref_done");
+    receiver.prepare_consuming_storeback(ctx, hash)?;
+    ctx.load_value_to_reg(hash, "rdi")?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+    ctx.store_result_value(hash)?;
+    receiver.store_back_container_writeback(ctx, hash)?;
+    super::hashes::materialize_hash_key_x86_64(ctx, key)?;
+    ctx.load_value_to_reg(hash, "rdi")?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    ctx.emitter.instruction("test r8, r8");                                     // check whether the requested key already exists
+    ctx.emitter.instruction(&format!("jnz {found}"));                           // preserve an existing entry without overwriting its value
+
+    if create_missing {
+        receiver.reprepare_consuming_storeback(ctx, hash)?;
+        crate::codegen::literal_defaults::emit_boxed_null_literal_to_result(ctx);
+        abi::emit_push_reg(ctx.emitter, "rax");
+        super::hashes::materialize_hash_key_x86_64_after_first(ctx, key)?;
+        abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+        ctx.load_value_to_reg(hash, "rdi")?;
+        abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+        abi::emit_pop_reg(ctx.emitter, "rcx");
+        ctx.emitter.instruction("xor r8d, r8d");                                // boxed null occupies only the low hash payload word
+        abi::emit_load_int_immediate(ctx.emitter, "r9", runtime_value_tag(&PhpType::Mixed) as i64);
+        abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        ctx.store_result_value(hash)?;
+        receiver.store_back_container_writeback(ctx, hash)?;
+        super::hashes::materialize_hash_key_x86_64_after_first(ctx, key)?;
+        ctx.load_value_to_reg(hash, "rdi")?;
+        abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    } else {
+        super::hashes::emit_undefined_hash_key_warning_x86_64(ctx, key)?;
+        abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
+        ctx.emitter.instruction(&format!("jmp {done}"));                        // a foreach source miss does not create an entry
+    }
+
+    ctx.emitter.label(&found);
+    ctx.emitter.instruction("lea rdi, [r8 + 24]");                              // address the entry's low value word for reference promotion
+    abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Splits a shared Mixed cell before an element reference is taken through it.
+///
+/// PHP separates an array the moment one of its elements becomes a reference: after
+/// `$b = $a; $r = &$a["x"]; $r = 2;` the copy still reads `$b["x"] === 1`. A `mixed` receiver (a
+/// `mixed` or declared `array` parameter, a `mixed` local) shares its cell with every alias
+/// through `Acquire`, and the arch lowerings below rewrite that cell in place -- tag, payload,
+/// the promoted hash -- so every alias observed the reference and every write made through it.
+/// The mutating builtins already separate through `__rt_array_cell_ensure_unique` before they
+/// touch a boxed payload (`prepare_boxed_array_receiver`); this is the same step for the
+/// reference path, published back through the receiver's place so the local, ref cell, property
+/// or global names the unique cell from here on.
+///
+/// A cell that does not hold an array (null, a scalar, an object) is left alone: the arch
+/// lowering answers it with no addressable element, exactly as before, and the consuming
+/// store-back must not be prepared for a cell that is never republished. An opaque receiver has
+/// nowhere to publish a split cell and keeps the in-place behaviour.
+fn separate_shared_mixed_array_receiver(
+    ctx: &mut FunctionContext<'_>,
+    receiver: &ReceiverPlace,
+    array: ValueId,
+) -> Result<()> {
+    if matches!(receiver, ReceiverPlace::Opaque) {
+        return Ok(());
+    }
+    let skip = ctx.next_label("mixed_array_elem_ref_cell_not_array");
+    ctx.load_value_to_result(array)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {skip}"));                // a null cell holds no array to separate
+            ctx.emitter.instruction("ldr x10, [x0]");                           // read the cell tag before touching allocation metadata
+            ctx.emitter.instruction("sub x10, x10, #4");                        // array and hash tags become zero and one
+            ctx.emitter.instruction("cmp x10, #1");                             // only the two PHP array layouts are separated
+            ctx.emitter.instruction(&format!("b.hi {skip}"));                   // scalar, object and resource cells keep the in-place path
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // a null cell holds no array to separate
+            ctx.emitter.instruction(&format!("jz {skip}"));                     // leave the non-array answer to the arch lowering
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                // read the cell tag before touching allocation metadata
+            ctx.emitter.instruction("sub r10, 4");                              // array and hash tags become zero and one
+            ctx.emitter.instruction("cmp r10, 1");                              // only the two PHP array layouts are separated
+            ctx.emitter.instruction(&format!("ja {skip}"));                     // scalar, object and resource cells keep the in-place path
+        }
+    }
+    receiver.prepare_consuming_storeback(ctx, array)?;
+    ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_cell_ensure_unique");
+    ctx.store_result_value(array)?;
+    receiver.store_back_after_consuming_split(ctx, array)?;
+    ctx.emitter.label(&skip);
+    Ok(())
+}
+
+/// Promotes the indexed payload of a Mixed cell to a Mixed-entry hash, publishing it first.
+///
+/// The cell pointer sits at the top of the temporary stack and the unboxed indexed array is in
+/// the first argument register. The promoted hash is written into the cell BEFORE the old
+/// packed array's owner is dropped: `__rt_decref_array` deep-frees at zero, and the cell is that
+/// array's owner, so releasing first left the variable pointing at freed storage for the length
+/// of the free. `convert_loaded_indexed_source_to_hash` keeps the release-first order because
+/// its iterator callers hold the source in a register, not in a published cell. A payload that
+/// is already a hash (kind 3, an addressable source promoted earlier) is only normalized.
+fn promote_indexed_payload_into_mixed_cell(ctx: &mut FunctionContext<'_>) {
+    let already_hash = ctx.next_label("mixed_array_elem_ref_payload_already_hash");
+    let done = ctx.next_label("mixed_array_elem_ref_payload_promoted");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // a source promoted earlier must not be reread as indexed
+            ctx.emitter.instruction(&format!("b.eq {already_hash}"));           // normalize an existing hash without a second promotion
+            ctx.emitter.instruction("ldr x0, [sp]");                            // reload the indexed payload for promotion
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+            ctx.emitter.instruction("ldr x9, [sp, #16]");                       // reload the owning Mixed cell
+            ctx.emitter.instruction("mov x10, #5");                             // runtime tag 5 publishes associative hash storage
+            ctx.emitter.instruction("str x10, [x9]");                           // publish the hash tag before the old payload is released
+            ctx.emitter.instruction("str x0, [x9, #8]");                        // publish the promoted hash into the cell
+            ctx.emitter.instruction("str xzr, [x9, #16]");                      // clear the unused high payload word
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // the indexed owner the published hash replaced
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_pop_reg(ctx.emitter, "x9");
+            ctx.emitter.instruction(&format!("b {done}"));                      // join the already-hash and promoted results
+            ctx.emitter.label(&already_hash);
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rdi");
+            ctx.emitter.instruction("mov rax, rdi");                            // `__rt_heap_kind` probes the pointer in the RESULT register, not `rdi`
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                              // a source promoted earlier must not be reread as indexed
+            ctx.emitter.instruction(&format!("je {already_hash}"));             // normalize an existing hash without a second promotion
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // reload the indexed payload for promotion
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+            ctx.emitter.instruction("mov rdi, rax");                            // widen the promoted hash entries to boxed Mixed
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");           // reload the owning Mixed cell
+            ctx.emitter.instruction("mov QWORD PTR [r10], 5");                  // publish the hash tag before the old payload is released
+            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");            // publish the promoted hash into the cell
+            ctx.emitter.instruction("mov QWORD PTR [r10 + 16], 0");             // clear the unused high payload word
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // the indexed owner the published hash replaced
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            abi::emit_pop_reg(ctx.emitter, "r10");
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // join the already-hash and promoted results
+            ctx.emitter.label(&already_hash);
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+        }
+    }
+    ctx.emitter.label(&done);
+}
+
+/// Resolves an element reference through a boxed Mixed container on AArch64.
+fn lower_load_mixed_array_elem_ref_cell_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    index: ValueId,
+    create_missing: bool,
+) -> Result<()> {
+    let indexed_label = ctx.next_label("mixed_array_elem_ref_indexed");
+    let hash_label = ctx.next_label("mixed_array_elem_ref_hash");
+    let fetch_label = ctx.next_label("mixed_array_elem_ref_fetch");
+    let missing_label = ctx.next_label("mixed_array_elem_ref_missing");
+    let null_label = ctx.next_label("mixed_array_elem_ref_null");
+    let done_label = ctx.next_label("mixed_array_elem_ref_done");
+    ctx.load_value_to_reg(array, "x0")?;
+    abi::emit_push_reg(ctx.emitter, "x0");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("cmp x0, #4");                                      // runtime tag 4 identifies an indexed child container
+    ctx.emitter.instruction(&format!("b.eq {indexed_label}"));                  // promote indexed children before exposing an element reference
+    ctx.emitter.instruction("cmp x0, #5");                                      // runtime tag 5 identifies an associative child container
+    ctx.emitter.instruction(&format!("b.eq {hash_label}"));                     // normalize existing hashes to Mixed entry storage
+    ctx.emitter.instruction(&format!("b {null_label}"));                        // non-array Mixed payloads have no addressable element
+
+    ctx.emitter.label(&indexed_label);
+    ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed indexed child to publish-first hash promotion
+    promote_indexed_payload_into_mixed_cell(ctx);
+    ctx.emitter.instruction(&format!("b {fetch_label}"));                       // fetch the requested entry from the published hash
+
+    ctx.emitter.label(&hash_label);
+    ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed hash child to Mixed-entry normalization
+    abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+
+    ctx.emitter.label(&fetch_label);
+    ctx.emitter.instruction("ldr x9, [sp]");                                    // reload the owning Mixed box after container conversion
+    ctx.emitter.instruction("mov x10, #5");                                     // runtime tag 5 publishes associative hash storage
+    ctx.emitter.instruction("str x10, [x9]");                                   // update the box tag before exposing the replacement hash
+    ctx.emitter.instruction("str x0, [x9, #8]");                                // write the normalized hash back into the parent entry box
+    ctx.emitter.instruction("str xzr, [x9, #16]");                              // clear the unused high payload word
+    abi::emit_push_reg(ctx.emitter, "x0");
+    super::hashes::materialize_hash_key_aarch64(ctx, index)?;
+    abi::emit_pop_reg(ctx.emitter, "x0");
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    ctx.emitter.instruction(&format!("cbz x4, {missing_label}"));               // handle a missing key according to address-of versus foreach semantics
+    ctx.emitter.instruction("add x0, x4, #24");                                 // pass the matched hash entry's value-low address
+    abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+    abi::emit_pop_reg(ctx.emitter, "x9");
+    ctx.emitter.instruction(&format!("b {done_label}"));                        // return the managed tag-11 reference cell
+
+    ctx.emitter.label(&missing_label);
+    if create_missing {
+        ctx.emitter.instruction("ldr x9, [sp]");                                // reload the owning Mixed box before inserting the missing key
+        ctx.emitter.instruction("ldr x0, [x9, #8]");                            // recover the normalized hash pointer from its box
+        abi::emit_push_reg(ctx.emitter, "x0");
+        crate::codegen::literal_defaults::emit_boxed_null_literal_to_result(ctx);
+        abi::emit_push_reg(ctx.emitter, "x0");
+        super::hashes::materialize_hash_key_aarch64_after_first(ctx, index)?;
+        abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+        abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        abi::emit_pop_reg(ctx.emitter, "x3");
+        abi::emit_pop_reg(ctx.emitter, "x0");
+        ctx.emitter.instruction("mov x4, xzr");                                 // boxed null occupies only the low hash payload word
+        abi::emit_load_int_immediate(ctx.emitter, "x5", runtime_value_tag(&PhpType::Mixed) as i64);
+        abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        ctx.emitter.instruction("ldr x9, [sp]");                                // republish a hash pointer changed by insertion growth
+        ctx.emitter.instruction("str x0, [x9, #8]");                            // keep the owning Mixed cell synchronized
+        abi::emit_push_reg(ctx.emitter, "x0");
+        super::hashes::materialize_hash_key_aarch64_after_first(ctx, index)?;
+        abi::emit_pop_reg(ctx.emitter, "x0");
+        abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+        ctx.emitter.instruction("add x0, x4, #24");                             // address the newly inserted entry payload
+        abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+        abi::emit_pop_reg(ctx.emitter, "x9");
+        ctx.emitter.instruction(&format!("b {done_label}"));                    // return the new managed entry cell
+    } else {
+        super::hashes::emit_undefined_hash_key_warning_aarch64(ctx, index)?;
+        abi::emit_pop_reg(ctx.emitter, "x9");
+        abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+        ctx.emitter.instruction(&format!("b {done_label}"));                    // foreach source lookup leaves the hash unchanged
+    }
+
+    ctx.emitter.label(&null_label);
+    abi::emit_pop_reg(ctx.emitter, "x9");
+    abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+    ctx.emitter.label(&done_label);
+    store_ref_cell_pointer_result(ctx, inst)
+}
+
+/// Resolves an element reference through a boxed Mixed container on x86_64.
+fn lower_load_mixed_array_elem_ref_cell_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    index: ValueId,
+    create_missing: bool,
+) -> Result<()> {
+    let indexed_label = ctx.next_label("mixed_array_elem_ref_indexed");
+    let hash_label = ctx.next_label("mixed_array_elem_ref_hash");
+    let fetch_label = ctx.next_label("mixed_array_elem_ref_fetch");
+    let missing_label = ctx.next_label("mixed_array_elem_ref_missing");
+    let null_label = ctx.next_label("mixed_array_elem_ref_null");
+    let done_label = ctx.next_label("mixed_array_elem_ref_done");
+    ctx.load_value_to_reg(array, "rax")?;
+    abi::emit_push_reg(ctx.emitter, "rax");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("cmp rax, 4");                                      // runtime tag 4 identifies an indexed child container
+    ctx.emitter.instruction(&format!("je {indexed_label}"));                    // promote indexed children before exposing an element reference
+    ctx.emitter.instruction("cmp rax, 5");                                      // runtime tag 5 identifies an associative child container
+    ctx.emitter.instruction(&format!("je {hash_label}"));                       // normalize existing hashes to Mixed entry storage
+    ctx.emitter.instruction(&format!("jmp {null_label}"));                      // non-array Mixed payloads have no addressable element
+
+    ctx.emitter.label(&indexed_label);
+    promote_indexed_payload_into_mixed_cell(ctx);
+    ctx.emitter.instruction(&format!("jmp {fetch_label}"));                     // fetch the requested entry from the published hash
+
+    ctx.emitter.label(&hash_label);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+
+    ctx.emitter.label(&fetch_label);
+    ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                        // reload the owning Mixed box after container conversion
+    ctx.emitter.instruction("mov QWORD PTR [r10], 5");                          // publish associative hash storage in the Mixed tag
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // write the normalized hash back into the parent entry box
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 16], 0");                     // clear the unused high payload word
+    abi::emit_push_reg(ctx.emitter, "rax");
+    super::hashes::materialize_hash_key_x86_64(ctx, index)?;
+    abi::emit_pop_reg(ctx.emitter, "rdi");
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    ctx.emitter.instruction("test r8, r8");                                     // a missing key cannot supply a managed entry cell
+    ctx.emitter.instruction(&format!("jz {missing_label}"));                    // handle a missing key according to address-of versus foreach semantics
+    ctx.emitter.instruction("lea rdi, [r8 + 24]");                              // pass the matched hash entry's value-low address
+    abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+    abi::emit_pop_reg(ctx.emitter, "r10");
+    ctx.emitter.instruction(&format!("jmp {done_label}"));                      // return the managed tag-11 reference cell
+
+    ctx.emitter.label(&missing_label);
+    if create_missing {
+        ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                    // reload the owning Mixed box before inserting the missing key
+        ctx.emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                // recover the normalized hash pointer from its box
+        abi::emit_push_reg(ctx.emitter, "rax");
+        crate::codegen::literal_defaults::emit_boxed_null_literal_to_result(ctx);
+        abi::emit_push_reg(ctx.emitter, "rax");
+        super::hashes::materialize_hash_key_x86_64_after_first(ctx, index)?;
+        abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+        abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+        abi::emit_pop_reg(ctx.emitter, "rcx");
+        abi::emit_pop_reg(ctx.emitter, "rdi");
+        ctx.emitter.instruction("xor r8d, r8d");                                // boxed null occupies only the low hash payload word
+        abi::emit_load_int_immediate(ctx.emitter, "r9", runtime_value_tag(&PhpType::Mixed) as i64);
+        abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                    // republish a hash pointer changed by insertion growth
+        ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                // keep the owning Mixed cell synchronized
+        abi::emit_push_reg(ctx.emitter, "rax");
+        super::hashes::materialize_hash_key_x86_64_after_first(ctx, index)?;
+        abi::emit_pop_reg(ctx.emitter, "rdi");
+        abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+        ctx.emitter.instruction("lea rdi, [r8 + 24]");                          // address the newly inserted entry payload
+        abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+        abi::emit_pop_reg(ctx.emitter, "r10");
+        ctx.emitter.instruction(&format!("jmp {done_label}"));                  // return the new managed entry cell
+    } else {
+        super::hashes::emit_undefined_hash_key_warning_x86_64(ctx, index)?;
+        abi::emit_pop_reg(ctx.emitter, "r10");
+        abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
+        ctx.emitter.instruction(&format!("jmp {done_label}"));                  // foreach source lookup leaves the hash unchanged
+    }
+
+    ctx.emitter.label(&null_label);
+    abi::emit_pop_reg(ctx.emitter, "r10");
+    abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
+    ctx.emitter.label(&done_label);
+    store_ref_cell_pointer_result(ctx, inst)
 }
 
 /// Returns the inline storage width for an indexed-array element from its value type.
@@ -672,9 +1211,28 @@ fn lower_load_array_elem_ref_cell_aarch64(
     let idx_reg = abi::int_result_reg(ctx.emitter);
     let len_reg = abi::secondary_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(array, array_reg)?;
-    ctx.load_value_to_reg(index, idx_reg)?;
+    ctx.emitter.instruction(&format!("mov x0, {array_reg}"));                   // classify runtime-promoted array storage before address arithmetic
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    let indexed_label = ctx.next_label("array_elem_ref_indexed");
+    let hash_label = ctx.next_label("array_elem_ref_hash");
     let null_label = ctx.next_label("array_elem_ref_null");
     let done_label = ctx.next_label("array_elem_ref_done");
+    ctx.emitter.instruction("cmp x0, #3");                                      // heap kind 3 identifies a promoted hash receiver
+    ctx.emitter.instruction(&format!("b.eq {hash_label}"));                     // hash entries require managed tag-11 reference promotion
+    ctx.emitter.instruction(&format!("b {indexed_label}"));                     // ordinary indexed storage still exposes its inline slot
+
+    ctx.emitter.label(&hash_label);
+    super::hashes::materialize_hash_key_aarch64(ctx, index)?;
+    ctx.load_value_to_reg(array, "x0")?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    ctx.emitter.instruction(&format!("cbz x4, {null_label}"));                  // a missing key has no entry that can own a reference cell
+    ctx.emitter.instruction("add x0, x4, #24");                                 // pass the matching entry's value-low address
+    abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+    ctx.emitter.instruction(&format!("b {done_label}"));                        // return the managed reference-cell pointer
+
+    ctx.emitter.label(&indexed_label);
+    ctx.load_value_to_reg(array, array_reg)?;
+    ctx.load_value_to_reg(index, idx_reg)?;
     ctx.emitter.instruction(&format!("cmp {}, #0", idx_reg));                   // check whether the indexed-array offset is negative
     ctx.emitter.instruction(&format!("b.lt {}", null_label));                   // negative offsets yield a null cell pointer
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);            // load the indexed-array logical length
@@ -686,9 +1244,8 @@ fn lower_load_array_elem_ref_cell_aarch64(
     } else {
         ctx.emitter.instruction(&format!("lsl {}, {}, #3", idx_reg, idx_reg));  // scale the offset by the 8-byte element slot width
     }
-    ctx.emitter.instruction(
-        &format!("add {}, {}, {}", idx_reg, array_reg, idx_reg)
-    );                                                                          // compute the element address within the array payload
+    ctx.emitter
+        .instruction(&format!("add {}, {}, {}", idx_reg, array_reg, idx_reg));  // compute the element address within the array payload
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the null fallback after computing the element address
     ctx.emitter.label(&null_label);
     abi::emit_load_int_immediate(ctx.emitter, idx_reg, 0);                      // materialize a null cell pointer for invalid indices
@@ -708,17 +1265,36 @@ fn lower_load_array_elem_ref_cell_x86_64(
     let idx_reg = abi::int_result_reg(ctx.emitter);
     let len_reg = abi::secondary_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(array, array_reg)?;
-    ctx.load_value_to_reg(index, idx_reg)?;
+    ctx.emitter.instruction(&format!("mov rax, {array_reg}"));                  // classify runtime-promoted array storage before address arithmetic
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    let indexed_label = ctx.next_label("array_elem_ref_indexed");
+    let hash_label = ctx.next_label("array_elem_ref_hash");
     let null_label = ctx.next_label("array_elem_ref_null");
     let done_label = ctx.next_label("array_elem_ref_done");
+    ctx.emitter.instruction("cmp rax, 3");                                      // heap kind 3 identifies a promoted hash receiver
+    ctx.emitter.instruction(&format!("je {hash_label}"));                       // hash entries require managed tag-11 reference promotion
+    ctx.emitter.instruction(&format!("jmp {indexed_label}"));                   // ordinary indexed storage still exposes its inline slot
+
+    ctx.emitter.label(&hash_label);
+    super::hashes::materialize_hash_key_x86_64(ctx, index)?;
+    ctx.load_value_to_reg(array, "rdi")?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    ctx.emitter.instruction("test r8, r8");                                     // a missing key has no entry that can own a reference cell
+    ctx.emitter.instruction(&format!("jz {null_label}"));                       // return null rather than dereferencing a missing entry
+    ctx.emitter.instruction("lea rdi, [r8 + 24]");                              // pass the matching entry's value-low address
+    abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+    ctx.emitter.instruction(&format!("jmp {done_label}"));                      // return the managed reference-cell pointer
+
+    ctx.emitter.label(&indexed_label);
+    ctx.load_value_to_reg(array, array_reg)?;
+    ctx.load_value_to_reg(index, idx_reg)?;
     ctx.emitter.instruction(&format!("cmp {}, 0", idx_reg));                    // check whether the indexed-array offset is negative
     ctx.emitter.instruction(&format!("jl {}", null_label));                     // negative offsets yield a null cell pointer
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);            // load the indexed-array logical length
     ctx.emitter.instruction(&format!("cmp {}, {}", idx_reg, len_reg));          // compare the requested offset against the array length
     ctx.emitter.instruction(&format!("jge {}", null_label));                    // out-of-bounds offsets yield a null cell pointer
-    ctx.emitter.instruction(
-        &format!("lea {}, [{} + 24]", array_reg, array_reg)
-    );                                                                          // skip the indexed-array header to reach element payloads
+    ctx.emitter
+        .instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg));      // skip the indexed-array header to reach element payloads
     if elem_size == 16 {
         ctx.emitter.instruction(&format!("shl {}, 4", idx_reg));                // scale the offset by the 16-byte element slot width
     } else {
@@ -762,7 +1338,7 @@ pub(super) fn lower_array_elem_addr(
     }
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
+        ctx.store_container_writeback_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
     match ctx.emitter.target.arch {
@@ -791,15 +1367,80 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     if let Some(slot) = source_local {
         ctx.release_mutated_source_local_owner(slot, array)?;
     }
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_array_set_aarch64(ctx, array, index, value, &raw_value_ty, &value_ty)?,
-        Arch::X86_64 => lower_array_set_x86_64(ctx, array, index, value, &raw_value_ty, &value_ty)?,
+    if matches!(elem_ty.codegen_repr(), PhpType::Mixed) {
+        lower_runtime_polymorphic_array_set(ctx, array, index, value, &raw_value_ty)?;
+    } else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                lower_array_set_aarch64(ctx, array, index, value, &raw_value_ty, &value_ty)?
+            }
+            Arch::X86_64 => {
+                lower_array_set_x86_64(ctx, array, index, value, &raw_value_ty, &value_ty)?
+            }
+        }
     }
+    stamp_scalar_array_write_result(ctx, &value_ty);
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
+        ctx.store_container_writeback_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
+    Ok(())
+}
+
+/// Writes an integer key into `Array(Mixed)` after dispatching on its runtime storage kind.
+///
+/// A runtime-shaped key write can promote the value before static flow typing observes a string
+/// key. The indexed setter and hash setter have different headers and ownership protocols, so the
+/// runtime kind must select the helper before either reads storage.
+fn lower_runtime_polymorphic_array_set(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    index: ValueId,
+    value: ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    let hash = ctx.next_label("array_set_mixed_hash");
+    let done = ctx.next_label("array_set_mixed_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // detect runtime-promoted associative storage
+            ctx.emitter.instruction(&format!("b.eq {hash}"));                   // hash entries need tag-11-aware write-through
+            lower_mixed_array_set_aarch64(ctx, array, index, value, value_ty)?;
+            ctx.emitter.instruction(&format!("b {done}"));                      // join with the replacement container in x0
+
+            ctx.emitter.label(&hash);
+            super::hashes::lower_hash_set_aarch64(
+                ctx,
+                array,
+                index,
+                value,
+                value_ty,
+                &PhpType::Mixed,
+            )?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rax")?;
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                              // detect runtime-promoted associative storage
+            ctx.emitter.instruction(&format!("je {hash}"));                     // hash entries need tag-11-aware write-through
+            lower_mixed_array_set_x86_64(ctx, array, index, value, value_ty)?;
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // join with the replacement container in rax
+
+            ctx.emitter.label(&hash);
+            super::hashes::lower_hash_set_x86_64(
+                ctx,
+                array,
+                index,
+                value,
+                value_ty,
+                &PhpType::Mixed,
+            )?;
+        }
+    }
+    ctx.emitter.label(&done);
     Ok(())
 }
 
@@ -826,11 +1467,16 @@ pub(super) fn lower_array_set_mixed_key(
         )));
     }
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    let helper = if matches!(inst.immediate, Some(Immediate::Bool(true))) {
+        "__rt_array_set_mixed_key_already_diagnosed"
+    } else {
+        "__rt_array_set_mixed_key"
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            lower_array_set_mixed_key_aarch64(ctx, array, key, value, &value_ty)?
+            lower_array_set_mixed_key_aarch64(ctx, array, key, value, &value_ty, helper)?
         }
-        Arch::X86_64 => lower_array_set_mixed_key_x86_64(ctx, array, key, value, &value_ty)?,
+        Arch::X86_64 => lower_array_set_mixed_key_x86_64(ctx, array, key, value, &value_ty, helper)?,
     }
     // The storeback to the destination local is driven by the EIR-level
     // `store_local` of this op's result value (emitted by `store_mutated_local`
@@ -854,9 +1500,19 @@ pub(super) fn lower_array_get_mixed_key(
     let key = expect_operand(inst, 1)?;
     require_indexed_array(ctx.value_php_type(array)?.codegen_repr(), inst)?;
     let key_ty = ctx.value_php_type(key)?.codegen_repr();
+    // Every shape `materialize_hash_key_*` turns into the runtime's (pointer, tagged length)
+    // key pair. A `?int` key (TaggedScalar) is Laravel Prompts' `isset($keys[$this->highlighted])`.
     if !matches!(
         key_ty,
-        PhpType::Mixed | PhpType::Union(_) | PhpType::Str | PhpType::Void | PhpType::Never
+        PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Str
+            | PhpType::Void
+            | PhpType::Never
+            | PhpType::TaggedScalar
+            | PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
     ) {
         return Err(CodegenIrError::unsupported(format!(
             "array_get_mixed_key key PHP type {:?}",
@@ -920,6 +1576,7 @@ fn lower_array_set_mixed_key_aarch64(
     key: ValueId,
     value: ValueId,
     value_ty: &PhpType,
+    helper: &str,
 ) -> Result<()> {
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
         ctx.load_value_to_result(value)?;
@@ -929,11 +1586,15 @@ fn lower_array_set_mixed_key_aarch64(
     }
     abi::emit_push_reg(ctx.emitter, "x0");
     ctx.load_value_to_reg(array, "x0")?;
-    // The helper consumes the slot's reference and returns the one the storeback installs.
-    // Retaining here would make it observe a fake COW alias and clone on every dynamic-key write.
+    // A raw StoreLocal transfers its existing slot owner into the helper. Stores through a ref
+    // cell, static, or global retire their previous owner after publication, so those paths need a
+    // separate helper owner. Acquiring for the raw-local path would leak an abandoned array.
+    if mixed_key_storeback_retires_source(ctx, array)? {
+        abi::emit_incref_if_refcounted(ctx.emitter, &ctx.value_php_type(array)?);
+    }
     ctx.load_value_to_reg(key, "x1")?;
     abi::emit_pop_reg(ctx.emitter, "x2");
-    abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed_key");
+    abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }
 
@@ -944,6 +1605,7 @@ fn lower_array_set_mixed_key_x86_64(
     key: ValueId,
     value: ValueId,
     value_ty: &PhpType,
+    helper: &str,
 ) -> Result<()> {
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
         ctx.load_value_to_result(value)?;
@@ -953,75 +1615,65 @@ fn lower_array_set_mixed_key_x86_64(
     }
     abi::emit_push_reg(ctx.emitter, "rax");
     ctx.load_value_to_reg(array, "rax")?;
-    ctx.emitter.instruction("mov rdi, rax");                                    // hand the slot's array to the helper, which consumes its reference
+    // See the AArch64 twin: only a storeback that retires its previous owner needs a distinct
+    // owner for the helper. The retain helper consumes and returns the integer result register.
+    if mixed_key_storeback_retires_source(ctx, array)? {
+        abi::emit_incref_if_refcounted(ctx.emitter, &ctx.value_php_type(array)?);
+    }
+    ctx.emitter.instruction("mov rdi, rax");                                    // publish the transferred or retained helper owner
     ctx.load_value_to_reg(key, "rsi")?;
     abi::emit_pop_reg(ctx.emitter, "rdx");
-    abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed_key");
+    abi::emit_call_label(ctx.emitter, helper);
     Ok(())
+}
+
+/// Returns whether the destination storeback retires the owner currently in storage.
+fn mixed_key_storeback_retires_source(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<bool> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Err(CodegenIrError::invalid_module(
+            "array_set_mixed_key destination must be loaded from writable storage",
+        ));
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+    };
+    match inst_ref.op {
+        Op::LoadLocal => Ok(false),
+        Op::LoadRefCell | Op::LoadStaticLocal | Op::LoadGlobal => Ok(true),
+        other => Err(CodegenIrError::invalid_module(format!(
+            "array_set_mixed_key destination was produced by {} instead of a writable load",
+            other.name()
+        ))),
+    }
 }
 
 /// Lowers an indexed-array append through the runtime helper for the value type.
 pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
-    release_array_push_source_owner(ctx, array)?;
     lower_array_push_value(ctx, inst, array, value)
 }
 
-/// Drops the boxed frame slot's own reference before the appends of one call.
+/// Appends ONE already-selected value to an indexed array.
 ///
-/// A boxed slot lends the append an unboxed array holding its own reference, and the storeback
-/// boxes the result anew: the old box goes first, as `lower_array_set` does. Without it every
-/// `$a[] = $x` on such a local split a copy of the whole array and leaked the old box with it --
-/// quadratic memory for a filling loop. Once per call, before the first append: the one
-/// storeback after the last append installs the only new box.
-pub(super) fn release_array_push_source_owner(
-    ctx: &mut FunctionContext<'_>,
-    array: ValueId,
-) -> Result<()> {
-    if let Some(slot) = source_load_local_slot(ctx, array)? {
-        ctx.release_mutated_source_local_owner(slot, array)?;
-    }
-    Ok(())
-}
-
-/// Appends ONE value and publishes the array back to the local or global it was read from.
+/// Split out of `lower_array_push` so a variadic `array_push($a, v1, v2, …)` can run it once per
+/// value: the append may relocate the array through `__rt_array_grow`, and every step of the
+/// write-back — result value, source local, global source — has to happen between appends rather
+/// than once at the end.
 pub(super) fn lower_array_push_value(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     array: ValueId,
     value: ValueId,
 ) -> Result<()> {
-    append_array_push_value(ctx, inst, array, value)?;
-    publish_array_push_result(ctx, array)
-}
-
-/// Writes the appended array back to the local or global storage it was loaded from.
-///
-/// `array_push($a, $x, $y)` publishes once, after its last append. Publishing between appends
-/// re-boxed a boxed local each time: the next append then saw the array shared with that box and
-/// split a copy, and the box it replaced leaked.
-pub(super) fn publish_array_push_result(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
-    if let Some(slot) = source_load_local_slot(ctx, array)? {
-        ctx.store_value_to_local(slot, array)?;
-    }
-    ctx.writeback_global_array_source(array)
-}
-
-/// Appends ONE named value to an indexed array without publishing it, for callers that do not
-/// hold it in operand 1.
-///
-/// `array_push($a, $x, $y)` is N appends against the same array, so the variadic builtin arm walks
-/// its operand tail through here and publishes once. `inst` is still carried for the diagnostics
-/// the storage predicates attach to it, not to read operands from. The possibly relocated array
-/// is stored back into `array`'s own value slot, so the next append sees it.
-pub(super) fn append_array_push_value(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    array: ValueId,
-    value: ValueId,
-) -> Result<()> {
     let array_ty = ctx.value_php_type(array)?;
+    let source_local = source_load_local_slot(ctx, array)?;
     // A HASH receiver is ordinary php: `array_push()` appends under the next free integer key
     // whatever storage the array has. `lower_runtime_promotable_array_push` already dispatches on
     // the runtime heap kind, so a statically associative receiver reaches the same hash append the
@@ -1032,19 +1684,21 @@ pub(super) fn append_array_push_value(
         PhpType::AssocArray { ref value, .. } if value.codegen_repr() == PhpType::Mixed
     ) {
         lower_runtime_promotable_array_push(ctx, array, value)?;
-        return ctx.store_result_value(array);
-    }
-    require_indexed_array(array_ty.clone(), inst)?;
-    let elem_ty = indexed_array_element_type(&array_ty, inst)?;
-    if elem_ty.codegen_repr() == PhpType::Mixed {
-        lower_runtime_promotable_array_push(ctx, array, value)?;
     } else {
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => lower_array_push_aarch64(ctx, array, value, &elem_ty)?,
-            Arch::X86_64 => lower_array_push_x86_64(ctx, array, value, &elem_ty)?,
-        }
+        require_indexed_array(array_ty.clone(), inst)?;
+        let elem_ty = indexed_array_element_type(&array_ty, inst)?;
+        let stored_type = if matches!(elem_ty.codegen_repr(), PhpType::Void | PhpType::Never) {
+            ctx.value_php_type(value)?.codegen_repr()
+        } else {
+            elem_ty.codegen_repr()
+        };
+        lower_runtime_polymorphic_array_push(ctx, array, value, &elem_ty, &stored_type)?;
     }
-    ctx.store_result_value(array)
+    ctx.store_result_value(array)?;
+    if let Some(slot) = source_local {
+        ctx.store_container_writeback_to_local(slot, array)?;
+    }
+    ctx.writeback_global_array_source(array)
 }
 
 /// Appends to an `array<mixed>` whose raw storage may have promoted to a hash at runtime.
@@ -1093,6 +1747,102 @@ fn lower_runtime_promotable_array_push(
     Ok(())
 }
 
+/// Appends to an indexed array whose payload may have been promoted to associative hash storage.
+///
+/// A runtime-shaped key write or a by-reference `foreach` can preserve the static array type while
+/// changing the runtime heap kind. Dispatching every append here prevents a typed append after
+/// promotion from
+/// passing a hash header to an indexed-array helper. Each branch materializes its own owned Mixed
+/// payload because indexed append retains then releases the temporary, while hash append consumes
+/// the owned payload directly. Scalar storage stamps apply only to the indexed branch because a
+/// promoted hash has its own header layout and always stores boxed Mixed values.
+fn lower_runtime_polymorphic_array_push(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    value: ValueId,
+    elem_ty: &PhpType,
+    stored_type: &PhpType,
+) -> Result<()> {
+    // An array literal under construction is packed storage nobody else has seen yet: nothing
+    // between its `array_new` and this append can have promoted it to a hash, so the heap-kind
+    // dispatch below is dead code. Skipping it halves the code of every literal list; Symfony's
+    // `MimeTypes` maps and DI container literals were 2.3M instructions of dispatch alone.
+    if ctx.current_inst_is_fresh_literal_push() {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => lower_array_push_aarch64(ctx, array, value, elem_ty)?,
+            Arch::X86_64 => lower_array_push_x86_64(ctx, array, value, elem_ty)?,
+        }
+        stamp_scalar_array_write_result(ctx, stored_type);
+        return Ok(());
+    }
+    let hash = ctx.next_label("array_push_hash");
+    let done = ctx.next_label("array_push_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_push_reg(ctx.emitter, "x0");                              // preserve the receiver while heap-kind classification clobbers x0
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // select associative storage after a runtime promotion
+            ctx.emitter.instruction(&format!("b.eq {hash}"));                   // hash append has a distinct header and growth helper
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // restore the indexed receiver before ordinary append lowering
+            ctx.store_result_value(array)?;
+            lower_array_push_aarch64(ctx, array, value, elem_ty)?;
+            stamp_scalar_array_write_result(ctx, stored_type);
+            ctx.emitter.instruction(&format!("b {done}"));                      // join with the updated container pointer in x0
+
+            ctx.emitter.label(&hash);
+            prepare_boxed_mixed_value_for_container(ctx, value)?;
+            abi::emit_push_reg(ctx.emitter, "x0");                              // stack the owned Mixed cell above the preserved receiver
+            abi::emit_pop_reg(ctx.emitter, "x1");                               // transfer the owned Mixed cell into the hash entry
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // recover the receiver without reloading a call-clobbered SSA register
+            ctx.emitter.instruction("mov x2, xzr");                             // boxed Mixed values use only the low payload word
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "x3",
+                runtime_value_tag(&PhpType::Mixed) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_append");
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rax")?;
+            abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the receiver while heap-kind classification clobbers rax
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                              // select associative storage after a runtime promotion
+            ctx.emitter.instruction(&format!("je {hash}"));                     // hash append has a distinct header and growth helper
+            abi::emit_pop_reg(ctx.emitter, "rax");                              // restore the indexed receiver before ordinary append lowering
+            ctx.store_result_value(array)?;
+            lower_array_push_x86_64(ctx, array, value, elem_ty)?;
+            stamp_scalar_array_write_result(ctx, stored_type);
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // join with the updated container pointer in rax
+
+            ctx.emitter.label(&hash);
+            prepare_boxed_mixed_value_for_container(ctx, value)?;
+            abi::emit_push_reg(ctx.emitter, "rax");                             // stack the owned Mixed cell above the preserved receiver
+            abi::emit_pop_reg(ctx.emitter, "rsi");                              // transfer the owned Mixed cell into the hash entry
+            abi::emit_pop_reg(ctx.emitter, "rdi");                              // recover the receiver without reloading a call-clobbered SSA register
+            ctx.emitter.instruction("xor edx, edx");                            // boxed Mixed values use only the low payload word
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "rcx",
+                runtime_value_tag(&PhpType::Mixed) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_append");
+        }
+    }
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Restores semantic tags after shared word-write helpers specialize an empty array's storage.
+fn stamp_scalar_array_write_result(ctx: &mut FunctionContext<'_>, stored_type: &PhpType) {
+    if matches!(stored_type, PhpType::Float | PhpType::Bool | PhpType::Callable) {
+        // The helper has already performed COW and possible growth. Stamp its returned
+        // owner, not the original pointer, so aliases retain their original metadata.
+        let result = abi::int_result_reg(ctx.emitter);
+        crate::codegen::emit_array_value_type_stamp(ctx.emitter, result, stored_type);
+    }
+}
+
 /// Lowers appends through a boxed Mixed array cell.
 pub(super) fn lower_mixed_array_append(
     ctx: &mut FunctionContext<'_>,
@@ -1103,10 +1853,11 @@ pub(super) fn lower_mixed_array_append(
     lower_mixed_array_append_value(ctx, receiver, value)
 }
 
-/// Appends ONE named value through a boxed Mixed array cell.
+/// Appends ONE already-selected value through a boxed Mixed array cell.
 ///
-/// The twin of [`lower_array_push_value`]: `array_push($a, $x, $y)` walks its operand tail through
-/// here when the receiver is a boxed cell rather than an indexed array.
+/// The counterpart to `lower_array_push_value`: a variadic push over a `Mixed` receiver runs it
+/// once per value. `__rt_mixed_array_append` republishes the container inside the Mixed cell
+/// itself, so unlike the typed path there is no pointer for this side to write back.
 pub(super) fn lower_mixed_array_append_value(
     ctx: &mut FunctionContext<'_>,
     receiver: ValueId,
@@ -1147,30 +1898,111 @@ pub(super) fn lower_array_union(ctx: &mut FunctionContext<'_>, inst: &Instructio
     require_indexed_array(left_ty.clone(), inst)?;
     require_indexed_array(right_ty.clone(), inst)?;
     require_indexed_array(inst.result_php_type.codegen_repr(), inst)?;
-    // `array<mixed>` is what a declared `array` parameter gets, and a declared `array` holds
-    // string keys perfectly happily — so this static type does NOT promise indexed storage.
-    // Committing to the indexed walk here ran it over hash storage and silently produced a
-    // short, malformed result. Only the gradual pair needs the runtime check; a narrower
-    // element type (`array<int>`, `array<string>`, ...) can only ever be indexed.
-    let runtime_label = if array_union_operand_is_gradual(&left_ty)
-        && array_union_operand_is_gradual(&right_ty)
-    {
-        "__rt_array_union_gradual"
-    } else {
-        "__rt_array_union"
-    };
+    lower_runtime_polymorphic_array_union(ctx, left, right)?;
+    store_if_result(ctx, inst)
+}
+
+/// Unions two statically indexed arrays after selecting their runtime storage pair.
+///
+/// Runtime-shaped key writes may promote either operand to hash storage before a containing flow
+/// fact changes. Every pair therefore uses the matching union helper, preserving PHP keys without
+/// interpreting a hash header as packed.
+fn lower_runtime_polymorphic_array_union(
+    ctx: &mut FunctionContext<'_>,
+    left: ValueId,
+    right: ValueId,
+) -> Result<()> {
+    let left_hash = ctx.next_label("array_union_left_hash");
+    let array_hash = ctx.next_label("array_union_array_hash");
+    let hash_array = ctx.next_label("array_union_hash_array");
+    let hash_hash = ctx.next_label("array_union_hash_hash");
+    let done = ctx.next_label("array_union_runtime_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #32");                         // reserve operand pointers and runtime-kind flags
             ctx.load_value_to_reg(left, "x0")?;
-            ctx.load_value_to_reg(right, "x1")?;
+            ctx.emitter.instruction("str x0, [sp]");                            // preserve the left container across kind classification
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("str x0, [sp, #16]");                       // save the left runtime storage kind
+            ctx.load_value_to_reg(right, "x0")?;
+            ctx.emitter.instruction("str x0, [sp, #8]");                        // preserve the right container across kind classification
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("ldr x9, [sp, #16]");                       // reload the left runtime storage kind
+            ctx.emitter.instruction("cmp x9, #3");                              // kind 3 identifies a hash-backed left operand
+            ctx.emitter.instruction(&format!("b.eq {left_hash}"));              // choose a hash-left helper when required
+            ctx.emitter.instruction("cmp x0, #3");                              // classify the right operand for an indexed left
+            ctx.emitter.instruction(&format!("b.eq {array_hash}"));             // indexed plus hash uses the cross-layout helper
+            load_array_union_operands_aarch64(ctx);
+            abi::emit_call_label(ctx.emitter, "__rt_array_union");
+            ctx.emitter.instruction(&format!("b {done}"));                      // join with the fresh union result in x0
+
+            ctx.emitter.label(&left_hash);
+            ctx.emitter.instruction("cmp x0, #3");                              // classify the right operand for a hash left
+            ctx.emitter.instruction(&format!("b.eq {hash_hash}"));              // two hashes use the associative union helper
+            ctx.emitter.instruction(&format!("b {hash_array}"));                // hash plus indexed uses the reverse cross-layout helper
+            ctx.emitter.label(&array_hash);
+            load_array_union_operands_aarch64(ctx);
+            abi::emit_call_label(ctx.emitter, "__rt_array_hash_union");
+            ctx.emitter.instruction(&format!("b {done}"));                      // join with the fresh hash result in x0
+            ctx.emitter.label(&hash_array);
+            load_array_union_operands_aarch64(ctx);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_array_union");
+            ctx.emitter.instruction(&format!("b {done}"));                      // join with the fresh hash result in x0
+            ctx.emitter.label(&hash_hash);
+            load_array_union_operands_aarch64(ctx);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_union");
+            ctx.emitter.label(&done);
+            ctx.emitter.instruction("add sp, sp, #32");                         // release runtime-kind dispatch temporaries
         }
         Arch::X86_64 => {
-            ctx.load_value_to_reg(left, "rdi")?;
-            ctx.load_value_to_reg(right, "rsi")?;
+            ctx.emitter.instruction("sub rsp, 32");                             // reserve operand pointers and runtime-kind flags
+            ctx.load_value_to_reg(left, "rax")?;
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // preserve the left container across kind classification
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // save the left runtime storage kind
+            ctx.load_value_to_reg(right, "rax")?;
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // preserve the right container across kind classification
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp QWORD PTR [rsp + 16], 3");             // kind 3 identifies a hash-backed left operand
+            ctx.emitter.instruction(&format!("je {left_hash}"));                // choose a hash-left helper when required
+            ctx.emitter.instruction("cmp rax, 3");                              // classify the right operand for an indexed left
+            ctx.emitter.instruction(&format!("je {array_hash}"));               // indexed plus hash uses the cross-layout helper
+            load_array_union_operands_x86_64(ctx);
+            abi::emit_call_label(ctx.emitter, "__rt_array_union");
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // join with the fresh union result in rax
+
+            ctx.emitter.label(&left_hash);
+            ctx.emitter.instruction("cmp rax, 3");                              // classify the right operand for a hash left
+            ctx.emitter.instruction(&format!("je {hash_hash}"));                // two hashes use the associative union helper
+            ctx.emitter.instruction(&format!("jmp {hash_array}"));              // hash plus indexed uses the reverse cross-layout helper
+            ctx.emitter.label(&array_hash);
+            load_array_union_operands_x86_64(ctx);
+            abi::emit_call_label(ctx.emitter, "__rt_array_hash_union");
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // join with the fresh hash result in rax
+            ctx.emitter.label(&hash_array);
+            load_array_union_operands_x86_64(ctx);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_array_union");
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // join with the fresh hash result in rax
+            ctx.emitter.label(&hash_hash);
+            load_array_union_operands_x86_64(ctx);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_union");
+            ctx.emitter.label(&done);
+            ctx.emitter.instruction("add rsp, 32");                             // release runtime-kind dispatch temporaries
         }
     }
-    abi::emit_call_label(ctx.emitter, runtime_label);
-    store_if_result(ctx, inst)
+    Ok(())
+}
+
+/// Reloads staged union operands into the AArch64 argument registers.
+fn load_array_union_operands_aarch64(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter.instruction("ldr x0, [sp]");                                    // restore the left union operand
+    ctx.emitter.instruction("ldr x1, [sp, #8]");                                // restore the right union operand
+}
+
+/// Reloads staged union operands into the x86_64 argument registers.
+fn load_array_union_operands_x86_64(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                        // restore the left union operand
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                    // restore the right union operand
 }
 
 /// Reports whether a union operand's static type leaves its runtime storage kind open.
@@ -1185,26 +2017,44 @@ pub(super) fn lower_array_hash_union(ctx: &mut FunctionContext<'_>, inst: &Instr
     require_indexed_array(ctx.value_php_type(left)?, inst)?;
     require_assoc_union_hash_operand(ctx.value_php_type(right)?, inst)?;
     let result_value_ty = require_array_to_hash_result(&inst.result_php_type.codegen_repr(), inst)?;
-    // Same trap as the sibling arm: the left operand's `array<mixed>` type does not promise
-    // indexed storage, and assuming it renumbered a string key — `$left + ['b'=>2]` answered
-    // `0,b` where php answers `a,b`.
-    let runtime_label =
-        if array_union_operand_is_gradual(&ctx.value_php_type(left)?) {
-            "__rt_array_union_gradual"
-        } else {
-            "__rt_array_hash_union"
-        };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            let hash_left = ctx.next_label("array_hash_union_hash_left");
+            let done = ctx.next_label("array_hash_union_runtime_done");
             ctx.load_value_to_reg(left, "x0")?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // detect a runtime-promoted left array
+            ctx.emitter.instruction(&format!("b.eq {hash_left}"));              // two hash operands use the associative helper
+            abi::emit_pop_reg(ctx.emitter, "x0");
             ctx.load_value_to_reg(right, "x1")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_hash_union");
+            ctx.emitter.instruction(&format!("b {done}"));                      // join with the fresh hash result in x0
+            ctx.emitter.label(&hash_left);
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            ctx.load_value_to_reg(right, "x1")?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_union");
+            ctx.emitter.label(&done);
         }
         Arch::X86_64 => {
-            ctx.load_value_to_reg(left, "rdi")?;
+            let hash_left = ctx.next_label("array_hash_union_hash_left");
+            let done = ctx.next_label("array_hash_union_runtime_done");
+            ctx.load_value_to_reg(left, "rax")?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                              // detect a runtime-promoted left array
+            ctx.emitter.instruction(&format!("je {hash_left}"));                // two hash operands use the associative helper
+            abi::emit_pop_reg(ctx.emitter, "rdi");
             ctx.load_value_to_reg(right, "rsi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_hash_union");
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // join with the fresh hash result in rax
+            ctx.emitter.label(&hash_left);
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            ctx.load_value_to_reg(right, "rsi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_union");
+            ctx.emitter.label(&done);
         }
     }
-    abi::emit_call_label(ctx.emitter, runtime_label);
     convert_hash_union_result_to_mixed_if_needed(ctx, &result_value_ty);
     store_if_result(ctx, inst)
 }
@@ -1267,10 +2117,12 @@ fn lower_array_get_aarch64(
         &null_receiver_label,
     );
     if can_read_promoted {
-        ctx.emitter.instruction(
+        ctx.emitter
+            .instruction(
             &format!("ldr {}, [{}, #-8]", len_reg, array_reg)
         );                                                                      // load the storage-kind metadata word from the array header
-        ctx.emitter.instruction(
+        ctx.emitter
+            .instruction(
             &format!("and {}, {}, #0xff", len_reg, len_reg)
         );                                                                      // isolate the low byte holding the storage kind
         ctx.emitter.instruction(&format!("cmp {}, #3", len_reg));               // kind 3 = storage was promoted to a hash at runtime
@@ -1443,7 +2295,8 @@ fn lower_array_get_x86_64(
         &null_receiver_label,
     );
     if can_read_promoted {
-        ctx.emitter.instruction(
+        ctx.emitter
+            .instruction(
             &format!("mov {}, QWORD PTR [{} - 8]", len_reg, array_reg)
         );                                                                      // load the storage-kind metadata word from the array header
         ctx.emitter.instruction(&format!("and {}, 0xff", len_reg));             // isolate the low byte holding the storage kind
@@ -1580,15 +2433,38 @@ fn emit_array_get_in_bounds_aarch64(
         emit_array_get_for_write_in_bounds_aarch64(ctx, array_reg, index_reg, helper);
         return Ok(());
     }
+    let widened_done = if !matches!(elem_ty, PhpType::Void | PhpType::Never | PhpType::Mixed) {
+        let typed = ctx.next_label("array_get_typed_payload");
+        let done = ctx.next_label("array_get_widened_done");
+        ctx.emitter.instruction(&format!("ldr x11, [{}, #-8]", array_reg));     // load the runtime indexed-array value type
+        ctx.emitter.instruction("ubfx x11, x11, #8, #7");                       // isolate the value type without the COW flag
+        ctx.emitter.instruction("cmp x11, #7");                                 // tag 7 means the slots were widened to boxed Mixed
+        ctx.emitter.instruction(&format!("b.ne {}", typed));                    // preserve the ordinary typed-slot fast path
+        ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // move to the pointer-sized Mixed payload base
+        let load_widened = format!(
+            "ldr x0, [{}, {}, lsl #3]",
+            array_reg, index_reg
+        );
+        ctx.emitter.instruction(&load_widened);                                 // load the boxed element using its widened slot layout
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        materialize_widened_array_payload_aarch64(ctx, elem_ty, result_ty);
+        ctx.emitter.instruction(&format!("b {}", done));                        // skip the original static-layout load
+        ctx.emitter.label(&typed);
+        Some(done)
+    } else {
+        None
+    };
     match elem_ty {
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("add {}, {}, #24", array_reg, array_reg)
             );                                                                  // skip the indexed-array header to reach element payloads
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)
             );                                                                  // load the selected pointer-sized indexed-array element
             if matches!(elem_ty, PhpType::Callable) {
@@ -1599,22 +2475,27 @@ fn emit_array_get_in_bounds_aarch64(
             }
         }
         PhpType::Float => {
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("add {}, {}, #24", array_reg, array_reg)
             );                                                                  // skip the indexed-array header to reach float payloads
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("ldr d0, [{}, {}, lsl #3]", array_reg, index_reg)
             );                                                                  // load the selected indexed-array float element
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("lsl {}, {}, #4", index_reg, index_reg)
             );                                                                  // scale the string-array offset by the pointer-plus-length slot size
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("add {}, {}, {}", array_reg, array_reg, index_reg)
             );                                                                  // move to the selected string slot within the indexed array
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("add {}, {}, #24", array_reg, array_reg)
             );                                                                  // skip the indexed-array header before loading the string slot
             abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, 0);
@@ -1622,32 +2503,39 @@ fn emit_array_get_in_bounds_aarch64(
         }
         PhpType::TaggedScalar => {
             let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("lsl {}, {}, #4", index_reg, index_reg)
             );                                                                  // scale the tagged-scalar offset by the payload-plus-tag slot size
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("add {}, {}, {}", array_reg, array_reg, index_reg)
             );                                                                  // move to the selected tagged-scalar slot within the indexed array
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("add {}, {}, #24", array_reg, array_reg)
             );                                                                  // skip the indexed-array header before loading the tagged-scalar slot
             abi::emit_load_from_address(ctx.emitter, index_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, tag_reg, array_reg, 8);
         }
         PhpType::Mixed => {
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("add {}, {}, #24", array_reg, array_reg)
             );                                                                  // skip the indexed-array header to reach Mixed cell payloads
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)
             );                                                                  // load the selected boxed Mixed cell
             emit_mixed_array_get_deref_invoker_ref_cell(ctx, index_reg);
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("add {}, {}, #24", array_reg, array_reg)
             );                                                                  // skip the indexed-array header to reach pointer payloads
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)
             );                                                                  // load the selected refcounted indexed-array element
             abi::emit_incref_if_refcounted(ctx.emitter, other);
@@ -1658,6 +2546,9 @@ fn emit_array_get_in_bounds_aarch64(
                 other
             )));
         }
+    }
+    if let Some(done) = widened_done {
+        ctx.emitter.label(&done);
     }
     Ok(())
 }
@@ -1675,15 +2566,43 @@ fn emit_array_get_in_bounds_x86_64(
         emit_array_get_for_write_in_bounds_x86_64(ctx, array_reg, index_reg, helper);
         return Ok(());
     }
+    let widened_done = if !matches!(elem_ty, PhpType::Void | PhpType::Never | PhpType::Mixed) {
+        let typed = ctx.next_label("array_get_typed_payload");
+        let done = ctx.next_label("array_get_widened_done");
+        let load_value_type = format!(
+            "mov rcx, QWORD PTR [{} - 8]",
+            array_reg
+        );
+        ctx.emitter.instruction(&load_value_type);                              // load the runtime indexed-array value type
+        ctx.emitter.instruction("shr rcx, 8");                                  // move the value type byte into the low bits
+        ctx.emitter.instruction("and rcx, 0x7f");                               // isolate the value type without the COW flag
+        ctx.emitter.instruction("cmp rcx, 7");                                  // tag 7 means the slots were widened to boxed Mixed
+        ctx.emitter.instruction(&format!("jne {}", typed));                     // preserve the ordinary typed-slot fast path
+        ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // move to the pointer-sized Mixed payload base
+        let load_widened = format!(
+            "mov rax, QWORD PTR [{} + {} * 8]",
+            array_reg, index_reg
+        );
+        ctx.emitter.instruction(&load_widened);                                 // load the boxed element using its widened slot layout
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        materialize_widened_array_payload_x86_64(ctx, elem_ty, result_ty);
+        ctx.emitter.instruction(&format!("jmp {}", done));                      // skip the original static-layout load
+        ctx.emitter.label(&typed);
+        Some(done)
+    } else {
+        None
+    };
     match elem_ty {
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
             );                                                                  // skip the indexed-array header to reach element payloads
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)
             );                                                                  // load the selected pointer-sized indexed-array element
             if matches!(elem_ty, PhpType::Callable) {
@@ -1694,17 +2613,20 @@ fn emit_array_get_in_bounds_x86_64(
             }
         }
         PhpType::Float => {
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
             );                                                                  // skip the indexed-array header to reach float payloads
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("movsd xmm0, QWORD PTR [{} + {} * 8]", array_reg, index_reg)
             );                                                                  // load the selected indexed-array float element
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             ctx.emitter.instruction(&format!("shl {}, 4", index_reg));          // scale the string-array offset by the pointer-plus-length slot size
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("add {}, {}", array_reg, index_reg)
             );                                                                  // move to the selected string slot within the indexed array
             ctx.emitter.instruction(&format!("add {}, 24", array_reg));         // skip the indexed-array header before loading the string slot
@@ -1714,7 +2636,8 @@ fn emit_array_get_in_bounds_x86_64(
         PhpType::TaggedScalar => {
             let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
             ctx.emitter.instruction(&format!("shl {}, 4", index_reg));          // scale the tagged-scalar offset by the payload-plus-tag slot size
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("add {}, {}", array_reg, index_reg)
             );                                                                  // move to the selected tagged-scalar slot within the indexed array
             ctx.emitter.instruction(&format!("add {}, 24", array_reg));         // skip the indexed-array header before loading the tagged-scalar slot
@@ -1722,19 +2645,23 @@ fn emit_array_get_in_bounds_x86_64(
             abi::emit_load_from_address(ctx.emitter, tag_reg, array_reg, 8);
         }
         PhpType::Mixed => {
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
             );                                                                  // skip the indexed-array header to reach Mixed cell payloads
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)
             );                                                                  // load the selected boxed Mixed cell
             emit_mixed_array_get_deref_invoker_ref_cell(ctx, index_reg);
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
             );                                                                  // skip the indexed-array header to reach pointer payloads
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)
             );                                                                  // load the selected refcounted indexed-array element
             abi::emit_incref_if_refcounted(ctx.emitter, other);
@@ -1746,7 +2673,74 @@ fn emit_array_get_in_bounds_x86_64(
             )));
         }
     }
+    if let Some(done) = widened_done {
+        ctx.emitter.label(&done);
+    }
     Ok(())
+}
+
+/// Adapts an unboxed Mixed slot to a statically concrete AArch64 array result.
+fn materialize_widened_array_payload_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    elem_ty: &PhpType,
+    result_ty: &PhpType,
+) {
+    match elem_ty {
+        PhpType::Int | PhpType::Bool | PhpType::Callable => {
+            ctx.emitter.instruction("mov x0, x1");                              // move the unboxed low word into the integer result register
+            if matches!(elem_ty, PhpType::Callable) {
+                abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
+            }
+            if matches!(result_ty, PhpType::TaggedScalar) {
+                crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
+            }
+        }
+        PhpType::Float => ctx.emitter.instruction("fmov d0, x1"),               // move the unboxed float bits into the float result register
+        PhpType::Str => {}
+        PhpType::TaggedScalar => {
+            ctx.emitter.instruction("mov x9, x0");                              // preserve the runtime scalar tag
+            ctx.emitter.instruction("mov x0, x1");                              // move the unboxed payload into the scalar result register
+            ctx.emitter.instruction("mov x1, x9");                              // pair the payload with its runtime tag
+        }
+        other if other.is_refcounted() => {
+            ctx.emitter.instruction("mov x0, x1");                              // return the unboxed pointer-backed payload
+            abi::emit_incref_if_refcounted(ctx.emitter, other);
+        }
+        _ => {}
+    }
+}
+
+/// Adapts an unboxed Mixed slot to a statically concrete x86_64 array result.
+fn materialize_widened_array_payload_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    elem_ty: &PhpType,
+    result_ty: &PhpType,
+) {
+    match elem_ty {
+        PhpType::Int | PhpType::Bool | PhpType::Callable => {
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed low word into the integer result register
+            if matches!(elem_ty, PhpType::Callable) {
+                abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
+            }
+            if matches!(result_ty, PhpType::TaggedScalar) {
+                crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
+            }
+        }
+        PhpType::Float => ctx.emitter.instruction("movq xmm0, rdi"),            // move the unboxed float bits into the float result register
+        PhpType::Str => {
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed string pointer into the string result register
+        }
+        PhpType::TaggedScalar => {
+            ctx.emitter.instruction("mov r10, rax");                            // preserve the runtime scalar tag
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed payload into the scalar result register
+            ctx.emitter.instruction("mov rdx, r10");                            // pair the payload with its runtime tag
+        }
+        other if other.is_refcounted() => {
+            ctx.emitter.instruction("mov rax, rdi");                            // return the unboxed pointer-backed payload
+            abi::emit_incref_if_refcounted(ctx.emitter, other);
+        }
+        _ => {}
+    }
 }
 
 /// Emits the in-bounds copy-on-write element fetch for AArch64.
@@ -1769,7 +2763,8 @@ fn emit_array_get_for_write_in_bounds_aarch64(
 ) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
-    ctx.emitter.instruction(
+    ctx.emitter
+        .instruction(
         &format!("add {}, {}, {}, lsl #3", array_reg, array_reg, index_reg)
     );                                                                          // address the selected element slot within the payload
     abi::emit_push_reg(ctx.emitter, array_reg);                                // preserve the element slot address across the copy-on-write helper call
@@ -1787,10 +2782,12 @@ fn emit_array_get_for_write_in_bounds_x86_64(
     helper: &str,
 ) {
     let result_reg = abi::int_result_reg(ctx.emitter);
-    ctx.emitter.instruction(
+    ctx.emitter
+        .instruction(
         &format!("lea {}, [{} + 24]", array_reg, array_reg)
     );                                                                          // skip the indexed-array header to reach element payloads
-    ctx.emitter.instruction(
+    ctx.emitter
+        .instruction(
         &format!("lea {}, [{} + {} * 8]", array_reg, array_reg, index_reg)
     );                                                                          // address the selected element slot within the payload
     abi::emit_push_reg(ctx.emitter, array_reg);                                // preserve the element slot address across the copy-on-write helper call
@@ -1856,7 +2853,8 @@ pub(super) fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
     abi::emit_load_int_immediate(ctx.emitter, hi_reg, 0);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("cmp {}, #{}", tag_reg, runtime_value_tag(&PhpType::Mixed))
             );                                                                  // check whether the ref-cell stores a boxed Mixed handle
             ctx.emitter.instruction(&format!("b.eq {}", mixed_cell_label));     // retain and forward boxed Mixed values without reboxing their pointer
@@ -1864,7 +2862,8 @@ pub(super) fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
             ctx.emitter.instruction(&format!("b.eq {}", string_hi_label));      // load string length only for string ref-cells
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("cmp {}, {}", tag_reg, runtime_value_tag(&PhpType::Mixed))
             );                                                                  // check whether the ref-cell stores a boxed Mixed handle
             ctx.emitter.instruction(&format!("je {}", mixed_cell_label));       // retain and forward boxed Mixed values without reboxing their pointer
@@ -1901,7 +2900,8 @@ pub(super) fn emit_branch_if_invoker_ref_cell_tag(
 ) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("cmp {}, #{}", tag_reg, INVOKER_ARG_REF_CELL_TAG)
             );                                                                  // check for a by-reference variadic marker
             ctx.emitter.instruction(&format!("b.eq {}", label));                // dereference marker slots instead of returning the marker
@@ -1911,7 +2911,8 @@ pub(super) fn emit_branch_if_invoker_ref_cell_tag(
             ctx.emitter.instruction(&format!("b.eq {}", label));                // every marker kind exposes the same referenced-cell layout
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("cmp {}, {}", tag_reg, INVOKER_ARG_REF_CELL_TAG)
             );                                                                  // check for a by-reference variadic marker
             ctx.emitter.instruction(&format!("je {}", label));                  // dereference marker slots instead of returning the marker
@@ -1965,7 +2966,7 @@ pub(super) fn emit_publish_diag_location(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_reg_to_symbol(ctx.emitter, value_reg, "_rt_diag_file_ptr", 0);
     abi::emit_load_int_immediate(ctx.emitter, value_reg, file_len as i64);
     abi::emit_store_reg_to_symbol(ctx.emitter, value_reg, "_rt_diag_file_len", 0);
-    abi::emit_load_int_immediate(ctx.emitter, value_reg, i64::from(span.line));
+    abi::emit_load_int_immediate(ctx.emitter, value_reg, i64::from(span.source_line()));
     abi::emit_store_reg_to_symbol(ctx.emitter, value_reg, "_rt_diag_line", 0);
 }
 
@@ -2067,6 +3068,7 @@ fn lower_array_push_aarch64(
     elem_ty: &PhpType,
 ) -> Result<()> {
     let value_ty = ctx.value_php_type(value)?;
+    let scalar_tag = scalar_slot_element_tag(elem_ty, &value_ty);
     if array_push_value_needs_mixed_unbox(elem_ty, &value_ty) {
         return lower_array_push_unboxed_mixed_aarch64(ctx, array, value, elem_ty);
     }
@@ -2125,7 +3127,48 @@ fn lower_array_push_aarch64(
             )));
         }
     }
+    emit_scalar_slot_element_tag(ctx, scalar_tag);
     Ok(())
+}
+
+/// Restamps the header tag of an array whose elements share the raw 8-byte int slot.
+///
+/// `__rt_array_push_int` takes float and bool payloads too -- the slot is identical -- and
+/// stamps `value_type` 0 on the first append to an empty array, which says "int". That is the
+/// only element description a reader holding nothing but the array has, and float and bool do
+/// not RENDER like an int: a double's bits would print as a huge integer and `false` would
+/// print as `0` instead of the empty string. `implode()` reached through a `mixed`/union
+/// operand is exactly such a reader (issues #689 and #640), as is zval packing.
+///
+/// A no-op for every other element type: string, refcounted and tagged-scalar appends already
+/// stamp their own tag, and an int array wants the 0 the helper wrote.
+fn emit_scalar_slot_element_tag(ctx: &mut FunctionContext<'_>, tag: Option<PhpType>) {
+    let Some(tag) = tag else {
+        return;
+    };
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &tag,
+    );
+}
+
+/// Picks the element type an 8-byte-slot append should stamp, if any.
+///
+/// The ARRAY's element type decides, except when the checker still sees the array as empty:
+/// `$a = []` appended inside a loop keeps its `array<never>` back-edge type at every push, so
+/// there the value being written is the only description of the slot. A heterogeneous array is
+/// not reachable here -- a `mixed` element type boxes instead of taking this path.
+fn scalar_slot_element_tag(elem_ty: &PhpType, value_ty: &PhpType) -> Option<PhpType> {
+    let from_array = elem_ty.codegen_repr();
+    if matches!(from_array, PhpType::Float | PhpType::Bool) {
+        return Some(from_array);
+    }
+    if !matches!(from_array, PhpType::Never | PhpType::Void) {
+        return None;
+    }
+    let from_value = value_ty.codegen_repr();
+    matches!(from_value, PhpType::Float | PhpType::Bool).then_some(from_value)
 }
 
 /// Lowers an indexed-array append for x86_64 targets.
@@ -2136,6 +3179,7 @@ fn lower_array_push_x86_64(
     elem_ty: &PhpType,
 ) -> Result<()> {
     let value_ty = ctx.value_php_type(value)?;
+    let scalar_tag = scalar_slot_element_tag(elem_ty, &value_ty);
     if array_push_value_needs_mixed_unbox(elem_ty, &value_ty) {
         return lower_array_push_unboxed_mixed_x86_64(ctx, array, value, elem_ty);
     }
@@ -2194,6 +3238,7 @@ fn lower_array_push_x86_64(
             )));
         }
     }
+    emit_scalar_slot_element_tag(ctx, scalar_tag);
     Ok(())
 }
 
@@ -2557,7 +3602,8 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
     ctx.emitter.label(&marker_label);
     ctx.emitter.instruction("ldr x12, [x11, #16]");                             // load the source runtime tag carried by the by-reference marker
     ctx.emitter.instruction("ldr x10, [x11, #8]");                              // load the caller ref-cell address from the marker payload
-    ctx.emitter.instruction(
+    ctx.emitter
+        .instruction(
         &format!("cmp x12, #{}", runtime_value_tag(&PhpType::Mixed))
     );                                                                          // check whether the caller ref-cell stores a boxed Mixed handle
     ctx.emitter.instruction(&format!("b.eq {}", mixed_cell_label));             // transfer boxed Mixed replacements as handles rather than payload words
@@ -2572,7 +3618,21 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the runtime setter after marker write-through
 
     ctx.emitter.label(&mixed_cell_label);
+    // The cell is the caller variable's storage and OWNS the box it holds, so overwriting it
+    // has to release the old one exactly as `__rt_array_set_mixed` does for an ordinary slot.
+    // Without this the caller's previous box — and the payload it pins — is orphaned at
+    // refcount 1 on every write-back, which is the leak reported in issue #1062.
+    //
+    // Safe to release AFTER the store and not before: this whole emitter runs only when the
+    // incoming value was freshly boxed here (`fresh_boxed_value`), so the handle in `x2` is a
+    // refcount-1 cell allocated at this store and can never be the occupant being released,
+    // not even for `$items[0] = $items[0]`.
+    ctx.emitter.instruction("ldr x11, [x10]");                                  // load the boxed Mixed the caller ref-cell currently owns
     ctx.emitter.instruction("str x2, [x10]");                                   // transfer the fresh boxed Mixed handle into the caller ref-cell
+    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // preserve the array result across the replaced-box release
+    ctx.emitter.instruction("mov x0, x11");                                     // pass the replaced boxed Mixed to the release helper
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the array pointer as the ArraySet result
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the runtime setter after handle transfer
 
     ctx.emitter.label(&runtime_label);
@@ -2616,7 +3676,8 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_
     ctx.emitter.label(&marker_label);
     ctx.emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                   // load the source runtime tag carried by the by-reference marker
     ctx.emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                    // load the caller ref-cell address from the marker payload
-    ctx.emitter.instruction(
+    ctx.emitter
+        .instruction(
         &format!("cmp r11, {}", runtime_value_tag(&PhpType::Mixed))
     );                                                                          // check whether the caller ref-cell stores a boxed Mixed handle
     ctx.emitter.instruction(&format!("je {}", mixed_cell_label));               // transfer boxed Mixed replacements as handles rather than payload words
@@ -2631,8 +3692,14 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the runtime setter after marker write-through
 
     ctx.emitter.label(&mixed_cell_label);
+    // See the AArch64 arm: the cell owns the box it holds, so the replaced one is released
+    // here rather than orphaned (issue #1062), after the store rather than before it.
+    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the boxed Mixed the caller ref-cell currently owns
     ctx.emitter.instruction("mov QWORD PTR [r10], rdx");                        // transfer the fresh boxed Mixed handle into the caller ref-cell
-    ctx.emitter.instruction("mov rax, rdi");                                    // return the unchanged indexed array after marker handle transfer
+    abi::emit_push_reg(ctx.emitter, "rdi");
+    ctx.emitter.instruction("mov rax, r11");                                    // pass the replaced boxed Mixed to the release helper
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, "rax");
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the runtime setter after handle transfer
 
     ctx.emitter.label(&runtime_label);
@@ -2771,10 +3838,11 @@ fn require_array_to_mixed_result(result_ty: &PhpType, inst: &Instruction) -> Res
     }
 }
 
-/// Verifies that `array_to_hash` produces associative-array storage.
+/// Verifies that `array_to_hash` produces hash-capable storage.
 fn require_array_to_hash_result(result_ty: &PhpType, inst: &Instruction) -> Result<PhpType> {
     match result_ty {
         PhpType::AssocArray { value, .. } => Ok(value.codegen_repr()),
+        PhpType::Array(value) if value.codegen_repr() == PhpType::Mixed => Ok(PhpType::Mixed),
         other => Err(CodegenIrError::unsupported(format!(
             "{} result PHP type {:?}",
             inst.op.name(),
@@ -2928,7 +3996,8 @@ fn emit_zero_array_slot_aarch64(
     match elem_size {
         8 => {
             ctx.emitter.instruction(&format!("add x12, {}, #24", array_reg));   // compute the base address of pointer-sized indexed-array slots
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("str xzr, [x12, {}, lsl #3]", index_reg)
             );                                                                  // initialize the missing by-reference slot to null
         }
@@ -2966,10 +4035,12 @@ fn emit_zero_array_slot_x86_64(
         16 => {
             ctx.emitter.instruction(&format!("mov r12, {}", index_reg));        // copy the gap index before scaling for a two-word slot
             ctx.emitter.instruction("shl r12, 4");                              // scale the gap index by the two-word slot size
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("mov QWORD PTR [{} + 24 + r12], 0", array_reg)
             );                                                                  // initialize the first word of the missing slot
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("mov QWORD PTR [{} + 32 + r12], 0", array_reg)
             );                                                                  // initialize the second word of the missing slot
         }
@@ -2990,8 +4061,10 @@ fn emit_array_elem_addr_result_aarch64(
     index: ValueId,
     elem_size: i64,
 ) -> Result<()> {
-    ctx.load_value_to_reg(array, "x9")?;
+    // A spilled index beyond the unscaled frame range uses x9 as its address scratch.
+    // Load it first so the array base is not replaced by the index's stack address.
     ctx.load_value_to_reg(index, "x10")?;
+    ctx.load_value_to_reg(array, "x9")?;
     ctx.emitter.instruction("cmp x10, #0");                                     // keep negative by-reference offsets aligned with the materialized slot
     ctx.emitter.instruction("csel x10, xzr, x10, lt");                          // clamp unsupported negative offsets to the safe slot
     match elem_size {
@@ -3093,7 +4166,8 @@ fn emit_tagged_scalar_array_value_type_stamp(ctx: &mut FunctionContext<'_>, arra
             ctx.emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg)); // load the packed indexed-array metadata before replacing value_type bits
             ctx.emitter.instruction("mov x11, #0x80ff");                        // preserve heap kind and persistent COW metadata only
             ctx.emitter.instruction("and x10, x10, x11");                       // clear stale indexed-array value_type bits
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("mov x11, #{}", TAGGED_SCALAR_ARRAY_VALUE_TYPE)
             );                                                                  // value_type 11 = inline tagged-scalar slots
             ctx.emitter.instruction("lsl x11, x11, #8");                        // move the tagged-scalar value_type into the packed kind word
@@ -3101,15 +4175,18 @@ fn emit_tagged_scalar_array_value_type_stamp(ctx: &mut FunctionContext<'_>, arra
             ctx.emitter.instruction(&format!("str x10, [{}, #-8]", array_reg)); // publish tagged-scalar indexed-array metadata
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("mov r10, QWORD PTR [{} - 8]", array_reg)
             );                                                                  // load the packed indexed-array metadata before replacing value_type bits
             ctx.emitter.instruction("mov r11, 0xffffffff000080ff");             // preserve heap marker, indexed-array kind, and persistent COW metadata
             ctx.emitter.instruction("and r10, r11");                            // clear stale indexed-array value_type bits
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("or r10, 0x{:x}", TAGGED_SCALAR_ARRAY_VALUE_TYPE << 8)
             );                                                                  // add value_type 11 for inline tagged-scalar slots
-            ctx.emitter.instruction(
+            ctx.emitter
+                .instruction(
                 &format!("mov QWORD PTR [{} - 8], r10", array_reg)
             );                                                                  // publish tagged-scalar indexed-array metadata
         }
@@ -3179,7 +4256,7 @@ pub(super) fn lower_slot_detach(ctx: &mut FunctionContext<'_>, inst: &Instructio
     }
     ctx.store_result_value(container)?;
     if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, container)?;
+        ctx.store_container_writeback_to_local(slot, container)?;
     }
     ctx.writeback_global_array_source(container)?;
     Ok(())
@@ -3250,4 +4327,56 @@ fn lower_slot_detach_indexed_x86_64(
     ctx.emitter.instruction("xor edx, edx");                                    // payload = null: release the old element, store nothing
     abi::emit_call_label(ctx.emitter, "__rt_array_set_refcounted");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen::generate_user_asm_from_ir;
+    use crate::codegen::platform::{Arch, Target};
+    use std::path::Path;
+
+    /// `array_splice($a, …, $a)` copies its replacement on EVERY supported target.
+    ///
+    /// The self-replacement snapshot (issue #676) is the first user of `Op::ArrayCloneShallow`,
+    /// so `lower_array_clone_shallow` is the only thing standing between the copy and the
+    /// aliased pointer that produced the wrong answer. The executable codegen shards run on
+    /// `macos-aarch64`, `linux-aarch64` and `linux-x86_64`; `ios-arm64` and `ios-sim-arm64` are
+    /// covered by compile tests like this one, so a target whose lowering stopped emitting the
+    /// call — or rejected the opcode outright, as every target did before this change — would
+    /// otherwise only surface as a wrong answer on a device.
+    #[test]
+    fn test_array_splice_self_replacement_clones_on_every_supported_target() {
+        let source = r#"<?php
+$a = [1, 2, 3];
+array_splice($a, 1, 1, $a);
+echo implode(",", $a);
+"#;
+        for target in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(target).expect("target");
+            let module = crate::ir_lower::tests::lower_source_at_for_target(
+                source,
+                Path::new("main.php"),
+                Path::new("."),
+                target,
+            );
+            let asm = generate_user_asm_from_ir(&module, false, false)
+                .unwrap_or_else(|error| panic!("{}: {error:?}", target.as_str()));
+            let call = match target.arch {
+                Arch::AArch64 => "bl __rt_array_clone_shallow",
+                Arch::X86_64 => "call __rt_array_clone_shallow",
+            };
+            let call = target.transform_assembly(call);
+            assert!(
+                asm.contains(&call),
+                "{} must copy the self-replacement before the splice ({call})",
+                target.as_str()
+            );
+        }
+    }
 }

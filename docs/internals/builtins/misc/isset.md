@@ -1,11 +1,11 @@
 ---
-title: "isset() — internals"
+title: "isset() - internals"
 description: "Compiler internals for isset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 637
+  order: 657
 ---
 
-## `isset()` — internals
+## `isset()` - internals
 
 ## Where it lives
 

@@ -1,16 +1,16 @@
 ---
-title: "__elephc_reflection_fill_members() — internals"
+title: "__elephc_reflection_fill_members() - internals"
 description: "Compiler internals for __elephc_reflection_fill_members(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1125
+  order: 1234
 ---
 
-## `__elephc_reflection_fill_members()` — internals
+## `__elephc_reflection_fill_members()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_reflection_fill_members.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_reflection_fill_members.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -46,8 +46,8 @@ function __elephc_reflection_fill_members(int $filler, mixed $reflector): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

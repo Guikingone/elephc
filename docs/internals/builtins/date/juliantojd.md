@@ -1,16 +1,16 @@
 ---
-title: "juliantojd() — internals"
+title: "juliantojd() - internals"
 description: "Compiler internals for juliantojd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 248
+  order: 249
 ---
 
-## `juliantojd()` — internals
+## `juliantojd()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:819](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L819) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:842](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L842) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

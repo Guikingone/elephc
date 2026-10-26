@@ -1,16 +1,16 @@
 ---
-title: "date_create() — internals"
+title: "date_create() - internals"
 description: "Compiler internals for date_create(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 203
+  order: 204
 ---
 
-## `date_create()` — internals
+## `date_create()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:785](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L785) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:808](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L808) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

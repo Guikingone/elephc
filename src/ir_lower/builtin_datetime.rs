@@ -37,25 +37,126 @@ const BUILTIN_DATETIME_CLASSES: &[&str] = &[
 
 /// Returns true when `name` is one of the synthetic builtin date/time classes.
 fn is_builtin_datetime_class(name: &str) -> bool {
-    BUILTIN_DATETIME_CLASSES.contains(&name.trim_start_matches('\\'))
+    let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    BUILTIN_DATETIME_CLASSES
+        .iter()
+        .any(|candidate| crate::names::php_symbol_key(candidate) == key)
 }
 
-/// Returns the normalized builtin date/time class named by `ty`, if any.
+/// Returns the normalized builtin date/time class or descendant named by `ty`, if any.
 ///
 /// Accepts a concrete `Object(Class)` receiver as well as nullable/union receivers such as
 /// `?DateTimeZone` (`Union([Object("DateTimeZone"), Void])`), whose codegen representation
 /// collapses to `Mixed`. This lets the reference scan discover date/time methods invoked on a
 /// nullable date/time receiver — e.g. the constructor's internal `$timezone->getName()` — so they
 /// are lowered instead of dispatching to an unemitted symbol at runtime.
-fn builtin_datetime_class_in_type(ty: &PhpType) -> Option<String> {
+fn builtin_datetime_class_in_type(module: &Module, ty: &PhpType) -> Option<String> {
     match ty {
         PhpType::Object(name) => {
             let normalized = name.trim_start_matches('\\');
-            is_builtin_datetime_class(normalized).then(|| normalized.to_string())
+            class_is_or_descends_from_builtin_datetime(module, normalized)
+                .then(|| normalized.to_string())
         }
-        PhpType::Union(members) => members.iter().find_map(builtin_datetime_class_in_type),
+        PhpType::Union(members) => members
+            .iter()
+            .find_map(|member| builtin_datetime_class_in_type(module, member)),
         _ => None,
     }
+}
+
+/// Returns true when a canonical class lineage reaches a synthetic date/time class.
+pub(in crate::ir_lower) fn class_is_or_descends_from_builtin_datetime(
+    module: &Module,
+    class_name: &str,
+) -> bool {
+    let name = class_name.trim_start_matches('\\');
+    if is_builtin_datetime_class(name) {
+        return true;
+    }
+    // The reference scan asks this for every class-typed value of every lowered function, so the
+    // answer for the whole class table is computed once: walking each name's parent chain per
+    // query -- with a case-insensitive scan of every class for each name the table does not hold
+    // verbatim, like an interface -- was a sixth of lowering the Symfony app.
+    let identity = (&module.class_infos as *const _ as usize, module.class_infos.len());
+    DATETIME_DESCENDANTS.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        if cell.as_ref().is_none_or(|(table, len, _)| (*table, *len) != identity) {
+            let descendants = module
+                .class_infos
+                .keys()
+                .filter(|candidate| walk_to_builtin_datetime(module, candidate))
+                .map(|candidate| crate::names::php_symbol_key(candidate.trim_start_matches('\\')))
+                .collect();
+            *cell = Some((identity.0, identity.1, descendants));
+        }
+        cell.as_ref().is_some_and(|(_, _, descendants)| {
+            !descendants.is_empty() && descendants.contains(&crate::names::php_symbol_key(name))
+        })
+    })
+}
+
+/// Per-module set of the lowercased classes that are or descend from a builtin date/time class,
+/// tagged with the class table it was computed from.
+type DatetimeDescendants = (usize, usize, crate::fast_hash::FastSet<String>);
+
+thread_local! {
+    static DATETIME_DESCENDANTS: std::cell::RefCell<Option<DatetimeDescendants>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Forgets the descendant set; each program lowering starts from a fresh one (a later program's
+/// class table could reuse an address and a size).
+pub(crate) fn reset_datetime_descendants() {
+    DATETIME_DESCENDANTS.with(|cell| *cell.borrow_mut() = None);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Parent-chain walks and case-insensitive class scans run while answering date/time descent
+    /// questions, so a test can pin
+    /// them to the class count instead of the number of questions.
+    pub(crate) static DATETIME_CHAIN_WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// [`class_is_or_descends_from_builtin_datetime`] for one class, by walking its parent chain.
+fn walk_to_builtin_datetime(module: &Module, class_name: &str) -> bool {
+    #[cfg(test)]
+    DATETIME_CHAIN_WALKS.with(|count| count.set(count.get() + 1));
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    let mut seen = HashSet::new();
+    while let Some(candidate) = current {
+        let key = crate::names::php_symbol_key(candidate);
+        if !seen.insert(key) {
+            return false;
+        }
+        if is_builtin_datetime_class(candidate) {
+            return true;
+        }
+        current = class_info_by_php_name(module, candidate)
+            .and_then(|class_info| class_info.parent.as_deref())
+            .map(|parent| parent.trim_start_matches('\\'));
+    }
+    false
+}
+
+/// Looks up class metadata using PHP's case-insensitive, leading-separator-neutral name rules.
+fn class_info_by_php_name<'a>(
+    module: &'a Module,
+    class_name: &str,
+) -> Option<&'a crate::types::ClassInfo> {
+    let normalized = class_name.trim_start_matches('\\');
+    module.class_infos.get(normalized).or_else(|| {
+        let key = crate::names::php_symbol_key(normalized);
+        module
+            .class_infos
+            .iter()
+            .find(|(candidate, _)| {
+                #[cfg(test)]
+                DATETIME_CHAIN_WALKS.with(|count| count.set(count.get() + 1));
+                crate::names::php_symbol_key(candidate) == key
+            })
+            .map(|(_, class_info)| class_info)
+    })
 }
 
 /// Lowers every referenced synthetic date/time method into the EIR module.
@@ -157,7 +258,9 @@ fn eval_date_alias_builtin_datetime_methods(module: &Module) -> Vec<(String, Str
         methods.push(("DateTime".to_string(), php_method_key(method_name)));
         methods.push(("DateTimeImmutable".to_string(), php_method_key(method_name)));
     }
-    for method_name in ["createFromDateString", "format"] {
+    // `__serialize`/`__unserialize` too: interpreted `serialize()` calls the first, and a library
+    // that saw `method_exists(DateInterval::class, '__unserialize')` calls the second.
+    for method_name in ["createFromDateString", "format", "__serialize", "__unserialize"] {
         methods.push(("DateInterval".to_string(), php_method_key(method_name)));
     }
     for method_name in DATE_TIMEZONE_ALIAS_METHOD_NAMES {
@@ -357,6 +460,49 @@ fn builtin_call_is_eval(module: &Module, inst: &crate::ir::Instruction) -> bool 
 /// full interface vtable required to allocate the object.
 fn referenced_builtin_datetime_methods(module: &Module) -> Vec<(String, String)> {
     let mut methods = Vec::new();
+    // A user class deriving from a date/time class inherits its STATIC methods, which a
+    // `parent::createFromFormat()` inside an override, or the static callable tables listing the
+    // subclass's inherited methods, reach by the builtin's symbol -- no `DateTime::...` call names
+    // them. Carbon overrides `createFromFormat()` exactly this way.
+    for (class_name, class_info) in &module.class_infos {
+        if is_builtin_datetime_class(class_name.trim_start_matches('\\')) {
+            continue;
+        }
+        let mut ancestor = class_info.parent.clone();
+        while let Some(parent_name) = ancestor {
+            let normalized = parent_name.trim_start_matches('\\');
+            if is_builtin_datetime_class(normalized) {
+                if let Some(parent_info) = module.class_infos.get(normalized) {
+                    methods.extend(
+                        parent_info
+                            .static_methods
+                            .keys()
+                            .map(|method_key| (normalized.to_string(), method_key.clone())),
+                    );
+                    // An instance method the subclass OVERRIDES is reached only by the override's
+                    // `parent::add(...)` (Carbon's `Units::add()`), which names `parent`, not the
+                    // builtin, and by the builtin's own method table. Without a body the link
+                    // failed on `_method_DateTime_add`.
+                    methods.extend(
+                        parent_info
+                            .methods
+                            .keys()
+                            .filter(|method_key| {
+                                class_info.method_impl_classes.get(*method_key).is_some_and(
+                                    |owner| !is_builtin_datetime_class(owner.trim_start_matches('\\')),
+                                )
+                            })
+                            .map(|method_key| (normalized.to_string(), method_key.clone())),
+                    );
+                }
+                break;
+            }
+            ancestor = module
+                .class_infos
+                .get(normalized)
+                .and_then(|info| info.parent.clone());
+        }
+    }
     for function in module
         .functions
         .iter()
@@ -384,7 +530,9 @@ fn referenced_builtin_datetime_methods(module: &Module) -> Vec<(String, String)>
                     // `$timezone->getName()`) and leave their symbols unemitted.
                     let Some(normalized) = function
                         .value(receiver)
-                        .and_then(|value| builtin_datetime_class_in_type(&value.php_type))
+                        .and_then(|value| {
+                            builtin_datetime_class_in_type(module, &value.php_type)
+                        })
                     else {
                         continue;
                     };
@@ -422,8 +570,12 @@ fn push_constructor_and_interface_methods(
     module: &Module,
     class_name: &str,
 ) {
-    methods.push((class_name.to_string(), php_method_key("__construct")));
-    let Some(class_info) = module.class_infos.get(class_name) else {
+    let constructor_key = php_method_key("__construct");
+    let constructor_impl = method_impl_class(module, class_name, &constructor_key);
+    if is_builtin_datetime_class(&constructor_impl) {
+        methods.push((constructor_impl, constructor_key));
+    }
+    let Some(class_info) = class_info_by_php_name(module, class_name) else {
         return;
     };
     let mut seen = HashSet::new();
@@ -453,9 +605,7 @@ fn push_constructor_and_interface_methods(
 ///
 /// Falls back to `class_name` when no implementing-class metadata is recorded.
 fn method_impl_class(module: &Module, class_name: &str, method_key: &str) -> String {
-    module
-        .class_infos
-        .get(class_name)
+    class_info_by_php_name(module, class_name)
         .and_then(|class_info| class_info.method_impl_classes.get(method_key).cloned())
         .unwrap_or_else(|| class_name.to_string())
 }
@@ -518,7 +668,7 @@ fn class_method_already_lowered(
 }
 
 /// Returns the class-name immediate attached to an `ObjectNew` instruction when it
-/// names a builtin date/time class.
+/// names a builtin date/time class or one of its descendants.
 fn datetime_class_data_name<'a>(
     module: &'a Module,
     inst: &crate::ir::Instruction,
@@ -527,7 +677,7 @@ fn datetime_class_data_name<'a>(
         return None;
     };
     let name = module.data.class_names.get(data.as_raw() as usize)?;
-    is_builtin_datetime_class(name).then_some(name.as_str())
+    class_is_or_descends_from_builtin_datetime(module, name).then_some(name.as_str())
 }
 
 /// Returns the string immediate attached to an instruction.

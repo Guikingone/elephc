@@ -1,8 +1,8 @@
 ---
 title: "mysqli_real_escape_string()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Escapes a string for use in a statement, honoring the connection charset."
 sidebar:
-  order: 161
+  order: 162
 ---
 
 ## mysqli_real_escape_string()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_real_escape_string(mixed $mysql, string $string): string
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Escapes a string for use in a statement, honoring the connection charset.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

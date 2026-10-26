@@ -25,19 +25,20 @@ pub extern "C" fn __elephc_eval_scope_new() -> *mut ElephcEvalScope {
     Box::into_raw(Box::new(ElephcEvalScope::new()))
 }
 
-/// Frees a materialized activation scope handle allocated by the eval bridge.
+/// Frees an activation scope completely and transfers any accumulated Throwable to native code.
 ///
 /// # Safety
 /// `scope` must be null or a pointer returned by `__elephc_eval_scope_new`
 /// that has not already been freed.
-#[no_mangle]
-pub unsafe extern "C" fn __elephc_eval_scope_free(scope: *mut ElephcEvalScope) {
-    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_scope_free");
+#[export_name = "__elephc_eval_scope_free_v2"]
+pub unsafe extern "C" fn __elephc_eval_scope_free(scope: *mut ElephcEvalScope) -> *mut RuntimeCell {
     if !scope.is_null() {
         let mut scope = Box::from_raw(scope);
-        release_owned_scope_cells(&mut scope);
+        let thrown = release_owned_scope_cells(&mut scope);
         drop(scope);
+        return thrown.map_or(std::ptr::null_mut(), RuntimeCellHandle::as_ptr);
     }
+    std::ptr::null_mut()
 }
 
 /// Stores a named runtime cell in a materialized eval scope.
@@ -45,15 +46,19 @@ pub unsafe extern "C" fn __elephc_eval_scope_free(scope: *mut ElephcEvalScope) {
 /// # Safety
 /// `scope` must be a valid eval scope handle. `name_ptr` must be readable for
 /// `name_len` bytes when `name_len > 0`; names must be UTF-8 variable names.
-#[no_mangle]
+/// `throwable` must point to writable pointer storage for an owned escaping exception.
+#[export_name = "__elephc_eval_scope_set_v2"]
 pub unsafe extern "C" fn __elephc_eval_scope_set(
     scope: *mut ElephcEvalScope,
     name_ptr: *const u8,
     name_len: u64,
     cell: *mut RuntimeCell,
     flags: u32,
+    throwable: *mut *mut RuntimeCell,
 ) -> i32 {
     crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_scope_set");
+    if throwable.is_null() { return EvalStatus::RuntimeFatal.code(); }
+    *throwable = std::ptr::null_mut();
     let Some(scope) = scope.as_mut() else {
         return EvalStatus::RuntimeFatal.code();
     };
@@ -71,8 +76,11 @@ pub unsafe extern "C" fn __elephc_eval_scope_set(
         crate::abi::SCOPE_FLAG_NATIVE_GLOBAL => crate::scope::NativeScopeBinding::GlobalName,
         _ => return EvalStatus::RuntimeFatal.code(),
     };
-    if let Some(replaced) = scope.set_with_native_binding(name, RuntimeCellHandle::from_raw(cell), ownership, binding) {
-        release_scope_cell(replaced);
+    if let Some(replaced) = scope.set_from_aot_with_native_binding(name, RuntimeCellHandle::from_raw(cell), ownership, binding) {
+        if let Some(thrown) = release_scope_cell(replaced) {
+            *throwable = thrown.as_ptr();
+            return EvalStatus::UncaughtThrowable.code();
+        }
     }
     EvalStatus::Ok.code()
 }
@@ -81,16 +89,21 @@ pub unsafe extern "C" fn __elephc_eval_scope_set(
 /// symbol, so an older bridge cannot silently discard the new flags.
 ///
 /// # Safety
-/// The pointer and lifetime requirements are the same as `__elephc_eval_scope_set`.
-#[no_mangle]
+/// The pointer and lifetime requirements are the same as `__elephc_eval_scope_set`. Like it, this
+/// is the versioned entry: the runtime's five-argument `__elephc_eval_scope_bind_native` adapter
+/// supplies `throwable` and rethrows what lands there. Generated code called the six-argument
+/// entry directly with five arguments, so the leftover sixth register was read (a null one made
+/// every `global $g; eval('$g = 1;')` fail) and written through.
+#[export_name = "__elephc_eval_scope_bind_native_v2"]
 pub unsafe extern "C" fn __elephc_eval_scope_bind_native(
     scope: *mut ElephcEvalScope,
     name_ptr: *const u8,
     name_len: u64,
     cell: *mut RuntimeCell,
     flags: u32,
+    throwable: *mut *mut RuntimeCell,
 ) -> i32 {
-    unsafe { __elephc_eval_scope_set(scope, name_ptr, name_len, cell, flags) }
+    unsafe { __elephc_eval_scope_set(scope, name_ptr, name_len, cell, flags, throwable) }
 }
 
 /// Looks up a named runtime cell in a materialized eval scope.
@@ -131,13 +144,17 @@ pub unsafe extern "C" fn __elephc_eval_scope_get(
 /// # Safety
 /// `scope` must be a valid eval scope handle. `name_ptr` must be readable for
 /// `name_len` bytes when `name_len > 0`; names must be UTF-8 variable names.
-#[no_mangle]
+/// `throwable` must point to writable pointer storage for an owned escaping exception.
+#[export_name = "__elephc_eval_scope_unset_v2"]
 pub unsafe extern "C" fn __elephc_eval_scope_unset(
     scope: *mut ElephcEvalScope,
     name_ptr: *const u8,
     name_len: u64,
+    throwable: *mut *mut RuntimeCell,
 ) -> i32 {
     crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_scope_unset");
+    if throwable.is_null() { return EvalStatus::RuntimeFatal.code(); }
+    *throwable = std::ptr::null_mut();
     let Some(scope) = scope.as_mut() else {
         return EvalStatus::RuntimeFatal.code();
     };
@@ -145,7 +162,10 @@ pub unsafe extern "C" fn __elephc_eval_scope_unset(
         return EvalStatus::RuntimeFatal.code();
     };
     if let Some(replaced) = scope.unset(name) {
-        release_scope_cell(replaced);
+        if let Some(thrown) = release_scope_cell(replaced) {
+            *throwable = thrown.as_ptr();
+            return EvalStatus::UncaughtThrowable.code();
+        }
     }
     EvalStatus::Ok.code()
 }
@@ -173,7 +193,13 @@ pub unsafe extern "C" fn __elephc_eval_scope_mark_global_alias(
     let Ok(global_name) = abi_name_to_string(global_name_ptr, global_name_len) else {
         return EvalStatus::RuntimeFatal.code();
     };
-    scope.mark_global_alias_to(name, global_name);
+    // An empty global name drops the alias: a compiled local published as a global alias by an
+    // earlier eval in the same frame may since have been rebound to other storage.
+    if global_name.is_empty() {
+        scope.clear_global_alias(&name);
+    } else {
+        scope.mark_global_alias_to(name, global_name);
+    }
     EvalStatus::Ok.code()
 }
 

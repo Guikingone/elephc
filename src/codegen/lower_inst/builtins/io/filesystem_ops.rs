@@ -26,7 +26,9 @@ pub(crate) fn lower_unlink(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         .as_deref()
         .map(|path| path.starts_with("phar://"))
         .unwrap_or(true);
-    if can_be_phar {
+    // A runtime path publishes only when the link carries the bridge; see
+    // `dynamic_phar_libraries_linked`. The unpublished slot makes a `phar://` unlink fail.
+    if can_be_phar && (path_literal.is_some() || super::phar_read::dynamic_phar_libraries_linked(ctx)) {
         publish_phar_delete_function_pointer(ctx);
     }
     load_string_to_result(ctx, path, "unlink")?;
@@ -41,125 +43,14 @@ pub(crate) fn lower_unlink(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 /// Lowers `mkdir(path, permissions?, recursive?, context?)` through wrapper-aware runtime helpers.
 pub(crate) fn lower_mkdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count_between(inst, "mkdir", 1, 4)?;
-    let path = expect_operand(inst, 0)?;
-    load_string_to_result(ctx, path, "mkdir directory")?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("sub sp, sp, #32");                         // reserve the path, permissions, and recursive flag across operand loads
-            ctx.emitter.instruction("stp x1, x2, [sp, #0]");                    // preserve the directory string pair while loading scalar arguments
-            if inst.operands.len() >= 2 {
-                let permissions = expect_operand(inst, 1)?;
-                require_int(
-                    ctx.load_value_to_result(permissions)?.codegen_repr(),
-                    "mkdir permissions",
-                )?;
-            } else {
-                ctx.emitter.instruction("mov x0, #511");                        // use PHP's default 0777 permissions before the process umask
-            }
-            ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the requested permissions for native or wrapper dispatch
-            if inst.operands.len() >= 3 {
-                let recursive = expect_operand(inst, 2)?;
-                require_int_or_bool(
-                    ctx.load_value_to_result(recursive)?.codegen_repr(),
-                    "mkdir recursive flag",
-                )?;
-            } else {
-                ctx.emitter.instruction("mov x0, #0");                          // default to non-recursive directory creation
-            }
-            ctx.emitter.instruction("str x0, [sp, #24]");                       // preserve the recursive flag as the wrapper options bit
-            ctx.emitter.instruction("ldp x1, x2, [sp, #0]");                    // restore the directory string pair for dispatch
-            ctx.emitter.instruction("ldr x3, [sp, #16]");                       // pass permissions in the native helper's third input register
-            ctx.emitter.instruction("ldr x4, [sp, #24]");                       // pass recursive/options in the native helper's fourth input register
-            ctx.emitter.instruction("add sp, sp, #32");                         // release argument scratch storage before calling another helper
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("sub rsp, 32");                             // reserve the path, permissions, and recursive flag across operand loads
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the directory string pointer while loading scalar arguments
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // preserve the directory string length while loading scalar arguments
-            if inst.operands.len() >= 2 {
-                let permissions = expect_operand(inst, 1)?;
-                require_int(
-                    ctx.load_value_to_result(permissions)?.codegen_repr(),
-                    "mkdir permissions",
-                )?;
-            } else {
-                ctx.emitter.instruction("mov rax, 511");                        // use PHP's default 0777 permissions before the process umask
-            }
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the requested permissions for native or wrapper dispatch
-            if inst.operands.len() >= 3 {
-                let recursive = expect_operand(inst, 2)?;
-                require_int_or_bool(
-                    ctx.load_value_to_result(recursive)?.codegen_repr(),
-                    "mkdir recursive flag",
-                )?;
-            } else {
-                ctx.emitter.instruction("xor eax, eax");                        // default to non-recursive directory creation
-            }
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");           // preserve the recursive flag as the wrapper options bit
-            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // restore the directory string pointer for dispatch
-            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // restore the directory string length for dispatch
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // pass permissions in the native helper's scalar input register
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");           // pass recursive/options in the native helper's scalar input register
-            ctx.emitter.instruction("add rsp, 32");                             // release argument scratch storage before calling another helper
-        }
+    if inst.operands.len() > 3 {
+        // The stream `$context` operand is already evaluated for its effects; no wrapper dispatch
+        // consumes it, so the wrapper-aware lowering sees only path, permissions and recursive.
+        let mut without_context = inst.clone();
+        without_context.operands.truncate(3);
+        return lower_mkdir_wrapper_op(ctx, &without_context);
     }
-    emit_mkdir_wrapper_dispatch(ctx);
-    store_if_result(ctx, inst)
-}
-
-/// Dispatches directory creation to a registered stream wrapper or the native helper.
-fn emit_mkdir_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
-    let wrapper = ctx.next_label("mkdir_wrapper");
-    let after = ctx.next_label("mkdir_after");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("sub sp, sp, #32");                         // preserve all mkdir arguments across the wrapper-scheme probe
-            ctx.emitter.instruction("stp x1, x2, [sp, #0]");                    // save the directory string pair
-            ctx.emitter.instruction("stp x3, x4, [sp, #16]");                   // save permissions and recursive/options values
-            ctx.emitter.instruction("mov x0, x1");                              // pass the directory pointer to the wrapper-scheme probe
-            ctx.emitter.instruction("mov x1, x2");                              // pass the directory length to the wrapper-scheme probe
-            abi::emit_call_label(ctx.emitter, "__rt_path_is_wrapper");
-            ctx.emitter.instruction("ldp x1, x2, [sp, #0]");                    // restore the directory string pair after the probe
-            ctx.emitter.instruction("ldp x3, x4, [sp, #16]");                   // restore permissions and recursive/options values
-            ctx.emitter.instruction(&format!("cbnz x0, {}", wrapper));          // registered wrapper schemes use userspace mkdir dispatch
-            abi::emit_call_label(ctx.emitter, "__rt_mkdir");
-            ctx.emitter.instruction(&format!("b {}", after));                   // skip wrapper dispatch after native creation
-            ctx.emitter.label(&wrapper);
-            ctx.emitter.instruction("mov x0, x1");                              // pass the wrapper path pointer
-            ctx.emitter.instruction("mov x1, x2");                              // pass the wrapper path length
-            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_WRAPPER_MKDIR_SLOT)); // select the wrapper mkdir method
-            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
-            ctx.emitter.label(&after);
-            ctx.emitter.instruction("add sp, sp, #32");                         // release preserved mkdir arguments
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("sub rsp, 32");                             // preserve all mkdir arguments across the wrapper-scheme probe
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // save the directory string pointer
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // save the directory string length
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rdi");           // save requested permissions
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rsi");           // save recursive/options value
-            ctx.emitter.instruction("mov rdi, rax");                            // pass the directory pointer to the wrapper-scheme probe
-            ctx.emitter.instruction("mov rsi, rdx");                            // pass the directory length to the wrapper-scheme probe
-            abi::emit_call_label(ctx.emitter, "__rt_path_is_wrapper");
-            ctx.emitter.instruction("test rax, rax");                           // test whether the path scheme matched a registered wrapper
-            ctx.emitter.instruction(&format!("jnz {}", wrapper));               // registered wrapper schemes use userspace mkdir dispatch
-            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // restore the directory string pointer for native creation
-            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // restore the directory string length for native creation
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // restore requested permissions for native creation
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");           // restore recursive flag for native creation
-            abi::emit_call_label(ctx.emitter, "__rt_mkdir");
-            ctx.emitter.instruction(&format!("jmp {}", after));                 // skip wrapper dispatch after native creation
-            ctx.emitter.label(&wrapper);
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // pass the wrapper path pointer
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // pass the wrapper path length
-            ctx.emitter.instruction(&format!("mov rdx, {}", STREAM_WRAPPER_MKDIR_SLOT)); // select the wrapper mkdir method
-            ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 16]");           // pass requested permissions to the wrapper method
-            ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 24]");            // pass recursive/options to the wrapper method
-            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
-            ctx.emitter.label(&after);
-            ctx.emitter.instruction("add rsp, 32");                             // release preserved mkdir arguments
-        }
-    }
+    lower_mkdir_wrapper_op(ctx, inst)
 }
 
 /// Lowers `rmdir(path)` through the target-aware runtime helper.

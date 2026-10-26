@@ -1,16 +1,16 @@
 ---
-title: "frenchtojd() — internals"
+title: "frenchtojd() - internals"
 description: "Compiler internals for frenchtojd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 231
+  order: 232
 ---
 
-## `frenchtojd()` — internals
+## `frenchtojd()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:821](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L821) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:844](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L844) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

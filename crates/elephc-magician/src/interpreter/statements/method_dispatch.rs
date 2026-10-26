@@ -29,6 +29,30 @@ pub(in crate::interpreter) fn eval_method_call_result(
     )
 }
 
+/// `bindTo()` on a COMPILED closure (a callable descriptor, not an interpreter object).
+///
+/// Laravel's `Macroable::__call` runs `$macro->bindTo($this, static::class)` on macros that
+/// compiled service providers registered, and the descriptor answered nothing: every request
+/// reaching a `Request` macro died. The receiver is rebound through the runtime's own
+/// `Closure::bind`; the scope argument is not forwarded (the runtime keeps the closure's scope
+/// unless it addresses properties by a runtime name), the same limit compiled `bindTo` has.
+fn eval_native_closure_method(
+    object: RuntimeCellHandle,
+    method_name: &str,
+    evaluated_args: &[EvaluatedCallArg],
+    _context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("bindTo") {
+        return Ok(None);
+    }
+    let new_this = evaluated_args
+        .first()
+        .map(|arg| arg.value)
+        .filter(|value| values.type_tag(*value).is_ok_and(|tag| tag == EVAL_TAG_OBJECT));
+    values.bind_native_closure(object, new_this).map(Some)
+}
+
 /// Dispatches an object method call while preserving named-argument metadata for eval methods.
 pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     object: RuntimeCellHandle,
@@ -46,6 +70,13 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
                 call_site.0,
                 call_site.2,
             );
+        }
+    }
+    if values.type_tag(object)? == EVAL_TAG_CALLABLE {
+        if let Some(result) =
+            eval_native_closure_method(object, method_name, &evaluated_args, context, values)?
+        {
+            return Ok(result);
         }
     }
     let Ok(identity) = values.object_identity(object) else {
@@ -732,14 +763,35 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     }
     if inaccessible_method.is_none() {
         if let Some(parent) = context.class_native_parent_name(&called_class_name) {
-            if let Some((declaring_class, _, _, _)) =
-                eval_aot_method_dispatch_metadata_in_hierarchy(
-                    &parent,
-                    method_name,
+            let metadata = eval_aot_method_dispatch_metadata_in_hierarchy(
+                &parent,
+                method_name,
+                context,
+                values,
+            )?;
+            // An eval class inheriting `getTraceAsString()`/`__toString()` from a BUILTIN
+            // Throwable is rendered here: the compiled bodies call a prelude function the bridge
+            // cannot reach, and the synthetic bridge accessor answered "". A compiled user class
+            // declaring either keeps its own body.
+            let key = method_name.to_ascii_lowercase();
+            let builtin_declared = metadata.as_ref().is_none_or(|(declaring, ..)| {
+                matches!(declaring.trim_start_matches('\\'), "Exception" | "Error")
+            });
+            if builtin_declared
+                && matches!(key.as_str(), "gettraceasstring" | "__tostring")
+                && evaluated_args.is_empty()
+                && eval_foreach_object_is_a(object, "Throwable", context, values)?
+            {
+                let text = crate::interpreter::builtins::eval_throwable_string(
+                    object,
+                    &called_class_name,
+                    key == "gettraceasstring",
                     context,
                     values,
-                )?
-            {
+                )?;
+                return values.string(&text);
+            }
+            if let Some((declaring_class, _, _, _)) = metadata {
                 return eval_native_method_with_evaluated_args_bridge_scope(
                     object,
                     &parent,
@@ -824,9 +876,8 @@ pub(super) fn eval_closure_object_method_result(
                 "call",
                 std::iter::once(EvaluatedCallArg {
                     name: None,
-                    value: bound_this,
+                    value: bound_this.borrowed(),
                     ref_target: None,
-                    owned: false,
                 })
                 .chain(call_args)
                 .collect(),
@@ -1249,9 +1300,12 @@ fn eval_rebind_foreign_reflection_target(
                 owner_kind,
             );
         }
-        // Not a reflector at all: whatever the registry still files under this address belongs
-        // to a reflector freed from the same block, and must not answer for this object.
-        other if !other.starts_with("Reflection") => {
+        // Not a registered reflector kind (not a reflector at all, or a `ReflectionParameter`,
+        // `ReflectionNamedType`, ... that no table describes): whatever the registry still files
+        // under this address belongs to a reflector freed from the same block, and must not
+        // answer for this object. A `ReflectionParameter` allocated where a closure's
+        // `ReflectionFunction` had lived answered `getName()` with the closure's name.
+        other if live_kind.is_none() => {
             if context.forget_eval_reflection_identity(identity) && crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=reflection_rebind kind=stale identity={identity} runtime_class={other:?} stage=forgotten"

@@ -1,16 +1,16 @@
 ---
-title: "copy() — internals"
+title: "copy() - internals"
 description: "Compiler internals for copy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 272
+  order: 273
 ---
 
-## `copy()` — internals
+## `copy()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/copy.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/copy.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function copy(string $from, string $to): bool
+function copy(string $from, string $to, mixed $context = null): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes 2–3 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

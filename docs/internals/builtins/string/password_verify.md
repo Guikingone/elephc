@@ -1,11 +1,11 @@
 ---
-title: "password_verify() — internals"
+title: "password_verify() - internals"
 description: "Compiler internals for password_verify(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 855
+  order: 948
 ---
 
-## `password_verify()` — internals
+## `password_verify()` - internals
 
 ## Where it lives
 

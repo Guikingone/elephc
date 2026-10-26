@@ -1,16 +1,16 @@
 ---
-title: "passthru() — internals"
+title: "passthru() - internals"
 description: "Compiler internals for passthru(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 758
+  order: 790
 ---
 
-## `passthru()` — internals
+## `passthru()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/passthru.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/passthru.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

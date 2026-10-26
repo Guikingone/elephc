@@ -1,8 +1,8 @@
 ---
 title: "imagecrop()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the given rectangle of an image as a new image."
 sidebar:
-  order: 509
+  order: 510
 ---
 
 ## imagecrop()
@@ -11,7 +11,7 @@ sidebar:
 function imagecrop(mixed $image, mixed $rect = ['x' => 0, 'y' => 0, 'width' => 0, 'height' => 0]): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the given rectangle of an image as a new image.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

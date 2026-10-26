@@ -18,6 +18,7 @@ mod class_get_attributes;
 mod class_implements;
 mod class_parents;
 mod class_uses;
+mod clone;
 mod dispatch;
 mod empty;
 mod enum_exists;
@@ -44,6 +45,7 @@ pub(crate) mod spl_autoload;
 mod spl_autoload_call;
 mod spl_autoload_extensions;
 mod spl_autoload_functions;
+pub(crate) use spl_autoload_functions::eval_registered_spl_autoload_functions_result;
 mod spl_autoload_register;
 mod spl_autoload_unregister;
 mod spl_classes;
@@ -62,6 +64,7 @@ pub(in crate::interpreter) use class_implements::{
 pub(in crate::interpreter) use function_exists::{
     eval_date_procedural_alias_names, eval_function_probe_exists,
 };
+pub(in crate::interpreter) use class_exists::eval_class_is_declared;
 pub(in crate::interpreter) use get_class::eval_get_class_result;
 pub(in crate::interpreter) use isset::eval_isset_arg;
 pub(in crate::interpreter) use get_object_vars::eval_get_object_vars_result;

@@ -18,7 +18,7 @@
 use crate::parser::ast::{BinOp, Program, Stmt};
 use crate::synthetic_class::{
     e_array, e_binop, e_call, e_closure_call, e_index, e_int, e_null, e_null_coalesce, e_post_inc, e_spread,
-    e_var, function, internal_declarations, s_array_push, s_assign, s_expr, s_for, s_foreach,
+    e_var, function, php_semantics_declarations, s_array_push, s_assign, s_expr, s_for, s_foreach,
     s_array_assign, s_if, s_return, t_array,
 };
 
@@ -31,12 +31,12 @@ pub(crate) const ARRAY_MAP_GRADUAL_NAME: &str = "__elephc_array_map_gradual";
 
 /// Returns the multi-array `array_map()` declarations for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| vec![map_multi()])
+    php_semantics_declarations(|| vec![map_multi()])
 }
 
 /// Returns the gradual-callback `array_map()` declarations for injection.
 pub(crate) fn gradual_declarations() -> Program {
-    internal_declarations(|| vec![map_gradual()])
+    php_semantics_declarations(|| vec![map_gradual()])
 }
 
 /// Builds `__elephc_array_map_gradual($callback, array $array): array`.

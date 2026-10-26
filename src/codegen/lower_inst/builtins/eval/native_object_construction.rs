@@ -54,7 +54,7 @@ pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new(
         .target
         .extern_symbol("__elephc_eval_reflection_new_object");
     abi::emit_call_label(ctx.emitter, &symbol);
-    emit_eval_status_check(ctx);
+    emit_eval_status_check_releasing(ctx, &boxed);
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
 
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -100,7 +100,7 @@ pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new_fallback(
     // The construction is written inside this frame's class body, which is the calling scope
     // php judges the constructor's visibility from (`BigNumber` building a `BigInteger` with a
     // protected constructor).
-    let pushed_caller_class = push_native_caller_class(ctx);
+    let pushed_caller_class = push_native_caller_class(ctx)?;
     load_eval_context_to_arg(ctx, 0);
     let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
@@ -129,7 +129,7 @@ pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new_fallback(
     abi::emit_call_label(ctx.emitter, &symbol);
     pop_native_caller_class(ctx, pushed_caller_class);
     emit_branch_if_eval_c_int_negative(ctx, &eval_miss_label);
-    emit_eval_status_check(ctx);
+    emit_eval_status_check_releasing(ctx, &boxed);
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
 
     let result_reg = abi::int_result_reg(ctx.emitter);

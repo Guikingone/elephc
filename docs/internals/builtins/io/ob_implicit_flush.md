@@ -1,16 +1,16 @@
 ---
-title: "ob_implicit_flush() — internals"
+title: "ob_implicit_flush() - internals"
 description: "Compiler internals for ob_implicit_flush(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 364
+  order: 365
 ---
 
-## `ob_implicit_flush()` — internals
+## `ob_implicit_flush()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ob_implicit_flush.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ob_implicit_flush.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

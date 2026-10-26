@@ -1,16 +1,16 @@
 ---
-title: "pcntl_sigprocmask() — internals"
+title: "pcntl_sigprocmask() - internals"
 description: "Compiler internals for pcntl_sigprocmask(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 666
+  order: 686
 ---
 
-## `pcntl_sigprocmask()` — internals
+## `pcntl_sigprocmask()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_sigprocmask.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_sigprocmask.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

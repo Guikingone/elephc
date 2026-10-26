@@ -1,16 +1,16 @@
 ---
-title: "preg_quote() — internals"
+title: "preg_quote() - internals"
 description: "Compiler internals for preg_quote(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 856
+  order: 949
 ---
 
-## `preg_quote()` — internals
+## `preg_quote()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/preg_quote.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/preg_quote.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -28,7 +28,7 @@ sidebar:
 - **Result ownership**: `independent`
 - **Effects**: `static (0 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary

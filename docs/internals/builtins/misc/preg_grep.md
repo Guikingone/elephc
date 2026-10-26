@@ -1,16 +1,16 @@
 ---
-title: "preg_grep() — internals"
+title: "preg_grep() - internals"
 description: "Compiler internals for preg_grep(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 687
+  order: 708
 ---
 
-## `preg_grep()` — internals
+## `preg_grep()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_grep.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_grep.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

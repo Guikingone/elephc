@@ -2,7 +2,7 @@
 title: "sodium_crypto_box_seal_open()"
 description: "Opens a sealed box with a keypair, returning false when it does not authenticate."
 sidebar:
-  order: 867
+  order: 960
 ---
 
 ## sodium_crypto_box_seal_open()
@@ -22,9 +22,9 @@ Opens a sealed box with a keypair, returning false when it does not authenticate
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected sodium prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/sodium_crypto_box_seal_open.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/sodium_crypto_box_seal_open.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/sodium_crypto_box_seal_open.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/sodium_crypto_box_seal_open.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

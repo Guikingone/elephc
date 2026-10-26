@@ -450,6 +450,17 @@ fn strip_stmt(
             },
             span,
         )),
+        // A class-like nested in a conditional statement was not hoisted by
+        // `extract_discoverable_declarations`, which only takes unconditional positions; removing
+        // it lost the class outright (Carbon's `if (!class_exists(DatePeriodBase::class, false))
+        // { class DatePeriodBase … }`). It stays where php declares it, and
+        // `crate::conditional_classes` decides its binding once the program is whole.
+        kind if is_conditional_class_like(&kind)
+            && !allow_early_bindings
+            && conditional_include_declarations_are_bound() =>
+        {
+            Some(Stmt { kind, ..stmt })
+        }
         kind if is_discoverable_declaration(&kind) => None,
         StmtKind::NamespaceDecl { name } => {
             *current_namespace = Some(namespace_string(&name));
@@ -535,6 +546,18 @@ fn push_early_binding(
         },
         span,
     ));
+}
+
+/// Returns true for the class-like declarations `crate::conditional_classes` can bind from a
+/// conditional position.
+fn is_conditional_class_like(kind: &StmtKind) -> bool {
+    matches!(
+        kind,
+        StmtKind::ClassDecl { .. }
+            | StmtKind::EnumDecl { .. }
+            | StmtKind::InterfaceDecl { .. }
+            | StmtKind::TraitDecl { .. }
+    )
 }
 
 /// Returns true if the statement kind is a discoverable declaration that

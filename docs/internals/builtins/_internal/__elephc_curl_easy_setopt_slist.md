@@ -1,16 +1,16 @@
 ---
-title: "__elephc_curl_easy_setopt_slist() — internals"
+title: "__elephc_curl_easy_setopt_slist() - internals"
 description: "Compiler internals for __elephc_curl_easy_setopt_slist(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1060
+  order: 1150
 ---
 
-## `__elephc_curl_easy_setopt_slist()` — internals
+## `__elephc_curl_easy_setopt_slist()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_easy_setopt_slist.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_easy_setopt_slist.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,8 +48,8 @@ function __elephc_curl_easy_setopt_slist(mixed $handle, int $option, string $ite
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

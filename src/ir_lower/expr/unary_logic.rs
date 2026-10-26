@@ -215,7 +215,7 @@ pub(super) fn lower_logical_binary(
 /// widened the slot, the restore put the LOOP's element type back as the logical fact, and the
 /// `foreach ($v as …)` that follows was lowered as an iteration of that class
 /// (`Symfony\Component\VarDumper\Caster\ReflectionCaster::castFunctionAbstract`).
-fn join_short_circuit_operand_types(ctx: &mut LoweringContext<'_, '_>, saved_types: TypeEnv) {
+pub(super) fn join_short_circuit_operand_types(ctx: &mut LoweringContext<'_, '_>, saved_types: TypeEnv) {
     let operand_types = ctx.local_types_snapshot();
     ctx.restore_local_types(saved_types.clone());
     for (name, operand_ty) in operand_types {

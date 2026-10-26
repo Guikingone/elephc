@@ -12,7 +12,7 @@
 use crate::parser::ast::Program;
 
 /// Reserved function name used for one-argument `assert()` calls.
-pub(crate) const ASSERT_ONE_ARG_NAME: &str = "__elephc_assert_one_arg";
+pub const ASSERT_ONE_ARG_NAME: &str = "__elephc_assert_one_arg";
 
 /// PHP source for the injected one-argument assertion implementation.
 pub const ASSERT_PRELUDE_SRC: &str = r#"<?php

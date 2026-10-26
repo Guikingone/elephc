@@ -15,7 +15,7 @@ AST layer.
 Today the AST optimizer is split into six passes:
 
 1. `fold_constants_for_target(program, target)` runs before type checking
-2. `propagate_constants(program, mixed_storage_locals)` runs after successful type checking
+2. `propagate_constants(program, mixed_storage_locals, buffer_read_sites)` runs after successful type checking
 3. `prune_constant_control_flow(program, binding_decision_spans)` runs after propagation and warning collection
 4. `normalize_control_flow(program, binding_decision_spans)` runs after pruning and rewrites structurally equivalent control-flow shells into simpler AST shapes
 5. `eliminate_dead_code(program, binding_decision_spans)` runs after normalization and removes leftover unreachable or non-observable statements from the already-normalized AST
@@ -29,6 +29,11 @@ veto themselves — DCE's tail-sinking, and the single-case `switch` rewrite rea
 normalize phases (which otherwise materializes a `switch` default body into both branches of a
 synthesized `if`). `propagate_constants` takes the mixed-storage local NAMES for a related reason:
 it must not substitute a literal for a read of a local the checker boxed as `mixed`.
+It also consumes `CheckResult::buffer_read_sites`: indexed reads proven to use
+native buffer storage at every checker observation of that source span. Those
+reads cannot invoke PHP warning handlers, so propagation preserves unrelated
+global facts across them. Bounds failures remain observable, and evaluating the
+receiver or index can still invalidate facts. Ambiguous spans retain no proof.
 
 That split matters. Some rewrites are always safe on syntax alone, while others should only happen after diagnostics have already seen the checked program.
 
@@ -138,7 +143,7 @@ This pass is still intentionally local and conservative. Today it focuses on:
 - preserving untouched scalar locals across simple loops when a conservative local write analysis can prove the loop only mutates other variables, including simple nested `switch`, `try/catch/finally`, `foreach`, other simple nested loop statements, local array writes like `$items[] = $i` / `$items[0] = $i`, local property writes like `$box->last = $i` / `$box->items[] = $i`, and targeted invalidations like `unset($tmp)`, while also retaining stable scalar values introduced by `for` init clauses
 - local loop path summaries for known `while(false)`, `do...while(false)`, `while(true)` / `for(;;)` break exits, and branch-local loop exits that agree on scalar values
 - array-literal facts for heap-backed locals: a local assigned an all-scalar indexed/associative array literal (up to 64 entries) carries the literal as a fact, `$a[<const>]` reads fold through the same helper as inline literal access, `list(...) = $a` unpacks element facts, and `$b = $a` copies the fact because PHP array assignment is a COW value-semantics snapshot
-- targeted invalidation grounded in the memory model: a statement or expression removes only the locals it can actually write. Known local writes and `unset($var)` stay exact; `unset($a[0])` kills only `$a`; array reads kill nothing; a call kills its by-ref argument roots (user function/method signatures come from a program pre-scan, builtin signatures from the registry) plus, at top level only, everything when the callee can write `global` storage (tracked transitively by the callable-effects fixed point). Callback-invoking builtins (`call_user_func`, `usort`, `array_walk`, ...) treat their arguments like an unknown callee's
+- targeted invalidation grounded in the memory model: a statement or expression removes only the locals it can actually write. Known local writes and `unset($var)` stay exact; `unset($a[0])` kills only `$a`; warning-capable array reads invalidate top-level global facts because a handler can modify them, while proven present literal reads and checker-proven buffer reads preserve unrelated facts; a call kills its by-ref argument roots (user function/method signatures come from a program pre-scan, builtin signatures from the registry) plus, at top level only, everything when the callee can write `global` storage (tracked transitively by the callable-effects fixed point). Callback-invoking builtins (`call_user_func`, `usort`, `array_walk`, ...) treat their arguments like an unknown callee's
 - a reference-volatility ledger backing those targeted rules: every reference-exposure point (`$t = &$s` and its lvalue roots, by-ref `foreach` array roots, by-ref closure captures, `global`/`static` declarations, by-ref arguments to user callees, `ptr($x)` address-taking, request superglobals) marks the name so it never carries a fact again
 - never substituting a constant into a by-ref argument position, which must stay an lvalue
 - re-running constant folding on expressions after substitutions are made
@@ -192,6 +197,51 @@ Current pruning coverage includes:
   - `??`
   - short-circuit `&&` / `||`
 
+### A pass must not delete a body's last `yield`
+
+PHP decides generator-ness **syntactically, at declaration**. The checker records
+that on `FunctionSig::is_generator` from the source body, before any later pass
+runs. Named functions and methods pass that checker bit to lowering; closures
+rebuild it from the optimized body in `closure_signature_from_ast`. A declared `: Generator` return is not a
+substitute: `function factory(): Generator { return inner(); }` declares the type
+without containing `yield`, and it is an ordinary function (issue #1086). A body
+that held a `yield` is still a generator when no `yield` can run, so
+`function g(): iterable { while (false) { yield 1; } }` returns an empty
+`Generator`.
+
+The bit does not replace the token in the body. Generator source and the body-scan
+fallback still look for a `yield`, and a pass that removes every one of them changes
+the body the coroutine is lowered from. When constant folding took the dead branch
+with the token, the function returned a boxed `null`, `valid()` answered `true`
+forever, and `foreach` never terminated (issues #673 and #1085). Pre-check target
+folding is earlier still: it runs before the checker records the bit, so deleting
+the last `yield` there would make the declaration look ordinary.
+
+`optimize::generator_bodies::rewrite_preserving_yield` keeps the original body when
+a rewrite would leave it with no `yield` at all. Only a body whose yields are all
+removed gives up that pass. The walk is paid by every body; the clone only by
+bodies that contain a yield.
+
+The rewrites that delete a yield do it for different reasons, so each has its own call:
+
+- **Pre-check target folding** (`fold_callable_body`) can fold a target-availability
+  condition such as `PHP_OS_FAMILY === "Windows"` and take a `yield` with that
+  branch, before `is_generator` exists.
+- **Pass 3, pruning** (which Pass 4 runs again over the same bodies) folds a
+  condition it can read as a literal — `while (false)`, `if (false)`. Named
+  functions and methods reach the guard through `prune_function_body()`, closures
+  through the `Closure` arm of `prune_expr()`.
+- **Pass 5, dead-code elimination** rewrites an `if` chain as a whole.
+  `if (false) { ... } elseif (false) { yield 1; }` leaves pruning with the guard
+  engaged and the body restored; DCE then collapses the chain and takes the token
+  with it. Named functions reach the guard in `dce_stmt_in_source_mode`, methods
+  through `dce_method()` and `dce_method_without_context()`.
+
+Checking for a yield after a pass is not enough: `prune_function_body()`'s own
+trailing-`return` guard did exactly that and was defeated the same way. A `yield`
+after `return` in the same block is kept by the same helper on the propagation
+boundary, which stops rewriting at the first terminator.
+
 ## Pass 4: Control-flow normalization
 
 `normalize_control_flow()` runs after the pruning pass. At this point the AST already has constant-dead branches removed, so the job becomes "reshape the remaining control flow into simpler but equivalent forms" rather than "decide which branch is dead".
@@ -225,6 +275,56 @@ The second generation of the pass (control-flow normalization v2) adds shell can
 - leading `if (g) { break; } [else { E }]` guards folded into the loop test: `while (c) { if (g) break; rest }` becomes `while (c && !g) { rest }` (`while (true)` / `for (;;)` become plain `while (!g)`), with the guard's `else` body leading the remaining body; the fold repeats while the body still starts with such a guard, and `for` loops with an update clause receive the same test without changing shape
 - an endless loop that ends in `if (g) { break; }` rotated into `do { body } while (!g)`, refused when the body carries a `continue` targeting that loop (it skips the guard today but would reach the rotated test); nested loops and `switch` bodies raise the `continue` level the check looks for
 - trailing terminators that transfer exactly where falling off the block would are dropped: a `continue` ending a loop body, the `break` ending the body that runs last in a `switch` (the `default` body when it is written last, else the last case; a `default` written between cases keeps its `break`, since EIR lowering places it at its source position), and a bare `return;` ending a function or method body. The walk follows only the tail path — the last statement, then recursively the last statement of each `if` / `ifdef` / `try` branch — and never enters loops, `switch` bodies, or `finally` blocks; a shell whose branch was emptied is re-pruned so it collapses like fresh input. By-reference-returning functions and generators keep their `return;`, and a `break`-only last case is kept when a `default` follows it
+
+### A generator must still look like one
+
+Constant propagation, pruning, and dead-code elimination rewrite callable bodies through
+`optimize::generator_bodies::rewrite_preserving_yield`, which keeps the original body when a
+rewrite would leave it with NO `yield` at all. Pruning's call sites are described under Pass 3;
+dead-code elimination uses the same helper because it runs later and can delete a yield the
+prune guard has just restored.
+
+Named functions and methods keep the checker's `FunctionSig::is_generator` bit from the source
+body. Lowering also scans their rewritten bodies and can classify them as generators when that
+bit is false or unavailable. Closures take a different path: `closure_signature_from_ast`
+rechecks the optimized body with `body_contains_yield` during EIR lowering. Preserving a `yield`
+therefore also preserves their generator classification.
+
+PHP decides whether a declaration is a **generator** syntactically, before any folding, and the
+type checker does the same — it types `g()` as `Generator` from the `yield` it can see. These
+passes run *after* checking, and both the propagation and pruning walks stop at a block's first
+terminator, so an unreachable `yield` was deleted. The two classifications then disagreed: the
+caller still drove a `Generator` while EIR lowering saw an ordinary function, and the driving
+`foreach` spun forever on a boxed null (issue #673).
+
+Both of PHP's ways to spell an immediately-complete generator hit it, and they are destroyed by
+different passes:
+
+```php
+function g() { if (false) { yield 1; } return; }   // constant-branch pruning
+function g() { return; yield; }                     // the stop-at-terminator rule
+```
+
+Keeping the un-rewritten body is the conservative answer: the retained `yield` is unreachable by
+construction, so the cost is one unexecuted statement in a body that is now lowered as the
+coroutine it is — and only a body whose every `yield` is dead pays it.
+
+It is also whole-body: one dead `yield` blocks propagation, pruning, and dead-code elimination
+in that callable. A surgical "keep one yield, apply the rest" would be tighter (issue #1325).
+
+Dead-code elimination is wrapped by the same helper. The checker bit preserves generator
+classification for named callables, and the body scan can add it; closure classification is
+derived from the optimized body. The coroutine body still has to contain a `yield`. DCE runs after
+pruning and collapses shapes the
+prune guard has just put back: a constant `elseif` chain is the case that still deleted the
+last `yield` with the pruning guard alone (issue #1085). Reverting that pass's whole body is
+the same trade propagation and pruning already make, and only a callable whose every `yield`
+is dead pays it.
+
+The invariant covers both paths: named callables retain their check-time classification with an
+additive body scan, closures are classified again from the optimized body, and a pass that
+rewrites either body must not delete its last `yield`.
+
 ### Example
 
 ```php
@@ -256,6 +356,7 @@ Current dead-code-elimination coverage includes:
 - source-order handler subtraction for unknown throws, including the PHP `Throwable = Exception | Error` root partition, so a later handler is removed once earlier catches exhaust its remaining domain without assuming arbitrary interfaces or open class families are closed
 - caught-variable domains preserved through nested `try` blocks and simple local aliases/reassignments, allowing `throw $e` to retain the incoming exact or constrained class while writes through unknown paths invalidate that fact conservatively
 - shadowed `catch` clauses whose exception types are already fully covered by earlier handlers, including all later handlers after `catch (Throwable ...)`
+- implicit destructor execution routed through that same typed model, so a `__destruct` that throws keeps the handler it can actually reach (see "Destructor throws" below)
 - shadowed `switch` patterns whose match points are already covered by earlier case labels, including full-case removal or fallthrough-body merging when no entry pattern remains
 - internal `if` regions pruned when outer pure variable guards or strict boolean checks already determine a nested branch outcome, with guard invalidation on relevant local writes to stay conservative
 - guard-based pruning now also understands simple pure `&&` / `||` combinations, so contradictions like `if ($a && $b) { if (!$a || !$b) ... }` can be removed without needing constant folding first
@@ -308,6 +409,10 @@ if (true) {
 ```
 
 After pruning and normalization, the dead branch disappears entirely. The final dead-code pass then has less structural noise to inspect, and codegen never emits the `pow` path.
+
+`examples/exception-routing/` shows the exception-aware side on a whole program: an order pipeline with a ten-class exception hierarchy writes ten `catch` clauses, and four of them can never run (a handler disjoint from everything the `try` can throw, a handler that cannot match a narrowed `throw $e`, a parent clause after handlers for all of its thrown children, and a child clause shadowed by its parent). `elephc --emit-ir examples/exception-routing/main.php` keeps six handlers, and the two classes and two functions that only the dead clauses referenced never reach EIR, because declaration reachability (Pass 6) runs after this pass.
+
+AST-only optimizer entry points seed the standard SPL exception parent tree from the same table as the checker. This lets an `Exception` handler shadow a later `RuntimeException` handler even without checker metadata, while explicit source or checker hierarchy facts remain authoritative.
 
 ## Pass 6: Declaration reachability
 
@@ -464,6 +569,92 @@ try {
 
 Because every `match` arm produces the same known pure / non-throwing callable, the optimizer can prove that the `catch` path is dead and avoid emitting the `pow` branch at all.
 
+### Destructor throws
+
+PHP runs `__destruct` implicitly, and a destructor that throws raises a perfectly ordinary
+catchable exception. The site that retires the last owner of an object is therefore a throw
+site, even though nothing at that site is written as a `throw`. The exception-flow analysis
+models those sites so a `catch` that a destructor can actually reach is never pruned.
+
+The model is deliberately bounded and conservative:
+
+- It is **gated on a program-wide destructor summary**. A closed program without a throwing
+  destructor keeps that summary empty. Opaque eval and unsummarized destructor declarations
+  make it conservative instead of assuming there are no implicit throws.
+- The summary is the union of every summarized `__destruct` body, so a destructor that throws
+  one exact class still routes through ordinary first-match handler matching: a `catch` for a
+  disjoint class is still removed.
+- Destructor **enumeration is proven**, not assumed. A `__destruct` supplied by a trait,
+  declared without a body, declared inside a conditional branch, or declared inside a closure
+  body never reaches the summary collector, so the summary widens to the unknown `Throwable`
+  domain instead of silently claiming the program has no destructor throws. A reachable `eval`
+  widens it the same way: its source is opaque, so it can define a class with a throwing
+  destructor that no AST in the program mentions. That check reads the SOURCE, so a capability
+  forced on from the command line with no `eval` call or `'eval'` string anywhere leaves
+  nothing to find.
+- A `new C()` temporary names an **exact** runtime class, so its own destructor resolves
+  through the parent chain precisely, and a subclass source routes the subclass override rather
+  than the parent's destructor. `new self()` and `new parent()` are early-bound and stay exact;
+  `new static()` is **not**, because late static binding can instantiate a subclass whose
+  destructor throws something else. A value of a **declared** type can likewise name a
+  subclass, so object, `mixed`, `iterable`, and `callable` positions use the program-wide
+  summary. Declared scalar types contribute nothing, which is the precision that keeps
+  scalar-returning callees from resurrecting a handler.
+- Destroying an object also retires the **instance storage it owns**: declared, inherited,
+  and promoted properties, and the container children they hold. "This class declares no
+  `__destruct`" is not a proof that its children are quiet, so that term is dropped only when
+  the whole layout is provably non-heap scalar. A class with dynamic property storage
+  (`#[\AllowDynamicProperties]`, inherited or declared, or eval-visible property storage) has
+  no such layout proof at all: an instance can hold an object under a name no declaration
+  mentions.
+- The attributed sites are: call and constructor operands, a retired call receiver, a discarded
+  expression-statement or `echo` value, a retired callable literal, a write that rebinds
+  storage (including `unset`), and a callable frame's own scope teardown.
+- A **callable literal** written at a call site is created and retired there, so it retires
+  what it binds: explicit `use` captures by value and by reference, an arrow function's
+  implicit captures (which the AST does not list, so any arrow function is conservative), the
+  implicit `$this` a non-static closure written inside a class body binds, and the receiver a
+  first-class callable binds. A `(new C())->m(...)` receiver is exact. Nonliteral callees
+  retain conservative call summaries, including their possible retirement.
+- Borrowed views are not assumed harmless. A variable passed as an argument can become the last
+  owned reference as soon as another argument or the callee rebinds its source, and this pass
+  has no ownership proof to the contrary, so it uses the gated program-wide summary there.
+
+### The scope-cleanup proof
+
+A callable frame drops its remaining owners when it returns, so by default every callable
+summary unions the program-wide destructor summary. That default is sound but coarse: it would
+erase all exact-class distinction in any program with two unrelated destructor types, and would
+charge a purely scalar helper for a destructor it can never touch.
+
+The summary is therefore omitted for a callable whose frame is **proven** to own nothing
+destructible. The proof is deliberately narrow and has two halves, both required:
+
+- *Signature*: every parameter is declared with a non-heap scalar type and passed by value, and
+  there is no variadic parameter. An untyped parameter is not proven, because it can hold an
+  object.
+- *Body*: no statement binds unproven frame storage. Named-local increments are a scalar-only
+  exception. Assignments, `list()` unpacking, `foreach`
+  loop variables, `global`, `static`, a `catch` variable, `extract()`, `eval()`, and any call
+  with an lvalue argument (a possible by-reference out-parameter) all refuse the proof, as does
+  any statement or expression form the whitelist has not been taught. Tracking *which* local
+  holds what would need a dataflow this AST pass does not have, and getting that wrong would be
+  unsound rather than merely imprecise.
+
+Two things are deliberately outside this term. `$this` is not charged to the callee frame: the
+receiver is owned by the caller, and a `(new C())->m()` temporary is already attributed to the
+call site, so charging it twice would gain nothing and make every instance method unprovable.
+And an object's own property storage is retired when the OBJECT is destroyed, not when one of
+its methods returns, so it belongs to the exact-class retirement term above rather than here.
+
+The bound is honest rather than complete: a callable containing any rebinding write keeps
+unioning the program-wide summary at that write, because rebinding retires whatever the target
+previously held and this pass cannot say what that was.
+
+The precision cost is concentrated in programs with possible destructor throws, including
+opaque eval or unsummarized declarations. Unproven retirement sites retain the corresponding
+handlers.
+
 ## Why there are six passes
 
 If elephc removed whole branches before type checking, it could accidentally hide useful diagnostics.
@@ -613,8 +804,10 @@ fixed-point pass driver (`src/ir_passes/driver.rs`) after lowering, starting wit
 identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …) and local peephole
 patterns (box/unbox cancellation, scalar load/store forwarding, paired
 acquire/release cancellation, string-literal concat folding, redundant
-`move`/`borrow` cleanup), then immutable integer-local classification and
-integer-sink specialization for checked add/subtract/multiply. Those passes make
+`move`/`borrow` cleanup), then scalar local promotion into SSA values with block
+parameters at joins and loop back edges, then immutable integer-local
+classification and integer-sink specialization for checked add/subtract/multiply.
+Those passes make
 proven-stable local loads pure and replace transient boxed Mixed arithmetic with
 allocation-free `ichecked_*_to_int` operations only when every use observes an
 integer. After `CheckedIntSink`, `CheckedNumericChain` may fuse a left-associated

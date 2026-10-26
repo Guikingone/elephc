@@ -164,12 +164,22 @@ impl Checker {
         }
 
         let property_ty = self.infer_type(property, env)?;
-        if !matches!(property_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
+        if !property_ty.is_dynamic_property_name() {
             return Err(CompileError::new(
                 property.span,
                 "Dynamic property name must be string or integer",
             ));
         }
+
+        // A runtime name can miss every declared property, or resolve a strict ancestor's private
+        // name to a distinct dynamic property. The backend dispatches both answers per runtime
+        // class, so every admitted receiver shape records the reachable class subtree for hash
+        // reservation. See `crate::types::checker::scope_dynamic_storage`.
+        let receiver_ty = obj_ty.clone();
+        crate::types::checker::scope_dynamic_storage::record_scope_dynamic_runtime_name_receiver_mutation(
+            self,
+            &receiver_ty,
+        );
 
         self.infer_type_with_assignment_effects(value, env)?;
         if let Some(result_target) = result_target {

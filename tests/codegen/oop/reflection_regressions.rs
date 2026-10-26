@@ -967,3 +967,79 @@ echo implode(',', $names) . '|' . $reflector->getMethod('camelCaseOne')->getName
     );
     assert_eq!(out, "camelCaseOne,plain|camelCaseOne");
 }
+
+/// `ReflectionEnum::getCases()`/`getCase()` read the lazily filled `__cases` slot.
+///
+/// The slot was declared as a plain `array`, which stores a boxed Mixed cell, while its filler
+/// stores a raw object array; `getCases()` unboxed the raw pointer and answered "float given",
+/// and `getCase()` warned "foreach() argument must be of type array|object" and then threw
+/// "Suit::S is not a case". Expected output is `php -n` 8.5's.
+#[test]
+fn test_reflection_enum_get_cases_reads_the_filled_slot() {
+    let out = compile_and_run(
+        r#"<?php
+enum Suit: string { case H = "h"; case S = "s"; const X = 1; }
+$e = new ReflectionEnum(Suit::class);
+echo $e->getCase("S")->getName(), ":", count($e->getCases()), ":";
+try { $e->getCase("X"); } catch (ReflectionException $error) { echo $error->getMessage(), ":"; }
+echo json_encode([(new ReflectionEnum(Suit::class))->getCase("H")]), "\n";
+"#,
+    );
+    assert_eq!(out, "S:2:Suit::X is not a case:[{\"name\":\"H\",\"class\":\"Suit\"}]\n");
+}
+
+/// A literal `new ReflectionMethod(Trait::class, ...)` or `(Interface::class, ...)` and an object
+/// `new ReflectionClass($anonymous)` are answered from compile-time metadata.
+///
+/// Every reflector construction reserves an eval context, and a body owning one sent any target
+/// that was not a CLASS method to the interpreter, which does not know compiled traits ("Method
+/// T::m() does not exist") and lost `isAnonymous()` and `returnsReference()` facts.
+#[test]
+fn test_reflection_of_trait_interface_and_anonymous_targets_stays_compiled() {
+    let out = compile_and_run(
+        r#"<?php
+trait RefT { public function &get(): array { static $a = []; return $a; } public function Helper(): int { return 1; } }
+interface RefI { public function &byRef(int $n): array; }
+echo (new ReflectionMethod(RefT::class, "HELPER"))->getName(), ":";
+echo (new ReflectionMethod(RefT::class, "get"))->returnsReference() ? "y" : "n";
+echo (new ReflectionMethod(RefI::class, "byRef"))->returnsReference() ? "y" : "n";
+$anon = new class { public function v(): int { return 1; } };
+echo (new ReflectionClass($anon))->isAnonymous() ? "A" : "a";
+echo (new ReflectionClass(new class {}))->isAnonymous() ? "A" : "a";
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "Helper:yyAA\n");
+}
+
+/// Builtin call shapes that refused whole vendor files: `ReflectionClass::getConstants($filter)`
+/// (league/uri), `http_build_query()` named arguments (league/uri), `copy()` with a stream
+/// context (symfony/asset-mapper), and `array_column()` over enum cases and list rows
+/// (symfony/asset-mapper, symfony/type-info).
+#[test]
+fn test_builtin_signatures_that_refused_vendor_files() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+enum T: string { case A = 'a'; case B = 'b'; }
+class K { public const A = 1; protected const B = 2; private const C = 3; }
+$r = new ReflectionClass(K::class);
+echo implode(',', array_keys($r->getConstants())), '|';
+echo implode(',', array_keys($r->getConstants(ReflectionClassConstant::IS_PUBLIC))), '|';
+echo implode(',', array_keys($r->getConstants(ReflectionClassConstant::IS_PRIVATE))), "\n";
+echo http_build_query(data: ['a' => 1, 'b' => 'x y'], arg_separator: ';', encoding_type: PHP_QUERY_RFC3986), "\n";
+$src = tempnam(sys_get_temp_dir(), 'cp');
+file_put_contents($src, 'hello');
+var_dump(copy($src, $src . '.copy', stream_context_create()));
+echo file_get_contents($src . '.copy'), "\n";
+unlink($src);
+unlink($src . '.copy');
+echo implode(',', array_column(T::cases(), 'value')), '|';
+echo implode(',', array_column([['p', 1], ['q', 2]], 0)), "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "A,B,C|A|C\na=1;b=x%20y\nbool(true)\nhello\na,b|p,q\n"
+    );
+}

@@ -1,16 +1,16 @@
 ---
-title: "gmdate() — internals"
+title: "gmdate() - internals"
 description: "Compiler internals for gmdate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 234
+  order: 235
 ---
 
-## `gmdate()` — internals
+## `gmdate()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/gmdate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/gmdate.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

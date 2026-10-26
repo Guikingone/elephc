@@ -29,7 +29,7 @@ use crate::parser::ast::{BinOp, CastType, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_binop, e_bool, e_call, e_cast, e_concat, e_concat_all, e_index, e_instance_of, e_int,
     e_method_call, e_new_fq, e_not, e_null, e_str, e_ternary, e_var, function,
-    internal_declarations, s_assign, s_if, s_return, t_nullable,
+    php_semantics_declarations, s_assign, s_if, s_return, t_nullable,
 };
 
 /// Reserved helper backing `is_callable()` calls that pass `$syntax_only` or `$callable_name`.
@@ -37,7 +37,7 @@ pub(crate) const IS_CALLABLE_EXT_NAME: &str = "__elephc_is_callable_ext";
 
 /// Returns the extended `is_callable()` declarations for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| vec![is_callable_ext()])
+    php_semantics_declarations(|| vec![is_callable_ext()])
 }
 
 /// Builds `__elephc_is_callable_ext($value, $syntax_only = false, &$callable_name = null): bool`.

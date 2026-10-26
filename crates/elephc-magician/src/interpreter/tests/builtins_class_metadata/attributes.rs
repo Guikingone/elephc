@@ -654,3 +654,70 @@ return true;"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies attribute arguments that are constant EXPRESSIONS are evaluated when reflected.
+///
+/// The parser kept an attribute's arguments only when every one was a literal, so a single
+/// class constant (`Requirement::POSITIVE_INT`) dropped them all and `new ReflectionMethod()` on
+/// the method was fatal: Symfony reflects every controller, and symfony/demo's carry
+/// `#[Route(requirements: ['page' => Requirement::POSITIVE_INT])]`. The expression is kept and
+/// folded to its value in `getArguments()`, `newInstance()`, `__toString()` and
+/// `class_attribute_args()`. Expected output is php 8.5's (with `class_attribute_args` read
+/// through `ReflectionClass::getAttributes()[0]->getArguments()` there, and the rendered text
+/// being `(string) $attrs[1]`).
+#[test]
+fn execute_program_reflects_attribute_constant_expression_arguments() {
+    let program = parse_fragment(
+        br#"final class EvalRequirement { public const POSITIVE_INT = "[1-9][0-9]*"; public const PREFIX = "/blog"; public const LIMIT = 5; }
+define("EVAL_ROUTE_SUFFIX", "-x");
+#[Attribute(Attribute::TARGET_ALL | Attribute::IS_REPEATABLE)]
+final class EvalConstRoute {
+    public function __construct(public string $path, public string $name = "", public array $requirements = []) {}
+}
+#[EvalConstRoute(EvalRequirement::PREFIX . EVAL_ROUTE_SUFFIX, name: "cls")]
+final class EvalConstController {
+    #[EvalConstRoute("/", name: "index")]
+    #[EvalConstRoute(EvalRequirement::PREFIX . "/page/{page}", name: "paged", requirements: ["page" => EvalRequirement::POSITIVE_INT, 3 => EvalRequirement::LIMIT * 2, EvalRequirement::LIMIT])]
+    public function index(int $page) {}
+}
+$attrs = (new ReflectionMethod("EvalConstController", "index"))->getAttributes();
+echo count($attrs); echo "|";
+$args = $attrs[1]->getArguments();
+echo $args[0]; echo "|"; echo $args["name"]; echo "|";
+echo $args["requirements"]["page"]; echo "|"; echo $args["requirements"][3]; echo "|"; echo $args["requirements"][4]; echo "|";
+$route = $attrs[1]->newInstance();
+echo $route->path; echo "|"; echo $route->name; echo "|"; echo $route->requirements["page"]; echo "|";
+$class_args = class_attribute_args("EvalConstController", "EvalConstRoute");
+echo $class_args[0]; echo "|";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "2|/blog/page/{page}|paged|[1-9][0-9]*|10|5|/blog/page/{page}|paged|[1-9][0-9]*|/blog-x|"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    // `(string) $attrs[1]`: the fake runtime has no `__toString()` dispatch for the object, so the
+    // `__string` slot the materializer fills with that text is read directly.
+    let attrs = scope.visible_cell("attrs").expect("scope should contain attrs");
+    let index = values.int(1).expect("index");
+    let attribute = values.array_get(attrs, index).expect("second attribute");
+    let rendered = values.property_get(attribute, "__string").expect("rendered attribute");
+    assert_eq!(
+        values.get(rendered),
+        FakeValue::String(concat!(
+            "Attribute [ EvalConstRoute ] {\n",
+            "  - Arguments [3] {\n",
+            "    Argument #0 [ '/blog/page/{page}' ]\n",
+            "    Argument #1 [ name = 'paged' ]\n",
+            "    Argument #2 [ requirements = ['page' => '[1-9][0-9]*', 3 => 10, 4 => 5] ]\n",
+            "  }\n",
+            "}\n",
+        ).to_string())
+    );
+}

@@ -35,6 +35,8 @@ pub(crate) use postfix::{
     assignment_target_append_stmt, assignment_target_store_stmt,
     can_replay_assignment_target,
     lower_postfix_incdec_assignment,
+    update_dimension_base_is_snapshotted,
+    update_index_needs_snapshot,
 };
 pub(crate) use compound::is_valid_reference_source;
 pub(super) use postfix::{

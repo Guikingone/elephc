@@ -37,7 +37,7 @@ class ContractPipelineTests(unittest.TestCase):
         cls.render_by_name = {record["name"]: record for record in registry}
 
     def test_all_non_registry_contract_routes_are_exported(self) -> None:
-        """Keep the constructs, prelude, rewrite, and eval-only routes explicit."""
+        """Keep constructs, preludes, compiler transforms, and rewrites explicit."""
         routes = Counter(
             (record.get("aot") or {}).get("kind")
             for record in self.records
@@ -52,16 +52,61 @@ class ContractPipelineTests(unittest.TestCase):
                     # Four hash_*, the thirty-four PHP-visible curl_* contracts the
                     # canonical `--features curl` docs configuration publishes (see
                     # extract.run_gen_builtins), the fifty-four xml_* / xmlwriter_*
-                    # functions of the xml prelude, and the 326 functions the other
+                    # functions of the xml prelude, and the functions the other
                     # injected preludes declare (the password, array-edge, user-comparator,
                     # version_compare, hash_pbkdf2 and get_class_vars preludes among them).
-                    "prelude": 418,
+                    # TODO(merge): ours 418 / main 380 against a shared base of 381; 417 is the
+                    # arithmetic merge, to be corrected from the first real run of this test.
+                    "prelude": 417,
+                    # Calls rewritten from their enclosing lexical function frame.
+                    "compiler-transform": 3,
                     # The date/calendar procedural families rewritten by the name resolver.
                     "name-resolver-rewrite": 54,
-                    "none": 3,
                 }
             ),
         )
+
+    def test_capture_contracts_publish_shared_reference_support(self) -> None:
+        """Keep shared capture passing modes distinct from the pending AOT callable wrapper policy."""
+        for name in ["mb_ereg", "mb_eregi"]:
+            record = self.by_name[name]
+            self.assertFalse(record["eval_only"])
+            self.assertTrue(record["aot"]["supported"])
+            self.assertEqual(record["aot"]["kind"], "registry")
+            self.assertTrue(record["aot"]["params"][2]["by_ref"])
+            self.assertTrue(record["eval"]["supported"])
+            self.assertEqual(record["eval"]["kind"], "registry")
+            self.assertTrue(record["eval"]["params"][2]["by_ref"])
+            rendered = self.render_by_name[name]
+            self.assertFalse(rendered["eval_only"])
+            self.assertEqual(rendered["lowering"]["sig_file"], f"src/builtins/string/{name}.rs")
+            self.assertEqual(rendered["semantics"]["callable"]["kind"], "static_only")
+            page = render.render_internals(rendered, 0, REPO)
+            self.assertIn(f"runtime.{name}", page)
+            self.assertNotIn("No compiled lowering is available", page)
+            self.assertNotIn("intentionally eval-only", page)
+            self.assertNotIn("](\u0029", page)
+        errors = []
+        audit_builtins._check_backend_contracts(list(self.render_by_name.values()), errors, {})
+        self.assertEqual(errors, [])
+        inconsistent = [dict(record, eval_only=True) if record["name"] == "mb_ereg" else record
+                        for record in self.render_by_name.values()]
+        audit_builtins._check_backend_contracts(inconsistent, errors, {})
+        self.assertIn("mb_ereg has an inconsistent eval_only flag", errors)
+
+    def test_query_contract_publishes_shared_reference_support(self) -> None:
+        """Publish the shared query implementation while retaining its explicit callable restriction."""
+        record = self.by_name["mb_parse_str"]
+        for backend in ["aot", "eval"]:
+            self.assertTrue(record[backend]["supported"])
+            self.assertEqual(record[backend]["kind"], "registry")
+        self.assertTrue(record["params"][1]["by_ref"])
+        self.assertEqual([param["name"] for param in record["params"]], ["string", "result"])
+        page = render.render_internals(self.render_by_name["mb_parse_str"], 0, REPO)
+        self.assertIn("runtime.mb_parse_str", page)
+        self.assertNotIn("No compiled lowering is available", page)
+        self.assertEqual(self.render_by_name["mb_parse_str"]["semantics"]["callable"]["kind"], "static_only")
+        self.assertIn("What the type checker enforces", page)
 
     def test_hash_init_and_exit_use_backend_contract_signatures(self) -> None:
         """Pin the prelude subset and construct default that previously drifted."""
@@ -71,6 +116,11 @@ class ContractPipelineTests(unittest.TestCase):
         self.assertEqual(hash_init["aot"]["signature_override_reason"], "prelude-signature-subset")
         self.assertEqual([param["name"] for param in hash_init["aot"]["params"]], ["algo"])
         self.assertEqual(self.by_name["exit"]["params"][0]["default"], 0)
+
+    def test_error_all_default_renders_as_a_php_constant(self) -> None:
+        """Keep the profile-aware error mask symbolic in generated signatures."""
+        default = self.render_by_name["set_error_handler"]["sig"]["params"][1]["default"]
+        self.assertEqual(default, "E_ALL")
 
     def test_getenv_user_signature_preserves_checked_union(self) -> None:
         """Render the PHP union instead of contract-level `mixed`."""
@@ -100,11 +150,13 @@ class ContractPipelineTests(unittest.TestCase):
         self.assertIn("`eval()` (magician interpreter)**: supported", rendered)
 
     def test_prelude_availability_names_the_declaring_prelude(self) -> None:
-        """Two preludes declare PHP-visible builtins; each page must name its own."""
+        """Each PHP-visible prelude route names its actual declaring prelude."""
         rendered = render._availability_section(self.render_by_name["curl_init"])
         self.assertIn("compiler-injected curl prelude", rendered)
         self.assertNotIn("hash prelude", rendered)
         self.assertNotIn("Compiled (AOT)**: not available", rendered)
+        rendered = render._availability_section(self.render_by_name["zend_version"])
+        self.assertIn("compiler-injected version prelude", rendered)
 
     def test_user_renderer_owns_section_spacing_once(self) -> None:
         """Join empty optional sections without accumulating blank-line runs."""

@@ -42,3 +42,50 @@ echo $runtime->envVarName(), ':', $runtime->debugVarName();
     );
     assert_eq!(out, "APP_ENV:APP_DEBUG");
 }
+
+/// `$object[$k] ?? $d` over an `ArrayAccess` receiver asks `offsetExists()` first and reads
+/// `offsetGet()` only when it answered true (Laravel's `$this->app['session'] ?? null`), and a
+/// closure returning `$x ?? null` keeps the value it read instead of being typed `null`.
+/// Expected output verified against php 8.5.
+#[test]
+fn test_array_access_coalesce_asks_offset_exists_and_closure_coalesce_keeps_value() {
+    let out = compile_and_run(
+        r#"<?php
+class Cont implements ArrayAccess {
+  function offsetExists($o): bool { echo "exists($o);"; return $o === "session"; }
+  function offsetGet($o): mixed { echo "get($o);"; return "S"; }
+  function offsetSet($o, $v): void {}
+  function offsetUnset($o): void {}
+}
+class Prov {
+  public $app;
+  function __construct($a) { $this->app = $a; }
+  function direct() { return $this->app['session'] ?? 'none'; }
+  function missing() { return $this->app['nope'] ?? 'none'; }
+  function clo() { return function () { return $this->app['session'] ?? null; }; }
+}
+$p = new Prov(new Cont);
+echo $p->direct(), "\n";
+echo $p->missing(), "\n";
+$f = $p->clo();
+var_dump($f());
+$c = new Cont;
+echo $c['session'] ?? 'd', "\n";
+$g = function ($a) { return $a['s'] ?? null; };
+var_dump($g(['s' => 'x']), $g([]));
+$h = fn($a) => $a ?? null;
+var_dump($h('y'));
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"exists(session);get(session);S
+exists(nope);none
+exists(session);get(session);string(1) "S"
+exists(session);get(session);S
+string(1) "x"
+NULL
+string(1) "y"
+"#
+    );
+}

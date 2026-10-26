@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Specialized and builtin signatures must expose the caller-visible parameter contract expected by call-argument planning.
+//! - Callable-array target provenance is local-frame state. A body check starts with empty target
+//!   maps and restores the caller's maps before call-site validation resumes.
 
 use std::collections::HashMap;
 
@@ -26,7 +28,80 @@ impl Checker {
     ///
     /// Returns the resolved return type, or a `CompileError` if the body fails to type-check
     /// or return types are incompatible with any declared annotation.
+    ///
+    /// A recursive self-call that widens the parameters (`recursive_param_widenings`) re-runs the
+    /// body with the widened types until they stop changing. A round that failed is retried the
+    /// same way, since its error may only exist under the narrower types.
     pub(crate) fn resolve_function_signature(
+        &mut self,
+        name: &str,
+        decl: &FnDecl,
+        param_types: Vec<(String, PhpType)>,
+    ) -> Result<PhpType, CompileError> {
+        let result = self.resolve_function_signature_rounds(name, decl, param_types.clone());
+        // A call-site-specialized parameter type is an optimization, not PHP semantics: the
+        // parameter is untyped, so php reads `$o->secret` at run time and raises the catchable
+        // `Error` for an inaccessible name only when that call executes. Specializing the
+        // parameter to the one class a call passes turned that into a compile error -- or, when
+        // the failing round ran inside a loop's storage pre-pass (which drops its errors), into a
+        // silently poisoned signature whose placeholder `int` return type read a string as `0`.
+        // So a visibility refusal retries with the specialized parameters read as `mixed`.
+        match result {
+            Err(error) if Self::is_member_visibility_refusal(&error) => {
+                let mut widened = param_types.clone();
+                let mut changed = false;
+                for (idx, (_, param_ty)) in widened.iter_mut().enumerate() {
+                    let undeclared = decl.param_types.get(idx).map_or(true, |ann| ann.is_none());
+                    let by_ref = decl.ref_params.get(idx).copied().unwrap_or(false);
+                    if undeclared
+                        && !by_ref
+                        && matches!(param_ty, PhpType::Object(_) | PhpType::Union(_))
+                    {
+                        *param_ty = PhpType::Mixed;
+                        changed = true;
+                    }
+                }
+                if !changed {
+                    return Err(error);
+                }
+                self.resolve_function_signature_rounds(name, decl, widened)
+                    .or(Err(error))
+            }
+            other => other,
+        }
+    }
+
+    /// Returns whether every diagnostic is php's runtime visibility refusal for a property.
+    fn is_member_visibility_refusal(error: &CompileError) -> bool {
+        error.flatten().iter().all(|error| {
+            error.message.starts_with("Cannot access ") && error.message.contains(" property")
+        })
+    }
+
+    /// The body-check rounds of `resolve_function_signature`, without the visibility retry.
+    fn resolve_function_signature_rounds(
+        &mut self,
+        name: &str,
+        decl: &FnDecl,
+        param_types: Vec<(String, PhpType)>,
+    ) -> Result<PhpType, CompileError> {
+        // Types only widen, so a handful of rounds reaches the fixpoint; the bound only guards
+        // against a widening that oscillates.
+        const MAX_RECURSIVE_WIDENING_ROUNDS: usize = 8;
+        let mut param_types = param_types;
+        for _ in 0..MAX_RECURSIVE_WIDENING_ROUNDS {
+            self.recursive_param_widenings.remove(name);
+            let result = self.resolve_function_signature_once(name, decl, param_types.clone());
+            match self.recursive_param_widenings.remove(name) {
+                Some(widened) if widened != param_types => param_types = widened,
+                _ => return result,
+            }
+        }
+        self.resolve_function_signature_once(name, decl, param_types)
+    }
+
+    /// One body check of `resolve_function_signature` with fixed parameter types.
+    fn resolve_function_signature_once(
         &mut self,
         name: &str,
         decl: &FnDecl,
@@ -72,6 +147,14 @@ impl Checker {
             .map(|(_, (pname, _))| pname.clone())
             .collect();
         let saved_callable_param_names = self.callable_param_names.clone();
+        // Target records name storage in one physical frame. A same-named parameter or local in
+        // this function must neither inherit the caller's target nor let a loop/try join clear
+        // the caller's record while the body is re-specialized. Callable parameter signatures
+        // have their dedicated channel below; callable-array locals rebuild their records from
+        // assignments inside this body.
+        let saved_callable_array_targets = std::mem::take(&mut self.callable_array_targets);
+        let saved_callable_array_target_versions =
+            std::mem::take(&mut self.callable_array_target_versions);
         for pname in &declared_callable_param_names {
             self.callable_param_names.insert(pname.clone());
         }
@@ -115,29 +198,7 @@ impl Checker {
             }
         }
 
-        let provisional_sig = FunctionSig {
-            params: param_types.clone(),
-            param_type_exprs: decl
-                .param_types
-                .iter()
-                .cloned()
-                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
-                .collect(),
-            param_attributes: decl.param_attributes.clone(),
-            defaults: decl.defaults.clone(),
-            return_type: self.provisional_return_type(decl),
-            declared_return: decl.return_type.is_some(),
-            by_ref_return: decl.by_ref_return,
-            ref_params: decl.ref_params.clone(),
-            deprecation: None,
-            declared_params: decl
-                .param_types
-                .iter()
-                .map(|type_ann| type_ann.is_some())
-                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
-                .collect(),
-            variadic: decl.variadic.clone(),
-        };
+        let provisional_sig = self.provisional_function_sig(decl, param_types.clone());
         self.functions.insert(name.to_string(), provisional_sig);
 
         let mut return_type = PhpType::Void;
@@ -161,21 +222,6 @@ impl Checker {
             .cloned()
             .chain(decl.variadic.iter().cloned())
             .collect();
-        // A parameter with a declared type hint is a contract: it never becomes kill/retype
-        // eligible inside the body, in either mode.
-        let typed_param_names: Vec<String> = decl
-            .params
-            .iter()
-            .zip(decl.param_types.iter())
-            .filter(|(_, type_ann)| type_ann.is_some())
-            .map(|(name, _)| name.clone())
-            .chain(
-                decl.variadic
-                    .iter()
-                    .filter(|_| decl.variadic_type.is_some())
-                    .cloned(),
-            )
-            .collect();
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return = decl.by_ref_return;
         self.loop_storage_types
@@ -195,7 +241,6 @@ impl Checker {
         let body_check_result = self.with_local_storage_context(
             ref_param_names,
             param_names,
-            typed_param_names,
             pre_bound_own_storage,
             &decl.body,
             |checker| {
@@ -246,6 +291,8 @@ impl Checker {
                 }
             }
         }
+        self.callable_array_targets = saved_callable_array_targets;
+        self.callable_array_target_versions = saved_callable_array_target_versions;
         body_check_result?;
         for pname in &callable_param_names {
             if let Some(sig) = self.callable_sigs.get(pname).cloned() {
@@ -331,6 +378,9 @@ impl Checker {
             for return_info in &all_return_infos[1..] {
                 return_type = Self::wider_type(&return_type, &return_info.ty);
             }
+            if !decl.by_ref_return {
+                return_type = self.widen_return_for_fall_off(&decl.body, return_type);
+            }
         }
 
         let sig = FunctionSig {
@@ -357,6 +407,10 @@ impl Checker {
             deprecation: crate::types::checker::schema::validation::extract_deprecation(
                 &decl.attributes,
             ),
+            // The syntactic fact, taken from the SOURCE body before any pass has run. `decl.body`
+            // here is the declaration as parsed, so an unreachable `yield` still counts -- which
+            // is PHP's rule, and the thing lowering must not try to re-derive later.
+            is_generator: contains_yield,
         };
         self.functions.insert(name.to_string(), sig);
         if return_type == PhpType::Callable {
@@ -381,6 +435,47 @@ impl Checker {
         }
 
         Ok(return_type)
+    }
+
+    /// Builds the *provisional* signature published before a free function's body is walked.
+    ///
+    /// Shared by the two places that publish one: `resolve_function_signature` (under the
+    /// function's own name) and the variant-group path in
+    /// `crate::types::checker::driver::functions` (under the group's PHP-visible name, which is
+    /// what a recursive call inside an include-loaded variant spells). Keeping one builder keeps
+    /// one provisional policy: a variant group used to publish its own copy with a hardcoded
+    /// `Int` return, so a recursive include-loaded `: string` function was rejected with
+    /// `return type expects Str, got Int` although the same function compiled when declared in
+    /// the main file (issue #635).
+    pub(in crate::types::checker) fn provisional_function_sig(
+        &self,
+        decl: &FnDecl,
+        param_types: Vec<(String, PhpType)>,
+    ) -> FunctionSig {
+        FunctionSig {
+            params: param_types,
+            param_type_exprs: decl
+                .param_types
+                .iter()
+                .cloned()
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
+                .collect(),
+            param_attributes: decl.param_attributes.clone(),
+            defaults: decl.defaults.clone(),
+            return_type: self.provisional_return_type(decl),
+            declared_return: decl.return_type.is_some(),
+            by_ref_return: decl.by_ref_return,
+            ref_params: decl.ref_params.clone(),
+            deprecation: None,
+            is_generator: false,
+            declared_params: decl
+                .param_types
+                .iter()
+                .map(|type_ann| type_ann.is_some())
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
+                .collect(),
+            variadic: decl.variadic.clone(),
+        }
     }
 
     /// Picks the return type for the *provisional* signature published before a free

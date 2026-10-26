@@ -1,16 +1,16 @@
 ---
-title: "date_isodate_set() — internals"
+title: "date_isodate_set() - internals"
 description: "Compiler internals for date_isodate_set(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 215
+  order: 216
 ---
 
-## `date_isodate_set()` — internals
+## `date_isodate_set()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:969](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L969) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:992](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L992) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

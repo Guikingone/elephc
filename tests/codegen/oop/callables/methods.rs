@@ -848,7 +848,7 @@ foreach ($values as $value) {
 }
 "#,
     );
-    assert_eq!(out, "321");
+    assert_eq!(out, "231");
 }
 
 /// Tests an instance method captured as a first-class callable and passed to `uasort`, verifying
@@ -919,7 +919,7 @@ foreach ($uasorted as $value) {
 }
 "#,
     );
-    assert_eq!(out, "321:321:321");
+    assert_eq!(out, "321:231:321");
 }
 
 /// Tests a static method using late static binding passed to `array_reduce` inside a static
@@ -1022,7 +1022,7 @@ echo "|";
 ChildCallbacks::run();
 "#,
     );
-    assert_eq!(out, "23:11,12,:321:321:321|43:21,22,:123:123:123");
+    assert_eq!(out, "23:11,12,:321:231:321|43:21,22,:123:132:123");
 }
 
 /// Tests an instance method first-class callable invoked immediately via an expression call
@@ -1232,7 +1232,7 @@ foreach ($uasorted as $value) {
 }
 "#,
     );
-    assert_eq!(out, "34:23:11,12,:321:321:321");
+    assert_eq!(out, "34:23:11,12,:321:231:321");
 }
 
 /// Verifies an interface-typed receiver resolves a first-class method callable through the

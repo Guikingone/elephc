@@ -1,16 +1,16 @@
 ---
-title: "date() — internals"
+title: "date() - internals"
 description: "Compiler internals for date(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 201
+  order: 202
 ---
 
-## `date()` — internals
+## `date()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/date.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/date.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

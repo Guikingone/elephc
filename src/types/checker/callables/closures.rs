@@ -11,7 +11,7 @@
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TypeExpr};
 use crate::span::Span;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
@@ -29,6 +29,30 @@ pub(crate) struct ClosureSignatureContext {
     pub declared_params: Vec<bool>,
 }
 
+/// Returns the captures of a closure that must exist in the enclosing scope.
+///
+/// An arrow function captures by value every outer variable its body names, and php skips the
+/// ones that do not exist: a name the body assigns itself (the `$f = function () use (&$f) {...}`
+/// recursion idiom inside `fn () => ...`, Laravel's `Vite::makePreloadTags`) is a local, not a
+/// capture. Only an explicit `use ($x)` of an unknown name is an error.
+pub(crate) fn closure_captures_for_check<'a>(
+    is_arrow: bool,
+    captures: &'a [String],
+    capture_refs: &[String],
+    env: &TypeEnv,
+) -> std::borrow::Cow<'a, [String]> {
+    if !is_arrow {
+        return std::borrow::Cow::Borrowed(captures);
+    }
+    std::borrow::Cow::Owned(
+        captures
+            .iter()
+            .filter(|name| env.contains_key(name.as_str()) || capture_refs.contains(name))
+            .cloned()
+            .collect(),
+    )
+}
+
 impl Checker {
     /// Builds the closure signature/environment, typing unannotated parameters
     /// from `contextual_param_types` when a hint is available at that position.
@@ -39,11 +63,13 @@ impl Checker {
     /// real value type instead of the gradual `Mixed` fallback. An explicitly
     /// annotated parameter always keeps its declared type; the hint is only
     /// consulted for parameters with no type annotation.
+    /// An untyped by-reference parameter uses canonical Mixed storage instead of the hint.
     pub(crate) fn prepare_closure_signature_context_with_param_hints(
         &mut self,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
         variadic_by_ref: bool,
+        variadic_type: &Option<TypeExpr>,
         captures: &[String],
         capture_refs: &[String],
         span: Span,
@@ -112,12 +138,32 @@ impl Checker {
         }
 
         if let Some(name) = variadic {
-            closure_env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Int)));
-            param_types.push((name.clone(), PhpType::Array(Box::new(PhpType::Mixed))));
-            param_type_exprs.push(None);
+            // A closure VALUE is a callable descriptor, so its collector is always
+            // descriptor-reachable and always takes the descriptor container. There is no
+            // reachability question to answer here and nothing to promote later: the body and the
+            // published signature are built from the same storage in one place.
+            //
+            // The body environment used to be seeded with `array<int>` while the signature
+            // published `array<mixed>`, so the frame read boxed Mixed slots as raw integers even
+            // before any named argument was involved. One binding, both sides.
+            let storage = crate::types::signatures::descriptor_variadic_container();
+            // The declared element hint is the SOURCE contract, not the storage: it is what
+            // `$closure(...)` call sites are checked against, and dropping it (this pushed a bare
+            // `None`/`false` pair) silently turned `int ...$xs` into an untyped tail that accepted
+            // anything. Resolving it here also keeps a bad hint an error at the declaration.
+            if let Some(type_ann) = variadic_type {
+                self.resolve_declared_param_type_hint(
+                    type_ann,
+                    span,
+                    &format!("Closure variadic parameter ${}", name),
+                )?;
+            }
+            closure_env.insert(name.clone(), storage.clone());
+            param_types.push((name.clone(), storage));
+            param_type_exprs.push(variadic_type.clone());
             defaults.push(None);
             ref_params.push(variadic_by_ref);
-            declared_params.push(false);
+            declared_params.push(variadic_type.is_some());
         }
 
         Ok(ClosureSignatureContext {
@@ -139,6 +185,7 @@ impl Checker {
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
         variadic_by_ref: bool,
+        variadic_type: &Option<TypeExpr>,
         return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
@@ -152,6 +199,7 @@ impl Checker {
             params,
             variadic,
             variadic_by_ref,
+            variadic_type,
             captures,
             capture_refs,
             span,
@@ -172,6 +220,10 @@ impl Checker {
             declared_params: closure_sig.declared_params,
             variadic: variadic.clone(),
             deprecation: None,
+            // The checker classifies this source body for callable typing. Unlike named
+            // functions, EIR closures rebuild their signature from the optimized body, so
+            // optimizer passes must retain a yield token to preserve that classification.
+            is_generator: super::super::yield_validation::body_contains_yield(body),
         })
     }
 
@@ -257,7 +309,54 @@ impl Checker {
             for return_info in &all_return_infos[1..] {
                 inferred_return = wider_type_syntactic(&inferred_return, &return_info.ty);
             }
-            Ok((inferred_return, false))
+            let inferred_return = self.widen_return_for_fall_off(body, inferred_return);
+            Ok((self.caller_visible_direct_call_return(body, inferred_return), false))
+        }
+    }
+
+    /// Applies the caller-visible container rule to a closure whose body is `return <user call>;`.
+    ///
+    /// EIR lowering stamps exactly that body shape with the callee's
+    /// `crate::types::dynamic_params::caller_visible_return_type` (see
+    /// `crate::ir_lower::function::direct_closure_return_expr_type`), built from the two
+    /// predicates applied here: a callee with an untyped by-value parameter receives it as a
+    /// boxed Mixed cell, so an array it builds from it holds Mixed elements. The checker
+    /// inferred the element from the parameter placeholder instead
+    /// (`int` for an untyped closure parameter), so `strlen($f("hello")[0])` was refused although
+    /// lowering reads the element back as the string it is (issue #1270). Only a container is
+    /// widened, and only for that shape, because only that shape is stamped this way.
+    ///
+    /// A container inside a union is widened too, keeping the union: a callee returning `[$v]`
+    /// or `null` gives `?array<mixed>`, whose elements a `string` parameter accepts, while the
+    /// boxed `Mixed` lowering stamps for that union is its codegen representation.
+    fn caller_visible_direct_call_return(&self, body: &[Stmt], inferred: PhpType) -> PhpType {
+        if !crate::types::dynamic_params::type_contains_container(&inferred) {
+            return inferred;
+        }
+        let [stmt] = body else {
+            return inferred;
+        };
+        let StmtKind::Return(Some(expr)) = &stmt.kind else {
+            return inferred;
+        };
+        let ExprKind::FunctionCall { name, .. } = &expr.kind else {
+            return inferred;
+        };
+        if self.is_recorded_builtin_call(expr.span) {
+            return inferred;
+        }
+        let Some(signature) = self.functions.get(name.as_str()) else {
+            return inferred;
+        };
+        if signature.declared_return
+            || !crate::types::dynamic_params::signature_has_dynamic_untyped_param(signature)
+        {
+            return inferred;
+        }
+        match crate::types::dynamic_params::dynamic_param_container_php_type(&inferred) {
+            // Two container members can widen to the same type; fold them back into one.
+            PhpType::Union(members) => self.normalize_union_type(members),
+            widened => widened,
         }
     }
 
@@ -275,20 +374,23 @@ impl Checker {
                 params,
                 variadic,
                 variadic_by_ref,
+                variadic_type,
                 return_type,
                 body,
                 captures,
                 capture_refs,
                 by_ref_return,
+                is_arrow,
                 ..
             } => self
                 .resolve_closure_signature_with_param_hints(
                     params,
                     variadic,
                     *variadic_by_ref,
+                    variadic_type,
                     return_type,
                     body,
-                    captures,
+                    &closure_captures_for_check(*is_arrow, captures, capture_refs, env),
                     capture_refs,
                     *by_ref_return,
                     expr.span,
@@ -381,6 +483,63 @@ impl Checker {
         self.static_property_callable_sigs
             .get(&format!("{}::${}", declaring_class, property))
             .cloned()
+    }
+
+    /// Returns the callable target tracked for a two-element callable-array local.
+    ///
+    /// This is intentionally narrower than general callable-signature resolution. In
+    /// particular, it does not validate the target as a zero-argument invocation and it does
+    /// not classify every `Array(Mixed)` value as callable. The matching EIR path materializes
+    /// this target as a descriptor before crossing a `callable` parameter boundary.
+    pub(crate) fn tracked_callable_array_target(
+        &self,
+        expr: &Expr,
+    ) -> Option<CallableTarget> {
+        let ExprKind::Variable(name) = &expr.kind else {
+            return None;
+        };
+        self.callable_array_targets.get(name).cloned()
+    }
+
+    /// Resolves a callable array that parameter lowering can materialize as a descriptor.
+    ///
+    /// Stored arrays need tracked target metadata. A two-element literal is also safe because
+    /// lowering consumes it directly at the parameter boundary and evaluates its receiver once.
+    pub(crate) fn callable_array_param_target(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Option<CallableTarget>, CompileError> {
+        let target = if let Some(target) = self.tracked_callable_array_target(expr) {
+            target
+        } else {
+            let ExprKind::ArrayLiteral(items) = &expr.kind else {
+                return Ok(None);
+            };
+            let [receiver, method] = items.as_slice() else {
+                return Ok(None);
+            };
+            let ExprKind::StringLiteral(method) = &method.kind else {
+                return Ok(None);
+            };
+            if let Some(receiver) = self.static_callable_array_receiver(receiver, expr.span)? {
+                CallableTarget::StaticMethod {
+                    receiver,
+                    method: method.clone(),
+                }
+            } else {
+                let receiver_ty = self.infer_type(receiver, env)?;
+                let Some(_) = self.invokable_class_for_type(&receiver_ty) else {
+                    return Ok(None);
+                };
+                CallableTarget::Method {
+                    object: Box::new(receiver.clone()),
+                    method: method.clone(),
+                }
+            }
+        };
+        self.resolve_first_class_callable_sig(&target, expr.span, env)?;
+        Ok(Some(target))
     }
 
     /// Extracts the element callable signature from an expression that yields an array of callables.

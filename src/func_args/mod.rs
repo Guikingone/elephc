@@ -13,9 +13,8 @@
 //!   `mixed ...$__elephc_func_args`, so the *existing* variadic call machinery (planner,
 //!   EIR lowering, ABI) packs the surplus with no new ABI surface.
 //! - Because the introspection calls are rewritten away here, no builtin registry entry
-//!   exists for them: they behave like the language constructs PHP itself special-cases
-//!   (php-src rejects `$f = 'func_num_args'; $f();` with "Cannot call func_num_args()
-//!   dynamically" for the same reason).
+//!   exists for them. PHP accepts direct calls and literal `call_user_func*` forms, while
+//!   rejecting a callback first stored in a variable or created with first-class syntax.
 //! - The pass runs *after* name resolution and autoloading so autoloaded declarations are
 //!   covered too. Call names are therefore matched on their unqualified last segment,
 //!   case-insensitively, which accepts both the canonical `func_num_args` and the
@@ -23,9 +22,9 @@
 //!   function exists. A program that declares its own function with one of the three names
 //!   disables the pass entirely (see `program_declares_introspection_name`).
 //! - Supported scopes are functions, methods (instance and static) and closures/arrow
-//!   functions whose declared parameters are all mandatory and which declare no variadic of
-//!   their own. Every other shape is a hard error rather than a silently wrong answer —
-//!   see `walk::Rewriter::scope_replacement` for the exact diagnostics.
+//!   functions. Source variadics are snapshotted on entry so later writes do not rewrite the
+//!   argument history. Optional parameters carry internal count metadata so omitted defaults
+//!   remain distinguishable from arguments the caller supplied.
 
 mod build;
 mod method_families;
@@ -38,31 +37,26 @@ use crate::types::FunctionSig;
 
 /// Name of the hidden variadic parameter that collects the surplus positional arguments.
 ///
-/// Reserved: user code cannot declare `$__elephc_func_args` and reach this slot, and the
-/// name never appears in a PHP-visible signature position because it is added after the
-/// source declaration has been parsed.
-pub(crate) const HIDDEN_ARGS_PARAM: &str = "__elephc_func_args";
+/// Every name in this group carries `crate::names::GENERATED_LOCAL_MARKER`, so none of them can
+/// be spelled by PHP source, named as an argument in an `eval()` fragment, or confused with a
+/// user variable that merely happens to start with `__elephc_`. The name also never appears in
+/// a PHP-visible signature position because it is added after the source declaration has been
+/// parsed.
+pub(crate) const HIDDEN_ARGS_PARAM: &str = "__elephc_func_args#gen";
 
-/// Prefix of the caller-supplied argument-count marker a call appends to the hidden variadic
-/// tail of a scope with optional parameters.
-///
-/// Default materialization erases whether an optional parameter was passed, so the caller
-/// records the count it really passed as the tail's LAST entry: `"\0elephc-argc:" . <count>`.
-/// A string no PHP program passes is what lets a call that cannot add the marker -- a spread,
-/// named arguments, a callable invoker -- still be told apart from one that did. The eval
-/// bridge appends the same marker (`elephc-magician`'s native function binding) and must agree
-/// on the spelling.
-pub(crate) const ARGC_MARKER_PREFIX: &str = "\0elephc-argc:";
-
-/// Returns the argc marker for `count` actually passed arguments.
-pub(crate) fn argc_marker(count: usize) -> String {
-    format!("{ARGC_MARKER_PREFIX}{count}")
-}
+/// Hidden regular parameter carrying the actual count when a source variadic owns the tail slot.
+pub(crate) const HIDDEN_ARGC_PARAM: &str = "__elephc_func_argc#gen";
 
 /// Name of the hidden local that holds the evaluated `func_get_arg()` position when the
 /// position expression is not already side-effect free, so it is evaluated exactly once
 /// across the range checks and the indexed read.
-const POSITION_TEMP: &str = "__elephc_func_arg_pos";
+const POSITION_TEMP: &str = "__elephc_func_arg_pos#gen";
+
+/// Key local of the entry-time snapshot loop over a source-declared variadic parameter.
+pub(crate) const SNAPSHOT_KEY_LOCAL: &str = "__elephc_func_arg_key#gen";
+
+/// Value local of the entry-time snapshot loop over a source-declared variadic parameter.
+pub(crate) const SNAPSHOT_VALUE_LOCAL: &str = "__elephc_func_arg_value#gen";
 
 /// The three PHP argument-introspection functions this pass rewrites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,12 +118,34 @@ impl IntrospectionCall {
 /// Returns the rewritten program, or the combined diagnostics for every unsupported use.
 /// A program that declares its own function named after one of the three constructs is
 /// returned untouched, so the user's declaration keeps winning exactly as it does in PHP.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): both the detector and the
+/// rewriter walk the whole program, so an embedder calling it without the CLI driver's wrapper gets
+/// the same stack budget.
 pub fn desugar(program: Program) -> Result<Program, CompileError> {
-    if program_declares_introspection_name(&program) {
+    crate::compiler_stack::with_compiler_stack(|| {
+        // Same moment, same reason: autoloaded files are spliced in and the checker has not run.
+        let program = crate::literal_format_split::split_ternary_literal_formats(program);
+        desugar_on_compiler_stack(program)
+    })
+}
+
+/// The body of [`desugar`], run on the stack `with_compiler_stack` sized.
+fn desugar_on_compiler_stack(program: Program) -> Result<Program, CompileError> {
+    let mut program = program;
+    // The gate walks the program in place: its detector mode performs no rewrite, so there is
+    // no reason to hand it a full copy of the AST.
+    // TEMP-AB-SWITCH ELEPHC_NO_CAPTURE_ALL
+    let capture_all_frames = walk::program_uses_backtrace(&mut program)
+        && std::env::var_os("ELEPHC_NO_CAPTURE_ALL").is_none();
+    let rewrite_introspection = !program_declares_introspection_name(&program);
+    if !rewrite_introspection && !capture_all_frames {
         return Ok(program);
     }
-    let mut program = program;
-    let mut rewriter = walk::Rewriter::new();
+    let mut rewriter = walk::Rewriter::new(capture_all_frames, rewrite_introspection);
+    if capture_all_frames {
+        rewriter.set_capture_opt_outs(method_families::capture_all_opt_outs(&program));
+    }
     rewriter.walk_stmts(&mut program);
     method_families::propagate(&mut program);
     match rewriter.into_errors() {
@@ -151,12 +167,9 @@ pub(crate) fn sig_collects_surplus_args(sig: &FunctionSig) -> bool {
 
 /// Returns `sig` as PHP declares it: without the hidden variadic this pass appends.
 ///
-/// The hidden parameter is an ABI detail, and `method_families::propagate` spreads it across a
-/// whole interface family so every implementation shares one call shape. A PHP-visible contract
-/// must not carry it: handed to the interpreter as an interface requirement, it demanded a
-/// variadic parameter from every class implementing the interface there, and refused
-/// `class Dispatcher implements DispatcherContract` because another implementation of that
-/// interface happened to call `func_get_args()`.
+/// The hidden parameter is an ABI detail. A PHP-visible contract must not carry it: handed to
+/// the interpreter as an interface requirement, it demanded a variadic parameter from every class
+/// implementing the interface there.
 pub(crate) fn php_visible_signature(sig: &FunctionSig) -> FunctionSig {
     if !sig_collects_surplus_args(sig) {
         return sig.clone();
@@ -177,6 +190,25 @@ pub(crate) fn php_visible_signature(sig: &FunctionSig) -> FunctionSig {
     }
     visible.variadic = None;
     visible
+}
+
+/// Returns whether the hidden collector must begin with the actual PHP argument count.
+pub(crate) fn sig_collects_optional_arg_count(sig: &FunctionSig) -> bool {
+    if !sig_collects_surplus_args(sig) {
+        return false;
+    }
+    let regular = crate::types::call_args::regular_param_count(sig);
+    sig.defaults
+        .iter()
+        .take(regular)
+        .any(|default| default.is_some())
+}
+
+/// Returns whether a source-variadic signature carries the internal actual-count parameter.
+pub(crate) fn sig_has_hidden_argc_param(sig: &FunctionSig) -> bool {
+    sig.params
+        .iter()
+        .any(|(name, _)| name == HIDDEN_ARGC_PARAM)
 }
 
 /// Returns whether the program declares a function or method named after one of the three
@@ -280,4 +312,37 @@ fn method_declares_introspection_name(method: &ClassMethod) -> bool {
 fn declared_name_collides(name: &str) -> bool {
     let segment = name.rsplit('\\').next().unwrap_or(name);
     IntrospectionCall::from_segment(segment).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        HIDDEN_ARGC_PARAM, HIDDEN_ARGS_PARAM, POSITION_TEMP, SNAPSHOT_KEY_LOCAL,
+        SNAPSHOT_VALUE_LOCAL,
+    };
+    use crate::names::is_generated_local_name;
+
+    /// Every frame local this pass mints is recognised by the one shared generated-local predicate.
+    ///
+    /// `get_defined_vars()` and eval scope synchronization both filter on that predicate, so a
+    /// name added here without the marker would immediately leak into PHP-visible scope.
+    #[test]
+    fn every_hidden_frame_local_carries_the_generated_marker() {
+        for name in [
+            HIDDEN_ARGS_PARAM,
+            HIDDEN_ARGC_PARAM,
+            POSITION_TEMP,
+            SNAPSHOT_KEY_LOCAL,
+            SNAPSHOT_VALUE_LOCAL,
+        ] {
+            assert!(is_generated_local_name(name), "{name}");
+        }
+    }
+
+    /// The user variable that shares a hidden local's readable stem stays PHP-visible.
+    #[test]
+    fn a_user_variable_spelled_like_a_hidden_local_is_not_generated() {
+        assert!(!is_generated_local_name("__elephc_func_arg_value"));
+        assert!(!is_generated_local_name("__elephc_func_args"));
+    }
 }

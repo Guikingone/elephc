@@ -20,9 +20,8 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_values(
         .into_iter()
         .map(|value| EvaluatedCallArg {
             name: None,
-            value,
+            value: value.borrowed(),
             ref_target: None,
-            owned: false,
         })
         .collect();
     eval_dynamic_function_with_evaluated_args(function, evaluated_args, context, values)
@@ -76,9 +75,14 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     // PHP names the frame after the callee and positions it at the caller, so both halves are
     // captured here, before the body can move the call site.
     let frame_args = evaluated_args.iter().map(|arg| arg.value).collect();
-    let frame = EvalCallFrame::function(function.name(), Some(frame_args), context);
-    context.push_call_frame(frame);
-    let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
+    let call_frame = EvalCallFrame::function(function.name(), Some(frame_args), context);
+    context.push_call_frame(call_frame);
+    // Named functions have global lexical scope even when a method calls them. Empty sentinels
+    // hide the caller's class and late-static scopes until this activation returns.
+    context.push_class_scope(String::new());
+    context.push_called_class_scope(String::new());
+    let bound_call = match bind_evaluated_function_args_with_ref_mode(
+        function.name(),
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
@@ -91,46 +95,65 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     ) {
         Ok(args) => args,
         Err(status) => {
+            context.pop_called_class_scope();
+            context.pop_class_scope();
             context.pop_call_frame();
             context.pop_function();
             return Err(status);
         }
     };
+    let BoundEvalFunctionArgs {
+        params: binding_params,
+        parameter_is_by_ref: binding_by_ref,
+        args: evaluated_args,
+        mut frame,
+    } = bound_call;
     let scope_parameter_is_by_ref =
-        method_scope_parameter_ref_flags(parameter_is_by_ref, &evaluated_args, by_ref_mode);
+        method_scope_parameter_ref_flags(&binding_by_ref, &evaluated_args, by_ref_mode);
     let mut function_scope = ElephcEvalScope::new();
-    bind_method_scope_args(
+    let binding_result = bind_method_scope_args(
         &mut function_scope,
-        function.params(),
+        &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        values,
     );
-    separate_array_scope_args(&mut function_scope, function.params(), &scope_parameter_is_by_ref, values)?;
+    let binding_result = binding_result.and_then(|()| {
+        separate_array_scope_args(
+            &mut function_scope,
+            function.params(),
+            &scope_parameter_is_by_ref,
+            values,
+        )
+    });
+    frame.bind_scope(&function_scope);
+    context.push_function_args(frame);
     // A body containing `yield` does not run here at all. PHP evaluates the arguments, binds
     // them, and hands back a Generator whose body starts only when it is first asked for a
     // value, so the bound scope becomes the generator's own and outlives this call.
     if eval_body_is_generator(function.body()) {
-        retain_generator_scope_args(
-            &mut function_scope,
-            function.params(),
-            &scope_parameter_is_by_ref,
-            &evaluated_args,
-            values,
-        )?;
-        let generator = eval_generator_new(
-            function.body(),
-            std::mem::replace(&mut function_scope, ElephcEvalScope::new()),
-            eval_plain_function_activation(function.name()),
-            context,
-            values,
-        );
-        let arg_cleanup = release_owned_bound_args(&evaluated_args, None, context, values);
+        let generator = binding_result.and_then(|()| {
+            retain_generator_scope_args(
+                &mut function_scope,
+                function.params(),
+                &scope_parameter_is_by_ref,
+                &evaluated_args,
+                values,
+            )?;
+            eval_generator_new(
+                function.body(),
+                std::mem::replace(&mut function_scope, ElephcEvalScope::new()),
+                eval_plain_function_activation(function.name()),
+                context,
+                values,
+            )
+        });
+        let generator = release_function_args(generator, context, values);
+        context.pop_called_class_scope();
+        context.pop_class_scope();
         context.pop_call_frame();
         context.pop_function();
-        return match (generator, arg_cleanup) {
-            (Err(status), _) | (_, Err(status)) => Err(status),
-            (Ok(generator), Ok(())) => Ok(generator),
-        };
+        return generator;
     }
     // The RETURN statement needs to know whether this body hands back a reference, and the flag
     // is saved and restored around the body so a nested call cannot leak its own answer out.
@@ -144,7 +167,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     let previous_call_line = context.call_line();
     let previous_strict_types = context.set_strict_types(function.strict_types());
     let previous_by_ref = context.set_returns_by_ref(function.returns_by_ref());
-    let result = execute_statements(function.body(), context, &mut function_scope, values);
+    let result = binding_result.and_then(|()| execute_statements(function.body(), context, &mut function_scope, values));
     context.set_returns_by_ref(previous_by_ref);
     let persist_result = persist_static_locals(
         context,
@@ -175,16 +198,19 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     // the returned value, and the coercion is the callee's, so it obeys the callee's file.
     context.set_strict_types(previous_strict_types);
     context.set_call_line(previous_call_line);
-    let returned = return_result.as_ref().ok().copied();
-    let scope_cleanup = release_activation_scope(&mut function_scope, returned, context, values);
-    let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
-    let cleanup_result = match (scope_cleanup, arg_cleanup) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
-        (Ok(()), Ok(())) => Ok(()),
-    };
+    let return_result = retain_static_local_return(
+        return_result,
+        &static_names,
+        &function_scope,
+        values,
+    );
+    let return_result = release_function_args(return_result, context, values);
+    context.pop_called_class_scope();
+    context.pop_class_scope();
+    let return_result = finish_activation_scope(&mut function_scope, return_result, context, values);
     context.pop_call_frame();
     context.pop_function();
-    merge_activation_result(return_result, cleanup_result)
+    return_result
 }
 
 /// Evaluates one runtime eval closure after callback arguments preserve names and ref targets.
@@ -455,6 +481,25 @@ fn leave_closure_declaration_source(
     }
 }
 
+/// Returns the name PHP gives a closure in diagnostics.
+///
+/// PHP 8.4 names a closure after where it is declared, `{closure:<file>:<line>}`; earlier
+/// profiles print `{closure}`. Eval records the declaration line but neither the enclosing
+/// function (PHP names a closure declared inside `f` as `{closure:f():<line>}`) nor the eval
+/// site it was declared in, so this uses the current eval site. That is exact for a closure
+/// declared at the top level of the eval fragment calling it.
+fn eval_closure_display_name(function: &EvalFunction, context: &ElephcEvalContext) -> String {
+    let file = context.eval_file_magic();
+    match function.source_location() {
+        Some(location)
+            if crate::eval_php_profile::eval_php_minor_version() >= 4 && !file.is_empty() =>
+        {
+            format!("{{closure:{file}:{}}}", location.start_line())
+        }
+        _ => "{closure}".to_string(),
+    }
+}
+
 /// Returns the closure function's declared by-reference parameter flags.
 fn function_ref_flags(closure: &EvalClosure) -> &[bool] {
     closure.function().parameter_is_by_ref()
@@ -694,9 +739,10 @@ fn eval_closure_with_optional_binding_inner(
     // A closure is a plain-function frame in PHP even when it is bound to a class: the trace
     // shows no `class` key for it, only the generated closure name.
     let frame_args = evaluated_args.iter().map(|arg| arg.value).collect();
-    let frame = EvalCallFrame::function(function.name(), Some(frame_args), context);
-    context.push_call_frame(frame);
-    let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
+    let call_frame = EvalCallFrame::function(function.name(), Some(frame_args), context);
+    context.push_call_frame(call_frame);
+    let bound_call = match bind_evaluated_function_args_with_ref_mode(
+        &eval_closure_display_name(function, context),
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
@@ -720,20 +766,45 @@ fn eval_closure_with_optional_binding_inner(
             return Err(status);
         }
     };
+    let BoundEvalFunctionArgs {
+        params: binding_params,
+        parameter_is_by_ref: binding_by_ref,
+        args: evaluated_args,
+        mut frame,
+    } = bound_call;
     let mut function_scope = ElephcEvalScope::new();
     let bound_capture_cells = bind_closure_captures(&mut function_scope, closure.captures(), context);
-    if let Some(object) = binding.and_then(|binding| binding.this_object) {
+    let backtrace_class = binding
+        .as_ref()
+        .map(|binding| binding.class_scope.clone());
+    let backtrace_object = binding.as_ref().and_then(|binding| binding.this_object);
+    if let Some(object) = backtrace_object {
         function_scope.set("this", object, ScopeCellOwnership::Borrowed);
     }
     let scope_parameter_is_by_ref =
-        method_scope_parameter_ref_flags(parameter_is_by_ref, &evaluated_args, by_ref_mode);
-    bind_method_scope_args(
+        method_scope_parameter_ref_flags(&binding_by_ref, &evaluated_args, by_ref_mode);
+    let binding_result = bind_method_scope_args(
         &mut function_scope,
-        function.params(),
+        &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        values,
     );
-    separate_array_scope_args(&mut function_scope, function.params(), &scope_parameter_is_by_ref, values)?;
+    frame.bind_scope(&function_scope);
+    context.push_function_args_with_backtrace(
+        frame,
+        backtrace_class,
+        backtrace_object,
+        backtrace_object.is_none(),
+    );
+    let binding_result = binding_result.and_then(|()| {
+        separate_array_scope_args(
+            &mut function_scope,
+            function.params(),
+            &scope_parameter_is_by_ref,
+            values,
+        )
+    });
     let _capture_frame = if eval_body_is_generator(function.body()) {
         ActiveCaptureFrameGuard { registered: false }
     } else {
@@ -743,19 +814,21 @@ fn eval_closure_with_optional_binding_inner(
     // Generator object and runs nothing, and the scope built above — captures, `$this` and the
     // bound arguments — becomes the generator's own.
     if eval_body_is_generator(function.body()) {
-        let generator = eval_generator_new(
-            function.body(),
-            std::mem::replace(&mut function_scope, ElephcEvalScope::new()),
-            eval_closure_activation(
-                function.name(),
-                bound_class_scope,
-                bound_called_class,
-                closure.declaring_call_site().cloned(),
-            ),
-            context,
-            values,
-        );
-        let arg_cleanup = release_owned_bound_args(&evaluated_args, None, context, values);
+        let generator = binding_result.and_then(|()| {
+            eval_generator_new(
+                function.body(),
+                std::mem::replace(&mut function_scope, ElephcEvalScope::new()),
+                eval_closure_activation(
+                    function.name(),
+                    bound_class_scope,
+                    bound_called_class,
+                    closure.declaring_call_site().cloned(),
+                ),
+                context,
+                values,
+            )
+        });
+        let generator = release_function_args(generator, context, values);
         context.pop_call_frame();
         if bound_class_pushed {
             context.pop_called_class_scope();
@@ -764,10 +837,7 @@ fn eval_closure_with_optional_binding_inner(
         context.pop_function();
         context.pop_static_slot_key();
         leave_closure_declaration_source(previous_source, context);
-        return match (generator, arg_cleanup) {
-            (Err(status), _) | (_, Err(status)) => Err(status),
-            (Ok(generator), Ok(())) => Ok(generator),
-        };
+        return generator;
     }
     // The RETURN statement needs to know whether this body hands back a reference, and the flag
     // is saved and restored around the body so a nested call cannot leak its own answer out.
@@ -781,7 +851,7 @@ fn eval_closure_with_optional_binding_inner(
     let previous_call_line = context.call_line();
     let previous_strict_types = context.set_strict_types(function.strict_types());
     let previous_by_ref = context.set_returns_by_ref(function.returns_by_ref());
-    let result = execute_statements(function.body(), context, &mut function_scope, values);
+    let result = binding_result.and_then(|()| execute_statements(function.body(), context, &mut function_scope, values));
     context.set_returns_by_ref(previous_by_ref);
     let persist_result = persist_static_locals(
         context,
@@ -829,49 +899,23 @@ fn eval_closure_with_optional_binding_inner(
     // the returned value, and the coercion is the callee's, so it obeys the callee's file.
     context.set_strict_types(previous_strict_types);
     context.set_call_line(previous_call_line);
-    let returned = return_result.as_ref().ok().copied();
-    let scope_cleanup = release_activation_scope(&mut function_scope, returned, context, values);
-    let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
-    let cleanup_result = match (scope_cleanup, arg_cleanup) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
-        (Ok(()), Ok(())) => Ok(()),
-    };
+    let return_result = retain_static_local_return(
+        return_result,
+        &static_names,
+        &function_scope,
+        values,
+    );
     if bound_class_pushed {
         context.pop_called_class_scope();
         context.pop_class_scope();
     }
+    let return_result = release_function_args(return_result, context, values);
+    let return_result = finish_activation_scope(&mut function_scope, return_result, context, values);
     context.pop_call_frame();
     context.pop_function();
     context.pop_static_slot_key();
     leave_closure_declaration_source(previous_source, context);
-    merge_activation_result(return_result, cleanup_result)
-}
-
-/// Releases owned activation locals while transferring an explicitly returned cell to the caller.
-pub(in crate::interpreter) fn release_activation_scope(
-    scope: &mut ElephcEvalScope,
-    returned: Option<RuntimeCellHandle>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    for value in scope.drain_owned_cells() {
-        if Some(value) != returned {
-            eval_release_value(context, values, value)?;
-        }
-    }
-    Ok(())
-}
-
-/// Preserves the execution failure while surfacing cleanup failure after an otherwise valid return.
-fn merge_activation_result<T>(
-    result: Result<T, EvalStatus>,
-    cleanup: Result<(), EvalStatus>,
-) -> Result<T, EvalStatus> {
-    match (result, cleanup) {
-        (Err(status), _) => Err(status),
-        (Ok(_), Err(status)) => Err(status),
-        (Ok(value), Ok(())) => Ok(value),
-    }
+    return_result
 }
 
 /// Returns the PHP class name used as the bound scope for `Closure::call()`.
@@ -1039,6 +1083,7 @@ pub(in crate::interpreter) fn persist_static_locals(
 ) -> Result<(), EvalStatus> {
     for name in names {
         if let Some(cell) = scope.visible_cell(name) {
+            if context.static_local(function_name, name) == Some(cell) { continue; }
             // The store keeps this value until the NEXT call, long after the activation's scope
             // is drained, so it has to hold a reference of its own. Without it a body that
             // reassigned the static — the only reason the value is worth persisting — handed the
@@ -1053,6 +1098,17 @@ pub(in crate::interpreter) fn persist_static_locals(
         }
     }
     Ok(())
+}
+
+/// Retains a borrowed return before its activation releases local owners.
+pub(in crate::interpreter) fn retain_static_local_return(
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    _static_names: &[String],
+    _scope: &ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let result = result?;
+    if result.is_borrowed() { values.retain(result) } else { Ok(result) }
 }
 
 /// One source-order static local declaration and its initializer expression.
@@ -1193,7 +1249,8 @@ fn visit_static_var_declarations(
             | EvalStmt::UnsetProperty { .. }
             | EvalStmt::UnsetStaticProperty { .. }
             | EvalStmt::UnsetDynamicVar { .. }
-            | EvalStmt::UnsetVar { .. } => {}
+            | EvalStmt::UnsetVar { .. }
+            | EvalStmt::GcCollect => {}
         }
     }
 }

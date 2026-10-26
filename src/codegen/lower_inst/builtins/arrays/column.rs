@@ -1,7 +1,7 @@
 //! Purpose:
 //! Lowers PHP `array_column()` builtin calls for the EIR backend.
-//! Materializes indexed or associative collections of associative rows plus a string column key
-//! into the existing target-aware runtime extraction helpers.
+//! Materializes indexed or associative collections of associative rows, or a boxed array, plus a
+//! string column key into the existing target-aware runtime extraction helpers.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::arrays::lower_array_column()`.
@@ -25,10 +25,37 @@ pub(super) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let array = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
     let source_ty = ctx.value_php_type(array)?.codegen_repr();
-    let value_ty = array_column_source_value_type(source_ty.clone())?;
+    let boxed = source_ty == PhpType::Mixed;
+    let value_ty = if boxed {
+        PhpType::Mixed
+    } else {
+        array_column_source_value_type(source_ty.clone())?
+    };
     require_array_column_key_type(ctx.value_php_type(key)?)?;
     let result_elem_ty = array_column_result_element_type(inst, &value_ty)?;
-    lower_array_column_call(ctx, array, key, &source_ty, &value_ty)?;
+    if boxed {
+        // A boxed source is handed to the runtime as the Mixed cell it is; the helper walks any
+        // array shape the cell holds and reports a non-array through a zero result.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.load_value_to_reg(array, "x0")?;
+                ctx.load_string_value_to_regs(key, "x1", "x2")?;
+            }
+            Arch::X86_64 => {
+                ctx.load_value_to_reg(array, "rdi")?;
+                ctx.load_string_value_to_regs(key, "rsi", "rdx")?;
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_array_column_boxed");
+        let valid = ctx.next_label("array_column_boxed_valid");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &valid);
+        crate::codegen::lower_inst::exceptions::emit_type_error(
+            ctx, "array_column(): Argument #1 ($array) must be of type array",
+        );
+        ctx.emitter.label(&valid);
+    } else {
+        lower_array_column_call(ctx, array, key, &source_ty, &value_ty)?;
+    }
     super::normalize_indexed_array_result(ctx, "array_column", &value_ty, &result_elem_ty)?;
     super::box_array_result_for_mixed_builtin(ctx, inst, &result_elem_ty);
     store_if_result(ctx, inst)

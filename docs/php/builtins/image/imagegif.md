@@ -1,8 +1,8 @@
 ---
 title: "imagegif()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Writes an image as GIF, to a file or to the output buffer."
 sidebar:
-  order: 526
+  order: 527
 ---
 
 ## imagegif()
@@ -11,7 +11,7 @@ sidebar:
 function imagegif(mixed $image, ?string $file = null): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Writes an image as GIF, to a file or to the output buffer.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

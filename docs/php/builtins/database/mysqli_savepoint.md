@@ -1,8 +1,8 @@
 ---
 title: "mysqli_savepoint()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Creates a named savepoint in the open transaction."
 sidebar:
-  order: 166
+  order: 167
 ---
 
 ## mysqli_savepoint()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_savepoint(mixed $mysql, string $name): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Creates a named savepoint in the open transaction.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

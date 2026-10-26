@@ -944,9 +944,8 @@ pub(crate) fn eval_generator_protocol_result(
     let evaluated_args = argument
         .map(|value| EvaluatedCallArg {
             name: None,
-            value,
+            value: value.borrowed(),
             ref_target: None,
-            owned: false,
         })
         .into_iter()
         .collect();
@@ -1065,12 +1064,7 @@ fn eval_throw_error_message<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let error = values.new_object("Error")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(error, vec![message, code])?;
-    context.set_pending_throw(error);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("Error", message, 0, context, values)
 }
 
 fn eval_throw_exception_message<T>(
@@ -1078,12 +1072,7 @@ fn eval_throw_exception_message<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("Exception")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("Exception", message, 0, context, values)
 }
 
 /// Drives `foreach` over one generator, which PHP refuses once the generator has finished.
@@ -1147,6 +1136,9 @@ pub(in crate::interpreter) fn execute_foreach_generator_stmt(
             values,
         );
     }
+    // A resumed generator frame reports its caller on the foreach line, not on the last body
+    // statement the loop ran (php: Twig's `yield from $this->block_x()` stack in live ids).
+    let foreach_line = context.call_line();
     eval_generator_prime(identity, context, values)?;
     loop {
         let Some((key, value)) = context
@@ -1165,6 +1157,7 @@ pub(in crate::interpreter) fn execute_foreach_generator_stmt(
                     key_name.to_string(),
                     key,
                     ScopeCellOwnership::Owned,
+                    values,
                 )? {
                     values.release(replaced)?;
                 }
@@ -1177,6 +1170,7 @@ pub(in crate::interpreter) fn execute_foreach_generator_stmt(
             value_name.to_string(),
             value,
             ScopeCellOwnership::Owned,
+            values,
         )? {
             values.release(replaced)?;
         }
@@ -1191,6 +1185,7 @@ pub(in crate::interpreter) fn execute_foreach_generator_stmt(
             EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
         }
         eval_generator_mark_advanced(identity, context);
+        context.set_call_line(foreach_line);
         eval_generator_step(identity, None, true, context, values)?;
     }
     Ok(EvalControl::None)

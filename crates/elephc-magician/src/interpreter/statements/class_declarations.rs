@@ -86,6 +86,12 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
             .with_strict_types(context.strict_types()),
         )
     };
+    // A child that redeclares an inherited property keeps the parent's hooks and backing storage.
+    // Only a class that actually changes is copied, so the shared parsed class stays shared.
+    let prepared = match resolve_eval_inherited_property_hooks(&prepared, context, values)? {
+        Some(resolved) => Arc::new(resolved),
+        None => prepared,
+    };
     let class = &prepared;
     // The parent-override half of php's variance check runs inside the modifier validation, so
     // the classes an override's signature names must be loaded before it; the interface half is
@@ -261,7 +267,11 @@ fn ensure_eval_class_parent_available(
     if context.class(&parent).is_some() || values.class_exists(&parent)? {
         Ok(())
     } else {
-        Err(EvalStatus::RuntimeFatal)
+        // php throws a catchable `Error` here, not a fatal: Symfony's `FileLoader` loads every
+        // class under `src/` and records the ones whose parent is missing (the demo's
+        // `AppFixtures` extends a dev-only bundle's `Fixture`). The fatal killed every
+        // `debug:container`-family command of the compiled console.
+        super::property_validation::eval_throw_class_not_found_error(&parent, context, values)
     }
 }
 
@@ -310,6 +320,45 @@ fn trace_class_decl_duplicate(class: &EvalClass, matches: [bool; 8]) {
         matches[6],
         matches[7],
     );
+}
+
+/// Preserves inherited hooks and backing storage when a child redeclares a property.
+///
+/// Answers `None` when no property needs adjusting, so a class without such a redeclaration is
+/// never copied.
+fn resolve_eval_inherited_property_hooks(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalClass>, EvalStatus> {
+    let Some(parent) = class.parent() else { return Ok(None); };
+    let mut properties = class.properties().to_vec();
+    let mut changed = false;
+    for property in &mut properties {
+        if property.is_static() { continue; }
+        if let Some((_, inherited)) = context.class_property(parent, property.name()) {
+            if inherited.is_static() || inherited.visibility() == EvalVisibility::Private {
+                continue;
+            }
+            *property = property.clone()
+                .with_hooks(property.has_get_hook() || inherited.has_get_hook(),
+                    property.has_set_hook() || inherited.has_set_hook())
+                .with_virtual(property.is_virtual() && inherited.is_virtual());
+            changed = true;
+        } else {
+            let native_parent = context.class_native_parent_name(parent)
+                .unwrap_or_else(|| parent.to_string());
+            if values.reflection_property_flags(&native_parent, property.name())?
+                .is_some_and(|flags| flags & (EVAL_REFLECTION_MEMBER_FLAG_STATIC
+                    | EVAL_REFLECTION_MEMBER_FLAG_PRIVATE | EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL) == 0)
+            {
+                *property = property.clone().with_virtual(false);
+                changed = true;
+            }
+        }
+    }
+    if !changed { return Ok(None); }
+    Ok(Some(class.clone().with_properties(properties)))
 }
 
 /// Validates an eval class parent and returns an AOT parent name when the parent is runtime-backed.
@@ -381,6 +430,18 @@ pub(in crate::interpreter) fn ensure_eval_anonymous_class_decl(
 /// differently -- reflection reads this for `getFileName()`, and a class-like with no record falls
 /// back to the generated program's single source file, which is the ENTRY point.
 pub(in crate::interpreter) fn eval_declaration_source_file(context: &ElephcEvalContext) -> String {
+    // A class-like declared while an INCLUDED file executes is named after that file. The frame
+    // scan below used to answer first and found the OUTER eval frame -- the dev container's
+    // autoloader requires vendor files from inside `eval()`, so every vendor declaration was
+    // renamed to `... : eval()'d code` and an exception thrown in a trait method reported the
+    // using class's file with the trait's line. An eval that runs *inside* an include clears the
+    // include's `__FILE__` override and pushes a non-include execution marker, so it still takes
+    // the frame scan below.
+    if context.executing_include() {
+        if let Some(file) = context.call_site().3 {
+            return file;
+        }
+    }
     context
         .with_call_frames(|frames| {
             frames.iter().rev().find_map(|frame| match frame.function.as_str() {

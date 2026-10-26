@@ -1,8 +1,8 @@
 ---
 title: "date_parse()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Parses a date/time string into its components, warnings, and errors."
 sidebar:
-  order: 218
+  order: 219
 ---
 
 ## date_parse()
@@ -11,7 +11,7 @@ sidebar:
 function date_parse(string $datetime): array
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Parses a date/time string into its components, warnings, and errors.
 
 **Parameters**:
 - `$datetime` (`string`)
@@ -23,7 +23,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

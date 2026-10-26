@@ -1,9 +1,14 @@
 //! Purpose:
-//! Eval-interpreter implementation of `debug_backtrace()` and `debug_print_backtrace()`.
+//! Registers the eval implementation of PHP `debug_backtrace()` and keeps the frame-based helpers
+//! that build the trace a COMPILED Throwable records at its `new`.
+//!
+//! A WRITTEN call is answered here, from the interpreter's live call frames. A dynamic-callable
+//! call goes through the registry to the shared implementation in `core::runtime_introspection`
+//! (`core::backtrace_runtime`), whose argument spelling the listing below borrows.
 //!
 //! Called from:
 //! - `crate::interpreter::expressions::calls` for a written call.
-//! - `crate::interpreter::builtins::registry::dispatch` for a dynamic-callable call.
+//! - `crate::ffi::throwable_trace` for the trace a compiled Throwable records.
 //! - `crate::interpreter::builtins::symbols::function_exists` for the existence probe.
 //!
 //! Key details:
@@ -15,12 +20,13 @@
 //!   args` in that order, innermost frame first. `class`, `object` and `type` are omitted for a
 //!   plain function; `object` is omitted for a static call, whose `type` is `::`.
 //! - `debug_backtrace()` never appears in its own result, and `debug_print_backtrace()` prints
-//!   `#N FILE(LINE): Class->method()` per frame with no trailing `{main}` line.
+//!   `#N FILE(LINE): Class->method(args)` per frame with no trailing `{main}` line.
 //! - These two are dispatched as plain interpreter handlers rather than through the PHP-visible
 //!   builtin registry, exactly like the OPcache handlers next door: a shared-contract entry would
 //!   also claim an AOT implementation, and a compiled binary has no interpreter frames to report.
 
 use super::super::super::*;
+use super::backtrace_runtime::render_backtrace_argument;
 
 /// PHP's `DEBUG_BACKTRACE_PROVIDE_OBJECT`, which is also the default `$options`.
 const EVAL_BACKTRACE_PROVIDE_OBJECT: i64 = 1;
@@ -80,7 +86,20 @@ fn eval_debug_backtrace_result(
     for (index, frame) in frames.iter().enumerate() {
         let entry = eval_backtrace_frame_array(frame, options, values)?;
         let key = values.int(index as i64)?;
-        result = values.array_set(result, key, entry)?;
+        result = eval_backtrace_store(result, key, entry, values)?;
+    }
+    // The COMPILED frames below the interpreter follow, outermost last: the compiled function
+    // that ran `eval()` is a frame php lists (with its arguments). The dynamic-callable path in
+    // `core::backtrace_runtime` already appends them the same way; a written call answered from
+    // the interpreter's frames alone and lost every one of them.
+    let mut position = frames.len();
+    while limit >= 0 && (limit == 0 || position < limit as usize) {
+        let Some(entry) = values.runtime_backtrace_entry(position - frames.len(), options)? else {
+            break;
+        };
+        let key = values.int(position as i64)?;
+        result = eval_backtrace_store(result, key, entry, values)?;
+        position += 1;
     }
     Ok(result)
 }
@@ -89,11 +108,11 @@ fn eval_debug_backtrace_result(
 ///
 /// PHP captures a Throwable's trace when the object is created, from the frames live at that
 /// moment, with the `file`, `line`, `function`, `class` and `type` keys `debug_backtrace()` uses
-/// and never an `object`. The interpreter's frames are the only ones elephc keeps, so this is
-/// the eval-visible part of that stack; compiled frames are missing from it exactly as they are
-/// from `debug_backtrace()`. `args` is left out, which is PHP's own shape under
-/// `zend.exception_ignore_args`, and which keeps a stored trace from retaining every argument of
-/// every frame for as long as the exception lives.
+/// and never an `object`. The interpreter's frames come first, then the suspended compiled
+/// activations the generated runtime materializes, exactly as `debug_backtrace()` composes them.
+/// `args` is recorded, as php does by default
+/// (`zend.exception_ignore_args=Off`, also `php -n`): `getTraceAsString()` prints them, and
+/// leaving them out made every listed call read `f()`.
 ///
 /// Returns `None` when no interpreter frame is live, so the caller keeps the Throwable's
 /// declared empty trace without building anything.
@@ -125,20 +144,97 @@ pub(crate) fn eval_throwable_trace_value(
     }
     let mut result = values.array_new(frames.len())?;
     for (index, frame) in frames.iter().enumerate() {
-        let entry = eval_backtrace_frame_array(frame, EVAL_BACKTRACE_IGNORE_ARGS, values)?;
+        let entry = eval_backtrace_frame_array(frame, 0, values)?;
         let key = values.int(index as i64)?;
-        result = values.array_set(result, key, entry)?;
+        result = eval_backtrace_store(result, key, entry, values)?;
+    }
+    // The interpreter only sees the frames it pushed. Compiled callers above the outermost eval
+    // entry live in the activation chain, and php reports ONE stack: append those frames through
+    // the same suspended-activation reader `debug_backtrace()` uses. Without this, a `new` inside
+    // eval started the trace at the eval boundary and the dev error page lost every kernel frame.
+    let mut position = frames.len();
+    while let Some(entry) = values.runtime_backtrace_entry(position - frames.len(), 0)? {
+        let key = values.int(position as i64)?;
+        result = eval_backtrace_store(result, key, entry, values)?;
+        position += 1;
     }
     Ok(Some(result))
 }
 
+/// Renders a Throwable the way php's builtin `getTraceAsString()` (`trace_only`) or
+/// `__toString()` does, through the object's own accessors.
+///
+/// For an eval-declared class extending a builtin Throwable: the compiled `Exception` bodies
+/// call a prelude function the interpreter has no direct way to reach, and the bridge's
+/// synthetic accessor used to answer `""`. The format is php's: one
+/// `#N FILE(LINE): Class->method(args)` line per `getTrace()` frame ending in `#N {main}`, and for
+/// `__toString()` the previous exception first, `\n\nNext `, then
+/// `Class: message in FILE:LINE\nStack trace:\n` and the listing.
+pub(in crate::interpreter) fn eval_throwable_string(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    trace_only: bool,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let trace = eval_method_call_result(object, "getTrace", Vec::new(), context, values)?;
+    let count = values.array_len(trace)?;
+    let mut listing = String::new();
+    for index in 0..count {
+        let key = values.int(index as i64)?;
+        let frame = values.array_get(trace, key)?;
+        values.release(key)?;
+        let rendered =
+            super::backtrace_runtime::render_native_frame(index, frame, 0, context, values);
+        values.release(frame)?;
+        listing.push_str(&rendered?);
+    }
+    values.release(trace)?;
+    listing.push_str(&format!("#{count} {{main}}"));
+    if trace_only {
+        return Ok(listing);
+    }
+    let mut text = String::new();
+    let previous = eval_method_call_result(object, "getPrevious", Vec::new(), context, values)?;
+    if !values.is_null(previous)? {
+        let rendered = eval_method_call_result(previous, "__toString", Vec::new(), context, values);
+        values.release(previous)?;
+        let rendered = rendered?;
+        text.push_str(&String::from_utf8_lossy(&values.string_bytes(rendered)?));
+        values.release(rendered)?;
+        text.push_str("\n\nNext ");
+    } else {
+        values.release(previous)?;
+    }
+    let message = eval_method_call_result(object, "getMessage", Vec::new(), context, values)?;
+    let message_text = String::from_utf8_lossy(&values.string_bytes(message)?).into_owned();
+    values.release(message)?;
+    let file = eval_method_call_result(object, "getFile", Vec::new(), context, values)?;
+    let file_text = String::from_utf8_lossy(&values.string_bytes(file)?).into_owned();
+    values.release(file)?;
+    let line = eval_method_call_result(object, "getLine", Vec::new(), context, values)?;
+    let line_number = eval_int_value(line, values)?;
+    values.release(line)?;
+    text.push_str(class_name.trim_start_matches('\\'));
+    if !message_text.is_empty() {
+        text.push_str(": ");
+        text.push_str(&message_text);
+    }
+    text.push_str(&format!(" in {file_text}:{line_number}\nStack trace:\n{listing}"));
+    Ok(text)
+}
+
 /// Prints PHP's `debug_print_backtrace()` listing and returns null.
+///
+/// Arguments are printed unless `DEBUG_BACKTRACE_IGNORE_ARGS` is set, in php's compact spelling:
+/// `php -n` 8.5 prints `f('a\\b\nc\t\x01\xC3\xA9')` for a string holding a backslash, a
+/// newline, a tab and three non-printable bytes. The listing used to print every call as `name()`.
 fn eval_debug_print_backtrace_result(
     evaluated_args: &[RuntimeCellHandle],
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (_, limit) = eval_backtrace_options(evaluated_args, values)?;
+    let (options, limit) = eval_backtrace_options(evaluated_args, values)?;
     let frames = eval_backtrace_frames(context, limit);
     let mut output = String::new();
     for (index, frame) in frames.iter().enumerate() {
@@ -147,10 +243,30 @@ fn eval_debug_print_backtrace_result(
             (Some(class), EvalCallFrameKind::StaticMethod) => format!("{class}::{}", frame.function),
             _ => frame.function.clone(),
         };
+        let mut rendered_args = Vec::new();
+        if options & EVAL_BACKTRACE_IGNORE_ARGS == 0 {
+            for arg in frame.args.iter().flatten() {
+                rendered_args.push(render_backtrace_argument(*arg, context, values)?);
+            }
+        }
         output.push_str(&format!(
-            "#{index} {}({}): {call}()\n",
-            frame.file, frame.line
+            "#{index} {}({}): {call}({})\n",
+            frame.file,
+            frame.line,
+            rendered_args.join(", ")
         ));
+    }
+    // The compiled frames below the interpreter, as `eval_debug_backtrace_result` appends them.
+    let mut position = frames.len();
+    while limit >= 0 && (limit == 0 || position < limit as usize) {
+        let Some(frame) = values.runtime_backtrace_entry(position - frames.len(), options)? else {
+            break;
+        };
+        let rendered =
+            super::backtrace_runtime::render_native_frame(position, frame, options, context, values);
+        values.release(frame)?;
+        output.push_str(&rendered?);
+        position += 1;
     }
     let output = values.string_bytes_value(output.as_bytes())?;
     values.echo(output)?;
@@ -169,7 +285,13 @@ struct EvalBacktraceFrame {
 }
 
 /// Collects the live frames innermost-first, honouring `$limit`.
-fn eval_backtrace_frames(context: &ElephcEvalContext, limit: usize) -> Vec<EvalBacktraceFrame> {
+///
+/// PHP's convention: `0` is unlimited and a NEGATIVE limit selects no frame at all
+/// (`count(debug_backtrace(0, -1))` is `0` under `php -n` 8.5).
+fn eval_backtrace_frames(context: &ElephcEvalContext, limit: i64) -> Vec<EvalBacktraceFrame> {
+    if limit < 0 {
+        return Vec::new();
+    }
     let mut frames: Vec<EvalBacktraceFrame> = context.with_call_frames(|frames| {
         frames
             .iter()
@@ -185,6 +307,7 @@ fn eval_backtrace_frames(context: &ElephcEvalContext, limit: usize) -> Vec<EvalB
             })
             .collect()
     });
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     if limit > 0 && frames.len() > limit {
         frames.truncate(limit);
     }
@@ -195,7 +318,7 @@ fn eval_backtrace_frames(context: &ElephcEvalContext, limit: usize) -> Vec<EvalB
 fn eval_backtrace_options(
     evaluated_args: &[RuntimeCellHandle],
     values: &mut impl RuntimeValueOps,
-) -> Result<(i64, usize), EvalStatus> {
+) -> Result<(i64, i64), EvalStatus> {
     if evaluated_args.len() > 2 {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -204,7 +327,7 @@ fn eval_backtrace_options(
         None => EVAL_BACKTRACE_PROVIDE_OBJECT,
     };
     let limit = match evaluated_args.get(1) {
-        Some(limit) => usize::try_from(eval_int_value(*limit, values)?).unwrap_or(0),
+        Some(limit) => eval_int_value(*limit, values)?,
         None => 0,
     };
     Ok((options, limit))
@@ -242,7 +365,7 @@ fn eval_backtrace_frame_array(
             for (index, arg) in frame_args.iter().enumerate() {
                 let key = values.int(index as i64)?;
                 let value = values.retain(*arg)?;
-                args = values.array_set(args, key, value)?;
+                args = eval_backtrace_store(args, key, value, values)?;
             }
             entry = eval_backtrace_set_handle(entry, "args", args, values)?;
         }
@@ -280,5 +403,27 @@ fn eval_backtrace_set_handle(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let key = values.string(key)?;
-    values.array_set(entry, key, value)
+    eval_backtrace_store(entry, key, value, values)
 }
+
+/// Writes an owned key and value into `array` and drops both owners.
+///
+/// `array_set` borrows its key and value and the array retains what it stores, so every frame
+/// built here leaked its keys, its values and, in the outer array, the frame itself -- one hash
+/// per frame of every eval-created Throwable's trace.
+fn eval_backtrace_store(
+    array: RuntimeCellHandle,
+    key: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let stored = values.array_set(array, key, value);
+    let key_release = values.release(key);
+    let value_release = values.release(value);
+    let stored = stored?;
+    key_release?;
+    value_release?;
+    Ok(stored)
+}
+
+eval_builtin! { contract: "debug_backtrace", area: Core, direct: Core, values: Core }

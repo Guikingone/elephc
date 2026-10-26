@@ -562,9 +562,10 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             strict_types,
             attributes: Vec::new(),
         }],
-        StmtKind::IncludeOnceGuard { source_path, body } => vec![Stmt {
+        StmtKind::IncludeOnceGuard { source_path, required, body } => vec![Stmt {
             kind: StmtKind::IncludeOnceGuard {
                 source_path,
+                required,
                 body: dce_block_with_guards(body, guards.clone()),
             },
             span,
@@ -734,7 +735,9 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                     variadic_type,
                     return_type,
                     body: with_function_scope(|| {
-                        dce_block_with_guards(body, function_guards)
+                        crate::optimize::generator_bodies::rewrite_preserving_yield(body, |body| {
+                            dce_block_with_guards(body, function_guards)
+                        })
                     }),
                 },
                 span,

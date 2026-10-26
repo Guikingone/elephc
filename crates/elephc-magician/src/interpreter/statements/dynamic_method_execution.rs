@@ -15,8 +15,22 @@ fn dynamic_class_method_site(
     class_name: &str,
     method: &EvalClassMethod,
     context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Option<(String, String, i64, Option<String>)> {
-    let file = context.class_source_file(class_name)?.to_string();
+    // php keeps a trait method's declaring FILE: a `throw` inside
+    // `CompiledUrlMatcherTrait::match()` is reported at the trait's `...Trait.php:70`, not at the
+    // using class's (much shorter) file, which used to excerpt an empty window.
+    let owner = method.trait_origin().unwrap_or(class_name);
+    let file = match context.class_source_file(owner).map(str::to_string) {
+        Some(file) => file,
+        // A trait imported from a class-like the build already declared AOT has no runtime
+        // include to record it; its declaring file survives in the generated reflection
+        // metadata, which is the same answer `ReflectionClass::getFileName()` uses.
+        None => match values.reflection_class_source_file(owner) {
+            Ok(Some(file)) => file,
+            _ => return None,
+        },
+    };
     let dir = std::path::Path::new(&file)
         .parent()
         .map(|parent| parent.to_string_lossy().into_owned())
@@ -32,8 +46,10 @@ fn enter_dynamic_class_method_source(
     class_name: &str,
     method: &EvalClassMethod,
     context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Option<(String, String, i64, Option<String>)> {
-    let (file, dir, line, file_magic) = dynamic_class_method_site(class_name, method, context)?;
+    let (file, dir, line, file_magic) =
+        dynamic_class_method_site(class_name, method, context, values)?;
     let previous = context.call_site();
     context.set_call_site(file, dir, line);
     context.set_file_magic_override(file_magic);
@@ -162,15 +178,16 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     } else {
         Vec::new()
     };
-    let frame = EvalCallFrame::method(
+    let call_frame = EvalCallFrame::method(
         class_name,
         method.name(),
         Some(object),
         Some(frame_args),
         context,
     );
-    context.push_call_frame(frame);
-    let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
+    context.push_call_frame(call_frame);
+    let binding = match bind_evaluated_function_args_with_ref_mode(
+        &qualified_method_name,
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),
@@ -215,6 +232,12 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
             return Err(status);
         }
     };
+    let BoundEvalFunctionArgs {
+        params: binding_params,
+        parameter_is_by_ref: binding_by_ref,
+        args: evaluated_args,
+        mut frame,
+    } = binding;
     let mut method_scope = ElephcEvalScope::new();
     // A generator method's scope OUTLIVES this call, so its `$this` cannot stay a borrow of the
     // caller's reference: the receiver has to be kept alive by the generator itself. That is
@@ -226,50 +249,64 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
         method_scope.set("this", object, ScopeCellOwnership::Borrowed);
     }
     let scope_parameter_is_by_ref =
-        method_scope_parameter_ref_flags(parameter_is_by_ref, &evaluated_args, by_ref_mode);
-    bind_method_scope_args(
+        method_scope_parameter_ref_flags(&binding_by_ref, &evaluated_args, by_ref_mode);
+    let binding_result = bind_method_scope_args(
         &mut method_scope,
-        method.params(),
+        &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        values,
     );
-    separate_array_scope_args(&mut method_scope, method.params(), &scope_parameter_is_by_ref, values)?;
+    frame.bind_scope(&method_scope);
+    context.push_function_args_with_backtrace(
+        frame,
+        Some(class_name.trim_start_matches('\\').to_string()),
+        Some(object),
+        false,
+    );
+    let binding_result = binding_result.and_then(|()| {
+        separate_array_scope_args(
+            &mut method_scope,
+            method.params(),
+            &scope_parameter_is_by_ref,
+            values,
+        )
+    });
     // A method whose body contains `yield` returns a Generator without executing a line, and its
     // activation travels with it: the class scope a later `next()` runs under is this method's,
     // not the resumer's.
     if eval_body_is_generator(method.body()) {
-        retain_generator_scope_args(
-            &mut method_scope,
-            method.params(),
-            &scope_parameter_is_by_ref,
-            &evaluated_args,
-            values,
-        )?;
-        let generator = eval_generator_new(
-            method.body(),
-            std::mem::replace(&mut method_scope, ElephcEvalScope::new()),
-            eval_method_activation(
-                qualified_method_name.clone(),
-                class_name,
-                called_class_name,
-                method,
-                dynamic_class_method_site(class_name, method, context),
-            ),
-            context,
-            values,
-        );
-        let arg_cleanup = release_owned_bound_args(&evaluated_args, None, context, values);
+        let generator = binding_result.and_then(|()| {
+            retain_generator_scope_args(
+                &mut method_scope,
+                method.params(),
+                &scope_parameter_is_by_ref,
+                &evaluated_args,
+                values,
+            )?;
+            eval_generator_new(
+                method.body(),
+                std::mem::replace(&mut method_scope, ElephcEvalScope::new()),
+                eval_method_activation(
+                    qualified_method_name.clone(),
+                    class_name,
+                    called_class_name,
+                    method,
+                    dynamic_class_method_site(class_name, method, context, values),
+                ),
+                context,
+                values,
+            )
+        });
+        let generator = release_function_args(generator, context, values);
         context.pop_magic_scope();
         context.pop_called_class_scope();
         context.pop_class_scope();
         context.pop_call_frame();
         context.pop_function();
-        return match (generator, arg_cleanup) {
-            (Err(status), _) | (_, Err(status)) => Err(status),
-            (Ok(generator), Ok(())) => Ok(generator),
-        };
+        return generator;
     }
-    let previous_source = enter_dynamic_class_method_source(class_name, method, context);
+    let previous_source = enter_dynamic_class_method_source(class_name, method, context, values);
     // The RETURN statement needs to know whether this body hands back a reference, and the flag
     // is saved and restored around the body so a nested call cannot leak its own answer out.
     // A body runs under the strict-types mode of the file that DECLARED it, not the file that
@@ -282,7 +319,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     let previous_call_line = context.call_line();
     let previous_strict_types = context.set_strict_types(method.strict_types());
     let previous_by_ref = context.set_returns_by_ref(method.returns_by_ref());
-    let result = execute_statements(method.body(), context, &mut method_scope, values);
+    let result = binding_result.and_then(|()| execute_statements(method.body(), context, &mut method_scope, values));
     context.set_returns_by_ref(previous_by_ref);
     let persist_result = persist_static_locals(
         context,
@@ -313,20 +350,18 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     // the returned value, and the coercion is the callee's, so it obeys the callee's file.
     context.set_strict_types(previous_strict_types);
     context.set_call_line(previous_call_line);
-    let returned = return_result.as_ref().ok().copied();
-    // A method's locals are released exactly as a function's are: the scope was dropped with
-    // its owned cells in it, so every `$local = ...` in an eval-declared method leaked its cell,
-    // and a by-value array parameter its separated copy (and through it the whole array).
-    let scope_cleanup = release_activation_scope(&mut method_scope, returned, context, values);
-    let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
-    let return_result = match (return_result, scope_cleanup, arg_cleanup) {
-        (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
-        (Ok(value), Ok(()), Ok(())) => Ok(value),
-    };
+    let return_result = retain_static_local_return(
+        return_result,
+        &static_names,
+        &method_scope,
+        values,
+    );
+    let return_result = release_function_args(return_result, context, values);
     leave_dynamic_class_method_source(previous_source, context);
     context.pop_magic_scope();
     context.pop_called_class_scope();
     context.pop_class_scope();
+    let return_result = finish_activation_scope(&mut method_scope, return_result, context, values);
     context.pop_call_frame();
     context.pop_function();
     if crate::eval_trace::enabled() {
@@ -403,9 +438,10 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     context.push_method_magic_scope(class_name, method);
     // A static call has no receiver, so PHP omits `object` and reports `type` as `::`.
     let frame_args = evaluated_args.iter().map(|arg| arg.value).collect();
-    let frame = EvalCallFrame::method(class_name, method.name(), None, Some(frame_args), context);
-    context.push_call_frame(frame);
-    let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
+    let call_frame = EvalCallFrame::method(class_name, method.name(), None, Some(frame_args), context);
+    context.push_call_frame(call_frame);
+    let binding = match bind_evaluated_function_args_with_ref_mode(
+        &qualified_method_name,
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),
@@ -426,52 +462,72 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
             return Err(status);
         }
     };
+    let BoundEvalFunctionArgs {
+        params: binding_params,
+        parameter_is_by_ref: binding_by_ref,
+        args: evaluated_args,
+        mut frame,
+    } = binding;
     let mut method_scope = ElephcEvalScope::new();
     let scope_parameter_is_by_ref =
-        method_scope_parameter_ref_flags(parameter_is_by_ref, &evaluated_args, by_ref_mode);
-    bind_method_scope_args(
+        method_scope_parameter_ref_flags(&binding_by_ref, &evaluated_args, by_ref_mode);
+    let binding_result = bind_method_scope_args(
         &mut method_scope,
-        method.params(),
+        &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        values,
     );
-    separate_array_scope_args(&mut method_scope, method.params(), &scope_parameter_is_by_ref, values)?;
+    frame.bind_scope(&method_scope);
+    context.push_function_args_with_backtrace(
+        frame,
+        Some(class_name.trim_start_matches('\\').to_string()),
+        None,
+        true,
+    );
+    let binding_result = binding_result.and_then(|()| {
+        separate_array_scope_args(
+            &mut method_scope,
+            method.params(),
+            &scope_parameter_is_by_ref,
+            values,
+        )
+    });
     // A method whose body contains `yield` returns a Generator without executing a line, and its
     // activation travels with it: the class scope a later `next()` runs under is this method's,
     // not the resumer's.
     if eval_body_is_generator(method.body()) {
-        retain_generator_scope_args(
-            &mut method_scope,
-            method.params(),
-            &scope_parameter_is_by_ref,
-            &evaluated_args,
-            values,
-        )?;
-        let generator = eval_generator_new(
-            method.body(),
-            std::mem::replace(&mut method_scope, ElephcEvalScope::new()),
-            eval_method_activation(
-                qualified_method_name.clone(),
-                class_name,
-                called_class_name,
-                method,
-                dynamic_class_method_site(class_name, method, context),
-            ),
-            context,
-            values,
-        );
-        let arg_cleanup = release_owned_bound_args(&evaluated_args, None, context, values);
+        let generator = binding_result.and_then(|()| {
+            retain_generator_scope_args(
+                &mut method_scope,
+                method.params(),
+                &scope_parameter_is_by_ref,
+                &evaluated_args,
+                values,
+            )?;
+            eval_generator_new(
+                method.body(),
+                std::mem::replace(&mut method_scope, ElephcEvalScope::new()),
+                eval_method_activation(
+                    qualified_method_name.clone(),
+                    class_name,
+                    called_class_name,
+                    method,
+                    dynamic_class_method_site(class_name, method, context, values),
+                ),
+                context,
+                values,
+            )
+        });
+        let generator = release_function_args(generator, context, values);
         context.pop_magic_scope();
         context.pop_called_class_scope();
         context.pop_class_scope();
         context.pop_call_frame();
         context.pop_function();
-        return match (generator, arg_cleanup) {
-            (Err(status), _) | (_, Err(status)) => Err(status),
-            (Ok(generator), Ok(())) => Ok(generator),
-        };
+        return generator;
     }
-    let previous_source = enter_dynamic_class_method_source(class_name, method, context);
+    let previous_source = enter_dynamic_class_method_source(class_name, method, context, values);
     // The RETURN statement needs to know whether this body hands back a reference, and the flag
     // is saved and restored around the body so a nested call cannot leak its own answer out.
     // A body runs under the strict-types mode of the file that DECLARED it, not the file that
@@ -484,7 +540,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     let previous_call_line = context.call_line();
     let previous_strict_types = context.set_strict_types(method.strict_types());
     let previous_by_ref = context.set_returns_by_ref(method.returns_by_ref());
-    let result = execute_statements(method.body(), context, &mut method_scope, values);
+    let result = binding_result.and_then(|()| execute_statements(method.body(), context, &mut method_scope, values));
     context.set_returns_by_ref(previous_by_ref);
     let persist_result = persist_static_locals(
         context,
@@ -515,20 +571,18 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     // the returned value, and the coercion is the callee's, so it obeys the callee's file.
     context.set_strict_types(previous_strict_types);
     context.set_call_line(previous_call_line);
-    let returned = return_result.as_ref().ok().copied();
-    // A method's locals are released exactly as a function's are: the scope was dropped with
-    // its owned cells in it, so every `$local = ...` in an eval-declared method leaked its cell,
-    // and a by-value array parameter its separated copy (and through it the whole array).
-    let scope_cleanup = release_activation_scope(&mut method_scope, returned, context, values);
-    let arg_cleanup = release_owned_bound_args(&evaluated_args, returned, context, values);
-    let return_result = match (return_result, scope_cleanup, arg_cleanup) {
-        (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
-        (Ok(value), Ok(()), Ok(())) => Ok(value),
-    };
+    let return_result = retain_static_local_return(
+        return_result,
+        &static_names,
+        &method_scope,
+        values,
+    );
+    let return_result = release_function_args(return_result, context, values);
     leave_dynamic_class_method_source(previous_source, context);
     context.pop_magic_scope();
     context.pop_called_class_scope();
     context.pop_class_scope();
+    let return_result = finish_activation_scope(&mut method_scope, return_result, context, values);
     context.pop_call_frame();
     context.pop_function();
     return_result
@@ -541,9 +595,8 @@ pub(in crate::interpreter) fn positional_args(
     args.into_iter()
         .map(|value| EvaluatedCallArg {
             name: None,
-            value,
+            value: value.borrowed(),
             ref_target: None,
-            owned: false,
         })
         .collect()
 }

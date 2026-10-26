@@ -1,8 +1,8 @@
 ---
 title: "cal_info()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns a calendar's month names, abbreviations, and day count."
 sidebar:
-  order: 198
+  order: 199
 ---
 
 ## cal_info()
@@ -11,7 +11,7 @@ sidebar:
 function cal_info(int $calendar = -1): array
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns a calendar's month names, abbreviations, and day count.
 
 **Parameters**:
 - `$calendar` (`int`), default `-1`, optional
@@ -23,7 +23,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

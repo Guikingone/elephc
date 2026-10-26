@@ -93,6 +93,7 @@ pub(super) fn reflection_property_metadata_for_property(
                 required_parameter_count: 0,
                 is_deprecated: false,
                 is_generator: false,
+        returns_reference: false,
                 prototype_member: None,
                 is_final: false,
                 is_abstract: false,
@@ -183,6 +184,7 @@ pub(super) fn reflection_function_parameter_metadata(
         type_metadata,
         is_deprecated: signature.deprecation.is_some(),
         is_generator: function.flags.is_generator,
+        returns_reference: signature.by_ref_return,
     };
     let parameters = reflection_parameter_members_with_declaring_function(
         ctx,

@@ -1,16 +1,16 @@
 ---
-title: "preg_replace_callback() — internals"
+title: "preg_replace_callback() - internals"
 description: "Compiler internals for preg_replace_callback(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 770
+  order: 802
 ---
 
-## `preg_replace_callback()` — internals
+## `preg_replace_callback()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/preg_replace_callback.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/preg_replace_callback.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -28,7 +28,7 @@ sidebar:
 - **Result ownership**: `independent`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary

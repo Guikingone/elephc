@@ -1,16 +1,16 @@
 ---
-title: "setrawcookie() — internals"
+title: "setrawcookie() - internals"
 description: "Compiler internals for setrawcookie(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 977
+  order: 1066
 ---
 
-## `setrawcookie()` — internals
+## `setrawcookie()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:1322](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L1322) (`setrawcookie`)
+- **Lowering**: [`src/web_prelude/build.rs`:1424](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L1424) (`setrawcookie`)
 - **Function symbol**: `setrawcookie()`
 
 
@@ -38,7 +38,7 @@ function setrawcookie(mixed $name, mixed $value = '', mixed $expires = 0, mixed 
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

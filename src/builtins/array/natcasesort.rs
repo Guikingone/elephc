@@ -28,7 +28,10 @@ builtin! {
 /// pre-validated by the registry. Returns `Ok(PhpType::Bool)` on success.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+    // A gradual array is sorted by `crate::natsort_gradual_prelude`, which the call is routed to.
+    if !crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&ty)
+        && !ty.is_php_array()
+    {
         return Err(CompileError::new(cx.span, &format!("{}() argument must be array", cx.name)));
     }
     Ok(PhpType::Bool)

@@ -264,12 +264,12 @@ fn test_error_defined_wrong_args() {
     expect_error("<?php defined();", "defined() takes exactly 1 argument");
 }
 
-/// Verifies that `defined()` requires a string literal in AOT mode.
+/// `defined()` accepts a runtime name as its first argument, as php does; elephc now compiles it and
+/// the program output matches php.
 #[test]
-fn test_error_defined_non_literal_name() {
-    expect_error(
+fn test_defined_accepts_runtime_name() {
+    expect_no_error(
         "<?php $name = \"PHP_OS\"; defined($name);",
-        "defined() first argument must be a string literal in AOT mode",
     );
 }
 
@@ -279,6 +279,12 @@ fn test_error_defined_non_literal_name() {
 #[test]
 fn test_error_time_wrong_args() {
     expect_error("<?php time(1);", "time() takes no arguments");
+}
+
+/// Verifies that `getmypid()` with any arguments yields a no-args diagnostic (issue #860).
+#[test]
+fn test_error_getmypid_wrong_args() {
+    expect_error("<?php getmypid(1);", "getmypid() takes no arguments");
 }
 
 /// Verifies that `microtime()` with two arguments yields a wrong-args diagnostic.
@@ -378,10 +384,11 @@ fn test_error_php_uname_wrong_type() {
     expect_error("<?php php_uname(1);", "php_uname() argument must be string");
 }
 
-/// Verifies that `exec()` with no arguments yields a wrong-args diagnostic.
+/// Verifies that `exec()` with no arguments yields a wrong-args diagnostic (php declares 1 to 3
+/// parameters).
 #[test]
 fn test_error_exec_wrong_args() {
-    expect_error("<?php exec();", "exec() takes exactly 1 argument");
+    expect_error("<?php exec();", "exec() takes 1 to 3 arguments");
 }
 
 /// Verifies that `shell_exec()` with no arguments yields a wrong-args diagnostic.
@@ -681,7 +688,7 @@ fn test_error_preg_replace_wrong_args() {
 fn test_error_preg_replace_count_requires_variable() {
     expect_error(
         r#"<?php preg_replace("/a/", "b", "a", -1, 0);"#,
-        "preg_replace() parameter $count must be passed a variable",
+        "preg_replace(): Argument #5 ($count) could not be passed by reference",
     );
 }
 
@@ -699,7 +706,7 @@ fn test_error_preg_replace_callback_wrong_args() {
 fn test_error_preg_replace_callback_count_requires_variable() {
     expect_error(
         r#"<?php preg_replace_callback("/a/", function($matches) { return "b"; }, "a", -1, 0);"#,
-        "preg_replace_callback() parameter $count must be passed a variable",
+        "preg_replace_callback(): Argument #5 ($count) could not be passed by reference",
     );
 }
 
@@ -788,5 +795,130 @@ if (false === $matcher('/([A-Z]+)/', 'abcXYZ', $matches)) {
 }
 echo $matches[1];
 "#,
+    );
+}
+
+/// Verifies Core GC builtins reject arguments through the shared zero-arity contract.
+#[test]
+fn test_error_gc_status_wrong_args() {
+    expect_error(
+        "<?php gc_status(1);",
+        "gc_status() takes no arguments",
+    );
+}
+
+/// Verifies every remaining Core parity builtin rejects excess or missing arguments.
+#[test]
+fn test_error_core_parity_builtin_arity_contracts() {
+    let cases = [
+        (
+            "<?php debug_backtrace(0, 0, 0);",
+            "debug_backtrace() takes at most 2 arguments",
+        ),
+        (
+            "<?php debug_print_backtrace(0, 0, 0);",
+            "debug_print_backtrace() takes at most 2 arguments",
+        ),
+        (
+            "<?php error_reporting(1, 2);",
+            "error_reporting() takes at most 1 argument",
+        ),
+        (
+            "<?php gc_collect_cycles(1);",
+            "gc_collect_cycles() takes no arguments",
+        ),
+        ("<?php gc_disable(1);", "gc_disable() takes no arguments"),
+        ("<?php gc_enable(1);", "gc_enable() takes no arguments"),
+        ("<?php gc_enabled(1);", "gc_enabled() takes no arguments"),
+        (
+            "<?php gc_mem_caches(1);",
+            "gc_mem_caches() takes no arguments",
+        ),
+        (
+            "<?php get_called_class(1);",
+            "get_called_class() takes no arguments",
+        ),
+        (
+            "<?php get_class_methods();",
+            "get_class_methods() takes exactly 1 argument",
+        ),
+        (
+            "<?php get_class_vars();",
+            "get_class_vars() takes exactly 1 argument",
+        ),
+        (
+            "<?php get_defined_constants(false, true);",
+            "get_defined_constants() takes at most 1 argument",
+        ),
+        (
+            "<?php get_defined_functions(false, true);",
+            "get_defined_functions() takes at most 1 argument",
+        ),
+        (
+            "<?php get_defined_vars(1);",
+            "get_defined_vars() takes no arguments",
+        ),
+        (
+            "<?php get_error_handler(1);",
+            "get_error_handler() takes no arguments",
+        ),
+        (
+            "<?php get_exception_handler(null);",
+            "get_exception_handler() takes no arguments",
+        ),
+        (
+            "<?php get_extension_funcs();",
+            "get_extension_funcs() takes exactly 1 argument",
+        ),
+        (
+            "<?php get_included_files(1);",
+            "get_included_files() takes no arguments",
+        ),
+        (
+            "<?php get_mangled_object_vars();",
+            "get_mangled_object_vars() takes exactly 1 argument",
+        ),
+        (
+            "<?php get_required_files(1);",
+            "get_required_files() takes no arguments",
+        ),
+        (
+            "<?php get_resources(null, null);",
+            "get_resources() takes at most 1 argument",
+        ),
+        (
+            "<?php restore_error_handler(1);",
+            "restore_error_handler() takes no arguments",
+        ),
+        (
+            "<?php restore_exception_handler(1);",
+            "restore_exception_handler() takes no arguments",
+        ),
+        (
+            "<?php set_error_handler();",
+            "set_error_handler() takes 1 or 2 arguments",
+        ),
+        (
+            "<?php set_exception_handler();",
+            "set_exception_handler() takes exactly 1 argument",
+        ),
+        (
+            "<?php trigger_error();",
+            "trigger_error() takes 1 or 2 arguments",
+        ),
+        // The alias is diagnosed under its canonical name, so only the arity wording is asserted.
+        ("<?php user_error();", "takes 1 or 2 arguments"),
+    ];
+    for (source, expected) in cases {
+        expect_error(source, expected);
+    }
+}
+
+/// Verifies PHP's scope-introspection builtin cannot be invoked through first-class syntax.
+#[test]
+fn test_error_get_defined_vars_first_class_callable() {
+    expect_error(
+        "<?php function inspect_scope() { $callback = get_defined_vars(...); return $callback(); }",
+        "Cannot call get_defined_vars() dynamically",
     );
 }

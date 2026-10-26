@@ -1,8 +1,8 @@
 ---
 title: "date_timestamp_set()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Sets a DateTime from a Unix timestamp."
 sidebar:
-  order: 226
+  order: 227
 ---
 
 ## date_timestamp_set()
@@ -11,7 +11,7 @@ sidebar:
 function date_timestamp_set(mixed $object, int $timestamp): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Sets a DateTime from a Unix timestamp.
 
 **Parameters**:
 - `$object` (`mixed`)
@@ -24,7 +24,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

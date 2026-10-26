@@ -5,7 +5,7 @@
 //! - `crate::pipeline::compile()` after EIR lowering and optimization.
 //!
 //! Key details:
-//! - Runtime feature selection, bridge planning, assembly emission, and linking preserve their original order.
+//! - Assembly-only output returns before runtime-object preparation, native resolution, assembly, and linking.
 
 use std::collections::{HashMap, HashSet};
 
@@ -15,6 +15,7 @@ use super::*;
 pub(super) struct BackendInputs<'a> {
     pub(super) filename: &'a str,
     pub(super) with_crates: &'a HashSet<String>,
+    pub(super) ini_overrides: &'a [(String, String)],
     /// PHP surfaces injected into this compilation ("PDO", "mysqli"), reported to
     /// `extension_loaded()` alongside archive-derived bridge extensions. Needed
     /// because the shared `elephc_pdo` archive cannot identify a surface by itself.
@@ -65,6 +66,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     let BackendInputs {
         filename,
         with_crates,
+        ini_overrides,
         linked_php_surfaces,
         mut ir_module,
         web,
@@ -97,6 +99,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     if with_crates.contains("regex") {
         ir_module.required_runtime_features.regex = true;
     }
+    if with_crates.contains("mbstring") {
+        ir_module.required_runtime_features.mbstring = true;
+        ir_module.required_runtime_features.mbregex = true;
+        ir_module.required_runtime_features.mbstring_mime = true;
+    }
     let probe = with_crates.contains("probe");
     if probe {
         // A build that cannot produce a real key does not produce a binary. The
@@ -116,6 +123,15 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         };
         eprintln!("probe build fingerprint: {}", crate::probe_key::fingerprint(&key));
         ir_module.probe_key = Some(key);
+    }
+    let configures_mbstring = ir_module.required_runtime_features.mbstring
+        || ir_module.required_runtime_features.mbregex
+        || ir_module.required_runtime_features.eval_bridge;
+    if configures_mbstring {
+        ir_module.required_runtime_features.mbstring_mime |= ini_overrides.iter().any(|(name, _)| {
+            name == "mbstring.http_output_conv_mimetypes"
+        });
+        ir_module.mbstring_startup = Some(super::mbstring_configuration::arguments(ini_overrides));
     }
     let mut runtime_features = ir_module.required_runtime_features;
     // `--web` selects the output-capture variant of `__rt_stdout_write`. This is the
@@ -208,7 +224,17 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     let mut spill_path = output_paths.asm.clone().into_os_string();
     spill_path.push(".spill");
     let spill_path = std::path::PathBuf::from(spill_path);
-    let user_asm = match codegen::generate_user_asm_from_ir_with_options(
+    // Nobody reads this assembly in an ordinary build, so it is written compact (no comments,
+    // short local labels). `--emit-asm` hands it to the user, `--debug-info` is stepped
+    // through and the source map reads its `@src`/`@block` markers, so all three keep the
+    // readable form.
+    crate::codegen_support::emit::set_compact_asm(
+        !emit_asm
+            && !emit_debug_info
+            && !emit_source_map
+            && !matches!(std::env::var("ELEPHC_COMPACT_ASM").as_deref(), Ok("0") | Ok("off")),
+    );
+    let generated_user_asm = match codegen::generate_user_asm_from_ir_with_options_and_features(
         &ir_module,
         gc_stats,
         counters,
@@ -223,11 +249,13 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         web_isolation,
         Some(&spill_path),
     ) {
-        Ok(asm) => asm,
+        Ok(output) => output,
         Err(err) => {
             // Bodies of a class php would have autoloaded lazily are handed to the runtime and
             // the build runs again; this returns only when nothing new can be handed back.
             if let Some(deferral) = &deferral {
+                // The re-run replaces this process, so nothing would remove the partial spill.
+                let _ = std::fs::remove_file(&spill_path);
                 deferral.rerun_without_refused_bodies(err.failed_bodies());
             }
             crate::progress::clear();
@@ -235,20 +263,24 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             process::exit(1);
         }
     };
+    codegen::print_op_stats();
+    runtime_features.handler_state |= generated_user_asm.handler_state;
+    runtime_features.object_clone |= generated_user_asm.object_clone;
     let user_asm = if emit_debug_info {
         codegen::UserAssembly::from_text(debug_info::inject_line_directives(
-            &user_asm.into_string(),
+            &generated_user_asm.asm.into_string(),
             filename,
             target.platform,
         ))
     } else {
-        user_asm
+        generated_user_asm.asm
     };
     timings.record_since("codegen", phase_started);
     // The EIR module is not read past this point (only its probe key is), and it is one of the
     // largest live structures: freeing it here lets the phases below reuse its pages instead of
     // growing the heap past them.
     let probe_key = ir_module.probe_key;
+    let runs_interpreted_code = crate::ir_lower::module_runs_interpreted_code(&ir_module);
     drop(ir_module);
 
     crate::progress::phase("write-asm");
@@ -445,7 +477,9 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             .unwrap_or("libelephc_module");
         let exports = exported_functions.values().collect::<Vec<_>>();
         let header = exports::render_c_header(library_stem, &exports);
-        if let Err(error) = fs::write(header_path, header) {
+        if let Err(error) =
+            crate::pipeline::artifact_io::write_artifact(header_path, header.as_bytes())
+        {
             crate::progress::clear();
             eprintln!("Error writing '{}': {}", header_path.display(), error);
             process::exit(1);
@@ -484,7 +518,10 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // reads it to run the HMAC handshake. Keep it like a `.env` secret.
     if let Some(key) = probe_key {
         let sidecar = output_paths.bin.with_extension("key");
-        if let Err(err) = fs::write(&sidecar, crate::probe_key::to_hex(&key)) {
+        if let Err(err) = crate::pipeline::artifact_io::write_private_artifact(
+            &sidecar,
+            crate::probe_key::to_hex(&key).as_bytes(),
+        ) {
             eprintln!("warning: could not write the build key {}: {err}", sidecar.display());
         } else if let Err(err) = restrict_to_owner(&sidecar) {
             // Not fatal — the key is still usable — but say it, because the
@@ -498,7 +535,10 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     crate::progress::clear();
     timings.report();
-    if let Some(warning) = dynamic_eval_capability_warning(runtime_features) {
+    if let Some(warning) = dynamic_eval_capability_warning(
+        runtime_features,
+        runs_interpreted_code,
+    ) {
         eprintln!("{warning}");
     }
     crate::progress::finish_ok(

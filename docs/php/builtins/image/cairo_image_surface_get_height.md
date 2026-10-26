@@ -1,8 +1,8 @@
 ---
 title: "cairo_image_surface_get_height()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns an image surface's height in pixels."
 sidebar:
-  order: 424
+  order: 425
 ---
 
 ## cairo_image_surface_get_height()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_image_surface_get_height(mixed $surface): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns an image surface's height in pixels.
 
 **Parameters**:
 - `$surface` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

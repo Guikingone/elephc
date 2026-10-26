@@ -43,12 +43,12 @@ pub(crate) fn emit_fiber_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberW
     emitter.instruction(&format!(
         "stp x22, x23, [sp, #{}]",
         saved_callee_offset + 32
-    )); // preserve variadic tail scratch registers across helper calls
+    ));                                                                         // preserve variadic tail scratch registers across helper calls
     emitter.instruction("mov x19, x0");                                         // x19 = Fiber object passed by __rt_fiber_entry
     emitter.instruction(&format!(
         "ldr x20, [x19, #{}]",
         runtime::FIBER_CALLABLE_OFFSET
-    )); // x20 = callable descriptor stored on the Fiber
+    ));                                                                         // x20 = callable descriptor stored on the Fiber
     emitter.instruction("mov x21, x20");                                        // x21 = descriptor pointer kept for hidden capture reloads
     callable_descriptor::emit_load_entry_from_descriptor(emitter, "x20", "x20");
 
@@ -65,7 +65,7 @@ pub(crate) fn emit_fiber_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberW
     emitter.instruction(&format!(
         "ldp x22, x23, [sp, #{}]",
         saved_callee_offset + 32
-    )); // restore variadic tail scratch registers
+    ));                                                                         // restore variadic tail scratch registers
     emitter.instruction(&format!("ldr x21, [sp, #{}]", saved_callee_offset + 16)); // restore the caller's descriptor scratch register
     emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_callee_offset)); // restore callee-saved wrapper registers
     abi::emit_frame_restore(emitter, frame_size);
@@ -88,6 +88,7 @@ fn emit_aarch64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     let loop_label = format!("{}_copy_args", label);
     let copy_done_label = format!("{}_args_done", label);
     let return_label = format!("{}_return", label);
+    let pending_label = format!("{}_pending_throw", label);
 
     emitter.blank();
     emitter.comment(&format!("fiber descriptor invoker wrapper: {}", label));
@@ -103,16 +104,17 @@ fn emit_aarch64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emitter.instruction(&format!(
         "ldr x20, [x19, #{}]",
         runtime::FIBER_CALLABLE_OFFSET
-    )); // x20 = callable descriptor stored on the Fiber
+    ));                                                                         // x20 = callable descriptor stored on the Fiber
     emitter.instruction(&format!(
         "ldr x21, [x19, #{}]",
         runtime::FIBER_START_ARG_COUNT_OFFSET
-    )); // x21 = number of boxed start() values to forward
+    ));                                                                         // x21 = number of boxed start() values to forward
     emit_allocate_descriptor_start_arg_array_aarch64(emitter);
     emit_copy_fiber_start_args_to_array_aarch64(emitter, &loop_label, &copy_done_label);
     emit_box_descriptor_start_arg_array(emitter, "x22", "x1");
 
     emitter.instruction("mov x25, x1");                                         // keep the boxed argument array alive across the descriptor invocation
+    park_pending_exception(emitter, "x9", AARCH64_PARKED_EXCEPTION_OFFSET);
     emitter.instruction("mov x0, x20");                                         // pass callable descriptor as invoker argument 1
     callable_descriptor::emit_load_invoker_from_descriptor(emitter, "x24", "x20");
     emitter.instruction(&format!("cbz x24, {}", missing_label));                // reject descriptors that do not expose the uniform invoker slot
@@ -121,8 +123,15 @@ fn emit_aarch64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emitter.instruction("mov x24, x0");                                         // preserve the Fiber callback return while releasing the argument container
     emitter.instruction("mov x0, x25");                                         // move the boxed argument container into the decref helper input
     emitter.instruction("bl __rt_decref_mixed");                                // release the temporary boxed argument container
+    restore_parked_exception_or_branch(emitter, "x9", AARCH64_PARKED_EXCEPTION_OFFSET, &pending_label);
     emitter.instruction("mov x0, x24");                                         // restore the callback return value for __rt_fiber_entry
     emitter.instruction(&format!("b {}", return_label));                        // skip the missing-invoker diagnostic path
+
+    emitter.label(&pending_label);
+    chain_parked_exception(emitter, "x0", "x1", AARCH64_PARKED_EXCEPTION_OFFSET);
+    emit_aarch64_descriptor_wrapper_restores(emitter);
+    abi::emit_frame_restore(emitter, frame_size);
+    abi::emit_jump(emitter, "__rt_throw_current");
 
     emitter.label(&missing_label);
     emitter.instruction("mov x0, x25");                                         // move the boxed argument container into the decref helper before throwing
@@ -133,12 +142,69 @@ fn emit_aarch64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emitter.instruction("brk #0xfffe");                                         // defensive trap: the throw helper must not return
 
     emitter.label(&return_label);
+    emit_aarch64_descriptor_wrapper_restores(emitter);
+    abi::emit_frame_restore(emitter, frame_size);
+    abi::emit_return(emitter);
+}
+
+/// Restores the callee-saved registers the ARM64 descriptor-invoker wrapper preserved.
+fn emit_aarch64_descriptor_wrapper_restores(emitter: &mut Emitter) {
     emitter.instruction("ldr x25, [sp, #48]");                                  // restore the caller's x25 register
     emitter.instruction("ldp x23, x24, [sp, #32]");                             // restore loop/index scratch callee-saved registers
     emitter.instruction("ldp x21, x22, [sp, #16]");                             // restore count/array callee-saved registers
     emitter.instruction("ldp x19, x20, [sp, #0]");                              // restore Fiber/descriptor callee-saved registers
-    abi::emit_frame_restore(emitter, frame_size);
-    abi::emit_return(emitter);
+}
+
+/// Frame-pointer-relative slots holding the exception pending before the invocation. Both sit in
+/// the 96-byte frames below, clear of the registers each wrapper saves.
+const AARCH64_PARKED_EXCEPTION_OFFSET: usize = 16;
+const X86_64_PARKED_EXCEPTION_OFFSET: usize = 56;
+
+/// Frame-pointer-relative slots of the x86_64 wrapper's preserved callee-saved registers.
+const X86_64_SAVED_FIBER_OFFSET: usize = 16;
+const X86_64_SAVED_DESCRIPTOR_OFFSET: usize = 24;
+const X86_64_SAVED_COUNT_OFFSET: usize = 32;
+const X86_64_SAVED_ARRAY_OFFSET: usize = 40;
+const X86_64_SAVED_ARGBOX_OFFSET: usize = 48;
+
+/// Parks `_exc_value` in a frame slot and clears it for the descriptor invocation.
+///
+/// A bounded invoker -- an instance-method descriptor the interpreter may call inside its own
+/// `try` -- catches the callee's throw and RETURNS null with the Throwable left in `_exc_value`.
+/// Clearing it first is what tells that throw apart from an exception already pending.
+fn park_pending_exception(emitter: &mut Emitter, scratch: &str, offset: usize) {
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_exc_value", 0);
+    abi::store_at_offset(emitter, scratch, offset);
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+}
+
+/// Branches to `pending_label` when the invocation left a throw pending; otherwise puts the
+/// parked exception back.
+fn restore_parked_exception_or_branch(
+    emitter: &mut Emitter,
+    scratch: &str,
+    offset: usize,
+    pending_label: &str,
+) {
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_exc_value", 0);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cbnz {}, {}", scratch, pending_label)); // a bounded invoker returned with the callee's throw pending
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {}, {}", scratch, scratch));     // did a bounded invoker return with the callee's throw pending?
+            emitter.instruction(&format!("jnz {}", pending_label));             // rethrow it instead of returning its null result
+        }
+    }
+    abi::load_at_offset(emitter, scratch, offset);
+    abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_value", 0);
+}
+
+/// Chains the parked exception under the pending throw, as `__rt_callable_invoke_owned_args` does.
+fn chain_parked_exception(emitter: &mut Emitter, newest: &str, older: &str, offset: usize) {
+    abi::emit_load_symbol_to_reg(emitter, newest, "_exc_value", 0);
+    abi::load_at_offset(emitter, older, offset);
+    abi::emit_call_label(emitter, "__rt_exception_chain");
 }
 
 /// Allocates the Mixed-pointer argument array used by an ARM64 descriptor invoker.
@@ -166,7 +232,7 @@ fn emit_copy_fiber_start_args_to_array_aarch64(
     emitter.instruction(&format!(
         "add x10, x19, #{}",
         runtime::FIBER_START_ARGS_OFFSET
-    )); // x10 = base of Fiber start_args storage
+    ));                                                                         // x10 = base of Fiber start_args storage
     emitter.instruction("ldr x0, [x10, x9]");                                   // load the boxed Mixed start argument
     emitter.instruction("bl __rt_incref");                                      // retain the boxed Mixed cell for the temporary invoker array
     emitter.instruction("lsl x9, x23, #3");                                     // recompute the element offset after the retain helper clobbers scratch regs
@@ -191,41 +257,38 @@ fn emit_box_descriptor_start_arg_array(emitter: &mut Emitter, source_reg: &str, 
 /// Emits the x86_64 descriptor-invoker Fiber wrapper.
 fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     let frame_size = 96;
-    let saved_fiber_offset = 16;
-    let saved_descriptor_offset = 24;
-    let saved_count_offset = 32;
-    let saved_array_offset = 40;
-    let saved_argbox_offset = 48;
     let missing_label = format!("{}_missing_invoker", label);
     let loop_label = format!("{}_copy_args", label);
     let copy_done_label = format!("{}_args_done", label);
     let return_label = format!("{}_return", label);
+    let pending_label = format!("{}_pending_throw", label);
 
     emitter.blank();
     emitter.comment(&format!("fiber descriptor invoker wrapper: {}", label));
     emitter.raw(".align 16");
     emitter.label_global(label);
     abi::emit_frame_prologue(emitter, frame_size);
-    abi::store_at_offset(emitter, "r12", saved_fiber_offset);
-    abi::store_at_offset(emitter, "r13", saved_descriptor_offset);
-    abi::store_at_offset(emitter, "r14", saved_count_offset);
-    abi::store_at_offset(emitter, "r15", saved_array_offset);
-    abi::store_at_offset(emitter, "rbx", saved_argbox_offset);
+    abi::store_at_offset(emitter, "r12", X86_64_SAVED_FIBER_OFFSET);
+    abi::store_at_offset(emitter, "r13", X86_64_SAVED_DESCRIPTOR_OFFSET);
+    abi::store_at_offset(emitter, "r14", X86_64_SAVED_COUNT_OFFSET);
+    abi::store_at_offset(emitter, "r15", X86_64_SAVED_ARRAY_OFFSET);
+    abi::store_at_offset(emitter, "rbx", X86_64_SAVED_ARGBOX_OFFSET);
 
     emitter.instruction("mov r12, rdi");                                        // r12 = Fiber object passed by __rt_fiber_entry
     emitter.instruction(&format!(
         "mov r13, QWORD PTR [r12 + {}]",
         runtime::FIBER_CALLABLE_OFFSET
-    )); // r13 = callable descriptor stored on the Fiber
+    ));                                                                         // r13 = callable descriptor stored on the Fiber
     emitter.instruction(&format!(
         "mov r14, QWORD PTR [r12 + {}]",
         runtime::FIBER_START_ARG_COUNT_OFFSET
-    )); // r14 = number of boxed start() values to forward
+    ));                                                                         // r14 = number of boxed start() values to forward
     emit_allocate_descriptor_start_arg_array_x86_64(emitter);
     emit_copy_fiber_start_args_to_array_x86_64(emitter, &loop_label, &copy_done_label);
     emit_box_descriptor_start_arg_array(emitter, "r15", "rsi");
 
     emitter.instruction("mov rbx, rsi");                                        // keep the boxed argument array alive across the descriptor invocation
+    park_pending_exception(emitter, "r10", X86_64_PARKED_EXCEPTION_OFFSET);
     emitter.instruction("mov rdi, r13");                                        // pass callable descriptor as invoker argument 1
     callable_descriptor::emit_load_invoker_from_descriptor(emitter, "r10", "r13");
     emitter.instruction(&format!("test r10, r10"));                             // check whether the descriptor exposes a uniform invoker slot
@@ -235,8 +298,15 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emitter.instruction("mov r15, rax");                                        // preserve the Fiber callback return while releasing the argument container
     emitter.instruction("mov rax, rbx");                                        // move the boxed argument container into the decref helper input
     emitter.instruction("call __rt_decref_mixed");                              // release the temporary boxed argument container
+    restore_parked_exception_or_branch(emitter, "r10", X86_64_PARKED_EXCEPTION_OFFSET, &pending_label);
     emitter.instruction("mov rax, r15");                                        // restore the callback return value for __rt_fiber_entry
     emitter.instruction(&format!("jmp {}", return_label));                      // skip the missing-invoker diagnostic path
+
+    emitter.label(&pending_label);
+    chain_parked_exception(emitter, "rax", "rdi", X86_64_PARKED_EXCEPTION_OFFSET);
+    emit_x86_64_descriptor_wrapper_restores(emitter);
+    abi::emit_frame_restore(emitter, frame_size);
+    abi::emit_jump(emitter, "__rt_throw_current");
 
     emitter.label(&missing_label);
     emitter.instruction("mov rax, rbx");                                        // move the boxed argument container into the decref helper before throwing
@@ -247,13 +317,18 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emitter.instruction("ud2");                                                 // defensive trap: the throw helper must not return
 
     emitter.label(&return_label);
-    abi::load_at_offset(emitter, "rbx", saved_argbox_offset);
-    abi::load_at_offset(emitter, "r15", saved_array_offset);
-    abi::load_at_offset(emitter, "r14", saved_count_offset);
-    abi::load_at_offset(emitter, "r13", saved_descriptor_offset);
-    abi::load_at_offset(emitter, "r12", saved_fiber_offset);
+    emit_x86_64_descriptor_wrapper_restores(emitter);
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
+}
+
+/// Restores the callee-saved registers the x86_64 descriptor-invoker wrapper preserved.
+fn emit_x86_64_descriptor_wrapper_restores(emitter: &mut Emitter) {
+    abi::load_at_offset(emitter, "rbx", X86_64_SAVED_ARGBOX_OFFSET);
+    abi::load_at_offset(emitter, "r15", X86_64_SAVED_ARRAY_OFFSET);
+    abi::load_at_offset(emitter, "r14", X86_64_SAVED_COUNT_OFFSET);
+    abi::load_at_offset(emitter, "r13", X86_64_SAVED_DESCRIPTOR_OFFSET);
+    abi::load_at_offset(emitter, "r12", X86_64_SAVED_FIBER_OFFSET);
 }
 
 /// Allocates the Mixed-pointer argument array used by an x86_64 descriptor invoker.
@@ -280,7 +355,7 @@ fn emit_copy_fiber_start_args_to_array_x86_64(
     emitter.instruction(&format!(
         "mov rax, QWORD PTR [r12 + rbx * 8 + {}]",
         runtime::FIBER_START_ARGS_OFFSET
-    )); // load the boxed Mixed start argument
+    ));                                                                         // load the boxed Mixed start argument
     emitter.instruction("call __rt_incref");                                    // retain the boxed Mixed cell for the temporary invoker array
     emitter.instruction("mov QWORD PTR [r15 + 24 + rbx * 8], rax");             // store the retained boxed Mixed pointer into the argument array
     emitter.instruction("add rbx, 1");                                          // advance to the next supplied start() argument
@@ -356,7 +431,7 @@ fn spill_variadic_start_arg_array_aarch64(
     emitter.instruction(&format!(
         "ldr x22, [x19, #{}]",
         runtime::FIBER_START_ARG_COUNT_OFFSET
-    )); // x22 = number of boxed start() values supplied by the caller
+    ));                                                                         // x22 = number of boxed start() values supplied by the caller
     if fixed_param_count > 0 {
         emitter.instruction(&format!("cmp x22, #{}", fixed_param_count));       // did start() supply values beyond the fixed Fiber callback params?
         emitter.instruction(&format!("b.hi {}", has_tail_label));               // compute a non-empty tail when supplied args exceed fixed params
@@ -388,7 +463,7 @@ fn spill_variadic_start_arg_array_aarch64(
     emitter.instruction(&format!(
         "add x11, x19, #{}",
         runtime::FIBER_START_ARGS_OFFSET
-    )); // x11 = base of Fiber start_args storage
+    ));                                                                         // x11 = base of Fiber start_args storage
     emitter.instruction("ldr x0, [x11, x10]");                                  // load the boxed Mixed tail value
     emitter.instruction("bl __rt_incref");                                      // retain the boxed Mixed cell for the variadic tail array
     emitter.instruction(&format!("ldr x12, [sp, #{}]", slot_offset));           // reload the variadic array pointer after the retain helper
@@ -427,7 +502,7 @@ fn spill_descriptor_hidden_arg(
             emitter.instruction(&format!(
                 "stp {}, {}, [sp, #{}]",
                 ptr_reg, len_reg, slot_offset
-            )); // spill the descriptor-captured string pair for the final call
+            ));                                                                 // spill the descriptor-captured string pair for the final call
         }
         PhpType::Void | PhpType::Never => {}
         _ => {
@@ -435,7 +510,7 @@ fn spill_descriptor_hidden_arg(
                 "str {}, [sp, #{}]",
                 abi::int_result_reg(emitter),
                 slot_offset
-            )); // spill the descriptor-captured payload for the final call
+            ));                                                                 // spill the descriptor-captured payload for the final call
             retain_refcounted_capture_for_closure_frame(
                 emitter,
                 wrapper,
@@ -619,7 +694,7 @@ fn emit_x86_64_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper) {
     emitter.instruction(&format!(
         "mov r13, QWORD PTR [r12 + {}]",
         runtime::FIBER_CALLABLE_OFFSET
-    )); // r13 = callable descriptor stored on the Fiber
+    ));                                                                         // r13 = callable descriptor stored on the Fiber
     emitter.instruction("mov r14, r13");                                        // r14 = descriptor pointer kept for hidden capture reloads
     callable_descriptor::emit_load_entry_from_descriptor(emitter, "r13", "r13");
 
@@ -694,7 +769,7 @@ fn spill_variadic_start_arg_array_x86_64(
     emitter.instruction(&format!(
         "mov r15, QWORD PTR [r12 + {}]",
         runtime::FIBER_START_ARG_COUNT_OFFSET
-    )); // r15 = number of boxed start() values supplied by the caller
+    ));                                                                         // r15 = number of boxed start() values supplied by the caller
     if fixed_param_count > 0 {
         emitter.instruction(&format!("cmp r15, {}", fixed_param_count));        // did start() supply values beyond the fixed Fiber callback params?
         emitter.instruction(&format!("ja {}", has_tail_label));                 // compute a non-empty tail when supplied args exceed fixed params
@@ -726,7 +801,7 @@ fn spill_variadic_start_arg_array_x86_64(
     emitter.instruction(&format!(
         "mov rax, QWORD PTR [r12 + r10 * 8 + {}]",
         runtime::FIBER_START_ARGS_OFFSET
-    )); // load the boxed Mixed tail value
+    ));                                                                         // load the boxed Mixed tail value
     emitter.instruction("call __rt_incref");                                    // retain the boxed Mixed cell for the variadic tail array
     abi::load_at_offset(emitter, "r10", slot_offset);
     emitter.instruction("mov QWORD PTR [r10 + 24 + rbx * 8], rax");             // store the retained boxed Mixed pointer into the variadic array

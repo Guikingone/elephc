@@ -10,7 +10,7 @@
 use super::*;
 
 /// Runtime interface declared by an eval fragment.
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct EvalInterface {
     name: String,
     source_location: Option<EvalSourceLocation>,
@@ -142,7 +142,7 @@ impl EvalInterface {
 }
 
 /// Property hook contract metadata for a runtime eval interface.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalInterfaceProperty {
     name: String,
     attributes: Vec<EvalAttribute>,
@@ -150,6 +150,8 @@ pub struct EvalInterfaceProperty {
     set_visibility: Option<EvalVisibility>,
     requires_get: bool,
     requires_set: bool,
+    /// Whether the `get` contract is declared `&get` (returns by reference).
+    get_returns_by_ref: bool,
 }
 
 impl EvalInterfaceProperty {
@@ -162,7 +164,14 @@ impl EvalInterfaceProperty {
             set_visibility: None,
             requires_get,
             requires_set,
+            get_returns_by_ref: false,
         }
+    }
+
+    /// Returns a copy of this contract recording whether its `get` hook is declared `&get`.
+    pub const fn with_get_returns_by_ref(mut self, returns_by_ref: bool) -> Self {
+        self.get_returns_by_ref = returns_by_ref;
+        self
     }
 
     /// Returns a copy of this interface property with retained type metadata.
@@ -221,6 +230,11 @@ impl EvalInterfaceProperty {
         self.requires_set
     }
 
+    /// Returns whether the `get` contract is declared `&get` (returns by reference).
+    pub const fn get_returns_by_ref(&self) -> bool {
+        self.get_returns_by_ref
+    }
+
     /// Returns a merged contract containing either side's get/set requirements.
     pub fn merged_with(&self, other: &Self) -> Self {
         Self {
@@ -236,6 +250,7 @@ impl EvalInterfaceProperty {
             ),
             requires_get: self.requires_get || other.requires_get,
             requires_set: self.requires_set || other.requires_set,
+            get_returns_by_ref: self.get_returns_by_ref || other.get_returns_by_ref,
         }
     }
 }
@@ -274,7 +289,7 @@ const fn eval_visibility_rank(visibility: EvalVisibility) -> u8 {
 }
 
 /// Method signature metadata for a runtime eval interface.
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct EvalInterfaceMethod {
     name: String,
     source_location: Option<EvalSourceLocation>,

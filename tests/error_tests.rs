@@ -70,6 +70,11 @@ fn check_source_with_defines_and_options(
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
+    // Mirrors `pipeline::compile`: the object-cast prelude is injected past name resolution,
+    // so a `(object)` cast has the helper it is lowered to and a program that declares that
+    // helper's own name is rejected here rather than reaching the checker as a duplicate.
+    let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)
+        .map_err(|e| e.message.clone())?;
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
     // desugared into a hidden variadic parameter plus plain PHP before the checker runs, so
     // their own diagnostics reach this harness instead of a bare `Undefined function`.
@@ -79,8 +84,19 @@ fn check_source_with_defines_and_options(
     Ok(())
 }
 
-/// Checks source full for this module.
+/// Checks source full for this module, with the PHP-divergent lints enabled.
 fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::errors::CompileError> {
+    check_source_full_with(
+        src,
+        types::CheckOptions { lint: true, ..Default::default() },
+    )
+}
+
+/// Checks source with caller-selected options, e.g. the default php-silent build.
+fn check_source_full_with(
+    src: &str,
+    options: types::CheckOptions,
+) -> Result<elephc::types::CheckResult, elephc::errors::CompileError> {
     let tokens = tokenize(src).map_err(|e| elephc::errors::CompileError::new(e.span, &e.message))?;
     let ast = parse(&tokens)?;
     let ast = elephc::autoload::collect_aliases(ast);
@@ -89,9 +105,10 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast)?;
+    let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::func_args::desugar(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
-    types::check(&ast)
+    types::check_with_options(&ast, options)
 }
 
 /// Resolves files error for this module.
@@ -141,6 +158,28 @@ fn expect_error(src: &str, expected_substr: &str) {
                 expected_substr,
             );
         }
+    }
+}
+
+/// Verifies expect error under an explicit PHP compatibility profile, for a diagnostic that
+/// only exists on that profile (an 8.6 built-in name, say). The profile is thread-local, so it
+/// is restored to the default before returning.
+fn expect_error_with_php_version(
+    src: &str,
+    expected_substr: &str,
+    php_version: elephc::php_version::PhpVersion,
+) {
+    elephc::codegen::set_compile_profile(php_version, false);
+    let result = check_source(src);
+    elephc::codegen::set_compile_profile(elephc::php_version::PhpVersion::default(), false);
+    match result {
+        Ok(_) => panic!("Expected error containing '{}', but got Ok", expected_substr),
+        Err(msg) => assert!(
+            msg.contains(expected_substr),
+            "Error '{}' doesn't contain '{}'",
+            msg,
+            expected_substr,
+        ),
     }
 }
 
@@ -234,6 +273,19 @@ macro_rules! expect_builtin_arity_error {
 
 /// Verifies resolver error.
 fn resolver_error(src: &str) -> elephc::errors::CompileError {
+    resolve_main_source(src).expect_err("expected resolver to fail")
+}
+
+/// Verifies that the include resolver accepts `src`, e.g. an `include`/`require` whose path is
+/// only known at run time.
+fn resolver_ok(src: &str) {
+    if let Err(err) = resolve_main_source(src) {
+        panic!("Expected the resolver to accept the source, but got error: {}", err.message);
+    }
+}
+
+/// Runs the include resolver over `src` as the main file of a throwaway project directory.
+fn resolve_main_source(src: &str) -> Result<(), elephc::errors::CompileError> {
     let id = TEST_PROJECT_ID.fetch_add(1, Ordering::SeqCst);
     let dir = std::env::temp_dir().join(format!(
         "elephc_resolver_err_{}_{}",
@@ -253,9 +305,11 @@ fn resolver_error(src: &str) -> elephc::errors::CompileError {
     })();
 
     let _ = fs::remove_dir_all(&dir);
-    result.expect_err("expected resolver to fail")
+    result
 }
 
+#[path = "support/locals_retype_fixtures.rs"]
+mod locals_retype_fixtures;
 #[path = "error_tests/syntax.rs"]
 mod syntax;
 #[path = "error_tests/recovery.rs"]
@@ -264,6 +318,8 @@ mod recovery;
 mod warnings;
 #[path = "error_tests/type_system.rs"]
 mod type_system;
+#[path = "error_tests/reference_detach.rs"]
+mod reference_detach;
 #[path = "error_tests/exceptions_enums_magic.rs"]
 mod exceptions_enums_magic;
 #[path = "error_tests/classes_traits.rs"]
@@ -276,6 +332,8 @@ mod strict_php;
 mod math_builtins;
 #[path = "error_tests/string_builtins.rs"]
 mod string_builtins;
+#[path = "error_tests/mbstring.rs"]
+mod mbstring;
 #[path = "error_tests/io_builtins/mod.rs"]
 mod io_builtins;
 #[path = "error_tests/array_builtins.rs"]
@@ -307,11 +365,15 @@ mod xml;
 
 // --- Iterator-related errors ---
 
-/// Verifies the error diagnostic for foreach over object not implementing iterator.
+/// A by-value `foreach` over a plain object walks its accessible properties, as in php, so it is
+/// accepted; a by-reference walk over a plain object outside its declaring scope is still rejected.
 #[test]
-fn test_error_foreach_over_object_not_implementing_iterator() {
-    expect_error(
+fn test_foreach_over_plain_object_by_value_is_accepted_by_reference_rejected() {
+    expect_no_error(
         "<?php class Plain { public int $x = 1; } foreach (new Plain() as $v) { echo $v; }",
+    );
+    expect_error(
+        "<?php class Plain { public int $x = 1; } $o = new Plain(); foreach ($o as &$v) { echo $v; }",
         "foreach over object requires Plain to implement Iterator",
     );
 }
@@ -376,6 +438,72 @@ class Ok implements Iterator {
 }";
     expect_no_error(source);
     expect_no_warning(source, "should either be compatible with");
+}
+
+/// Tentative interface validation does not repeat for an already checked source hierarchy.
+#[test]
+fn test_tentative_notice_inherited_source_contract_is_not_repeated() {
+    let source = r"<?php
+class NoticeParent implements Countable {
+    #[\ReturnTypeWillChange]
+    public function count() { return 1; }
+}
+class NoticeChild extends NoticeParent {}
+class NoticeGrandchild extends NoticeChild implements Countable {}
+class NoticeOverride extends NoticeParent {
+    public function count() { return 2; }
+}
+";
+    expect_no_error(source);
+    expect_no_warning(source, "should either be compatible with");
+}
+
+/// A new interface checks the actual inherited method's attributes, as php-src does.
+#[test]
+fn test_tentative_notice_new_interface_reads_inherited_attributes() {
+    let source = r"<?php
+class NoticePlainParent {
+    #[\ReturnTypeWillChange]
+    public function count() { return 1; }
+}
+class NoticeAddsInterface extends NoticePlainParent implements Countable {}
+";
+    expect_no_error(source);
+    expect_no_warning(source, "should either be compatible with");
+}
+
+/// A missing declaration still warns at its actual owner, without one notice per descendant.
+#[test]
+fn test_tentative_notice_names_the_declaring_method_once() {
+    let source = "<?php
+class NoticeBareParent { public function count() { return 1; } }
+class NoticeFirstInterface extends NoticeBareParent implements Countable {}
+class NoticeDescendant extends NoticeFirstInterface {}
+";
+    let result = check_source_full(source).expect("valid tentative implementation");
+    let notices: Vec<_> = result
+        .warnings
+        .iter()
+        .filter(|warning| warning.message.contains("should either be compatible with"))
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].message.starts_with("Return type of NoticeBareParent::count()"));
+}
+
+/// The attribute does not weaken a newly introduced userland return contract.
+#[test]
+fn test_tentative_notice_attribute_does_not_waive_userland_contract() {
+    expect_error(
+        r"<?php
+interface NoticeStrictContract { public function count(): int; }
+class NoticeStrictParent {
+    #[\ReturnTypeWillChange]
+    public function count() { return 1; }
+}
+class NoticeStrictChild extends NoticeStrictParent implements NoticeStrictContract {}
+",
+        "without declaring a compatible return type",
+    );
 }
 
 /// Verifies the error diagnostic for iterator method rejects incompatible return type.

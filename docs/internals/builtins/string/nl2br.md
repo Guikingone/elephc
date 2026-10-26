@@ -1,16 +1,16 @@
 ---
-title: "nl2br() — internals"
+title: "nl2br() - internals"
 description: "Compiler internals for nl2br(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 842
+  order: 935
 ---
 
-## `nl2br()` — internals
+## `nl2br()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/nl2br.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/nl2br.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

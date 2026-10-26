@@ -235,7 +235,7 @@ pub(super) fn set_eval_call_site(ctx: &mut FunctionContext<'_>, inst: &Instructi
     );
     let line = inst
         .span
-        .and_then(|span| i64::try_from(span.line).ok())
+        .and_then(|span| i64::try_from(span.source_line()).ok())
         .unwrap_or(0);
     abi::emit_load_int_immediate(
         ctx.emitter,
@@ -272,6 +272,6 @@ pub(super) fn emit_eval_construction_site(
     abi::emit_store_to_sp(ctx.emitter, reg, offset + 8);
     abi::emit_load_int_immediate(ctx.emitter, reg, file_len as i64);
     abi::emit_store_to_sp(ctx.emitter, reg, offset + 16);
-    abi::emit_load_int_immediate(ctx.emitter, reg, inst.span.map_or(0, |span| i64::from(span.line)));
+    abi::emit_load_int_immediate(ctx.emitter, reg, inst.span.map_or(0, |span| i64::from(span.source_line())));
     abi::emit_store_to_sp(ctx.emitter, reg, offset + 24);
 }

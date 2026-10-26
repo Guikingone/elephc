@@ -1,16 +1,16 @@
 ---
-title: "date_sunset() — internals"
+title: "date_sunset() - internals"
 description: "Compiler internals for date_sunset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 223
+  order: 224
 ---
 
-## `date_sunset()` — internals
+## `date_sunset()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:890](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L890) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:913](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L913) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

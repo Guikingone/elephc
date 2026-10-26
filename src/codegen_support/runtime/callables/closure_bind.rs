@@ -16,8 +16,11 @@
 //!   string capture is an owned copy and is duplicated through
 //!   `__rt_str_persist`; arrays, hashes, objects, Mixed boxes, nested callables
 //!   and erased iterables are refcounted heap blocks and take `__rt_incref`;
-//!   scalars own nothing; a by-reference capture borrows an external cell and is
-//!   neither retained nor replaced.
+//!   scalars own nothing; a by-reference capture is never replaced, and the
+//!   copy takes its own lease on the managed reference cell, which
+//!   `descriptor_release` retires.
+//! - An eval callback adapter is rebound by Magician and wrapped again; without
+//!   eval support linked it is bound like any native closure.
 //! - It used to accept exactly one capture, named `this`, and abort otherwise.
 //!   That refused ordinary PHP: `\Closure::bind(static function () use ($a, $b)
 //!   {...}, null, null)` has four captures and no `$this`, which is what
@@ -26,8 +29,16 @@
 //!   `Closure::bind requires a closure that captures only $this`.
 //! - A null receiver leaves every capture in place, which is what PHP does when
 //!   only the scope is being changed.
+//! - `__rt_closure_set_scope` stamps a RUNTIME-bound scope into a freshly bound descriptor: a
+//!   closure whose body addresses properties by a runtime name carries a hidden last `Int`
+//!   capture (`crate::names::CLOSURE_SCOPE_LOCAL`), `0` until `Closure::bind($f, $t, $scope)` names
+//!   a scope that only exists as a string or object at run time. The stored value is the scope
+//!   class id plus one, so `0` stays "use the lexical scope". The helper matches the capture by
+//!   its 26-byte name and does nothing for any other descriptor (no environment, no metadata, an
+//!   eval adapter, a closure without the capture), so callers need not know which closures have it.
 //! - Verified on aarch64 (macOS/Linux) and x86_64 (Linux).
 
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -52,6 +63,41 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #80");                                    // establish a frame pointer for the helper
     emitter.instruction("str x0, [sp, #0]");                                    // save the source descriptor pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the new $this receiver (null keeps the captures)
+
+    // -- an eval callback adapter is rebound by Magician, then wrapped again --
+    // Its two captures are the eval context and the boxed callback, never `$this`, so the
+    // native shape check below would abort. Both hooks are installed only when eval support is
+    // linked; without them the adapter is bound like any native closure.
+    emitter.instruction("ldr x9, [x0]");                                        // x9 = descriptor kind word
+    emitter.instruction(&format!(                                               // is this an eval callback adapter?
+        "cmp x9, #{}",
+        crate::codegen_support::callable_descriptor::CALLABLE_DESC_KIND_CALLBACK_ADAPTER
+    ));
+    emitter.instruction("b.ne __rt_closure_bind_native");                       // native descriptors keep the capture-shape path
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_elephc_eval_closure_bind_fn");
+    emitter.instruction("ldr x10, [x10]");                                      // x10 = Magician's rebinding callback, or null
+    emitter.instruction("cbz x10, __rt_closure_bind_native");              // no eval support linked: bind it like any native closure
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the adapter descriptor
+    emitter.instruction("ldr x0, [x9, #64]");                                   // pass the captured eval context
+    emitter.instruction("ldr x1, [x9, #80]");                                   // pass the captured boxed callback
+    emitter.instruction("ldr x2, [sp, #8]");                                    // pass the raw new $this receiver
+    emitter.instruction("add x3, sp, #16");                                     // pass the bound-closure output slot
+    emitter.instruction("blr x10");                                             // ask Magician to rebind $this on the eval closure
+    emitter.instruction("cbz x0, __rt_closure_bind_native");               // a rejected rebinding binds it like any native closure
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_elephc_eval_wrap_callback_fn");
+    emitter.instruction("ldr x10, [x10]");                                      // x10 = generated adapter wrapper, installed with the eval context
+    emitter.instruction("cbz x10, __rt_closure_bind_native");              // no wrapper means no eval context ever existed
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the adapter descriptor
+    emitter.instruction("ldr x0, [x9, #64]");                                   // pass the eval context to the wrapper
+    emitter.instruction("ldr x1, [sp, #16]");                                   // pass the owned bound closure cell
+    emitter.instruction("blr x10");                                             // x0 = adapter descriptor for the bound closure
+    emitter.instruction("str x0, [sp, #24]");                                   // park the descriptor while Magician's owner is retired
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the wrapper retained its own capture owner
+    emitter.instruction("bl __rt_decref_mixed");                                // so drop the owner Magician handed back
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the adapter descriptor
+    emitter.instruction("str x0, [sp, #16]");                                   // publish it as the bind result
+    emitter.instruction("b __rt_closure_bind_return");                          // return through the shared epilogue
+    emitter.label("__rt_closure_bind_native");
 
     // -- read the capture shape; a descriptor with no environment has none --
     emitter.instruction("mov x10, #0");                                         // assume zero captures until the environment says otherwise
@@ -139,13 +185,12 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
     emitter.instruction("str x0, [x9]");                                        // store the boxed Mixed receiver into the slot
     emitter.instruction("b __rt_closure_bind_next");                            // this capture is done
 
-    // -- a by-ref capture the source holds a cell share for: the copy takes its own --
+    // -- a by-ref capture owns a managed reference-cell lease: the copy takes its own --
     emitter.label("__rt_closure_bind_ref");
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload the capture slot pointer
-    emitter.instruction("ldr x10, [x9, #8]");                                   // the share marker, copied with the slot
-    emitter.instruction("cbz x10, __rt_closure_bind_next");                     // a borrowed address needs nothing
-    emitter.instruction("ldr x0, [x9]");                                        // the shared reference cell
-    emitter.instruction("bl __rt_incref");                                      // the copy takes its own share, released by descriptor_release
+    emitter.instruction("ldr x0, [x9]");                                        // the captured reference payload address
+    emitter.instruction("bl __rt_reference_cell_owner");                        // x0 = the managed cell that owns that payload
+    emitter.instruction("bl __rt_incref");                                      // the copy takes its own lease, retired by descriptor_release
     emitter.instruction("b __rt_closure_bind_next");                            // this capture is done
 
     // -- take the copy's own reference, tag for tag with `descriptor_release` --
@@ -215,6 +260,41 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 80");                                         // reserve spill slots (16-byte aligned)
     emitter.instruction("mov [rsp+0], rdi");                                    // save the source descriptor pointer
     emitter.instruction("mov [rsp+8], rsi");                                    // save the new $this receiver (null keeps the captures)
+
+    // -- an eval callback adapter is rebound by Magician, then wrapped again (see AArch64) --
+    emitter.instruction("mov r10, [rdi]");                                      // r10 = descriptor kind word
+    emitter.instruction(&format!(                                               // is this an eval callback adapter?
+        "cmp r10, {}",
+        crate::codegen_support::callable_descriptor::CALLABLE_DESC_KIND_CALLBACK_ADAPTER
+    ));
+    emitter.instruction("jne __rt_closure_bind_native");                        // native descriptors keep the capture-shape path
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_elephc_eval_closure_bind_fn");
+    emitter.instruction("mov r11, [r11]");                                      // r11 = Magician's rebinding callback, or null
+    emitter.instruction("test r11, r11");                                       // is eval support linked at all?
+    emitter.instruction("jz __rt_closure_bind_native");                    // no: bind it like any native closure
+    emitter.instruction("mov r10, [rsp+0]");                                    // reload the adapter descriptor
+    emitter.instruction("mov rdi, [r10+64]");                                   // pass the captured eval context
+    emitter.instruction("mov rsi, [r10+80]");                                   // pass the captured boxed callback
+    emitter.instruction("mov rdx, [rsp+8]");                                    // pass the raw new $this receiver
+    emitter.instruction("lea rcx, [rsp+16]");                                   // pass the bound-closure output slot
+    emitter.instruction("call r11");                                            // ask Magician to rebind $this on the eval closure
+    emitter.instruction("test rax, rax");                                       // was the rebinding accepted?
+    emitter.instruction("jz __rt_closure_bind_native");                    // no: bind it like any native closure
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_elephc_eval_wrap_callback_fn");
+    emitter.instruction("mov r11, [r11]");                                      // r11 = generated adapter wrapper, installed with the eval context
+    emitter.instruction("test r11, r11");                                       // did an eval context ever install it?
+    emitter.instruction("jz __rt_closure_bind_native");                    // no wrapper: bind it like any native closure
+    emitter.instruction("mov r10, [rsp+0]");                                    // reload the adapter descriptor
+    emitter.instruction("mov rdi, [r10+64]");                                   // pass the eval context to the wrapper
+    emitter.instruction("mov rsi, [rsp+16]");                                   // pass the owned bound closure cell
+    emitter.instruction("call r11");                                            // rax = adapter descriptor for the bound closure
+    emitter.instruction("mov [rsp+24], rax");                                   // park the descriptor while Magician's owner is retired
+    emitter.instruction("mov rax, [rsp+16]");                                   // the wrapper retained its own capture owner
+    emitter.instruction("call __rt_decref_mixed");                              // so drop the owner Magician handed back
+    emitter.instruction("mov rax, [rsp+24]");                                   // reload the adapter descriptor
+    emitter.instruction("mov [rsp+16], rax");                                   // publish it as the bind result
+    emitter.instruction("jmp __rt_closure_bind_return");                        // return through the shared epilogue
+    emitter.label("__rt_closure_bind_native");
 
     // -- read the capture shape; a descriptor with no environment has none --
     emitter.instruction("xor r9d, r9d");                                        // assume zero captures
@@ -297,14 +377,12 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov [r8], rax");                                       // store the boxed Mixed receiver into the slot
     emitter.instruction("jmp __rt_closure_bind_next");                          // this capture is done
 
-    // -- a by-ref capture the source holds a cell share for: the copy takes its own --
+    // -- a by-ref capture owns a managed reference-cell lease: the copy takes its own --
     emitter.label("__rt_closure_bind_ref");
     emitter.instruction("mov r8, [rsp+48]");                                    // reload the capture slot pointer
-    emitter.instruction("mov rax, [r8+8]");                                     // the share marker, copied with the slot
-    emitter.instruction("test rax, rax");                                       // does the source hold a share?
-    emitter.instruction("jz __rt_closure_bind_next");                           // a borrowed address needs nothing
-    emitter.instruction("mov rax, [r8]");                                       // the shared reference cell, in the register __rt_incref reads
-    emitter.instruction("call __rt_incref");                                    // the copy takes its own share, released by descriptor_release
+    emitter.instruction("mov rax, [r8]");                                       // the captured reference payload address
+    emitter.instruction("call __rt_reference_cell_owner");                      // rax = the managed cell that owns that payload
+    emitter.instruction("call __rt_incref");                                    // the copy takes its own lease, retired by descriptor_release
     emitter.instruction("jmp __rt_closure_bind_next");                          // this capture is done
 
     // -- take the copy's own reference, tag for tag with `descriptor_release` --
@@ -356,6 +434,86 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // tear down the closure-bind frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the rebound closure descriptor
+}
+
+/// Emits `__rt_closure_set_scope(descriptor, encoded_scope)` for the active target.
+///
+/// Input: `x0`/`rdi` = a closure descriptor this caller exclusively owns (a fresh
+/// `__rt_closure_bind` copy), `x1`/`rsi` = the encoded scope (class id + 1, `0` = unchanged).
+/// An encoded `0` is a no-op so a scope that named no class keeps the lexical one. Output: none.
+pub(crate) fn emit_closure_set_scope(emitter: &mut Emitter) {
+    // The 26-byte capture name `crate::names::CLOSURE_SCOPE_LOCAL` as three little-endian words.
+    const NAME_WORD_0: i64 = 0x636870656c655f5f; // "__elephc"
+    const NAME_WORD_1: i64 = 0x657275736f6c635f; // "_closure"
+    const NAME_WORD_2: i64 = 0x672365706f63735f; // "_scope#g"
+    emitter.blank();
+    emitter.comment("--- runtime: closure set scope ---");
+    emitter.label_global("__rt_closure_set_scope");
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("test rsi, rsi");                                   // an encoded scope of zero means "unchanged"
+        emitter.instruction("jz __rt_closure_set_scope_done");                  // keep the lexical scope
+        emitter.instruction("mov r8, [rdi+40]");                                // r8 = descriptor environment record
+        emitter.instruction("test r8, r8");                                     // a captureless closure has no scope slot
+        emitter.instruction("jz __rt_closure_set_scope_done");                  // nothing to stamp
+        emitter.instruction("mov r9, [r8]");                                    // r9 = capture count
+        emitter.instruction("test r9, r9");                                     // an empty environment has no scope slot
+        emitter.instruction("jz __rt_closure_set_scope_done");                  // nothing to stamp
+        emitter.instruction("mov r10, [r8+16]");                                // r10 = capture metadata table
+        emitter.instruction("test r10, r10");                                   // untyped captures cannot be named
+        emitter.instruction("jz __rt_closure_set_scope_done");                  // nothing to stamp
+        emitter.instruction("lea r11, [r9-1]");                                 // r11 = index of the LAST capture
+        emitter.instruction("mov rax, r11");                                    // copy the index to scale it
+        emitter.instruction("shl rax, 5");                                      // each metadata entry is four 8-byte words
+        emitter.instruction("add rax, r10");                                    // rax = last capture's metadata entry
+        emitter.instruction("cmp QWORD PTR [rax+8], 26");                       // the scope capture's name is 26 bytes long
+        emitter.instruction("jne __rt_closure_set_scope_done");                 // any other name is an ordinary capture
+        emitter.instruction("mov rcx, [rax]");                                  // rcx = capture name bytes
+        emitter.instruction(&format!("mov rdx, {NAME_WORD_0}"));               // first eight name bytes
+        emitter.instruction("cmp [rcx], rdx");                                  // compare them
+        emitter.instruction("jne __rt_closure_set_scope_done");                 // not the scope capture
+        emitter.instruction(&format!("mov rdx, {NAME_WORD_1}"));               // next eight name bytes
+        emitter.instruction("cmp [rcx+8], rdx");                                // compare them
+        emitter.instruction("jne __rt_closure_set_scope_done");                 // not the scope capture
+        emitter.instruction(&format!("mov rdx, {NAME_WORD_2}"));               // next eight name bytes
+        emitter.instruction("cmp [rcx+16], rdx");                               // compare them
+        emitter.instruction("jne __rt_closure_set_scope_done");                 // not the scope capture
+        emitter.instruction("shl r11, 4");                                      // each runtime capture slot is 16 bytes
+        emitter.instruction("mov [rdi+r11+64], rsi");                           // stamp the scope into the slot after the 64-byte header
+        emitter.label("__rt_closure_set_scope_done");
+        emitter.instruction("ret");                                             // return to the caller
+        return;
+    }
+    emitter.instruction("cbz x1, __rt_closure_set_scope_done");                 // an encoded scope of zero means "unchanged"
+    emitter.instruction("ldr x9, [x0, #40]");                                   // x9 = descriptor environment record
+    emitter.instruction("cbz x9, __rt_closure_set_scope_done");                 // a captureless closure has no scope slot
+    emitter.instruction("ldr x10, [x9]");                                       // x10 = capture count
+    emitter.instruction("cbz x10, __rt_closure_set_scope_done");                // an empty environment has no scope slot
+    emitter.instruction("ldr x11, [x9, #16]");                                  // x11 = capture metadata table
+    emitter.instruction("cbz x11, __rt_closure_set_scope_done");                // untyped captures cannot be named
+    emitter.instruction("sub x12, x10, #1");                                    // x12 = index of the LAST capture
+    emitter.instruction("lsl x13, x12, #5");                                    // each metadata entry is four 8-byte words
+    emitter.instruction("add x13, x13, x11");                                   // x13 = last capture's metadata entry
+    emitter.instruction("ldr x14, [x13, #8]");                                  // x14 = capture name length
+    emitter.instruction("cmp x14, #26");                                        // the scope capture's name is 26 bytes long
+    emitter.instruction("b.ne __rt_closure_set_scope_done");                    // any other name is an ordinary capture
+    emitter.instruction("ldr x14, [x13]");                                      // x14 = capture name bytes
+    abi::emit_load_int_immediate(emitter, "x15", NAME_WORD_0);
+    emitter.instruction("ldr x16, [x14]");                                      // first eight name bytes
+    emitter.instruction("cmp x16, x15");                                        // compare them
+    emitter.instruction("b.ne __rt_closure_set_scope_done");                    // not the scope capture
+    abi::emit_load_int_immediate(emitter, "x15", NAME_WORD_1);
+    emitter.instruction("ldr x16, [x14, #8]");                                  // next eight name bytes
+    emitter.instruction("cmp x16, x15");                                        // compare them
+    emitter.instruction("b.ne __rt_closure_set_scope_done");                    // not the scope capture
+    abi::emit_load_int_immediate(emitter, "x15", NAME_WORD_2);
+    emitter.instruction("ldr x16, [x14, #16]");                                 // next eight name bytes
+    emitter.instruction("cmp x16, x15");                                        // compare them
+    emitter.instruction("b.ne __rt_closure_set_scope_done");                    // not the scope capture
+    emitter.instruction("lsl x12, x12, #4");                                    // each runtime capture slot is 16 bytes
+    emitter.instruction("add x12, x12, #64");                                   // skip the static descriptor header
+    emitter.instruction("str x1, [x0, x12]");                                   // stamp the scope into the capture slot
+    emitter.label("__rt_closure_set_scope_done");
+    emitter.instruction("ret");                                                 // return to the caller
 }
 
 #[cfg(test)]

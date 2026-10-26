@@ -1,16 +1,16 @@
 ---
-title: "key() — internals"
+title: "key() - internals"
 description: "Compiler internals for key(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 69
 ---
 
-## `key()` — internals
+## `key()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/key.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/key.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

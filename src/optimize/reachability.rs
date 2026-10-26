@@ -9,8 +9,6 @@
 //! - The pass removes declarations only after a fixed-point reachability proof.
 //! - The AST and `CheckResult` are pruned together so lowering cannot resurrect dead methods.
 
-use crate::fast_hash::FastSet as HashSet;
-
 use crate::parser::ast::Program;
 use crate::types::CheckResult;
 
@@ -39,11 +37,22 @@ pub fn prune_unreachable_declarations(
     check_result: &mut CheckResult,
     options: PruneOptions<'_>,
 ) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        prune_on_compiler_stack(program, check_result, options)
+    })
+}
+
+/// The pruning body, running on the stack its entry point established.
+fn prune_on_compiler_stack(
+    program: Program,
+    check_result: &mut CheckResult,
+    options: PruneOptions<'_>,
+) -> Program {
     // This pass is 14.3% of a Symfony `--web` build (45.10 s of 314.57 s), which is as much as
     // type checking, and it is SIX steps. `ELEPHC_DECL_REACH_TIMES=1` says which one.
     let trace = std::env::var("ELEPHC_DECL_REACH_TIMES").is_ok();
     let mut mark = std::time::Instant::now();
-    let mut step = |label: &str, mark: &mut std::time::Instant| {
+    let step = |label: &str, mark: &mut std::time::Instant| {
         if trace {
             eprintln!("[elephc-decl-reach] {label}={:.2}s", mark.elapsed().as_secs_f64());
         }

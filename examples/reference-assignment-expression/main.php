@@ -73,6 +73,19 @@ $referencedValues[0] = &$referencedStub;
 $referencedStub = 7;
 echo $referencedValues[0];
 
+// Later loop iterations mutate the same nested path shared by both result entries.
+function appendMutablePaths(array &$paths): void
+{
+    $path = ['root', []];
+    foreach (['left', 'right'] as $key) {
+        $path[1][$key] = true;
+        $paths[$key][] = &$path;
+    }
+}
+
+$sharedPaths = [];
+appendMutablePaths($sharedPaths);
+echo "\n", json_encode($sharedPaths), "\n";
 class SharedPropertyReferences
 {
     public array $refs = [];

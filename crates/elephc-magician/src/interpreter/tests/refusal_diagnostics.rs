@@ -59,17 +59,15 @@ fn a_refused_expression_names_the_expression_kind() {
     );
 }
 
-/// Verifies a refused class declaration names the CLASS, not just the statement.
+/// Verifies a class whose parent is missing is no longer a refusal at all.
 ///
-/// The generic statement fallback would have said `unsupported ClassDecl statement`, which groups
-/// 40 corpus cases into one useless bucket. The class name is written deeper, and first-writer-
-/// wins keeps it.
+/// It used to be refused with ": class C could not be declared" (the class named deeper than the
+/// generic `unsupported ClassDecl statement` fallback). The interpreter now throws php's catchable
+/// `Error` (`Class "NoSuchParent" not found`) from `ensure_eval_class_parent_available`, so there
+/// is no refusal description to write.
 #[test]
-fn a_refused_class_declaration_names_the_class() {
-    assert_eq!(
-        refusal_description(br#"class C extends NoSuchParent {}"#),
-        ": class C could not be declared",
-    );
+fn a_class_with_a_missing_parent_throws_instead_of_being_refused() {
+    assert_eq!(refusal_description(br#"class C extends NoSuchParent {}"#), "");
 }
 
 /// Verifies a path that already describes itself keeps its own message.

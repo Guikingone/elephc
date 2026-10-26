@@ -1,8 +1,8 @@
 ---
 title: "mb_strtolower()"
-description: "Lowercases a string with full Unicode case mapping in the requested encoding."
+description: "Converts every character to its Unicode lowercase mapping."
 sidebar:
-  order: 839
+  order: 926
 ---
 
 ## mb_strtolower()
@@ -11,7 +11,7 @@ sidebar:
 function mb_strtolower(string $string, ?string $encoding = null): string
 ```
 
-Lowercases a string with full Unicode case mapping in the requested encoding.
+Converts every character to its Unicode lowercase mapping.
 
 **Parameters**:
 - `$string` (`string`)
@@ -22,9 +22,9 @@ Lowercases a string with full Unicode case mapping in the requested encoding.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_strtolower.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_strtolower.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_strtolower.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_strtolower.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

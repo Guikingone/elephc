@@ -79,7 +79,7 @@ pub(in crate::codegen::lower_inst) fn emit_eval_interface_method_on_miss(
     let method_call = ctx.emitter.target.extern_symbol("__elephc_eval_method_call");
     abi::emit_call_label(ctx.emitter, &method_call);
     emit_branch_if_eval_c_int_negative(ctx, &not_implemented);
-    emit_eval_status_check(ctx);
+    emit_eval_status_check_releasing(ctx, &boxed);
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     if matches!(return_ty.codegen_repr(), PhpType::Void | PhpType::Never) {

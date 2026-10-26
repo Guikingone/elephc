@@ -12,7 +12,6 @@
 
 mod captures;
 mod engine;
-mod mb_ereg_match;
 mod preg_array;
 mod preg_filter;
 mod preg_grep;
@@ -30,7 +29,6 @@ mod targets;
 
 pub(in crate::interpreter) use captures::*;
 pub(in crate::interpreter) use engine::*;
-pub(in crate::interpreter) use mb_ereg_match::*;
 pub(in crate::interpreter) use preg_array::*;
 pub(in crate::interpreter) use preg_filter::*;
 pub(in crate::interpreter) use preg_grep::*;

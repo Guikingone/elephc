@@ -10,54 +10,116 @@
 
 use std::collections::HashSet;
 
-use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
-use crate::parser::stmt::{can_replay_assignment_target, lower_postfix_incdec_assignment};
+use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
+use crate::parser::stmt::{
+    can_replay_assignment_target, lower_postfix_incdec_assignment,
+    update_dimension_base_is_snapshotted, update_index_needs_snapshot,
+};
 use crate::span::Span;
 
-/// Desugars `$p++` / `++$p` where `$p` is an l-value that `ExprKind::PreIncrement` cannot name
-/// — a property, static property, or array element. Returns `None` when the target is not one
-/// this can safely rewrite, leaving the caller's existing parse error in place.
+/// Desugars `++$place` / `$place++` into a read-modify-write an expression can carry.
 ///
-/// The AST models increment as `PreIncrement(String)` / `PostIncrement(String)`: a variable
-/// NAME, not an l-value. Statement position gets away with that by desugaring to a
-/// read-modify-write and discarding the operator's value. Expression position needs the value,
-/// and `ExprKind::Assignment` already carries a `prelude` the checker runs BEFORE the value —
-/// which is exactly "perform the write, then evaluate to the right one of the two values". No
-/// new AST node, so nothing downstream of the parser changes.
+/// The `Pre*`/`Post*` nodes hold a variable NAME, so a property, an array element, a static
+/// property or any nesting of those has nowhere to live in them. This rewrites such a place into
+/// an `Assignment` whose prelude does the work and whose value is what PHP yields: the NEW value
+/// for the prefix form, the value the place held BEFORE the write for the postfix form.
 ///
-/// The target is read twice — once for the write, once for the value or the capture — so this
-/// only applies where `can_replay_assignment_target` holds. `$a[f()]++` keeps the existing
-/// error rather than silently calling `f()` twice.
+/// The place is STABILIZED first, exactly as a compound assignment's target is. PHP evaluates the
+/// receiver and every index once, so `$b[ix()]++` calls `ix()` once and the temporary it binds is
+/// what both the read and the write address. Without it the rewrite had to replay the place
+/// verbatim, so `can_replay_assignment_target` turned away every computed index and the operator
+/// was left unconsumed — `echo $b[ix()]++;` reported `Expected ';'` (issue #682).
+///
+/// A target that is still not replayable after stabilization is declined rather than guessed at,
+/// which leaves the caller's original error in place.
 pub(super) fn desugar_lvalue_incdec(
     target: Expr,
     increment: bool,
     prefix: bool,
     span: Span,
 ) -> Option<Expr> {
-    if !can_replay_assignment_target(&target) || matches!(target.kind, ExprKind::Variable(_)) {
+    if matches!(target.kind, ExprKind::Variable(_)) {
         // A bare variable already has a dedicated node; only the shapes it cannot name reach here.
         return None;
     }
+    if !is_non_local_assignment_target(&target) {
+        return None;
+    }
+    let mut lowerer = AssignmentExpressionLowerer::new(span);
+    // The increment reads and writes the same place, so the place itself is what the stabilizer
+    // measures the target's parts against.
+    let probe = target.clone();
+    let target = lowerer.stabilize_non_local_target(target, &probe);
+    let target = lowerer.snapshot_update_dimension(target);
+    if !can_replay_assignment_target(&target) {
+        return None;
+    }
+    let mut prelude = lowerer.finish();
+    // One dimension of a local, property, or static-property array is read once into `old`,
+    // and the write stores `old ± 1`, so the element is fetched and its key converted a single
+    // time, as in PHP. Deeper places keep the statement write below.
+    if let ExprKind::ArrayAccess { array, .. } = &target.kind {
+        if matches!(
+            &array.kind,
+            ExprKind::Variable(_)
+                | ExprKind::PropertyAccess { .. }
+                | ExprKind::StaticPropertyAccess { .. }
+        ) {
+            let old_name = crate::names::generated_local_name(&format!(
+                "__elephc_incdec_old_{}_{}", span.line, span.col
+            ));
+            let new_name = crate::names::generated_local_name(&format!(
+                "__elephc_incdec_new_{}_{}", span.line, span.col
+            ));
+            prelude.push(Stmt::new(StmtKind::Assign {
+                name: old_name.clone(),
+                value: target.clone(),
+            }, span));
+            let old_value = Expr::new(ExprKind::Variable(old_name.clone()), span);
+            let next_value = Expr::new(ExprKind::BinaryOp {
+                left: Box::new(old_value),
+                op: if increment { BinOp::Add } else { BinOp::Sub },
+                right: Box::new(Expr::new(ExprKind::IntLiteral(1), span)),
+            }, span);
+            prelude.push(Stmt::new(StmtKind::Assign {
+                name: new_name.clone(),
+                value: next_value,
+            }, span));
+            let result_name = if prefix { new_name.clone() } else { old_name };
+            return Some(Expr::new(ExprKind::Assignment {
+                target: Box::new(target),
+                value: Box::new(Expr::new(ExprKind::Variable(new_name), span)),
+                result_target: Some(Box::new(Expr::new(ExprKind::Variable(result_name), span))),
+                prelude,
+                conditional_value_temp: None,
+            }, span));
+        }
+    }
     let write = lower_postfix_incdec_assignment(target.clone(), increment, span).ok()?;
-    let (prelude, value) = if prefix {
+    let value = if prefix {
         // `++$p` evaluates to the NEW value, which re-reading the target after the write gives.
-        (vec![write], target)
+        prelude.push(write);
+        target
     } else {
         // `$p++` evaluates to the OLD value, so it has to be captured before the write.
-        let temp = format!("__elephc_incdec_{}_{}", span.line, span.col);
-        let capture = Stmt::new(
+        let temp = crate::names::generated_local_name(&format!(
+            "__elephc_incdec_{}_{}",
+            span.line, span.col
+        ));
+        prelude.push(Stmt::new(
             StmtKind::Assign {
                 name: temp.clone(),
                 value: target,
             },
             span,
-        );
-        (
-            vec![capture, write],
-            Expr::new(ExprKind::Variable(temp), span),
-        )
+        ));
+        prelude.push(write);
+        Expr::new(ExprKind::Variable(temp), span)
     };
-    let result = format!("__elephc_incdec_result_{}_{}", span.line, span.col);
+    let result = crate::names::generated_local_name(&format!(
+        "__elephc_incdec_result_{}_{}",
+        span.line, span.col
+    ));
     Some(Expr::new(
         ExprKind::Assignment {
             target: Box::new(Expr::new(ExprKind::Variable(result), span)),
@@ -161,6 +223,30 @@ impl AssignmentExpressionLowerer {
     /// mutate. Returns a replacement expression with temporaries substituted.
     pub(super) fn stabilize_non_local_target(&mut self, target: Expr, rhs: &Expr) -> Expr {
         self.stabilize_assignment_target(target, rhs)
+    }
+
+    /// Captures a mutable index for both halves of an update.
+    ///
+    /// Covers one dimension of a local, property, or static-property array, so the write lands
+    /// on the key its read converted even when a diagnostic handler reassigns the index variable.
+    pub(super) fn snapshot_update_dimension(&mut self, target: Expr) -> Expr {
+        let span = target.span;
+        match target.kind {
+            ExprKind::ArrayAccess { array, index }
+                if update_dimension_base_is_snapshotted(&array) =>
+            {
+                let index = if update_index_needs_snapshot(&index) {
+                    self.bind_temp(*index)
+                } else {
+                    *index
+                };
+                Expr::new(ExprKind::ArrayAccess {
+                    array,
+                    index: Box::new(index),
+                }, span)
+            }
+            kind => Expr::new(kind, span),
+        }
     }
 
     /// Binds a value expression for use in an assignment context. If the value
@@ -350,10 +436,10 @@ impl AssignmentExpressionLowerer {
     /// monotonically increasing counter. Names are formatted as
     /// `__elephc_assign_expr_{line}_{col}_{counter}`.
     fn next_temp_name(&mut self) -> String {
-        let name = format!(
+        let name = crate::names::generated_local_name(&format!(
             "__elephc_assign_expr_{}_{}_{}",
             self.span.line, self.span.col, self.next_temp
-        );
+        ));
         self.next_temp += 1;
         name
     }
@@ -478,6 +564,13 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
             for (key, value) in items {
                 collect_assignment_target_dependencies(key, dependencies);
                 collect_assignment_target_dependencies(value, dependencies);
+            }
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    collect_assignment_target_dependencies(expr, dependencies);
+                }
             }
         }
         ExprKind::Match {
@@ -611,6 +704,10 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
             expr_may_write_dependency(key, dependencies)
                 || expr_may_write_dependency(value, dependencies)
         }),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(|expr| expr_may_write_dependency(expr, dependencies)),
         ExprKind::ArrayAccess { array, index } => {
             expr_may_write_dependency(array, dependencies)
                 || expr_may_write_dependency(index, dependencies)
@@ -861,6 +958,10 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, value)| {
             expr_contains_equivalent(key, needle) || expr_contains_equivalent(value, needle)
         }),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(|expr| expr_contains_equivalent(expr, needle)),
         ExprKind::ArrayAccess { array, index } => {
             expr_contains_equivalent(array, needle) || expr_contains_equivalent(index, needle)
         }

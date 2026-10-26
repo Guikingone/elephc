@@ -1,16 +1,16 @@
 ---
-title: "headers_sent() — internals"
+title: "headers_sent() - internals"
 description: "Compiler internals for headers_sent(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 634
+  order: 654
 ---
 
-## `headers_sent()` — internals
+## `headers_sent()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/headers_sent.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/headers_sent.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -50,7 +50,7 @@ function headers_sent(mixed $filename = null, mixed $line = null): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/headers_sent.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/headers_sent.rs) (`eval_builtin!`)
-- **Execution**: generated-runtime ABI (`RuntimeBuiltinId(22)`) with a Magician fallback adapter.
+- **Execution**: generated-runtime ABI (`RuntimeBuiltinId(88)`) with a Magician fallback adapter.
 - **Adapter reason**: `additional-signature-semantics`.
 - **Dispatch hooks**: `direct`, `values`
 - **By-reference parameters**: `$filename`, `$line`.

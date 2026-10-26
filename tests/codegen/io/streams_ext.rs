@@ -322,6 +322,29 @@ echo $wrote . "|" . $content;
     assert_eq!(out, "7|scratch");
 }
 
+/// Verifies `tmpfile` resolves the template through `TMPDIR`, the way PHP does.
+///
+/// PHP creates the temporary file in the environment's temp directory and fails when `TMPDIR`
+/// points somewhere unusable (it does not fall back to `/tmp`). elephc emulates `php://memory`
+/// with the same helper, so honoring `TMPDIR` is also what keeps that emulation inside a
+/// writable sandbox root.
+#[test]
+fn test_tmpfile_honors_tmpdir_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+putenv("TMPDIR=/nonexistent");
+$missing = tmpfile();
+putenv("TMPDIR=" . __DIR__);
+$present = tmpfile();
+fwrite($present, "ok");
+rewind($present);
+echo gettype($missing), "|", fread($present, 2), "\n";
+fclose($present);
+"#,
+    );
+    assert_eq!(out, "boolean|ok\n");
+}
+
 /// Verifies `tmpfile` returns a resource type (not `false`) and `gettype` reports "resource".
 #[test]
 fn test_tmpfile_returns_resource_type() {

@@ -80,10 +80,7 @@ fn emit_hash_to_hash_reverse_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x11, #-1");                                        // has the walk run off the head?
     emitter.instruction("b.eq __rt_h2h_rev_done");                              // walk finished: return the result
     emitter.instruction("ldr x0, [sp, #0]");                                    // the source hash base
-    emitter.instruction("mov x7, #64");                                         // x7 = hash entry size in bytes
-    emitter.instruction("mul x8, x11, x7");                                     // x8 = slot index * 64
-    emitter.instruction("add x8, x0, x8");                                      // advance from the hash base to the selected slot
-    emitter.instruction("add x8, x8, #40");                                     // skip the 40-byte hash header
+    super::hash_layout::emit_entry_address(emitter, "x8", "x0", "x11");
     emitter.instruction("ldr x12, [x8, #48]");                                  // entry[48]: PREV slot index
     emitter.instruction("str x12, [sp, #16]");                                  // advance the cursor BEFORE any call clobbers it
     emitter.instruction("ldp x1, x2, [x8, #8]");                                // entry key pointer and length
@@ -175,10 +172,8 @@ fn emit_hash_to_hash_reverse_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // current slot index
     emitter.instruction("cmp r11, -1");                                         // has the walk run off the head?
     emitter.instruction("je __rt_h2h_rev_done_x");                              // walk finished: return the result
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // the source hash base
-    emitter.instruction("imul r11, r11, 64");                                   // slot index * hash entry size
-    emitter.instruction("add rax, r11");                                        // advance from the hash base to the selected slot
-    emitter.instruction("add rax, 40");                                         // skip the 40-byte hash header
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // the source hash header
+    super::hash_layout::emit_entry_address(emitter, "rax", "r10", "r11");
     emitter.instruction("mov r10, QWORD PTR [rax + 48]");                       // entry[48]: PREV slot index
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // advance the cursor BEFORE any call clobbers it
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // entry key pointer

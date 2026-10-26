@@ -26,6 +26,66 @@ fn eval_uninitialized_static_property_read(
     eval_throw_uninitialized_static_property_error(declaring_class, property_name, context, values)
 }
 
+/// Stores a borrowed reflection argument under an independent static-property owner.
+/// Same-cell writes preserve the existing owner; replacements release the displaced value.
+pub(in crate::interpreter) fn store_borrowed_static_property(
+    class_name: &str,
+    property_name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if context.static_property(class_name, property_name) == Some(value) {
+        return Ok(());
+    }
+    let retained = values.retain(value)?;
+    if let Some(previous) = context.set_static_property(class_name, property_name, retained) {
+        eval_release_value(context, values, previous)?;
+    }
+    Ok(())
+}
+
+/// Transfers a fresh value to static storage or acquires an independent owner for a storage borrow.
+/// In-place mutation results retain the existing slot owner when their cell identity is unchanged.
+pub(in crate::interpreter) fn store_static_property_value(
+    class_name: &str,
+    property_name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if value.is_borrowed() {
+        return store_borrowed_static_property(class_name, property_name, value, context, values);
+    }
+    if let Some(previous) = context.set_static_property(class_name, property_name, value) {
+        eval_release_value(context, values, previous)?;
+    }
+    Ok(())
+}
+
+/// Gives the registered SPL autoloaders their chance at a static-property receiver nobody has
+/// declared yet, as php does for `Foo::$prop` (read or write) before it reports the class
+/// missing. Constants and static calls already did; the property forms threw
+/// `Class "Foo" not found` without asking, which broke Laravel's
+/// `Serializers\Native::$transformUseVariables = ...` under artisan.
+fn eval_autoload_static_property_class(
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if matches!(
+        class_name.to_ascii_lowercase().as_str(),
+        "self" | "parent" | "static"
+    ) || eval_class_like_is_known(class_name, context, values)?
+    {
+        return Ok(());
+    }
+    let _ = crate::interpreter::eval_spl_autoload_class(class_name, context, values)?;
+    #[cfg(not(test))]
+    context.sync_global_eval_classes();
+    Ok(())
+}
+
 /// Reads one eval-declared static property after resolving the class-like receiver.
 pub(in crate::interpreter) fn eval_static_property_get_result(
     class_name: &str,
@@ -33,7 +93,19 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_static_property_get_result_with_ownership(class_name, property_name, context, values, None)
+}
+
+/// Reads a property while optionally retaining reference-backed values for a native caller.
+pub(in crate::interpreter) fn eval_static_property_get_result_with_ownership(
+    class_name: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    owned: Option<&mut Vec<RuntimeCellHandle>>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let class_name = resolve_eval_static_member_class_name(class_name, context)?;
+    eval_autoload_static_property_class(&class_name, context, values)?;
     if let Some((declaring_class, property)) = context.class_property(&class_name, property_name) {
         if !property.is_static() {
             return eval_throw_undeclared_static_property_error(
@@ -55,12 +127,15 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
         if let Some(target) = context
             .static_property_alias(&declaring_class, property.name())
         {
-            return eval_reference_target_value(&target, context, values);
+            return match owned {
+                Some(owners) => eval_owned_reference_target_value(&target, context, values, owners),
+                None => eval_reference_target_value(&target, context, values),
+            };
         }
         if let Some(value) =
             eval_static_property_value_or_default(&declaring_class, &property, context, values)?
         {
-            return Ok(value);
+            return if owned.is_some() { values.retain(value) } else { Ok(value) };
         }
         if property.property_type().is_none() {
             return values.null();
@@ -109,7 +184,10 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
                 if let Some(target) = context
                     .static_property_alias(&declaring_class, property_name)
                 {
-                    return eval_reference_target_value(&target, context, values);
+                    return match owned {
+                        Some(owners) => eval_owned_reference_target_value(&target, context, values, owners),
+                        None => eval_reference_target_value(&target, context, values),
+                    };
                 }
                 if !eval_with_native_bridge_scope(&declaring_class, context, || {
                     values.static_property_is_initialized(&declaring_class, property_name)
@@ -158,7 +236,10 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
             if let Some(target) = context
                 .static_property_alias(&declaring_class, property_name)
             {
-                return eval_reference_target_value(&target, context, values);
+                return match owned {
+                    Some(owners) => eval_owned_reference_target_value(&target, context, values, owners),
+                    None => eval_reference_target_value(&target, context, values),
+                };
             }
             if !values.static_property_is_initialized(&declaring_class, property_name)? {
                 return eval_uninitialized_static_property_read(
@@ -605,7 +686,7 @@ pub(super) fn eval_builtin_property_hook_type_case(
     if let Some(replaced) = context.set_enum_case("PropertyHookType", case_name, object) {
         values.release(replaced)?;
     }
-    Ok(Some(object))
+    Ok(Some(object.borrowed()))
 }
 
 /// Returns the PHP case name and backed value for a builtin property-hook case.
@@ -637,6 +718,7 @@ pub(super) fn eval_static_property_reference_bind_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let class_name = resolve_eval_static_member_class_name(class_name, context)?;
+    eval_autoload_static_property_class(&class_name, context, values)?;
     if let Some((declaring_class, property)) = context.class_property(&class_name, property_name) {
         if !property.is_static() {
             return eval_throw_undeclared_static_property_error(
@@ -654,7 +736,7 @@ pub(super) fn eval_static_property_reference_bind_result(
                 values,
             );
         }
-        if validate_eval_readonly_property_write(&declaring_class, &property, context).is_err() {
+        if validate_eval_readonly_property_write(&declaring_class, &property, None, context).is_err() {
             return eval_throw_readonly_property_modification_error(
                 &declaring_class,
                 property.name(),
@@ -683,12 +765,7 @@ pub(super) fn eval_static_property_reference_bind_result(
         }
         let value = eval_reference_target_value(&target, context, values)?;
         context.bind_static_property_alias(&declaring_class, property.name(), target);
-        if let Some(replaced) =
-            context.set_static_property(&declaring_class, property.name(), value)
-        {
-            values.release(replaced)?;
-        }
-        return Ok(());
+        return store_borrowed_static_property(&declaring_class, property.name(), value, context, values);
     }
     if eval_static_member_context_owns_class(&class_name, context) {
         if let Some(parent) = context.class_native_parent_name(&class_name) {
@@ -856,6 +933,7 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let class_name = resolve_eval_static_member_class_name(class_name, context)?;
+    eval_autoload_static_property_class(&class_name, context, values)?;
     if let Some((declaring_class, property)) = context.class_property(&class_name, property_name) {
         if !property.is_static() {
             return eval_throw_undeclared_static_property_error(
@@ -873,7 +951,7 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                 values,
             );
         }
-        if validate_eval_readonly_property_write(&declaring_class, &property, context).is_err() {
+        if validate_eval_readonly_property_write(&declaring_class, &property, None, context).is_err() {
             return eval_throw_readonly_property_modification_error(
                 &declaring_class,
                 property.name(),
@@ -898,12 +976,7 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                 return Ok(());
             }
         }
-        if let Some(replaced) =
-            context.set_static_property(&declaring_class, property.name(), value)
-        {
-            values.release(replaced)?;
-        }
-        return Ok(());
+        return store_borrowed_static_property(&declaring_class, property.name(), value, context, values);
     }
     if eval_static_member_context_owns_class(&class_name, context) {
         if let Some(parent) = context.class_native_parent_name(&class_name) {
@@ -934,6 +1007,13 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                         values,
                     );
                 }
+                super::instance_property_access::validate_eval_native_array_property_assignment(
+                    &declaring_class,
+                    property_name,
+                    value,
+                    context,
+                    values,
+                )?;
                 if let Some(target) = context
                     .static_property_alias(&declaring_class, property_name)
                 {
@@ -980,6 +1060,13 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
             );
         }
         if is_static {
+            super::instance_property_access::validate_eval_native_array_property_assignment(
+                &declaring_class,
+                property_name,
+                value,
+                context,
+                values,
+            )?;
             if let Some(target) = context
                 .static_property_alias(&declaring_class, property_name)
             {

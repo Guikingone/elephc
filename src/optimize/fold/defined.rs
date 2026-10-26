@@ -21,6 +21,9 @@ struct KnownClassConstants {
 #[derive(Clone, Debug, Default)]
 struct KnownClassDeclaration {
     constants: HashSet<String>,
+    /// Private and protected constants. `defined()` answers by the CALLING scope -- true inside
+    /// the class, false outside -- which a fold cannot see, so a probe naming one stays open.
+    scoped: HashSet<String>,
     dependencies: Vec<String>,
 }
 
@@ -46,6 +49,10 @@ impl KnownClassConstants {
             return None;
         }
         let declaration = self.declarations.get(class_key)?;
+        if declaration.scoped.contains(constant_name) {
+            visiting.remove(class_key);
+            return None;
+        }
         if declaration.constants.contains(constant_name) {
             visiting.remove(class_key);
             return Some(true);
@@ -144,11 +151,7 @@ fn collect_top_level_declaration(stmt: &Stmt, facts: &mut KnownClassConstants) {
                         .map(|dependency| php_symbol_key(dependency.as_str()))
                 }))
                 .collect();
-            (
-                name,
-                constants.iter().map(|constant| constant.name.clone()).collect(),
-                dependencies,
-            )
+            (name, constants.as_slice(), dependencies)
         }
         StmtKind::InterfaceDecl {
             name,
@@ -157,7 +160,7 @@ fn collect_top_level_declaration(stmt: &Stmt, facts: &mut KnownClassConstants) {
             ..
         } => (
             name,
-            constants.iter().map(|constant| constant.name.clone()).collect(),
+            constants.as_slice(),
             extends
                 .iter()
                 .map(|dependency| php_symbol_key(dependency.as_str()))
@@ -171,9 +174,6 @@ fn collect_top_level_declaration(stmt: &Stmt, facts: &mut KnownClassConstants) {
             constants,
             ..
         } => {
-            let mut names: HashSet<_> =
-                constants.iter().map(|constant| constant.name.clone()).collect();
-            names.extend(cases.iter().map(|case| case.name.clone()));
             let dependencies = implements
                 .iter()
                 .map(|dependency| php_symbol_key(dependency.as_str()))
@@ -184,7 +184,14 @@ fn collect_top_level_declaration(stmt: &Stmt, facts: &mut KnownClassConstants) {
                         .map(|dependency| php_symbol_key(dependency.as_str()))
                 }))
                 .collect();
-            (name, names, dependencies)
+            let mut declaration = split_by_visibility(constants, dependencies);
+            declaration
+                .constants
+                .extend(cases.iter().map(|case| case.name.clone()));
+            facts
+                .declarations
+                .insert(php_symbol_key(name.trim_start_matches('\\')), declaration);
+            return;
         }
         StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { body, .. }
@@ -199,9 +206,25 @@ fn collect_top_level_declaration(stmt: &Stmt, facts: &mut KnownClassConstants) {
 
     facts.declarations.insert(
         php_symbol_key(name.trim_start_matches('\\')),
-        KnownClassDeclaration {
-            constants,
-            dependencies,
-        },
+        split_by_visibility(constants, dependencies),
     );
+}
+
+/// Sorts a declaration's constants into foldable public names and scope-dependent ones.
+fn split_by_visibility(
+    constants: &[crate::parser::ast::ClassConst],
+    dependencies: Vec<String>,
+) -> KnownClassDeclaration {
+    let mut declaration = KnownClassDeclaration {
+        dependencies,
+        ..KnownClassDeclaration::default()
+    };
+    for constant in constants {
+        if matches!(constant.visibility, crate::parser::ast::Visibility::Public) {
+            declaration.constants.insert(constant.name.clone());
+        } else {
+            declaration.scoped.insert(constant.name.clone());
+        }
+    }
+    declaration
 }

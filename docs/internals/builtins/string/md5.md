@@ -1,16 +1,16 @@
 ---
-title: "md5() — internals"
+title: "md5() - internals"
 description: "Compiler internals for md5(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 841
+  order: 934
 ---
 
-## `md5()` — internals
+## `md5()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/md5.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/md5.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

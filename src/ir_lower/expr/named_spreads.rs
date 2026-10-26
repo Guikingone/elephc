@@ -104,14 +104,7 @@ pub(super) fn emit_named_spread_bounds_guard(
     if check.min_len == 0 && check.max_len.is_none() {
         return;
     }
-    let len = ctx.emit_value(
-        Op::ArrayLen,
-        vec![spread],
-        None,
-        PhpType::Int,
-        Op::ArrayLen.default_effects(),
-        Some(span),
-    );
+    let len = lower_spread_length(ctx, spread, span);
     emit_named_spread_min_len_guard(ctx, len.value, check.min_len, span);
     emit_named_spread_max_len_guard(
         ctx,
@@ -189,21 +182,22 @@ pub(super) fn emit_named_spread_max_len_guard(
     });
 
     ctx.builder.position_at_end(fatal);
-    let message = if let Some(param_name) = param_name {
-        format!(
-            "Fatal error: Named parameter ${} overwrites previous argument\n",
-            param_name
-        )
+    if let Some(param_name) = param_name {
+        super::named_args::throw_named_parameter_overwrite(ctx, param_name, span);
     } else {
-        "Fatal error: named argument spread length mismatch\n".to_string()
-    };
-    let message = ctx.intern_string(&message);
-    ctx.builder.terminate(Terminator::Fatal { message });
+        let message = ctx.intern_string("Fatal error: named argument spread length mismatch\n");
+        ctx.builder.terminate(Terminator::Fatal { message });
+    }
 
     ctx.builder.position_at_end(ok);
 }
 
 /// Lowers a single associative spread as named parameter reads by key.
+///
+/// The hidden `func_get_args()` collector `debug_backtrace()` arms on every body is no source
+/// variadic: the reads cover the source-visible parameters and the collector is appended, so
+/// Monolog's `new self(...$args)` keeps compiling. A body with optional parameters reads the
+/// passed-argument count first; it is the position after the last parameter the array binds.
 pub(super) fn lower_assoc_spread_only_args(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -215,20 +209,72 @@ pub(super) fn lower_assoc_spread_only_args(
     let ExprKind::Spread(inner) = &arg.kind else {
         return None;
     };
-    if !is_assoc_spread_source(ctx, inner) || sig.variadic.is_some() {
+    let hidden_collector = sig.variadic.as_deref() == Some(crate::func_args::HIDDEN_ARGS_PARAM)
+        && !crate::func_args::sig_has_hidden_argc_param(sig);
+    if !is_assoc_spread_source(ctx, inner) || (sig.variadic.is_some() && !hidden_collector) {
         return None;
     }
+    let source_params = if hidden_collector {
+        sig.params.len().checked_sub(1)?
+    } else {
+        sig.params.len()
+    };
     let spread = lower_expr(ctx, inner);
+    let spread = root_evaluated_call_argument(ctx, spread, inner.span);
     let spread_type = ctx.builder.value_php_type(spread.value);
     let temp_name = ctx.declare_hidden_temp(spread_type.clone());
     store_value_into_temp(ctx, &temp_name, spread_type, spread, arg.span);
     let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
     let mut operands = Vec::with_capacity(sig.params.len());
-    for (idx, (param_name, _)) in sig.params.iter().enumerate() {
+    for (idx, (param_name, _)) in sig.params.iter().enumerate().take(source_params) {
         let default = sig.defaults.get(idx).and_then(|default| default.as_ref());
         let param_expr =
             assoc_spread_param_expr(&spread_expr, idx, param_name, default, arg.span);
-        operands.push(lower_expr(ctx, &param_expr).value);
+        operands.push(lower_arg_with_signature(ctx, sig, idx, &param_expr));
+    }
+    if hidden_collector {
+        let span = arg.span;
+        let elements = if crate::func_args::sig_collects_optional_arg_count(sig) {
+            let key_exists = |key: Expr| {
+                Expr::new(
+                    ExprKind::FunctionCall {
+                        name: Name::unqualified("array_key_exists"),
+                        args: vec![key, spread_expr.clone()],
+                    },
+                    span,
+                )
+            };
+            let mut count = Expr::new(ExprKind::IntLiteral(0), span);
+            for (idx, (param_name, _)) in sig.params.iter().enumerate().take(source_params) {
+                let bound = Expr::new(
+                    ExprKind::BinaryOp {
+                        left: Box::new(key_exists(Expr::new(
+                            ExprKind::StringLiteral(param_name.clone()),
+                            span,
+                        ))),
+                        op: crate::parser::ast::BinOp::Or,
+                        right: Box::new(key_exists(Expr::new(
+                            ExprKind::IntLiteral(idx as i64),
+                            span,
+                        ))),
+                    },
+                    span,
+                );
+                count = Expr::new(
+                    ExprKind::Ternary {
+                        condition: Box::new(bound),
+                        then_expr: Box::new(Expr::new(ExprKind::IntLiteral(idx as i64 + 1), span)),
+                        else_expr: Box::new(count),
+                    },
+                    span,
+                );
+            }
+            vec![count]
+        } else {
+            Vec::new()
+        };
+        let collector = Expr::new(ExprKind::ArrayLiteral(elements), span);
+        operands.push(lower_arg_with_signature(ctx, sig, source_params, &collector));
     }
     Some(operands)
 }
@@ -451,6 +497,17 @@ pub(super) fn is_assoc_spread_source(ctx: &LoweringContext<'_, '_>, expr: &Expr)
     // `['name' => 'x']` carries that type, and ruling its result out is what kept
     // `new $class(...namedArgs())` from binding anything. A POSITIONAL ARRAY LITERAL written at
     // the call site is the only source whose keys are known here.
-    let _ = ctx;
-    !matches!(expr.kind, ExprKind::ArrayLiteral(_))
+    //
+    // A source typed `array<T>` with a concrete element type was inferred from a list and has
+    // integer keys, so it is ruled out as well: treating `...$pos` in `f(...$pos, ...$args, b: 1)`
+    // as a name provider made the FIRST provider answer for every slot (`$pos[2]`, undefined), and
+    // `f(...args(), c: 1)` evaluated its call once per slot. `array<mixed>` is what a bare `array`
+    // declaration types as and may hold names, so it still probes.
+    if matches!(expr.kind, ExprKind::ArrayLiteral(_)) {
+        return false;
+    }
+    !matches!(
+        super::positional_spreads::indexed_spread_source_type(ctx, expr),
+        Some(PhpType::Array(element)) if element.codegen_repr() != PhpType::Mixed
+    )
 }

@@ -286,7 +286,7 @@ fn apply_local_transfer(
             state.set(local_count, *slot, CallableNameSet::Unknown);
         }
         (
-            Op::PromoteLocalRefCell | Op::AliasLocalRefCell,
+            Op::PromoteLocalRefCell | Op::AliasLocalRefCell | Op::RetainLocalRefCell | Op::BindRefCellPtr | Op::AdoptRefCellPtr,
             Some(Immediate::LocalSlotPair { first, second }),
         ) => {
             state.set(local_count, *first, CallableNameSet::Unknown);

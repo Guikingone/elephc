@@ -2,7 +2,7 @@
 title: "addcslashes()"
 description: "Quotes the listed characters with C-style backslash escapes."
 sidebar:
-  order: 790
+  order: 822
 ---
 
 ## addcslashes()
@@ -22,9 +22,9 @@ Quotes the listed characters with C-style backslash escapes.
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected addcslashes prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/addcslashes.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/addcslashes.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/addcslashes.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/addcslashes.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

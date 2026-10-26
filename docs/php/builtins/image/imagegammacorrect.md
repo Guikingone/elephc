@@ -1,8 +1,8 @@
 ---
 title: "imagegammacorrect()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Applies a gamma correction from one gamma value to another."
 sidebar:
-  order: 524
+  order: 525
 ---
 
 ## imagegammacorrect()
@@ -11,7 +11,7 @@ sidebar:
 function imagegammacorrect(mixed $image, float $input_gamma, float $output_gamma): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Applies a gamma correction from one gamma value to another.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -25,7 +25,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

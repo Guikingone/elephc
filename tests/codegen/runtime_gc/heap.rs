@@ -81,7 +81,9 @@ fn test_gc_heap_alloc_aligns_odd_sized_payloads() {
         }
     };
 
-    let out = compile_harness_and_run("<?php", 256, harness);
+    // The harness resets the allocator before its two allocations, so the size only has to cover
+    // the runtime's own startup allocations, which outgrew 256 bytes.
+    let out = compile_harness_and_run("<?php", 65_536, harness);
     assert_eq!(out, "1");
 }
 

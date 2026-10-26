@@ -1,16 +1,16 @@
 ---
-title: "__elephc_reflection_materialize() — internals"
+title: "__elephc_reflection_materialize() - internals"
 description: "Compiler internals for __elephc_reflection_materialize(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1126
+  order: 1235
 ---
 
-## `__elephc_reflection_materialize()` — internals
+## `__elephc_reflection_materialize()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_reflection_materialize.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_reflection_materialize.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -46,8 +46,8 @@ function __elephc_reflection_materialize(int $materializer): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

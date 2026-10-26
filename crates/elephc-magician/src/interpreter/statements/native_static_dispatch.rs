@@ -113,7 +113,7 @@ pub(super) fn eval_native_static_syntax_method_result(
             values,
         );
     }
-    eval_native_static_method_with_evaluated_args_bridge_scope(
+    let result = eval_native_static_method_with_evaluated_args_bridge_scope(
         class_name,
         method_name,
         evaluated_args,
@@ -121,8 +121,93 @@ pub(super) fn eval_native_static_syntax_method_result(
         called_class_scope,
         context,
         values,
+    )?;
+    eval_native_date_factory_as_called_class(
+        &declaring_class,
+        called_class_scope,
+        method_name,
+        result,
+        context,
+        values,
     )
     .map(Some)
+}
+
+/// Rebuilds a native `DateTime`/`DateTimeImmutable` factory result as the late-static class.
+///
+/// php's `createFromFormat()` and the other `create*` factories return `static`: called as
+/// `parent::createFromFormat()` from a subclass, they build the SUBCLASS. The compiled factory
+/// cannot allocate an interpreted class, so it answers a plain `DateTime`, and Carbon's
+/// `rawCreateFromFormat()` (behind `Carbon::create()`, `parse()` and Laravel's dates) then held a
+/// `DateTime` where it needed a Carbon. The subclass is allocated here without its constructor and
+/// its native part is built from the factory's result, which keeps the date, the microseconds and
+/// the time zone. A factory that failed (`false`) is returned as it is.
+fn eval_native_date_factory_as_called_class(
+    declaring_class: &str,
+    called_class_scope: Option<&str>,
+    method_name: &str,
+    result: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(called_class) = called_class_scope else {
+        return Ok(result);
+    };
+    let date_class = ["DateTime", "DateTimeImmutable"]
+        .into_iter()
+        .find(|native| declaring_class.trim_start_matches('\\').eq_ignore_ascii_case(native));
+    let Some(date_class) = date_class else {
+        return Ok(result);
+    };
+    let factory = matches!(
+        method_name.to_ascii_lowercase().as_str(),
+        "createfromformat" | "createfrominterface" | "createfromimmutable" | "createfrommutable"
+            | "createfromtimestamp"
+    );
+    if !factory
+        || called_class.eq_ignore_ascii_case(date_class)
+        || context.class(called_class).is_none()
+        || values.type_tag(result)? != 6
+    {
+        return Ok(result);
+    }
+    let Some(object) = eval_new_object_without_constructor_result(called_class, context, values)?
+    else {
+        return Ok(result);
+    };
+    let format = values.string("Y-m-d H:i:s.u")?;
+    let rendered = eval_native_method_with_evaluated_args_bridge_scope(
+        result.borrowed(),
+        date_class,
+        "format",
+        vec![EvaluatedCallArg { name: None, value: format, ref_target: None }],
+        None,
+        None,
+        context,
+        values,
+    )?;
+    let timezone = eval_native_method_with_evaluated_args_bridge_scope(
+        result.borrowed(),
+        date_class,
+        "getTimezone",
+        Vec::new(),
+        None,
+        None,
+        context,
+        values,
+    )?;
+    eval_native_constructor_with_evaluated_args(
+        date_class,
+        object.borrowed(),
+        vec![
+            EvaluatedCallArg { name: None, value: rendered, ref_target: None },
+            EvaluatedCallArg { name: None, value: timezone, ref_target: None },
+        ],
+        context,
+        values,
+    )?;
+    values.release(result)?;
+    Ok(object)
 }
 
 /// Returns `$this` when PHP permits static-call syntax to target an instance method.
@@ -403,12 +488,7 @@ pub(super) fn eval_throw_value_error(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("ValueError", message, 0, context, values)
 }
 
 /// Creates and schedules a `ReflectionException` through eval's normal Throwable channel.
@@ -417,12 +497,7 @@ pub(super) fn eval_throw_reflection_exception(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let exception = values.new_object("ReflectionException")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("ReflectionException", message, 0, context, values)
 }
 
 /// Schedules the Throwable category required by one ReflectionClass instantiation error.

@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Output state and final-object ownership remain shared with native code.
+//! - String-byte views borrow string payloads while Rust copies them, avoiding allocating casts.
 
 use super::*;
 
@@ -87,6 +88,8 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_install_ob_handler_hook");
     crate::codegen::abi::emit_symbol_address(emitter, "x9", "_elephc_eval_ob_handler_fn"); // materialize the eval handler hook slot
     emitter.instruction("str x0, [x9]");                                        // install the magician ob-handler callback
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_elephc_eval_ob_release_fn"); // locate the independent buffer-retirement callback
+    emitter.instruction("str x1, [x9]");                                        // install callback-owner retirement with invocation support
     emitter.instruction("ret");                                                 // return to Rust
 
     label_c_global(emitter, "__elephc_eval_ob_get_clean_pop");
@@ -176,10 +179,12 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // establish a stable wrapper frame pointer
     emitter.instruction("str x1, [sp, #0]");                                    // save the caller's out_ptr storage address
     emitter.instruction("str x2, [sp, #8]");                                    // save the caller's out_len storage address
-    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the concrete tag and payload through any nested Mixed cells
-    emitter.instruction("cmp x0, #1");                                          // an existing string already has stable bytes owned by the input cell
-    emitter.instruction("b.eq __elephc_eval_value_string_bytes_store");        // borrow the payload while Rust immediately copies it
-    emitter.instruction("bl __rt_value_cast_string");                           // render non-string values through the shared PHP conversion helper
+    emitter.instruction("str x0, [sp, #16]");                                   // preserve the source cell for non-string conversion
+    emitter.instruction("bl __rt_mixed_unbox");                                 // inspect the final tag and borrow any existing string payload
+    emitter.instruction("cmp x0, #1");                                          // string payloads are already stable while Rust copies their bytes
+    emitter.instruction("b.eq __elephc_eval_value_string_bytes_store");         // skip the allocating string cast for existing strings
+    emitter.instruction("ldr x0, [sp, #16]");                                   // restore non-string input for the borrowed scalar formatting path
+    emitter.instruction("bl __rt_mixed_cast_string");                           // cast the boxed eval value to a PHP string pair
     emitter.label("__elephc_eval_value_string_bytes_store");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the optional out_ptr storage address
     emitter.instruction("cbz x9, __elephc_eval_value_string_bytes_len");        // skip pointer storage when the caller passed null
@@ -196,9 +201,6 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
 
     label_c_global(emitter, "__elephc_eval_value_truthy");
     emitter.instruction("b __rt_mixed_cast_bool");                              // cast one boxed mixed value to PHP truthiness for eval
-
-    label_c_global(emitter, "__elephc_eval_value_copy");
-    emitter.instruction("b __rt_mixed_clone");                                  // detach a PHP by-value assignment cell while retaining its payload ownership
 
     label_c_global(emitter, "__elephc_eval_value_retain");
     emitter.instruction("b __rt_incref");                                       // retain one eval-owned boxed Mixed cell
@@ -254,7 +256,7 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_warning");
     emitter.instruction("mov x2, x1");                                          // move warning length into the runtime diagnostic length register
     emitter.instruction("mov x1, x0");                                          // move warning pointer into the runtime diagnostic buffer register
-    emitter.instruction("b __rt_diag_message");                                 // one WHOLE interpreted diagnostic: it carries no trailing newline
+    emitter.instruction("b __rt_diag_warning");                                 // one WHOLE interpreted diagnostic: it carries no trailing newline
 
     label_c_global(emitter, "__elephc_eval_fatal");
     emitter.instruction("mov x2, x1");                                          // move fatal length into the stderr write-length register
@@ -267,6 +269,13 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_dispatching");
     emitter.instruction("str x0, [x9]");                                        // publish Magician handler execution to the Fiber guard
     emitter.instruction("ret");                                                 // return to the Rust interpreter
+    label_c_global(emitter, "__elephc_eval_warning_raw");
+    emitter.instruction("mov x2, x1");                                          // adapt the already-filtered warning length to the writer ABI
+    emitter.instruction("mov x1, x0");                                          // adapt the already-filtered warning pointer to the writer ABI
+    emitter.instruction("b __rt_diag_write");                                   // do not redispatch trigger_error default output
+
+    label_c_global(emitter, "__elephc_eval_record_last_error");
+    emitter.instruction("b __rt_last_error_record");                            // the C arguments already match the record writer
 
     label_c_global(emitter, "__elephc_eval_diag_suppression");
     emitter.instruction("cbz x0, __elephc_eval_diag_suppression_leave");        // zero leaves one interpreted @ scope
@@ -283,7 +292,4 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     emitter.instruction("mov x10, #1");                                         // the next descriptor invoker is called by the interpreter
     emitter.instruction("str x10, [x9]");                                       // ask that invoker for its exception boundary
     emitter.instruction("ret");                                                 // return to the Rust interpreter
-
-    label_c_global(emitter, "__elephc_eval_value_release");
-    emitter.instruction("b __rt_decref_mixed");                                 // release one eval-owned boxed Mixed cell
 }

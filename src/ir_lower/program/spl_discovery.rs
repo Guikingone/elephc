@@ -20,8 +20,11 @@ pub(super) fn lower_referenced_builtin_spl_methods(
         let mut methods = referenced_builtin_spl_methods(module);
         methods.sort();
         methods.dedup();
+        // A key names one method, static or not: checking only the instance flavour re-lowered a
+        // static body such as `Phar::running()` every round and never reached the fixpoint.
         methods.retain(|(class_name, method_key)| {
             !class_method_already_lowered(module, class_name, method_key, false)
+                && !class_method_already_lowered(module, class_name, method_key, true)
                 && !runtime_intrinsic_method_has_wrapper(class_name, method_key, false)
         });
         if methods.is_empty() {
@@ -243,6 +246,22 @@ pub(super) fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, St
                         }
                         _ => {}
                     }
+                }
+                // `Class::method(...)` names the class and method in one `Class::method` string.
+                // A builtin class's STATIC method with an AST body (`Phar::running()`) is lowered
+                // only when a call reaches it, exactly like an instance method above.
+                Op::StaticMethodCall => {
+                    let Some((class_name, method_name)) = string_data_name(module, inst)
+                        .and_then(|name| name.rsplit_once("::"))
+                    else {
+                        continue;
+                    };
+                    push_supported_builtin_spl_method_for_receiver(
+                        &mut methods,
+                        module,
+                        class_name.trim_start_matches('\\'),
+                        &php_method_key(method_name),
+                    );
                 }
                 _ => {}
             }
@@ -468,7 +487,10 @@ pub(super) fn lower_dynamic_constructor_thunks(
     let mut arg_counts = BTreeSet::new();
     for function in all_lowered_functions(module) {
         for inst in &function.instructions {
-            if inst.op != Op::DynamicObjectNewMixed {
+            // `new $class(...)` lowers to DynamicObjectNewMixed; `new static(...)` and a named
+            // dynamic `new` lower to DynamicObjectNew. Both pick a constructor at run time, so
+            // both need padding thunks for the defaults the call site omits (#797).
+            if !matches!(inst.op, Op::DynamicObjectNewMixed | Op::DynamicObjectNew) {
                 continue;
             }
             // A runtime argument container carries its arguments dynamically; there is no static
@@ -485,15 +507,22 @@ pub(super) fn lower_dynamic_constructor_thunks(
     // The MODULE's ClassInfo, not the checker's: codegen forms the thunk symbol from
     // `module.class_infos[..].class_id`, and looking the class up anywhere else risks naming a
     // symbol nothing will call.
-    let classes = module
-        .class_infos
-        .iter()
-        .map(|(name, info)| (name.clone(), info.clone()))
-        .collect::<Vec<_>>();
-    for (class_name, class_info) in classes {
-        if !is_dynamic_new_mixed_metadata_candidate(&class_name) {
+    // One thunk per constructor IMPLEMENTATION: descendants that inherit a constructor share the
+    // ancestor's thunk (see `function::dynamic_constructor_thunk_owner`).
+    let mut owners = std::collections::BTreeMap::new();
+    for class_name in module.class_infos.keys() {
+        if !is_dynamic_new_mixed_metadata_candidate(class_name) {
             continue;
         }
+        if let Some((owner_name, owner_info)) =
+            function::dynamic_constructor_thunk_owner(&module.class_infos, class_name)
+        {
+            owners
+                .entry(owner_name.to_string())
+                .or_insert_with(|| owner_info.clone());
+        }
+    }
+    for (class_name, class_info) in owners {
         for &provided_args in &arg_counts {
             function::lower_dynamic_constructor_thunk(
                 &class_name,

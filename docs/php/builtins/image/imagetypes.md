@@ -1,8 +1,8 @@
 ---
 title: "imagetypes()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns a bitmask of the image formats this build supports."
 sidebar:
-  order: 550
+  order: 551
 ---
 
 ## imagetypes()
@@ -11,7 +11,7 @@ sidebar:
 function imagetypes(): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns a bitmask of the image formats this build supports.
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

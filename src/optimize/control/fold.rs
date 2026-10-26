@@ -28,8 +28,9 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
     let kind = match stmt.kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(fold_block(stmts)),
         StmtKind::IncludeOnceMark { source_path } => StmtKind::IncludeOnceMark { source_path },
-        StmtKind::IncludeOnceGuard { source_path, body } => StmtKind::IncludeOnceGuard {
+        StmtKind::IncludeOnceGuard { source_path, required, body } => StmtKind::IncludeOnceGuard {
             source_path,
+            required,
             body: fold_block(body),
         },
         StmtKind::Echo(expr) => StmtKind::Echo(fold_expr(expr)),

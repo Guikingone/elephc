@@ -8,15 +8,27 @@
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
 
 use super::*;
-use crate::parser::ast::ExprKind;
 
 /// Lowers a direct instance-method call on a statically known object receiver.
 pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    // The shared untyped-receiver helper holds only the native dispatch: the site already asked
+    // the eval owner (and kept its scope), so the helper must not probe again.
+    if inside_mixed_method_call_helper(ctx) {
+        return lower_native_method_call(ctx, inst);
+    }
+    // The shared owner-call helper holds only the interpreter-declared slow path.
+    if builtins::inside_owner_call_helper(ctx) {
+        return builtins::lower_owner_call_helper_body(ctx, inst);
+    }
     if !ctx.module.required_runtime_features.eval_bridge {
         return lower_native_method_call(ctx, inst);
     }
     let object = expect_operand(inst, 0)?;
     let method_name = method_name_data(ctx, inst)?.to_string();
+    // `Class::method` is a call pinned to that implementation: nothing to probe or dispatch on.
+    if method_name.contains("::") {
+        return lower_native_method_call(ctx, inst);
+    }
     let class_name = objects::nullable_object_receiver_class(ctx, object)?
         .map(|(name, _)| name);
     let statically_bound = class_name.as_ref()
@@ -47,6 +59,9 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
 fn lower_native_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let method_name = method_name_data(ctx, inst)?.to_string();
+    if let Some((scope_class, plain_method)) = method_name.split_once("::") {
+        return lower_scoped_direct_method_call(ctx, inst, scope_class, plain_method);
+    }
     if builtins::has_eval_context(ctx)
         && boxed_reflection_receiver_needs_eval_bridge(ctx, object, &method_name)?
     {
@@ -58,7 +73,10 @@ fn lower_native_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let object_ty = ctx.value_php_type(object)?.codegen_repr();
     if matches!(object_ty, PhpType::Mixed | PhpType::Union(_)) {
         if let Some(state) = fiber_state_predicate_method(&method_name) {
-            return lower_mixed_fiber_state_predicate(ctx, inst, object, &method_name, state);
+            return lower_mixed_maybe_fiber_state_predicate(ctx, inst, object, &method_name, state);
+        }
+        if let Some(method) = mixed_fiber_method(&method_name) {
+            return lower_mixed_maybe_fiber_method(ctx, inst, object, &method_name, method);
         }
         return lower_mixed_method_call(ctx, inst, object, &method_name);
     }
@@ -157,7 +175,50 @@ fn lower_typed_native_method_call(
             &method_name,
         );
     }
+    // Neither the class nor a descendant declares the method, and nothing intercepts it: php
+    // throws when the call runs. Doctrine's `EntityManager::__construct()` guards
+    // `$conn->getEventManager()` with `method_exists()`, which DBAL 4's `Connection` fails, and
+    // refusing the call here interpreted the entity manager.
+    if !class_declares_method(ctx, &class_name, &method_name)
+        && !class_declares_method(ctx, &class_name, "__call")
+        && super::method_resolution::lexical_private_method_scope(ctx, &class_name, &method_name).is_none()
+        && ctx.module.class_infos.contains_key(normalized_class)
+    {
+        exceptions::emit_error(
+            ctx,
+            &format!("Call to undefined method {}::{}()", normalized_class, method_name),
+        );
+        return Ok(());
+    }
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
+    emit_instance_call_to_target(ctx, inst, class_name, &method_name, target)
+}
+
+/// Lowers `Class::method` on an object receiver as a NON-virtual call of that class's method.
+///
+/// This is `ReflectionMethod::invoke()` of an ancestor's method on a descendant receiver: php
+/// binds the reflected declaring class's body, so an override in the receiver's class must not
+/// run. The receiver pointer is passed as `$this` unchanged.
+fn lower_scoped_direct_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    scope_class: &str,
+    method_name: &str,
+) -> Result<()> {
+    let mut target = resolve_method_call_target(ctx, scope_class, method_name, inst.operands.len())?;
+    target.dynamic_slot = None;
+    emit_instance_call_to_target(ctx, inst, scope_class.to_string(), method_name, target)
+}
+
+/// Materializes the arguments of an instance call and emits it against a resolved target.
+fn emit_instance_call_to_target(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: String,
+    method_name: &str,
+    target: MethodCallTarget,
+) -> Result<()> {
+    let method_name = method_name.to_string();
     let mut param_types = Vec::with_capacity(inst.operands.len());
     param_types.push(PhpType::Object(class_name));
     param_types.extend(target.params.iter().map(|param| param.codegen_repr()));
@@ -183,18 +244,12 @@ fn lower_typed_native_method_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    if let Some(slot) = target.dynamic_slot {
-        emit_dynamic_instance_method_call(ctx, slot);
-    } else {
-        abi::emit_call_label(
-            ctx.emitter,
-            &method_symbol(&target.impl_class, &target.method_key),
-        );
-    }
+    emit_resolved_method_call(ctx, &target)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &target)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    // User callees return an owner independent of the caller's materialized Mixed arguments.
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 
@@ -337,8 +392,17 @@ pub(super) fn guard_static_method_receiver(
     );
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&null_label);
-    emit_aot_raw_null_method_receiver_trace(ctx, object, method_name)?;
-    emit_method_call_on_null_fatal(ctx, method_name);
+    if crate::codegen::shared_null_method_trace::emit_shared_null_method_trace(
+        ctx,
+        method_name,
+        Some(object),
+    )? {
+        // The shared helper ran both traces (raw, then plain); only the error is left.
+        super::method_intrinsics::emit_method_call_on_null_error(ctx, method_name, false);
+    } else {
+        emit_aot_raw_null_method_receiver_trace(ctx, object, method_name)?;
+        emit_method_call_on_null_fatal(ctx, method_name);
+    }
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -369,7 +433,7 @@ fn emit_aot_raw_null_method_receiver_trace(
     let line_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
     let line = ctx
         .current_instruction_span()
-        .map(|span| span.line as i64)
+        .map(|span| span.source_line() as i64)
         .unwrap_or_default();
     abi::emit_load_int_immediate(ctx.emitter, line_arg, line);
     let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
@@ -402,6 +466,9 @@ pub(super) fn lower_mixed_method_call(
             || mixed_method_call_needs_eval_ref_adapter(ctx, inst, &candidates)?)
     {
         return builtins::lower_eval_method_call(ctx, inst, object, method_name);
+    }
+    if try_lower_outlined_mixed_method_call(ctx, inst, &candidates)? {
+        return Ok(());
     }
 
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
@@ -456,7 +523,9 @@ pub(super) fn lower_mixed_method_call(
         builtins::lower_eval_method_call(ctx, inst, object, method_name)?;
         abi::emit_jump(ctx.emitter, &done_label);
     } else {
-        emit_method_call_on_null_fatal(ctx, method_name);
+        // The receiver IS an object (a non-object took `non_object_label`), just of a class none
+        // of the candidates covers: php names the class and the method, not a null receiver.
+        emit_missing_method_error(ctx, receiver_reg, method_name);
     }
 
     ctx.emitter.label(&non_object_label);
@@ -510,6 +579,11 @@ fn mixed_method_call_needs_eval_ref_adapter(
             continue;
         }
         let param_index = operand_index - 1;
+        // Only a typed by-reference parameter (`int &$x`) mismatches a Mixed cell. A `mixed &`
+        // parameter takes the promoted cell as its own, so direct dispatch hands it the caller's
+        // durable cell; the eval bridge instead passes a frame-address marker, which a callee
+        // that keeps the reference in a closure (`PDOStatement::bindParam()`) would capture
+        // dangling.
         if candidates.iter().any(|candidate| {
             candidate
                 .target
@@ -517,6 +591,11 @@ fn mixed_method_call_needs_eval_ref_adapter(
                 .get(param_index)
                 .copied()
                 .unwrap_or(false)
+                && candidate
+                    .target
+                    .params
+                    .get(param_index)
+                    .is_none_or(|param| param.codegen_repr() != PhpType::Mixed)
         }) {
             return Ok(true);
         }
@@ -587,21 +666,19 @@ pub(super) fn lower_mixed_method_candidate_call(
         crate::codegen::lower_inst::RefArgCellLifetime::for_callee(ctx, method_name),
         &candidate.defaults,
         variadic_tail,
+        // A site that packed the tail itself wrote the count; otherwise every operand after the
+        // receiver is an argument the caller passed.
+        (candidate.tail_counts_args && variadic_tail.is_some())
+            .then(|| inst.operands.len().saturating_sub(1)),
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    if let Some(slot) = candidate.target.dynamic_slot {
-        emit_dynamic_instance_method_call(ctx, slot);
-    } else {
-        abi::emit_call_label(
-            ctx.emitter,
-            &method_symbol(&candidate.target.impl_class, &candidate.target.method_key),
-        );
-    }
+    emit_resolved_method_call(ctx, &candidate.target)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &candidate.target)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    // Candidate dispatch creates the same caller-owned coercion cells as concrete dispatch.
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 
@@ -941,17 +1018,27 @@ pub(super) fn mixed_method_candidates(
         let Some(signature) = class_info.methods.get(&method_key) else {
             continue;
         };
-        // A variadic tail -- declared, or the hidden `...$__elephc_func_args` a body that calls
-        // `func_get_args()` receives -- collects whatever the call passes past the fixed
-        // parameters, an EMPTY array when that is nothing; the candidate call packs it. Requiring a
-        // default for it left every such method out of the dispatch: Symfony's
-        // `ServiceLocator::get()` reads `func_get_args()`, and each `$locator->get($id)` through
-        // an `object` receiver died "Call to undefined method". Only a variadic that occupies the
-        // last parameter slot is packed; a signature that lists its variadic separately keeps the
-        // old rules.
-        let variadic_last = signature.variadic.as_deref().is_some_and(|name| {
-            signature.params.last().is_some_and(|(param, _)| param == name)
-        });
+        // A body with hidden frame collectors (`func_get_args()`) is called with its
+        // SOURCE-visible parameters; that exact count dispatches as is.
+        let source_count = crate::codegen_support::source_method_adapters::source_visible_signature(
+            signature,
+        )
+        .ok()
+        .map(|source| source.params.len() + 1);
+        // Not when the collector opens with the actual count, which only the packed tail below
+        // writes: the source adapter appends an EMPTY collector, so `func_num_args()` read no
+        // count when a boxed receiver supplied every optional parameter, and warned on key 0.
+        let source_visible_match = source_count == Some(operand_count)
+            && signature.params.len() + 1 != operand_count
+            && !crate::func_args::sig_collects_optional_arg_count(signature);
+        // A declared variadic tail collects whatever the call passes past the fixed parameters,
+        // an EMPTY array when that is nothing; the candidate call packs it. Only a variadic that
+        // occupies the last parameter slot is packed; a signature that lists its variadic
+        // separately keeps the old rules.
+        let variadic_last = !source_visible_match
+            && signature.variadic.as_deref().is_some_and(|name| {
+                signature.params.last().is_some_and(|(param, _)| param == name)
+            });
         let fixed = if variadic_last {
             signature.params.len().saturating_sub(1)
         } else {
@@ -963,16 +1050,25 @@ pub(super) fn mixed_method_candidates(
         // `ContainerInterface::get($id)` call -- still dispatches to this method; the surplus is
         // simply not materialized.
         let provided = operand_count.saturating_sub(1);
-        let surplus = !variadic_last && provided > signature.params.len();
+        let surplus = !source_visible_match && !variadic_last && provided > signature.params.len();
         // Constructors are left out: a generated container's `$lazyLoad->__construct(...)` would
         // otherwise dispatch over every class whose constructor takes fewer arguments.
         if surplus && (signature.variadic.is_some() || method_key == "__construct") {
             continue;
         }
-        let provided = provided.min(fixed);
+        let provided = if source_visible_match { fixed } else { provided.min(fixed) };
+        // A default spelled as a constant expression (`int $type = HttpKernelInterface::MAIN_REQUEST`)
+        // is folded to the literal it names, so the ladder can stage it. Without this the
+        // candidate was dropped and a call with the argument omitted found no implementation:
+        // `$kernel->handle($request)` on a boxed receiver died as "Call to undefined method".
+        let defaults: Vec<Option<crate::parser::ast::Expr>> = signature
+            .defaults
+            .iter()
+            .map(|default| literalize_default(ctx, class_name, default.as_ref()))
+            .collect();
         if (provided..fixed).any(|index| {
             !omitted_default_is_materializable(
-                signature.defaults.get(index).and_then(|default| default.as_ref()),
+                defaults.get(index).and_then(|default| default.as_ref()),
                 &signature.params[index].1,
             )
         }) {
@@ -996,12 +1092,53 @@ pub(super) fn mixed_method_candidates(
             class_id: class_info.class_id,
             class_name: class_name.clone(),
             target,
-            defaults: signature.defaults.clone(),
+            defaults,
             variadic_last,
+            tail_counts_args: variadic_last
+                && crate::func_args::sig_collects_optional_arg_count(signature),
         });
     }
     candidates.sort_by_key(|candidate| candidate.class_id);
     Ok(candidates)
+}
+
+/// Folds a constant-expression default to the literal it names, when that literal is one the
+/// call staging can materialize; any other default is returned as written.
+fn literalize_default(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    default: Option<&crate::parser::ast::Expr>,
+) -> Option<crate::parser::ast::Expr> {
+    use crate::codegen::const_default_values::{
+        resolve_const_default, ConstDefaultContext, ConstDefaultValue, CONST_DEFAULT_BOOL,
+        CONST_DEFAULT_EMPTY_ARRAY, CONST_DEFAULT_FLOAT, CONST_DEFAULT_INT, CONST_DEFAULT_NULL,
+    };
+    use crate::parser::ast::{Expr, ExprKind};
+    let expr = default?;
+    if matches!(
+        expr.kind,
+        ExprKind::Null
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::IntLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::ArrayLiteral(_)
+    ) {
+        return Some(expr.clone());
+    }
+    let context = ConstDefaultContext::for_class(ctx.module, class_name.trim_start_matches('\\'));
+    let kind = match resolve_const_default(expr, &context)? {
+        ConstDefaultValue::Scalar { kind, payload } => match kind {
+            CONST_DEFAULT_NULL => ExprKind::Null,
+            CONST_DEFAULT_BOOL => ExprKind::BoolLiteral(payload != 0),
+            CONST_DEFAULT_INT => ExprKind::IntLiteral(payload),
+            CONST_DEFAULT_FLOAT => ExprKind::FloatLiteral(f64::from_bits(payload as u64)),
+            CONST_DEFAULT_EMPTY_ARRAY => ExprKind::ArrayLiteral(Vec::new()),
+            _ => return Some(expr.clone()),
+        },
+        ConstDefaultValue::String(value) => ExprKind::StringLiteral(value),
+        _ => return Some(expr.clone()),
+    };
+    Some(Expr::new(kind, expr.span))
 }
 
 /// Preserves the unboxed object payload or routes non-object `Mixed` receivers to fatal.

@@ -7,11 +7,11 @@ created: 2026-09-17
 verified_by: "A fixture covering all three receivers PHP's ?object allows — named class, gradual object, gradual null — plus a writing body, byte-identical to php -n; error_tests at its 99-failure baseline with identical names"
 sources:
   - path: src/codegen/lower_inst/builtins/count_empty.rs
-    blob: d63b62817ef22480e05d03a392727ee59a09f2ad
+    blob: e89695b247562bc92b07d27f9179244cfec9729f
   - path: src/ir_lower/expr/static_method_calls.rs
-    blob: 30b0b7d2320dc2a33748e71ac1fa78f367183c9a
+    blob: 86af0e35cf5b064c4018d4629e6a6f2802df4b7b
   - path: src/types/checker/inference/objects/methods.rs
-    blob: 1b960b8a66c6a24accfbd1e7b882ee38c898f512
+    blob: 41165febac884fb04decd20c4bc0e74b01afe31e
 supersedes: "gotcha-the-runtime-closure-bind-does-not-write-the-new--82153f10"
 ---
 

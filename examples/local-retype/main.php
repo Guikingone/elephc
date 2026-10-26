@@ -2,15 +2,16 @@
 
 // Local retype in permissive mode (the default).
 //
-// elephc keeps every local monomorphic, but an undeclared-type local may
-// change type in three ways. The implicit shapes (2 and 3 below) warn by
-// default and become hard errors under --strict-locals; the explicit
-// unset() kill (shape 1) is not gated by the flag and behaves identically
-// in both modes. Its unbinding follows PHP's own model, but the
-// consequence diverges: PHP warns on a later read and evaluates it as
-// null, where elephc rejects that read at compile time — probe with
-// isset() instead. Declared types (int $x = ..., typed parameters,
-// properties) stay strict everywhere.
+// elephc keeps every local monomorphic, but a local may change type in
+// three ways. The implicit shapes (2 and 3 below) warn by default and
+// become hard errors under --strict-locals; the explicit unset() kill
+// (shape 1) is not gated by the flag and behaves identically in both
+// modes. Its unbinding follows PHP's own model, but the consequence
+// diverges: PHP warns on a later read and evaluates it as null, where
+// elephc rejects that read at compile time — probe with isset() instead.
+// Declared types (int $x = ..., properties) stay strict everywhere; a
+// PARAMETER TYPE HINT does not, because it constrains the incoming
+// argument rather than the local (shape 4 below).
 
 // -- 1. Explicit kill: unset() ends the binding, the next write starts fresh --
 // A scratch buffer holds a status string, is disposed of, and the same name
@@ -44,3 +45,18 @@ if ($argc > 1) {
     $label = "none";
 }
 echo "label: ", $label, "\n";
+
+// -- 4. A typed parameter is a local too --
+// PHP's `float $value` constrains what callers may pass; it says nothing
+// about the variable afterwards, so formatting in place through the same
+// name is valid PHP. Warns like any other straight-line retype:
+//   $value changes type from float to string; the previous value is
+//   discarded (compile with --strict-locals to make this an error)
+// The hint still governs the call boundary — `format("x")` is still
+// rejected — and a by-REFERENCE parameter is still never retypable,
+// because the caller's storage is reachable through it.
+function format(float $value): string {
+    $value = number_format($value, 2);
+    return $value;
+}
+echo format($argc + 0.5), "\n";

@@ -1,8 +1,8 @@
 ---
 title: "imagecolordeallocate()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Frees a palette entry allocated earlier."
 sidebar:
-  order: 484
+  order: 485
 ---
 
 ## imagecolordeallocate()
@@ -11,7 +11,7 @@ sidebar:
 function imagecolordeallocate(mixed $image, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Frees a palette entry allocated earlier.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

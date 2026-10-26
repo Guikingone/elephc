@@ -76,6 +76,83 @@ echo "ok";
     assert_eq!(out, "ok");
 }
 
+/// Verifies `get_class()` preserves valid object lookup and throws PHP's catchable
+/// `TypeError` for a statically known string argument.
+#[test]
+fn test_get_class_rejects_static_non_object_with_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticClassLookup {}
+echo get_class(new StaticClassLookup()), "\n";
+try {
+    get_class("not-an-object");
+} catch (TypeError $error) {
+    echo get_class($error), ": ", $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "StaticClassLookup\nTypeError: get_class(): Argument #1 ($object) must be of type object, string given"
+    );
+}
+
+/// Verifies a runtime-selected non-object in a `mixed` cell raises a catchable
+/// `TypeError` instead of taking the old empty-string branch.
+#[test]
+fn test_get_class_rejects_runtime_mixed_non_object_with_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeClassLookup {}
+function runtime_class_subject(int $selector): mixed {
+    return $selector > 1 ? new RuntimeClassLookup() : "not-an-object";
+}
+try {
+    get_class(runtime_class_subject($argc));
+} catch (TypeError $error) {
+    echo get_class($error), ": ", $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "TypeError: get_class(): Argument #1 ($object) must be of type object, string given"
+    );
+}
+
+/// Verifies `get_parent_class()` shares the corrected TypeError behavior while
+/// retaining object and runtime class-string lookup for valid child classes.
+#[test]
+fn test_get_parent_class_rejects_invalid_static_and_mixed_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentLookupBase {}
+class ParentLookupChild extends ParentLookupBase {}
+function runtime_parent_subject(bool $valid): mixed {
+    return $valid ? "ParentLookupChild" : 42;
+}
+echo get_parent_class(new ParentLookupChild()), "|";
+echo get_parent_class(runtime_parent_subject(true)), "\n";
+try {
+    get_parent_class(42);
+} catch (TypeError $error) {
+    echo get_class($error), ": ", $error->getMessage(), "\n";
+}
+try {
+    get_parent_class(runtime_parent_subject(false));
+} catch (TypeError $error) {
+    echo get_class($error), ": ", $error->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "ParentLookupBase|ParentLookupBase\n\
+TypeError: get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name, int given\n\
+TypeError: get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name, int given\n"
+    );
+}
+
 /// Verifies a named class can be instantiated without constructor parentheses.
 #[test]
 fn test_class_instantiation_without_constructor_parentheses() {
@@ -245,6 +322,250 @@ echo '|after';
 "#,
     );
     assert_eq!(out, "before|ctor|after");
+}
+
+/// Verifies a dynamic constructor accepts a sole spread from a declared `array` property in
+/// both runtime storage shapes. Associative keys are intentionally reversed relative to the
+/// constructor parameters so the descriptor planner must bind names instead of insertion order.
+#[test]
+fn test_dynamic_constructor_spreads_declared_array_property_by_runtime_shape() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class SpreadTarget {
+    public string $value;
+    public function __construct(string $first, string $second) {
+        $this->value = $first . ":" . $second;
+    }
+}
+class SpreadHolder { public array $args = []; }
+class ThrowSpreadTarget {
+    public function __construct(string $value) {
+        global $escaped;
+        $escaped = $this;
+        throw new RuntimeException($value);
+    }
+    public function __destruct() { echo "|unexpected-destructor"; }
+}
+function runtimeArgs(): array {
+    echo "|source";
+    return ["value" => "caught"];
+}
+
+$class = SpreadTarget::class;
+$holder = new SpreadHolder();
+$holder->args = ["left", "right"];
+$indexed = new $class(...$holder->args);
+$holder->args = ["second" => "B", "first" => "A"];
+$assoc = new $class(...$holder->args);
+echo $indexed->value . "|" . $assoc->value;
+$class = ThrowSpreadTarget::class;
+$escaped = null;
+try {
+    new $class(...runtimeArgs());
+} catch (Throwable $error) {
+    echo "|" . $error->getMessage();
+}
+echo $escaped instanceof ThrowSpreadTarget ? "|escaped" : "|missing-escape";
+$escaped = null;
+echo "|after";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "left:right|A:B|source|caught|escaped|after");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected spread argument containers to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies dynamic constructors merge explicit prefixes and multiple declared-array spreads.
+/// The large packed segment forces accumulator growth, while the second construction proves that
+/// positional entries bind before out-of-parameter-order names from a later associative source.
+#[test]
+fn test_dynamic_constructor_merges_multiple_declared_array_spreads() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class MultiSpreadHolder { public array $args = []; }
+class PackedSpreadTarget {
+    public string $value;
+    public function __construct(string $prefix, ...$rest) {
+        $this->value = $prefix . ":" . count($rest) . ":" . $rest[0] . ":" . $rest[19];
+    }
+}
+class OrderedSpreadTarget {
+    public string $value;
+    public function __construct(string $first, string $second, string $third) {
+        $this->value = $first . ":" . $second . ":" . $third;
+    }
+}
+function readSpread(string $marker, MultiSpreadHolder $holder): array {
+    echo $marker;
+    return $holder->args;
+}
+
+$packed = new MultiSpreadHolder();
+$packed->args = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
+$class = PackedSpreadTarget::class;
+$large = new $class("prefix", ...readSpread("p", $packed));
+echo "|" . $large->value . "|";
+
+$named = new MultiSpreadHolder();
+$named->args = ["third" => "C", "second" => "B"];
+$positional = new MultiSpreadHolder();
+$positional->args = ["A"];
+$empty = new MultiSpreadHolder();
+$class = OrderedSpreadTarget::class;
+$ordered = new $class(
+    ...readSpread("i", $positional),
+    ...readSpread("n", $named),
+    ...readSpread("e", $empty),
+);
+echo $ordered->value;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "p|prefix:20:0:19|ineA:B:C");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected multi-spread argument owners to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies runtime call unpacking rejects duplicate names and positional entries after a named
+/// entry before evaluating later arguments. Every diagnostic remains a catchable PHP `Error`.
+#[test]
+fn test_dynamic_constructor_rejects_invalid_multiple_spreads_at_source_order_point() {
+    let source = r#"<?php
+class InvalidSpreadHolder { public array $args = []; }
+class InvalidSpreadTarget {
+    public function __construct(...$values) {}
+}
+function invalidSpread(string $marker, InvalidSpreadHolder $holder): array {
+    echo $marker;
+    return $holder->args;
+}
+function skippedSpreadArgument(): string {
+    echo "L";
+    return "later";
+}
+function explicitDuplicateValue(): string {
+    echo "v";
+    return "again";
+}
+
+$first = new InvalidSpreadHolder();
+$first->args = [
+    "n0" => 0, "n1" => 1, "n2" => 2, "n3" => 3, "n4" => 4, "n5" => 5,
+    "n6" => 6, "n7" => 7, "n8" => 8, "n9" => 9, "n10" => 10,
+    "n11" => 11, "n12" => 12, "second" => "B",
+];
+$duplicate = new InvalidSpreadHolder();
+$duplicate->args = ["second" => "again"];
+$class = InvalidSpreadTarget::class;
+try {
+    new $class(
+        ...invalidSpread("a", $first),
+        ...invalidSpread("b", $duplicate),
+        third: skippedSpreadArgument(),
+    );
+} catch (Throwable $error) {
+    echo "|" . get_class($error) . "|" . $error->getMessage();
+}
+
+$longName = "LONG_DYNAMIC_ARGUMENT_NAME";
+$longFirst = new InvalidSpreadHolder();
+$longFirst->args = [$longName => "first"];
+$longDuplicate = new InvalidSpreadHolder();
+$longDuplicate->args = [$longName => "again"];
+try {
+    new $class(
+        ...invalidSpread("|l", $longFirst),
+        ...invalidSpread("m", $longDuplicate),
+        third: skippedSpreadArgument(),
+    );
+} catch (Throwable $error) {
+    echo "|" . get_class($error) . "|" . (strlen($error->getMessage()) > 65536 ? "long" : "short");
+}
+
+$explicit = new InvalidSpreadHolder();
+$explicit->args = ["second" => "B"];
+try {
+    new $class(...invalidSpread("|e", $explicit), second: explicitDuplicateValue());
+} catch (Throwable $error) {
+    echo "|" . get_class($error) . "|" . $error->getMessage();
+}
+
+$namedFirst = new InvalidSpreadHolder();
+$namedFirst->args = ["second" => "B"];
+$numericLater = new InvalidSpreadHolder();
+$numericLater->args = [0 => "A", "second" => "again"];
+try {
+    new $class(
+        ...invalidSpread("|x", $namedFirst),
+        ...invalidSpread("y", $numericLater),
+        third: skippedSpreadArgument(),
+    );
+} catch (Throwable $error) {
+    echo "|" . get_class($error) . "|" . $error->getMessage();
+}
+
+$invalid = new InvalidSpreadHolder();
+$invalid->args = ["second" => "B", 0 => "A"];
+try {
+    new $class(...invalidSpread("|i", $invalid), third: skippedSpreadArgument());
+} catch (Throwable $error) {
+    echo "|" . get_class($error) . "|" . $error->getMessage();
+}
+"#
+    .replace("LONG_DYNAMIC_ARGUMENT_NAME", &"k".repeat(65_537));
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "ab|Error|Named parameter $second overwrites previous argument\
+         |lm|Error|long\
+         |ev|Error|Named parameter $second overwrites previous argument\
+         |xy|Error|Cannot use positional argument after named argument during unpacking\
+         |i|Error|Cannot use positional argument after named argument during unpacking"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected rejected spread sources and errors to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Releases converted variadic values after normal and throwing dynamic construction.
+#[test]
+fn test_dynamic_constructor_multiple_spreads_release_variadic_tail_on_throw() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class MultiSpreadThrowTarget {
+    public function __construct(string $prefix, bool $shouldThrow, ...$rest) {
+        echo $prefix, ':', count($rest), ':', $rest[0], ':', $rest[2], '|';
+        if ($shouldThrow) {
+            throw new Exception('stop');
+        }
+    }
+}
+$class = 'MultiSpreadThrowTarget';
+new $class('n', false, ...[4, 5], ...[6]);
+try {
+    new $class('p', true, ...[1, 2], ...[3]);
+} catch (Exception $error) {
+    echo $error->getMessage(), '|after';
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "n:3:4:6|p:3:1:3|stop|after");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the exceptional variadic tail owner to be released, got: {}",
+        out.stderr
+    );
 }
 
 /// Verifies that dynamic instantiation uses SPL-specific runtime storage initialization.
@@ -1383,4 +1704,173 @@ echo $n->name();
         out,
         "Builder(App)|OtherBuilder(SubApp)|OtherBuilder(App)|OtherBuilder|OtherBuilder(App)"
     );
+}
+
+/// Verifies a single declaration may introduce SEVERAL properties or class constants, separated
+/// by commas (issue #684).
+///
+/// Every declarator list was a parse error, so one such line made the whole file uncompilable:
+/// `public int $w = 40, $h = 22;` reported `Expected ';' or property hook block after property
+/// declaration` — pointing at the comma and talking about hooks, which sends the reader looking
+/// in the wrong place — and `const A = 1, B = 2;` reported `Expected ';'`.
+///
+/// The type and every modifier are SHARED by the whole list while each declarator carries its own
+/// initializer, so the matrix walks the modifier combinations that have to survive the split:
+/// typed and untyped, `private static`, a trait, `readonly` assigned in the constructor, typed
+/// class constants, a visibility-qualified constant list, three or more declarators, a list where
+/// only some declarators are initialized, and a list sitting beside a hooked property.
+///
+/// Every expected value is verbatim host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_comma_separated_property_and_constant_declarations_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public int $w = 40, $h = 22; }
+$a = new A(); echo $a->w + $a->h, "\n";
+class B { public $a = 1, $b = 2; }
+$b = new B(); echo $b->a + $b->b, "\n";
+class C {
+    private static int $x = 5, $y = 6;
+    public static function sum(): int { return self::$x + self::$y; }
+}
+echo C::sum(), "\n";
+class D { const A = 1, B = 2; }
+echo D::A + D::B, "\n";
+class E { const int P = 3, Q = 4; }
+echo E::P + E::Q, "\n";
+class F { protected const string S = "a", T = "b"; public static function j(): string { return self::S . self::T; } }
+echo F::j(), "\n";
+class G { public int $p = 7, $q = 8, $r = 9; }
+$g = new G(); echo $g->p, ",", $g->q, ",", $g->r, "\n";
+class H { public int $one = 1, $two = 2, $three = 3, $four = 4; }
+$h = new H(); echo $h->one + $h->two + $h->three + $h->four, "\n";
+class I {
+    public readonly int $m, $n;
+    public function __construct() { $this->m = 3; $this->n = 4; }
+}
+$i = new I(); echo $i->m + $i->n, "\n";
+trait T1 { public int $t1 = 1, $t2 = 2; }
+class J { use T1; }
+$j = new J(); echo $j->t1 + $j->t2, "\n";
+class K { public int $u = 8; public int $v = 9; const X = 10; const Y = 11; }
+$k = new K(); echo $k->u + $k->v + K::X + K::Y, "\n";
+interface Limits { const MIN = 1, MAX = 10; }
+class M implements Limits {}
+echo Limits::MIN + Limits::MAX + M::MAX, "\n";
+class N { public int $p = 7, $q, $r = 9; public function __construct() { $this->q = 8; } }
+$n = new N(); echo $n->p, ",", $n->q, ",", $n->r, "\n";
+class L {
+    public int $c1 = 1, $c2 = 2;
+    public int $hooked { get => 42; }
+}
+$l = new L(); echo $l->c1 + $l->c2 + $l->hooked, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "62\n",
+            "3\n",
+            "11\n",
+            "3\n",
+            "7\n",
+            "ab\n",
+            "7,8,9\n",
+            "10\n",
+            "7\n",
+            "3\n",
+            "38\n",
+            "21\n",
+            "7,8,9\n",
+            "45\n",
+        )
+    );
+}
+
+/// `$this(...)` reaches an `__invoke` the class inherits, takes from a trait, or overrides, and
+/// dispatches to the receiver's own implementation. Regression for #846.
+#[test]
+fn test_invoking_this_reaches_inherited_and_trait_invoke() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public function __invoke(int $n): string { return "base:" . $n; }
+}
+class Child extends Base {
+    public function twice(): string { return $this(1) . "|" . $this(2); }
+}
+trait Greets {
+    public function __invoke(string $who): string { return "hi " . $who; }
+}
+class UsesTrait {
+    use Greets;
+    public function run(): string { return $this("trait"); }
+}
+class Over extends Base {
+    public function __invoke(int $n): string { return "over:" . $n; }
+    public function viaParent(): string { return $this(3); }
+}
+echo (new Child())->twice(), "\n";
+echo (new UsesTrait())->run(), "\n";
+echo (new Over())->viaParent(), "\n";
+"#,
+    );
+    assert_eq!(out, "base:1|base:2\nhi trait\nover:3\n");
+}
+
+/// `$this(...)` invokes the current object through its `__invoke`, with positional or named
+/// arguments, as a statement or inside an expression. It failed to parse with
+/// `Expected ';'`. Regression for #846.
+#[test]
+fn test_invoking_this_calls_its_invoke_method() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    private int $calls = 0;
+    public function __invoke(string $value, string $suffix = "!"): string {
+        $this->calls++;
+        return $value . $suffix;
+    }
+    public function run(): string { return $this('ok'); }
+    public function named(): string { return $this(suffix: "?", value: "named"); }
+    public function statement(): int { $this('ignored'); $this('twice'); return $this->calls; }
+    public function chained(): int { return strlen($this('abc')); }
+}
+$c = new C();
+echo $c->run(), "\n";
+echo $c->named(), "\n";
+echo $c->statement(), "\n";
+echo $c->chained(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "ok!\n",
+            "named?\n",
+            "4\n",
+            "4\n",
+        )
+    );
+}
+
+/// Verifies `new` with arguments on a class that declares no constructor anywhere in its chain:
+/// php evaluates the arguments for their effects and discards them, and the object is built
+/// normally. Symfony's generated container writes `new ReflectionTypeResolver($factory)` for such
+/// a class; elephc refused it in the checker and then in the backend. The heap stays clean.
+#[test]
+fn test_new_on_a_constructorless_class_evaluates_and_discards_its_arguments() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class NoCtor { public int $n = 3; }
+class NoCtorChild extends NoCtor {}
+function arg(): array { echo "evaluated|"; return [1, 2]; }
+$a = new NoCtor(arg(), "x");
+$b = new NoCtorChild(arg());
+echo $a->n + $b->n;
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "evaluated|evaluated|6");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

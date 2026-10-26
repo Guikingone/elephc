@@ -1,8 +1,8 @@
 ---
 title: "imagecropauto()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Crops an image automatically by the chosen mode."
 sidebar:
-  order: 510
+  order: 511
 ---
 
 ## imagecropauto()
@@ -11,7 +11,7 @@ sidebar:
 function imagecropauto(mixed $image, int $mode = IMG_CROP_DEFAULT, float $threshold = 0.5, int $color = -1): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Crops an image automatically by the chosen mode.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -26,7 +26,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

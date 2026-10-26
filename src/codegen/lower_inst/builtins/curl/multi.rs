@@ -85,6 +85,10 @@ pub(crate) fn lower_curl_multi_exec(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    // The multi path streams bodies through the SAME default write callback as
+    // `curl_exec()`, so it needs the output sink published too (issue #875). Before the
+    // handle is loaded: publishing clobbers the argument registers.
+    crate::codegen::curl::publish_elephc_curl_output_sink(ctx.emitter);
     lower_multi_only(
         ctx,
         inst,

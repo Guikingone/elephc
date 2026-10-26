@@ -47,7 +47,7 @@ pub(super) fn lower_iterator_iterator_new(ctx: &mut FunctionContext<'_>, inst: &
         .class_infos
         .get("IteratorIterator")
         .ok_or_else(|| CodegenIrError::unsupported("unknown class IteratorIterator"))?;
-    if class_info.allow_dynamic_properties {
+    if class_info.has_property_hash_storage() {
         return Err(CodegenIrError::unsupported(
             "object allocation requiring dynamic properties for IteratorIterator",
         ));
@@ -210,22 +210,37 @@ pub(super) fn emit_push_iterator_iterator_downcast_status(
         // static type says nothing: only a null at run time means "no downcast requested". Taking
         // every boxed value for an invalid downcast made `new IteratorIterator($aggregate)` throw
         // "Class to downcast to not found..." for every IteratorAggregate source.
+        // A given class name arrives boxed the same way, so a string tag is resolved exactly like
+        // a `string` operand; taking every non-null box for an invalid name made
+        // `new IteratorIterator(new ArrayObject(...), "ArrayObject")` throw.
         PhpType::Mixed | PhpType::Union(_) => {
             let null_label = ctx.next_label("iterator_iterator_downcast_null");
+            let string_label = ctx.next_label("iterator_iterator_downcast_string");
             let done_label = ctx.next_label("iterator_iterator_downcast_done");
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
                     ctx.emitter.instruction("cmp x0, #8");                      // runtime tag 8 is null: no downcast class was given
-                    ctx.emitter.instruction(&format!("b.eq {}", null_label));
+                    ctx.emitter.instruction(&format!("b.eq {}", null_label));   // omitted or null class: no downcast constraint
+                    ctx.emitter.instruction("cmp x0, #1");                      // runtime tag 1 is a class-name string to resolve
+                    ctx.emitter.instruction(&format!("b.eq {}", string_label)); // resolve the boxed class name like a string operand
                 }
                 Arch::X86_64 => {
                     ctx.emitter.instruction("cmp rax, 8");                      // runtime tag 8 is null: no downcast class was given
-                    ctx.emitter.instruction(&format!("je {}", null_label));
+                    ctx.emitter.instruction(&format!("je {}", null_label));     // omitted or null class: no downcast constraint
+                    ctx.emitter.instruction("cmp rax, 1");                      // runtime tag 1 is a class-name string to resolve
+                    ctx.emitter.instruction(&format!("je {}", string_label));   // resolve the boxed class name like a string operand
                 }
             }
             emit_push_iterator_iterator_downcast_status_pair(ctx, 2, 0);
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&string_label);
+            if ctx.emitter.target.arch == Arch::X86_64 {
+                ctx.emitter.instruction("mov rax, rdi");                        // the unboxed string pointer becomes the lookup's string pointer
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_instanceof_lookup");
+            emit_push_iterator_iterator_downcast_status_from_lookup(ctx);
             abi::emit_jump(ctx.emitter, &done_label);
             ctx.emitter.label(&null_label);
             emit_push_iterator_iterator_downcast_status_pair(ctx, 0, 0);
@@ -361,7 +376,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ctx.emitter.instruction("str x9, [x0]");                            // store the class id at object header
             abi::emit_symbol_address(ctx.emitter, "x9", "_iterator_iterator_downcast_msg");
             ctx.emitter.instruction("str x9, [x0, #8]");                        // store static exception message pointer
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // materialize the exception message length
                 "mov x9, #{}",
                 ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len()
             ));                                                                 // load static exception message length
@@ -389,7 +404,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ctx.emitter
                 .instruction("lea r10, [rip + _iterator_iterator_downcast_msg]"); // materialize static exception message pointer
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store static exception message pointer
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // store the exception message length
                 "mov QWORD PTR [rax + 16], {}",
                 ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len()
             ));                                                                 // store static exception message length

@@ -1,16 +1,16 @@
 ---
-title: "opcache_reset() — internals"
+title: "opcache_reset() - internals"
 description: "Compiler internals for opcache_reset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 647
+  order: 667
 ---
 
-## `opcache_reset()` — internals
+## `opcache_reset()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/opcache_prelude/build.rs`:153](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L153) (`opcache_reset`)
+- **Lowering**: [`src/opcache_prelude/build.rs`:231](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L231) (`opcache_reset`)
 - **Function symbol**: `opcache_reset()`
 
 
@@ -38,7 +38,7 @@ function opcache_reset(): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

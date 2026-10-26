@@ -23,14 +23,6 @@ impl Parser {
         self.parse_class_decl_stmt_with_attributes_and_doc_comment(Vec::new(), doc_comment)
     }
 
-    /// Parses a class declaration and attaches already parsed class attributes.
-    pub(in crate::parser) fn parse_class_decl_stmt_with_attributes(
-        &mut self,
-        attributes: Vec<EvalAttribute>,
-    ) -> Result<Vec<EvalStmt>, EvalParseError> {
-        self.parse_class_decl_stmt_with_attributes_and_doc_comment(attributes, None)
-    }
-
     /// Parses a class declaration and attaches already parsed attributes and doc-comment metadata.
     pub(super) fn parse_class_decl_stmt_with_attributes_and_doc_comment(
         &mut self,

@@ -18,6 +18,7 @@ use crate::codegen::abi;
 
 use super::context::FunctionContext;
 use super::frame;
+use super::return_ownership;
 use super::{CodegenIrError, Result};
 
 /// Lowers one EIR terminator.
@@ -31,7 +32,11 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                     frame::emit_main_epilogue(ctx);
                 }
             } else {
-                frame::emit_function_return_epilogue(ctx, None);
+                frame::emit_function_return_epilogue(
+                    ctx,
+                    None,
+                    return_ownership::ReturnOwnershipStatus::Static(true),
+                );
             }
             Ok(())
         }
@@ -41,12 +46,29 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                 // (`$x = &f()` aliases it). The pointer is a single machine word regardless of
                 // the aliased element type, so place it in the integer result register rather
                 // than splitting a `Str`/`Float` declared return across the string/float regs.
+                // The returned value is the `Pointer` SSA result `acquire_ref_cell` published:
+                // the exact address it selected and validated, read back here as a SNAPSHOT.
+                // Loading it, instead of rematerializing the returned variable's CURRENT cell,
+                // is what keeps the acquisition and the returned reference identical when a
+                // fallthrough `finally` rebound that variable in between (PHP snapshots the
+                // same way, with `MAKE_REF` before the finally). The frame's lease slot is the
+                // separate managed OWNER, which a superseding return replaces and cleanup
+                // retires; a borrowed cell leaves it zero while still returning this snapshot.
+                if !matches!(ctx.value_php_type(*value)?, PhpType::Pointer(_)) {
+                    return Err(CodegenIrError::invalid_module(
+                        "by-reference return requires a captured pointer value",
+                    ));
+                }
                 let int_reg = abi::int_result_reg(ctx.emitter);
                 ctx.load_value_to_reg(*value, int_reg)?;
-                frame::emit_function_return_epilogue(ctx, None);
+                frame::emit_function_return_epilogue(
+                    ctx,
+                    None,
+                    return_ownership::ReturnOwnershipStatus::Static(false),
+                );
                 return Ok(());
             }
-            let skip_return_slot = frame::return_cleanup_skip_slot(ctx.function, *value);
+            let skip_return_slot = frame::return_cleanup_skip_slot(ctx, *value);
             let source_ty = ctx.load_value_to_result(*value)?;
             if ctx.is_main {
                 // The top-level script's return value is discarded (PHP only uses
@@ -63,7 +85,14 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             if ctx.function.return_php_type.codegen_repr() == PhpType::TaggedScalar {
                 super::lower_inst::coerce_loaded_value_to_tagged_scalar(ctx, &source_ty)?;
             }
-            frame::emit_function_return_epilogue(ctx, skip_return_slot);
+            let source_ownership =
+                return_ownership::classify_return_value(ctx, *value, skip_return_slot)?;
+            let return_ownership = return_ownership::normalize_loaded_return_representation(
+                ctx,
+                &source_ty,
+                source_ownership,
+            );
+            frame::emit_function_return_epilogue(ctx, skip_return_slot, return_ownership);
             Ok(())
         }
         Terminator::Unreachable => {
@@ -111,21 +140,78 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
 /// Lowers a throw value by publishing it to the runtime exception slot and unwinding.
 pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let ty = ctx.load_value_to_result(value)?;
-    match ty.codegen_repr() {
-        PhpType::Object(_) => {}
-        PhpType::Mixed | PhpType::Union(_) => {
-            return super::lower_inst::lower_mixed_throw_value(ctx);
-        }
-        _ => {
-            return Err(CodegenIrError::unsupported(format!(
-                "throw for PHP type {:?}",
-                ty
-            )));
-        }
+    if matches!(ty.codegen_repr(), PhpType::Object(_)) {
+        abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
+        abi::emit_call_label(ctx.emitter, "__rt_throw_current");
+        return Ok(());
     }
-    abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
-    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
-    Ok(())
+    if matches!(ty.codegen_repr(), PhpType::Mixed) {
+        // After eval, an unknown class instance is represented as Mixed. PHP validates the
+        // runtime object against Throwable before entering the unwinder.
+        let throwable_interface_id = ctx
+            .module
+            .interface_infos
+            .get("Throwable")
+            .map(|interface| interface.interface_id)
+            .ok_or_else(|| CodegenIrError::unsupported("Throwable interface metadata is unavailable for mixed throw"))?;
+        let invalid_label = ctx.next_label("throw_mixed_invalid");
+        let not_throwable_label = ctx.next_label("throw_mixed_not_throwable");
+        let done_label = ctx.next_label("throw_mixed_done");
+        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.comment("-- validate the Mixed throw tag and class --");
+                ctx.emitter.instruction("cmp x0, #6");                          // only Mixed's object tag can be checked for Throwable membership
+                ctx.emitter.instruction(&format!("b.ne {invalid_label}"));      // scalars and other boxed values raise a runtime TypeError
+                ctx.emitter.instruction("ldr x0, [x1]");                        // pass the runtime class id to the interface checker
+                abi::emit_load_int_immediate(ctx.emitter, "x1", throwable_interface_id as i64);
+                abi::emit_load_int_immediate(ctx.emitter, "x2", 1);            // request interface matching for Throwable
+            }
+            Arch::X86_64 => {
+                ctx.emitter.comment("-- validate the Mixed throw tag and class --");
+                ctx.emitter.instruction("cmp rax, 6");                          // only Mixed's object tag can be checked for Throwable membership
+                ctx.emitter.instruction(&format!("jne {invalid_label}"));       // scalars and other boxed values raise a runtime TypeError
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rdi]");            // pass the runtime class id to the interface checker
+                abi::emit_load_int_immediate(ctx.emitter, "rsi", throwable_interface_id as i64);
+                abi::emit_load_int_immediate(ctx.emitter, "rdx", 1);           // request interface matching for Throwable
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_class_implements_interface");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.comment("-- transfer the boxed Throwable to the exception slot --");
+                ctx.emitter.instruction(&format!("cbz x0, {not_throwable_label}")); // reject object tags whose runtime class does not implement Throwable
+            }
+            Arch::X86_64 => {
+                ctx.emitter.comment("-- transfer the boxed Throwable to the exception slot --");
+                ctx.emitter.instruction("test rax, rax");                       // did the runtime class implement Throwable?
+                ctx.emitter.instruction(&format!("jz {not_throwable_label}"));  // reject ordinary objects at runtime
+            }
+        }
+        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_take_boxed");
+        abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
+        abi::emit_call_label(ctx.emitter, "__rt_throw_current");
+        abi::emit_jump(ctx.emitter, &done_label);
+        // php raises `Error`, not `TypeError`, and names the two failures differently:
+        // `throw 42` -> "Can only throw objects", `throw new stdClass` -> "Cannot throw objects
+        // that do not implement Throwable".
+        ctx.emitter.label(&invalid_label);
+        ctx.emitter.comment("-- release an invalid thrown box before raising Error --");
+        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        super::lower_inst::emit_error(ctx, "Can only throw objects");
+        ctx.emitter.label(&not_throwable_label);
+        ctx.emitter.comment("-- release a non-Throwable thrown object before raising Error --");
+        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        super::lower_inst::emit_error(ctx, "Cannot throw objects that do not implement Throwable");
+        ctx.emitter.label(&done_label);
+        return Ok(());
+    }
+
+    Err(CodegenIrError::unsupported(format!("throw for PHP type {:?}", ty)))
 }
 
 /// Lowers an unconditional branch and copies any target block parameters.
@@ -203,15 +289,15 @@ fn lower_switch(
         abi::emit_load_int_immediate(ctx.emitter, case_reg, case.value);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(
+                ctx.emitter.instruction(                                        // compare switch scrutinee with the case value
                     &format!("cmp {}, {}", result_reg, case_reg)
-                );                                                              // compare switch scrutinee with the case value
+                );
                 ctx.emitter.instruction(&format!("b.eq {}", branch_label));     // branch to the matching switch case
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(
+                ctx.emitter.instruction(                                        // compare switch scrutinee with the case value
                     &format!("cmp {}, {}", result_reg, case_reg)
-                );                                                              // compare switch scrutinee with the case value
+                );
                 ctx.emitter.instruction(&format!("je {}", branch_label));       // branch to the matching switch case
             }
         }
@@ -387,8 +473,9 @@ fn materialize_block_args(
         abi::emit_push_result_value(ctx.emitter, &ty);
         arg_types.push(ty);
     }
-    for (param, ty) in params.iter().zip(arg_types.iter()).rev() {
+    for ((param, arg), ty) in params.iter().zip(args.iter()).zip(arg_types.iter()).rev() {
         pop_result_value(ctx, ty);
+        return_ownership::normalize_loaded_block_argument(ctx, *param, *arg, ty)?;
         ctx.store_result_value(*param)?;
     }
     Ok(())
@@ -486,7 +573,8 @@ mod tests {
     use crate::codegen::platform::{Arch, Platform, Target};
     use crate::codegen::generate_user_asm_from_ir;
     use crate::ir::{
-        Builder, Function, IrHeapKind, IrType, Module, Op, Ownership, SwitchCase, Terminator,
+        Builder, Function, FunctionParam, Immediate, IrHeapKind, IrType, LocalKind, Module, Op,
+        Ownership, SwitchCase, Terminator,
     };
     use crate::types::PhpType;
 
@@ -506,13 +594,24 @@ mod tests {
         assert!(asm.contains("ud2"), "{asm}");
     }
 
-    /// Verifies unconditional branch arguments are copied into target block parameter slots.
+    /// Verifies unconditional scalar branch arguments reach the allocated parameter register.
     #[test]
     fn br_arguments_are_copied_to_target_params() {
-        let asm = generate_branch_arg_main_asm(Target::new(Platform::Linux, Arch::AArch64));
-
-        assert!(asm.contains("ldur x0, [x29, #-16]"), "{asm}");
-        assert!(asm.contains("stur x0, [x29, #-8]"), "{asm}");
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let asm = generate_branch_arg_asm(target);
+            let move_into_home = match target.arch {
+                Arch::AArch64 => "mov x12, x0",
+                Arch::X86_64 => "mov rsi, rax",
+            };
+            assert_eq!(asm.matches(move_into_home).count(), 2, "{name}: {asm}");
+        }
     }
 
     /// Verifies conditional branch arguments use per-edge copy stubs: both edges get their own
@@ -523,13 +622,21 @@ mod tests {
     /// shifts rather than when edge lowering regresses.
     #[test]
     fn cond_br_arguments_emit_edge_copy_stubs() {
-        let asm = generate_cond_branch_arg_main_asm(Target::new(Platform::Linux, Arch::X86_64));
-
-        let then_edge = find_numbered_label(&asm, "_eir_main_cond_then_args");
-        let else_edge = find_numbered_label(&asm, "_eir_main_cond_else_args");
-        assert_ne!(then_edge, else_edge, "{asm}");
-        assert!(branches_to(&asm, &then_edge), "{asm}");
-        assert!(branches_to(&asm, &else_edge), "{asm}");
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let asm = generate_cond_branch_arg_main_asm(target);
+            let then_edge = find_numbered_label(&asm, "_eir_main_cond_then_args");
+            let else_edge = find_numbered_label(&asm, "_eir_main_cond_else_args");
+            assert_ne!(then_edge, else_edge, "{name}: {asm}");
+            assert!(branches_to(&asm, &then_edge), "{name}: {asm}");
+            assert!(branches_to(&asm, &else_edge), "{name}: {asm}");
+        }
     }
 
     /// Verifies switch case and default arguments use per-edge copy stubs, with the case compare
@@ -538,13 +645,89 @@ mod tests {
     /// Structural for the same reason as `cond_br_arguments_emit_edge_copy_stubs()`.
     #[test]
     fn switch_arguments_emit_edge_copy_stubs() {
-        let asm = generate_switch_arg_main_asm(Target::new(Platform::Linux, Arch::AArch64));
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let asm = generate_switch_arg_main_asm(target);
+            let case_edge = find_numbered_label(&asm, "_eir_main_switch_case_args");
+            let default_edge = find_numbered_label(&asm, "_eir_main_switch_default_args");
+            assert_ne!(case_edge, default_edge, "{name}: {asm}");
+            assert!(branches_to(&asm, &case_edge), "{name}: {asm}");
+            assert!(branches_to(&asm, &default_edge), "{name}: {asm}");
+        }
+    }
 
-        let case_edge = find_numbered_label(&asm, "_eir_main_switch_case_args");
-        let default_edge = find_numbered_label(&asm, "_eir_main_switch_default_args");
-        assert_ne!(case_edge, default_edge, "{asm}");
-        assert!(branches_to(&asm, &case_edge), "{asm}");
-        assert!(branches_to(&asm, &default_edge), "{asm}");
+    /// Verifies an inliner-shaped Mixed phi promotes only its borrowed incoming edge.
+    #[test]
+    fn mixed_phi_return_normalizes_incoming_ownership_on_all_targets() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let asm = generate_mixed_phi_return_asm(target);
+            let function_start = asm
+                .find("mixed_phi_return_fixture")
+                .expect("fixture function label should be emitted");
+            let function_return = asm[function_start..]
+                .find("\n    ret\n")
+                .map(|offset| function_start + offset)
+                .expect("fixture function should return");
+            let function_asm = &asm[function_start..function_return];
+
+            assert_eq!(function_asm.matches("__rt_incref").count(), 1, "{name}: {function_asm}");
+            match target.arch {
+                Arch::AArch64 => {
+                    assert!(function_asm.contains("mov x15, #1"), "{name}: {function_asm}");
+                    assert!(!function_asm.contains("mov x15, xzr"), "{name}: {function_asm}");
+                }
+                Arch::X86_64 => {
+                    assert!(function_asm.contains("mov r11d, 1"), "{name}: {function_asm}");
+                    assert!(!function_asm.contains("xor r11d, r11d"), "{name}: {function_asm}");
+                }
+            }
+        }
+    }
+
+    /// Verifies reference-cell and global storage reads publish borrowed return ownership.
+    #[test]
+    fn storage_backed_mixed_returns_publish_borrowed_status_on_all_targets() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).expect("supported target");
+            let asm = generate_storage_backed_mixed_return_asm(target);
+            for function_name in ["ref_cell_return_fixture", "global_return_fixture"] {
+                let function_start = asm.find(function_name).expect("fixture label should be emitted");
+                let function_return = asm[function_start..]
+                    .find("\n    ret\n")
+                    .map(|offset| function_start + offset)
+                    .expect("fixture function should return");
+                let function_asm = &asm[function_start..function_return];
+                match target.arch {
+                    Arch::AArch64 => {
+                        assert!(function_asm.contains("mov x15, xzr"), "{name}: {function_asm}");
+                        assert!(!function_asm.contains("mov x15, #1"), "{name}: {function_asm}");
+                    }
+                    Arch::X86_64 => {
+                        assert!(function_asm.contains("xor r11d, r11d"), "{name}: {function_asm}");
+                        assert!(!function_asm.contains("mov r11d, 1"), "{name}: {function_asm}");
+                    }
+                }
+            }
+        }
     }
 
     /// Returns the one emitted assembly label named `<prefix>_<digits>`.
@@ -633,11 +816,193 @@ mod tests {
         generate_user_asm_from_ir(&module, false, false).expect("unreachable module should lower")
     }
 
-    /// Builds a minimal `br` fixture with one integer block argument.
-    fn generate_branch_arg_main_asm(target: Target) -> String {
+    /// Builds a mixed-returning function whose phi joins a borrowed parameter and fresh cell.
+    fn generate_mixed_phi_return_asm(target: Target) -> String {
         let mut module = Module::new(target);
-        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
-        function.flags.is_main = true;
+        let mut function = Function::new(
+            "mixed_phi_return_fixture".to_string(),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        function.params.push(FunctionParam {
+            name: "fresh".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Bool,
+            by_ref: false,
+            variadic: false,
+        });
+        function.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Mixed),
+            php_type: PhpType::Mixed,
+            by_ref: false,
+            variadic: false,
+        });
+        let fresh_slot = function.add_local(
+            Some("fresh".to_string()),
+            IrType::I64,
+            PhpType::Bool,
+            LocalKind::PhpLocal,
+        );
+        let value_slot = function.add_local(
+            Some("value".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            let borrowed = builder.create_named_block("borrowed", Vec::new());
+            let owned = builder.create_named_block("owned", Vec::new());
+            let merge = builder.create_named_block(
+                "merge",
+                vec![(IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed)],
+            );
+            let merged = builder.function().block(merge).expect("merge block").params[0];
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let condition = builder.emit_load_local(fresh_slot, IrType::I64, PhpType::Bool);
+            builder.terminate(Terminator::CondBr {
+                cond: condition,
+                then_target: owned,
+                then_args: Vec::new(),
+                else_target: borrowed,
+                else_args: Vec::new(),
+            });
+            builder.position_at_end(borrowed);
+            let borrowed_value = builder.emit_load_local(
+                value_slot,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+            );
+            builder.terminate(Terminator::Br {
+                target: merge,
+                args: vec![borrowed_value],
+            });
+            builder.position_at_end(owned);
+            let scalar = builder.emit_const_i64(7);
+            let owned_value = builder
+                .emit(
+                    Op::MixedBox,
+                    vec![scalar],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .expect("mixed_box produces a value");
+            builder.terminate(Terminator::Br {
+                target: merge,
+                args: vec![owned_value],
+            });
+            builder.position_at_end(merge);
+            builder.terminate(Terminator::Return {
+                value: Some(merged),
+            });
+        }
+        module.add_function(function);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        generate_user_asm_from_ir(&module, false, false)
+            .expect("mixed phi return module should lower")
+    }
+
+    /// Builds Mixed-returning functions backed by a reference cell and global storage.
+    fn generate_storage_backed_mixed_return_asm(target: Target) -> String {
+        let mut module = Module::new(target);
+        let global_name = module.data.intern_global_name("borrowed_return_global");
+
+        let mut ref_cell = Function::new(
+            "ref_cell_return_fixture".to_string(),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        ref_cell.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Mixed),
+            php_type: PhpType::Mixed,
+            by_ref: true,
+            variadic: false,
+        });
+        let value_slot = ref_cell.add_local(
+            Some("value".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut ref_cell);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let value = builder
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(value_slot)),
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::MaybeOwned,
+                )
+                .expect("load_ref_cell produces a value");
+            builder.terminate(Terminator::Return { value: Some(value) });
+        }
+        module.add_function(ref_cell);
+
+        let mut global = Function::new(
+            "global_return_fixture".to_string(),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        {
+            let mut builder = Builder::new(&mut global);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let value = builder
+                .emit(
+                    Op::LoadGlobal,
+                    Vec::new(),
+                    Some(Immediate::GlobalName(global_name)),
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::MaybeOwned,
+                )
+                .expect("load_global produces a value");
+            builder.terminate(Terminator::Return { value: Some(value) });
+        }
+        module.add_function(global);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        generate_user_asm_from_ir(&module, false, false)
+            .expect("storage-backed return module should lower")
+    }
+
+    /// Builds a `br` fixture whose returned integer block parameter needs a live register home.
+    fn generate_branch_arg_asm(target: Target) -> String {
+        let mut module = Module::new(target);
+        let mut function = Function::new("branch_arg_fixture".to_string(), IrType::I64, PhpType::Int);
         {
             let mut builder = Builder::new(&mut function);
             let entry = builder.create_named_block("entry", Vec::new());
@@ -650,9 +1015,21 @@ mod tests {
                 args: vec![value],
             });
             builder.position_at_end(body);
-            builder.terminate(Terminator::Unreachable);
+            let parameter = builder.block_param(body, 0);
+            builder.terminate(Terminator::Return { value: Some(parameter) });
         }
         module.add_function(function);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
 
         generate_user_asm_from_ir(&module, false, false).expect("branch-arg module should lower")
     }

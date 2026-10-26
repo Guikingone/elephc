@@ -56,6 +56,15 @@ mod field {
     pub(super) const REPORT: usize = 48;
 }
 
+/// Creation line of a raise inside a shared helper: the helper has no PHP line of its own, so the
+/// throwable takes the line of the statement that called it, published in `_php_site`.
+pub(in crate::codegen) const LINE_OF_CALLING_SITE: u32 = u32::MAX;
+
+/// Returns whether `ctx` is a shared helper body, whose raises belong to the calling statement.
+pub(in crate::codegen) fn raises_on_calling_site(ctx: &FunctionContext<'_>) -> bool {
+    ctx.function.flags.is_synthetic && ctx.function.name.starts_with("_eir_shared_")
+}
+
 /// php's uncaught-throwable report: flush the output buffer, write to fd 1, exit 255.
 pub(in crate::codegen) const REPORT_UNCAUGHT: u64 = 0;
 
@@ -176,6 +185,7 @@ fn emit_static_throw_from_result(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let result = abi::int_result_reg(ctx.emitter);
     let throw_label = ctx.next_label("static_exception_throw");
     let typed_property_label = ctx.next_label("typed_property_throw");
+    let line_known = ctx.next_label("static_exception_line_known");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("mov {}, {}", record, result)); // keep the record across the allocating calls below
@@ -212,6 +222,14 @@ fn emit_static_throw_from_result(ctx: &mut FunctionContext<'_>) -> Result<()> {
             ctx.emitter.instruction("str x9, [x0, #16]");                    // store the exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                   // exception code defaults to zero
             abi::emit_load_from_address(ctx.emitter, "x9", record, field::CREATION_LINE);
+            ctx.emitter.instruction("mov w10, #-1");                         // the calling-site line sentinel, u32::MAX
+            ctx.emitter.instruction("cmp x9, x10");                          // does the line come from the calling site?
+            ctx.emitter.instruction(&format!("b.ne {}", line_known));        // no: the raise baked its own line
+            // A shared helper's raise names the line of the PHP statement that called it, which
+            // that statement published in `_php_site` ({file descriptor, line}).
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_php_site", 0);
+            ctx.emitter.instruction("ldr x9, [x9, #8]");                     // the calling statement's line
+            ctx.emitter.label(&line_known);
             abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_layout::LINE_OFFSET);
             ctx.emitter.instruction(&format!(
                 "str xzr, [x0, #{}]",
@@ -263,6 +281,14 @@ fn emit_static_throw_from_result(ctx: &mut FunctionContext<'_>) -> Result<()> {
             ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");        // store the exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");          // exception code defaults to zero
             abi::emit_load_from_address(ctx.emitter, "r10", record, field::CREATION_LINE);
+            ctx.emitter.instruction("mov r11d, 0xffffffff");                 // the calling-site line sentinel, u32::MAX
+            ctx.emitter.instruction("cmp r10, r11");                         // does the line come from the calling site?
+            ctx.emitter.instruction(&format!("jne {}", line_known));         // no: the raise baked its own line
+            // A shared helper's raise names the line of the PHP statement that called it, which
+            // that statement published in `_php_site` ({file descriptor, line}).
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_php_site", 0);
+            ctx.emitter.instruction("mov r10, QWORD PTR [r10 + 8]");         // the calling statement's line
+            ctx.emitter.label(&line_known);
             abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_layout::LINE_OFFSET);
             ctx.emitter.instruction(&format!(
                 "mov QWORD PTR [rax + {}], 0",

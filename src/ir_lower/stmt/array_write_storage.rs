@@ -9,6 +9,30 @@
 
 use super::*;
 
+/// Detaches a boxed local before a write can replace its array payload or modify shared cells.
+/// Reference locals publish through the existing reference; value aliases keep the original box.
+pub(in crate::ir_lower) fn load_array_local_for_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    span: Span,
+) -> LoweredValue {
+    let ty = ctx.local_type(name);
+    let value = ctx.load_local(name, Some(span));
+    if ty.codegen_repr() != PhpType::Mixed {
+        return value;
+    }
+    let detached = ctx.emit_owned_value(
+        Op::MixedClone,
+        vec![value.value],
+        None,
+        ty.clone(),
+        Op::MixedClone.default_effects(),
+        Some(span),
+    );
+    ctx.store_call_argument_local(name, detached, ty, Some(span));
+    ctx.load_local(name, Some(span))
+}
+
 /// Lowers `$array[] = value`.
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
     // Value first, container second: see `lower_array_assign` for the stale-pointer failure.
@@ -16,9 +40,11 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
-    let array_value = ctx.load_local(array, Some(span));
+    let array_value = load_array_local_for_write(ctx, array, span);
     let op = if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Array) {
         Op::ArrayPush
+    } else if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Hash) {
+        Op::HashAppend
     } else if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed) {
         Op::MixedArrayAppend
     } else {
@@ -50,6 +76,36 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, span);
         return;
     }
+    if op == Op::HashAppend {
+        // `$h = ['a' => 1]; $h[] = 'x';` appends a value the hash's concrete storage cannot hold:
+        // the string's address was stored as an int. Widen to boxed values first, exactly as a
+        // keyed write does (`array_write_core::lower_array_assign`).
+        let current_ty = ctx.builder.value_php_type(array_value.value);
+        let value_ty = ctx.builder.value_php_type(value.value);
+        if let Some(updated_ty) =
+            super::array_write_core::assoc_array_write_updated_type(current_ty, value_ty)
+        {
+            ctx.prepare_mutated_local_owner(array, array_value, updated_ty.clone(), Some(span));
+            let converted = ctx.emit_value(
+                Op::HashToMixed,
+                vec![array_value.value],
+                None,
+                updated_ty.clone(),
+                Op::HashToMixed.default_effects(),
+                Some(span),
+            );
+            ctx.emit_void(
+                Op::HashAppend,
+                vec![converted.value, value.value],
+                None,
+                Op::HashAppend.default_effects(),
+                Some(span),
+            );
+            release_persisted_string_operand(ctx, value, span);
+            ctx.store_prepared_mutated_local(array, converted, updated_ty, Some(span));
+            return;
+        }
+    }
     let operands = if op == Op::RuntimeCall {
         let receiver_ty = ctx.local_type(array);
         object_push_operands(ctx, &receiver_ty, array_value, value, span)
@@ -57,7 +113,26 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         vec![array_value.value, value.value]
     };
     ctx.emit_void(op, operands, None, op.default_effects(), Some(span));
-    release_persisted_string_operand(ctx, value, span);
+    // A boxed append TAKES OVER a call's string (`box_value_for_mixed_container`); releasing it
+    // again freed what the array holds -- `$this->paths[$ns][] = rtrim($path, '/\\')` goes
+    // through a hidden Mixed local and stored freed bytes.
+    if op == Op::MixedArrayAppend {
+        // `__rt_mixed_array_append` retains an already-boxed value for the container, so a
+        // fresh Mixed box (a call result, or the cell of `$a[] = &$ref`) is still owed a release
+        // here; without it every `$global[] = mixedCall()` / `$global[] = &$ref` leaked a box.
+        let value_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+        if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
+            if ctx.value_is_owning_temporary(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
+        } else {
+            super::array_write_core::release_string_copied_into_box(ctx, value, span);
+        }
+    } else if op == Op::RuntimeCall {
+        super::array_write_core::release_object_offset_set_operand(ctx, value, span);
+    } else {
+        release_persisted_string_operand(ctx, value, span);
+    }
 }
 
 /// Operands of the runtime call that appends `value` to an object receiver (`$o[] = $v`).

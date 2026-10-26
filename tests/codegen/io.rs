@@ -13,6 +13,10 @@ use crate::support::*;
 mod printing;
 #[path = "io/output_buffering.rs"]
 mod output_buffering;
+#[path = "io/output_handler_lifecycle.rs"]
+mod output_handler_lifecycle;
+#[path = "io/output_handler_exceptions.rs"]
+mod output_handler_exceptions;
 #[path = "io/files.rs"]
 mod files;
 #[path = "io/streams.rs"]
@@ -31,3 +35,5 @@ mod modify;
 mod streams_ext;
 #[path = "io/symlinks.rs"]
 mod symlinks;
+#[path = "io/proc_open.rs"]
+mod proc_open;

@@ -176,3 +176,275 @@ echo $callback("ok");
     );
     assert_eq!(out, "[ok]");
 }
+
+
+/// Regression for #576: a function reachable only through a dynamic callable must return what it
+/// was given, not an int cast of it.
+///
+/// An untyped parameter starts as the checker's `Int` PLACEHOLDER, which direct call sites
+/// specialize away. A function whose only callers are dynamic never gets that, so
+/// `function h($b, $p) { return $b; }` recorded `Int` as its return type — and the
+/// runtime-callable invoker coerced the real value through it. A returned string arrived as
+/// `int(0)`, silently: no diagnostic, no cast in the source, nothing to see at the call site.
+///
+/// The rows are the issue's own scope table, each one a different reason to be included:
+///
+/// - `h` returning the STRING parameter is the defect.
+/// - `hp` returning the INT parameter is the row that was accidentally correct before, because
+///   an int survives an int cast — so it pins that the fix did not simply widen everything.
+/// - `ht` with declared types never had the defect and must not change.
+/// - `m` is the MASKING variant: one direct call anywhere taught the checker the real type, so
+///   the dynamic path was correct too. Both calls are asserted, in that order, because the
+///   fix must not depend on which one runs first.
+/// - `strlen(call_user_func(...))` is the static consumer. Pre-fix it did not merely print the
+///   wrong value, it refused to compile — *"strlen for PHP type Int"* — which is how the
+///   recorded return type can be read back directly.
+/// - `add` computes its result instead of forwarding a parameter, so it keeps `int`. Without
+///   that row the fix could be a blanket widening of every untyped function.
+/// - `array_map` and `call_user_func_array` are the other two entry points into the same
+///   invoker.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_dynamic_only_function_returns_its_argument_not_an_int_cast() {
+    let out = compile_and_run(
+        r#"<?php
+function h($b, $p) { return $b; }
+function hp($b, $p) { return $p; }
+function ht(string $b, int $p): string { return $b; }
+
+$fn = 'h';
+var_dump(call_user_func($fn, "probe", 9));
+$fnp = 'hp';
+var_dump(call_user_func($fnp, "x", 12345));
+$fnt = 'ht';
+var_dump(call_user_func($fnt, "typed", 1));
+
+function m($b) { return $b; }
+var_dump(m("direct"));
+$fm = 'm';
+var_dump(call_user_func($fm, "probe"));
+
+function s($b) { return $b; }
+$fs = 's';
+var_dump(strlen(call_user_func($fs, "abcde")));
+
+function any($v) { return $v; }
+$fa = 'any';
+var_dump(call_user_func($fa, 1.5));
+var_dump(call_user_func($fa, true));
+var_dump(call_user_func($fa, null));
+
+function add($a, $b) { return $a + $b; }
+$fadd = 'add';
+var_dump(call_user_func($fadd, 2, 3));
+
+var_dump(array_map('m', ["a", "b"]));
+var_dump(call_user_func_array('h', ["arr", 7]));
+
+function fcc($b) { return $b; }
+var_dump(array_map(fcc(...), ["probe"]));
+$bound = fcc(...);
+var_dump($bound("bound"));
+var_dump(call_user_func(fcc(...), "cuf"));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "string(5) \"probe\"\n",
+            "int(12345)\n",
+            "string(5) \"typed\"\n",
+            "string(6) \"direct\"\n",
+            "string(5) \"probe\"\n",
+            "int(5)\n",
+            "float(1.5)\n",
+            "bool(true)\n",
+            "NULL\n",
+            "int(5)\n",
+            "array(2) {\n  [0]=>\n  string(1) \"a\"\n  [1]=>\n  string(1) \"b\"\n}\n",
+            "string(3) \"arr\"\n",
+            "array(1) {\n  [0]=>\n  string(5) \"probe\"\n}\n",
+            "string(5) \"bound\"\n",
+            "string(3) \"cuf\"\n",
+        )
+    );
+}
+
+
+/// Regression for #576 on methods: a method reachable only through a dynamic callable must
+/// return what it was given, not an int cast of it.
+///
+/// Functions get the checker widening in `widen_dynamic_only_passthrough_returns`. Methods keep
+/// the same pass-through rule through `normalize_method_map_for_eir`, via
+/// `src/types/dynamic_params.rs`. A method-only `call_user_func` path has no function-shaped
+/// caller to teach the parameter type, so it is the shape that would silently regress if the
+/// two callers of that predicate drifted apart.
+///
+/// The expectation is host PHP 8.5.10 `var_dump` of the same fixture.
+#[test]
+fn test_dynamic_only_method_returns_its_argument_not_an_int_cast() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    function h($b, $p) { return $b; }
+}
+var_dump(call_user_func([new C(), 'h'], "probe", 9));
+"#,
+    );
+    assert_eq!(out, "string(5) \"probe\"\n");
+}
+
+
+/// A signature PROBE and an argument-less call are not call sites, so neither suppresses the
+/// pass-through return widening.
+///
+/// `widen_dynamic_only_passthrough_returns` skips a function a real caller taught its parameter
+/// types to. Two things reach the same checker entry point without teaching it anything:
+///
+/// - `function_exists('fe')` resolves `fe`'s signature by calling it with FABRICATED zeros
+///   (`check_function_exists` builds one `IntLiteral(0)` per parameter). Counting that as a
+///   caller left `fe`'s untyped parameter on the `Int` placeholder, and the dynamic call
+///   returned `int(0)` instead of the string.
+/// - `opt()` on `function opt($b = null) { return $b; }` is a genuine call that passes nothing,
+///   so `$b` keeps the type its default implies and the dynamic call returned `NULL`.
+///
+/// Both are driven through a callable VARIABLE on purpose. A literal callable string is
+/// validated against the signature during the top-level walk, which runs before the widening
+/// pass, so it reports a compile error instead — a separate, pre-existing ordering problem that
+/// this fixture deliberately does not depend on.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_signature_probes_do_not_suppress_dynamic_return_widening() {
+    let out = compile_and_run(
+        r#"<?php
+function fe($b) { return $b; }
+var_dump(function_exists('fe'));
+$fn = 'fe';
+var_dump(call_user_func($fn, "probe"));
+
+function opt($b = null) { return $b; }
+var_dump(opt());
+$fo = 'opt';
+var_dump(call_user_func($fo, "probe"));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "string(5) \"probe\"\n",
+            "NULL\n",
+            "string(5) \"probe\"\n",
+        )
+    );
+}
+
+
+/// A user function NAMED like a generated include variant is not one, and does not inherit
+/// another function's call sites.
+///
+/// `function_was_called_directly` has to see past the resolver's `__elephc_include_variant_
+/// {hash}_{local}` decoration, because a variant's declaration is registered under that symbol
+/// while the call site names the function the way the source wrote it. Recovering `{local}` by
+/// SPLITTING the symbol would hand any function whose name happens to start that way the call
+/// sites of whatever `{local}` names: here `foo(7)` would suppress the imitator's widening and
+/// `array_map` would print `int(0)` for a returned string. Reading the real mapping out of
+/// `function_variant_groups` cannot make that mistake — a name nobody generated is in no group.
+///
+/// PHP accepts the name (a leading `__` is legal), and the expectation is host PHP 8.5.10's.
+#[test]
+fn test_a_function_named_like_an_include_variant_keeps_its_own_call_sites() {
+    let out = compile_and_run(
+        r#"<?php
+function foo($x) { return $x; }
+function __elephc_include_variant_0123456789abcdef_foo($x) { return $x; }
+
+echo foo(7), "\n";
+var_dump(array_map(__elephc_include_variant_0123456789abcdef_foo(...), ["fcc"]));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "7\n",
+            "array(1) {\n",
+            "  [0]=>\n",
+            "  string(3) \"fcc\"\n",
+            "}\n",
+        )
+    );
+}
+
+/// A scratch-backed builtin result survives `array_map` through a runtime-chosen builtin name.
+///
+/// `strrev`, `addslashes`, `urlencode` and `base64_encode` reserve concat scratch for short
+/// results, and their callable wrapper handed that scratch to the descriptor invoker as an owner.
+/// Every element then aliased the one slot the last call wrote (`"dc,dc"`). The expectation is
+/// host PHP 8.5.
+#[test]
+fn test_runtime_named_scratch_string_builtins_keep_each_array_map_element() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$names = ['strtoupper', 'strrev', 'addslashes', 'urlencode', 'base64_encode', 'trim'];
+foreach ($names as $name) {
+    $pick = $names[array_search($name, $names) + $argc - 1];
+    echo $name, ':', implode(',', array_map($pick, ['ab', 'c d', 'Ef '])), "\n";
+}
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "strtoupper:AB,C D,EF \n",
+            "strrev:ba,d c, fE\n",
+            "addslashes:ab,c d,Ef \n",
+            "urlencode:ab,c+d,Ef+\n",
+            "base64_encode:YWI=,YyBk,RWYg\n",
+            "trim:ab,c d,Ef\n",
+        ),
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// `array_merge` reached by a runtime name merges packed and keyed arrays like a direct call.
+///
+/// A callee resolved only by lowering has no checked call-site type: the declared `mixed` result
+/// made `json_encode` read the raw indexed-array pointer as a boxed cell (segfault), and a keyed
+/// operand was refused outright because only the direct-call path routed it to the key-aware
+/// prelude. The expectation is host PHP 8.5.
+#[test]
+fn test_runtime_named_array_merge_handles_three_packed_and_keyed_arrays() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$f = 'array_merge';
+echo json_encode($f([1, 2], [3])), "\n";
+echo json_encode($f([1, 2], [3], [5])), "\n";
+echo json_encode($f(['x', 'y'], ['z'], ['w'])), "\n";
+echo json_encode(call_user_func_array($f, [[1, 2], [3], [5]])), "\n";
+echo json_encode(call_user_func_array($f, [[1, 2], [3], ['a' => 4]])), "\n";
+echo json_encode($f(['a' => 1], ['a' => 2, 5])), "\n";
+echo json_encode(call_user_func($f, [1, 2], [3], [5])), "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "[1,2,3]\n",
+            "[1,2,3,5]\n",
+            "[\"x\",\"y\",\"z\",\"w\"]\n",
+            "[1,2,3,5]\n",
+            "{\"0\":1,\"1\":2,\"2\":3,\"a\":4}\n",
+            "{\"a\":2,\"0\":5}\n",
+            "[1,2,3,5]\n",
+        ),
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

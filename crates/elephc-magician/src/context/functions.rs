@@ -9,11 +9,123 @@
 
 use super::*;
 
+/// One scalar AOT global constant registered with a persistent eval context.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvalNativeGlobalConstant {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(String),
+    Resource(i64),
+}
+
+/// One AOT *user-declared* global constant registered with a persistent eval context.
+///
+/// This is a separate registry from [`EvalNativeGlobalConstant`] on purpose: PHP reports
+/// user constants under the `user` category, and the values are compiler metadata rather
+/// than runtime cells, so nothing here may be merged into the dynamic `define()` map that
+/// the native constant inventory exports back to AOT.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvalNativeUserConstant {
+    /// A scalar constant, sharing the scalar shapes of the Core registry.
+    Scalar(EvalNativeGlobalConstant),
+    /// A recursively nested array constant, keyed exactly as AOT materialized it.
+    Array(Vec<NativeCallableArrayDefaultElement>),
+}
+
 impl ElephcEvalContext {
+    /// Registers one AOT global constant for eval fetches and Core introspection.
+    pub fn define_native_global_constant(
+        &mut self,
+        name: &str,
+        value: EvalNativeGlobalConstant,
+    ) -> bool {
+        let key = normalize_constant_name(name);
+        if key.is_empty() || self.native_global_constants.contains_key(&key) {
+            return false;
+        }
+        Arc::make_mut(&mut self.native_global_constants).insert(key, value);
+        true
+    }
+
+    /// Returns one registered AOT global constant by its case-sensitive PHP name.
+    pub fn native_global_constant(&self, name: &str) -> Option<&EvalNativeGlobalConstant> {
+        self.native_global_constants
+            .get(&normalize_constant_name(name))
+    }
+
+    /// Returns whether an AOT global constant is registered under the requested name.
+    pub fn has_native_global_constant(&self, name: &str) -> bool {
+        self.native_global_constant(name).is_some()
+    }
+
+    /// Returns registered AOT global constants in stable PHP-visible name order.
+    pub(crate) fn native_global_constant_entries(
+        &self,
+    ) -> Vec<(String, EvalNativeGlobalConstant)> {
+        let mut entries = self
+            .native_global_constants
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+    }
+
+    /// Registers one AOT user-declared global constant for eval fetches and introspection.
+    ///
+    /// Fails when the name is empty or already registered in either native registry, so a
+    /// seeded name can never be duplicated by a second registration call. A name already
+    /// present in the dynamic `define()` map is rejected too, and left untouched, so a late
+    /// seeding call can never shadow or replace a constant a fragment already defined.
+    pub fn define_native_user_constant(
+        &mut self,
+        name: &str,
+        value: EvalNativeUserConstant,
+    ) -> bool {
+        let key = normalize_constant_name(name);
+        if key.is_empty()
+            || self.native_user_constants.contains_key(&key)
+            || self.native_global_constants.contains_key(&key)
+            || self.constants.contains_key(&key)
+        {
+            return false;
+        }
+        Arc::make_mut(&mut self.native_user_constants).insert(key, value);
+        true
+    }
+
+    /// Returns one registered AOT user constant by its case-sensitive PHP name.
+    pub fn native_user_constant(&self, name: &str) -> Option<&EvalNativeUserConstant> {
+        self.native_user_constants
+            .get(&normalize_constant_name(name))
+    }
+
+    /// Returns whether an AOT user constant is registered under the requested name.
+    pub fn has_native_user_constant(&self, name: &str) -> bool {
+        self.native_user_constant(name).is_some()
+    }
+
+    /// Returns registered AOT user constants in stable PHP-visible name order.
+    pub(crate) fn native_user_constant_entries(&self) -> Vec<(String, EvalNativeUserConstant)> {
+        let mut entries = self
+            .native_user_constants
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+    }
+
     /// Defines an eval dynamic constant value, failing if the name is invalid or already present.
     pub fn define_constant(&mut self, name: &str, value: RuntimeCellHandle) -> bool {
         let key = normalize_constant_name(name);
-        if key.is_empty() || self.has_constant(&key) {
+        if key.is_empty()
+            || self.has_constant(&key)
+            || self.native_global_constants.contains_key(&key)
+            || self.native_user_constants.contains_key(&key)
+        {
             return false;
         }
         // Constants are request-global in php; see `register_global_eval_constant`.
@@ -37,14 +149,50 @@ impl ElephcEvalContext {
     pub fn constant(&self, name: &str) -> Option<RuntimeCellHandle> {
         let key = normalize_constant_name(name);
         if let Some(value) = self.constants.get(&key) {
-            return Some(*value);
+            return Some(value.borrowed());
         }
         #[cfg(not(test))]
         {
             crate::context::global_eval_constant(&key, self as *const Self)
+                .map(RuntimeCellHandle::borrowed)
         }
         #[cfg(test)]
         None
+    }
+
+    /// Returns user-defined constants in stable name order for PHP introspection.
+    pub(crate) fn defined_constant_entries(&self) -> Vec<(String, RuntimeCellHandle)> {
+        let mut entries = self
+            .constants
+            .iter()
+            .map(|(name, value)| (name.clone(), *value))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+    }
+
+    /// Borrows one dynamic constant in stable name order for a native inventory snapshot.
+    pub(crate) fn constant_inventory_entry(&self, index: usize) -> Option<(&str, RuntimeCellHandle)> {
+        let mut entries = self.constants.iter().collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(right.0));
+        entries.get(index).map(|(name, cell)| (name.as_str(), **cell))
+    }
+
+    /// Borrows one eval-only function name, excluding native registrations and closures.
+    pub(crate) fn function_inventory_entry(&self, index: usize) -> Option<&str> {
+        let mut names = self.functions.keys().collect::<Vec<_>>();
+        names.sort();
+        names.get(index).map(|name| name.as_str())
+    }
+
+    /// Returns eval and generated native user-function names in stable order.
+    pub(crate) fn defined_user_function_names(&self) -> Vec<String> {
+        let mut names = self.functions.keys().cloned().collect::<Vec<_>>();
+        names.extend(self.native_functions.keys().cloned());
+        names.extend(self.local_native_functions.keys().cloned());
+        names.sort();
+        names.dedup();
+        names
     }
 
     /// Defines a dynamic user function, failing if the name already exists.
@@ -229,13 +377,26 @@ impl ElephcEvalContext {
     pub fn define_native_function(
         &mut self,
         name: impl Into<String>,
-        function: NativeFunction,
+        mut function: NativeFunction,
     ) -> Result<(), NativeFunction> {
         let name = name.into();
-        if self.functions.contains_key(&name) || self.native_functions.contains_key(&name) {
+        if self.functions.contains_key(&name)
+            || self.native_functions.contains_key(&name)
+            || self.local_native_functions.contains_key(&name)
+        {
             return Err(function);
         }
-        Arc::make_mut(&mut self.native_functions).insert(name, function);
+        function.name.clone_from(&name);
+        // The module registration fills a table nobody else holds yet, and the shape/param
+        // setters below expect to find those entries in it. Once the table is the shared AOT
+        // snapshot, a late registration must not copy it; see `local_native_functions`.
+        // A fresh context's table is the thread's shared EMPTY value, which `make_mut` copies
+        // for nothing; it must stay the registration target so the publish sees the entries.
+        if !self.native_functions.is_empty() && Arc::strong_count(&self.native_functions) > 1 {
+            self.local_native_functions.insert(name, function);
+        } else {
+            Arc::make_mut(&mut self.native_functions).insert(name, function);
+        }
         Ok(())
     }
 
@@ -285,16 +446,18 @@ impl ElephcEvalContext {
     /// A conditionally declared function whose declaration has not run is not there, exactly as
     /// in php (see `NativeFunction::active_slot`).
     pub fn native_function(&self, name: &str) -> Option<NativeFunction> {
-        self.native_functions
+        self.local_native_functions
             .get(name)
+            .or_else(|| self.native_functions.get(name))
             .filter(|function| function.is_active())
             .cloned()
     }
 
     /// Returns whether a native AOT function of this lowercase name is declared right now.
     pub(crate) fn has_active_native_function(&self, name: &str) -> bool {
-        self.native_functions
+        self.local_native_functions
             .get(name)
+            .or_else(|| self.native_functions.get(name))
             .is_some_and(NativeFunction::is_active)
     }
 
@@ -306,6 +469,21 @@ impl ElephcEvalContext {
                 function.set_active_slot(slot);
                 true
             })
+    }
+
+    /// Records the explicit PHP signature shape for an already registered native AOT callback.
+    ///
+    /// Emitted from the AST-level signature, so it states the source arity even when a declared
+    /// default has no representation in the eval default ABI and is therefore never registered.
+    pub fn define_native_function_shape(
+        &mut self,
+        function_name: &str,
+        shape: NativeCallableShape,
+    ) -> bool {
+        Arc::make_mut(&mut self.native_functions)
+            .get_mut(function_name)
+            .map(|function| function.set_shape(shape))
+            .is_some()
     }
 
     /// Records one parameter name for an already registered native AOT callback.
@@ -365,6 +543,16 @@ impl ElephcEvalContext {
         Arc::make_mut(&mut self.native_functions)
             .get_mut(function_name)
             .is_some_and(|function| function.set_variadic_index(index))
+    }
+
+    /// Records that one native AOT callback is declared `function &name()`.
+    pub fn define_native_function_returns_reference(&mut self, function_name: &str) -> bool {
+        Arc::make_mut(&mut self.native_functions)
+            .get_mut(function_name)
+            .is_some_and(|function| {
+                function.set_returns_reference(true);
+                true
+            })
     }
 
     /// Records one native AOT callback return type.

@@ -1,11 +1,11 @@
 ---
-title: "version_compare() — internals"
+title: "version_compare() - internals"
 description: "Compiler internals for version_compare(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 908
+  order: 1002
 ---
 
-## `version_compare()` — internals
+## `version_compare()` - internals
 
 ## Where it lives
 

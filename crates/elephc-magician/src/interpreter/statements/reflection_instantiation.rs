@@ -29,13 +29,9 @@ pub(super) fn eval_reflection_class_new_instance_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let direct_new_instance = method_name.eq_ignore_ascii_case("newInstance");
-    let constructor_args = if direct_new_instance {
-        eval_reflection_constructor_by_value_args(evaluated_args)
-    } else if method_name.eq_ignore_ascii_case("newInstanceArgs") {
-        eval_reflection_class_new_instance_args(evaluated_args, context, values)?
-    } else {
+    if !direct_new_instance && !method_name.eq_ignore_ascii_case("newInstanceArgs") {
         return Ok(None);
-    };
+    }
     let Some(reflected_name) = context
         .eval_reflection_class_name(identity)
         .map(str::to_string)
@@ -48,12 +44,30 @@ pub(super) fn eval_reflection_class_new_instance_result(
             context.class(&reflected_name).is_some(),
         );
     }
+    if direct_new_instance {
+        let arguments = eval_reflection_constructor_by_value_args(evaluated_args);
+        return eval_reflection_class_instantiate(&reflected_name, arguments, context, values);
+    }
+    let array = eval_reflection_class_new_instance_args(evaluated_args)?;
+    with_eval_array_call_arguments(array, context, values, |arguments, context, values| {
+        eval_reflection_class_instantiate(&reflected_name, arguments, context, values)?
+            .ok_or(EvalStatus::RuntimeFatal)
+    }).map(Some)
+}
+
+/// Instantiates an already identified reflected class while its caller owns constructor arguments.
+fn eval_reflection_class_instantiate(
+    reflected_name: &str,
+    constructor_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     if let Some(message) =
-        eval_reflection_eval_instantiation_error_message(&reflected_name, context)
+        eval_reflection_eval_instantiation_error_message(reflected_name, context)
     {
         return eval_throw_error(&message, context, values);
     }
-    if let Some(class) = context.class(&reflected_name).cloned() {
+    if let Some(class) = context.class(reflected_name).cloned() {
         if crate::eval_trace::enabled() {
             let argument_shapes = constructor_args
                 .iter()
@@ -118,8 +132,8 @@ pub(super) fn eval_reflection_class_new_instance_result(
         };
     }
     let class_name = context
-        .resolve_class_name(&reflected_name)
-        .unwrap_or(reflected_name);
+        .resolve_class_name(reflected_name)
+        .unwrap_or_else(|| reflected_name.to_string());
     let instantiation_error = match eval_reflection_aot_class_public_instantiation_error(
         &class_name,
         values,
@@ -183,19 +197,16 @@ pub(super) fn eval_reflection_constructor_by_value_args(
             name: arg.name,
             value: arg.value,
             ref_target: None,
-            owned: arg.owned,
         })
         .collect()
 }
 
-/// Expands the single `ReflectionClass::newInstanceArgs()` array argument.
+/// Binds the borrowed array passed to `ReflectionClass::newInstanceArgs()`.
 pub(super) fn eval_reflection_class_new_instance_args(
     evaluated_args: Vec<EvaluatedCallArg>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("args")], evaluated_args)?;
-    eval_array_call_arg_values(args[0], context, values)
+    Ok(args[0])
 }
 
 /// Runs ReflectionClass construction with only public constructor visibility.
@@ -394,6 +405,38 @@ pub(in crate::interpreter) fn eval_initialize_lazy_ghost(
     }
 }
 
+/// Allocates an eval-declared class without running `__construct()`, for a COMPILED
+/// `ReflectionClass::newInstanceWithoutConstructor()` whose class only the interpreter knows.
+///
+/// Returns `Ok(None)` when this context does not declare the class, so the caller can try the
+/// next context. A class another context declared is imported first, as for `method_exists()`.
+/// Symfony's `polyfill-deepclone` rebuilds cached Doctrine `ParserResult`s this way, and the
+/// compiled call died "Class not found" on every class loaded at run time.
+pub(in crate::interpreter) fn eval_new_object_without_constructor_result(
+    name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    #[cfg(not(test))]
+    context.sync_global_eval_classes();
+    let name = name.trim_start_matches('\\');
+    let known = context.class(name).is_some()
+        || context.has_interface(name)
+        || context.has_trait(name)
+        || context.has_enum(name);
+    if !known {
+        return Ok(None);
+    }
+    if let Some(message) = eval_reflection_eval_instantiation_error_message(name, context) {
+        return eval_throw_error(&message, context, values);
+    }
+    let Some(class) = context.class(name).cloned() else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let mut scope = ElephcEvalScope::new();
+    eval_dynamic_class_allocate_object(&class, context, &mut scope, values).map(Some)
+}
+
 /// Builds PHP's reflection instantiation error for eval non-instantiable class-likes.
 pub(super) fn eval_reflection_eval_instantiation_error_message(
     reflected_name: &str,
@@ -480,7 +523,6 @@ pub(super) fn eval_reflection_attribute_evaluated_args(
                 name: arg.name().map(str::to_string),
                 value: eval_reflection_attribute_arg_value(arg.value(), values)?,
                 ref_target: None,
-                owned: false,
             })
         })
         .collect()
@@ -492,7 +534,8 @@ pub(super) fn eval_reflection_attribute_arg_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match arg {
-        EvalAttributeArg::String(value) => values.string(value),
+        EvalAttributeArg::String(value) => values.string_literal(value),
+        EvalAttributeArg::Bytes(value) => values.string_literal_bytes(value),
         EvalAttributeArg::Int(value) => values.int(*value),
         EvalAttributeArg::Float(bits) => values.float(f64::from_bits(*bits)),
         EvalAttributeArg::Bool(value) => values.bool_value(*value),
@@ -503,6 +546,9 @@ pub(super) fn eval_reflection_attribute_arg_value(
         EvalAttributeArg::Named { value, .. } | EvalAttributeArg::IntKeyed { value, .. } => {
             eval_reflection_attribute_arg_value(value, values)
         }
+        // An expression needs the interpreter to evaluate it; reflection folds it before it
+        // registers the attribute this metadata comes from.
+        EvalAttributeArg::Expr(_) => Err(EvalStatus::RuntimeFatal),
     }
 }
 
@@ -535,7 +581,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_for_call(
     object_class_name: &str,
     method_name: &str,
     context: &ElephcEvalContext,
-) -> Option<(String, EvalClassMethod)> {
+) -> Option<(String, EvalClassMethodRef)> {
     if let Some(current_class) = context.current_class_scope() {
         if context.class_is_a(object_class_name, current_class, false) {
             if let Some((declaring_class, method)) =
@@ -566,7 +612,14 @@ pub(in crate::interpreter) fn validate_eval_member_access(
     let Some(current_class) = context.current_class_scope() else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    if same_eval_class_name(current_class, "ReflectionMethod") {
+    // `ReflectionProperty::getValue()` / `setValue()` likewise reach private and protected
+    // properties: their compiled bodies read and write `$object->{$name}` from the reflection
+    // class's scope. Doctrine hydrates every entity through them; refusing the write left a
+    // refreshed `App\Entity\User` without its private password, so the session token looked
+    // stale and every admin page bounced back to the login form.
+    if same_eval_class_name(current_class, "ReflectionMethod")
+        || same_eval_class_name(current_class, "ReflectionProperty")
+    {
         return Ok(());
     }
     match visibility {

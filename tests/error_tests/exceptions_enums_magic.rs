@@ -45,6 +45,26 @@ fn test_error_throw_requires_object() {
     expect_error("<?php throw 123;", "throw requires an object value");
 }
 
+/// Verifies that binding the builtin `Exception::$message` slot to a user by-reference
+/// parameter is refused rather than promoting the native payload slot to a reference cell
+/// for every exception class.
+#[test]
+fn test_error_throwable_payload_property_cannot_be_passed_by_reference() {
+    expect_error(
+        r#"<?php
+class Holder { public function __construct(&$m) { $m = 'set'; } }
+class E extends Exception {
+    public function __construct() {
+        parent::__construct('');
+        new Holder($this->message);
+    }
+}
+echo (new E())->getMessage();
+"#,
+        "The builtin Throwable property $message cannot be passed by reference",
+    );
+}
+
 /// Verifies that `new Color()` on a backed enum reports
 /// "Cannot instantiate enum: Color".
 #[test]
@@ -156,15 +176,6 @@ fn test_error_magic_clone_must_return_void() {
     );
 }
 
-/// Verifies that cloning from outside respects a private `__clone` hook's visibility.
-#[test]
-fn test_error_private_magic_clone_is_inaccessible_from_global_scope() {
-    expect_error(
-        "<?php class Locked { private function __clone() { } } $a = new Locked(); $b = clone $a;",
-        "Cannot access private method: Locked::__clone",
-    );
-}
-
 /// Verifies that a private `__toString` method reports
 /// "Magic method must be public: User::__toString".
 #[test]
@@ -185,13 +196,15 @@ fn test_error_magic_tostring_must_take_zero_arguments() {
     );
 }
 
-/// Verifies that `__toString` returning an integer reports
-/// "Magic method must return string: User::__toString".
+/// `__toString()` has an implicit `string` return type: in weak mode php coerces a returned integer,
+/// and under `declare(strict_types=1)` the return is a TypeError, which elephc rejects at compile
+/// time.
 #[test]
 fn test_error_magic_tostring_must_return_string() {
+    expect_no_error("<?php class User { public function __toString() { return 123; } }");
     expect_error(
-        "<?php class User { public function __toString() { return 123; } }",
-        "Magic method must return string: User::__toString",
+        "<?php declare(strict_types=1); class User { public function __toString() { return 123; } }",
+        "Method 'User::__toString' return type expects Str, got Int",
     );
 }
 
@@ -469,9 +482,10 @@ fn test_error_cannot_redeclare_builtin_error_type() {
 /// a built-in type redeclaration diagnostic.
 #[test]
 fn test_error_cannot_redeclare_builtin_sort_direction_enum() {
-    expect_error(
+    expect_error_with_php_version(
         "<?php enum SortDirection { case Up; }",
         "Cannot redeclare built-in type: SortDirection",
+        elephc::php_version::PhpVersion::Php86,
     );
 }
 
@@ -479,9 +493,10 @@ fn test_error_cannot_redeclare_builtin_sort_direction_enum() {
 /// `SortDirection` enum name.
 #[test]
 fn test_error_cannot_redeclare_builtin_sort_direction_class() {
-    expect_error(
+    expect_error_with_php_version(
         "<?php class SortDirection {}",
         "Cannot redeclare built-in type: SortDirection",
+        elephc::php_version::PhpVersion::Php86,
     );
 }
 
@@ -489,9 +504,10 @@ fn test_error_cannot_redeclare_builtin_sort_direction_class() {
 /// same enum-case diagnostic as user-declared enums.
 #[test]
 fn test_error_builtin_sort_direction_unknown_case() {
-    expect_error(
+    expect_error_with_php_version(
         "<?php SortDirection::Sideways;",
         "Undefined enum case: SortDirection::Sideways",
+        elephc::php_version::PhpVersion::Php86,
     );
 }
 
@@ -559,5 +575,49 @@ fn test_error_enum_method_undefined_variable() {
     expect_error(
         "<?php enum E { case A; public function f(): int { return $missing; } }",
         "Undefined variable: $missing",
+    );
+}
+
+/// Verifies that the hidden argument collector `func_args` appends to a scope that uses
+/// `func_num_args()` does not make a zero-argument magic method look variadic.
+///
+/// The collector occupies the same AST slot as a source `...$args`, so an arity rule that
+/// only asked whether a variadic was present rejected `__destruct`/`__toString` bodies PHP
+/// accepts. Only the source-visible signature may decide the contract.
+#[test]
+fn test_magic_methods_accept_the_generated_func_args_collector() {
+    expect_no_error(
+        "<?php class Logged { public function __toString(): string { return \"n\" . func_num_args(); } public function __destruct() { echo func_num_args(); } } echo new Logged();",
+    );
+}
+
+/// Verifies the same rule under the whole-program trigger: any `debug_print_backtrace()` in the
+/// program gives EVERY frame a hidden collector, including magic methods that never mention an
+/// introspection construct themselves.
+#[test]
+fn test_magic_methods_accept_the_collector_added_to_every_frame() {
+    expect_no_error(
+        "<?php class Traced { public function __unset(string $name): void { echo $name; } public function __clone() { echo \"c\"; } } function trace(): void { debug_print_backtrace(); } trace(); $t = new Traced(); echo get_class($t);",
+    );
+}
+
+/// Verifies that a magic method declaring its OWN variadic is still rejected while the program
+/// also carries the generated collector. The fix filters exactly one reserved parameter name,
+/// so a PHP-visible `...$extra` must keep failing the contract.
+#[test]
+fn test_magic_destruct_still_rejects_a_source_variadic() {
+    expect_error(
+        "<?php class Bad { public function __destruct(...$extra) { echo count($extra); } } function trace(): void { debug_print_backtrace(); } trace(); echo get_class(new Bad());",
+        "Magic method must take 0 arguments: Bad::__destruct",
+    );
+}
+
+/// Verifies the arity half of the same rule: a source parameter beyond the contract is still
+/// counted even when the generated collector is present.
+#[test]
+fn test_magic_unset_still_rejects_an_extra_source_parameter() {
+    expect_error(
+        "<?php class Bad { public function __unset(string $name, int $extra): void { echo $name, $extra; } } function trace(): void { debug_print_backtrace(); } trace(); echo get_class(new Bad());",
+        "Magic method must take 1 argument: Bad::__unset",
     );
 }

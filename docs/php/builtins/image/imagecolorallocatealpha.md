@@ -1,8 +1,8 @@
 ---
 title: "imagecolorallocatealpha()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Allocates a color with alpha in a palette image."
 sidebar:
-  order: 479
+  order: 480
 ---
 
 ## imagecolorallocatealpha()
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorallocatealpha(mixed $image, int $red, int $green, int $blue, int $alpha): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Allocates a color with alpha in a palette image.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -27,7 +27,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -105,6 +105,12 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["bcmath"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_mbstring",
+        package: "elephc-mbstring",
+        apple_libraries: &[],
+        php_extensions: &["mbstring"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_iconv",
         package: "elephc-iconv",
         apple_libraries: &[],
@@ -117,10 +123,22 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["pcntl", "posix"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_proc",
+        package: "elephc-proc",
+        apple_libraries: &[],
+        php_extensions: &[],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_phar",
         package: "elephc-phar",
         apple_libraries: &[],
         php_extensions: &["Phar"],
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_highlight",
+        package: "elephc-highlight",
+        apple_libraries: &[],
+        php_extensions: &[],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_tz",
@@ -246,7 +264,9 @@ pub(crate) fn get_runtime_obj() -> &'static Path {
 pub(crate) fn runtime_obj_for_asm(runtime_asm: &str) -> std::path::PathBuf {
     let hash = runtime_asm_hash(runtime_asm);
     let cache = RUNTIME_OBJS_BY_ASM.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
-    let mut cache = cache.lock().expect("runtime asm cache poisoned");
+    // A test that panics while assembling one runtime variant must not take every later test
+    // down with it: the map only ever holds finished objects, so it is safe to keep using.
+    let mut cache = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(path) = cache.get(&hash) {
         return path.clone();
     }
@@ -601,21 +621,10 @@ fn magician_curl_aware_plan(
     elephc::link_plan::LinkPlan::from_items(items)
 }
 
-/// Reports whether a bridge staticlib is missing or older than any workspace crate source.
-///
-/// THE COMPARISON IS AGAINST EVERY CRATE, not just the bridge's own package, because a bridge
-/// archive embeds its dependencies. `elephc-magician` links `elephc-builtin-contract`, and an
-/// edit to the shared contract leaves the magician's own `src` untouched: the archive then looks
-/// current while its compiled-in copy of the catalog is a release behind. That is not a
-/// theoretical staleness — it silently aborted the interpreter at startup in every eval fixture
-/// of a full suite run, which reads as 441 tests failing with an empty stderr.
-///
-/// Walking `crates/` is over-conservative (a `elephc-tls` edit rebuilds the magician too) and
-/// that is the right trade: the rebuild is an incremental cargo no-op in the common case, while
-/// a missed rebuild costs a whole suite run and points the blame at the wrong change.
-/// Archived CI runs can still declare existing build-job artifacts authoritative through
-/// `ELEPHC_TEST_PREBUILT_BRIDGES`.
-fn bridge_staticlib_needs_build(archive_path: &Path, _package: &str) -> bool {
+/// Reports whether a bridge staticlib is missing or older than its local build inputs.
+/// Shares dependency-aware freshness with the CLI. Archived CI runs can declare
+/// existing build-job artifacts authoritative through `ELEPHC_TEST_PREBUILT_BRIDGES`.
+fn bridge_staticlib_needs_build(archive_path: &Path, package: &str) -> bool {
     let archive_mtime = match archive_path.metadata().and_then(|meta| meta.modified()) {
         Ok(mtime) => mtime,
         Err(_) => return true,
@@ -623,20 +632,11 @@ fn bridge_staticlib_needs_build(archive_path: &Path, _package: &str) -> bool {
     if prebuilt_bridge_staticlibs_are_trusted() {
         return false;
     }
-    let crates_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("crates");
-    let Ok(entries) = std::fs::read_dir(&crates_dir) else {
-        return true;
-    };
-    entries.filter_map(Result::ok).any(|entry| {
-        let package_dir = entry.path();
-        source_path_newer_than(&package_dir.join("Cargo.toml"), archive_mtime)
-            || source_path_newer_than(&package_dir.join("build.rs"), archive_mtime)
-            || source_tree_newer_than(&package_dir.join("src"), archive_mtime)
-    })
+    elephc::bridge_sources::local_inputs_newer_than(Path::new(env!("CARGO_MANIFEST_DIR")), package, archive_mtime)
 }
 
 /// Returns whether this test process should trust existing bridge archives without mtime checks.
-fn prebuilt_bridge_staticlibs_are_trusted() -> bool {
+pub(crate) fn prebuilt_bridge_staticlibs_are_trusted() -> bool {
     std::env::var("ELEPHC_TEST_PREBUILT_BRIDGES").is_ok_and(|value| {
         value == "1" || value.eq_ignore_ascii_case("true")
     })
@@ -997,44 +997,6 @@ mod bridge_staticlib_dir_tests {
     }
 }
 
-/// Reports whether an existing source path was modified after `archive_mtime`.
-/// Missing optional files such as `build.rs` do not force a rebuild.
-fn source_path_newer_than(path: &Path, archive_mtime: std::time::SystemTime) -> bool {
-    match path.metadata().and_then(|meta| meta.modified()) {
-        Ok(source_mtime) => source_mtime > archive_mtime,
-        Err(_) => false,
-    }
-}
-
-/// Recursively scans a bridge package source directory for files newer than the
-/// compiled staticlib. Directory-read failures are treated as stale so tests do
-/// not silently link an archive whose source state could not be inspected.
-fn source_tree_newer_than(dir: &Path, archive_mtime: std::time::SystemTime) -> bool {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return true,
-    };
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => return true,
-        };
-        let path = entry.path();
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(_) => return true,
-        };
-        if file_type.is_dir() {
-            if source_tree_newer_than(&path, archive_mtime) {
-                return true;
-            }
-        } else if file_type.is_file() && source_path_newer_than(&path, archive_mtime) {
-            return true;
-        }
-    }
-    false
-}
-
 /// Links a user object file and a runtime object into a final native binary.
 /// On macOS uses `ld` with SDK/platform_version flags; on Linux uses `gcc` with
 /// static linking when no extra libs are needed. Linux links each selected PDO
@@ -1241,6 +1203,11 @@ fn test_link_plan(
                     if named.insert(library.to_string()) {
                         plan.push(LinkItem::named_runtime(library));
                     }
+                }
+            }
+            elephc::codegen::LinkRequirement::NativePackage("oniguruma") => {
+                for archive in test_oniguruma_archives() {
+                    plan.push(LinkItem::managed_archive(archive, "oniguruma"));
                 }
             }
             elephc::codegen::LinkRequirement::NativePackage("libxml2") => {
@@ -1467,7 +1434,24 @@ pub(crate) fn run_binary_with_env(
     dir: &Path,
     env: &[(&str, &std::ffi::OsStr)],
 ) -> Output {
-    if target().platform == Platform::Linux
+    run_binary_with_env_and_args(bin_path, dir, env, &[])
+}
+
+/// Runs a compiled binary with extra command-line arguments after the program name, so the
+/// program starts with `$argc == 1 + args.len()`.
+pub(crate) fn run_binary_with_args(bin_path: &Path, dir: &Path, args: &[&str]) -> Output {
+    run_binary_with_env_and_args(bin_path, dir, &[], args)
+}
+
+/// Runs a compiled binary with environment overrides and extra command-line arguments, using
+/// qemu for cross-architecture Linux AArch64 fixtures when required.
+fn run_binary_with_env_and_args(
+    bin_path: &Path,
+    dir: &Path,
+    env: &[(&str, &std::ffi::OsStr)],
+    args: &[&str],
+) -> Output {
+    let mut output = if target().platform == Platform::Linux
         && target().arch == Arch::AArch64
         && cfg!(target_arch = "x86_64")
     {
@@ -1475,13 +1459,85 @@ pub(crate) fn run_binary_with_env(
         if let Some(sysroot) = qemu_sysroot() {
             cmd.args(["-L", sysroot]);
         }
-        cmd.arg(bin_path).current_dir(dir).envs(env.iter().copied());
+        cmd.arg(bin_path).args(args).current_dir(dir).envs(env.iter().copied());
         run_command_with_timeout(cmd)
     } else {
         let mut cmd = Command::new(bin_path);
-        cmd.current_dir(dir).envs(env.iter().copied());
+        cmd.args(args).current_dir(dir).envs(env.iter().copied());
         run_command_with_timeout(cmd)
+    };
+    append_macos_signal_diagnostics(&mut output, bin_path, dir, env, args);
+    output
+}
+
+/// Replays a signalled native macOS fixture under LLDB and appends its crash context.
+#[cfg(target_os = "macos")]
+fn append_macos_signal_diagnostics(
+    output: &mut Output,
+    bin_path: &Path,
+    dir: &Path,
+    env: &[(&str, &std::ffi::OsStr)],
+    args: &[&str],
+) {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    if target().platform != Platform::MacOS || output.status.signal().is_none() {
+        return;
     }
+
+    let mut cmd = Command::new("lldb");
+    cmd.args([
+        "--batch",
+        "-o",
+        "run",
+        "-k",
+        "thread backtrace all",
+        "-k",
+        "register read",
+        "-k",
+        "disassemble --frame",
+        "-k",
+        "image lookup -n gc_application_started",
+        "-k",
+        "image lookup -n gc_collector_started",
+        "-k",
+        "image lookup -n gc_free_started",
+        "-k",
+        "image lookup -n gc_collector_time",
+        "-k",
+        "image lookup -n heap_buf",
+        "-k",
+        "image lookup -n heap_off",
+        "-k",
+        "memory read --format x --size 8 --count 16 '&gc_application_started'",
+        "-k",
+        "disassemble --name _rt_gc_request_start",
+        "-k",
+        "disassemble --name _rt_gc_collector_begin",
+        "--",
+    ])
+    .arg(bin_path)
+    .args(args)
+    .current_dir(dir)
+    .envs(env.iter().copied());
+    let diagnostic = run_command_with_timeout(cmd);
+
+    output
+        .stderr
+        .extend_from_slice(b"\nLLDB replay after signal:\n");
+    output.stderr.extend_from_slice(&diagnostic.stdout);
+    output.stderr.extend_from_slice(&diagnostic.stderr);
+}
+
+/// Leaves non-macOS fixture output unchanged because LLDB replay is unavailable.
+#[cfg(not(target_os = "macos"))]
+fn append_macos_signal_diagnostics(
+    _output: &mut Output,
+    _bin_path: &Path,
+    _dir: &Path,
+    _env: &[(&str, &std::ffi::OsStr)],
+    _args: &[&str],
+) {
 }
 
 /// Runs a child command with a timeout and captures stdout/stderr.
@@ -1662,6 +1718,47 @@ pub(crate) fn assemble_and_run_capture(
         stderr: String::from_utf8(output.stderr).unwrap(),
         success: output.status.success(),
     }
+}
+
+/// Assembles and links a fixture ONCE, then runs the binary once per argument vector and
+/// captures every run, without asserting success.
+///
+/// Every other runner starts the program with no arguments, so `$argc` is always 1 and a fixture
+/// whose control flow branches on `$argc` executes only one of its arms. Running the same binary
+/// again with extra arguments executes the others.
+pub(crate) fn assemble_and_run_capture_per_argv(
+    user_asm: &str,
+    runtime_obj: &Path,
+    dir: &Path,
+    requirements: &TestLinkRequirements,
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+    argvs: &[&[&str]],
+) -> Vec<ProgramOutput> {
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
+
+    assemble_from_stdin(user_asm, &obj_path);
+    link_binary(
+        &obj_path,
+        runtime_obj,
+        &bin_path,
+        requirements,
+        extra_link_paths,
+        extra_frameworks,
+    );
+
+    argvs
+        .iter()
+        .map(|args| {
+            let output = run_binary_with_args(&bin_path, dir, args);
+            ProgramOutput {
+                stdout: String::from_utf8(output.stdout).unwrap(),
+                stderr: String::from_utf8(output.stderr).unwrap(),
+                success: output.status.success(),
+            }
+        })
+        .collect()
 }
 
 /// Assembles user assembly, links it with a runtime object, runs the binary,

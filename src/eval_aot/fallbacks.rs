@@ -254,6 +254,7 @@ pub(super) fn expr_fallback_reason(expr: &Expr) -> Option<EvalAotFallbackReason>
         ExprKind::ArrayLiteral(_)
         | ExprKind::ArrayLiteralAssoc(_)
         | ExprKind::ArrayReference(_)
+        | ExprKind::ArrayLiteralMixed(_)
         | ExprKind::Spread(_) => {
             Some(EvalAotFallbackReason::ArrayOrIterable)
         }

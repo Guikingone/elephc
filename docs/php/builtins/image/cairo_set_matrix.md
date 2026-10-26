@@ -1,8 +1,8 @@
 ---
 title: "cairo_set_matrix()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Replaces the context's transformation with the given matrix."
 sidebar:
-  order: 452
+  order: 453
 ---
 
 ## cairo_set_matrix()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_set_matrix(mixed $context, mixed $matrix): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Replaces the context's transformation with the given matrix.
 
 **Parameters**:
 - `$context` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

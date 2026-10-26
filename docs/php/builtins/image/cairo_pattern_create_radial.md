@@ -1,8 +1,8 @@
 ---
 title: "cairo_pattern_create_radial()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates a radial gradient pattern between two circles."
 sidebar:
-  order: 440
+  order: 441
 ---
 
 ## cairo_pattern_create_radial()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_pattern_create_radial(float $cx0, float $cy0, float $radius0, float $cx1, float $cy1, float $radius1): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates a radial gradient pattern between two circles.
 
 **Parameters**:
 - `$cx0` (`float`)
@@ -28,7 +28,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

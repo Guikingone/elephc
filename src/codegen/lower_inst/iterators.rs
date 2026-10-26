@@ -6,7 +6,13 @@
 //! - `crate::codegen::lower_inst::lower_instruction()`.
 //!
 //! Key details:
-//! - `IterStart` values reserve a fixed stack state for source, cursor, and current hash payload.
+//! - `IterStart` names an addressable stack state for source, cursor, and current hash payload.
+//! - A successful `IteratorAggregate::getIterator()` result is transferred into the
+//!   optional Mixed owner slot before the raw iterator pointer is published. The
+//!   source word then borrows that payload; the aggregate word is overwritten
+//!   without being released. `IterEnd` releases owned successor-key anchors. The optional owner
+//!   in the `IterStart` immediate is the lowering decision for whether the aggregate probe is
+//!   reachable; backend value types may have widened after that decision.
 //! - Current values are boxed into `Mixed` unless EIR preserves a concrete indexed-array element type.
 //! - A source that is not iterable does NOT abort. Every dispatch that misses the
 //!   indexed/hash/object cases — the static `NonIterable` kind, the `__rt_mixed_unbox` tag
@@ -19,17 +25,23 @@
 //!   `IteratorIterator` sites, where the shape really is unsupported.
 
 use crate::codegen::platform::Arch;
-use crate::codegen::{abi, emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed};
+use crate::codegen::{
+    abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+    emit_box_runtime_payload_as_mixed,
+};
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
-use crate::names::{method_symbol, php_symbol_key};
+use crate::names::php_symbol_key;
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
 use super::arrays::{
     emit_box_loaded_invoker_ref_cell_value_as_mixed, emit_branch_if_invoker_ref_cell_tag,
 };
-use super::{direct_call_stack_pad_bytes, expect_local_slot, expect_operand, store_if_result};
+use super::{
+    direct_call_stack_pad_bytes, emit_direct_resolved_method_call, expect_local_slot,
+    expect_operand, resolve_method_call_target, store_if_result,
+};
 use crate::codegen::{CodegenIrError, Result};
 
 const ITER_SOURCE_OFFSET_DELTA: usize = 0;
@@ -41,6 +53,27 @@ const ITER_VALUE_HI_OFFSET_DELTA: usize = 40;
 const ITER_VALUE_TAG_OFFSET_DELTA: usize = 48;
 const ITER_VALUE_ADDR_OFFSET_DELTA: usize = 56;
 const ITER_SNAPSHOT_LEN_OFFSET_DELTA: usize = 64;
+/// Table pointer the current associative cursor was computed against.
+///
+/// `IterNext` compares the live container published by the loop body against this word. A
+/// mismatch means growth or a copy-on-write split replaced the table, so the source word is
+/// republished before key-identity validation rebuilds the cursor from the successor anchors.
+const ITER_TABLE_SNAPSHOT_OFFSET_DELTA: usize = 72;
+/// Owned keys of the next two entries the cursor can yield, used after table relocation.
+///
+/// String keys carry one retain per occupied anchor word pair. The primary anchor is the immediate
+/// successor. The fallback anchor is its successor, so deleting the immediate successor before a
+/// grow still resumes at the first surviving entry. Integer anchors carry no heap ownership.
+const ITER_NEXT_KEY_LO_OFFSET_DELTA: usize = 80;
+const ITER_NEXT_KEY_HI_OFFSET_DELTA: usize = 88;
+const ITER_FALLBACK_KEY_LO_OFFSET_DELTA: usize = 96;
+const ITER_FALLBACK_KEY_HI_OFFSET_DELTA: usize = 104;
+/// Key high word meaning "no successor entry to resume from".
+///
+/// A live key uses -1 for an integer key and a non-negative length for a string key, so this can
+/// never collide with one. Must match `NO_SUCCESSOR_KEY_MARKER` in the runtime emitter.
+const NO_SUCCESSOR_KEY_MARKER: i64 = -2;
+const MIXED_CELL_PAYLOAD_LOW_OFFSET: usize = 8;
 
 /// The runtime value tag `__rt_warn_foreach_non_iterable` reads as "null".
 ///
@@ -83,10 +116,13 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let source = expect_operand(inst, 0)?;
     let source_kind = iterator_source_kind_from_type(ctx, &ctx.value_php_type(source)?, inst)?;
     let by_ref = iter_start_is_by_ref(inst);
-    let result = inst.result.ok_or_else(|| {
-        CodegenIrError::invalid_module("iter_start missing result value".to_string())
-    })?;
-    let offset = ctx.value_frame_offset(result)?;
+    let owner = iter_start_owner_slot(inst);
+    if inst.result.is_none() {
+        return Err(CodegenIrError::invalid_module(
+            "iter_start missing result value".to_string(),
+        ));
+    }
+    let offset = ctx.local_offset(iter_start_state_slot(inst)?)?;
     // -- statically non-iterable sources warn and skip before any value is loaded --
     // A `float` source lives in `d0`, not the integer result register, so this must run
     // BEFORE the unconditional `load_value_to_reg` below.
@@ -96,7 +132,10 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let result_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(source, result_reg)?;
     if matches!(source_kind, IteratorSourceKind::DynamicMixed) {
-        initialize_dynamic_mixed_iterator(ctx, offset, by_ref)?;
+        initialize_dynamic_mixed_iterator(ctx, offset, by_ref, owner)?;
+        if iter_start_origin(ctx, inst).is_some() {
+            emit_snapshot_origin_container(ctx, offset);
+        }
         return Ok(());
     }
     if by_ref {
@@ -119,7 +158,10 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
     if matches!(source_kind, IteratorSourceKind::DynamicIterable) {
-        initialize_dynamic_iterable_iterator(ctx, offset, by_ref, source)?;
+        initialize_dynamic_iterable_iterator(ctx, offset, by_ref, source, owner)?;
+        if iter_start_origin(ctx, inst).is_some() {
+            emit_snapshot_origin_container(ctx, offset);
+        }
         return Ok(());
     }
     // -- the loop's reference on an object source is taken by EIR lowering, not here --
@@ -129,6 +171,7 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     // heap block it owned. `lower_foreach` now wraps a borrowed object source in an
     // `Op::Acquire`, which the loop's existing exit/`LoopCleanup` release paths balance.
     let initial_cursor = match &source_kind {
+        IteratorSourceKind::Indexed { .. } if by_ref => 0,
         IteratorSourceKind::Indexed { .. } => -1,
         IteratorSourceKind::Hash => 0,
         IteratorSourceKind::DynamicIterable => 0,
@@ -147,13 +190,27 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
             aggregate_class_name: Some(aggregate_class_name),
             ..
         } => {
-            emit_object_iterator_method_call(ctx, offset, aggregate_class_name, "getIterator")?;
-            abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+            let return_ty =
+                emit_object_iterator_method_call(ctx, offset, aggregate_class_name, "getIterator")?;
+            adopt_get_iterator_result(ctx, offset, owner, &return_ty)?;
+        }
+        IteratorSourceKind::Interface { interface_name, .. }
+            if interface_needs_get_iterator(ctx, interface_name) =>
+        {
+            let return_ty = emit_interface_iterator_method_call(
+                ctx,
+                offset,
+                interface_name,
+                "getIterator",
+            )?;
+            adopt_get_iterator_result(ctx, offset, owner, &return_ty)?;
         }
         _ => {}
     }
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, initial_cursor);
-    abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
+    store_iterator_cursor(ctx, offset, initial_cursor);
+    if iter_start_origin(ctx, inst).is_some() {
+        emit_snapshot_origin_container(ctx, offset);
+    }
     if !by_ref && matches!(source_kind, IteratorSourceKind::Indexed { .. }) {
         snapshot_indexed_array_length(ctx, offset);
     }
@@ -162,7 +219,12 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
             emit_object_iterator_method_call(ctx, offset, &class_name, "rewind")?;
         }
         IteratorSourceKind::Interface { interface_name, .. } => {
-            emit_interface_iterator_method_call(ctx, offset, &interface_name, "rewind")?;
+            let rewind_interface = if interface_needs_get_iterator(ctx, &interface_name) {
+                "Iterator"
+            } else {
+                interface_name.as_str()
+            };
+            emit_interface_iterator_method_call(ctx, offset, rewind_interface, "rewind")?;
         }
         _ => {}
     }
@@ -172,19 +234,38 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
 /// Lowers iterator advancement into a boolean result without moving past end.
 pub(super) fn lower_iter_next(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let iterator = expect_operand(inst, 0)?;
-    let offset = ctx.value_frame_offset(iterator)?;
+    let offset = iterator_state_offset(ctx, iterator, inst)?;
     let by_ref = iterator_is_by_ref(ctx, iterator, inst)?;
+    // -- republished containers are picked up BEFORE any dispatch reads the source word --
+    // `branch_on_dynamic_source_heap_kind` probes the heap header of the source pointer, so a
+    // table freed by growth or replaced by a copy-on-write split has to be swapped out here
+    // rather than inside the hash arm, or the dispatch itself reads released storage.
+    let origin = iter_origin(ctx, iterator, inst)?;
+    let has_origin = origin.is_some();
+    if let Some(origin) = origin {
+        emit_reload_live_iter_source(ctx, offset, origin);
+    }
+    if has_origin {
+        // A deletion followed by insertion can reuse the saved cursor's physical tombstone slot
+        // without changing the table pointer. Rebuild from key identity before consuming anchors.
+        emit_validate_hash_cursor_anchor(ctx, offset);
+        emit_release_successor_keys(ctx, offset);
+    }
     match iterator_source_kind(ctx, iterator, inst)? {
+        IteratorSourceKind::Indexed { .. } if by_ref => match ctx.emitter.target.arch {
+            Arch::AArch64 => lower_hash_iter_next_aarch64(ctx, offset, has_origin),
+            Arch::X86_64 => lower_hash_iter_next_x86_64(ctx, offset, has_origin),
+        },
         IteratorSourceKind::Indexed { .. } => match ctx.emitter.target.arch {
-            Arch::AArch64 => lower_indexed_iter_next_aarch64(ctx, offset, by_ref),
-            Arch::X86_64 => lower_indexed_iter_next_x86_64(ctx, offset, by_ref),
+            Arch::AArch64 => lower_indexed_iter_next_aarch64(ctx, offset, false),
+            Arch::X86_64 => lower_indexed_iter_next_x86_64(ctx, offset, false),
         },
         IteratorSourceKind::Hash => match ctx.emitter.target.arch {
-            Arch::AArch64 => lower_hash_iter_next_aarch64(ctx, offset),
-            Arch::X86_64 => lower_hash_iter_next_x86_64(ctx, offset),
+            Arch::AArch64 => lower_hash_iter_next_aarch64(ctx, offset, has_origin),
+            Arch::X86_64 => lower_hash_iter_next_x86_64(ctx, offset, has_origin),
         },
         IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
-            lower_dynamic_iter_next(ctx, offset, by_ref)?;
+            lower_dynamic_iter_next(ctx, offset, by_ref, has_origin)?;
         }
         // A non-iterable source has no elements: report "loop finished" on the first probe
         // so the body never runs and the statement after the loop still executes.
@@ -207,8 +288,14 @@ pub(super) fn lower_iter_current_key(
     inst: &Instruction,
 ) -> Result<()> {
     let iterator = expect_operand(inst, 0)?;
-    let offset = ctx.value_frame_offset(iterator)?;
+    let offset = iterator_state_offset(ctx, iterator, inst)?;
     match iterator_source_kind(ctx, iterator, inst)? {
+        IteratorSourceKind::Indexed { .. } if iterator_is_by_ref(ctx, iterator, inst)? => {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => load_current_hash_key_as_mixed_aarch64(ctx, offset),
+                Arch::X86_64 => load_current_hash_key_as_mixed_x86_64(ctx, offset),
+            }
+        }
         IteratorSourceKind::Indexed { .. } => {
             let result_reg = abi::int_result_reg(ctx.emitter);
             abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
@@ -245,8 +332,10 @@ pub(super) fn lower_iter_current_value(
     inst: &Instruction,
 ) -> Result<()> {
     let iterator = expect_operand(inst, 0)?;
-    let offset = ctx.value_frame_offset(iterator)?;
+    let offset = iterator_state_offset(ctx, iterator, inst)?;
     let result_ty = iter_current_result_type(ctx, inst)?;
+    let preserve_reference = inst.immediate == Some(Immediate::Bool(true));
+    let promote_reference = inst.immediate == Some(Immediate::I64(1));
     match iterator_source_kind(ctx, iterator, inst)? {
         IteratorSourceKind::Indexed { elem } => {
             match ctx.emitter.target.arch {
@@ -261,12 +350,9 @@ pub(super) fn lower_iter_current_value(
                 box_current_indexed_value_if_needed(ctx, &elem, &result_ty)?;
             }
         }
-        IteratorSourceKind::Hash => match ctx.emitter.target.arch {
-            Arch::AArch64 => load_current_hash_value_as_mixed_aarch64(ctx, offset),
-            Arch::X86_64 => load_current_hash_value_as_mixed_x86_64(ctx, offset),
-        },
+        IteratorSourceKind::Hash => load_current_hash_call_value_as_mixed(ctx, offset, preserve_reference, promote_reference),
         IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
-            lower_dynamic_iter_current_value(ctx, inst, offset)?;
+            lower_dynamic_iter_current_value(ctx, inst, offset, preserve_reference, promote_reference)?;
         }
         // Dead code in practice — `IterNext` already reported "no more elements" — but the
         // block is still emitted, so materialize a null Mixed rather than reading the
@@ -351,11 +437,9 @@ pub(super) fn lower_iter_current_value_ref(
 ) -> Result<()> {
     let iterator = expect_operand(inst, 0)?;
     let slot = expect_local_slot(inst)?;
-    let offset = ctx.value_frame_offset(iterator)?;
+    let offset = iterator_state_offset(ctx, iterator, inst)?;
     match iterator_source_kind(ctx, iterator, inst)? {
-        IteratorSourceKind::Indexed { elem } => {
-            bind_indexed_current_value_ref(ctx, offset, slot, &elem)?;
-        }
+        IteratorSourceKind::Indexed { .. } => bind_hash_current_value_ref(ctx, offset, slot)?,
         IteratorSourceKind::Hash => {
             bind_hash_current_value_ref(ctx, offset, slot)?;
         }
@@ -365,6 +449,7 @@ pub(super) fn lower_iter_current_value_ref(
         // Dead code in practice — `IterNext` already reported "no more elements" — but bind
         // the slot to a null cell so nothing downstream dereferences stack garbage.
         IteratorSourceKind::NonIterable { .. } => {
+            ctx.release_counted_ref_binding(slot);
             let local_offset = ctx.local_offset(slot)?;
             let result_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
@@ -376,7 +461,7 @@ pub(super) fn lower_iter_current_value_ref(
             ))
         }
     }
-    ctx.mark_promoted_ref_cell(slot);
+    ctx.record_promoted_ref_cell(slot);
     Ok(())
 }
 
@@ -386,6 +471,7 @@ fn initialize_dynamic_iterable_iterator(
     offset: usize,
     by_ref: bool,
     source: ValueId,
+    owner: Option<LocalSlotId>,
 ) -> Result<()> {
     let indexed_case = ctx.next_label("iter_start_dyn_indexed");
     let hash_case = ctx.next_label("iter_start_dyn_hash");
@@ -405,7 +491,7 @@ fn initialize_dynamic_iterable_iterator(
         convert_dynamic_indexed_source_for_ref(ctx, offset)?;
         store_iter_source_to_origin_if_local(ctx, offset, source)?;
     }
-    store_iterator_cursor(ctx, offset, -1);
+    store_iterator_cursor(ctx, offset, if by_ref { 0 } else { -1 });
     if !by_ref {
         snapshot_indexed_array_length(ctx, offset);
     }
@@ -421,7 +507,7 @@ fn initialize_dynamic_iterable_iterator(
 
     ctx.emitter.label(&object_case);
     store_iterator_cursor(ctx, offset, 0);
-    resolve_dynamic_object_iterator_source(ctx, offset)?;
+    resolve_dynamic_object_iterator_source(ctx, offset, owner)?;
     emit_interface_iterator_method_call(ctx, offset, "Iterator", "rewind")?;
     ctx.emitter.label(&done);
     Ok(())
@@ -432,6 +518,7 @@ fn initialize_dynamic_mixed_iterator(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
     by_ref: bool,
+    owner: Option<LocalSlotId>,
 ) -> Result<()> {
     let indexed_case = ctx.next_label("iter_start_mixed_indexed");
     let hash_case = ctx.next_label("iter_start_mixed_hash");
@@ -456,7 +543,7 @@ fn initialize_dynamic_mixed_iterator(
     } else {
         store_mixed_payload_low_as_iterator_source(ctx, offset);
     }
-    store_iterator_cursor(ctx, offset, -1);
+    store_iterator_cursor(ctx, offset, if by_ref { 0 } else { -1 });
     if !by_ref {
         snapshot_indexed_array_length(ctx, offset);
     }
@@ -474,7 +561,7 @@ fn initialize_dynamic_mixed_iterator(
     ctx.emitter.label(&object_case);
     store_mixed_payload_low_as_iterator_source(ctx, offset);
     store_iterator_cursor(ctx, offset, 0);
-    resolve_dynamic_object_iterator_source(ctx, offset)?;
+    resolve_dynamic_object_iterator_source(ctx, offset, owner)?;
     emit_interface_iterator_method_call(ctx, offset, "Iterator", "rewind")?;
     ctx.emitter.label(&done);
     if by_ref {
@@ -546,14 +633,363 @@ fn emit_empty_iterator_state(ctx: &mut FunctionContext<'_>, offset: usize) {
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
+    abi::store_at_offset(
+        ctx.emitter,
+        result_reg,
+        offset - ITER_TABLE_SNAPSHOT_OFFSET_DELTA,
+    );
+    emit_clear_successor_keys(ctx, offset);
 }
 
 /// Returns true when an `iter_start` instruction is preparing a by-reference foreach.
 fn iter_start_is_by_ref(inst: &Instruction) -> bool {
-    matches!(inst.immediate, Some(Immediate::Bool(true)))
+    match inst.immediate.as_ref() {
+        Some(Immediate::IterStart(metadata)) => metadata.is_by_ref(),
+        _ => false,
+    }
 }
 
-/// Splits statically typed array/hash sources before by-reference iteration.
+/// Returns the optional Mixed owner slot named by an `iter_start` immediate.
+fn iter_start_owner_slot(inst: &Instruction) -> Option<LocalSlotId> {
+    match inst.immediate.as_ref() {
+        Some(Immediate::IterStart(metadata)) => metadata.owner(),
+        _ => None,
+    }
+}
+
+/// Returns the optional origin local slot named by an `iter_start` immediate.
+fn iter_start_origin_slot(inst: &Instruction) -> Option<LocalSlotId> {
+    match inst.immediate.as_ref() {
+        Some(Immediate::IterStart(metadata)) => metadata.origin(),
+        _ => None,
+    }
+}
+
+/// Returns the addressable iterator-state slot named by an `iter_start` immediate.
+fn iter_start_state_slot(inst: &Instruction) -> Result<LocalSlotId> {
+    match inst.immediate.as_ref() {
+        Some(Immediate::IterStart(metadata)) => Ok(metadata.state()),
+        _ => Err(CodegenIrError::invalid_module(
+            "iter_start missing iterator-state metadata".to_string(),
+        )),
+    }
+}
+
+/// Returns the frame offset of the addressable state behind an iterator SSA handle.
+fn iterator_state_offset(
+    ctx: &FunctionContext<'_>,
+    iterator: ValueId,
+    inst: &Instruction,
+) -> Result<usize> {
+    let iter_start = iterator_start_instruction(ctx, iterator, inst)?;
+    ctx.local_offset(iter_start_state_slot(iter_start)?)
+}
+
+/// Where a by-reference foreach can re-read its source container after the loop body moved it.
+///
+/// `value_offset` is the origin local's own frame slot. `storage` records the CFG-aware backend
+/// representation at the current instruction, including the runtime flag only when the slot is
+/// genuinely path-dependent. This lets an aliased source (`function f(array &$a) { foreach
+/// ($a as &$v) ... }`) be reloaded instead of being mistaken for a raw pointer because function
+/// entry flags start at zero.
+#[derive(Clone, Copy)]
+struct IterOrigin {
+    value_offset: usize,
+    storage: IterOriginStorage,
+}
+
+/// Authoritative representation of the origin slot at the current EIR instruction.
+#[derive(Clone, Copy)]
+enum IterOriginStorage {
+    Raw,
+    RefCell,
+    Dynamic { state_offset: usize },
+}
+
+/// Resolves the origin an `iter_start` instruction names, for use during initialization.
+fn iter_start_origin(ctx: &FunctionContext<'_>, inst: &Instruction) -> Option<IterOrigin> {
+    let slot = iter_start_origin_slot(inst)?;
+    let value_offset = ctx.local_offset(slot).ok()?;
+    Some(IterOrigin {
+        value_offset,
+        storage: iter_origin_storage(ctx, slot)?,
+    })
+}
+
+/// Returns where to re-read the local that republishes a relocated by-reference source.
+///
+/// `lower_array_push` and the copy-on-write helpers write the replacement container back into the
+/// origin local, never into the iterator's private source word. Reloading it every `IterNext`
+/// is what keeps growth inside a by-reference foreach from walking freed storage.
+fn iter_origin(
+    ctx: &FunctionContext<'_>,
+    iterator: ValueId,
+    inst: &Instruction,
+) -> Result<Option<IterOrigin>> {
+    let iter_start = iterator_start_instruction(ctx, iterator, inst)?;
+    let Some(slot) = iter_start_origin_slot(iter_start) else {
+        return Ok(None);
+    };
+    let Ok(value_offset) = ctx.local_offset(slot) else {
+        return Ok(None);
+    };
+    Ok(Some(IterOrigin {
+        value_offset,
+        storage: iter_origin_storage(ctx, slot).ok_or_else(|| {
+            CodegenIrError::invalid_module(format!(
+                "dynamic iterator origin slot {} has no representation flag",
+                slot.as_raw()
+            ))
+        })?,
+    }))
+}
+
+/// Classifies an origin slot from the backend's CFG-aware local representation analysis.
+fn iter_origin_storage(
+    ctx: &FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Option<IterOriginStorage> {
+    if ctx.local_ref_cell_representation_is_definite(slot) {
+        return Some(IterOriginStorage::RefCell);
+    }
+    if ctx.local_ref_cell_representation_is_dynamic(slot) {
+        return ctx
+            .ref_cell_state_offset(slot)
+            .map(|state_offset| IterOriginStorage::Dynamic { state_offset });
+    }
+    Some(IterOriginStorage::Raw)
+}
+
+/// Materializes the container the origin local currently holds into `dest`.
+///
+/// A raw slot holds the container itself. A definite reference slot always holds an address whose
+/// target is the value, regardless of its zero-initialized runtime state word. Only a dynamic slot
+/// consults that word because the same slot may be raw on one path and indirect on another.
+fn emit_load_origin_container(
+    ctx: &mut FunctionContext<'_>,
+    origin: IterOrigin,
+    dest: &str,
+    scratch: &str,
+) {
+    abi::load_at_offset_scratch(ctx.emitter, dest, origin.value_offset, scratch);
+    let state_offset = match origin.storage {
+        IterOriginStorage::Raw => return,
+        IterOriginStorage::RefCell => {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("ldr {dest}, [{dest}]"));  // a definite reference origin stores its value behind the incoming cell pointer
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(                                    // a definite reference origin stores its value behind the incoming cell pointer
+                        &format!("mov {dest}, QWORD PTR [{dest}]")
+                    );
+                }
+            }
+            return;
+        }
+        IterOriginStorage::Dynamic { state_offset } => state_offset,
+    };
+    let direct = ctx.next_label("iter_origin_direct");
+    abi::load_at_offset_scratch(
+        ctx.emitter,
+        scratch,
+        state_offset,
+        abi::int_result_reg(ctx.emitter),
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {scratch}, {direct}"));       // a raw slot already holds the container itself
+            ctx.emitter.instruction(&format!("ldr {dest}, [{dest}]"));          // a promoted slot holds it behind the alias address
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {scratch}, {scratch}"));     // is this slot still in its raw representation?
+            ctx.emitter.instruction(&format!("jz {direct}"));                   // a raw slot already holds the container itself
+            ctx.emitter
+                .instruction(&format!("mov {dest}, QWORD PTR [{dest}]"));        // a promoted slot holds it behind the alias address
+        }
+    }
+    ctx.emitter.label(&direct);
+}
+
+/// Anchors relocation checks on the normalized iterator source at loop entry.
+///
+/// Dynamic and aliased origins may hold an outer Mixed box while the iterator source word holds
+/// the unboxed container. The reload path normalizes that outer box before comparing pointers, so
+/// the snapshot must use the same representation.
+fn emit_snapshot_origin_container(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let (dest, scratch) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x9", "x11"),
+        Arch::X86_64 => ("r11", "r10"),
+    };
+    abi::load_at_offset_scratch(
+        ctx.emitter,
+        dest,
+        offset - ITER_SOURCE_OFFSET_DELTA,
+        scratch,
+    );
+    abi::store_at_offset_scratch(
+        ctx.emitter,
+        dest,
+        offset - ITER_TABLE_SNAPSHOT_OFFSET_DELTA,
+        scratch,
+    );
+}
+
+/// Republishes a relocated by-reference source into the iterator.
+///
+/// The origin is normalized to the same unboxed representation as the iterator source BEFORE the
+/// pointer compare. A stable outer Mixed box can contain a replaced array or hash after copy-on-write
+/// or growth, so comparing the box itself would miss relocation and leave a freed table published.
+/// Cursor identity is validated exactly once afterwards, because delete followed by insertion can
+/// reuse a physical slot without replacing the table.
+///
+/// The replacement is then CLASSIFIED rather than assumed. One `Mixed` box is unwrapped, because
+/// an aliased `Mixed` local holds the container one level deeper than the iterator's source word.
+/// Heap kind 3 is associative storage and needs a rebuilt cursor, since rehashing permutes slot
+/// indices. Heap kind 2 is an indexed array, whose positional cursor survives reallocation, so it
+/// only needs the fresh pointer. ANY OTHER kind, including the zero that a destroyed or
+/// non-container value reports, parks the iterator in the done state instead of handing an
+/// invalid pointer to the heap-kind dispatch that runs next.
+fn emit_reload_live_iter_source(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    origin: IterOrigin,
+) {
+    let stable = ctx.next_label("iter_source_stable");
+    let classified = ctx.next_label("iter_source_classified");
+    let indexed = ctx.next_label("iter_source_indexed");
+    let normalized = ctx.next_label("iter_source_normalized");
+    let (dest, scratch) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x9", "x11"),
+        Arch::X86_64 => ("r11", "r10"),
+    };
+    emit_load_origin_container(ctx, origin, dest, scratch);
+    abi::store_at_offset_scratch(ctx.emitter, dest, offset - ITER_SOURCE_OFFSET_DELTA, scratch);
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), dest);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #5");                              // heap kind 5 identifies a boxed Mixed value
+            ctx.emitter.instruction(&format!("b.ne {}", normalized));           // an unboxed container is already the right pointer
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 5");                              // heap kind 5 identifies a boxed Mixed value
+            ctx.emitter.instruction(&format!("jne {}", normalized));            // an unboxed container is already the right pointer
+        }
+    }
+    abi::load_at_offset_scratch(ctx.emitter, dest, offset - ITER_SOURCE_OFFSET_DELTA, scratch);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x9, #8]");                        // an aliased Mixed local holds the container one box deeper
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r11, QWORD PTR [r11 + 8]");            // an aliased Mixed local holds the container one box deeper
+        }
+    }
+    abi::store_at_offset_scratch(ctx.emitter, dest, offset - ITER_SOURCE_OFFSET_DELTA, scratch);
+    ctx.emitter.label(&normalized);
+    abi::load_at_offset_scratch(ctx.emitter, dest, offset - ITER_SOURCE_OFFSET_DELTA, scratch);
+    abi::load_at_offset_scratch(
+        ctx.emitter,
+        scratch,
+        offset - ITER_TABLE_SNAPSHOT_OFFSET_DELTA,
+        abi::int_result_reg(ctx.emitter),
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x9, x11");                             // is the normalized live container still the cursor's source?
+            ctx.emitter.instruction(&format!("b.eq {}", stable));               // unchanged sources need no republish or classification
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp r11, r10");                            // is the normalized live container still the cursor's source?
+            ctx.emitter.instruction(&format!("je {}", stable));                 // unchanged sources need no republish or classification
+        }
+    }
+    abi::store_at_offset_scratch(
+        ctx.emitter,
+        dest,
+        offset - ITER_TABLE_SNAPSHOT_OFFSET_DELTA,
+        scratch,
+    );
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), dest);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    ctx.emitter.label(&classified);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #3");                              // heap kind 3 identifies associative table storage
+            ctx.emitter.instruction(&format!("b.eq {}", stable));               // the separate anchor validator rebuilds associative cursors once
+            ctx.emitter.instruction("cmp x0, #2");                              // heap kind 2 identifies indexed-array storage
+            ctx.emitter.instruction(&format!("b.eq {}", indexed));              // a positional cursor survives indexed reallocation
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 3");                              // heap kind 3 identifies associative table storage
+            ctx.emitter.instruction(&format!("je {}", stable));                 // the separate anchor validator rebuilds associative cursors once
+            ctx.emitter.instruction("cmp rax, 2");                              // heap kind 2 identifies indexed-array storage
+            ctx.emitter.instruction(&format!("je {}", indexed));                // a positional cursor survives indexed reallocation
+        }
+    }
+    // -- the replacement is not a live container, so stop instead of dispatching on it --
+    // A destroyed source reports heap kind 0, and so does any non-container value. Parking the
+    // iterator here is what keeps the heap-kind dispatch in `IterNext` from probing it.
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, -1);
+    abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
+    abi::emit_jump(ctx.emitter, &stable);
+
+    ctx.emitter.label(&indexed);
+    abi::emit_jump(ctx.emitter, &stable);
+    ctx.emitter.label(&stable);
+}
+
+/// Rebuilds an active hash cursor from owned key identity even when the table pointer is stable.
+///
+/// Deletion may leave the cursor aimed at a tombstone, and a later insertion may reuse that exact
+/// physical slot. The occupied marker alone cannot distinguish the replacement entry. Restricting
+/// this validation to by-reference iterators with an origin keeps by-value iteration unchanged.
+fn emit_validate_hash_cursor_anchor(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let done = ctx.next_label("iter_anchor_validate_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // only an active positive cursor has a successor identity
+            ctx.emitter.instruction(&format!("b.le {done}"));                   // fresh and terminal cursors need no validation
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 0");                              // only an active positive cursor has a successor identity
+            ctx.emitter.instruction(&format!("jle {done}"));                    // fresh and terminal cursors need no validation
+        }
+    }
+    abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #3");                              // heap kind 3 is associative storage
+            ctx.emitter.instruction(&format!("b.ne {done}"));                   // indexed and parked sources have no hash cursor
+            abi::load_at_offset(ctx.emitter, "x0", offset - ITER_SOURCE_OFFSET_DELTA);
+            abi::load_at_offset(ctx.emitter, "x1", offset - ITER_NEXT_KEY_LO_OFFSET_DELTA);
+            abi::load_at_offset(ctx.emitter, "x2", offset - ITER_NEXT_KEY_HI_OFFSET_DELTA);
+            abi::load_at_offset(ctx.emitter, "x3", offset - ITER_FALLBACK_KEY_LO_OFFSET_DELTA);
+            abi::load_at_offset(ctx.emitter, "x4", offset - ITER_FALLBACK_KEY_HI_OFFSET_DELTA);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 3");                              // heap kind 3 is associative storage
+            ctx.emitter.instruction(&format!("jne {done}"));                    // indexed and parked sources have no hash cursor
+            abi::load_at_offset(ctx.emitter, "rdi", offset - ITER_SOURCE_OFFSET_DELTA);
+            abi::load_at_offset(ctx.emitter, "rsi", offset - ITER_NEXT_KEY_LO_OFFSET_DELTA);
+            abi::load_at_offset(ctx.emitter, "rdx", offset - ITER_NEXT_KEY_HI_OFFSET_DELTA);
+            abi::load_at_offset(ctx.emitter, "rcx", offset - ITER_FALLBACK_KEY_LO_OFFSET_DELTA);
+            abi::load_at_offset(ctx.emitter, "r8", offset - ITER_FALLBACK_KEY_HI_OFFSET_DELTA);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_resync");
+    abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
+    ctx.emitter.label(&done);
+}
+
+/// Splits statically typed array sources and boxes hash entries before reference iteration.
 ///
 /// A null/sentinel source — the value a missed read such as `foreach ($a[7] as &$v)`
 /// materializes — has nothing to split: the copy-on-write helpers recognize both the zero
@@ -565,17 +1001,101 @@ fn ensure_unique_static_iter_source(
     source: ValueId,
     source_kind: &IteratorSourceKind,
 ) -> Result<()> {
+    let source_local = source_load_local_slot(ctx, source)?;
     let helper = match source_kind {
-        IteratorSourceKind::Indexed { .. } => "__rt_array_ensure_unique",
-        IteratorSourceKind::Hash => "__rt_hash_ensure_unique",
+        // Every indexed by-reference source becomes a hash before iteration. Hash entries carry
+        // the persistent tag-11 reference-set marker, so the last alias can safely outlive a
+        // literal or function-result source without introducing a second indexed wrapper format.
+        IteratorSourceKind::Indexed { .. } => {
+            // Loading a concrete container from boxed PHP-array storage retained its payload.
+            // Retire and clear the old box before the consuming conversion, then publish the
+            // converted owner below. Raw concrete slots need no release here.
+            if let Some(slot) = source_local {
+                ctx.release_mutated_source_local_owner(slot, source)?;
+            }
+            convert_loaded_indexed_source_to_hash(ctx);
+            ctx.store_result_value(source)?;
+            if let Some(slot) = source_local {
+                ctx.store_container_writeback_to_local(slot, source)?;
+            }
+            return Ok(());
+        }
+        // Hash references use the boxed Mixed entry slot as their stable value cell. The
+        // converter performs COW itself before replacing concrete entry payloads.
+        IteratorSourceKind::Hash => "__rt_hash_to_mixed",
         _ => return Ok(()),
     };
+    // HashToMixed can replace the payload at its copy-on-write boundary. Transfer a raw boxed
+    // local's payload owner into that operation so storeback neither leaks the previous box nor
+    // leaves the iterator's origin pointing at a retired generation.
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, source)?;
+    }
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the foreach source pointer to the COW helper
     }
     abi::emit_call_label(ctx.emitter, helper);
     ctx.store_result_value(source)?;
-    publish_iter_source_to_origin(ctx, source)
+    if let Some(slot) = source_local {
+        ctx.store_container_writeback_to_local(slot, source)?;
+    }
+    Ok(())
+}
+
+/// Converts the array-like value in the integer result register into a Mixed-entry hash.
+///
+/// A source may already have been promoted by addressable-source preparation before this shared
+/// helper reaches it. Probe the runtime heap kind first so that existing hashes go directly
+/// through the idempotent Mixed-entry conversion instead of being reinterpreted as indexed
+/// storage. For a genuine indexed array, `__rt_array_to_hash` borrows its input and returns a
+/// fresh hash. The replacement consumes the caller's indexed-array reference, so this helper
+/// releases that old owner after the hash has retained every child.
+pub(super) fn convert_loaded_indexed_source_to_hash(ctx: &mut FunctionContext<'_>) {
+    let already_hash = ctx.next_label("iter_indexed_source_already_hash");
+    let done = ctx.next_label("iter_indexed_source_hash_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // detect a source already promoted by addressable-source lowering
+            ctx.emitter.instruction(&format!("b.eq {}", already_hash));         // never reinterpret an existing hash as indexed storage
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // release the indexed owner replaced by the promoted hash
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_pop_reg(ctx.emitter, "x9");
+            ctx.emitter.instruction(&format!("b {}", done));                    // join the already-hash and newly-promoted results
+            ctx.emitter.label(&already_hash);
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the indexed source to hash promotion
+            abi::emit_push_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                              // detect a source already promoted by addressable-source lowering
+            ctx.emitter.instruction(&format!("je {}", already_hash));           // never reinterpret an existing hash as indexed storage
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_push_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
+            ctx.emitter.instruction("mov rdi, rax");                            // widen the promoted hash entries to boxed Mixed
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // release the indexed owner replaced by the promoted hash
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            abi::emit_pop_reg(ctx.emitter, "r10");
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // join the already-hash and newly-promoted results
+            ctx.emitter.label(&already_hash);
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+        }
+    }
+    ctx.emitter.label(&done);
 }
 
 /// Stores a converted dynamic iterator source back to its originating local when possible.
@@ -584,9 +1104,9 @@ fn store_iter_source_to_origin_if_local(
     offset: usize,
     source: ValueId,
 ) -> Result<()> {
-    if source_origin(ctx, source)?.is_none() {
+    let Some(slot) = source_load_local_slot(ctx, source)? else {
         return Ok(());
-    }
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset(ctx.emitter, "x0", offset - ITER_SOURCE_OFFSET_DELTA);
@@ -596,46 +1116,14 @@ fn store_iter_source_to_origin_if_local(
         }
     }
     ctx.store_result_value(source)?;
-    publish_iter_source_to_origin(ctx, source)
+    ctx.store_container_writeback_to_local(slot, source)
 }
 
-/// Where an iterator source was read from, so a separated or converted copy can be put back.
-enum IterSourceOrigin {
-    /// A plain frame slot (`load_local`).
-    Local(LocalSlotId),
-    /// A by-reference slot (`load_ref_cell`): the storage is the CALLER's, reached through it.
-    RefCell(LocalSlotId),
-}
-
-/// Writes the (possibly separated or converted) iterator source back to where it was read.
-///
-/// A by-reference `foreach` separates a shared array before it writes into it, so the loop
-/// mutates a NEW array; that array has to replace the one the variable held. Only `load_local`
-/// used to count as an origin, so a source read through a by-reference PARAMETER was separated
-/// and then abandoned -- the loop wrote into a copy nobody kept, and the separation had already
-/// given up the variable's share of the original. MEASURED against php 8.5.10, identical on the
-/// pristine HEAD compiler:
-///
-///     function bump(array &$a) { foreach ($a as &$x) { $x = 7; } }
-///     function run(array $e) { $c = $e; bump($c); return $c; }
-///     var_dump(run([1, 2]));        php [7, 7]      elephc array(0) {}
-///
-/// A fresh local (`$l = [1, 2]; bump($l);`) worked because nothing shared it, so the separation
-/// never ran. The reference case writes through the cell exactly as a relocating builtin does.
-fn publish_iter_source_to_origin(ctx: &mut FunctionContext<'_>, source: ValueId) -> Result<()> {
-    match source_origin(ctx, source)? {
-        Some(IterSourceOrigin::Local(slot)) => ctx.store_value_to_local(slot, source),
-        Some(IterSourceOrigin::RefCell(slot)) => {
-            let source_ty = ctx.value_php_type(source)?;
-            super::local_stores::store_value_through_ref_cell_slot(ctx, slot, source, &source_ty)
-        }
-        None => Ok(()),
-    }
-}
-
-/// Resolves a source SSA value back to the slot it was loaded from, directly or through a
-/// by-reference cell.
-fn source_origin(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<IterSourceOrigin>> {
+/// Resolves a source SSA value back to its direct or reference-bound local origin.
+fn source_load_local_slot(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<LocalSlotId>> {
     let Some(value_ref) = ctx.function.value(value) else {
         return Err(CodegenIrError::missing_entry("value", value.as_raw()));
     };
@@ -646,17 +1134,18 @@ fn source_origin(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<Ite
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
         return Ok(None);
+    }
+    let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
+        return Err(CodegenIrError::invalid_module(
+            "load_local iterator source missing local slot",
+        ));
     };
-    Ok(match inst_ref.op {
-        Op::LoadLocal => Some(IterSourceOrigin::Local(slot)),
-        Op::LoadRefCell => Some(IterSourceOrigin::RefCell(slot)),
-        _ => None,
-    })
+    Ok(Some(slot))
 }
 
-/// Converts the raw dynamic indexed-array iterator source to boxed Mixed slots.
+/// Converts the raw dynamic indexed-array iterator source to a Mixed-entry hash.
 fn convert_dynamic_indexed_source_for_ref(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
@@ -664,18 +1153,13 @@ fn convert_dynamic_indexed_source_for_ref(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset(ctx.emitter, "x0", offset - ITER_SOURCE_OFFSET_DELTA);
-            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load indexed-array metadata before by-reference Mixed conversion
-            ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the indexed-array value_type tag
-            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+            convert_loaded_indexed_source_to_hash(ctx);
             abi::store_at_offset(ctx.emitter, "x0", offset - ITER_SOURCE_OFFSET_DELTA);
         }
         Arch::X86_64 => {
             abi::load_at_offset(ctx.emitter, "rdi", offset - ITER_SOURCE_OFFSET_DELTA);
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load indexed-array metadata before by-reference Mixed conversion
-            ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the indexed-array value_type tag
-            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+            ctx.emitter.instruction("mov rax, rdi");                            // put the indexed source in the shared promotion input register
+            convert_loaded_indexed_source_to_hash(ctx);
             abi::store_at_offset(ctx.emitter, "rax", offset - ITER_SOURCE_OFFSET_DELTA);
         }
     }
@@ -702,29 +1186,27 @@ fn convert_dynamic_hash_source_for_ref(
     Ok(())
 }
 
-/// Converts an unboxed Mixed indexed payload and updates the preserved Mixed source cell.
+/// Converts an unboxed Mixed indexed payload to hash storage and updates its owning Mixed cell.
 fn convert_mixed_indexed_source_for_ref(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
 ) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed indexed-array payload to the Mixed conversion helper
-            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load indexed-array metadata before by-reference Mixed conversion
-            ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the indexed-array value_type tag
-            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+            ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed indexed payload to hash promotion
+            convert_loaded_indexed_source_to_hash(ctx);
             ctx.emitter.instruction("ldr x9, [sp]");                            // reload the preserved boxed Mixed source cell
-            ctx.emitter.instruction("str x0, [x9, #8]");                        // publish the unique converted indexed-array pointer into the Mixed cell
+            ctx.emitter.instruction("mov x10, #5");                             // runtime Mixed tag 5 identifies associative hash storage
+            ctx.emitter.instruction("str x10, [x9]");                           // publish the promoted container's new runtime tag
+            ctx.emitter.instruction("str x0, [x9, #8]");                        // publish the promoted hash pointer into the Mixed cell
             abi::store_at_offset(ctx.emitter, "x0", offset - ITER_SOURCE_OFFSET_DELTA);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load indexed-array metadata before by-reference Mixed conversion
-            ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the indexed-array value_type tag
-            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+            ctx.emitter.instruction("mov rax, rdi");                            // pass the unboxed indexed payload to hash promotion
+            convert_loaded_indexed_source_to_hash(ctx);
             ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // reload the preserved boxed Mixed source cell
-            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");            // publish the unique converted indexed-array pointer into the Mixed cell
+            ctx.emitter.instruction("mov QWORD PTR [r10], 5");                  // publish associative-hash as the new runtime Mixed tag
+            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");            // publish the promoted hash pointer into the Mixed cell
             abi::store_at_offset(ctx.emitter, "rax", offset - ITER_SOURCE_OFFSET_DELTA);
         }
     }
@@ -754,59 +1236,33 @@ fn convert_mixed_hash_source_for_ref(
     Ok(())
 }
 
-/// Binds a local slot to the current indexed-array element address.
-fn bind_indexed_current_value_ref(
-    ctx: &mut FunctionContext<'_>,
-    offset: usize,
-    slot: LocalSlotId,
-    elem_ty: &PhpType,
-) -> Result<()> {
-    let local_offset = ctx.local_offset(slot)?;
-    let is_string_slot = matches!(elem_ty.codegen_repr(), PhpType::Str);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::load_at_offset_scratch(ctx.emitter, "x9", offset - ITER_SOURCE_OFFSET_DELTA, "x11");
-            abi::load_at_offset_scratch(ctx.emitter, "x10", offset - ITER_CURSOR_OFFSET_DELTA, "x11");
-            if is_string_slot {
-                ctx.emitter.instruction("lsl x10, x10, #4");                    // scale the cursor to the 16-byte indexed string slot
-            } else {
-                ctx.emitter.instruction("lsl x10, x10, #3");                    // scale the cursor to the 8-byte indexed payload slot
-            }
-            ctx.emitter.instruction("add x9, x9, #24");                         // skip the indexed-array header to reach payload storage
-            ctx.emitter.instruction("add x9, x9, x10");                         // compute the current indexed element address
-            abi::store_at_offset_scratch(ctx.emitter, "x9", local_offset, "x11");
-        }
-        Arch::X86_64 => {
-            abi::load_at_offset(ctx.emitter, "r11", offset - ITER_SOURCE_OFFSET_DELTA);
-            abi::load_at_offset(ctx.emitter, "r10", offset - ITER_CURSOR_OFFSET_DELTA);
-            if is_string_slot {
-                ctx.emitter.instruction("shl r10, 4");                          // scale the cursor to the 16-byte indexed string slot
-            } else {
-                ctx.emitter.instruction("shl r10, 3");                          // scale the cursor to the 8-byte indexed payload slot
-            }
-            ctx.emitter.instruction("add r11, 24");                             // skip the indexed-array header to reach payload storage
-            ctx.emitter.instruction("add r11, r10");                            // compute the current indexed element address
-            abi::store_at_offset(ctx.emitter, "r11", local_offset);
-        }
-    }
-    Ok(())
-}
-
-/// Binds a local slot to the current associative-array entry value address.
+/// Binds a local slot to the current associative-array entry's managed reference cell.
+///
+/// The entry is promoted into a PHP reference set first, so what the local receives is a real
+/// managed reference-cell allocation rather than an interior pointer into the table. That is what
+/// lets the alias survive growth, a copy-on-write split and even destruction of the source array,
+/// and what makes closure capture and returning the reference retain something real. Promotion is
+/// idempotent, so a repeated by-reference foreach reuses the existing cell instead of restamping
+/// the entry.
 fn bind_hash_current_value_ref(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
     slot: LocalSlotId,
 ) -> Result<()> {
+    ctx.release_counted_ref_binding(slot);
     let local_offset = ctx.local_offset(slot)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::load_at_offset(ctx.emitter, "x9", offset - ITER_VALUE_ADDR_OFFSET_DELTA);
-            abi::store_at_offset_scratch(ctx.emitter, "x9", local_offset, "x11");
+            abi::load_at_offset(ctx.emitter, "x0", offset - ITER_VALUE_ADDR_OFFSET_DELTA);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+            abi::store_at_offset_scratch(ctx.emitter, "x0", local_offset, "x11");
+            ctx.bind_hash_entry_ref_state(slot, "x0")?;
         }
         Arch::X86_64 => {
-            abi::load_at_offset(ctx.emitter, "r11", offset - ITER_VALUE_ADDR_OFFSET_DELTA);
-            abi::store_at_offset(ctx.emitter, "r11", local_offset);
+            abi::load_at_offset(ctx.emitter, "rdi", offset - ITER_VALUE_ADDR_OFFSET_DELTA);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+            abi::store_at_offset(ctx.emitter, "rax", local_offset);
+            ctx.bind_hash_entry_ref_state(slot, "rax")?;
         }
     }
     Ok(())
@@ -835,7 +1291,7 @@ fn bind_dynamic_current_value_ref(
     }
 
     ctx.emitter.label(&indexed_case);
-    bind_indexed_current_value_ref(ctx, offset, slot, &PhpType::Mixed)?;
+    bind_hash_current_value_ref(ctx, offset, slot)?;
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&hash_case);
@@ -853,6 +1309,7 @@ fn lower_dynamic_iter_next(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
     by_ref: bool,
+    capture_successor: bool,
 ) -> Result<()> {
     let indexed_case = ctx.next_label("iter_next_dyn_indexed");
     let hash_case = ctx.next_label("iter_next_dyn_hash");
@@ -874,8 +1331,8 @@ fn lower_dynamic_iter_next(
 
     ctx.emitter.label(&hash_case);
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_hash_iter_next_aarch64(ctx, offset),
-        Arch::X86_64 => lower_hash_iter_next_x86_64(ctx, offset),
+        Arch::AArch64 => lower_hash_iter_next_aarch64(ctx, offset, capture_successor),
+        Arch::X86_64 => lower_hash_iter_next_x86_64(ctx, offset, capture_successor),
     }
     abi::emit_jump(ctx.emitter, &done);
 
@@ -925,6 +1382,8 @@ fn lower_dynamic_iter_current_value(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     offset: usize,
+    preserve_reference: bool,
+    promote_reference: bool,
 ) -> Result<()> {
     let indexed_case = ctx.next_label("iter_value_dyn_indexed");
     let hash_case = ctx.next_label("iter_value_dyn_hash");
@@ -943,10 +1402,7 @@ fn lower_dynamic_iter_current_value(
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&hash_case);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => load_current_hash_value_as_mixed_aarch64(ctx, offset),
-        Arch::X86_64 => load_current_hash_value_as_mixed_x86_64(ctx, offset),
-    }
+    load_current_hash_call_value_as_mixed(ctx, offset, preserve_reference, promote_reference);
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&object_case);
@@ -957,9 +1413,14 @@ fn lower_dynamic_iter_current_value(
 }
 
 /// Replaces a dynamic object iterator source with `IteratorAggregate::getIterator()` when available.
+///
+/// The owner recorded in `IterStart` is authoritative. Its absence means lowering proved
+/// this source cannot produce an aggregate result, even if later type widening makes the
+/// backend operand look dynamic.
 fn resolve_dynamic_object_iterator_source(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
+    owner: Option<LocalSlotId>,
 ) -> Result<()> {
     if ctx.module.required_runtime_features.eval_bridge {
         // An object an eval context built wraps the generic native header, so neither dispatch
@@ -988,28 +1449,76 @@ fn resolve_dynamic_object_iterator_source(
         abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
         ctx.emitter.label(&keep_source);
     }
-    if !ctx.module.interface_infos.contains_key("IteratorAggregate") {
+    if owner.is_none() || !ctx.module.interface_infos.contains_key("IteratorAggregate") {
         return Ok(());
     }
-    let keep_original = ctx.next_label("iter_dynamic_keep_original_object");
-    emit_interface_iterator_method_call(ctx, offset, "IteratorAggregate", "getIterator")?;
+    let return_ty =
+        emit_interface_iterator_method_call(ctx, offset, "IteratorAggregate", "getIterator")?;
+    adopt_get_iterator_result(ctx, offset, owner, &return_ty)
+}
+
+/// Owns a nonzero `getIterator()` result in the Mixed owner slot, then publishes a borrow.
+///
+/// `emit_box_current_owned_value_as_mixed` is the transfer: `__rt_mixed_from_value`
+/// retains the payload into a fresh Mixed cell, then the helper releases the
+/// original method-return owner. There is no user callback between those two
+/// steps, so the Mixed cell is the sole owner afterward. The iterator source
+/// word is then loaded from that cell's payload. The previous aggregate pointer
+/// is overwritten without a matching release; the loop's source retain still
+/// owns the aggregate.
+fn adopt_get_iterator_result(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    owner: Option<LocalSlotId>,
+    return_ty: &PhpType,
+) -> Result<()> {
+    let slot = require_get_iterator_owner(owner)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
+    let keep_original = ctx.next_label("iter_keep_original_source");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // keep the original source when getIterator() returned null
                 &format!("cbz {}, {}", result_reg, keep_original)
-            );                                                                  // keep direct Iterator objects when IteratorAggregate dispatch misses
+            );
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // keep the original source when getIterator() returned null
                 &format!("test {}, {}", result_reg, result_reg)
-            );                                                                  // keep direct Iterator objects when IteratorAggregate dispatch misses
-            ctx.emitter.instruction(&format!("je {}", keep_original));          // skip source replacement when getIterator() was not resolved
+            );
+            ctx.emitter.instruction(&format!("je {}", keep_original));          // skip replacement when getIterator() was not resolved
         }
     }
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &return_ty.codegen_repr());
+    let local_offset = ctx.local_offset(slot)?;
+    abi::store_at_offset(ctx.emitter, result_reg, local_offset);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        result_reg,
+        result_reg,
+        MIXED_CELL_PAYLOAD_LOW_OFFSET,
+    );
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
     ctx.emitter.label(&keep_original);
     Ok(())
+}
+
+/// Rejects an aggregate adoption path that has no place to retain the returned iterator.
+fn require_get_iterator_owner(owner: Option<LocalSlotId>) -> Result<LocalSlotId> {
+    owner.ok_or_else(|| {
+        CodegenIrError::invalid_module(
+            "iterator aggregate result has no owning Mixed slot".to_string(),
+        )
+    })
+}
+
+/// Returns true when an interface-typed source must call `getIterator()` before rewind.
+fn interface_needs_get_iterator(ctx: &FunctionContext<'_>, interface_name: &str) -> bool {
+    let name = interface_name.trim_start_matches('\\');
+    if name == "Iterator" || interface_extends_interface(ctx, name, "Iterator") {
+        return false;
+    }
+    name == "IteratorAggregate"
+        || interface_extends_interface(ctx, name, "IteratorAggregate")
 }
 
 /// Branches on the heap kind of the raw iterable source stored in iterator state.
@@ -1054,16 +1563,38 @@ fn branch_on_heap_kind_result(
 }
 
 /// Branches to the concrete iterator path from a `__rt_mixed_unbox` tag result.
+///
+/// The Mixed tag records the STATIC shape the value was boxed with, which is not always the
+/// shape its storage has at run time: `__rt_array_set_mixed_key` promotes an indexed array to
+/// hash storage when a key does not fit the packed layout, and the tag does not move with it.
+/// Taking the indexed path for such a value snapshots the hash header's first word as the
+/// element count — zero — and the loop body never runs, which is how `foreach` inside
+/// `var_export()` over a rebuilt `[5 => 3]` printed an empty `array (...)`. So tag 4 is
+/// confirmed against the payload's actual heap kind before the indexed path is taken; tags 5
+/// and 6 need no probe because nothing promotes INTO them.
 fn branch_on_mixed_iterable_tag(
     ctx: &mut FunctionContext<'_>,
     indexed_case: &str,
     hash_case: &str,
     object_case: &str,
 ) {
+    let tag_not_indexed = ctx.next_label("iter_mixed_tag_not_indexed");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #4");                              // mixed tag 4 identifies indexed arrays
-            ctx.emitter.instruction(&format!("b.eq {}", indexed_case));         // dispatch to the indexed-array iterator path
+            ctx.emitter.instruction(&format!("b.ne {}", tag_not_indexed));      // only the indexed tag needs the promotion probe
+            // The payload is the only live value across the probe: `__rt_heap_kind` answers in
+            // x0, which is where the tag was, and the tag is not read again on any path this
+            // arm reaches. The pop lands BEFORE the compare because its x86_64 twin ends in an
+            // `add rsp` that would clobber the flags.
+            abi::emit_push_reg(ctx.emitter, "x1");                              // preserve the unboxed payload across the heap-kind probe
+            ctx.emitter.instruction("mov x0, x1");                              // hand the payload to the heap-kind probe
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            abi::emit_pop_reg(ctx.emitter, "x1");                               // restore the payload the iterator state is built from
+            ctx.emitter.instruction("cmp x0, #3");                              // heap kind 3 = storage promoted to an associative hash
+            ctx.emitter.instruction(&format!("b.eq {}", hash_case));            // a promoted array iterates through the hash path
+            abi::emit_jump(ctx.emitter, indexed_case);                          // genuinely packed storage keeps the indexed path
+            ctx.emitter.label(&tag_not_indexed);
             ctx.emitter.instruction("cmp x0, #5");                              // mixed tag 5 identifies associative arrays
             ctx.emitter.instruction(&format!("b.eq {}", hash_case));            // dispatch to the associative-array iterator path
             ctx.emitter.instruction("cmp x0, #6");                              // mixed tag 6 identifies object payloads
@@ -1071,7 +1602,17 @@ fn branch_on_mixed_iterable_tag(
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, 4");                              // mixed tag 4 identifies indexed arrays
-            ctx.emitter.instruction(&format!("je {}", indexed_case));           // dispatch to the indexed-array iterator path
+            ctx.emitter.instruction(&format!("jne {}", tag_not_indexed));       // only the indexed tag needs the promotion probe
+            // See the AArch64 arm: the payload lives in rdi here, and the pop MUST precede the
+            // compare because `emit_pop_reg` ends in an `add rsp, 16` that sets the flags.
+            abi::emit_push_reg(ctx.emitter, "rdi");                             // preserve the unboxed payload across the heap-kind probe
+            ctx.emitter.instruction("mov rax, rdi");                            // hand the payload to the heap-kind probe
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            abi::emit_pop_reg(ctx.emitter, "rdi");                              // restore the payload the iterator state is built from
+            ctx.emitter.instruction("cmp rax, 3");                              // heap kind 3 = storage promoted to an associative hash
+            ctx.emitter.instruction(&format!("je {}", hash_case));              // a promoted array iterates through the hash path
+            abi::emit_jump(ctx.emitter, indexed_case);                          // genuinely packed storage keeps the indexed path
+            ctx.emitter.label(&tag_not_indexed);
             ctx.emitter.instruction("cmp rax, 5");                              // mixed tag 5 identifies associative arrays
             ctx.emitter.instruction(&format!("je {}", hash_case));              // dispatch to the associative-array iterator path
             ctx.emitter.instruction("cmp rax, 6");                              // mixed tag 6 identifies object payloads
@@ -1097,6 +1638,118 @@ fn store_iterator_cursor(ctx: &mut FunctionContext<'_>, offset: usize, cursor: i
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_int_immediate(ctx.emitter, result_reg, cursor);
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
+    // -- record which container this cursor is valid against --
+    // Every initialization path reaches this helper AFTER the source word holds its final
+    // pointer, including the by-reference paths that first convert an indexed array or a hash
+    // to boxed Mixed storage. Snapshotting here rather than at the top of `lower_iter_start` is
+    // what keeps the first `IterNext` on the fast path instead of resyncing against a stale
+    // zero snapshot with no key yielded yet.
+    let snapshot_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let scratch_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::load_at_offset_scratch(
+        ctx.emitter,
+        snapshot_reg,
+        offset - ITER_SOURCE_OFFSET_DELTA,
+        scratch_reg,
+    );
+    abi::store_at_offset_scratch(
+        ctx.emitter,
+        snapshot_reg,
+        offset - ITER_TABLE_SNAPSHOT_OFFSET_DELTA,
+        scratch_reg,
+    );
+    emit_clear_successor_keys(ctx, offset);
+}
+
+/// Parks both successor-key anchors in their "nothing to resume from" state.
+///
+/// Every walk starts without a successor recorded, and an exhausted walk ends the same way, so
+/// a resync can never probe for a key this iterator never yielded a position for.
+fn emit_clear_successor_keys(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let value_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let scratch_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    for (low_delta, high_delta) in [
+        (ITER_NEXT_KEY_LO_OFFSET_DELTA, ITER_NEXT_KEY_HI_OFFSET_DELTA),
+        (
+            ITER_FALLBACK_KEY_LO_OFFSET_DELTA,
+            ITER_FALLBACK_KEY_HI_OFFSET_DELTA,
+        ),
+    ] {
+        abi::emit_load_int_immediate(ctx.emitter, value_reg, 0);
+        abi::store_at_offset_scratch(ctx.emitter, value_reg, offset - low_delta, scratch_reg);
+        abi::emit_load_int_immediate(ctx.emitter, value_reg, NO_SUCCESSOR_KEY_MARKER);
+        abi::store_at_offset_scratch(ctx.emitter, value_reg, offset - high_delta, scratch_reg);
+    }
+}
+
+/// Releases every owned string key stored in the relocation anchors, then clears both pairs.
+///
+/// Integer keys use the `-1` high-word sentinel and own nothing. String keys use a non-negative
+/// length and carry exactly one retain acquired by [`emit_capture_successor_keys`].
+fn emit_release_successor_keys(ctx: &mut FunctionContext<'_>, offset: usize) {
+    for (low_delta, high_delta) in [
+        (ITER_NEXT_KEY_LO_OFFSET_DELTA, ITER_NEXT_KEY_HI_OFFSET_DELTA),
+        (
+            ITER_FALLBACK_KEY_LO_OFFSET_DELTA,
+            ITER_FALLBACK_KEY_HI_OFFSET_DELTA,
+        ),
+    ] {
+        let done = ctx.next_label("iter_anchor_release_done");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::load_at_offset(ctx.emitter, "x9", offset - high_delta);
+                ctx.emitter.instruction("cmp x9, #0");                          // only non-negative high words describe owned string keys
+                ctx.emitter.instruction(&format!("b.lt {done}"));               // integer and absent sentinels carry no ownership
+                abi::load_at_offset(ctx.emitter, "x0", offset - low_delta);
+                ctx.emitter.instruction(&format!("cbz x0, {done}"));            // tolerate a cleared defensive state
+                abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            }
+            Arch::X86_64 => {
+                abi::load_at_offset(ctx.emitter, "r10", offset - high_delta);
+                ctx.emitter.instruction("cmp r10, 0");                          // only non-negative high words describe owned string keys
+                ctx.emitter.instruction(&format!("jl {done}"));                 // integer and absent sentinels carry no ownership
+                abi::load_at_offset(ctx.emitter, "rax", offset - low_delta);
+                ctx.emitter.instruction("test rax, rax");                       // tolerate a cleared defensive state
+                ctx.emitter.instruction(&format!("jz {done}"));                 // skip release when the defensive pointer is already clear
+                abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            }
+        }
+        ctx.emitter.label(&done);
+    }
+    emit_clear_successor_keys(ctx, offset);
+}
+
+/// Acquires the ownership represented by both populated string-key anchor pairs.
+fn emit_retain_successor_keys(ctx: &mut FunctionContext<'_>, offset: usize) {
+    for (low_delta, high_delta) in [
+        (ITER_NEXT_KEY_LO_OFFSET_DELTA, ITER_NEXT_KEY_HI_OFFSET_DELTA),
+        (
+            ITER_FALLBACK_KEY_LO_OFFSET_DELTA,
+            ITER_FALLBACK_KEY_HI_OFFSET_DELTA,
+        ),
+    ] {
+        let done = ctx.next_label("iter_anchor_retain_done");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::load_at_offset(ctx.emitter, "x9", offset - high_delta);
+                ctx.emitter.instruction("cmp x9, #0");                          // non-negative high words identify string keys
+                ctx.emitter.instruction(&format!("b.lt {done}"));               // integer and absent sentinels are inline
+                abi::load_at_offset(ctx.emitter, "x0", offset - low_delta);
+                ctx.emitter.instruction(&format!("cbz x0, {done}"));            // an empty defensive pointer owns nothing
+                abi::emit_call_label(ctx.emitter, "__rt_incref");
+            }
+            Arch::X86_64 => {
+                abi::load_at_offset(ctx.emitter, "r10", offset - high_delta);
+                ctx.emitter.instruction("cmp r10, 0");                          // non-negative high words identify string keys
+                ctx.emitter.instruction(&format!("jl {done}"));                 // integer and absent sentinels are inline
+                abi::load_at_offset(ctx.emitter, "rax", offset - low_delta);
+                ctx.emitter.instruction("test rax, rax");                       // an empty defensive pointer owns nothing
+                ctx.emitter.instruction(&format!("jz {done}"));                 // skip retain when the defensive pointer is already clear
+                abi::emit_call_label(ctx.emitter, "__rt_incref");
+            }
+        }
+        ctx.emitter.label(&done);
+    }
 }
 
 /// Snapshots the indexed-array length into the iterator state so `IterNext` compares
@@ -1184,9 +1837,9 @@ fn lower_object_iter_next(
             ctx.emitter.instruction(&format!("b.eq {}", first_label));          // skip next() before the first valid() probe
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // check whether this object iterator has already yielded once
                 &format!("test {}, {}", started_reg, started_reg)
-            );                                                                  // check whether this object iterator has already yielded once
+            );
             ctx.emitter.instruction(&format!("je {}", first_label));            // skip next() before the first valid() probe
         }
     }
@@ -1216,9 +1869,9 @@ fn lower_interface_iter_next(
             ctx.emitter.instruction(&format!("b.eq {}", first_label));          // skip next() before the first valid() probe
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // check whether this interface iterator has already yielded once
                 &format!("test {}, {}", started_reg, started_reg)
-            );                                                                  // check whether this interface iterator has already yielded once
+            );
             ctx.emitter.instruction(&format!("je {}", first_label));            // skip next() before the first valid() probe
         }
     }
@@ -1244,7 +1897,7 @@ fn emit_object_iterator_method_call(
         emit_generator_iterator_runtime_call(ctx, offset, helper);
         return Ok(generator_iterator_return_type(&method_key));
     }
-    let target = object_iterator_method_target(ctx, class_name, &method_key)?;
+    let target = resolve_method_call_target(ctx, class_name, &method_key, 1)?;
     let assignments = abi::build_outgoing_arg_assignments_for_target(
         ctx.emitter.target,
         &[PhpType::Object(class_name.to_string())],
@@ -1256,14 +1909,16 @@ fn emit_object_iterator_method_call(
     let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    if let Some(helper) = target.runtime_helper {
+    if let Some(helper) = IntrinsicCall::instance_method(&target.impl_class, &method_key)
+        .and_then(|intrinsic| intrinsic.runtime_helper())
+    {
         abi::emit_call_label(ctx.emitter, helper);
     } else {
-        abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &method_key));
+        emit_direct_resolved_method_call(ctx, &target)?;
     }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
-    Ok(target.return_type)
+    Ok(target.return_ty)
 }
 
 /// Emits a zero-argument Iterator method call through runtime interface metadata.
@@ -1333,6 +1988,12 @@ pub(super) enum InterfaceDispatchMiss {
     /// out of -- Symfony's `RouteCollection::addResource()` casting an eval-declared resource
     /// surfaced it as an 8 GiB allocation rather than as anything diagnosable.
     DynamicToString(ValueId),
+    /// Raise php's "Cannot use object of type X as array" Error for the receiver.
+    ///
+    /// A boxed `$mixed[$k] = $v` whose object does not implement `ArrayAccess` used to fall
+    /// through the zero answer and drop the write silently. The unboxed receiver is still in the
+    /// first argument register when the scan gives up, which is what the thrower reads.
+    ObjectNotArray,
 }
 
 /// Emits the interface table scan and calls the resolved method slot.
@@ -1375,7 +2036,9 @@ pub(super) fn emit_interface_dispatch_call_with_miss(
         .map(|sig| sig.return_type.clone())
         .unwrap_or(PhpType::Mixed);
     // An eval-created object carries the generic `stdClass` header, so the scan below never finds
-    // the interfaces its declaring class implements. Ask the bridge before answering zero. Only a
+    // the interfaces its declaring class implements. An eval subclass of a compiled abstract class
+    // carries that ancestor's header instead: the scan matches, but the slot the subclass fills is
+    // null. Both ask the bridge before answering zero. Only a
     // method without parameters qualifies: the arguments of the others are already in the ABI
     // argument registers, which the bridge call does not forward.
     let eval_miss = ctx.module.required_runtime_features.eval_bridge
@@ -1411,9 +2074,12 @@ pub(super) fn emit_interface_dispatch_call_with_miss(
             if slot == 0 {
                 ctx.emitter.instruction("ldr x11, [x11]");                      // load first interface method implementation pointer
             } else {
-                ctx.emitter.instruction(
+                ctx.emitter.instruction(                                        // load selected interface method implementation pointer
                     &format!("ldr x11, [x11, #{}]", slot * 8)
-                );                                                              // load selected interface method implementation pointer
+                );
+            }
+            if eval_miss {
+                ctx.emitter.instruction(&format!("cbz x11, {}", missing));      // an abstract slot means an eval subclass owns the body
             }
             ctx.emitter.instruction("blr x11");                                 // call resolved interface method implementation
             ctx.emitter.instruction(&format!("b {}", local_done));              // skip defensive missing-interface fallback
@@ -1423,6 +2089,8 @@ pub(super) fn emit_interface_dispatch_call_with_miss(
             }
             if let InterfaceDispatchMiss::DynamicToString(value) = miss {
                 super::output_values::emit_value_dynamic_object_to_string(ctx, value)?;
+            } else if matches!(miss, InterfaceDispatchMiss::ObjectNotArray) {
+                ctx.emitter.instruction("bl __rt_throw_object_not_array");      // the receiver is not ArrayAccess: raise php's Error, never returns
             } else {
                 ctx.emitter.instruction("mov x0, #0");                          // defensive fallback for invalid interface metadata
             }
@@ -1448,9 +2116,13 @@ pub(super) fn emit_interface_dispatch_call_with_miss(
             if slot == 0 {
                 ctx.emitter.instruction("mov r11, QWORD PTR [r11]");            // load first interface method implementation pointer
             } else {
-                ctx.emitter.instruction(
+                ctx.emitter.instruction(                                        // load selected interface method implementation pointer
                     &format!("mov r11, QWORD PTR [r11 + {}]", slot * 8)
-                );                                                              // load selected interface method implementation pointer
+                );
+            }
+            if eval_miss {
+                ctx.emitter.instruction("test r11, r11");                       // an abstract slot means an eval subclass owns the body
+                ctx.emitter.instruction(&format!("je {}", missing));            // ask the eval bridge instead of calling null
             }
             ctx.emitter.instruction("call r11");                                // call resolved interface method implementation
             ctx.emitter.instruction(&format!("jmp {}", local_done));            // skip defensive missing-interface fallback
@@ -1460,6 +2132,8 @@ pub(super) fn emit_interface_dispatch_call_with_miss(
             }
             if let InterfaceDispatchMiss::DynamicToString(value) = miss {
                 super::output_values::emit_value_dynamic_object_to_string(ctx, value)?;
+            } else if matches!(miss, InterfaceDispatchMiss::ObjectNotArray) {
+                ctx.emitter.instruction("call __rt_throw_object_not_array");    // the receiver is not ArrayAccess: raise php's Error, never returns
             } else {
                 ctx.emitter.instruction("xor eax, eax");                        // defensive fallback for invalid interface metadata
             }
@@ -1531,70 +2205,51 @@ fn emit_generator_iterator_runtime_call(
     abi::emit_call_label(ctx.emitter, helper);
 }
 
-/// Resolves the concrete implementation class for an object iterator method.
-fn object_iterator_method_target(
-    ctx: &FunctionContext<'_>,
-    class_name: &str,
-    method_key: &str,
-) -> Result<ObjectIteratorMethodTarget> {
-    let normalized = class_name.trim_start_matches('\\');
-    let class_info = ctx
-        .module
-        .class_infos
-        .get(normalized)
-        .ok_or_else(|| CodegenIrError::unsupported(format!("iterator object class {}", normalized)))?;
-    let callee_sig = class_info
-        .methods
-        .get(method_key)
-        .ok_or_else(|| CodegenIrError::unsupported(format!("iterator method {}::{}", normalized, method_key)))?;
-    if !callee_sig.params.is_empty() {
-        return Err(CodegenIrError::unsupported(format!(
-            "iterator method {}::{} with {} params",
-            normalized,
-            method_key,
-            callee_sig.params.len()
-        )));
+/// Frame offsets of every iterator state whose walk retains successor-key anchors.
+///
+/// Only a by-reference walk that names an origin captures them (see [`emit_capture_successor_keys`]),
+/// so an ordinary `foreach` is not listed and pays nothing at function exit.
+pub(in crate::codegen) fn anchored_iterator_state_offsets(ctx: &FunctionContext<'_>) -> Vec<usize> {
+    let mut offsets = Vec::new();
+    for inst in &ctx.function.instructions {
+        if inst.op != Op::IterStart {
+            continue;
+        }
+        let Some(Immediate::IterStart(metadata)) = inst.immediate.as_ref() else {
+            continue;
+        };
+        if !metadata.is_by_ref() || metadata.origin().is_none() {
+            continue;
+        }
+        if let Ok(offset) = ctx.local_offset(metadata.state()) {
+            if !offsets.contains(&offset) {
+                offsets.push(offset);
+            }
+        }
     }
-    let impl_class = class_info
-        .method_impl_classes
-        .get(method_key)
-        .cloned()
-        .unwrap_or_else(|| normalized.to_string());
-    let runtime_helper =
-        IntrinsicCall::instance_method(&impl_class, method_key).and_then(|intrinsic| intrinsic.runtime_helper());
-    if runtime_helper.is_none() && !class_method_body_exists(ctx, &impl_class, method_key) {
-        return Err(CodegenIrError::unsupported(format!(
-            "iterator method {}::{} without an emitted EIR method body",
-            impl_class, method_key
-        )));
-    }
-    Ok(ObjectIteratorMethodTarget {
-        impl_class,
-        runtime_helper,
-        return_type: callee_sig.return_type.clone(),
-    })
+    offsets
 }
 
-/// Resolved method implementation for an object iterator method call.
-struct ObjectIteratorMethodTarget {
-    impl_class: String,
-    runtime_helper: Option<&'static str>,
-    return_type: PhpType,
+/// Parks one state's anchors as "nothing retained", before any walk can have written them.
+pub(in crate::codegen) fn emit_clear_iterator_anchors(ctx: &mut FunctionContext<'_>, offset: usize) {
+    emit_clear_successor_keys(ctx, offset);
 }
 
-/// Returns true when the EIR module contains the concrete instance-method body.
-fn class_method_body_exists(ctx: &FunctionContext<'_>, class_name: &str, method_key: &str) -> bool {
-    ctx.shared
-        .emitted_method_contains(class_name, method_key, false)
+/// Releases the anchors a walk abandoned (a throw or an early return skips `iter_end`).
+pub(in crate::codegen) fn emit_release_iterator_anchors(ctx: &mut FunctionContext<'_>, offset: usize) {
+    emit_release_successor_keys(ctx, offset);
 }
 
-/// Lowers iterator cleanup; Phase 04 array iterator state is stack-resident.
-pub(super) fn lower_iter_end(_ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+/// Lowers iterator cleanup for owned relocation anchors in the stack-resident state.
+pub(super) fn lower_iter_end(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.result.is_some() {
         return Err(CodegenIrError::invalid_module(
             "iter_end must not produce a result".to_string(),
         ));
     }
+    let state = expect_local_slot(inst)?;
+    let offset = ctx.local_offset(state)?;
+    emit_release_successor_keys(ctx, offset);
     Ok(())
 }
 
@@ -1662,10 +2317,19 @@ fn lower_indexed_iter_next_x86_64(
 }
 
 /// Emits AArch64 advancement for a stack-resident associative-array iterator.
-fn lower_hash_iter_next_aarch64(ctx: &mut FunctionContext<'_>, offset: usize) {
+///
+/// The walk uses the dereferencing iterator, so a tag-11 entry reports the value it references
+/// while the returned entry address still points at the reference entry for by-reference
+/// binding. Reloading a relocated source happens earlier, in [`emit_reload_live_iter_source`],
+/// because the dynamic dispatch on heap kind must also see the live pointer.
+fn lower_hash_iter_next_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    capture_successor: bool,
+) {
     abi::load_at_offset(ctx.emitter, "x0", offset - ITER_SOURCE_OFFSET_DELTA);
     abi::load_at_offset(ctx.emitter, "x1", offset - ITER_CURSOR_OFFSET_DELTA);
-    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next_value");
     ctx.emitter.instruction("cmn x0, #1");                                      // check whether the hash iterator returned the done sentinel
     abi::store_at_offset(ctx.emitter, "x0", offset - ITER_CURSOR_OFFSET_DELTA);
     abi::store_at_offset(ctx.emitter, "x1", offset - ITER_KEY_LO_OFFSET_DELTA);
@@ -1674,14 +2338,25 @@ fn lower_hash_iter_next_aarch64(ctx: &mut FunctionContext<'_>, offset: usize) {
     abi::store_at_offset(ctx.emitter, "x4", offset - ITER_VALUE_HI_OFFSET_DELTA);
     abi::store_at_offset(ctx.emitter, "x5", offset - ITER_VALUE_TAG_OFFSET_DELTA);
     abi::store_at_offset(ctx.emitter, "x6", offset - ITER_VALUE_ADDR_OFFSET_DELTA);
+    if capture_successor {
+        emit_capture_successor_keys(ctx, offset);
+    }
+    abi::load_at_offset(ctx.emitter, "x9", offset - ITER_CURSOR_OFFSET_DELTA);
+    ctx.emitter.instruction("cmn x9, #1");                                      // check the saved cursor after anchor retain calls
     ctx.emitter.instruction("cset x0, ne");                                     // materialize whether the associative iterator has a current entry
 }
 
 /// Emits x86_64 advancement for a stack-resident associative-array iterator.
-fn lower_hash_iter_next_x86_64(ctx: &mut FunctionContext<'_>, offset: usize) {
+///
+/// Mirrors [`lower_hash_iter_next_aarch64`].
+fn lower_hash_iter_next_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    capture_successor: bool,
+) {
     abi::load_at_offset(ctx.emitter, "rdi", offset - ITER_SOURCE_OFFSET_DELTA);
     abi::load_at_offset(ctx.emitter, "rsi", offset - ITER_CURSOR_OFFSET_DELTA);
-    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next_value");
     ctx.emitter.instruction("cmp rax, -1");                                     // check whether the hash iterator returned the done sentinel
     abi::store_at_offset(ctx.emitter, "rax", offset - ITER_CURSOR_OFFSET_DELTA);
     abi::store_at_offset(ctx.emitter, "rdi", offset - ITER_KEY_LO_OFFSET_DELTA);
@@ -1690,8 +2365,83 @@ fn lower_hash_iter_next_x86_64(ctx: &mut FunctionContext<'_>, offset: usize) {
     abi::store_at_offset(ctx.emitter, "r8", offset - ITER_VALUE_HI_OFFSET_DELTA);
     abi::store_at_offset(ctx.emitter, "r9", offset - ITER_VALUE_TAG_OFFSET_DELTA);
     abi::store_at_offset(ctx.emitter, "r10", offset - ITER_VALUE_ADDR_OFFSET_DELTA);
+    if capture_successor {
+        emit_capture_successor_keys(ctx, offset);
+    }
+    abi::load_at_offset(ctx.emitter, "r10", offset - ITER_CURSOR_OFFSET_DELTA);
+    ctx.emitter.instruction("cmp r10, -1");                                     // check the saved cursor after anchor retain calls
     ctx.emitter.instruction("setne al");                                        // materialize whether the associative iterator has a current entry
     ctx.emitter.instruction("movzx rax, al");                                   // widen the availability flag into the integer result register
+}
+
+/// Records owned keys for the next two entries the cursor can yield.
+///
+/// Emitted only for a by-reference walk that named an origin, so an ordinary `foreach` pays
+/// nothing for it. A post-last or done cursor leaves both anchors absent. String keys are retained
+/// after both pairs have been copied out of the table, so helper calls cannot invalidate the entry
+/// address used to discover the fallback.
+fn emit_capture_successor_keys(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let absent = ctx.next_label("iter_successor_absent");
+    let retain = ctx.next_label("iter_successor_retain");
+    let done = ctx.next_label("iter_successor_done");
+    emit_clear_successor_keys(ctx, offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset_scratch(ctx.emitter, "x10", offset - ITER_CURSOR_OFFSET_DELTA, "x12");
+            ctx.emitter.instruction("cmp x10, #0");                             // do the end sentinels leave any successor to anchor on?
+            ctx.emitter.instruction(&format!("b.le {}", absent));               // the post-last and done cursors have none
+            abi::load_at_offset_scratch(ctx.emitter, "x9", offset - ITER_SOURCE_OFFSET_DELTA, "x12");
+            ctx.emitter.instruction("ldr x9, [x9, #40]");                       // locate the separately allocated hash entries
+            ctx.emitter.instruction("sub x10, x10, #1");                        // decode the successor slot index from the cursor
+            ctx.emitter.instruction("lsl x10, x10, #6");                        // 64 bytes per hash entry
+            ctx.emitter.instruction("add x10, x9, x10");                        // advance from entry storage to the successor slot
+            ctx.emitter.instruction("ldr x11, [x10, #8]");                      // successor key pointer or integer payload
+            ctx.emitter.instruction("ldr x12, [x10, #16]");                     // successor key length or integer sentinel
+            abi::store_at_offset_scratch(ctx.emitter, "x11", offset - ITER_NEXT_KEY_LO_OFFSET_DELTA, "x9");
+            abi::store_at_offset_scratch(ctx.emitter, "x12", offset - ITER_NEXT_KEY_HI_OFFSET_DELTA, "x9");
+            ctx.emitter.instruction("ldr x13, [x10, #56]");                     // load the successor's own insertion-order successor
+            ctx.emitter.instruction("cmp x13, #-1");                            // is the primary anchor the current tail?
+            ctx.emitter.instruction(&format!("b.eq {retain}"));                 // no fallback exists, retain only the primary key
+            abi::load_at_offset_scratch(ctx.emitter, "x9", offset - ITER_SOURCE_OFFSET_DELTA, "x12");
+            ctx.emitter.instruction("ldr x9, [x9, #40]");                       // locate the separately allocated hash entries
+            ctx.emitter.instruction("lsl x13, x13, #6");                        // 64 bytes per fallback hash entry
+            ctx.emitter.instruction("add x13, x9, x13");                        // advance from entry storage to the fallback slot
+            ctx.emitter.instruction("ldr x11, [x13, #8]");                      // fallback key pointer or integer payload
+            ctx.emitter.instruction("ldr x12, [x13, #16]");                     // fallback key length or integer sentinel
+            abi::store_at_offset_scratch(ctx.emitter, "x11", offset - ITER_FALLBACK_KEY_LO_OFFSET_DELTA, "x9");
+            abi::store_at_offset_scratch(ctx.emitter, "x12", offset - ITER_FALLBACK_KEY_HI_OFFSET_DELTA, "x9");
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(ctx.emitter, "r10", offset - ITER_CURSOR_OFFSET_DELTA);
+            ctx.emitter.instruction("cmp r10, 0");                              // do the end sentinels leave any successor to anchor on?
+            ctx.emitter.instruction(&format!("jle {}", absent));                // the post-last and done cursors have none
+            abi::load_at_offset(ctx.emitter, "r11", offset - ITER_SOURCE_OFFSET_DELTA);
+            ctx.emitter.instruction("mov r11, QWORD PTR [r11 + 40]");           // locate the separately allocated hash entries
+            ctx.emitter.instruction("sub r10, 1");                              // decode the successor slot index from the cursor
+            ctx.emitter.instruction("shl r10, 6");                              // 64 bytes per hash entry
+            ctx.emitter.instruction("add r10, r11");                            // advance from entry storage to the successor slot
+            ctx.emitter.instruction("mov r11, QWORD PTR [r10 + 8]");            // successor key pointer or integer payload
+            ctx.emitter.instruction("mov rcx, QWORD PTR [r10 + 16]");           // successor key length or integer sentinel
+            abi::store_at_offset(ctx.emitter, "r11", offset - ITER_NEXT_KEY_LO_OFFSET_DELTA);
+            abi::store_at_offset(ctx.emitter, "rcx", offset - ITER_NEXT_KEY_HI_OFFSET_DELTA);
+            ctx.emitter.instruction("mov r9, QWORD PTR [r10 + 56]");            // load the successor's own insertion-order successor
+            ctx.emitter.instruction("cmp r9, -1");                              // is the primary anchor the current tail?
+            ctx.emitter.instruction(&format!("je {retain}"));                   // no fallback exists, retain only the primary key
+            abi::load_at_offset(ctx.emitter, "r11", offset - ITER_SOURCE_OFFSET_DELTA);
+            ctx.emitter.instruction("mov r11, QWORD PTR [r11 + 40]");           // locate the separately allocated hash entries
+            ctx.emitter.instruction("shl r9, 6");                               // 64 bytes per fallback hash entry
+            ctx.emitter.instruction("add r9, r11");                             // advance from entry storage to the fallback slot
+            ctx.emitter.instruction("mov r11, QWORD PTR [r9 + 8]");             // fallback key pointer or integer payload
+            ctx.emitter.instruction("mov rcx, QWORD PTR [r9 + 16]");            // fallback key length or integer sentinel
+            abi::store_at_offset(ctx.emitter, "r11", offset - ITER_FALLBACK_KEY_LO_OFFSET_DELTA);
+            abi::store_at_offset(ctx.emitter, "rcx", offset - ITER_FALLBACK_KEY_HI_OFFSET_DELTA);
+        }
+    }
+    ctx.emitter.label(&retain);
+    emit_retain_successor_keys(ctx, offset);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&absent);
+    ctx.emitter.label(&done);
 }
 
 /// Boxes the current AArch64 hash key saved by `IterNext` into a `Mixed` cell.
@@ -1729,6 +2479,64 @@ fn load_current_hash_key_as_mixed_x86_64(ctx: &mut FunctionContext<'_>, offset: 
     ctx.emitter.instruction("mov eax, 1");                                      // runtime tag 1 = string mixed key
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
     ctx.emitter.label(&key_done);
+}
+
+/// Keeps an unpacked PHP reference's cell while boxing ordinary iterator values by value.
+fn load_current_hash_call_value_as_mixed(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    preserve_reference: bool,
+    promote_reference: bool,
+) {
+    if preserve_reference || promote_reference {
+        let ordinary = ctx.next_label("iter_call_value_ordinary");
+        let done = ctx.next_label("iter_call_value_done");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::load_at_offset(ctx.emitter, "x10", offset - ITER_VALUE_ADDR_OFFSET_DELTA);
+                if promote_reference {
+                    ctx.emitter.instruction("mov x0, x10");                     // promote this writable entry in the caller's array
+                    abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+                    ctx.emitter.instruction("mov x10, x0");                     // carry the managed cell into the descriptor marker
+                } else {
+                    ctx.emitter.instruction("ldr x9, [x10, #16]");              // inspect the original entry before iterator dereferencing
+                    ctx.emitter.instruction("cmp x9, #11");                     // only a PHP reference shares caller storage
+                    ctx.emitter.instruction(&format!("b.ne {ordinary}"));       // ordinary entries keep their by-value result
+                    ctx.emitter.instruction("ldr x10, [x10]");                  // borrow the cell from the pinned source
+                }
+                ctx.emitter.instruction("mov x9, #11");                         // encode a descriptor reference marker
+                ctx.emitter.instruction("mov x11, #7");                         // its referenced PHP value is boxed Mixed
+                emit_box_runtime_payload_as_mixed(ctx.emitter, "x9", "x10", "x11");
+            }
+            Arch::X86_64 => {
+                abi::load_at_offset(ctx.emitter, "r10", offset - ITER_VALUE_ADDR_OFFSET_DELTA);
+                if promote_reference {
+                    ctx.emitter.instruction("mov rdi, r10");                    // promote this writable entry in the caller's array
+                    abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+                    ctx.emitter.instruction("mov rcx, rax");                    // carry the managed cell into the descriptor marker
+                } else {
+                    ctx.emitter.instruction("cmp QWORD PTR [r10 + 16], 11");    // inspect the original entry before iterator dereferencing
+                    ctx.emitter.instruction(&format!("jne {ordinary}"));        // ordinary entries keep their by-value result
+                    ctx.emitter.instruction("mov rcx, QWORD PTR [r10]");        // borrow the cell from the pinned source
+                }
+                ctx.emitter.instruction("mov r9, 11");                          // encode a descriptor reference marker
+                ctx.emitter.instruction("mov r8, 7");                           // its referenced PHP value is boxed Mixed
+                emit_box_runtime_payload_as_mixed(ctx.emitter, "r9", "rcx", "r8");
+            }
+        }
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&ordinary);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => load_current_hash_value_as_mixed_aarch64(ctx, offset),
+            Arch::X86_64 => load_current_hash_value_as_mixed_x86_64(ctx, offset),
+        }
+        ctx.emitter.label(&done);
+    } else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => load_current_hash_value_as_mixed_aarch64(ctx, offset),
+            Arch::X86_64 => load_current_hash_value_as_mixed_x86_64(ctx, offset),
+        }
+    }
 }
 
 /// Boxes the current AArch64 hash value payload saved by `IterNext` into `Mixed`.
@@ -1962,42 +2770,42 @@ fn load_current_array_value_aarch64(
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // skip the indexed-array header to reach element payloads
                 &format!("add {}, {}, #24", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach element payloads
-            ctx.emitter.instruction(
+            );
+            ctx.emitter.instruction(                                            // load the selected pointer-sized indexed-array element
                 &format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, index_reg)
-            );                                                                  // load the selected pointer-sized indexed-array element
+            );
         }
         PhpType::Float => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // skip the indexed-array header to reach float payloads
                 &format!("add {}, {}, #24", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach float payloads
-            ctx.emitter.instruction(
+            );
+            ctx.emitter.instruction(                                            // load the selected indexed-array float element
                 &format!("ldr d0, [{}, {}, lsl #3]", array_reg, index_reg)
-            );                                                                  // load the selected indexed-array float element
+            );
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // scale the string-array offset by pointer-plus-length slot size
                 &format!("lsl {}, {}, #4", index_reg, index_reg)
-            );                                                                  // scale the string-array offset by pointer-plus-length slot size
-            ctx.emitter.instruction(
+            );
+            ctx.emitter.instruction(                                            // move to the selected string slot within the indexed array
                 &format!("add {}, {}, {}", array_reg, array_reg, index_reg)
-            );                                                                  // move to the selected string slot within the indexed array
-            ctx.emitter.instruction(
+            );
+            ctx.emitter.instruction(                                            // skip the indexed-array header before loading the string slot
                 &format!("add {}, {}, #24", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header before loading the string slot
+            );
             abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 8);
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // skip the indexed-array header to reach refcounted payloads
                 &format!("add {}, {}, #24", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach refcounted payloads
-            ctx.emitter.instruction(
+            );
+            ctx.emitter.instruction(                                            // load the selected refcounted indexed-array element
                 &format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, index_reg)
-            );                                                                  // load the selected refcounted indexed-array element
+            );
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -2025,38 +2833,38 @@ fn load_current_array_value_x86_64(
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // skip the indexed-array header to reach element payloads
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach element payloads
-            ctx.emitter.instruction(
+            );
+            ctx.emitter.instruction(                                            // load the selected pointer-sized indexed-array element
                 &format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, index_reg)
-            );                                                                  // load the selected pointer-sized indexed-array element
+            );
         }
         PhpType::Float => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // skip the indexed-array header to reach float payloads
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach float payloads
-            ctx.emitter.instruction(
+            );
+            ctx.emitter.instruction(                                            // load the selected indexed-array float element
                 &format!("movsd xmm0, QWORD PTR [{} + {} * 8]", array_reg, index_reg)
-            );                                                                  // load the selected indexed-array float element
+            );
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             ctx.emitter.instruction(&format!("shl {}, 4", index_reg));          // scale the string-array offset by pointer-plus-length slot size
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // move to the selected string slot within the indexed array
                 &format!("add {}, {}", array_reg, index_reg)
-            );                                                                  // move to the selected string slot within the indexed array
+            );
             ctx.emitter.instruction(&format!("add {}, 24", array_reg));         // skip the indexed-array header before loading the string slot
             abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 8);
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // skip the indexed-array header to reach refcounted payloads
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach refcounted payloads
-            ctx.emitter.instruction(
+            );
+            ctx.emitter.instruction(                                            // load the selected refcounted indexed-array element
                 &format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, index_reg)
-            );                                                                  // load the selected refcounted indexed-array element
+            );
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -2211,10 +3019,16 @@ fn object_iterator_source(
         return IteratorSourceKind::DynamicIterable;
     }
     if ctx.module.interface_infos.contains_key(class_name) {
-        return IteratorSourceKind::Interface {
-            interface_name: class_name.to_string(),
-            aggregate_class_name: None,
-        };
+        if class_name == "Iterator" || interface_extends_interface(ctx, class_name, "Iterator") {
+            return IteratorSourceKind::Interface {
+                interface_name: class_name.to_string(),
+                aggregate_class_name: None,
+            };
+        }
+        // A Traversable-typed value can be either an Iterator or an
+        // IteratorAggregate at runtime. The dynamic iterable path distinguishes
+        // those cases before invoking any protocol method.
+        return IteratorSourceKind::DynamicIterable;
     }
     if class_implements_interface(ctx, class_name, "Iterator") {
         return IteratorSourceKind::Object {
@@ -2317,3 +3131,26 @@ fn interface_extends_interface(
 fn normalized_type_name(name: &str) -> &str {
     name.trim_start_matches('\\')
 }
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Unit coverage for iterator lowering contracts that reject malformed EIR.
+    //!
+    //! Called from:
+    //! - `cargo test` through the Rust test harness.
+    //!
+    //! Key details:
+    //! - IteratorAggregate results must never be published without an owner.
+
+    use super::*;
+
+    /// Missing owner metadata is a codegen error before a result can be adopted.
+    #[test]
+    fn aggregate_adoption_requires_an_owner_slot() {
+        assert!(require_get_iterator_owner(None).is_err());
+        let slot = LocalSlotId::from_raw(7);
+        assert_eq!(require_get_iterator_owner(Some(slot)).unwrap(), slot);
+    }
+}
+

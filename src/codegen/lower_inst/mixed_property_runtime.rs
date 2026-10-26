@@ -323,7 +323,7 @@ pub(super) fn cast_loaded_mixed_pointer_to_result(
             return Ok(());
         }
         PhpType::TaggedScalar => {
-            emit_mixed_result_as_tagged_scalar(ctx);
+            coerce_loaded_value_to_tagged_scalar(ctx, &PhpType::Mixed)?;
             return Ok(());
         }
         PhpType::Array(_)

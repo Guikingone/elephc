@@ -73,6 +73,25 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_throw_current");                              // resume propagation at the caller's exception handler
 }
 
+/// Records a scalar value's wire position in its reserved `_unser_values` slot as `(pos << 1) | 1`.
+///
+/// A later `R:N` that names the scalar re-decodes it from that position, because scalars are not
+/// kept alive after parsing and a published pointer would dangle. Real pointers are 8-byte aligned,
+/// so the low bit tells the two apart. This yields value semantics: php makes both slots one PHP
+/// reference, elephc gives the `R:` slot an equal copy. Overflow slots stay unregistered.
+fn emit_tag_scalar_position(emitter: &mut Emitter, kind: &str) {
+    let skip = format!("__rt_unser_at_{kind}_untagged");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // this scalar's reserved zero-based registry index
+    emitter.instruction("cmp r10, 65536");                                      // is the reserved slot inside the fixed registry?
+    emitter.instruction(&format!("jae {skip}"));                                // overflow values remain deliberately unregistered
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // wire position of the scalar's type byte
+    emitter.instruction("shl r11, 1");                                          // make room for the scalar marker bit
+    emitter.instruction("or r11, 1");                                           // tag the slot as a wire position, not a box pointer
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_unser_values");
+    emitter.instruction("mov QWORD PTR [r8 + r10 * 8], r11");                   // publish the position for later R: back-references
+    emitter.label(&skip);
+}
+
 /// Emits the x86_64 recursive decoder for one prevalidated serialized value.
 pub(super) fn emit_parser(emitter: &mut Emitter) {
     // -- __rt_unser_at(base=rdi, pos=rsi, end=rdx) -> rax=box (0 fail), rdx=newpos --
@@ -95,8 +114,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("cmp rsi, rdx");                                        // is the cursor already at/past the end?
     emitter.instruction("jge __rt_unser_at_fail");                              // nothing left to parse
     emitter.instruction("movzx r9d, BYTE PTR [rdi + rsi]");                     // load the leading type byte
-    // -- back-reference? r:N; / R:N; resolves to a previously parsed value and
-    //    consumes no new index --
+    // -- back-reference? r:N; / R:N; resolves to a previously parsed value. Only R
+    //    consumes no new index: php pushes every value but a PHP reference --
     emitter.instruction("cmp r9d, 114");                                        // ASCII 'r'?
     emitter.instruction("je __rt_unser_at_ref");                                // resolve an object back-reference
     emitter.instruction("cmp r9d, 82");                                         // ASCII 'R'?
@@ -131,6 +150,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- null: "N;" --
     emitter.label("__rt_unser_at_null");
+    emit_tag_scalar_position(emitter, "null");
     emitter.instruction("mov rax, 8");                                          // value tag = null
     emitter.instruction("mov rdi, 0");                                          // null payload low word
     emitter.instruction("mov rsi, 0");                                          // null payload high word
@@ -141,6 +161,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- bool: "b:0;" / "b:1;" --
     emitter.label("__rt_unser_at_bool");
+    emit_tag_scalar_position(emitter, "bool");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload base
     emitter.instruction("add r10, QWORD PTR [rbp - 16]");                       // pointer to the type byte
     emitter.instruction("movzx r9d, BYTE PTR [r10 + 2]");                       // load the bool digit at offset 2
@@ -156,6 +177,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- int: "i:" + optional '-' + digits + ";" --
     emitter.label("__rt_unser_at_int");
+    emit_tag_scalar_position(emitter, "int");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload base
     emitter.instruction("add r10, QWORD PTR [rbp - 16]");                       // pointer to the type byte
     emitter.instruction("add r10, 2");                                          // skip "i:" to the first digit
@@ -195,6 +217,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- float: "d:" + (INF/-INF/NAN | digits) + ";" --
     emitter.label("__rt_unser_at_float");
+    emit_tag_scalar_position(emitter, "float");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload base
     emitter.instruction("add rdi, QWORD PTR [rbp - 16]");                       // pointer to the type byte
     emitter.instruction("add rdi, 2");                                          // strtod source = first byte after "d:"
@@ -225,6 +248,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- string: "s:" + bytelen + ":\"" + raw + "\";" --
     emitter.label("__rt_unser_at_str");
+    emit_tag_scalar_position(emitter, "str");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload base
     emitter.instruction("add r10, QWORD PTR [rbp - 16]");                       // pointer to the type byte
     emitter.instruction("add r10, 2");                                          // skip "s:" to the length digits
@@ -329,6 +353,9 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax], 5");                              // value tag 5 = associative array (hash)
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the hash pointer (ownership transferred)
     emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // clear the high payload word
+    emitter.instruction("mov rdi, rax");                                        // pass the completed array box to registry publication
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 88]");                       // pass this array's reserved zero-based index
+    emitter.instruction("call __rt_unserialize_register_array");                // retain a context lease for references after hydration
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload position (at the closing '}')
     emitter.instruction("add rdx, 1");                                          // newpos skips the '}'
     emitter.instruction("jmp __rt_unser_at_ret");                               // return box and new position
@@ -400,10 +427,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.label("__rt_unser_obj_incomplete_x");
     emitter.instruction("mov rax, 32");                                         // class id, original class name, and opaque property hash
     emitter.instruction("call __rt_heap_alloc");                                // allocate the incomplete-object payload
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // materialize the full-width object heap marker before storing it
         "mov r10, 0x{:x}",
         crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-    )); // materialize the full-width object heap marker before storing it
+    ));
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the object header without an unencodable imm64 memory move
     emitter.instruction("mov rdi, rax");                                        // object handle allocator input
     emitter.instruction("call __rt_object_handle_acquire");                     // give the incomplete object a normal PHP handle
@@ -500,10 +527,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // persist the entry index
     emitter.instruction("jmp __rt_unser_obj_data_loop");                        // continue with the next entry
     emitter.label("__rt_unser_obj_data_done");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // $this receiver = first argument
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // $data assoc array (bare hash) = second argument
-    emitter.instruction("mov r10, QWORD PTR [rbp - 72]");                       // reload the __unserialize target
-    emitter.instruction("call r10");                                            // call __unserialize($this, $data)
+    super::magic_call::emit_unserialize_magic_call(emitter);
     emitter.instruction("jmp __rt_unser_at_obj_box");                           // box the object (position is at the closing '}')
     emitter.label("__rt_unser_obj_default");
     emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // blocked objects own an opaque Mixed property hash
@@ -660,9 +684,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 60");                                         // Linux exit syscall number
     emitter.instruction("syscall");                                             // terminate without returning to the overflowing caller
 
-    // -- back-reference: r:N; / R:N; -> a fresh box aliasing the Nth parsed value
-    //    (1-based); objects are retained. Out-of-range/unregistered index -> null. --
+    // Back-references clone a registered value with its payload retain. Lowercase r
+    // accepts object identity only; uppercase R can also read a completed array.
     emitter.label("__rt_unser_at_ref");
+    emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // preserve the reference marker across index parsing
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // base
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // position
     emitter.instruction("add r10, r11");                                        // pointer to the leading 'r'/'R'
@@ -697,27 +722,44 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r9 + r11*8]");                      // the registered value box (0 if none)
     emitter.instruction("test r9, r9");                                         // was this reserved registry slot left unpublished?
     emitter.instruction("jz __rt_unser_at_ref_fail");                           // → null
-    emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // save the source box across the alloc
-    emitter.instruction("mov rax, 24");                                         // a fresh boxed Mixed cell
-    emitter.instruction("call __rt_heap_alloc");                                // allocate it
-    emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the source box
-    emitter.instruction("mov r10, QWORD PTR [r9 - 8]");                         // source heap header
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // copy the heap header
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // source value tag
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // copy the value tag
-    emitter.instruction("mov r10, QWORD PTR [r9 + 8]");                         // source low payload (object pointer)
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // copy the low payload
-    emitter.instruction("mov r10, QWORD PTR [r9 + 16]");                        // source high payload
-    emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // copy the high payload
-    emitter.instruction("cmp QWORD PTR [rax], 6");                              // does the alias point at an object?
-    emitter.instruction("jne __rt_unser_at_ref_boxed");                         // non-objects need no retain
-    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the fresh box across the retain
-    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // move the object pointer into incref's x86_64 input register
-    emitter.instruction("call __rt_incref");                                    // retain the shared object before the source box releases it
-    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload the fresh box
-    emitter.label("__rt_unser_at_ref_boxed");
+    emitter.instruction("test r9, 1");                                          // a tagged slot holds a scalar's wire position
+    emitter.instruction("jnz __rt_unser_at_ref_scalar");                        // re-decode the scalar instead of cloning a box
+    emitter.instruction("cmp QWORD PTR [rbp - 72], 114");                       // lowercase r denotes object identity, not an array reference
+    emitter.instruction("jne __rt_unser_at_ref_clone");                         // uppercase R accepts any published value shape
+    emitter.instruction("cmp QWORD PTR [r9], 6");                               // require an object for lowercase r
+    emitter.instruction("jne __rt_unser_at_ref_fail");                          // reject a non-object identity target
+    // An object back-reference takes the next index itself and publishes the SAME object box
+    // there (see the AArch64 decoder).
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_unser_count");
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // zero-based slot this reference takes
+    emitter.instruction("add QWORD PTR [r10], 1");                              // advance the registry counter past it
+    emitter.instruction("cmp r11, 65536");                                      // is the reserved slot inside the fixed registry?
+    emitter.instruction("jae __rt_unser_at_ref_clone");                         // overflow values remain deliberately unregistered
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_unser_values");
+    emitter.instruction("mov QWORD PTR [r10 + r11*8], r9");                     // alias the target's borrowed box, which outlives this parse
+    emitter.label("__rt_unser_at_ref_clone");
+    emitter.instruction("mov rax, r9");                                         // supply the borrowed registry cell to the shared clone helper
+    emitter.instruction("call __rt_mixed_clone");                               // detach a result box and retain its object or array payload
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // newpos past the ';'
     emitter.instruction("jmp __rt_unser_at_ret");                               // return the aliasing box
+    // R: onto a scalar: decode it again from its recorded wire position. The nested decode
+    // reserves one registry index, which is handed back so the R: itself consumes none.
+    emitter.label("__rt_unser_at_ref_scalar");
+    emitter.instruction("cmp QWORD PTR [rbp - 72], 114");                       // lowercase r denotes object identity only
+    emitter.instruction("je __rt_unser_at_ref_fail");                           // a scalar is never an object target
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_unser_count");
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // registry count before the nested decode
+    emitter.instruction("mov QWORD PTR [rbp - 80], r11");                       // keep it to hand the index back
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // base
+    emitter.instruction("mov rsi, r9");                                         // tagged wire position
+    emitter.instruction("shr rsi, 1");                                          // recover the scalar's wire position
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // end
+    emitter.instruction("call __rt_unser_at");                                  // decode the scalar into a fresh owned box
+    emitter.instruction("mov r11, QWORD PTR [rbp - 80]");                       // registry count before the nested decode
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_unser_count");
+    emitter.instruction("mov QWORD PTR [r10], r11");                            // the R: does not take an index of its own
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // newpos past the ';'
+    emitter.instruction("jmp __rt_unser_at_ret");                               // return the copied scalar box
     emitter.label("__rt_unser_at_ref_fail");
     emitter.instruction("xor eax, eax");                                        // unresolved reference → null
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // newpos past the ';'

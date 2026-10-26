@@ -33,7 +33,9 @@ pub(super) fn try_fold_cast(target: &CastType, expr: &Expr) -> Option<ExprKind> 
         // `try_fold_cast_int`/`try_fold_cast_string` already decline non-finite operands.
         CastType::Bool if value.is_nan_float() => None,
         CastType::Bool => Some(ExprKind::BoolLiteral(value.truthy())),
-        CastType::Array | CastType::Object => None,
+        CastType::Array => None,
+        // `(object)` always allocates a fresh stdClass, so there is no literal to fold to.
+        CastType::Object => None,
     }
 }
 

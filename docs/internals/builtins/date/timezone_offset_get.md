@@ -1,16 +1,16 @@
 ---
-title: "timezone_offset_get() — internals"
+title: "timezone_offset_get() - internals"
 description: "Compiler internals for timezone_offset_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 261
+  order: 262
 ---
 
-## `timezone_offset_get()` — internals
+## `timezone_offset_get()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:976](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L976) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:999](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L999) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

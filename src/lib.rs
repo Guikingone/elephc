@@ -11,6 +11,8 @@
 mod brand;
 mod call_graph;
 mod cli;
+mod closed_world;
+mod reflection_table;
 mod cli_entry;
 mod debug_info;
 mod mapped_file;
@@ -34,6 +36,10 @@ pub use cli_entry::run as run_cli;
 pub mod autoload;
 /// Gradual and associative `array_merge()` compatibility prelude.
 mod addcslashes_prelude;
+/// The by-reference `$count` form of `str_replace()` as an AST-built prelude declaration.
+mod str_replace_count_prelude;
+/// `natsort()`/`natcasesort()` over gradual arrays, rewritten into `uasort()` at the call site.
+mod natsort_gradual_prelude;
 /// `htmlspecialchars()`'s `$double_encode` parameter as AST-built prelude declarations.
 mod htmlspecialchars_prelude;
 mod hash_pbkdf2_prelude;
@@ -41,13 +47,14 @@ mod http_build_query_prelude;
 mod version_compare_prelude;
 pub mod array_merge_prelude;
 /// Default-initial-value `array_reduce()` compatibility prelude.
-pub mod array_reduce_prelude;
 /// Single-argument `assert()` compatibility prelude.
 pub mod assert_prelude;
+pub mod throwable_string_prelude;
 /// PHP's builtin `ErrorException`, declared as an AST-built class.
 pub mod error_exception_prelude;
 pub mod password_prelude;
 pub mod array_edge_prelude;
+pub mod array_gradual_prelude;
 pub mod array_ucompare_prelude;
 pub mod sodium_prelude;
 pub mod attribute_prelude;
@@ -57,18 +64,38 @@ pub mod ast_usage;
 mod array_filter_prelude;
 /// `array_any()` / `array_all()` as AST-built prelude declarations.
 mod array_find_prelude;
+pub mod lazy_static_defaults;
 mod array_splice_prelude;
 mod array_map_prelude;
 mod array_keys_prelude;
 mod array_walk_prelude;
 mod preg_match_all_prelude;
+mod proc_prelude;
+mod csv_prelude;
+mod exec_prelude;
+mod stream_select_prelude;
+mod min_max_prelude;
+mod count_recursive_prelude;
+mod numeric_string_arg_prelude;
+mod array_fill_keys_prelude;
 mod preg_array_prelude;
 mod is_callable_prelude;
 pub mod opcache_preload_sources;
+pub mod scoped_include_units;
+pub(crate) mod closure_from_callable_prelude;
+pub(crate) mod locale_prelude;
 /// Narrow PHP-level fallbacks for builtin shapes not handled natively yet.
 pub mod backend_gap_prelude;
+mod standard_gap_prelude;
 mod strnatcmp_prelude;
+mod strtok_prelude;
+mod randomizer_prelude;
+mod magic_call_prelude;
+pub mod static_ref_capture;
 mod tokenizer_prelude;
+/// Local Cargo source inputs shared by bridge discovery and integration-test builders.
+#[doc(hidden)]
+pub mod bridge_sources;
 /// Builtin catalog and signature metadata snapshots.
 pub mod builtin_metadata;
 /// Single-source builtin registry: catalog, signatures, type-check, and lowering dispatch.
@@ -78,9 +105,14 @@ pub mod codegen;
 /// Shared target/runtime support used by the EIR backend.
 #[doc(hidden)]
 pub mod codegen_support;
+/// The stack depth a compiler run needs, and the wrapper that supplies it.
+pub mod compiler_stack;
+/// Project `elephc.toml` `[ini]` manifest entries applied ahead of the command line's `--ini`.
+pub mod project_ini;
 /// Conditional compilation directives.
 pub mod conditional;
 /// Execution-time binding for conditionally declared PHP functions.
+pub mod conditional_classes;
 pub mod conditional_functions;
 /// Standard DOM class-surface prelude injection.
 pub mod dom_html_prelude;
@@ -101,6 +133,8 @@ pub mod filter_var_prelude;
 pub mod fast_hash;
 /// PHP variadic-argument introspection (`func_num_args`/`func_get_args`/`func_get_arg`) desugaring.
 pub mod func_args;
+pub mod literal_format_split;
+pub(crate) mod highlight_prelude;
 /// The program-wide set of names some body declares `global`, shared by the checker and lowering.
 pub(crate) mod global_decls;
 /// `$GLOBALS` literal-key aliasing onto ordinary global storage.
@@ -139,19 +173,22 @@ pub(crate) mod numeric_string;
 pub mod opcache;
 /// `opcache_get_configuration()` standard-library prelude injection.
 pub mod opcache_prelude;
+pub mod shared_ini_prelude;
+/// PHP `(object)` cast standard-library prelude injection.
+pub mod object_cast_prelude;
 /// Optimizer passes.
 pub mod optimize;
 /// Parser for PHP syntax.
 pub mod parser;
 /// `parse_str()` query-string prelude injection.
 mod parse_str_prelude;
-mod class_vars_prelude;
 /// `implode()` fallback for elements the native joiners cannot render.
 mod implode_prelude;
 /// `array_sum()` / `array_product()` fallback for arrays the native folds cannot sum.
+mod array_pad_prelude;
 mod array_sum_prelude;
 /// UTF-8 mbstring functions with no native implementation.
-mod mbstring_prelude;
+mod program_declares;
 /// Run-time constant table behind `define()` calls with a computed name.
 mod dynamic_define_prelude;
 /// Selected PHP compatibility version for version-sensitive compiler surfaces.
@@ -193,4 +230,5 @@ pub mod var_export_prelude;
 /// `ini_restore`).
 pub mod version_prelude;
 /// Conditionally-injected `--web` request prelude (extern declarations for bridge getters).
+pub mod entry_return;
 pub mod web_prelude;

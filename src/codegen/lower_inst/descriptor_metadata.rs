@@ -30,7 +30,10 @@ pub(in crate::codegen) fn emit_runtime_descriptor_with_receiver_capture(
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
     let total_bytes = callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16;
     ctx.load_value_to_result(receiver)?;
-    if !ctx.value_can_transfer_ownership_to_consumer(receiver)? {
+    // A receiver read out of a boxed (promoted) local is unboxed with a reference of its own,
+    // which the capture takes over. Retaining again leaked the receiver: `$o = new T; $f =
+    // $o->m(...); $o = null; $f = null;` never destroyed `$o`'s object.
+    if !ctx.value_can_own_mixed_box_source(receiver)? {
         abi::emit_incref_if_refcounted(ctx.emitter, receiver_ty);
     }
     abi::emit_push_reg(ctx.emitter, result_reg);
@@ -93,10 +96,11 @@ pub(super) fn emit_runtime_descriptor_with_called_class_capture(
 
 /// Descriptor metadata for a compile-time first-class callable target.
 pub(super) struct FirstClassCallableDescriptor {
-    pub(super) entry_label: String,
+    pub(super) entry_label: Option<String>,
     pub(super) kind: u64,
     pub(super) sig: Option<FunctionSig>,
     pub(super) invocation: callable_descriptor::CallableDescriptorInvocation,
+    pub(super) owns_string_return: bool,
 }
 
 /// Returns static descriptor metadata for compile-time callable targets supported by EIR.
@@ -114,7 +118,8 @@ pub(super) fn first_class_callable_descriptor(
     }
     if ctx.has_extern_function(target) {
         return Ok(Some(FirstClassCallableDescriptor {
-            entry_label: ctx.emitter.target.extern_symbol(target),
+            entry_label: Some(ctx.emitter.target.extern_symbol(target)),
+            owns_string_return: false,
             kind: callable_descriptor::CALLABLE_DESC_KIND_EXTERN,
             sig: None,
             invocation: callable_descriptor::CallableDescriptorInvocation::named(
@@ -127,15 +132,17 @@ pub(super) fn first_class_callable_descriptor(
         return Ok(Some(descriptor));
     }
     if let Some(callee) = ctx.callable_function_by_name(target) {
-        let entry_name = ctx.function_variant_group_name(target)
+        let public_entry = ctx
+            .function_variant_group_name(target)
             .unwrap_or_else(|| callee.name.clone());
         return Ok(Some(FirstClassCallableDescriptor {
-            entry_label: function_symbol(&entry_name),
+            entry_label: Some(function_symbol(&public_entry)),
+            owns_string_return: crate::codegen::runtime_callable_invoker::function_returns_owned_string(callee),
             kind: callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
             sig: Some(function_signature_from_eir(callee)),
             invocation: callable_descriptor::CallableDescriptorInvocation::named(
                 callable_descriptor::CallableDescriptorShape::Function,
-                entry_name,
+                public_entry,
             ),
         }));
     }
@@ -158,11 +165,33 @@ pub(super) fn first_class_builtin_descriptor(
     let Some(sig) = first_class_callable_builtin_sig(&name) else {
         return Ok(None);
     };
+    if matches!(name.as_str(), "get_class_vars" | "get_class_methods") {
+        return Ok(Some(FirstClassCallableDescriptor {
+            entry_label: None,
+            owns_string_return: false,
+            kind: callable_descriptor::CALLABLE_DESC_KIND_BUILTIN,
+            sig: None,
+            invocation: callable_descriptor::CallableDescriptorInvocation::named(
+                callable_descriptor::CallableDescriptorShape::Builtin,
+                name,
+            ),
+        }));
+    }
     let wrapper_sig = runtime_builtin_wrapper_sig(&name, &callable_wrapper_sig(&sig));
+    let owns_string_return = wrapper_sig.return_type.codegen_repr() == PhpType::Str
+        && (crate::builtins::registry::lookup(&name).is_some_and(|definition| {
+            matches!(
+                definition.spec.semantics.runtime_functions,
+                crate::builtins::semantics::BuiltinRuntimeFunctions::One(target)
+                    if target.uses_mbstring_runtime()
+            )
+        }) || super::runtime_wrappers::builtin_wrapper_returns_fresh_string(&name)
+            || super::runtime_wrappers::builtin_wrapper_string_cast_is_owning(&name, &wrapper_sig));
     let entry_label =
         emit_runtime_builtin_wrapper_inline(ctx, &name, &wrapper_sig, strict_php)?;
     Ok(Some(FirstClassCallableDescriptor {
-        entry_label,
+        entry_label: Some(entry_label),
+        owns_string_return,
         kind: callable_descriptor::CALLABLE_DESC_KIND_BUILTIN,
         sig: Some(wrapper_sig),
         invocation: callable_descriptor::CallableDescriptorInvocation::named(
@@ -206,7 +235,10 @@ pub(super) fn first_class_static_method_descriptor(
     )
     .ok()?;
     Some(FirstClassCallableDescriptor {
-        entry_label,
+        entry_label: Some(entry_label),
+        owns_string_return: crate::codegen::runtime_callable_invoker::method_returns_owned_string(
+            ctx.module, impl_class, &method_key, true,
+        ),
         kind: callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD,
         sig: Some(wrapper_sig),
         invocation: callable_descriptor::CallableDescriptorInvocation::method(

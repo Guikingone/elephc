@@ -8,6 +8,11 @@
 //! - The bridge fallback preserves PHP source order and result ownership.
 
 use super::*;
+use crate::codegen::lower_inst::callable_guards;
+use crate::codegen_support::try_handlers::EXCEPTION_GUARD_SLOT_SIZE;
+
+const EVAL_RESULT_GUARD_OFFSET: usize = EVAL_STACK_BYTES;
+const EVAL_GUARDED_STACK_BYTES: usize = EVAL_STACK_BYTES + EXCEPTION_GUARD_SLOT_SIZE;
 
 /// Lowers `eval($code)` through internal EIR AOT or the bridge ABI and leaves its result in registers.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -27,7 +32,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
         )));
     }
 
-    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_BRIDGE_STACK_BYTES);
     save_eval_code_string(ctx);
     ensure_eval_context(ctx)?;
     mark_eval_strict_php(ctx, inst);
@@ -36,12 +41,14 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     set_eval_call_site(ctx, inst);
     ensure_eval_scope(ctx)?;
     ensure_eval_global_scope(ctx)?;
-    let sync_locals = eval_sync_locals(ctx);
+    let (sync_locals, global_bound_locals) = split_eval_global_bound_locals(ctx, eval_sync_locals(ctx));
     let sync_globals = eval_sync_globals(ctx);
     let global_aliases = eval_global_aliases(ctx);
     flush_eval_scope_locals(ctx, &sync_locals)?;
     flush_eval_global_scope(ctx, &sync_globals)?;
+    clear_eval_global_scope_dirty(ctx, &sync_globals);
     mark_eval_scope_global_aliases(ctx, &global_aliases);
+    flush_eval_global_bound_locals(ctx, &global_bound_locals)?;
     set_eval_context_global_scope(ctx);
     let pushed_class_scope = push_eval_context_class_scope(ctx)?;
     load_eval_context_to_arg(ctx, 0);
@@ -52,14 +59,18 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_execute");
     abi::emit_call_label(ctx.emitter, &symbol);
     pop_eval_context_class_scope(ctx, pushed_class_scope);
-    emit_eval_status_check(ctx);
+    prepare_eval_scope_reload(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-    reload_eval_scope_locals(ctx, &sync_locals)?;
-    reload_eval_global_scope(ctx, &sync_globals)?;
+    protect_eval_reload_owners(ctx);
+    ctx.emitter.comment("reload eval scope before propagating its pending exception");
+    reload_eval_scope_locals(ctx, &sync_locals, Some(EVAL_RELOAD_THROWABLE_OFFSET))?;
+    reload_eval_global_bound_locals(ctx, &global_bound_locals, Some(EVAL_RELOAD_THROWABLE_OFFSET))?;
+    reload_eval_global_scope(ctx, &sync_globals, Some(EVAL_RELOAD_THROWABLE_OFFSET))?;
+    finish_eval_scope_reload(ctx);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_BRIDGE_STACK_BYTES);
     store_if_result(ctx, inst)
 }
 
@@ -74,6 +85,9 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_dynamic_include(
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "dynamic include", 1)?;
     let path = expect_operand(inst, 0)?;
+    if ctx.module.closed_world {
+        return lower_closed_world_include(ctx, inst, path, once, required, value_discarded);
+    }
     let unit_done = emit_include_unit_dispatch(ctx, inst, path, once)?;
     let fast_done = if once || value_discarded {
         emit_dynamic_include_fast_path(ctx, inst, path, once, value_discarded)?
@@ -91,12 +105,14 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_dynamic_include(
     set_eval_call_site(ctx, inst);
     ensure_eval_scope(ctx)?;
     ensure_eval_global_scope(ctx)?;
-    let sync_locals = eval_sync_locals(ctx);
+    let (sync_locals, global_bound_locals) = split_eval_global_bound_locals(ctx, eval_sync_locals(ctx));
     let sync_globals = eval_sync_globals(ctx);
     let global_aliases = eval_global_aliases(ctx);
     flush_eval_scope_locals(ctx, &sync_locals)?;
     flush_eval_global_scope(ctx, &sync_globals)?;
+    clear_eval_global_scope_dirty(ctx, &sync_globals);
     mark_eval_scope_global_aliases(ctx, &global_aliases);
+    flush_eval_global_bound_locals(ctx, &global_bound_locals)?;
     set_eval_context_global_scope(ctx);
     let pushed_class_scope = push_eval_context_class_scope(ctx)?;
     load_eval_context_to_arg(ctx, 0);
@@ -127,8 +143,9 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_dynamic_include(
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-    reload_eval_scope_locals(ctx, &sync_locals)?;
-    reload_eval_global_scope(ctx, &sync_globals)?;
+    reload_eval_scope_locals(ctx, &sync_locals, None)?;
+    reload_eval_global_bound_locals(ctx, &global_bound_locals, None)?;
+    reload_eval_global_scope(ctx, &sync_globals, None)?;
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     store_if_result(ctx, inst)?;
@@ -139,6 +156,58 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_dynamic_include(
         ctx.emitter.label(&done);
     }
     Ok(())
+}
+
+/// Lowers a runtime include of a `--closed-world` build: one call into `__rt_closed_include`,
+/// which answers from the compiled-source table (see `source_units::closed_include`).
+fn lower_closed_world_include(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    path: ValueId,
+    once: bool,
+    required: bool,
+    value_discarded: bool,
+) -> Result<()> {
+    use crate::codegen::source_units::{CLOSED_INCLUDE, FLAG_DISCARDED, FLAG_ONCE, FLAG_REQUIRED};
+    let boxed = match ctx.value_php_type(path)?.codegen_repr() {
+        PhpType::Str => false,
+        PhpType::Mixed | PhpType::Union(_) => true,
+        // Any other scalar would be cast to a string by php; no compiled file is named by one.
+        _ => false,
+    };
+    let flags = (if once { FLAG_ONCE } else { 0 })
+        | (if required { FLAG_REQUIRED } else { 0 })
+        | (if value_discarded { FLAG_DISCARDED } else { 0 });
+    ctx.load_value_to_result(path)?;
+    let string_ok = ctx.next_label("closed_include_string");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            if boxed {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+                ctx.emitter.instruction("cmp x0, #1");                          // runtime tag 1 = string
+                ctx.emitter.instruction(&format!("b.eq {string_ok}"));
+                ctx.emitter.instruction("mov x1, #0");                          // not a string: no path
+                ctx.emitter.instruction("mov x2, #0");
+                ctx.emitter.label(&string_ok);
+            }
+            ctx.emitter.instruction(&format!("mov x3, #{flags}"));              // once / require / discarded
+        }
+        Arch::X86_64 => {
+            if boxed {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+                ctx.emitter.instruction("cmp rax, 1");                          // runtime tag 1 = string
+                ctx.emitter.instruction("mov rax, rdi");                        // string bytes
+                ctx.emitter.instruction("mov rdx, rsi");                        // string length
+                ctx.emitter.instruction(&format!("je {string_ok}"));
+                ctx.emitter.instruction("xor eax, eax");                        // not a string: no path
+                ctx.emitter.instruction("xor edx, edx");
+                ctx.emitter.label(&string_ok);
+            }
+            ctx.emitter.instruction(&format!("mov ecx, {flags}"));              // once / require / discarded
+        }
+    }
+    abi::emit_call_label(ctx.emitter, CLOSED_INCLUDE);
+    store_if_result(ctx, inst)
 }
 
 /// Runs a compiled include unit when the path names one: absolute, canonicalized through the
@@ -215,6 +284,7 @@ fn emit_include_unit_dispatch(
                 ctx.emitter.instruction("str x11, [x10]");
             }
             ctx.emitter.instruction(&format!("ldr x9, [x9, #{function_offset}]")); // the unit function
+            ctx.emitter.instruction("mov x0, #0");                              // null func_get_args collector: x0 still held the freed path
             ctx.emitter.instruction("blr x9");                                  // x0 = the include's value
         }
         Arch::X86_64 => {
@@ -261,6 +331,7 @@ fn emit_include_unit_dispatch(
                 ctx.emitter.label(&run);
             }
             ctx.emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {function_offset}]")); // the unit function
+            ctx.emitter.instruction("xor edi, edi");                            // null func_get_args collector: rdi may hold a freed pointer
             ctx.emitter.instruction("call r9");                                 // rax = the include's value
         }
     }
@@ -415,7 +486,7 @@ pub(super) fn lower_eval_literal_scope_eir_function(
     }
     ctx.emitter
         .comment("eval literal AOT compiled EIR function with eval scope");
-    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_GUARDED_STACK_BYTES);
     ensure_eval_scope(ctx)?;
     let read_names = plan.reads().clone();
     let write_names = plan.writes().clone();
@@ -424,7 +495,12 @@ pub(super) fn lower_eval_literal_scope_eir_function(
     let sync_locals = eval_sync_locals(ctx);
     // The compiled scope contains lexical locals. A same-named program global
     // must not overwrite that entry or be restored from its unrelated value.
+    // Only the top level's scope IS the global scope. Inside a function a fragment reaches a
+    // program global through `global $g`, which this AOT path refuses; syncing the globals
+    // into the function's eval scope made `function e() { eval('$g = 5;'); }` overwrite a
+    // top-level `$g` that the fragment only shadowed.
     let sync_globals = eval_sync_globals(ctx).into_iter()
+        .filter(|_| ctx.is_main)
         .filter(|global| !sync_locals.iter().any(|local| local.name == global.name))
         .collect::<Vec<_>>();
     let flush_locals = filter_eval_sync_locals_by_name(sync_locals.clone(), &flush_names);
@@ -438,11 +514,12 @@ pub(super) fn lower_eval_literal_scope_eir_function(
     abi::emit_call_label(ctx.emitter, &function_symbol(&function_name));
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_STATUS_SAVE_OFFSET);
-    reload_eval_scope_locals(ctx, &reload_locals)?;
+    reload_eval_scope_locals(ctx, &reload_locals, None)?;
     reload_eval_globals_from_local_scope(ctx, &reload_globals)?;
     clear_native_scope_bindings(ctx, &flush_locals, &flush_globals);
+    callable_guards::unguard_saved_owner(ctx.emitter, EVAL_RESULT_GUARD_OFFSET);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_STATUS_SAVE_OFFSET);
-    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_GUARDED_STACK_BYTES);
     store_if_result(ctx, inst)?;
     Ok(true)
 }
@@ -481,8 +558,21 @@ pub(super) fn lower_eval_literal_scope_read_param_eir_function(
     };
     ctx.emitter
         .comment("eval literal AOT compiled EIR function with direct read params");
-    for source in &param_sources {
-        emit_eval_scope_read_param_source(ctx, source)?;
+    // The fragment BORROWS its params (it clones what it keeps). A box made here for the call
+    // -- the null of an unset variable, or a typed local boxed for the Mixed ABI -- is owned by
+    // this site, so it is kept in an owner area and released after the call; dropping it on the
+    // floor leaked one box per read variable per call (`function f() { eval('isset($g)…'); }`).
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let owners_bytes = param_sources.len() * 16;
+    abi::emit_reserve_temporary_stack(ctx.emitter, owners_bytes);
+    let mut fresh = Vec::with_capacity(param_sources.len());
+    for (index, source) in param_sources.iter().enumerate() {
+        fresh.push(emit_eval_scope_read_param_source(ctx, source)?);
+        abi::emit_store_to_sp(ctx.emitter, result_reg, index * 16);
+    }
+    for index in 0..param_sources.len() {
+        // Every earlier push moved the owner area 16 bytes further from `sp`.
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, index * 16 + index * 16);
         abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
     }
     let assignments =
@@ -495,6 +585,13 @@ pub(super) fn lower_eval_literal_scope_read_param_eir_function(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
     store_if_result(ctx, inst)?;
+    for (index, owned) in fresh.iter().enumerate() {
+        if *owned {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, index * 16);
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        }
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, owners_bytes);
     Ok(true)
 }
 
@@ -571,20 +668,26 @@ pub(super) fn eval_scope_read_float_predicate_param_type_supported(ty: &PhpType)
 }
 
 /// Emits one direct read-param value as a boxed Mixed result.
+/// Materializes one direct read param as a Mixed box, returning whether the box was made here
+/// (and is therefore this call site's to release).
 pub(super) fn emit_eval_scope_read_param_source(
     ctx: &mut FunctionContext<'_>,
     source: &EvalScopeReadParamSource,
-) -> Result<()> {
+) -> Result<bool> {
     match source {
         EvalScopeReadParamSource::Local(local) => {
             let ty = ctx.load_local_to_result(local.slot)?.codegen_repr();
             if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
                 emit_box_current_value_as_mixed(ctx.emitter, &ty);
+                return Ok(true);
             }
+            Ok(false)
         }
-        EvalScopeReadParamSource::Null => emit_core_mixed_null_cell(ctx),
+        EvalScopeReadParamSource::Null => {
+            emit_core_mixed_null_cell(ctx);
+            Ok(true)
+        }
     }
-    Ok(())
 }
 
 /// Boxes PHP null with the core Mixed runtime helper.

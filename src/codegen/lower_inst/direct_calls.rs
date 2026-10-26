@@ -41,9 +41,6 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         .collect::<Vec<_>>();
     let borrowed_stack_mixed_args =
         plan_borrowed_stack_mixed_args(ctx, callee, &inst.operands, &param_types, &ref_params)?;
-    // The result can only BE an argument temporary when the callee returns a parameter without
-    // acquiring it; otherwise every temporary is released after the call.
-    let result_may_alias_arg_temp = super::call_cleanup::callee_may_return_unacquired_param(callee);
     let call_args = materialize_direct_call_args_with_refs_and_borrowed_options(
         ctx,
         &inst.operands,
@@ -59,6 +56,7 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     if let Some(result) = inst.result {
+        ctx.store_runtime_return_ownership(result);
         if ctx.value_php_type(result)? == PhpType::Void {
             abi::emit_load_int_immediate(
                 ctx.emitter,
@@ -72,11 +70,8 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.store_result_value(result)?;
         }
     }
-    emit_call_arg_temp_cleanups(
-        ctx,
-        &call_args,
-        if result_may_alias_arg_temp { inst.result } else { None },
-    )?;
+    // User callees own their Mixed parameter shadows, including an aliased resource return.
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_borrowed_stack_mixed_arg_release(ctx, &call_args);
     emit_ref_arg_writebacks(ctx, &call_args)
 }
@@ -139,7 +134,12 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
     borrowed_stack_mixed_args: &[BorrowedStackMixedArg],
     ref_cell_lifetime: RefArgCellLifetime,
 ) -> Result<CallArgMaterialization> {
-    if args.len() != param_types.len() {
+    // See `reference_arguments::omits_only_hidden_collector`: an internal dispatcher may leave
+    // out the trailing hidden collector, which is staged empty below.
+    let omitted_collector = args.len() != param_types.len()
+        && super::reference_arguments::omits_only_hidden_collector(args.len(), param_types)
+        && !ref_params.last().copied().unwrap_or(false);
+    if args.len() != param_types.len() && !omitted_collector {
         return Err(CodegenIrError::invalid_module(format!(
             "direct call materialization received {} args for {} params",
             args.len(),
@@ -154,6 +154,7 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
         )));
     }
     let mut ref_writebacks = plan_ref_arg_writebacks(ctx, args, param_types, ref_params)?;
+    let preleased_ref_cells = plan_preleased_ref_arg_cells(ctx, args, ref_params)?;
     let mut ref_temp_cells = plan_ref_arg_temp_cells(
         ctx,
         args,
@@ -162,7 +163,11 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
         &ref_writebacks,
         ref_cell_lifetime,
     )?;
-    emit_ref_arg_cell_block(ctx, &mut ref_writebacks, &mut ref_temp_cells)?;
+    emit_ref_arg_cell_block(
+        ctx,
+        &mut ref_writebacks,
+        &mut ref_temp_cells,
+    )?;
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
@@ -170,7 +175,7 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
     if borrowed_stack_arg_bytes > 0 {
         abi::emit_reserve_temporary_stack(ctx.emitter, borrowed_stack_arg_bytes);
     }
-    let cleanup_slots = if track_mixed_temp_cleanups {
+    let mut cleanup_slots = if track_mixed_temp_cleanups {
         plan_call_arg_temp_cleanups(
             ctx,
             args,
@@ -181,7 +186,14 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
     } else {
         Vec::new()
     };
-    let cleanup_bytes = cleanup_slots.len() * 16;
+    if omitted_collector {
+        cleanup_slots.push(CallArgTempCleanup {
+            param_index: args.len(),
+            offset: cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES,
+            ty: PhpType::Array(Box::new(PhpType::Mixed)),
+        });
+    }
+    let cleanup_bytes = cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     if cleanup_bytes > 0 {
         abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     }
@@ -222,12 +234,26 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
         }
         arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[index]);
     }
+    if omitted_collector {
+        let index = args.len();
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 4);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 8);
+        abi::emit_call_label(ctx.emitter, "__rt_array_new");
+        let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+        crate::codegen::emit_array_value_type_stamp(ctx.emitter, &result_reg, &PhpType::Mixed);
+        if let Some(cleanup) = cleanup_slots.iter().find(|cleanup| cleanup.param_index == index) {
+            save_call_arg_temp_cleanup(ctx, cleanup, arg_temp_bytes);
+        }
+        abi::emit_push_result_value(ctx.emitter, &param_types[index]);
+    }
     Ok(CallArgMaterialization {
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
         ref_temp_cells,
+        preleased_ref_cells,
         cleanup_slots,
         cleanup_bytes,
+        cleanup_guard_bytes: 0,
         borrowed_stack_arg_bytes,
     })
 }
@@ -240,7 +266,14 @@ pub(super) fn materialize_static_method_call_args_with_refs(
     param_types: &[PhpType],
     ref_params: &[bool],
 ) -> Result<CallArgMaterialization> {
-    if args.len() != param_types.len() {
+    // `func_args::method_families` gives a whole interface family the hidden `func_get_args()`
+    // collector when one member reads its surplus arguments, static methods included, and a
+    // static interface call (`$subscriber::getSubscribedEvents()`) passes only the source
+    // arguments. The collector is staged empty, which is what a call with no surplus passes.
+    let omitted_collector = args.len() + 1 == param_types.len()
+        && param_types.last() == Some(&PhpType::Array(Box::new(PhpType::Mixed)))
+        && !ref_params.last().copied().unwrap_or(false);
+    if args.len() != param_types.len() && !omitted_collector {
         return Err(CodegenIrError::invalid_module(format!(
             "static method call materialization received {} args for {} visible params",
             args.len(),
@@ -255,6 +288,7 @@ pub(super) fn materialize_static_method_call_args_with_refs(
         )));
     }
     let mut ref_writebacks = plan_ref_arg_writebacks(ctx, args, param_types, ref_params)?;
+    let preleased_ref_cells = plan_preleased_ref_arg_cells(ctx, args, ref_params)?;
     // `CallOnly`: PHP refuses `Foo::__construct()` as a static call, so nothing reachable
     // here can promote a by-reference parameter into a property.
     let mut ref_temp_cells = plan_ref_arg_temp_cells(
@@ -265,9 +299,20 @@ pub(super) fn materialize_static_method_call_args_with_refs(
         &ref_writebacks,
         RefArgCellLifetime::CallOnly,
     )?;
-    emit_ref_arg_cell_block(ctx, &mut ref_writebacks, &mut ref_temp_cells)?;
-    let cleanup_slots = plan_call_arg_temp_cleanups(ctx, args, param_types, ref_params, &[])?;
-    let cleanup_bytes = cleanup_slots.len() * 16;
+    emit_ref_arg_cell_block(
+        ctx,
+        &mut ref_writebacks,
+        &mut ref_temp_cells,
+    )?;
+    let mut cleanup_slots = plan_call_arg_temp_cleanups(ctx, args, param_types, ref_params, &[])?;
+    if omitted_collector {
+        cleanup_slots.push(CallArgTempCleanup {
+            param_index: args.len(),
+            offset: cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES,
+            ty: PhpType::Array(Box::new(PhpType::Mixed)),
+        });
+    }
+    let cleanup_bytes = cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     if cleanup_bytes > 0 {
         abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     }
@@ -303,12 +348,26 @@ pub(super) fn materialize_static_method_call_args_with_refs(
         }
         arg_temp_bytes += call_arg_temp_slot_size(&visible_abi_param_types[index]);
     }
+    if omitted_collector {
+        let index = args.len();
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 4);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 8);
+        abi::emit_call_label(ctx.emitter, "__rt_array_new");
+        let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+        crate::codegen::emit_array_value_type_stamp(ctx.emitter, &result_reg, &PhpType::Mixed);
+        if let Some(cleanup) = cleanup_slots.iter().find(|cleanup| cleanup.param_index == index) {
+            super::save_call_arg_temp_cleanup(ctx, cleanup, arg_temp_bytes);
+        }
+        abi::emit_push_result_value(ctx.emitter, &param_types[index]);
+    }
     Ok(CallArgMaterialization {
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
         ref_temp_cells,
+        preleased_ref_cells,
         cleanup_slots,
         cleanup_bytes,
+        cleanup_guard_bytes: 0,
         borrowed_stack_arg_bytes: 0,
     })
 }
@@ -385,13 +444,24 @@ pub(super) fn materialize_this_object_called_class_id(
 /// The planner reserves that slot for exactly the borrowed widening arguments, so the presence
 /// of a cleanup is the same decision as the incref and the two cannot drift: an incref with no
 /// cleanup would leak the clone, and a cleanup with no incref would release the caller's array.
-fn materialize_plain_call_arg(
+pub(super) fn materialize_plain_call_arg(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     param_ty: &PhpType,
     cleanup: Option<&CallArgTempCleanup>,
     arg_temp_bytes: usize,
 ) -> Result<PhpType> {
+    // A boxed value handed to a `callable` parameter is the descriptor INSIDE the box (or the
+    // descriptor its string / array spelling resolves to), never the box: the callee calls
+    // through the pointer it receives. A `mixed` receiver's candidate call reached
+    // `getResolver(callable $callable)` with the box, and `$callable(...)` / `new
+    // ReflectionFunction($callable)` read garbage from it -- Symfony's runtime died on it.
+    if param_ty.codegen_repr() == PhpType::Callable
+        && matches!(ctx.raw_value_php_type(value)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    {
+        emit_boxed_argument_as_callable(ctx, value)?;
+        return Ok(PhpType::Callable);
+    }
     ctx.load_value_to_result(value)?;
     let source_ty = ctx.raw_value_php_type(value)?;
     if cleanup.is_some() && super::call_cleanup::argument_widens_typed_array(&source_ty, param_ty) {
@@ -399,9 +469,55 @@ fn materialize_plain_call_arg(
     }
     let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
     if let Some(cleanup) = cleanup {
+        // A detached string travels as a pointer/length pair; the cleanup record owns its pointer.
+        let string_pair_on_aarch64 =
+            cleanup.ty == PhpType::Str && ctx.emitter.target.arch == Arch::AArch64;
+        if string_pair_on_aarch64 {
+            ctx.emitter.instruction("mov x0, x1");                              // stage the detached string pointer in the owner-record register
+        }
         save_call_arg_temp_cleanup(ctx, cleanup, arg_temp_bytes);
+        if string_pair_on_aarch64 {
+            ctx.emitter.instruction("mov x1, x0");                              // restore the string pointer half of the argument pair
+        }
     }
     Ok(push_ty)
+}
+
+/// Loads the callable descriptor a boxed argument holds into the integer result register.
+///
+/// An existing descriptor is passed borrowed (the box keeps it alive for the call); php null stays
+/// the callable null sentinel, as a `?callable` parameter expects.
+fn emit_boxed_argument_as_callable(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let null_label = ctx.next_label("call_arg_callable_null");
+    let done_label = ctx.next_label("call_arg_callable_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #8");                              // is the boxed argument php null?
+            ctx.emitter.instruction(&format!("b.eq {}", null_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 8");                              // is the boxed argument php null?
+            ctx.emitter.instruction(&format!("je {}", null_label));
+        }
+    }
+    super::callables::emit_runtime_mixed_callable_descriptor_value(
+        ctx,
+        value,
+        "callable argument",
+        false,
+        crate::strict_php::is_enabled(),
+    )?;
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Converts the loaded call operand to the ABI shape required by the callee parameter.
@@ -443,6 +559,24 @@ pub(super) fn materialize_direct_call_arg_for_param(
                 }
             }
             Ok(PhpType::Object(name))
+        }
+        // A declared `iterable` parameter takes the array or Traversable payload, never the
+        // box. Handing the box over is what a `mixed` receiver's candidate call did in an eval
+        // program: `$this->fillCells($row)` from Symfony's table generator closure reached
+        // `fillCells(iterable $row)` with a pointer its `foreach` read as null.
+        PhpType::Iterable
+            if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) =>
+        {
+            super::reference_arguments::emit_mixed_iterable_unbox_guard(ctx);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x0, x1");                      // pass the unboxed iterable payload to the typed parameter
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rax, rdi");                    // pass the unboxed iterable payload to the typed parameter
+                }
+            }
+            Ok(PhpType::Iterable)
         }
         PhpType::Mixed if source_ty.codegen_repr() != PhpType::Mixed => {
             emit_box_current_value_as_mixed(ctx.emitter, source_ty);

@@ -121,7 +121,8 @@ pub(super) fn lower_binary_path_call(
     name: &str,
     runtime_label: &str,
 ) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 2)?;
+    // A trailing stream `$context` (`copy($from, $to, $context)`) has no effect on local paths.
+    super::super::ensure_arg_count_between(inst, name, 2, 3)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
     match ctx.emitter.target.arch {

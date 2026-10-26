@@ -1,8 +1,8 @@
 ---
 title: "mysqli_get_server_version()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the server version as an integer."
 sidebar:
-  order: 147
+  order: 148
 ---
 
 ## mysqli_get_server_version()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_get_server_version(mixed $mysql): int
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the server version as an integer.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

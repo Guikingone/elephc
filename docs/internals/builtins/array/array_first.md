@@ -1,11 +1,11 @@
 ---
-title: "array_first() — internals"
+title: "array_first() - internals"
 description: "Compiler internals for array_first(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 18
 ---
 
-## `array_first()` — internals
+## `array_first()` - internals
 
 ## Where it lives
 

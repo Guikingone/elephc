@@ -14,6 +14,9 @@ pub mod checker;
 pub mod traits;
 /// Array key type inference, normalization, and PHP integer/string coercion rules.
 mod array_keys;
+/// Whether an un-hinted declaration returns one of its untyped parameters; shared so the
+/// checker and EIR lowering cannot disagree about the recorded return type (issue #576).
+pub mod dynamic_params;
 /// Array storage-representation conversions shared by checking and lowering.
 mod array_storage;
 /// Call argument planning: named, positional, and spread semantics.
@@ -44,10 +47,18 @@ mod result;
 mod schema;
 
 pub(crate) mod instanceof_intersection;
+/// `assert($x instanceof C)` statements, which narrow `$x` for the code after them.
+mod asserted_instanceof;
+pub(crate) use asserted_instanceof::asserted_instanceof_condition;
 
 pub(crate) mod private_scope;
 /// Function signature representation and builtin signature helpers.
-mod signatures;
+///
+/// Crate-visible because the descriptor variadic storage contract
+/// (`signatures::descriptor_variadic_container` and its predicates) has to be asked the SAME
+/// question by the checker, by EIR lowering, and by the runtime callable invoker. A contract
+/// three layers must agree on cannot be re-spelled behind a narrow re-export in each of them.
+pub(crate) mod signatures;
 /// Target-dependent values of `ICONV_IMPL` / `ICONV_VERSION`.
 pub(crate) mod iconv_constants;
 /// Version-sensitive integer constants exposed by PHP's tokenizer surface.
@@ -56,6 +67,8 @@ pub(crate) mod token_constants;
 pub(crate) mod builtin_classes;
 /// The compiler's view over the shared global-constant catalog.
 pub(crate) mod predefined_constants;
+/// `defined('Class::CONST')` existence lookup over class/interface/enum metadata.
+mod defined;
 /// Type checker diagnostics and warnings.
 mod warnings;
 
@@ -68,7 +81,8 @@ pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conv
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
 pub(crate) use return_alias::{
-    collect_return_alias_summaries, DispatchFoldKey, ReturnAliasSummaries, ReturnArgAlias,
+    collect_return_alias_summaries, summarize_callable_return_alias, DispatchFoldKey,
+    ReturnAliasSummaries, ReturnArgAlias,
 };
 pub(crate) use result::LoopStorageTypes;
 pub use checker::CheckOptions;
@@ -80,11 +94,20 @@ pub use result::{check_with_target_and_options, CheckResult, ThrowAccessInfo, Th
 pub use schema::constructor_owner;
 pub use schema::private_property_init_thunk_classes;
 pub use schema::{
+    class_declares_private_property, class_inherits_from, object_payload_size,
+    property_name_shadows_ancestor_private_slot, resolve_property_name,
+    scope_shares_class_hierarchy, PropertyNameResolution,
+};
+pub use schema::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo,
     ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo,
     PackedFieldInfo, PropertyHookContract,
 };
 pub(crate) use schema::{collect_attribute_args, collect_attribute_names};
+pub(crate) use defined::{
+    class_like_constant_is_defined, class_like_constant_scope_error,
+    defined_late_static_member,
+};
 pub(crate) use signatures::{
     builtin_call_sig, callable_wrapper_sig, first_class_callable_builtin_sig,
 };

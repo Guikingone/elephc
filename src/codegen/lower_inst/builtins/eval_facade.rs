@@ -21,6 +21,14 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_include(
     eval::lower_dynamic_include(ctx, inst, once, required, strict_php, value_discarded)
 }
 
+/// Appends live eval declarations to the current owned native inventory container.
+pub(in crate::codegen::lower_inst) fn append_eval_inventory(
+    ctx: &mut FunctionContext<'_>,
+    constants: bool,
+) -> Result<()> {
+    eval::append_eval_inventory(ctx, constants)
+}
+
 /// Lowers a statically-known eval fragment through the current bridge fallback path.
 pub(in crate::codegen::lower_inst) fn lower_eval_literal_call(
     ctx: &mut FunctionContext<'_>,
@@ -101,6 +109,15 @@ pub(in crate::codegen::lower_inst) fn lower_eval_object_new_dynamic_fallback(
     miss_label: &str,
 ) -> Result<()> {
     eval::lower_eval_object_new_dynamic_fallback(ctx, inst, miss_label)
+}
+
+/// Lowers the eval fallback of a constructorless dynamic allocation.
+pub(in crate::codegen::lower_inst) fn lower_eval_object_new_without_constructor_fallback(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    miss_label: &str,
+) -> Result<()> {
+    eval::lower_eval_object_new_without_constructor_fallback(ctx, inst, miss_label)
 }
 
 /// Lowers a post-eval method call that may target an eval-created object.
@@ -388,6 +405,23 @@ pub(in crate::codegen::lower_inst) fn emit_eval_object_is_a_named_fallback(
     )
 }
 
+/// Same probe for an object that is a boxed Mixed cell in the int result register.
+pub(in crate::codegen::lower_inst) fn emit_eval_object_is_a_named_fallback_from_result(
+    ctx: &mut FunctionContext<'_>,
+    target_class: &str,
+    matched_label: &str,
+    native_fallback_label: &str,
+    definite_no_label: &str,
+) -> Result<()> {
+    eval::emit_eval_object_is_a_named_fallback_from_result(
+        ctx,
+        target_class,
+        matched_label,
+        native_fallback_label,
+        definite_no_label,
+    )
+}
+
 /// Emits a null-context eval ownership probe against a runtime class-name string.
 pub(in crate::codegen::lower_inst) fn emit_eval_object_is_a_dynamic_name_fallback(
     ctx: &mut FunctionContext<'_>,
@@ -416,6 +450,19 @@ pub(in crate::codegen::lower_inst) fn lower_eval_object_is_a_dynamic(
     exclude_self: bool,
 ) -> Result<()> {
     eval::lower_eval_object_is_a_dynamic(ctx, inst, object, target, exclude_self)
+}
+
+/// Returns true when the body being lowered is a shared owner-call helper.
+pub(in crate::codegen::lower_inst) fn inside_owner_call_helper(ctx: &FunctionContext<'_>) -> bool {
+    eval::inside_owner_call_helper(ctx)
+}
+
+/// Lowers the one instruction of a shared owner-call helper.
+pub(in crate::codegen::lower_inst) fn lower_owner_call_helper_body(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_owner_call_helper_body(ctx, inst)
 }
 
 /// Returns true when this lowered function has a persistent eval context local.

@@ -11,7 +11,7 @@
 //! - A container payload that is null or the in-band null-container sentinel
 //!   (`NULL_SENTINEL`, materialized by a missed read forwarded through a ternary merge)
 //!   is autovivified as a real PHP array before the keyed write (issues #585/#592).
-//! - A string key on an indexed payload promotes the payload to hash storage
+//! - String, negative, and non-contiguous numeric keys promote indexed payloads to hash storage
 //!   via `__rt_mixed_cell_promote_to_hash` (PHP array-key semantics) instead
 //!   of dropping the write.
 //! - Canonical null and legacy null-container payloads autovivify through the
@@ -52,7 +52,7 @@ pub fn emit_mixed_array_set(emitter: &mut Emitter) {
 /// Behavior:
 /// - If `x0` is null, the value is released via `__rt_decref_mixed` and the helper returns.
 /// - Canonical or legacy container-shaped null payloads autovivify as indexed arrays in place.
-/// - Indexed arrays mutate slots directly; string and negative keys first promote to hash
+/// - Packed overwrites and appends mutate slots directly; all other keys first promote to hash
 ///   storage, while existing associative arrays call `__rt_hash_set`.
 /// - Array capacity is grown via `__rt_array_grow` if the target index exceeds current capacity.
 /// - Overwriting an existing slot releases the previous `Mixed` cell.
@@ -71,6 +71,8 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save key_lo for indexed-array addressing
     emitter.instruction("str x2, [sp, #16]");                                   // save key_hi so integer keys can be distinguished
     emitter.instruction("str x3, [sp, #24]");                                   // save the boxed value consumed by the write
+    emitter.instruction("bl __rt_mixed_deref_for_write");                       // follow references and element reference markers to the writable value
+    emitter.instruction("str x0, [sp, #0]");                                    // save the concrete receiver for payload publication
 
     emitter.instruction("cbz x0, __rt_mixed_array_set_drop");                   // non-existent Mixed targets cannot be mutated
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed payload tag
@@ -92,9 +94,9 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the requested integer index
     emitter.instruction("cmp x9, #0");                                          // reject negative indexes before touching storage
     emitter.instruction("b.lt __rt_mixed_array_set_promote");                   // negative integer keys require associative PHP-array storage
-    emitter.instruction("ldr x13, [x10]");                                      // load the indexed array's current logical length
-    emitter.instruction("cmp x9, x13");                                         // would this write leave a gap in packed storage?
-    emitter.instruction("b.hi __rt_mixed_array_set_promote");                   // a key past the next append slot promotes to a hash like PHP (never pads)
+    emitter.instruction("ldr x12, [x10]");                                      // inspect the packed array's current logical length
+    emitter.instruction("cmp x9, x12");                                         // only overwrites and contiguous appends stay packed
+    emitter.instruction("b.hi __rt_mixed_array_set_promote");                   // preserve absent positive keys by promoting sparse writes
     emitter.instruction("ldr x12, [x10, #-8]");                                 // load the packed indexed-array metadata
     emitter.instruction("ubfx x1, x12, #8, #7");                                // pass the source value_type tag to the Mixed conversion helper
     emitter.instruction("mov x0, x10");                                         // pass the indexed array to the Mixed conversion helper
@@ -128,22 +130,29 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_mixed_array_set_skip_release");              // writes past the old end do not replace an existing Mixed cell
     emitter.instruction("add x12, x10, #24");                                   // compute the indexed-array data base
     emitter.instruction("ldr x0, [x12, x9, lsl #3]");                           // load the previous boxed Mixed pointer from the slot
-    emitter.instruction("cbz x0, __rt_mixed_array_set_release_old");            // a null gap is replaced like any value
-    emitter.instruction("ldr x13, [x0]");                                       // inspect the replaced box's tag
-    emitter.instruction(&format!("cmp x13, #{}", ARRAY_GLOBAL_REF_CELL_TAG));   // does the slot own a share of a global reference?
+    emitter.instruction("cbz x0, __rt_mixed_array_set_release_slot");           // absent slots contain no persistent reference
+    emitter.instruction("ldr x9, [x0]");                                        // inspect the stored boxed tag
+    emitter.instruction(&format!("cmp x9, #{}", ARRAY_GLOBAL_REF_CELL_TAG));    // does the slot own a share of a global reference?
     emitter.instruction("b.eq __rt_mixed_array_set_owned_ref");                 // a plain write goes through it
-    emitter.instruction(&format!("cmp x13, #{}", ARRAY_LOCAL_REF_CELL_TAG));    // does the slot own a share of a local reference?
-    emitter.instruction("b.ne __rt_mixed_array_set_release_old");               // ordinary boxes are simply replaced
+    emitter.instruction(&format!("cmp x9, #{}", ARRAY_LOCAL_REF_CELL_TAG));     // does the slot own a share of a local reference?
+    emitter.instruction("b.eq __rt_mixed_array_set_owned_ref");                 // a plain write goes through it
+    emitter.instruction("cmp x9, #7");                                          // recognize a nested Mixed wrapper
+    emitter.instruction("b.ne __rt_mixed_array_set_release_slot");              // ordinary values use normal slot replacement
+    emitter.instruction("ldr x9, [x0, #16]");                                   // inspect the persistent reference marker
+    emitter.instruction("cmp x9, #1");                                          // recognize shared PHP reference storage
+    emitter.instruction("b.eq __rt_mixed_array_set_reference");                 // write through the existing reference identity
+    emitter.instruction("b __rt_mixed_array_set_release_slot");                 // ordinary boxes are simply replaced
+    // -- an element reference marker `{12|13, cell, source_tag}`: `=&` rebinds it, a value goes through --
     emitter.label("__rt_mixed_array_set_owned_ref");
     emitter.instruction("ldr x14, [sp, #24]");                                  // the incoming box
     emitter.instruction("cbz x14, __rt_mixed_array_set_store_through");         // a null box is a plain value
     emitter.instruction("ldr x13, [x14]");                                      // inspect the incoming box's tag
     emitter.instruction(&format!("cmp x13, #{}", INVOKER_ARG_REF_CELL_TAG));    // is the incoming value a reference too?
-    emitter.instruction("b.eq __rt_mixed_array_set_release_old");               // `=&` rebinds: release this slot's share, store the new one
+    emitter.instruction("b.eq __rt_mixed_array_set_release_slot");              // `=&` rebinds: release this slot's share, store the new one
     emitter.instruction(&format!("cmp x13, #{}", ARRAY_GLOBAL_REF_CELL_TAG));   // is the incoming value a global reference?
-    emitter.instruction("b.eq __rt_mixed_array_set_release_old");               // `=&` rebinds: release this slot's share, store the new one
+    emitter.instruction("b.eq __rt_mixed_array_set_release_slot");              // `=&` rebinds: release this slot's share, store the new one
     emitter.instruction(&format!("cmp x13, #{}", ARRAY_LOCAL_REF_CELL_TAG));    // is the incoming value a local reference?
-    emitter.instruction("b.eq __rt_mixed_array_set_release_old");               // `=&` rebinds: release this slot's share, store the new one
+    emitter.instruction("b.eq __rt_mixed_array_set_release_slot");              // `=&` rebinds: release this slot's share, store the new one
     emitter.label("__rt_mixed_array_set_store_through");
     emitter.instruction("str x0, [sp, #56]");                                   // keep the slot's marker for the typed-cell fallback
     emitter.instruction("mov x1, x14");                                         // the incoming box is the value to write through
@@ -152,8 +161,20 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_ref_marker_store");                            // write the value into the shared reference cell
     emitter.instruction("cbnz x0, __rt_mixed_array_set_done");                  // the slot keeps its marker; nothing else to store
     emitter.instruction("ldr x0, [sp, #56]");                                   // a typed cell: replace the marker as before
-    emitter.label("__rt_mixed_array_set_release_old");
+    // Publish-before-retire, php's assignment order: the replacement is in the slot before the
+    // overwritten cell is released, because that release can run a destructor that writes this
+    // same array (and may grow it, freeing the buffer held here). An overwrite never changes the
+    // length, so nothing touches the array after the release.
+    emitter.label("__rt_mixed_array_set_release_slot");
+    emitter.instruction("str x0, [sp, #56]");                                   // keep the overwritten cell for the release that follows the publish
+    emitter.instruction("ldr x10, [sp, #32]");                                  // reload the array pointer
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the target index
+    emitter.instruction("ldr x1, [sp, #24]");                                   // reload the new boxed Mixed value
+    emitter.instruction("add x12, x10, #24");                                   // compute the indexed-array data base for the store
+    emitter.instruction("str x1, [x12, x9, lsl #3]");                           // publish the new boxed Mixed pointer into the target slot
+    emitter.instruction("ldr x0, [sp, #56]");                                   // the overwritten cell, no longer reachable from the slot
     emitter.instruction("bl __rt_decref_mixed");                                // release the overwritten Mixed cell
+    emitter.instruction("b __rt_mixed_array_set_done");                         // an overwrite leaves the logical length unchanged
     emitter.label("__rt_mixed_array_set_skip_release");
 
     emitter.instruction("ldr x10, [sp, #32]");                                  // reload the array pointer after the release helper
@@ -191,8 +212,32 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_array_set_assoc");                        // finish the write through the associative path
 
     emitter.label("__rt_mixed_array_set_assoc");
+    emitter.instruction("ldr x0, [x0, #8]");                                    // pass the associative payload to its COW boundary
+    emitter.instruction("bl __rt_hash_ensure_unique");                          // detach shared hash storage before examining reference slots
+    emitter.instruction("ldr x9, [sp, #0]");                                    // recover the concrete owning cell
+    emitter.instruction("str x0, [x9, #8]");                                    // publish the unique hash before any keyed write
+    emitter.instruction("mov x0, x9");                                          // restore the owning cell for associative dispatch
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the associative-array hash pointer from the Mixed payload
     emit_branch_if_null_container(emitter, "x10", "x9", "__rt_mixed_array_set_autovivify");
+    emitter.instruction("mov x0, x10");                                         // look up the existing hash slot before replacement
+    emitter.instruction("ldr x1, [sp, #8]");                                    // pass the normalized key low word
+    emitter.instruction("ldr x2, [sp, #16]");                                   // pass the normalized key high word
+    emitter.instruction("bl __rt_hash_get");                                    // read a borrowed entry and its storage tag
+    emitter.instruction("cbz x0, __rt_mixed_array_set_assoc_store");            // new keys use ordinary insertion
+    emitter.instruction("cmp x3, #7");                                          // only boxed entries can contain a reference
+    emitter.instruction("b.ne __rt_mixed_array_set_assoc_store");               // typed entries use ordinary replacement
+    emitter.instruction("mov x0, x1");                                          // inspect the borrowed boxed entry
+    emitter.instruction("cbz x0, __rt_mixed_array_set_assoc_store");            // absent slots contain no persistent reference
+    emitter.instruction("ldr x9, [x0]");                                        // inspect the stored boxed tag
+    emitter.instruction("cmp x9, #7");                                          // recognize a nested Mixed wrapper
+    emitter.instruction("b.ne __rt_mixed_array_set_assoc_store");               // ordinary values use normal slot replacement
+    emitter.instruction("ldr x9, [x0, #16]");                                   // inspect the persistent reference marker
+    emitter.instruction("cmp x9, #1");                                          // recognize shared PHP reference storage
+    emitter.instruction("b.eq __rt_mixed_array_set_reference");                 // write through the existing reference identity
+    emitter.label("__rt_mixed_array_set_assoc_store");
+    emitter.instruction("ldr x10, [sp, #0]");                                   // recover the concrete owning cell
+    emitter.instruction("ldr x10, [x10, #8]");                                  // reload its hash payload after lookup
+    emitter.instruction("str x10, [sp, #48]");                                  // remember the table handed to the hash-set helper
     emitter.instruction("mov x0, x10");                                         // pass the current hash table to the hash-set helper
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the normalized key low word
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the normalized key high word
@@ -201,6 +246,13 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x5, #7");                                          // runtime value tag 7 = boxed Mixed
     emitter.instruction("bl __rt_hash_set");                                    // insert or update the hash entry, preserving PHP key semantics
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the owning Mixed cell after hash mutation
+    // Releasing the overwritten value can run a destructor that writes this same array through
+    // the cell; a write that grows it publishes a new table and frees the one handed to
+    // `__rt_hash_set`, whose return is then stale. The cell's table is the live one.
+    emitter.instruction("ldr x11, [x10, #8]");                                  // the table the cell holds now
+    emitter.instruction("ldr x12, [sp, #48]");                                  // the table handed to the hash-set helper
+    emitter.instruction("cmp x11, x12");                                        // did a reentrant write replace it?
+    emitter.instruction("b.ne __rt_mixed_array_set_done");                      // yes: keep the newer table the cell already holds
     emitter.instruction("str x0, [x10, #8]");                                   // publish the possibly-reallocated hash table back to the Mixed cell
     emitter.instruction("b __rt_mixed_array_set_done");                         // finish after mutating the associative array
 
@@ -315,6 +367,10 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #80");                                     // release the helper frame before the tail-call
     emitter.instruction("b __rt_throw_object_not_array");                       // never returns
 
+    emitter.label("__rt_mixed_array_set_reference");
+    emitter.instruction("ldr x1, [sp, #24]");                                   // borrow the incoming value for reference assignment
+    emitter.instruction("bl __rt_reference_replace");                           // publish an independent value in the existing shared wrapper
+    emitter.instruction("bl __rt_decref_any");                                  // release the replaced child after publication
     emitter.label("__rt_mixed_array_set_drop");
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the unused boxed value
     emitter.instruction("bl __rt_decref_mixed");                                // release the boxed value when the write cannot be applied
@@ -347,6 +403,10 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save key_lo for indexed-array addressing
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save key_hi so integer keys can be distinguished
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed value consumed by the write
+    emitter.instruction("mov rax, rdi");                                        // pass the possibly referenced receiver
+    emitter.instruction("call __rt_mixed_deref_for_write");                     // follow references and element reference markers to the writable value
+    emitter.instruction("mov rdi, rax");                                        // restore the concrete receiver argument
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the concrete receiver for payload publication
 
     emitter.instruction("test rdi, rdi");                                       // non-existent Mixed targets cannot be mutated
     emitter.instruction("je __rt_mixed_array_set_drop");                        // drop the value when the target is null
@@ -369,8 +429,8 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the requested integer index
     emitter.instruction("cmp r9, 0");                                           // reject negative indexes before touching storage
     emitter.instruction("jl __rt_mixed_array_set_promote");                     // negative integer keys require associative PHP-array storage
-    emitter.instruction("cmp r9, QWORD PTR [r10]");                             // would this write leave a gap in packed storage?
-    emitter.instruction("ja __rt_mixed_array_set_promote");                     // a key past the next append slot promotes to a hash like PHP (never pads)
+    emitter.instruction("cmp r9, QWORD PTR [r10]");                             // compare the requested key with the packed logical length
+    emitter.instruction("ja __rt_mixed_array_set_promote");                     // sparse writes require hashes so gaps remain absent
     emitter.instruction("mov r8, QWORD PTR [r10 - 8]");                         // load the packed indexed-array metadata
     emitter.instruction("shr r8, 8");                                           // move the value_type tag into the low byte
     emitter.instruction("and r8, 0x7f");                                        // isolate the runtime value_type tag
@@ -405,24 +465,29 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9, r11");                                         // does this write overwrite an existing slot?
     emitter.instruction("jae __rt_mixed_array_set_skip_release");               // writes past the old end do not replace an existing Mixed cell
     emitter.instruction("mov rax, QWORD PTR [r10 + 24 + r9 * 8]");              // load the previous boxed Mixed pointer from the slot
-    emitter.instruction("test rax, rax");                                       // a null gap is replaced like any value
-    emitter.instruction("jz __rt_mixed_array_set_release_old");                 // release nothing for it
-    emitter.instruction("mov r11, QWORD PTR [rax]");                            // inspect the replaced box's tag
-    emitter.instruction(&format!("cmp r11, {}", ARRAY_GLOBAL_REF_CELL_TAG));    // does the slot own a share of a global reference?
+    emitter.instruction("test rax, rax");                                       // recognize an absent previous slot
+    emitter.instruction("jz __rt_mixed_array_set_release_slot");                // absent slots contain no persistent reference
+    emitter.instruction(&format!("cmp QWORD PTR [rax], {}", ARRAY_GLOBAL_REF_CELL_TAG)); // does the slot own a share of a global reference?
     emitter.instruction("je __rt_mixed_array_set_owned_ref");                   // a plain write goes through it
-    emitter.instruction(&format!("cmp r11, {}", ARRAY_LOCAL_REF_CELL_TAG));     // does the slot own a share of a local reference?
-    emitter.instruction("jne __rt_mixed_array_set_release_old");                // ordinary boxes are simply replaced
+    emitter.instruction(&format!("cmp QWORD PTR [rax], {}", ARRAY_LOCAL_REF_CELL_TAG)); // does the slot own a share of a local reference?
+    emitter.instruction("je __rt_mixed_array_set_owned_ref");                   // a plain write goes through it
+    emitter.instruction("cmp QWORD PTR [rax], 7");                              // recognize a nested Mixed wrapper
+    emitter.instruction("jne __rt_mixed_array_set_release_slot");               // ordinary values use normal slot replacement
+    emitter.instruction("cmp QWORD PTR [rax + 16], 1");                         // inspect the persistent reference marker
+    emitter.instruction("je __rt_mixed_array_set_reference");                   // write through the existing reference identity
+    emitter.instruction("jmp __rt_mixed_array_set_release_slot");               // ordinary boxes are simply replaced
+    // -- an element reference marker `{12|13, cell, source_tag}`: `=&` rebinds it, a value goes through --
     emitter.label("__rt_mixed_array_set_owned_ref");
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // the incoming box
     emitter.instruction("test rsi, rsi");                                       // a null box is a plain value
     emitter.instruction("jz __rt_mixed_array_set_store_through");               // write it through the reference
     emitter.instruction("mov r11, QWORD PTR [rsi]");                            // inspect the incoming box's tag
     emitter.instruction(&format!("cmp r11, {}", INVOKER_ARG_REF_CELL_TAG));     // is the incoming value a reference too?
-    emitter.instruction("je __rt_mixed_array_set_release_old");                 // `=&` rebinds: release this slot's share, store the new one
+    emitter.instruction("je __rt_mixed_array_set_release_slot");                // `=&` rebinds: release this slot's share, store the new one
     emitter.instruction(&format!("cmp r11, {}", ARRAY_GLOBAL_REF_CELL_TAG));    // is the incoming value a global reference?
-    emitter.instruction("je __rt_mixed_array_set_release_old");                 // `=&` rebinds: release this slot's share, store the new one
+    emitter.instruction("je __rt_mixed_array_set_release_slot");                // `=&` rebinds: release this slot's share, store the new one
     emitter.instruction(&format!("cmp r11, {}", ARRAY_LOCAL_REF_CELL_TAG));     // is the incoming value a local reference?
-    emitter.instruction("je __rt_mixed_array_set_release_old");                 // `=&` rebinds: release this slot's share, store the new one
+    emitter.instruction("je __rt_mixed_array_set_release_slot");                // `=&` rebinds: release this slot's share, store the new one
     emitter.label("__rt_mixed_array_set_store_through");
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // keep the slot's marker for the typed-cell fallback
     emitter.instruction("mov rdi, rax");                                        // the slot's marker box
@@ -432,8 +497,16 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // was the value written through?
     emitter.instruction("jnz __rt_mixed_array_set_done");                       // the slot keeps its marker; nothing else to store
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // a typed cell: replace the marker as before
-    emitter.label("__rt_mixed_array_set_release_old");
+    // Publish-before-retire (see the AArch64 arm).
+    emitter.label("__rt_mixed_array_set_release_slot");
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // keep the overwritten cell for the release that follows the publish
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the array pointer
+    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload the target index
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the new boxed Mixed value
+    emitter.instruction("mov QWORD PTR [r10 + 24 + r9 * 8], r11");              // publish the new boxed Mixed pointer into the target slot
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // the overwritten cell, no longer reachable from the slot
     emitter.instruction("call __rt_decref_mixed");                              // release the overwritten Mixed cell
+    emitter.instruction("jmp __rt_mixed_array_set_done");                       // an overwrite leaves the logical length unchanged
     emitter.label("__rt_mixed_array_set_skip_release");
 
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the array pointer after the release helper
@@ -469,8 +542,31 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_array_set_assoc");                      // finish the write through the associative path
 
     emitter.label("__rt_mixed_array_set_assoc");
+    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // pass the associative payload to its COW boundary
+    emitter.instruction("call __rt_hash_ensure_unique");                        // detach shared hash storage before examining reference slots
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // recover the concrete owning cell
+    emitter.instruction("mov QWORD PTR [rdi + 8], rax");                        // publish the unique hash before any keyed write
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the associative-array hash pointer from the Mixed payload
     emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_array_set_autovivify");
+    emitter.instruction("mov rdi, r10");                                        // look up the existing hash slot before replacement
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the normalized key low word
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // pass the normalized key high word
+    emitter.instruction("call __rt_hash_get");                                  // read a borrowed entry and its storage tag
+    emitter.instruction("test rax, rax");                                       // check whether this key already exists
+    emitter.instruction("jz __rt_mixed_array_set_assoc_store");                 // new keys use ordinary insertion
+    emitter.instruction("cmp rcx, 7");                                          // only boxed entries can contain a reference
+    emitter.instruction("jne __rt_mixed_array_set_assoc_store");                // typed entries use ordinary replacement
+    emitter.instruction("mov rax, rdi");                                        // inspect the borrowed boxed entry
+    emitter.instruction("test rax, rax");                                       // recognize an absent previous slot
+    emitter.instruction("jz __rt_mixed_array_set_assoc_store");                 // absent slots contain no persistent reference
+    emitter.instruction("cmp QWORD PTR [rax], 7");                              // recognize a nested Mixed wrapper
+    emitter.instruction("jne __rt_mixed_array_set_assoc_store");                // ordinary values use normal slot replacement
+    emitter.instruction("cmp QWORD PTR [rax + 16], 1");                         // inspect the persistent reference marker
+    emitter.instruction("je __rt_mixed_array_set_reference");                   // write through the existing reference identity
+    emitter.label("__rt_mixed_array_set_assoc_store");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // recover the concrete owning cell
+    emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                        // reload its hash payload after lookup
+    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // remember the table handed to the hash-set helper
     emitter.instruction("mov rdi, r10");                                        // pass the current hash table to the hash-set helper
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the normalized key low word
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the normalized key high word
@@ -479,6 +575,10 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, 7");                                           // runtime value tag 7 = boxed Mixed
     emitter.instruction("call __rt_hash_set");                                  // insert or update the hash entry, preserving PHP key semantics
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning Mixed cell after hash mutation
+    // A reentrant write that grew the array already published the live table (see the AArch64 arm).
+    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // the table the cell holds now
+    emitter.instruction("cmp r11, QWORD PTR [rbp - 48]");                       // did a reentrant write replace the table handed to the helper?
+    emitter.instruction("jne __rt_mixed_array_set_done");                       // yes: keep the newer table the cell already holds
     emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish the possibly-reallocated hash table back to the Mixed cell
     emitter.instruction("jmp __rt_mixed_array_set_done");                       // finish after mutating the associative array
 
@@ -588,6 +688,10 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before the tail-call
     emitter.instruction("jmp __rt_throw_object_not_array");                     // never returns
 
+    emitter.label("__rt_mixed_array_set_reference");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // borrow the incoming value for reference assignment
+    emitter.instruction("call __rt_reference_replace");                         // publish an independent value in the existing shared wrapper
+    emitter.instruction("call __rt_decref_any");                                // release the replaced child after publication
     emitter.label("__rt_mixed_array_set_drop");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the unused boxed value
     emitter.instruction("call __rt_decref_mixed");                              // release the boxed value when the write cannot be applied

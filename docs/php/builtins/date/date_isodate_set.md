@@ -1,8 +1,8 @@
 ---
 title: "date_isodate_set()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Sets a DateTime from an ISO year, week, and day of week."
 sidebar:
-  order: 215
+  order: 216
 ---
 
 ## date_isodate_set()
@@ -11,7 +11,7 @@ sidebar:
 function date_isodate_set(mixed $object, int $year, int $week, int $dayOfWeek = 1): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Sets a DateTime from an ISO year, week, and day of week.
 
 **Parameters**:
 - `$object` (`mixed`)
@@ -26,7 +26,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

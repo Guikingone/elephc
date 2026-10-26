@@ -10,6 +10,9 @@
 //!   or return types, so this bridge is emitted into the user assembly.
 //! - This method-call slice supports public methods plus protected/private
 //!   methods when the active eval class scope satisfies PHP visibility.
+//! - Magician binds eval method calls to the physical native signature. A generated
+//!   argument collector therefore stays in the slot metadata, and the bridge enters the
+//!   raw method symbol. Source adapters remain reserved for source/vtable boundaries.
 
 use std::collections::BTreeMap;
 
@@ -19,10 +22,11 @@ use crate::codegen_support::try_handlers::{
 };
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::emit_box_current_value_as_mixed;
+use crate::codegen::{emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
 use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
-use crate::ir::Module;
+use crate::ir::{Module, Ownership};
+use crate::codegen_support::source_method_adapters::MethodKind;
 use crate::names::{join_php_symbol, method_symbol, php_symbol_key, static_method_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
@@ -30,12 +34,14 @@ use crate::types::{ClassInfo, PhpType};
 use super::eval_ref_arg_helpers::{
     EvalRefArgSlot, eval_abi_param_types_for_refs, eval_arg_temp_slot_size,
     eval_normalized_ref_params, eval_ref_arg_slots, eval_signature_ref_params_supported,
-    emit_aarch64_write_back_ref_args, emit_x86_64_write_back_ref_args,
+    emit_aarch64_write_back_ref_args, emit_acquire_mixed_ref_args, emit_x86_64_write_back_ref_args,
 };
 use super::eval_callable_helpers::{EVAL_ARG_BOXED_VALUE_AARCH64_OFFSET, EVAL_ARG_BOXED_VALUE_X86_64_OFFSET,
     EVAL_ARG_CONTEXT_AARCH64_OFFSET};
 use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 use super::class_id_dispatch::{emit_class_id_switch, ClassIdSwitch};
+use super::eval_argument_helpers::emit_borrowed_string_arg;
+use super::eval_value_helpers::{emit_borrowed_eval_string_argument, native_method_returns_owned_value};
 
 /// Method metadata needed by eval method-call bridge dispatch.
 #[derive(Clone)]
@@ -49,7 +55,13 @@ struct EvalMethodSlot {
     params: Vec<PhpType>,
     ref_params: Vec<bool>,
     return_ty: PhpType,
+    return_is_owned: bool,
+    return_uses_marker: bool,
+    /// The compiled method returns BY REFERENCE: its result register holds the address of the
+    /// returned storage, which the bridge reads before boxing.
+    return_by_ref: bool,
     is_hidden_shadow: bool,
+    entry_symbol: String,
     runtime_helper: Option<&'static str>,
 }
 
@@ -65,6 +77,19 @@ struct EvalStaticMethodSlot {
     params: Vec<PhpType>,
     ref_params: Vec<bool>,
     return_ty: PhpType,
+    return_is_owned: bool,
+    return_uses_marker: bool,
+    /// See `EvalMethodSlot::return_by_ref`.
+    return_by_ref: bool,
+    entry_symbol: String,
+}
+
+/// Origin of a method result crossing the eval bridge.
+#[derive(Clone, Copy)]
+enum EvalMethodResultSource {
+    CompiledInstance,
+    CompiledStatic,
+    RuntimeHelper,
 }
 
 const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
@@ -242,6 +267,49 @@ fn collect_builtin_throwable_method_class_ids(module: &Module) -> Vec<u64> {
     class_ids
 }
 
+/// How the eval bridge reaches one method implementation.
+enum EvalMethodEntry {
+    /// Magician binds this physical signature before entering the raw method symbol.
+    Raw(crate::types::FunctionSig, String),
+}
+
+/// Returns the physical entry symbol one method kind publishes without any adaptation.
+fn raw_method_entry_symbol(impl_class: &str, method: &str, kind: MethodKind) -> String {
+    match kind {
+        MethodKind::Instance => method_symbol(impl_class, method),
+        MethodKind::Static => static_method_symbol(impl_class, method),
+    }
+}
+
+/// Resolves the physical signature and raw entry symbol for one method implementation.
+///
+/// Eval method registration and Magician's native argument binder both retain the physical
+/// parameter count. Generated collectors and hidden actual-count slots therefore reach the raw
+/// implementation with their physical signature instead of entering a source adapter. Magician's
+/// binder materializes both internal shapes before entering this bridge. The physical signature
+/// is read from the implementing class so inherited instance and static methods both resolve to
+/// the symbol that owns their body.
+fn eval_method_entry(
+    module: &Module,
+    impl_class: &str,
+    method: &str,
+    declared: &crate::types::FunctionSig,
+    kind: MethodKind,
+) -> EvalMethodEntry {
+    let physical = module
+        .class_infos
+        .get(impl_class)
+        .and_then(|class_info| match kind {
+            MethodKind::Instance => class_info.methods.get(method),
+            MethodKind::Static => class_info.static_methods.get(method),
+        })
+        .unwrap_or(declared);
+    EvalMethodEntry::Raw(
+        physical.clone(),
+        raw_method_entry_symbol(impl_class, method, kind),
+    )
+}
+
 /// Adds bridge-supported instance methods for one class.
 fn collect_class_method_slots(
     module: &Module,
@@ -261,10 +329,7 @@ fn collect_class_method_slots(
     methods.sort_by_key(|(method, _)| method.as_str());
     for (method, sig) in methods {
         let visibility = method_visibility(class_info, method);
-        if !method_visibility_supported(visibility)
-            || !method_signature_supported(sig)
-            || !method_return_supported(&sig.return_type)
-        {
+        if !method_visibility_supported(visibility) {
             continue;
         }
         let impl_class = class_info
@@ -272,7 +337,18 @@ fn collect_class_method_slots(
             .get(method)
             .map(String::as_str)
             .unwrap_or(class_name);
-        let runtime_helper = eval_runtime_backed_instance_method_helper(class_name, method);
+        let runtime_intrinsic = eval_runtime_backed_instance_method_intrinsic(class_name, method);
+        let runtime_helper = runtime_intrinsic.and_then(IntrinsicCall::runtime_helper);
+        let entry = match runtime_helper {
+            Some(_) => EvalMethodEntry::Raw(sig.clone(), method_symbol(impl_class, method)),
+            None => eval_method_entry(module, impl_class, method, sig, MethodKind::Instance),
+        };
+        let (sig, entry_symbol) = match &entry {
+            EvalMethodEntry::Raw(physical, symbol) => (physical, symbol),
+        };
+        if !method_signature_supported(sig) || !method_return_supported(&sig.return_type) {
+            continue;
+        }
         if runtime_helper.is_none()
             && !emitted_methods.contains(&(impl_class.to_string(), method.clone(), false))
         {
@@ -285,10 +361,16 @@ fn collect_class_method_slots(
             impl_class: impl_class.to_string(),
             visibility: visibility.clone(),
             allowed_scopes: visibility_scope_names(module, impl_class, visibility),
-            params: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
+            params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
-            return_ty: emitted_method_return_type(module, impl_class, method, false, sig),
+            return_ty: emitted_method_return_type(module, entry_symbol, sig),
+            return_is_owned: runtime_helper.is_none()
+                && native_method_returns_owned_value(module, impl_class, method, false),
+            return_uses_marker: runtime_helper.is_none()
+                && compiled_method_return_uses_marker(sig),
+            return_by_ref: runtime_helper.is_none() && sig.by_ref_return,
             is_hidden_shadow: false,
+            entry_symbol: entry_symbol.clone(),
             runtime_helper,
         });
     }
@@ -310,10 +392,7 @@ fn collect_hidden_private_ancestor_method_slots(
         methods.sort_by_key(|(method, _)| method.as_str());
         for (method, sig) in methods {
             let visibility = method_visibility(ancestor_info, method);
-            if visibility != &Visibility::Private
-                || !method_signature_supported(sig)
-                || !method_return_supported(&sig.return_type)
-            {
+            if visibility != &Visibility::Private {
                 continue;
             }
             let impl_class = ancestor_info
@@ -321,6 +400,13 @@ fn collect_hidden_private_ancestor_method_slots(
                 .get(method)
                 .map(String::as_str)
                 .unwrap_or(ancestor_name);
+            let entry = eval_method_entry(module, impl_class, method, sig, MethodKind::Instance);
+            let (sig, entry_symbol) = match &entry {
+                EvalMethodEntry::Raw(physical, symbol) => (physical, symbol),
+            };
+            if !method_signature_supported(sig) || !method_return_supported(&sig.return_type) {
+                continue;
+            }
             if !emitted_methods.contains(&(impl_class.to_string(), method.clone(), false)) {
                 continue;
             }
@@ -331,42 +417,25 @@ fn collect_hidden_private_ancestor_method_slots(
                 impl_class: impl_class.to_string(),
                 visibility: visibility.clone(),
                 allowed_scopes: visibility_scope_names(module, impl_class, visibility),
-                params: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
+                params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
                 ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
-                return_ty: emitted_method_return_type(module, impl_class, method, false, sig),
+                return_ty: emitted_method_return_type(module, entry_symbol, sig),
+                return_is_owned: native_method_returns_owned_value(module, impl_class, method, false),
+                return_uses_marker: compiled_method_return_uses_marker(sig),
+                return_by_ref: sig.by_ref_return,
                 is_hidden_shadow: true,
+                entry_symbol: entry_symbol.clone(),
                 runtime_helper: None,
             });
         }
     }
 }
 
-/// Gives a consuming SPL runtime helper the reference it will take over.
-///
-/// The `__rt_spl_*` list and fixed-array helpers CONSUME their boxed arguments: `push` stores the
-/// value cell in its storage, and the offset operations release the boxed offset. A compiled
-/// caller hands them a fresh reference. The bridge hands every method the interpreter's own
-/// cell, borrowed, so the helper stored (or freed) a reference the interpreter still owned: an
-/// `SplStack` an interpreted `push()` filled came back as empty arrays, and `count()` stopped
-/// matching. One retain here makes the transfer the helper expects.
-fn emit_retain_mixed_arg_for_consuming_helper(
-    emitter: &mut Emitter,
-    runtime_helper: Option<&'static str>,
-    param_ty: &PhpType,
-) {
-    if !runtime_helper.is_some_and(|helper| helper.starts_with("__rt_spl_"))
-        || param_ty.codegen_repr() != PhpType::Mixed
-    {
-        return;
-    }
-    abi::emit_call_label(emitter, "__rt_incref");
-}
-
 /// Returns a normal-ABI runtime helper for builtin instance methods that eval can bridge.
-fn eval_runtime_backed_instance_method_helper(
+fn eval_runtime_backed_instance_method_intrinsic(
     class_name: &str,
     method_name: &str,
-) -> Option<&'static str> {
+) -> Option<IntrinsicCall> {
     // `Generator` belongs here too: interpreted code iterating a COMPILED generator --
     // `foreach ($this->warmers as $w)` over a container `RewindableGenerator` whose
     // `getIterator()` runs a compiled closure -- drives it by method name, and without a slot
@@ -377,7 +446,9 @@ fn eval_runtime_backed_instance_method_helper(
     ) {
         return None;
     }
-    IntrinsicCall::instance_method(class_name, method_name)?.runtime_helper()
+    let intrinsic = IntrinsicCall::instance_method(class_name, method_name)?;
+    intrinsic.runtime_helper()?;
+    Some(intrinsic)
 }
 
 /// Adds bridge-supported static methods for one class.
@@ -392,10 +463,7 @@ fn collect_class_static_method_slots(
     methods.sort_by_key(|(method, _)| method.as_str());
     for (method, sig) in methods {
         let visibility = static_method_visibility(class_info, method);
-        if !method_visibility_supported(visibility)
-            || !method_signature_supported(sig)
-            || !method_return_supported(&sig.return_type)
-        {
+        if !method_visibility_supported(visibility) {
             continue;
         }
         let impl_class = class_info
@@ -403,6 +471,13 @@ fn collect_class_static_method_slots(
             .get(method)
             .map(String::as_str)
             .unwrap_or(class_name);
+        let entry = eval_method_entry(module, impl_class, method, sig, MethodKind::Static);
+        let (sig, entry_symbol) = match &entry {
+            EvalMethodEntry::Raw(physical, symbol) => (physical, symbol),
+        };
+        if !method_signature_supported(sig) || !method_return_supported(&sig.return_type) {
+            continue;
+        }
         if !emitted_methods.contains(&(impl_class.to_string(), method.clone(), true)) {
             continue;
         }
@@ -413,9 +488,13 @@ fn collect_class_static_method_slots(
             impl_class: impl_class.to_string(),
             visibility: visibility.clone(),
             allowed_scopes: visibility_scope_names(module, impl_class, visibility),
-            params: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
+            params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
-            return_ty: emitted_method_return_type(module, impl_class, method, true, sig),
+            return_ty: emitted_method_return_type(module, entry_symbol, sig),
+            return_is_owned: native_method_returns_owned_value(module, impl_class, method, true),
+            return_uses_marker: compiled_method_return_uses_marker(sig),
+            return_by_ref: sig.by_ref_return,
+            entry_symbol: entry_symbol.clone(),
         });
     }
 }
@@ -425,24 +504,25 @@ fn collect_class_static_method_slots(
 /// Class metadata may retain a checker-facing interface or union contract while
 /// the emitted EIR function returns a concrete object or scalar representation.
 /// The eval bridge must box the latter, because it receives the raw ABI result.
+/// `entry_symbol` is the physical entry the bridge calls (an adapter when the source method
+/// needed one), so the lookup follows the function that is actually invoked.
 fn emitted_method_return_type(
     module: &Module,
-    impl_class: &str,
-    method: &str,
-    is_static: bool,
+    entry_symbol: &str,
     signature: &crate::types::FunctionSig,
 ) -> PhpType {
-    let symbol = if is_static {
-        static_method_symbol(impl_class, method)
-    } else {
-        method_symbol(impl_class, method)
-    };
     module
         .class_methods
         .iter()
-        .find(|function| function.name == symbol)
+        .find(|function| function.name == entry_symbol)
         .map(|function| function.return_php_type.codegen_repr())
         .unwrap_or_else(|| signature.return_type.codegen_repr())
+}
+
+/// Returns whether a compiled by-value method publishes the private ownership marker.
+fn compiled_method_return_uses_marker(sig: &crate::types::FunctionSig) -> bool {
+    let return_ty = sig.return_type.codegen_repr();
+    !sig.by_ref_return && Ownership::php_type_needs_lifetime_tracking(&return_ty)
 }
 
 /// Returns the declared instance-method visibility, defaulting to public metadata.
@@ -602,14 +682,11 @@ fn emit_static_method_call_aarch64(
 ) {
     let fail_label = "__elephc_eval_value_static_method_call_fail";
     let done_label = "__elephc_eval_value_static_method_call_done";
-    let owner_count = slots.iter().map(|slot| slot.params.len()).max().unwrap_or(0);
-    let frame_size = super::eval_argument_owners::frame_size(emitter, STATIC_METHOD_HELPER_FRAME_SIZE, owner_count);
-    emitter.instruction(
-        &format!("sub sp, sp, #{}", frame_size)
-    );                                                                          // reserve helper frame plus a boundary exception handler
+    emitter.instruction(                                                        // reserve helper frame plus a boundary exception handler
+        &format!("sub sp, sp, #{}", STATIC_METHOD_HELPER_FRAME_SIZE)
+    );
     emitter.instruction("stp x29, x30, [sp, #64]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #64");                                    // establish a stable helper frame pointer
-    super::eval_argument_owners::initialize(emitter, owner_count);
     emitter.instruction("str x0, [sp, #0]");                                    // save the requested class-name pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the requested class-name length
     emitter.instruction("str x2, [sp, #16]");                                   // save the requested method-name pointer
@@ -632,11 +709,10 @@ fn emit_static_method_call_aarch64(
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
-    super::eval_argument_owners::release(emitter, owner_count);
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the Rust caller frame
-    emitter.instruction(
-        &format!("add sp, sp, #{}", frame_size)
-    );                                                                          // release the helper frame and boundary handler
+    emitter.instruction(                                                        // release the helper frame and boundary handler
+        &format!("add sp, sp, #{}", STATIC_METHOD_HELPER_FRAME_SIZE)
+    );
     emitter.instruction("ret");                                                 // return the boxed static method result to Rust
 }
 
@@ -650,14 +726,11 @@ fn emit_static_method_call_x86_64(
 ) {
     let fail_label = "__elephc_eval_value_static_method_call_fail_x";
     let done_label = "__elephc_eval_value_static_method_call_done_x";
-    let owner_count = slots.iter().map(|slot| slot.params.len()).max().unwrap_or(0);
-    let frame_size = super::eval_argument_owners::frame_size(emitter, STATIC_METHOD_HELPER_FRAME_SIZE, owner_count);
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction(
-        &format!("sub rsp, {}", frame_size)
-    );                                                                          // reserve aligned slots plus a boundary exception handler
-    super::eval_argument_owners::initialize(emitter, owner_count);
+    emitter.instruction(                                                        // reserve aligned slots plus a boundary exception handler
+        &format!("sub rsp, {}", STATIC_METHOD_HELPER_FRAME_SIZE)
+    );
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested method-name pointer
@@ -682,8 +755,6 @@ fn emit_static_method_call_x86_64(
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
-    emitter.instruction(&format!("lea rsp, [rbp - {}]", frame_size));           // restore the full frame before releasing argument reader owners
-    super::eval_argument_owners::release(emitter, owner_count);
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed static method result to Rust
@@ -714,12 +785,9 @@ fn emit_method_call_aarch64(
 ) {
     let fail_label = "__elephc_eval_value_method_call_fail";
     let done_label = "__elephc_eval_value_method_call_done";
-    let owner_count = slots.iter().map(|slot| slot.params.len()).max().unwrap_or(0);
-    let frame_size = super::eval_argument_owners::frame_size(emitter, METHOD_HELPER_FRAME_SIZE, owner_count);
-    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // reserve helper frame plus a boundary exception handler and argument owners
+    emitter.instruction(&format!("sub sp, sp, #{}", METHOD_HELPER_FRAME_SIZE)); // reserve helper frame plus a boundary exception handler
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
-    super::eval_argument_owners::initialize(emitter, owner_count);
     emitter.instruction("str x1, [sp, #0]");                                    // save the requested method-name pointer
     emitter.instruction("str x2, [sp, #8]");                                    // save the requested method-name length
     emitter.instruction("str x3, [sp, #24]");                                   // save the boxed eval argument array
@@ -752,9 +820,8 @@ fn emit_method_call_aarch64(
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
-    super::eval_argument_owners::release(emitter, owner_count);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
-    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // release the helper frame, boundary handler and argument owners
+    emitter.instruction(&format!("add sp, sp, #{}", METHOD_HELPER_FRAME_SIZE)); // release the helper frame and boundary handler
     emitter.instruction("ret");                                                 // return the boxed method result to Rust
 }
 
@@ -769,12 +836,9 @@ fn emit_method_call_x86_64(
 ) {
     let fail_label = "__elephc_eval_value_method_call_fail_x";
     let done_label = "__elephc_eval_value_method_call_done_x";
-    let owner_count = slots.iter().map(|slot| slot.params.len()).max().unwrap_or(0);
-    let frame_size = super::eval_argument_owners::frame_size(emitter, METHOD_HELPER_FRAME_SIZE, owner_count);
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction(&format!("sub rsp, {}", frame_size));                   // reserve aligned slots plus a boundary exception handler and argument owners
-    super::eval_argument_owners::initialize(emitter, owner_count);
+    emitter.instruction(&format!("sub rsp, {}", METHOD_HELPER_FRAME_SIZE));     // reserve aligned slots plus a boundary exception handler
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the requested method-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the requested method-name length
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed eval argument array
@@ -810,8 +874,6 @@ fn emit_method_call_x86_64(
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
-    emitter.instruction(&format!("lea rsp, [rbp - {}]", frame_size));           // restore the full frame before releasing argument reader owners
-    super::eval_argument_owners::release(emitter, owner_count);
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed method result to Rust
@@ -829,13 +891,13 @@ fn emit_aarch64_method_exception_boundary_push(
     abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
     emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset + 8));   // preserve the caller activation frame across method unwinding
     abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // save diagnostic suppression depth for restoration
         "str x10, [x29, #{}]",
         handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // save diagnostic suppression depth for restoration
+    ));
     emitter.instruction(&format!("add x10, x29, #{}", handler_offset));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // pass the boundary jmp_buf to setjmp
         "add x0, x29, #{}",
         handler_offset + TRY_HANDLER_JMP_BUF_OFFSET
     ));                                                                         // pass the boundary jmp_buf to setjmp
@@ -852,7 +914,7 @@ fn emit_aarch64_method_exception_boundary_pop(emitter: &mut Emitter, handler_off
     emitter.instruction(&format!(
         "ldr x10, [x29, #{}]",
         handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // reload the saved diagnostic suppression depth
+    ));
     abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
 }
 
@@ -864,21 +926,21 @@ fn emit_x86_64_method_exception_boundary_push(
 ) {
     emitter.comment("push eval method exception boundary");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(
+    emitter.instruction(                                                        // save the previous native exception-handler head
         &format!("mov QWORD PTR [rbp - {}], r10", handler_base)
-    );                                                                          // save the previous native exception-handler head
+    );
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-    emitter.instruction(
+    emitter.instruction(                                                        // preserve the caller activation frame across method unwinding
         &format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)
-    );                                                                          // preserve the caller activation frame across method unwinding
+    );
     abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // save diagnostic suppression depth for restoration
         "mov QWORD PTR [rbp - {}], r10",
         handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // save diagnostic suppression depth for restoration
+    ));
     emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // pass the boundary jmp_buf to setjmp
         "lea rdi, [rbp - {}]",
         handler_base - TRY_HANDLER_JMP_BUF_OFFSET
     ));                                                                         // pass the boundary jmp_buf to setjmp
@@ -890,15 +952,15 @@ fn emit_x86_64_method_exception_boundary_push(
 /// Emits an x86_64 boundary pop after a native method call returns to magician.
 fn emit_x86_64_method_exception_boundary_pop(emitter: &mut Emitter, handler_base: usize) {
     emitter.comment("pop eval method exception boundary");
-    emitter.instruction(
+    emitter.instruction(                                                        // reload the previous native exception-handler head
         &format!("mov r10, QWORD PTR [rbp - {}]", handler_base)
-    );                                                                          // reload the previous native exception-handler head
+    );
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emit_native_handler_pop_trace(emitter, 1, "r10");
     emitter.instruction(&format!(
         "mov r10, QWORD PTR [rbp - {}]",
         handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // reload the saved diagnostic suppression depth
+    ));
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
 }
 
@@ -1121,7 +1183,7 @@ fn emit_aarch64_builtin_throwable_method_name_branch(
     abi::emit_symbol_address(emitter, "x3", &label);
     abi::emit_load_int_immediate(emitter, "x4", len as i64);
     emitter.instruction("bl __rt_strcasecmp");                                  // compare Throwable method names with PHP case-insensitive rules
-    emitter.instruction(&format!("cbz x0, {}", target_label));                  // dispatch to the compact Throwable method when names match
+    emit_aarch64_branch_if_zero_far(emitter, "x0", target_label);               // dispatch to the compact Throwable method when names match
 }
 
 /// Emits one x86_64 method-name comparison for a compact Throwable method.
@@ -1158,7 +1220,7 @@ fn emit_aarch64_method_name_compare(
     emitter.instruction("bl __rt_strcasecmp");                                  // compare method names with PHP case-insensitive rules
     let target_label = method_body_label(module, slot);
     if matches!(slot.visibility, Visibility::Public) {
-        emitter.instruction(&format!("cbz x0, {}", target_label));              // dispatch to the method body when the names match
+        emit_aarch64_branch_if_zero_far(emitter, "x0", &target_label);         // dispatch to the method body when the names match
         return;
     }
     let miss_label = method_access_miss_label(module, slot);
@@ -1233,7 +1295,7 @@ fn emit_aarch64_static_method_name_compare(
     emitter.instruction("bl __rt_strcasecmp");                                  // compare static method names with PHP case-insensitive rules
     let target_label = static_method_body_label(module, slot);
     if matches!(slot.visibility, Visibility::Public) {
-        emitter.instruction(&format!("cbz x0, {}", target_label));              // dispatch to the static method body when the names match
+        emit_aarch64_branch_if_zero_far(emitter, "x0", &target_label);         // dispatch to the static method body when the names match
         return;
     }
     let miss_label = static_method_access_miss_label(module, slot);
@@ -1281,16 +1343,28 @@ fn emit_aarch64_method_scope_check(
     emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));       // reload the active eval class-scope pointer
     emitter.instruction(&format!("ldr x2, [sp, #{}]", scope_len_offset));       // reload the active eval class-scope length
     emit_aarch64_branch_if_zero_far(emitter, "x1", fail_label);
+    // The scope list is a data table walked by the shared `__rt_eval_scope_allowed`; unrolled
+    // inline it cost one `strcasecmp` per related class at every arm, three million arms over
+    // Symfony's compiled container.
+    let table = eval_scope_table_label(data, allowed_scopes);
+    abi::emit_symbol_address(emitter, "x3", &table);
+    emitter.instruction("bl __rt_eval_scope_allowed");                          // test the active scope against the member's allowed classes
+    emit_aarch64_branch_if_zero_far(emitter, "x0", fail_label);
+    emitter.instruction(&format!("b {}", success_label));                       // dispatch when scoped visibility is satisfied
+}
+
+/// Builds the deduplicated `[count, ptr, len, ...]` table of class names that may see a member,
+/// the operand of the shared `__rt_eval_scope_allowed` loop.
+pub(super) fn eval_scope_table_label(data: &mut DataSection, allowed_scopes: &[String]) -> String {
+    use crate::codegen_support::data_section::DataWord;
+    let mut words = Vec::with_capacity(1 + allowed_scopes.len() * 2);
+    words.push(DataWord::U64(allowed_scopes.len() as u64));
     for scope_name in allowed_scopes {
         let (label, len) = data.add_string(scope_name.as_bytes());
-        emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));   // reload the active eval class-scope pointer
-        emitter.instruction(&format!("ldr x2, [sp, #{}]", scope_len_offset));   // reload the active eval class-scope length
-        abi::emit_symbol_address(emitter, "x3", &label);
-        abi::emit_load_int_immediate(emitter, "x4", len as i64);
-        emitter.instruction("bl __rt_strcasecmp");                              // compare current eval scope with an allowed class
-        emitter.instruction(&format!("cbz x0, {}", success_label));             // dispatch when scoped visibility is satisfied
+        words.push(DataWord::Symbol(label));
+        words.push(DataWord::U64(len as u64));
     }
-    emitter.instruction(&format!("b {}", fail_label));                          // reject scoped method access from unrelated classes
+    data.add_words(words)
 }
 
 /// Emits x86_64 visibility checks for a protected/private method bridge hit.
@@ -1303,29 +1377,20 @@ fn emit_x86_64_method_scope_check(
     fail_label: &str,
 ) {
     let (scope_ptr_offset, scope_len_offset) = x86_64_method_scope_offsets(is_static);
-    emitter.instruction(
+    emitter.instruction(                                                        // reload the active eval class-scope pointer
         &format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)
-    );                                                                          // reload the active eval class-scope pointer
-    emitter.instruction(
+    );
+    emitter.instruction(                                                        // reload the active eval class-scope length
         &format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)
-    );                                                                          // reload the active eval class-scope length
+    );
     emitter.instruction("test rdi, rdi");                                       // check whether eval is executing inside a class scope
     emitter.instruction(&format!("jz {}", fail_label));                         // reject scoped method access outside a class scope
-    for scope_name in allowed_scopes {
-        let (label, len) = data.add_string(scope_name.as_bytes());
-        emitter.instruction(
-            &format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)
-        );                                                                      // reload the active eval class-scope pointer
-        emitter.instruction(
-            &format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)
-        );                                                                      // reload the active eval class-scope length
-        abi::emit_symbol_address(emitter, "rdx", &label);
-        abi::emit_load_int_immediate(emitter, "rcx", len as i64);
-        emitter.instruction("call __rt_strcasecmp");                            // compare current eval scope with an allowed class
-        emitter.instruction("test rax, rax");                                   // check whether the current scope matched
-        emitter.instruction(&format!("je {}", success_label));                  // dispatch when scoped visibility is satisfied
-    }
-    emitter.instruction(&format!("jmp {}", fail_label));                        // reject scoped method access from unrelated classes
+    let table = eval_scope_table_label(data, allowed_scopes);
+    abi::emit_symbol_address(emitter, "rdx", &table);
+    emitter.instruction("call __rt_eval_scope_allowed");                        // test the active scope against the member's allowed classes
+    emitter.instruction("test rax, rax");                                       // did any allowed class match?
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject scoped method access from unrelated classes
+    emitter.instruction(&format!("jmp {}", success_label));                     // dispatch when scoped visibility is satisfied
 }
 
 /// Returns ARM64 stack offsets for method class-scope pointer and length.
@@ -1606,6 +1671,8 @@ fn emit_aarch64_method_bodies(
         let prep_fail_label = format!("{}_prep_fail", body_label);
         emitter.label(&body_label);
         emit_aarch64_validate_method_arg_count(module, emitter, slot, fail_label);
+        let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
+        super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
         let (arg_temp_bytes, ref_slots) =
             emit_aarch64_prepare_method_args(
                 module,
@@ -1615,29 +1682,47 @@ fn emit_aarch64_method_bodies(
                 &prep_fail_label,
                 callable_support,
             );
+        emit_acquire_mixed_ref_args(emitter, &ref_slots, arg_temp_bytes);
         let escape_label = format!("{}_escape", body_label);
-        super::eval_ref_arg_helpers::emit_retain_mixed_ref_arg_slots(emitter, &ref_slots, arg_temp_bytes);
         emit_aarch64_method_exception_boundary_push(
             emitter,
             METHOD_HELPER_HANDLER_OFFSET - 48,
             &escape_label,
         );
+        if slot.runtime_helper.is_some() {
+            let intrinsic = IntrinsicCall::instance_method(&slot.class_name, &slot.method).unwrap();
+            super::eval_argument_helpers::emit_consumed_intrinsic_arguments(emitter, intrinsic, &slot.params);
+        }
         let receiver_ty = PhpType::Object(slot.class_name.clone());
         let overflow_bytes =
             materialize_method_args(module, emitter, &receiver_ty, &slot.params, &slot.ref_params);
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
-        let callee = slot
-            .runtime_helper
-            .map(str::to_string)
-            .unwrap_or_else(|| method_symbol(&slot.impl_class, &slot.method));
-        abi::emit_call_label(emitter, &callee);
+        let callee = slot.runtime_helper.unwrap_or(slot.entry_symbol.as_str());
+        abi::emit_call_label(emitter, callee);
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
-        emit_box_method_result(module, emitter, &slot.return_ty);
+        let result_source = if slot.runtime_helper.is_some() {
+            EvalMethodResultSource::RuntimeHelper
+        } else {
+            EvalMethodResultSource::CompiledInstance
+        };
+        if slot.return_by_ref {
+            emit_load_by_ref_method_result(emitter, &slot.return_ty);
+        }
+        emit_box_method_result(
+            module,
+            emitter,
+            &slot.return_ty,
+            slot.return_is_owned && !slot.return_by_ref,
+            slot.return_uses_marker && !slot.return_by_ref,
+            result_source,
+            &body_label,
+        );
         preserve_result_and_write_back_aarch64_ref_args(emitter, &ref_slots, &body_label);
         emit_aarch64_method_exception_boundary_pop(emitter, METHOD_HELPER_HANDLER_OFFSET - 48);
+        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), true);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the native method result
         emitter.label(&escape_label);
         abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -1645,6 +1730,7 @@ fn emit_aarch64_method_bodies(
         emit_aarch64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
         abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
         emit_aarch64_method_exception_boundary_pop(emitter, METHOD_HELPER_HANDLER_OFFSET - 48);
+        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
         emitter.instruction(&format!("b {}", fail_label));                      // return failure after preserving by-reference writes
         emitter.label(&prep_fail_label);
         emit_aarch64_method_prep_fail_cleanup(emitter, 48, fail_label);
@@ -1666,6 +1752,8 @@ fn emit_x86_64_method_bodies(
         let prep_fail_label = format!("{}_prep_fail_x", body_label);
         emitter.label(&body_label);
         emit_x86_64_validate_method_arg_count(module, emitter, slot, fail_label);
+        let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
+        super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
         let (arg_temp_bytes, ref_slots) =
             emit_x86_64_prepare_method_args(
                 module,
@@ -1675,25 +1763,43 @@ fn emit_x86_64_method_bodies(
                 &prep_fail_label,
                 callable_support,
             );
+        emit_acquire_mixed_ref_args(emitter, &ref_slots, arg_temp_bytes);
         let escape_label = format!("{}_escape_x", body_label);
-        super::eval_ref_arg_helpers::emit_retain_mixed_ref_arg_slots(emitter, &ref_slots, arg_temp_bytes);
         emit_x86_64_method_exception_boundary_push(emitter, METHOD_HELPER_FRAME_SIZE, &escape_label);
+        if slot.runtime_helper.is_some() {
+            let intrinsic = IntrinsicCall::instance_method(&slot.class_name, &slot.method).unwrap();
+            super::eval_argument_helpers::emit_consumed_intrinsic_arguments(emitter, intrinsic, &slot.params);
+        }
         let receiver_ty = PhpType::Object(slot.class_name.clone());
         let overflow_bytes =
             materialize_method_args(module, emitter, &receiver_ty, &slot.params, &slot.ref_params);
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
-        let callee = slot
-            .runtime_helper
-            .map(str::to_string)
-            .unwrap_or_else(|| method_symbol(&slot.impl_class, &slot.method));
-        abi::emit_call_label(emitter, &callee);
+        let callee = slot.runtime_helper.unwrap_or(slot.entry_symbol.as_str());
+        abi::emit_call_label(emitter, callee);
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
-        emit_box_method_result(module, emitter, &slot.return_ty);
+        let result_source = if slot.runtime_helper.is_some() {
+            EvalMethodResultSource::RuntimeHelper
+        } else {
+            EvalMethodResultSource::CompiledInstance
+        };
+        if slot.return_by_ref {
+            emit_load_by_ref_method_result(emitter, &slot.return_ty);
+        }
+        emit_box_method_result(
+            module,
+            emitter,
+            &slot.return_ty,
+            slot.return_is_owned && !slot.return_by_ref,
+            slot.return_uses_marker && !slot.return_by_ref,
+            result_source,
+            &body_label,
+        );
         preserve_result_and_write_back_x86_64_ref_args(emitter, &ref_slots, &body_label);
         emit_x86_64_method_exception_boundary_pop(emitter, METHOD_HELPER_FRAME_SIZE);
+        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), true);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the native method result
         emitter.label(&escape_label);
         abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -1701,6 +1807,7 @@ fn emit_x86_64_method_bodies(
         emit_x86_64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
         abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
         emit_x86_64_method_exception_boundary_pop(emitter, METHOD_HELPER_FRAME_SIZE);
+        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
         emitter.instruction(&format!("jmp {}", fail_label));                    // return failure after preserving by-reference writes
         emitter.label(&prep_fail_label);
         emit_x86_64_method_prep_fail_cleanup(emitter, fail_label);
@@ -1722,6 +1829,8 @@ fn emit_aarch64_static_method_bodies(
         let prep_fail_label = format!("{}_prep_fail", body_label);
         emitter.label(&body_label);
         emit_aarch64_validate_static_method_arg_count(module, emitter, slot, fail_label);
+        let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
+        super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
         let (arg_temp_bytes, ref_slots) =
             emit_aarch64_prepare_static_method_args(
                 module,
@@ -1731,8 +1840,8 @@ fn emit_aarch64_static_method_bodies(
                 &prep_fail_label,
                 callable_support,
             );
+        emit_acquire_mixed_ref_args(emitter, &ref_slots, arg_temp_bytes);
         let escape_label = format!("{}_escape", body_label);
-        super::eval_ref_arg_helpers::emit_retain_mixed_ref_arg_slots(emitter, &ref_slots, arg_temp_bytes);
         emit_aarch64_method_exception_boundary_push(
             emitter,
             STATIC_METHOD_HELPER_HANDLER_OFFSET - 64,
@@ -1742,18 +1851,27 @@ fn emit_aarch64_static_method_bodies(
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
-        abi::emit_call_label(
-            emitter,
-            &static_method_symbol(&slot.impl_class, &slot.method),
-        );
+        abi::emit_call_label(emitter, &slot.entry_symbol);
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
-        emit_box_method_result(module, emitter, &slot.return_ty);
+        if slot.return_by_ref {
+            emit_load_by_ref_method_result(emitter, &slot.return_ty);
+        }
+        emit_box_method_result(
+            module,
+            emitter,
+            &slot.return_ty,
+            slot.return_is_owned && !slot.return_by_ref,
+            slot.return_uses_marker && !slot.return_by_ref,
+            EvalMethodResultSource::CompiledStatic,
+            &body_label,
+        );
         preserve_result_and_write_back_aarch64_ref_args(emitter, &ref_slots, &body_label);
         emit_aarch64_method_exception_boundary_pop(
             emitter,
             STATIC_METHOD_HELPER_HANDLER_OFFSET - 64,
         );
+        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), true);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the native static method result
         emitter.label(&escape_label);
         abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -1764,6 +1882,7 @@ fn emit_aarch64_static_method_bodies(
             emitter,
             STATIC_METHOD_HELPER_HANDLER_OFFSET - 64,
         );
+        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
         emitter.instruction(&format!("b {}", fail_label));                      // return failure after preserving by-reference writes
         emitter.label(&prep_fail_label);
         emit_aarch64_method_prep_fail_cleanup(emitter, 64, fail_label);
@@ -1785,6 +1904,8 @@ fn emit_x86_64_static_method_bodies(
         let prep_fail_label = format!("{}_prep_fail_x", body_label);
         emitter.label(&body_label);
         emit_x86_64_validate_static_method_arg_count(module, emitter, slot, fail_label);
+        let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
+        super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
         let (arg_temp_bytes, ref_slots) =
             emit_x86_64_prepare_static_method_args(
                 module,
@@ -1794,8 +1915,8 @@ fn emit_x86_64_static_method_bodies(
                 &prep_fail_label,
                 callable_support,
             );
+        emit_acquire_mixed_ref_args(emitter, &ref_slots, arg_temp_bytes);
         let escape_label = format!("{}_escape_x", body_label);
-        super::eval_ref_arg_helpers::emit_retain_mixed_ref_arg_slots(emitter, &ref_slots, arg_temp_bytes);
         emit_x86_64_method_exception_boundary_push(
             emitter,
             STATIC_METHOD_HELPER_FRAME_SIZE,
@@ -1805,15 +1926,24 @@ fn emit_x86_64_static_method_bodies(
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
-        abi::emit_call_label(
-            emitter,
-            &static_method_symbol(&slot.impl_class, &slot.method),
-        );
+        abi::emit_call_label(emitter, &slot.entry_symbol);
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
-        emit_box_method_result(module, emitter, &slot.return_ty);
+        if slot.return_by_ref {
+            emit_load_by_ref_method_result(emitter, &slot.return_ty);
+        }
+        emit_box_method_result(
+            module,
+            emitter,
+            &slot.return_ty,
+            slot.return_is_owned && !slot.return_by_ref,
+            slot.return_uses_marker && !slot.return_by_ref,
+            EvalMethodResultSource::CompiledStatic,
+            &body_label,
+        );
         preserve_result_and_write_back_x86_64_ref_args(emitter, &ref_slots, &body_label);
         emit_x86_64_method_exception_boundary_pop(emitter, STATIC_METHOD_HELPER_FRAME_SIZE);
+        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), true);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the native static method result
         emitter.label(&escape_label);
         abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -1821,6 +1951,7 @@ fn emit_x86_64_static_method_bodies(
         emit_x86_64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
         abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
         emit_x86_64_method_exception_boundary_pop(emitter, STATIC_METHOD_HELPER_FRAME_SIZE);
+        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
         emitter.instruction(&format!("jmp {}", fail_label));                    // return failure after preserving by-reference writes
         emitter.label(&prep_fail_label);
         emit_x86_64_method_prep_fail_cleanup(emitter, fail_label);
@@ -1925,6 +2056,8 @@ fn emit_aarch64_prepare_method_args(
         callable_support,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
+    // The body reserved one zeroed owner slot per by-value callable below the ref cells.
+    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("ldr x0, [x29, #-32]");                                 // load the unboxed receiver as the first method argument
     abi::emit_push_result_value(emitter, &receiver_ty);
@@ -1938,19 +2071,19 @@ fn emit_aarch64_prepare_method_args(
             );
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
-            emit_aarch64_load_eval_arg(module, emitter, index, 24);
+            emit_aarch64_load_eval_arg(module, emitter, index, 24, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_aarch64_cast_eval_arg(
-                module,
+            if !emit_borrowed_string_arg(emitter, param_ty, 16, fail_label) {
+                emit_aarch64_cast_eval_arg(
+                    module, emitter, data, param_ty, &label_prefix, fail_label, callable_support,
+                );
+            }
+            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
                 emitter,
-                data,
-                param_ty,
-                &label_prefix,
-                fail_label,
-                callable_support,
+                &callable_owners,
+                index,
+                ref_slots.len() * 32 + arg_temp_bytes,
             );
-            super::eval_argument_owners::record_conversion(emitter, index, param_ty);
-            emit_retain_mixed_arg_for_consuming_helper(emitter, slot.runtime_helper, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1980,6 +2113,8 @@ fn emit_aarch64_prepare_static_method_args(
         callable_support,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
+    // The body reserved one zeroed owner slot per by-value callable below the ref cells.
+    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     abi::emit_load_int_immediate(emitter, "x0", slot.class_id as i64);
     abi::emit_push_result_value(emitter, &PhpType::Int);
     let mut arg_temp_bytes = eval_arg_temp_slot_size(&PhpType::Int);
@@ -1992,18 +2127,19 @@ fn emit_aarch64_prepare_static_method_args(
             );
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
-            emit_aarch64_load_eval_arg(module, emitter, index, 40);
+            emit_aarch64_load_eval_arg(module, emitter, index, 40, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_aarch64_cast_eval_arg(
-                module,
+            if !emit_borrowed_string_arg(emitter, param_ty, 16, fail_label) {
+                emit_aarch64_cast_eval_arg(
+                    module, emitter, data, param_ty, &label_prefix, fail_label, callable_support,
+                );
+            }
+            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
                 emitter,
-                data,
-                param_ty,
-                &label_prefix,
-                fail_label,
-                callable_support,
+                &callable_owners,
+                index,
+                ref_slots.len() * 32 + arg_temp_bytes,
             );
-            super::eval_argument_owners::record_conversion(emitter, index, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -2033,6 +2169,8 @@ fn emit_x86_64_prepare_method_args(
         X86_64_METHOD_CONTEXT_FRAME_OFFSET,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
+    // The body reserved one zeroed owner slot per by-value callable below the ref cells.
+    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // load the unboxed receiver as the first method argument
     abi::emit_push_result_value(emitter, &receiver_ty);
@@ -2046,20 +2184,20 @@ fn emit_x86_64_prepare_method_args(
             );
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
-            emit_x86_64_load_eval_arg(module, emitter, index);
+            emit_x86_64_load_eval_arg(module, emitter, index, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_x86_64_cast_eval_arg(
-                module,
+            if !emit_borrowed_string_arg(emitter, param_ty, 40, fail_label) {
+                emit_x86_64_cast_eval_arg(
+                    module, emitter, data, param_ty, &label_prefix, fail_label, callable_support,
+                    X86_64_METHOD_CONTEXT_FRAME_OFFSET,
+                );
+            }
+            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
                 emitter,
-                data,
-                param_ty,
-                &label_prefix,
-                fail_label,
-                callable_support,
-                X86_64_METHOD_CONTEXT_FRAME_OFFSET,
+                &callable_owners,
+                index,
+                ref_slots.len() * 32 + arg_temp_bytes,
             );
-            super::eval_argument_owners::record_conversion(emitter, index, param_ty);
-            emit_retain_mixed_arg_for_consuming_helper(emitter, slot.runtime_helper, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -2089,6 +2227,8 @@ fn emit_x86_64_prepare_static_method_args(
         X86_64_STATIC_METHOD_CONTEXT_FRAME_OFFSET,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
+    // The body reserved one zeroed owner slot per by-value callable below the ref cells.
+    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     abi::emit_load_int_immediate(emitter, "rax", slot.class_id as i64);
     abi::emit_push_result_value(emitter, &PhpType::Int);
     let mut arg_temp_bytes = eval_arg_temp_slot_size(&PhpType::Int);
@@ -2101,19 +2241,20 @@ fn emit_x86_64_prepare_static_method_args(
             );
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
-            emit_x86_64_load_eval_arg(module, emitter, index);
+            emit_x86_64_load_eval_arg(module, emitter, index, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_x86_64_cast_eval_arg(
-                module,
+            if !emit_borrowed_string_arg(emitter, param_ty, 40, fail_label) {
+                emit_x86_64_cast_eval_arg(
+                    module, emitter, data, param_ty, &label_prefix, fail_label, callable_support,
+                    X86_64_STATIC_METHOD_CONTEXT_FRAME_OFFSET,
+                );
+            }
+            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
                 emitter,
-                data,
-                param_ty,
-                &label_prefix,
-                fail_label,
-                callable_support,
-                X86_64_STATIC_METHOD_CONTEXT_FRAME_OFFSET,
+                &callable_owners,
+                index,
+                ref_slots.len() * 32 + arg_temp_bytes,
             );
-            super::eval_argument_owners::record_conversion(emitter, index, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -2161,12 +2302,13 @@ fn emit_aarch64_ref_arg_cells(
     fail_label: &str,
     callable_support: &EvalCallableDescriptorSupport,
 ) -> Vec<EvalRefArgSlot> {
-    let ref_slots = eval_ref_arg_slots(param_types, ref_params, false);
-    for slot in &ref_slots {
-        emit_aarch64_load_eval_arg(module, emitter, slot.param_index, arg_array_frame_offset);
+    let mut ref_slots = eval_ref_arg_slots(param_types, ref_params, false);
+    for slot in &mut ref_slots {
+        emit_aarch64_load_eval_arg(module, emitter, slot.param_index, arg_array_frame_offset, fail_label);
         emitter.instruction("ldr x0, [x29, #-16]");                             // reload the original eval Mixed cell for by-reference writeback
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
+            slot.raw_refcounted_owned = true;
             emitter.instruction("ldr x0, [x29, #-16]");                         // seed the mutable by-reference Mixed slot with the original cell
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
@@ -2180,6 +2322,9 @@ fn emit_aarch64_ref_arg_cells(
                 fail_label,
                 callable_support,
             );
+            if slot.param_ty.codegen_repr() == PhpType::Str {
+                abi::emit_call_label(emitter, "__rt_str_persist");
+            }
             abi::emit_push_result_value(emitter, &slot.param_ty);
         }
     }
@@ -2198,12 +2343,13 @@ fn emit_x86_64_ref_arg_cells(
     callable_support: &EvalCallableDescriptorSupport,
     context_frame_offset: usize,
 ) -> Vec<EvalRefArgSlot> {
-    let ref_slots = eval_ref_arg_slots(param_types, ref_params, false);
-    for slot in &ref_slots {
-        emit_x86_64_load_eval_arg(module, emitter, slot.param_index);
+    let mut ref_slots = eval_ref_arg_slots(param_types, ref_params, false);
+    for slot in &mut ref_slots {
+        emit_x86_64_load_eval_arg(module, emitter, slot.param_index, fail_label);
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // reload the original eval Mixed cell for by-reference writeback
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
+            slot.raw_refcounted_owned = true;
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // seed the mutable by-reference Mixed slot with the original cell
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
@@ -2218,6 +2364,9 @@ fn emit_x86_64_ref_arg_cells(
                 callable_support,
                 context_frame_offset,
             );
+            if slot.param_ty.codegen_repr() == PhpType::Str {
+                abi::emit_call_label(emitter, "__rt_str_persist");
+            }
             abi::emit_push_result_value(emitter, &slot.param_ty);
         }
     }
@@ -2254,47 +2403,22 @@ fn preserve_result_and_write_back_x86_64_ref_args(
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
 }
 
-/// Loads one eval argument into an ARM64 spill slot as a boxed Mixed cell.
+/// Borrows one normalized eval argument in an ARM64 spill slot for the native call.
 fn emit_aarch64_load_eval_arg(
-    module: &Module,
+    _module: &Module,
     emitter: &mut Emitter,
     index: usize,
     arg_array_frame_offset: usize,
+    fail_label: &str,
 ) {
-    let value_int_symbol = module.target.extern_symbol("__elephc_eval_value_int");
-    let array_get_symbol = module.target.extern_symbol("__elephc_eval_value_array_get");
-    abi::emit_load_int_immediate(emitter, "x0", index as i64);
-    abi::emit_call_label(emitter, &value_int_symbol);
-    emitter.instruction("str x0, [x29, #-16]");                                 // save the boxed index while loading from the argument array
-    emitter.instruction("ldr x1, [x29, #-16]");                                 // pass the boxed index to the eval array reader
-    emitter.instruction(
-        &format!("ldr x0, [x29, #-{}]", arg_array_frame_offset)
-    );                                                                          // pass the eval argument array to the reader
-    abi::emit_call_label(emitter, &array_get_symbol);
-    abi::emit_push_reg(emitter, "x0");
-    emitter.instruction("ldr x0, [x29, #-16]");                                 // release the temporary index borrowed by the array reader
-    abi::emit_call_label(emitter, "__rt_decref_any");
-    abi::emit_pop_reg(emitter, "x0");
-    super::eval_argument_owners::record(emitter, index);
-    emitter.instruction("str x0, [x29, #-16]");                                 // save the boxed eval argument for coercion
+    super::eval_argument_helpers::emit_borrowed_argument(
+        emitter, index, arg_array_frame_offset, 16, fail_label,
+    );
 }
 
-/// Loads one eval argument into an x86_64 spill slot as a boxed Mixed cell.
-fn emit_x86_64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usize) {
-    let value_int_symbol = module.target.extern_symbol("__elephc_eval_value_int");
-    let array_get_symbol = module.target.extern_symbol("__elephc_eval_value_array_get");
-    abi::emit_load_int_immediate(emitter, "rdi", index as i64);
-    abi::emit_call_label(emitter, &value_int_symbol);
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed index while loading from the argument array
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the boxed index to the eval array reader
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the eval argument array to the reader
-    abi::emit_call_label(emitter, &array_get_symbol);
-    abi::emit_push_reg(emitter, "rax");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // release the temporary index borrowed by the array reader
-    abi::emit_call_label(emitter, "__rt_decref_any");
-    abi::emit_pop_reg(emitter, "rax");
-    super::eval_argument_owners::record(emitter, index);
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed eval argument for coercion
+/// Borrows one normalized eval argument in an x86_64 spill slot for the native call.
+fn emit_x86_64_load_eval_arg(_module: &Module, emitter: &mut Emitter, index: usize, fail_label: &str) {
+    super::eval_argument_helpers::emit_borrowed_argument(emitter, index, 32, 40, fail_label);
 }
 
 /// Casts one boxed eval argument into ARM64 result registers for temporary staging.
@@ -2307,6 +2431,10 @@ fn emit_aarch64_cast_eval_arg(
     fail_label: &str,
     callable_support: &EvalCallableDescriptorSupport,
 ) {
+    if param_ty.is_php_array() {
+        emitter.instruction("ldr x0, [x29, #-16]");                             // borrow the boxed argument before checking its PHP array constraint
+        super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match param_ty.codegen_repr() {
         PhpType::Int => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for integer coercion
@@ -2322,7 +2450,7 @@ fn emit_aarch64_cast_eval_arg(
         }
         PhpType::Str => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for string coercion
-            emitter.instruction("bl __rt_mixed_cast_string");                   // coerce the eval argument to a PHP string pair in x1/x2
+            emit_borrowed_eval_string_argument(emitter, label_prefix);
         }
         PhpType::Callable => {
             super::eval_callable_helpers::emit_aarch64_cast_eval_callable_arg(
@@ -2502,6 +2630,10 @@ fn emit_x86_64_cast_eval_arg(
     callable_support: &EvalCallableDescriptorSupport,
     context_frame_offset: usize,
 ) {
+    if param_ty.is_php_array() {
+        emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // borrow the boxed argument before checking its PHP array constraint
+        super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match param_ty.codegen_repr() {
         PhpType::Int => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for integer coercion
@@ -2517,7 +2649,7 @@ fn emit_x86_64_cast_eval_arg(
         }
         PhpType::Str => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for string coercion
-            emitter.instruction("call __rt_mixed_cast_string");                 // coerce the eval argument to a PHP string pair
+            emit_borrowed_eval_string_argument(emitter, label_prefix);
         }
         PhpType::Callable => {
             super::eval_callable_helpers::emit_x86_64_cast_eval_callable_arg(
@@ -2682,7 +2814,7 @@ fn emit_x86_64_validate_iterable_object(
     emitter.instruction(&format!("jmp {}", fail_label));                        // reject non-Traversable objects for iterable parameters
 }
 
-/// Boxes the current native method result as the Mixed cell expected by eval.
+/// Boxes the current native method result as the owned Mixed cell expected by eval.
 ///
 /// The boxer is handed the CODEGEN REPRESENTATION, not the declared type. The two differ for
 /// exactly one shape that matters here: a method declared `: \Closure` is `PhpType::Object` but
@@ -2690,11 +2822,77 @@ fn emit_x86_64_validate_iterable_object(
 /// with the declared type stamped runtime tag 6 on a descriptor, and the interpreter then unboxed
 /// it as an object — Symfony's `HtmlErrorRenderer::isDebug(): \Closure` segfaulted the worker the
 /// first time interpreted code asked the returned value for its type.
-fn emit_box_method_result(module: &Module, emitter: &mut Emitter, return_ty: &PhpType) {
+fn emit_box_method_result(
+    module: &Module,
+    emitter: &mut Emitter,
+    return_ty: &PhpType,
+    owned: bool,
+    return_uses_marker: bool,
+    source: EvalMethodResultSource,
+    label_prefix: &str,
+) {
     let repr = return_ty.codegen_repr();
     if repr == PhpType::Void {
         let null_symbol = module.target.extern_symbol("__elephc_eval_value_null");
         abi::emit_call_label(emitter, &null_symbol);
+    } else if return_uses_marker
+        && matches!(
+            source,
+            EvalMethodResultSource::CompiledInstance | EvalMethodResultSource::CompiledStatic
+        )
+    {
+        let owned_label = format!("{}_return_owned", label_prefix);
+        let done_label = format!("{}_return_boxed", label_prefix);
+        super::return_ownership::emit_branch_if_owned(emitter, &owned_label);
+        emit_box_borrowed_method_result(emitter, return_ty);
+        abi::emit_jump(emitter, &done_label);
+        emitter.label(&owned_label);
+        emit_box_current_owned_value_as_mixed(emitter, &repr);
+        emitter.label(&done_label);
+    } else if owned {
+        emit_box_current_owned_value_as_mixed(emitter, &repr);
+    } else {
+        emit_box_current_value_as_mixed(emitter, &repr);
+    }
+}
+
+/// Reads the value a by-reference method returned the ADDRESS of into the result registers.
+///
+/// A `&method()` hands its caller the storage address; compiled callers bind or read through it,
+/// but the eval bridge boxed the address itself, so `&$session->getUsageIndex()` from interpreted
+/// code (Symfony's `ContextListener`) produced an integer that was a pointer. The value read here
+/// is borrowed, and is boxed as such.
+fn emit_load_by_ref_method_result(emitter: &mut Emitter, return_ty: &PhpType) {
+    let address = abi::symbol_scratch_reg(emitter);
+    let result = abi::int_result_reg(emitter);
+    abi::emit_reg_move(emitter, address, result);
+    match return_ty.codegen_repr() {
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            abi::emit_load_from_address(emitter, ptr_reg, address, 0);
+            abi::emit_load_from_address(emitter, len_reg, address, 8);
+        }
+        PhpType::Float => {
+            abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), address, 0);
+        }
+        PhpType::TaggedScalar => {
+            abi::emit_load_from_address(emitter, result, address, 0);
+            abi::emit_load_from_address(
+                emitter,
+                crate::codegen::sentinels::tagged_scalar_tag_reg(emitter),
+                address,
+                8,
+            );
+        }
+        _ => abi::emit_load_from_address(emitter, result, address, 0),
+    }
+}
+
+/// Promotes one borrowed compiled-PHP method result into an owned eval result cell.
+fn emit_box_borrowed_method_result(emitter: &mut Emitter, return_ty: &PhpType) {
+    let repr = return_ty.codegen_repr();
+    if matches!(repr, PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(emitter, "__rt_incref");
     } else {
         if method_result_is_object_only(return_ty) {
             emit_box_owned_object_method_result(emitter);
@@ -2936,14 +3134,13 @@ mod tests {
             declared_params: Vec::new(),
             variadic: None,
             deprecation: None,
+            is_generator: false,
         };
 
         assert_eq!(
             emitted_method_return_type(
                 &module,
-                "ConcreteResolver",
-                "resolve",
-                false,
+                &method_symbol("ConcreteResolver", "resolve"),
                 &signature,
             ),
             PhpType::Object("ConcreteResolver".to_string()),
@@ -2953,6 +3150,15 @@ mod tests {
 
 #[cfg(test)]
 mod catalog_tests {
+    use crate::codegen::emit::Emitter;
+    use crate::codegen::platform::{AppleVariant, Arch, Platform, Target};
+    use crate::ir::Module;
+    use crate::types::PhpType;
+
+    use super::{
+        EvalMethodResultSource, emit_box_method_result,
+    };
+
     /// Every throwable this helper can materialize is a catalogued builtin class.
     #[test]
     fn throwable_list_is_a_subset_of_the_class_catalog() {
@@ -2961,6 +3167,323 @@ mod catalog_tests {
                 elephc_builtin_contract::lookup_class(name).is_some(),
                 "{name} is not in the shared class catalog"
             );
+        }
+    }
+
+    /// Verifies compiled instance and static Mixed returns consume the private marker.
+    #[test]
+    fn compiled_method_results_use_the_return_ownership_marker_on_all_targets() {
+        for target in supported_targets() {
+            for return_ty in [PhpType::Mixed, PhpType::Str] {
+                for (source, name) in [
+                    (EvalMethodResultSource::CompiledInstance, "instance"),
+                    (EvalMethodResultSource::CompiledStatic, "static"),
+                ] {
+                    let asm = method_result_asm(target, source, true, name, &return_ty);
+                    match target.arch {
+                        Arch::AArch64 => assert!(asm.contains("cbnz x15"), "{target:?}: {asm}"),
+                        Arch::X86_64 => {
+                            assert!(asm.contains("test r11, r11"), "{target:?}: {asm}")
+                        }
+                    }
+                    match &return_ty {
+                        PhpType::Mixed => {
+                            assert_eq!(
+                                asm.matches("__rt_incref").count(),
+                                1,
+                                "{target:?}: {asm}"
+                            );
+                        }
+                        PhpType::Str => {
+                            assert!(asm.contains("__rt_mixed_from_value"), "{target:?}: {asm}");
+                            assert!(asm.contains("__rt_heap_alloc"), "{target:?}: {asm}");
+                        }
+                        _ => unreachable!(),
+                    }
+                    assert!(
+                        asm.contains(&format!("eval_{name}_return_owned")),
+                        "{target:?}: {asm}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Verifies runtime-backed methods never interpret a caller-saved register as a return marker.
+    #[test]
+    fn runtime_method_results_ignore_the_compiled_return_marker() {
+        for target in supported_targets() {
+            let asm = method_result_asm(
+                target,
+                EvalMethodResultSource::RuntimeHelper,
+                true,
+                "runtime",
+                &PhpType::Mixed,
+            );
+            assert!(!asm.contains("x15"), "{target:?}: {asm}");
+            assert!(!asm.contains("r11"), "{target:?}: {asm}");
+            assert!(!asm.contains("__rt_incref"), "{target:?}: {asm}");
+        }
+    }
+
+    /// Emits one isolated method-result boxing sequence for structural ABI assertions.
+    fn method_result_asm(
+        target: Target,
+        source: EvalMethodResultSource,
+        return_uses_marker: bool,
+        name: &str,
+        return_ty: &PhpType,
+    ) -> String {
+        let module = Module::new(target);
+        let mut emitter = Emitter::new(target);
+        emit_box_method_result(
+            &module,
+            &mut emitter,
+            return_ty,
+            false,
+            return_uses_marker,
+            source,
+            &format!("eval_{name}"),
+        );
+        emitter.output()
+    }
+
+    /// Returns every supported target so the private return marker stays target-aware.
+    fn supported_targets() -> [Target; 5] {
+        [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ]
+    }
+}
+
+#[cfg(test)]
+mod source_entry_tests {
+    use super::*;
+    use crate::codegen::platform::{Platform, Target};
+    use crate::types::FunctionSig;
+
+    /// Builds a fixed-arity signature with the given parameter types.
+    fn signature(params: Vec<(String, PhpType)>) -> FunctionSig {
+        let len = params.len();
+        FunctionSig {
+            params,
+            param_type_exprs: vec![None; len],
+            param_attributes: vec![Vec::new(); len],
+            defaults: vec![None; len],
+            return_type: PhpType::Mixed,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false; len],
+            declared_params: vec![true; len],
+            variadic: None,
+            deprecation: None,
+            is_generator: false,
+        }
+    }
+
+    /// Appends the generated trailing argument collector the `func_args` pass injects.
+    fn with_generated_collector(mut sig: FunctionSig) -> FunctionSig {
+        sig.params.push((
+            crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        ));
+        sig.param_type_exprs.push(None);
+        sig.param_attributes.push(Vec::new());
+        sig.defaults.push(None);
+        sig.ref_params.push(false);
+        sig.declared_params.push(false);
+        sig.variadic = Some(crate::func_args::HIDDEN_ARGS_PARAM.to_string());
+        sig
+    }
+
+    /// Returns one empty module per architecture the backend emits eval helpers for.
+    fn modules() -> Vec<Module> {
+        vec![
+            Module::new(Target::new(Platform::Linux, Arch::X86_64)),
+            Module::new(Target::new(Platform::Linux, Arch::AArch64)),
+            Module::new(Target::new(Platform::MacOS, Arch::AArch64)),
+        ]
+    }
+
+    /// A method without generated slots keeps the declared arity and the raw method symbol.
+    #[test]
+    fn plain_methods_keep_the_declared_signature_and_raw_symbol() {
+        let declared = signature(vec![("handler".to_string(), PhpType::Callable)]);
+        for module in modules() {
+            let EvalMethodEntry::Raw(physical, symbol) = eval_method_entry(
+                &module,
+                "XMLParser",
+                "setHandler",
+                &declared,
+                MethodKind::Instance,
+            );
+            assert_eq!(physical.params, declared.params);
+            assert_eq!(symbol, method_symbol("XMLParser", "setHandler"));
+        }
+    }
+
+    /// Magician materializes a generated collector, so eval keeps its physical slot and enters
+    /// the raw method rather than asking a source adapter to append another collector.
+    #[test]
+    fn hidden_collector_methods_keep_physical_arity_and_enter_the_raw_symbol() {
+        let visible = signature(vec![
+            ("start".to_string(), PhpType::Callable),
+            ("end".to_string(), PhpType::Callable),
+        ]);
+        let physical = with_generated_collector(visible.clone());
+        for module in modules() {
+            let EvalMethodEntry::Raw(resolved, symbol) = eval_method_entry(
+                &module,
+                "Handlers",
+                "setElementHandler",
+                &physical,
+                MethodKind::Instance,
+            );
+            assert_eq!(resolved.params, physical.params);
+            assert_eq!(resolved.ref_params, physical.ref_params);
+            assert_eq!(resolved.variadic, physical.variadic);
+            assert_eq!(resolved.return_type, physical.return_type);
+            assert_eq!(symbol, method_symbol("Handlers", "setElementHandler"));
+        }
+    }
+
+    /// An inherited implementation resolves against the class that owns the body, so a
+    /// descendant reaches the ancestor's raw physical entry rather than a nonexistent symbol.
+    #[test]
+    fn inherited_implementations_resolve_against_the_implementing_owner() {
+        let physical =
+            with_generated_collector(signature(vec![("data".to_string(), PhpType::Str)]));
+        for module in modules() {
+            let EvalMethodEntry::Raw(resolved, symbol) = eval_method_entry(
+                &module,
+                "BaseParser",
+                "parseInto",
+                &physical,
+                MethodKind::Instance,
+            );
+            assert_eq!(resolved.params, physical.params);
+            assert_eq!(symbol, method_symbol("BaseParser", "parseInto"));
+            assert_ne!(symbol, method_symbol("DerivedParser", "parseInto"));
+        }
+    }
+
+    /// A source variadic and its hidden actual-count slot both stay on the raw physical entry.
+    #[test]
+    fn source_variadics_and_hidden_counts_stay_on_the_raw_entry() {
+        let mut variadic = signature(vec![("values".to_string(), PhpType::Mixed)]);
+        variadic.variadic = Some("values".to_string());
+        let mut with_hidden_count = variadic.clone();
+        with_hidden_count.params.push((
+            crate::func_args::HIDDEN_ARGC_PARAM.to_string(),
+            PhpType::Int,
+        ));
+        with_hidden_count.param_type_exprs.push(None);
+        with_hidden_count.param_attributes.push(Vec::new());
+        with_hidden_count.defaults.push(None);
+        with_hidden_count.ref_params.push(false);
+        with_hidden_count.declared_params.push(false);
+        for module in modules() {
+            assert!(matches!(
+                eval_method_entry(&module, "Collector", "add", &variadic, MethodKind::Instance),
+                EvalMethodEntry::Raw(_, _)
+            ));
+            match eval_method_entry(
+                &module,
+                "Collector",
+                "add",
+                &with_hidden_count,
+                MethodKind::Instance,
+            ) {
+                EvalMethodEntry::Raw(physical, symbol) => {
+                    assert_eq!(physical.params, with_hidden_count.params);
+                    assert_eq!(symbol, method_symbol("Collector", "add"));
+                }
+            }
+        }
+    }
+
+    /// A static method without generated slots keeps its declared arity and the raw static
+    /// symbol, so the shared resolver leaves every ordinary static entry exactly where it was.
+    #[test]
+    fn plain_static_methods_keep_the_declared_signature_and_raw_symbol() {
+        let declared = signature(vec![("path".to_string(), PhpType::Str)]);
+        for module in modules() {
+            let EvalMethodEntry::Raw(physical, symbol) =
+                eval_method_entry(&module, "Loader", "fromFile", &declared, MethodKind::Static);
+            assert_eq!(physical.params, declared.params);
+            assert_eq!(symbol, static_method_symbol("Loader", "fromFile"));
+            assert_ne!(symbol, method_symbol("Loader", "fromFile"));
+        }
+    }
+
+    /// A static method reading `func_get_args()` grows the same hidden collector an instance
+    /// method does, so eval keeps that physical slot and enters the raw static symbol.
+    #[test]
+    fn hidden_collector_static_methods_keep_physical_arity_and_enter_the_raw_symbol() {
+        let visible = signature(vec![("label".to_string(), PhpType::Str)]);
+        let physical = with_generated_collector(visible.clone());
+        for module in modules() {
+            let EvalMethodEntry::Raw(resolved, symbol) =
+                eval_method_entry(&module, "Registry", "record", &physical, MethodKind::Static);
+            assert_eq!(resolved.params, physical.params);
+            assert_eq!(resolved.ref_params, physical.ref_params);
+            assert_eq!(resolved.variadic, physical.variadic);
+            assert_eq!(resolved.return_type, physical.return_type);
+            assert_eq!(symbol, static_method_symbol("Registry", "record"));
+            assert_ne!(symbol, method_symbol("Registry", "record"));
+        }
+    }
+
+    /// An inherited static implementation resolves against the class that owns the body, so a
+    /// descendant reaches the ancestor's raw physical static entry.
+    #[test]
+    fn inherited_static_implementations_resolve_against_the_implementing_owner() {
+        let physical =
+            with_generated_collector(signature(vec![("data".to_string(), PhpType::Str)]));
+        for module in modules() {
+            let EvalMethodEntry::Raw(resolved, symbol) =
+                eval_method_entry(&module, "BaseRegistry", "make", &physical, MethodKind::Static);
+            assert_eq!(resolved.params, physical.params);
+            assert_eq!(symbol, static_method_symbol("BaseRegistry", "make"));
+            assert_ne!(symbol, static_method_symbol("DerivedRegistry", "make"));
+        }
+    }
+
+    /// A static source variadic and its hidden actual-count slot stay on the raw physical entry.
+    #[test]
+    fn static_source_variadics_and_hidden_counts_stay_on_the_raw_entry() {
+        let mut variadic = signature(vec![("values".to_string(), PhpType::Mixed)]);
+        variadic.variadic = Some("values".to_string());
+        let mut with_hidden_count = variadic.clone();
+        with_hidden_count
+            .params
+            .push((crate::func_args::HIDDEN_ARGC_PARAM.to_string(), PhpType::Int));
+        with_hidden_count.param_type_exprs.push(None);
+        with_hidden_count.param_attributes.push(Vec::new());
+        with_hidden_count.defaults.push(None);
+        with_hidden_count.ref_params.push(false);
+        with_hidden_count.declared_params.push(false);
+        for module in modules() {
+            assert!(matches!(
+                eval_method_entry(&module, "Aggregator", "sum", &variadic, MethodKind::Static),
+                EvalMethodEntry::Raw(_, _)
+            ));
+            match eval_method_entry(
+                &module,
+                "Aggregator",
+                "sum",
+                &with_hidden_count,
+                MethodKind::Static,
+            ) {
+                EvalMethodEntry::Raw(physical, symbol) => {
+                    assert_eq!(physical.params, with_hidden_count.params);
+                    assert_eq!(symbol, static_method_symbol("Aggregator", "sum"));
+                }
+            }
         }
     }
 }

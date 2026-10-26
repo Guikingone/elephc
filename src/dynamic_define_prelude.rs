@@ -20,7 +20,7 @@
 use crate::parser::ast::{BinOp, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_binop, e_bool, e_call, e_concat_all, e_const, e_index, e_int, e_str, e_var,
-    function, internal_declarations, s_array_assign, s_expr, s_if, s_return, s_static, t_mixed,
+    function, php_semantics_declarations, s_array_assign, s_expr, s_if, s_return, s_static, t_mixed,
 };
 
 /// The table function every redirected call reaches: `(op, name, value)`.
@@ -34,7 +34,7 @@ pub(crate) const OP_FETCH: i64 = 2;
 
 /// Returns the table declaration for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| vec![dynamic_constants()])
+    php_semantics_declarations(|| vec![dynamic_constants()])
 }
 
 /// Builds `__elephc_dynamic_constants(int $op, string $name, mixed $value): mixed`.
@@ -67,7 +67,9 @@ fn dynamic_constants() -> Stmt {
                                         e_var("name"),
                                         e_str(" already defined"),
                                     ]),
-                                    e_const("E_WARNING"),
+                                    // `trigger_error()` accepts only the E_USER_* levels (php throws a
+                                    // ValueError for E_WARNING); E_USER_WARNING prints as "Warning".
+                                    e_const("E_USER_WARNING"),
                                 ],
                             )),
                             s_return(e_bool(false)),

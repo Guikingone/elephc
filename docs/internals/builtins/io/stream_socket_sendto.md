@@ -1,16 +1,16 @@
 ---
-title: "stream_socket_sendto() — internals"
+title: "stream_socket_sendto() - internals"
 description: "Compiler internals for stream_socket_sendto(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 404
+  order: 405
 ---
 
-## `stream_socket_sendto()` — internals
+## `stream_socket_sendto()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_socket_sendto.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_sendto.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

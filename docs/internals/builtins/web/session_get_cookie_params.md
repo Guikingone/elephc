@@ -1,16 +1,16 @@
 ---
-title: "session_get_cookie_params() — internals"
+title: "session_get_cookie_params() - internals"
 description: "Compiler internals for session_get_cookie_params(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 960
+  order: 1051
 ---
 
-## `session_get_cookie_params()` — internals
+## `session_get_cookie_params()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3453](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3453) (`session_get_cookie_params`)
+- **Lowering**: [`src/web_prelude/build.rs`:3626](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3626) (`session_get_cookie_params`)
 - **Function symbol**: `session_get_cookie_params()`
 
 
@@ -38,7 +38,7 @@ function session_get_cookie_params(): array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -424,6 +424,158 @@ echo $c . ":" . $d;
     assert_eq!(out, "A-f:B-g|C-m:D-n");
 }
 
+/// By-reference variadic markers widen scalar caller locals before a positional or named write.
+#[test]
+fn test_by_ref_variadic_scalar_and_named_tail_writeback_use_boxed_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function replace(&...$items): void {
+    $items[0] = "position";
+    $items["named"] = "name";
+}
+function replaceWithCount(&...$items): void {
+    func_num_args();
+    $items[0] = "counted";
+}
+function replaceBoth(&...$items): void {
+    $items[0] = "first";
+    $items[1] = "second";
+}
+$position = 1;
+$named = 2;
+replace($position, named: $named);
+echo $position . ":" . $named . "|";
+$callable = replace(...);
+$callablePosition = 3;
+$callableNamed = 4;
+$callable($callablePosition, named: $callableNamed);
+echo $callablePosition . ":" . $callableNamed . "|";
+$cuf = 5;
+call_user_func($callable, $cuf);
+echo $cuf . "|";
+$counted = 6;
+replaceWithCount($counted);
+echo $counted . "|";
+$repeated = 7;
+replaceBoth($repeated, $repeated);
+echo $repeated;
+"#,
+    );
+    assert_eq!(out, "position:name|position:name|position|counted|second");
+}
+
+// --- Issue #1062: a by-reference variadic may retype the caller's variable -----------------
+//
+// `f(&...$items)` is the one by-reference form PHP's checker does not constrain: the callee
+// writes through `$items[n]` with no declared type, so it may store a value of ANY type into
+// a caller local that currently holds something else. The marker the caller pushes into the
+// invoker argument array therefore has to point at storage wide enough for whatever comes
+// back. Pointing it at the local's concrete storage is silent corruption rather than a
+// diagnostic: a string written over an `I64` slot reads back as the string's pointer.
+//
+// The existing `test_by_ref_variadic_function_and_method_element_writeback` above covers the
+// same-type case, which never exercises the widening. Each test here changes the type.
+
+/// The archetypal shape from the issue: an `int` local replaced by a string.
+#[test]
+fn test_by_ref_variadic_write_retypes_an_int_local_to_a_string() {
+    let out = compile_and_run(
+        r#"<?php
+function replace(&...$items): void { $items[0] = "position"; }
+$p = 1;
+replace($p);
+var_dump($p);
+"#,
+    );
+    assert_eq!(out, "string(8) \"position\"\n");
+}
+
+/// Every scalar and the array case in one call, so a fix that only widens far enough for
+/// pointers still fails on `float` and `bool`, which are stored inline.
+#[test]
+fn test_by_ref_variadic_write_retypes_int_locals_to_every_value_kind() {
+    let out = compile_and_run(
+        r#"<?php
+function retype(&...$items): void {
+    $items[0] = "s";
+    $items[1] = 2.5;
+    $items[2] = true;
+    $items[3] = [7, 8];
+}
+$a = 1;
+$b = 1;
+$c = 1;
+$d = 1;
+retype($a, $b, $c, $d);
+var_dump($a, $b, $c, $d);
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(1) \"s\"\nfloat(2.5)\nbool(true)\narray(2) {\n  [0]=>\n  int(7)\n  [1]=>\n  int(8)\n}\n"
+    );
+}
+
+/// The other direction: a string local narrowed to an `int`. Widening the slot is not enough
+/// on its own -- the read back out of it has to go through the box too, or the integer is
+/// returned as an empty string.
+#[test]
+fn test_by_ref_variadic_write_retypes_a_string_local_to_an_int() {
+    let out = compile_and_run(
+        r#"<?php
+function narrow(&...$items): void { $items[0] = 42; }
+$s = "text";
+narrow($s);
+var_dump($s);
+"#,
+    );
+    assert_eq!(out, "int(42)\n");
+}
+
+/// A method and a closure reach the same marker through different callers.
+#[test]
+fn test_by_ref_variadic_retype_through_a_method_and_a_closure() {
+    let out = compile_and_run(
+        r#"<?php
+class Store { public function put(&...$items): void { $items[0] = "kept"; } }
+$p = 7;
+(new Store())->put($p);
+var_dump($p);
+$q = 3;
+$make = function (&...$items): void { $items[0] = "closed"; };
+$make($q);
+var_dump($q);
+"#,
+    );
+    assert_eq!(out, "string(4) \"kept\"\nstring(6) \"closed\"\n");
+}
+
+/// The first-class-callable form, and the issue's own loop: fifty calls that each retype a
+/// fresh `int` local, so a fix that works once but corrupts the slot for the next iteration
+/// reports a count below fifty rather than passing.
+#[test]
+fn test_by_ref_variadic_retype_through_a_first_class_callable_and_a_loop() {
+    let out = compile_and_run(
+        r#"<?php
+function replace(&...$items): void { $items[0] = "position"; }
+$c = replace(...);
+$p = 1;
+$c($p);
+var_dump($p);
+$n = 0;
+for ($i = 0; $i < 50; $i++) {
+    $v = $i;
+    replace($v);
+    if ($v === "position") { $n++; }
+}
+echo $n, "\n";
+"#,
+    );
+    assert_eq!(out, "string(8) \"position\"\n50\n");
+}
+
+// --- Variadic functions ---
+
 // --- Variadic functions ---
 
 /// Verifies a variadic function collects exactly three positional arguments into the rest array.
@@ -1545,4 +1697,54 @@ echo $selected === null ? "none" : "handler";
 "#,
     );
     assert_eq!(out, "none");
+}
+
+/// By-value parameters that receive reference markers (`call_user_func_array($f, [&$a])`) get the
+/// referenced value: a raw string, an array, a boxed object, and named entries. The conversion
+/// is the shared `__rt_invoker_ref_cell_to_mixed` helper rather than per-argument inline code.
+#[test]
+fn test_invoker_by_value_parameters_read_reference_markers() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function twice(int $x): int { return $x * 2; }
+function label(string $s, $m): string { return $s . ':' . (is_array($m) ? count($m) : $m); }
+function label2(string $s, $m): string { return $s . "=" . $m; }
+$a = 5;
+$s = "abc" . mt_rand(1, 1);
+$m = [1, 2, 3];
+$o = new stdClass();
+$o->v = 7;
+for ($i = 0; $i < 2; $i++) {
+    echo call_user_func_array('twice', [&$a]), "|";
+    echo call_user_func_array('label', [&$s, &$m]), "|";
+    $mixed = $i ? $o : 'x';
+    echo call_user_func_array(fn($v) => is_object($v) ? $v->v : $v, [&$mixed]), "|";
+    echo call_user_func_array('label2', ['m' => &$a, 's' => &$s]), "\n";
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "10|abc1:3|x|abc1=5\n10|abc1:3|7|abc1=5\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A `mixed` value bound to a `callable` parameter is NORMALIZED, so every callable spelling it
+/// can hold reaches the callee as a working descriptor, and the normalized descriptor is released
+/// after each call. A bare unbox read a boxed `null` as a descriptor and segfaulted, and leaked
+/// one block per call for a boxed closure.
+#[test]
+fn test_mixed_argument_bound_to_a_callable_parameter_is_normalized_and_released() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class K { function m($x) { return "m$x"; } }
+function call(callable $c, $a) { return $c($a); }
+function forward(mixed $v, $a) { return call($v, $a); }
+echo forward("strtoupper", "ab"), "|", forward([new K, "m"], 1), "|", forward(fn($x) => $x * 2, 4), "\n";
+for ($i = 0; $i < 20; $i++) { forward(fn($x) => $x, 1); forward("strrev", "xy"); }
+echo "ok";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "AB|m1|8\nok");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

@@ -195,6 +195,7 @@ pub(in crate::codegen) fn seed_runtime_throwable_class_names(module: &Module, na
         "Throwable",
         "Error",               // _spl_error_class_id
         "TypeError",           // _spl_type_error_class_id
+        "ArgumentCountError",  // _spl_argument_count_error_class_id, including dynamic mbstring calls
         "ValueError",          // _spl_value_error_class_id
         "ArithmeticError",     // _spl_arithmetic_error_class_id
         "DivisionByZeroError", // _spl_division_by_zero_error_class_id
@@ -208,11 +209,8 @@ pub(in crate::codegen) fn seed_runtime_throwable_class_names(module: &Module, na
             names.insert(class_name.to_string());
         }
     }
-    // ArgumentCountError, AssertionError and UnhandledMatchError have NO id symbol, and the
+    // AssertionError and UnhandledMatchError have no id symbol, and the
     // reason is the same in each case: nothing in elephc raises them.
-    // - ArgumentCountError: reference PHP raises it at runtime for a bad builtin arity;
-    //   elephc rejects that arity at COMPILE time (`error_class_hierarchy_tests` pins both
-    //   halves of the divergence).
     // - AssertionError: `assert()` is not implemented — it is still an undefined function.
     // - UnhandledMatchError: a match with no arm and no default ends in
     //   `Terminator::Fatal` (`ir_lower::expr::match_expr`), not a throw. Reference PHP throws
@@ -316,6 +314,16 @@ pub(in crate::codegen) fn seed_builtin_reflection_class_names(module: &Module, n
             && (module.required_runtime_features.eval_bridge || emitted_natively)
         {
             names.insert(class_name.to_string());
+        }
+    }
+    // ReflectionEnum owner construction eagerly materializes one internal case object per enum
+    // case, even when user code never calls getCases(). Keep both layouts available; only one
+    // family can be instantiated for a given enum, depending on whether it is backed.
+    if names.contains("ReflectionEnum") {
+        for case_class in ["ReflectionEnumBackedCase", "ReflectionEnumUnitCase"] {
+            if module.class_infos.contains_key(case_class) {
+                names.insert(case_class.to_string());
+            }
         }
     }
 }

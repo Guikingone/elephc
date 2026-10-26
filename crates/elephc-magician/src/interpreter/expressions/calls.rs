@@ -32,16 +32,6 @@ pub(in crate::interpreter) fn positional_call_arg_exprs(
     Ok(args.iter().map(|arg| arg.value().clone()).collect())
 }
 
-/// Evaluates method-call arguments, preserving named metadata for eval method binding.
-pub(in crate::interpreter) fn eval_method_call_arg_values(
-    args: &[EvalCallArg],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
-    eval_call_arg_values(args, context, scope, values)
-}
-
 /// Evaluates supported function-like calls from a runtime eval fragment.
 pub(in crate::interpreter) fn eval_call(
     name: &str,
@@ -54,10 +44,9 @@ pub(in crate::interpreter) fn eval_call(
         let args = positional_call_arg_exprs(args)?;
         return eval_positional_expr_call(name, &args, context, scope, values);
     }
-    if name == "trigger_error" {
-        let args = positional_call_arg_exprs(args)?;
-        return eval_builtin_trigger_error(&args, context, scope, values);
-    }
+    // Ahead of every specialised handler below: each one used to refuse a wrong count with a
+    // `RuntimeFatal` of its own, where PHP throws a catchable `ArgumentCountError`.
+    eval_check_builtin_source_arity(name, args, context, scope, values)?;
     if name == "flock" {
         return eval_builtin_flock(args, context, scope, values);
     }
@@ -88,11 +77,28 @@ pub(in crate::interpreter) fn eval_call(
     if matches!(name, "fsockopen" | "pfsockopen") {
         return eval_builtin_fsockopen_call(args, context, scope, values);
     }
+    // `proc_open()` writes `$pipes` through the caller's own cell, so it keeps its source
+    // arguments for the same reason `fsockopen` does.
+    if name == "proc_open" {
+        return eval_builtin_proc_open_call(args, context, scope, values);
+    }
+    // `exec($command, &$output, &$result_code)`: the one-argument form stays on the registry
+    // path; the by-reference forms need their reference targets.
+    if name == "exec" && args.len() > 1 {
+        return eval_builtin_exec_call(args, context, scope, values);
+    }
     // Same shape as `fsockopen` above, and intercepted for the same reason: PHP writes
     // `$error_code`/`$error_message` through the caller's own cells, and only this path still
     // holds them.
     if name == "stream_socket_client" {
         return eval_builtin_stream_socket_client_call(args, context, scope, values);
+    }
+    // `headers_sent($file, $line)` (Symfony's `NativeSessionStorage::start()`): the evaluated-
+    // argument route reads the two outputs as values and writes nothing back, so a call that
+    // passes them keeps its source arguments and reaches the direct hook that binds them.
+    if name == "headers_sent" && !args.is_empty() && eval_call_args_are_plain_positional(args) {
+        let args = positional_call_arg_exprs(args)?;
+        return eval_positional_expr_call(name, &args, context, scope, values);
     }
     // `debug_backtrace` and `debug_print_backtrace` describe interpreter frames, which only
     // the interpreter has, so they are dispatched as plain runtime handlers rather than
@@ -121,40 +127,26 @@ pub(in crate::interpreter) fn eval_call(
     if eval_xml_builtin_name(name) {
         return eval_builtin_xml_call(name, args, context, scope, values);
     }
-    // `opcache_get_configuration` is prelude-provided on the native side (not a
-    // catalog builtin), so eval dispatches it as a plain runtime handler rather than
-    // through the PHP-visible builtin registry, keeping the two builtin sets in sync.
-    if name == "opcache_get_configuration" {
-        return eval_opcache_get_configuration_call(args, context, scope, values);
-    }
-    // `opcache_reset` is likewise prelude-provided on native; eval returns the CLI
-    // default cache-enabled boolean (false) as a plain runtime handler.
-    if name == "opcache_reset" {
-        return eval_opcache_reset_call(args, context, scope, values);
-    }
-    // `opcache_get_status` is likewise prelude-provided on native; eval reports the CLI
-    // default (cache disabled) and so returns `false` as a plain runtime handler.
-    if name == "opcache_get_status" {
-        return eval_opcache_get_status_call(args, context, scope, values);
-    }
-    // The five OPcache file/script functions are likewise prelude-provided on native; eval
-    // reports the CLI default (cache disabled) and returns `false` from each, except the
-    // `void` `opcache_jit_blacklist`, which evaluates to `NULL`. See
-    // `network_env::opcache_file_functions`.
-    if name == "opcache_is_script_cached" {
-        return eval_opcache_is_script_cached_call(args, context, scope, values);
-    }
-    if name == "opcache_invalidate" {
-        return eval_opcache_invalidate_call(args, context, scope, values);
-    }
-    if name == "opcache_compile_file" {
-        return eval_opcache_compile_file_call(args, context, scope, values);
-    }
-    if name == "opcache_is_script_cached_in_file_cache" {
-        return eval_opcache_is_script_cached_in_file_cache_call(args, context, scope, values);
-    }
-    if name == "opcache_jit_blacklist" {
-        return eval_opcache_jit_blacklist_call(args, context, scope, values);
+    // ALL EIGHT OPcache functions are prelude-provided on the native side (they are not
+    // catalog builtins), so eval carries a fallback handler for each. Every one of those
+    // handlers is guarded the same way, and the uniformity is the point rather than a
+    // stylistic preference.
+    //
+    // When the binary DOES carry the prelude declaration, that declaration is the only thing
+    // that knows the compile-time manifest, the live runtime script cache, the resolved
+    // `--ini` values and `ini_set()` overrides — and `opcache.restrict_api`, which the
+    // prelude implements as a guard at the top of each body. A handler that intercepts ahead
+    // of it does not merely answer with stale data: it answers INSTEAD of the refusal. With
+    // `opcache.restrict_api=/nonexistent`, native `opcache_reset()` warns and returns
+    // `false` while an eval'd `opcache_reset()` returned `true` and scheduled a real flush,
+    // so `eval()` was a way around the directive for seven of the eight names.
+    //
+    // So `opcache_direct` hands the call to that declaration when it exists, and to the
+    // by-values dispatch `call_user_func()` reaches when it does not — in both cases after
+    // binding the arguments to the reference parameters and checking the internal-function
+    // count, which the declaration's userland signature would answer differently.
+    if let Some(parameters) = eval_opcache_parameters(name, context) {
+        return eval_opcache_direct_call(name, parameters, args, context, scope, values);
     }
     if let Some(result) = eval_date_procedural_alias_call(name, args, context, scope, values)? {
         return Ok(result);
@@ -201,21 +193,18 @@ pub(in crate::interpreter) fn eval_call(
         return eval_builtin_array_mutating_declared_call(name, args, context, scope, values);
     }
     if eval_php_visible_builtin_exists(name) {
-        if eval_call_args_are_plain_positional(args) {
+        if eval_call_args_are_plain_positional(args)
+            && (eval_declared_builtin_requires_source_arguments(name)
+                || eval_declared_builtin_call_binds_reference(name, args.len()))
+        {
             let args = positional_call_arg_exprs(args)?;
             return eval_positional_expr_call(name, &args, context, scope, values);
         }
         return eval_builtin_call(name, args, context, scope, values);
     }
 
-    // Answered before the lookup: these are not functions anywhere, in php or here. The compiler
-    // desugars them at compile time, so there is nothing to find in any table.
-    if eval_is_func_args_intrinsic(name) {
-        return eval_func_args_intrinsic(name, args, context, scope, values);
-    }
-    if eval_is_get_defined_vars_intrinsic(name) {
-        return eval_get_defined_vars_intrinsic(args, scope, values);
-    }
+    // Answered before the lookup: `compact()` is not a function anywhere, in php or here. The
+    // compiler desugars it at compile time, so there is nothing to find in any table.
     if eval_is_compact_intrinsic(name) {
         return eval_compact_intrinsic(args, context, scope, values);
     }
@@ -236,9 +225,6 @@ pub(in crate::interpreter) fn eval_call(
     }
     if name.eq_ignore_ascii_case("assert") {
         return eval_assert_call(args, context, scope, values);
-    }
-    if eval_is_mb_strimwidth_fallback(name) {
-        return eval_mb_strimwidth_fallback_call(args, context, scope, values);
     }
     note_eval_runtime_failure(format!("call to undefined function {name}()"), context);
     Err(EvalStatus::UnsupportedConstruct)
@@ -271,13 +257,21 @@ fn eval_assert_call(
                 context.set_pending_throw(value);
                 return Err(EvalStatus::UncaughtThrowable);
             }
-            values.cast_string(value)?
+            let message = values.cast_string(value);
+            if !value.is_borrowed() {
+                eval_release_value(context, values, value)?;
+            }
+            message?
         }
         None => values.string("assertion failed")?,
     };
     let exception = values.new_object("AssertionError")?;
     let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
+    // The constructor copies its operands; the message and code cells stay ours to release.
+    let constructed = values.construct_object(exception, vec![message, code]);
+    let released = eval_release_value(context, values, code)
+        .and(eval_release_value(context, values, message));
+    constructed.and(released)?;
     context.set_pending_throw(exception);
     Err(EvalStatus::UncaughtThrowable)
 }
@@ -308,7 +302,19 @@ pub(in crate::interpreter) fn eval_dynamic_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let callback = eval_expr(callee, context, scope, values)?;
+    with_eval_operands(&[callee], context, scope, values, |callbacks, context, scope, values| {
+        eval_dynamic_call_with_callback(callbacks[0], args, context, scope, values)
+    })
+}
+
+/// Invokes a rooted callback while source-order argument leases protect all consumed values.
+fn eval_dynamic_call_with_callback(
+    callback: RuntimeCellHandle,
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback_tag = values.type_tag(callback)?;
     if crate::eval_trace::enabled() {
         eprintln!("[elephc-eval-trace] phase=dynamic_call callback_tag={callback_tag}");
@@ -342,6 +348,7 @@ pub(in crate::interpreter) fn eval_dynamic_call(
                 RuntimeCellHandle::from_raw(
                     captured.value_word as usize as *mut crate::value::RuntimeCell,
                 )
+                .borrowed()
             } else {
                 values.raw_word_value(captured.type_tag, captured.value_word)?
             };
@@ -350,13 +357,14 @@ pub(in crate::interpreter) fn eval_dynamic_call(
             }
             .ok_or(EvalStatus::RuntimeFatal)?;
             let callback = eval_callable(captured, captured_context, values)?;
-            let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-            return eval_evaluated_callable_with_call_array_args(
-                &callback,
-                evaluated_args,
-                captured_context,
-                values,
-            );
+            return with_eval_call_arguments(args, context, scope, values, |evaluated_args, _, _, values| {
+                eval_evaluated_callable_with_call_array_args(
+                    &callback,
+                    evaluated_args,
+                    captured_context,
+                    values,
+                )
+            });
         }
         return Err(EvalStatus::UnsupportedConstruct);
     }
@@ -373,13 +381,18 @@ pub(in crate::interpreter) fn eval_dynamic_call(
             || crate::context::pcntl_runtime::is_handler_callable(callback);
         if !is_closure_object && !is_detached_pcntl_handler {
             eval_invokable_object_precheck(callback, context, values)?;
-            let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-            return eval_invokable_object_call_result(callback, evaluated_args, context, values);
+            return with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
+                eval_invokable_object_call_result(callback, arguments, context, values)
+            });
         }
     }
-    let callback = eval_callable(callback, context, values)?;
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
+    // A callable array's receiver read owns one reference; it stays alive for the call.
+    let (callback, receiver) = eval_callable_with_receiver(callback, context, None, values)?;
+    let result =
+        with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
+            eval_evaluated_callable_with_call_array_args(&callback, arguments, context, values)
+        });
+    eval_release_callable_receiver(result, receiver, values)
 }
 
 /// Returns true for language constructs that need unevaluated argument expressions.

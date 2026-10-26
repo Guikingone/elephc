@@ -7,12 +7,31 @@
 //!
 //! Key details:
 //! - Tag values and payload register conventions must match `__rt_mixed_from_value`.
+//! - `mixed_unbox_payload_reg()` is the matching contract for the OTHER direction: it names
+//!   the register `__rt_mixed_unbox` returns its payload low word in, which is not the first
+//!   argument register on AArch64.
 //! - Owned boxing paths transfer or release references without double-freeing payloads.
+//! - Mixed-element indexed arrays may contain promoted hash storage, so boxing probes their kind.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::{abi, platform::Arch};
 use crate::types::PhpType;
 
+
+/// Names the register `__rt_mixed_unbox` returns its payload LOW word in, per target.
+///
+/// The helper answers a triple: the runtime tag, the payload low word, and the payload high
+/// word. On AArch64 those are `x0`, `x1`, `x2`; on x86_64 they are `rax`, `rdi`, `rdx`. The
+/// payload therefore lands in the FIRST ARGUMENT register on x86_64 but NOT on AArch64, where
+/// that register carries the tag instead. Deriving the payload register from the argument-register
+/// helper looks correct on x86_64 and silently yields the constant tag value on every AArch64
+/// target, so the contract is named once here and read from this one place.
+pub(crate) fn mixed_unbox_payload_reg(target: crate::codegen_support::platform::Target) -> &'static str {
+    match target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdi",
+    }
+}
 
 /// Returns the runtime value tag byte for a PhpType.
 pub(crate) fn runtime_value_tag(ty: &PhpType) -> u8 {
@@ -61,6 +80,18 @@ pub(crate) fn emit_box_runtime_payload_as_mixed(
 }
 
 /// Boxes the current expression result in the ABI result registers into a runtime Mixed cell.
+///
+/// The match is on the REPRESENTATION, not on the declared type, and that is the whole fix: a
+/// declared union is usually already a boxed Mixed and needs nothing, but `int|null` is not —
+/// with the default tagged null representation it is an unboxed two-word `{payload, tag}` pair.
+/// Matching the DECLARED `PhpType::Union(_)` caught it before `PhpType::TaggedScalar` could and
+/// emitted NOTHING, so the callee read the raw payload as a Mixed pointer and the caller's own
+/// `__rt_decref_mixed` ran on the integer: `var_export($nullableInt)` segfaulted (#1040).
+///
+/// `codegen_repr()` never returns a `Union`, so that half of the first arm is now unreachable. It
+/// is kept because the arm states the contract — "already boxed, nothing to do" — and a future
+/// representation could map a union to itself; the comment says so rather than letting the next
+/// reader infer a live branch, which is how the original bug hid.
 pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpType) {
     // A nullable-int union (`?int`) is TaggedScalar's two words in registers, not a boxed value:
     // the `Union` arm below would hand the raw payload on as a box pointer. A `?int` local passed
@@ -68,9 +99,12 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
     if matches!(ty, PhpType::Union(_)) && ty.codegen_repr() == PhpType::TaggedScalar {
         return emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
     }
-    match ty {
+    match &ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {}
-        PhpType::Iterable => emit_box_iterable_as_mixed(emitter),
+        PhpType::Iterable => emit_box_dynamic_container_as_mixed(emitter, 4),
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
+            emit_box_dynamic_container_as_mixed(emitter, 3);
+        }
         PhpType::TaggedScalar => match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction("mov x9, x0");                              // stage the tagged scalar payload while the tag moves into the helper tag register
@@ -287,8 +321,45 @@ fn emit_box_current_owned_refcounted_as_mixed_for_container(emitter: &mut Emitte
     }
 }
 
-/// Boxes an iterable by probing its concrete heap kind and mapping it to a Mixed tag.
-fn emit_box_iterable_as_mixed(emitter: &mut Emitter) {
+/// The heap-kind ceilings a dynamic container is boxed under: arrays (3), iterables (4).
+const DYNAMIC_CONTAINER_KINDS: [u8; 2] = [3, 4];
+
+/// Boxes a dynamically shaped container, accepting arrays through kind 3 and iterables through kind 4.
+///
+/// One call into `__rt_mixed_box_container_<kind>`: the classification (heap-kind probe, range
+/// check, tag mapping, `__rt_mixed_from_value`) was thirteen AArch64 instructions at each of the
+/// ~27 000 sites that box a `mixed`-element array or an iterable in the compiled Symfony app.
+/// The pointer is in the result register and the owned Mixed cell comes back in it; the clobbers
+/// are those of the `__rt_mixed_from_value` call the sequence ended in.
+fn emit_box_dynamic_container_as_mixed(emitter: &mut Emitter, maximum_kind: u8) {
+    debug_assert!(DYNAMIC_CONTAINER_KINDS.contains(&maximum_kind));
+    abi::emit_call_label(emitter, &format!("__rt_mixed_box_container_{maximum_kind}"));
+}
+
+/// Emits the `__rt_mixed_box_container_<kind>` routines of [`emit_box_dynamic_container_as_mixed`].
+pub(crate) fn emit_box_dynamic_container_runtime(emitter: &mut Emitter) {
+    for maximum_kind in DYNAMIC_CONTAINER_KINDS {
+        emitter.blank();
+        emitter.comment(&format!("--- runtime: mixed_box_container_{maximum_kind} ---"));
+        emitter.label_global(&format!("__rt_mixed_box_container_{maximum_kind}"));
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction("stp x29, x30, [sp, #-16]!"), // preserve frame linkage and the return address across the nested calls
+            Arch::X86_64 => {
+                emitter.instruction("push rbp");                                // preserve the caller frame pointer
+                emitter.instruction("mov rbp, rsp");                            // keep the stack 16-byte aligned for the nested calls
+            }
+        }
+        emit_classify_and_box_dynamic_container(emitter, maximum_kind);
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction("ldp x29, x30, [sp], #16"),    // restore frame linkage and the return address
+            Arch::X86_64 => emitter.instruction("pop rbp"),                     // restore the caller frame pointer
+        }
+        emitter.instruction("ret");                                             // return the owned Mixed cell
+    }
+}
+
+/// The classification and boxing sequence itself, shared by every `__rt_mixed_box_container_<kind>`.
+fn emit_classify_and_box_dynamic_container(emitter: &mut Emitter, maximum_kind: u8) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("str x0, [sp, #-16]!");                         // preserve the iterable heap pointer while probing its concrete heap kind
@@ -296,7 +367,7 @@ fn emit_box_iterable_as_mixed(emitter: &mut Emitter) {
             emitter.instruction("mov x9, x0");                                  // keep the heap kind available for tag normalization
             emitter.instruction("cmp x0, #2");                                  // is the heap kind at least the indexed-array tag?
             emitter.instruction("cset x10, hs");                                // record whether the iterable is in the supported heap-backed range lower bound
-            emitter.instruction("cmp x0, #4");                                  // is the heap kind no greater than the object tag?
+            emitter.instruction(&format!("cmp x0, #{}", maximum_kind));         // restrict dynamic containers to the declared array or iterable family
             emitter.instruction("cset x11, ls");                                // record whether the iterable is in the supported heap-backed range upper bound
             emitter.instruction("and x10, x10, x11");                           // combine the lower and upper bound checks into one predicate
             emitter.instruction("add x9, x9, #2");                              // map heap kind 2/3/4 to mixed tag 4/5/6
@@ -313,7 +384,7 @@ fn emit_box_iterable_as_mixed(emitter: &mut Emitter) {
             emitter.instruction("mov r10, rax");                                // keep the heap kind available for tag normalization
             emitter.instruction("cmp rax, 2");                                  // is the heap kind at least the indexed-array tag?
             emitter.instruction("setae r11b");                                  // record whether the iterable is in the supported heap-backed range lower bound
-            emitter.instruction("cmp rax, 4");                                  // is the heap kind no greater than the object tag?
+            emitter.instruction(&format!("cmp rax, {}", maximum_kind));         // restrict dynamic containers to the declared array or iterable family
             emitter.instruction("setbe dl");                                    // record whether the iterable is in the supported heap-backed range upper bound
             emitter.instruction("and dl, r11b");                                // combine the lower and upper bound checks into one predicate byte
             emitter.instruction("add r10, 2");                                  // map heap kind 2/3/4 to mixed tag 4/5/6
@@ -323,6 +394,44 @@ fn emit_box_iterable_as_mixed(emitter: &mut Emitter) {
             abi::emit_pop_reg(emitter, "rdi");                                   // restore the iterable heap pointer as the mixed payload low word
             emitter.instruction("xor rsi, rsi");                                // iterable payloads do not use a high payload word
             emitter.instruction("call __rt_mixed_from_value");                  // retain the concrete heap payload and return an owned mixed cell
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Mixed-element array boxing preserves runtime hash promotion without accepting object storage.
+    #[test]
+    fn mixed_element_array_boxing_uses_the_actual_container_kind() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for owned in [false, true] {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                let ty = PhpType::Array(Box::new(PhpType::Mixed));
+                if owned {
+                    emit_box_current_owned_value_as_mixed(&mut emitter, &ty);
+                } else {
+                    emit_box_current_value_as_mixed(&mut emitter, &ty);
+                }
+                let asm = emitter.output();
+                assert!(asm.contains("__rt_mixed_box_container_3"), "{name}, owned={owned}");
+                assert!(!asm.contains("__rt_heap_kind"), "{name}: the probe lives in the routine");
+            }
+            let mut routines = Emitter::new(Target::parse(name).unwrap());
+            emit_box_dynamic_container_runtime(&mut routines);
+            let routines = routines.output();
+            assert!(routines.contains("__rt_heap_kind"), "{name}");
+            let guard = if name == "linux-x86_64" { "cmp rax, 3" } else { "cmp x0, #3" };
+            assert!(routines.contains(guard), "{name}");
+            let iterable_guard = if name == "linux-x86_64" { "cmp rax, 4" } else { "cmp x0, #4" };
+            assert!(routines.contains(iterable_guard), "{name}");
+            assert_eq!(routines.matches("call __rt_mixed_from_value").count()
+                + routines.matches("bl __rt_mixed_from_value").count(), 2, "{name}");
+            let mut scalar_array = Emitter::new(Target::parse(name).unwrap());
+            emit_box_current_value_as_mixed(&mut scalar_array, &PhpType::Array(Box::new(PhpType::Int)));
+            assert!(!scalar_array.output().contains("__rt_heap_kind"), "{name}");
         }
     }
 }

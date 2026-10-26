@@ -104,14 +104,15 @@ impl EvalCallFrame {
 /// the context's current call-site line, which is the closest thing the eval IR carries — no
 /// `EvalStmt` or `EvalExpr` records the line it was written on, so a per-statement line is not
 /// available to this crate.
+///
+/// The file is the `__FILE__` override when one is installed — an included file, a class method's
+/// declaring file, or eval'd code, which `enter_eval_code_site` names `FILE(LINE) : eval()'d code`
+/// — and the plain call-site file otherwise. It used to fall back to `eval_file_magic()`, which
+/// synthesizes the eval'd-code name from the call site even for a frame pushed by COMPILED code:
+/// the `eval` frame itself then claimed to be inside the code it was about to run.
 fn eval_call_frame_position(context: &ElephcEvalContext) -> (String, i64) {
-    let (file, _, line, _) = context.call_site();
-    let file = if context.eval_file_magic().is_empty() {
-        file
-    } else {
-        context.eval_file_magic()
-    };
-    (file, line)
+    let (file, _, line, file_magic) = context.call_site();
+    (file_magic.unwrap_or(file), line)
 }
 
 /// Returns whether PHP shows this builtin as its own `debug_backtrace()` frame here.

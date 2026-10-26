@@ -50,14 +50,18 @@ static REALPATH_CACHE: OnceLock<Mutex<RealpathCache>> = OnceLock::new();
 /// Falls back to `path` itself when it cannot be canonicalized, which is what the uncached call
 /// did: a missing file still needs a stable include key for the read failure that follows.
 pub(crate) fn canonicalize_cached(path: &Path) -> PathBuf {
+    try_canonicalize_cached(path).unwrap_or_else(|| path.to_path_buf())
+}
+
+/// Like [`canonicalize_cached`], but reports a path that cannot be canonicalized as `None`, for
+/// callers that have their own fallback (the script cache keys a missing file by its parent).
+pub(crate) fn try_canonicalize_cached(path: &Path) -> Option<PathBuf> {
     if let Some(cached) = lock_realpath_cache().lookup(path) {
-        return cached;
+        return Some(cached);
     }
-    let Ok(canonical) = std::fs::canonicalize(path) else {
-        return path.to_path_buf();
-    };
+    let canonical = std::fs::canonicalize(path).ok()?;
     lock_realpath_cache().insert(path.to_path_buf(), canonical.clone());
-    canonical
+    Some(canonical)
 }
 
 /// Returns the process-wide realpath cache singleton.

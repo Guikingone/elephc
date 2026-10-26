@@ -8,6 +8,9 @@
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 
 use super::*;
+use std::collections::HashMap;
+
+use crate::ir_lower::context::StaticCallableBinding;
 use crate::types::TypeEnv;
 
 /// One reachable arm of an `if` chain together with its deferred merge edge.
@@ -18,6 +21,8 @@ struct IfArmExit {
     types: TypeEnv,
     /// Definitely-initialized slots at the end of this arm.
     initialized: HashSet<LocalSlotId>,
+    /// Compile-time callable targets that remain valid at the end of this arm.
+    static_callables: HashMap<String, StaticCallableBinding>,
 }
 
 /// Lowers an `if` / `elseif` / `else` chain and joins all reachable arm types once.
@@ -67,7 +72,9 @@ pub(super) fn lower_if(
     if !merge_reachable {
         ctx.builder.terminate(Terminator::Unreachable);
     }
+    let joined_callables = ctx.static_callable_locals_snapshot();
     ctx.clear_static_callable_locals();
+    ctx.restore_static_callable_locals(joined_callables);
 }
 
 /// Recursively emits one condition node and records every reachable arm against one shared merge.
@@ -90,6 +97,11 @@ fn lower_if_chain(
     let split_initialized = ctx.initialized_slots_snapshot();
     let split_types = ctx.local_types_snapshot();
     let split_try_handler_stack = ctx.try_handler_stack.clone();
+    let split_static_callables = ctx.static_callable_locals_snapshot();
+    // Interior-alias markers are a MAY fact, so the arms are unioned rather than sequenced.
+    // Without this, `if (..) { $r = &$a[0]; } else { $r = &$o->p; }` would take whichever arm
+    // was lowered last as the answer for both.
+    let split_borrowed_refs = ctx.borrowed_element_ref_locals_snapshot();
     let then_block = ctx.builder.create_named_block("if.then", Vec::new());
     let else_block = ctx.builder.create_named_block("if.else", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
@@ -104,6 +116,7 @@ fn lower_if_chain(
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types.clone());
     ctx.try_handler_stack = split_try_handler_stack.clone();
+    ctx.restore_static_callable_locals(split_static_callables.clone());
     apply_instanceof_branch_narrowing(ctx, condition, true);
     lower_block(ctx, then_body);
     let then_initialized = ctx.initialized_slots_snapshot();
@@ -114,11 +127,13 @@ fn lower_if_chain(
         record_if_arm_exit(ctx, arms);
     }
 
-    ctx.clear_static_callable_locals();
+    let then_borrowed_refs = ctx.borrowed_element_ref_locals_snapshot();
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types);
     ctx.try_handler_stack = split_try_handler_stack.clone();
+    ctx.restore_static_callable_locals(split_static_callables);
+    ctx.restore_borrowed_element_ref_locals(split_borrowed_refs);
     apply_instanceof_branch_narrowing(ctx, condition, false);
     let else_reachable =
         if let Some(((next_condition, next_body), rest)) = elseif_clauses.split_first() {
@@ -150,6 +165,12 @@ fn lower_if_chain(
             }
         };
     merge_reachable |= else_reachable;
+    if !else_reachable {
+        ctx.restore_borrowed_element_ref_locals(HashSet::new());
+    }
+    if then_reachable {
+        ctx.merge_borrowed_element_ref_locals(&then_borrowed_refs);
+    }
     let else_initialized = ctx.initialized_slots_snapshot();
     ctx.restore_initialized_slots(merge_initialized_slots(
         &split_initialized,
@@ -186,6 +207,7 @@ fn record_if_arm_exit(ctx: &mut LoweringContext<'_, '_>, arms: &mut Vec<IfArmExi
         tail,
         types: ctx.local_types_snapshot(),
         initialized: ctx.initialized_slots_snapshot(),
+        static_callables: ctx.static_callable_locals_snapshot(),
     });
 }
 
@@ -199,6 +221,9 @@ fn finish_if_type_join(
     if arms.len() < 2 {
         if let Some(arm) = arms.first() {
             ctx.restore_local_types(arm.types.clone());
+            ctx.restore_static_callable_locals(arm.static_callables.clone());
+        } else {
+            ctx.restore_static_callable_locals(HashMap::new());
         }
         for arm in &arms {
             ctx.builder.position_at_end(arm.tail);
@@ -211,6 +236,7 @@ fn finish_if_type_join(
     }
 
     let joined = join_arm_types(ctx, &arms);
+    let joined_callables = join_arm_static_callables(&arms);
     // The merge resumes from a REACHABLE arm's facts, overlaid with the joins. The types current
     // here belong to whichever branch was lowered last, and when that branch ended in a `throw`
     // they are the pre-branch split: `$t = []; if (…) { foreach (…) { $t[] = …; } } elseif (…)
@@ -233,8 +259,32 @@ fn finish_if_type_join(
     }
     ctx.restore_local_types(saved_types);
     for (name, ty) in joined {
-        ctx.set_local_type(&name, ty);
+        if matches!(ty.codegen_repr(), PhpType::AssocArray { .. }) {
+            ctx.set_retyped_container_local_type(&name, ty);
+        } else {
+            ctx.set_local_type(&name, ty);
+        }
     }
+    ctx.restore_static_callable_locals(joined_callables);
+}
+
+/// Intersects static callable facts across every reachable arm of an `if` join.
+fn join_arm_static_callables(
+    arms: &[IfArmExit],
+) -> HashMap<String, StaticCallableBinding> {
+    let Some(first) = arms.first() else {
+        return HashMap::new();
+    };
+    first
+        .static_callables
+        .iter()
+        .filter(|(name, target)| {
+            arms.iter().skip(1).all(|arm| {
+                arm.static_callables.get(name.as_str()) == Some(*target)
+            })
+        })
+        .map(|(name, target)| (name.clone(), target.clone()))
+        .collect()
 }
 
 /// Computes the common post-merge type facts that every reachable arm can represent safely.
@@ -313,6 +363,41 @@ fn join_arm_types(ctx: &LoweringContext<'_, '_>, arms: &[IfArmExit]) -> TypeEnv 
             continue;
         }
 
+        // Any other indexed/associative mix whose slots convert in place joins at a hash of
+        // boxed values: indexed arms promote, associative arms box their values.
+        if arm_types
+            .iter()
+            .all(|ty| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }))
+            && arm_types
+                .iter()
+                .any(|ty| matches!(ty, PhpType::AssocArray { .. }))
+        {
+            if !arms
+                .iter()
+                .all(|arm| local_slot_is_convertible(ctx, &name, &arm.initialized))
+            {
+                continue;
+            }
+            // Keys keep their storage through the conversion, so the join may only claim `int`
+            // keys when every associative arm has them. `$known = array_flip([]); if (!$known) {
+            // $known += ['a' => …]; }` joined `array<never, int>` with `array<mixed, mixed>` at
+            // `array<int, mixed>`, and `array_keys($known)` then read its string keys as ints.
+            let int_keys = arm_types.iter().all(|ty| match ty {
+                PhpType::AssocArray { key, .. } => {
+                    matches!(key.codegen_repr(), PhpType::Int | PhpType::Never)
+                }
+                _ => true,
+            });
+            joined.insert(
+                name,
+                PhpType::AssocArray {
+                    key: Box::new(if int_keys { PhpType::Int } else { PhpType::Mixed }),
+                    value: Box::new(PhpType::Mixed),
+                },
+            );
+            continue;
+        }
+
         // The arms disagree and no in-place array conversion reconciles them:
         // `$i = \strlen('ab'); if (…) { $i = 'si'; }` leaves `int` on one edge and `string` on
         // the other. Falling through with NO joined fact left the merge block reading the
@@ -375,10 +460,13 @@ fn arm_conversions(arm: &IfArmExit, joined: &TypeEnv) -> Vec<(String, PhpType)> 
     let mut names = joined
         .iter()
         .filter(|(name, target)| {
-            let Some(PhpType::Array(element)) =
-                arm.types.get(name.as_str()).map(PhpType::codegen_repr)
-            else {
-                return false;
+            let element = match arm.types.get(name.as_str()).map(PhpType::codegen_repr) {
+                Some(PhpType::Array(element)) => element,
+                Some(PhpType::AssocArray { value, .. }) => {
+                    return matches!(target, PhpType::AssocArray { .. })
+                        && value.codegen_repr() != PhpType::Mixed;
+                }
+                _ => return false,
             };
             // A join at a concrete element (an empty arm meeting a filled one) reads every
             // arm's array as it already is; only a boxed or hash target converts.
@@ -428,20 +516,57 @@ fn local_slot_is_hash_convertible(
             .is_some_and(|slot| initialized.contains(slot))
 }
 
-/// Converts indexed-array locals on an arm edge so all paths agree at the merge: boxing the
-/// elements for an indexed join, promoting to hash storage for an associative one.
+/// Converts array locals on an arm edge so all paths agree at the merge: boxing the elements
+/// for an indexed join, promoting to hash storage (or boxing a hash's values) for an
+/// associative one.
 fn convert_arm_arrays(
     ctx: &mut LoweringContext<'_, '_>,
     conversions: &[(String, PhpType)],
     span: Span,
 ) {
     for (name, target) in conversions {
+        // A static local's boxed slot already holds any array, so its logical array type converts
+        // nothing. One narrowed on `null === $s` kept an array type over its `mixed` storage, and
+        // the conversion reached the backend as `array_to_mixed` over a `mixed` operand
+        // (DeepClone's `static $setTrace`). Checked before loading: a boxed load holds a reference.
+        // A by-reference parameter's slot is `mixed` too, but its cell holds the raw container
+        // and still converts.
+        if ctx.local_kinds.get(name).copied() == Some(LocalKind::StaticLocal)
+            && ctx
+                .local_slots
+                .get(name)
+                .is_some_and(|slot| ctx.builder.local_php_type(*slot).codegen_repr() == PhpType::Mixed)
+        {
+            continue;
+        }
+        let source_is_hash = matches!(ctx.local_type(name).codegen_repr(), PhpType::AssocArray { .. });
         let array = ctx.load_local(name, Some(span));
-        let op = if matches!(target, PhpType::AssocArray { .. }) {
+        let op = if source_is_hash {
+            Op::HashToMixed
+        } else if matches!(target, PhpType::AssocArray { .. }) {
             Op::ArrayToHash
         } else {
             Op::ArrayToMixed
         };
+        // Program-global storage can be a boxed `mixed` that already holds any list: `$argv`,
+        // promoted to a global because a function body runs `eval()`, loaded as `mixed` and
+        // reached the backend as `array_to_mixed` over a `mixed` operand (Symfony's
+        // `bin/console`). The load is a borrowed read, so dropping it releases nothing.
+        if op == Op::ArrayToMixed
+            && ctx.builder.value_php_type(array.value).codegen_repr() == PhpType::Mixed
+        {
+            continue;
+        }
+        // The join makes this local `mixed` for the rest of the function, so its frame slot is a
+        // boxed cell whatever it held when this arm was lowered. Declaring that BEFORE the store is
+        // what lets the store release the cell it overwrites: the later widening arrived after this
+        // edge was lowered, the edge saw a raw-array slot, and every pass through it left the
+        // previous box -- and the array it held -- behind (`$r = new ReflectionMethod(..); $ps =
+        // $r->getParameters();` in a loop leaked 176 blocks per iteration).
+        let join_is_boxed = matches!(
+            target.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        );
         let target = if op == Op::ArrayToMixed {
             PhpType::Array(Box::new(PhpType::Mixed))
         } else {
@@ -455,6 +580,11 @@ fn convert_arm_arrays(
             op.default_effects(),
             Some(span),
         );
+        if join_is_boxed {
+            if let Some(slot) = ctx.local_slots.get(name).copied() {
+                ctx.builder.widen_local_storage_type(slot, PhpType::Mixed);
+            }
+        }
         ctx.store_mutated_local(name, converted, target, Some(span));
     }
 }
@@ -522,6 +652,19 @@ pub(super) fn apply_loop_storage_contracts(
         if !ctx.local_slots.contains_key(&name) {
             continue;
         }
+        // A slot whose frame storage is already a boxed cell (a `static $x`, a whole-scope
+        // `mixed` widening) holds any representation the loop stores, so there is nothing to
+        // convert: loading it yields the box, and an array conversion of that box is refused.
+        // league/uri's `Option::cases()` fills `static $assoc` from `$assoc = []` in a foreach.
+        if ctx.local_storage_type(&name).codegen_repr() == PhpType::Mixed
+            && !matches!(target_ty.codegen_repr(), PhpType::Mixed)
+            && matches!(
+                ctx.local_type(&name).codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. }
+            )
+        {
+            continue;
+        }
         let source_ty = ctx.local_type(&name).codegen_repr();
         if source_ty == target_ty.codegen_repr() {
             ctx.set_local_type(&name, target_ty);
@@ -555,7 +698,7 @@ pub(super) fn apply_loop_storage_contracts(
                 let span_or_zero = span.unwrap_or_else(|| Span::new(0, 0));
                 let converted =
                     ctx.emit_local_array_to_hash_move(&name, source, target_ty.clone(), span_or_zero);
-                ctx.store_mutated_local(&name, converted, target_ty, span);
+                ctx.store_retyped_container_local(&name, converted, target_ty, span);
             }
             (PhpType::Array(_), PhpType::Array(target_element))
                 if target_element.codegen_repr() == PhpType::Mixed =>
@@ -608,9 +751,12 @@ pub(super) fn apply_loop_storage_contracts(
             // local against an `Array(Mixed)` contract, or a non-container local). Re-declaring
             // the type here would leave the slot holding a hash while every later read is typed
             // `array<mixed>`, so the write-site promotion reads storage it has already released.
+            // Avoid loading it as well: unboxing a concrete container from Mixed frame storage
+            // acquires an owner even when the unused load appears borrowed in EIR.
             // Leave the local alone and let its own assignment path convert it, mirroring the
             // heap-kind guard the pre-fixed-point widening applied before promoting.
             _ => {}
         }
     }
 }
+

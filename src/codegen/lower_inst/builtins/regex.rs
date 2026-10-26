@@ -7,16 +7,15 @@
 //!
 //! Key details:
 //! - Regex output variables are written through the local's active raw/ref-cell representation.
-//! - `preg_replace_callback()` supports static string callbacks and descriptor-backed
-//!   callable values through a regex-specific callback wrapper.
+//! - Every `preg_replace_callback()` callback uses the descriptor ABI adapter, including
+//!   literal names whose PHP array parameter has boxed storage.
 //! - `preg_split()` forces boxed Mixed element slots so dynamic flags cannot mismatch layout.
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, callable_descriptor};
 use crate::codegen::{CodegenIrError, Result};
 use crate::codegen_support::DeferredCallbackWrapper;
-use crate::ir::{Function, Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
-use crate::names::function_symbol;
+use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
@@ -549,23 +548,6 @@ fn emit_preg_grep_predicate_wrapper(ctx: &mut FunctionContext<'_>) -> String {
     predicate_label
 }
 
-/// Lowers `mb_ereg_match(pattern, subject, options = null)` as a start-anchored regex match.
-///
-/// The bare delimiter-less pattern and subject use the shared regex string loader. Optional
-/// options are passed as a string pair when present, or as `(0, 0)` for `null`/omitted options.
-pub(crate) fn lower_mb_ereg_match(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count_between(inst, "mb_ereg_match", 2, 3)?;
-    let pattern = super::expect_operand(inst, 0)?;
-    let subject = super::expect_operand(inst, 1)?;
-    let options = inst.operands.get(2).copied();
-    load_mb_ereg_match_args(ctx, pattern, subject, options)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mb_ereg_match");
-    super::store_if_result(ctx, inst)
-}
-
 /// Lowers `preg_match_all(pattern, subject, matches, flags, offset)` through the regex runtime.
 pub(crate) fn lower_preg_match_all(
     ctx: &mut FunctionContext<'_>,
@@ -768,7 +750,6 @@ impl PregReplaceCallbackTarget {
 
 /// Descriptor environment source used by the regex callback wrapper.
 enum PregReplaceCallbackEnv {
-    None,
     Descriptor(ValueId),
     RuntimeString(ValueId),
     /// A BOXED callback whose shape is only known at run time — a closure read out of an untyped
@@ -786,7 +767,6 @@ impl PregReplaceCallbackEnv {
     /// Reserves the stack environment expected by the deferred regex callback wrapper.
     fn reserve(&self, ctx: &mut FunctionContext<'_>, strict_php: bool) -> Result<usize> {
         match self {
-            Self::None => Ok(0),
             Self::Descriptor(callback) => reserve_descriptor_callback_env(ctx, *callback),
             Self::RuntimeString(callback) => {
                 reserve_runtime_string_descriptor_callback_env(ctx, *callback, strict_php)
@@ -828,12 +808,6 @@ fn preg_replace_callback_target(
     ctx: &mut FunctionContext<'_>,
     callback: ValueId,
 ) -> Result<PregReplaceCallbackTarget> {
-    if let Some(entry_label) = static_string_callback_entry(ctx, callback)? {
-        return Ok(PregReplaceCallbackTarget {
-            entry_label,
-            env: PregReplaceCallbackEnv::None,
-        });
-    }
     let callback_ty = ctx.raw_value_php_type(callback)?;
     let callback_codegen_ty = callback_ty.codegen_repr();
     match callback_codegen_ty {
@@ -896,41 +870,10 @@ fn preg_replace_callback_target(
     )))
 }
 
-/// Resolves a literal string callback to a module-local function entry.
-fn static_string_callback_entry(
-    ctx: &FunctionContext<'_>,
-    callback: ValueId,
-) -> Result<Option<String>> {
-    let Some(callback_name) = maybe_const_string_operand(ctx, callback)? else {
-        return Ok(None);
-    };
-    let Some(function) = ctx.callable_function_by_name(&callback_name) else {
-        return Ok(None);
-    };
-    if !function_takes_raw_match_array(function) {
-        return Ok(None);
-    }
-    Ok(Some(function_symbol(&function.name)))
-}
-
-/// Returns whether a function's entry can receive the runtime's raw `array<string>` match array
-/// and hand back a raw string, which is what a direct entry call means.
-///
-/// Any other shape is called through the descriptor wrapper instead, which boxes the argument
-/// and unboxes the result the way every other callable call does: an untyped `function up($m)`
-/// keeps its parameter as a boxed `mixed`, and jumping to it with the bare array pointer read
-/// that pointer as a box and crashed.
-fn function_takes_raw_match_array(function: &Function) -> bool {
-    let [param] = function.params.as_slice() else {
-        return false;
-    };
-    !param.by_ref
-        && !param.variadic
-        && param.php_type.codegen_repr() == preg_matches_type()
-        && function.return_php_type.codegen_repr() == PhpType::Str
-}
-
 /// Emits a descriptor callback wrapper that adapts regex matches to callable descriptors.
+///
+/// Reopens the caller's text section after the wrapper so the rest of the caller stays in
+/// its own ELF section instead of continuing inside the wrapper's.
 fn emit_descriptor_callback_wrapper(ctx: &mut FunctionContext<'_>) -> String {
     // Not shared by ABI shape; see the array_map twin for the two ways that broke.
     let wrapper_label = ctx.next_global_label("preg_replace_descriptor_callback_wrapper");
@@ -942,9 +885,12 @@ fn emit_descriptor_callback_wrapper(ctx: &mut FunctionContext<'_>) -> String {
         capture_types: Vec::new(),
         descriptor_prefix_types: Vec::new(),
         descriptor_return_type: Some(PhpType::Str),
+        invocation_scope_class_id: ctx.lexical_class_id(),
     };
+    let enclosing = ctx.emitter.current_text_section();
     abi::emit_jump(ctx.emitter, &done_label);
     crate::codegen::emit_callback_wrapper(ctx.emitter, &wrapper);
+    ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
     wrapper_label
 }
@@ -1224,46 +1170,6 @@ fn load_match_args(
     }
 }
 
-/// Loads `mb_ereg_match()` pattern, subject, and optional options into runtime ABI registers.
-fn load_mb_ereg_match_args(
-    ctx: &mut FunctionContext<'_>,
-    pattern: ValueId,
-    subject: ValueId,
-    options: Option<ValueId>,
-) -> Result<()> {
-    let mut args = vec![
-        (pattern, "mb_ereg_match pattern"),
-        (subject, "mb_ereg_match subject"),
-    ];
-    if let Some(options) = options {
-        args.push((options, "mb_ereg_match options"));
-    }
-    match (ctx.emitter.target.arch, options.is_some()) {
-        (Arch::AArch64, true) => load_string_args(
-            ctx,
-            &args,
-            &[("x1", "x2"), ("x3", "x4"), ("x5", "x6")],
-        ),
-        (Arch::AArch64, false) => {
-            load_string_args(ctx, &args, &[("x1", "x2"), ("x3", "x4")])?;
-            abi::emit_load_int_immediate(ctx.emitter, "x5", 0);
-            abi::emit_load_int_immediate(ctx.emitter, "x6", 0);
-            Ok(())
-        }
-        (Arch::X86_64, true) => load_string_args(
-            ctx,
-            &args,
-            &[("rdi", "rsi"), ("rdx", "rcx"), ("r8", "r9")],
-        ),
-        (Arch::X86_64, false) => {
-            load_string_args(ctx, &args, &[("rdi", "rsi"), ("rdx", "rcx")])?;
-            abi::emit_load_int_immediate(ctx.emitter, "r8", 0);
-            abi::emit_load_int_immediate(ctx.emitter, "r9", 0);
-            Ok(())
-        }
-    }
-}
-
 /// Returns an optional writable local slot, treating an omitted nullable default as no destination.
 fn optional_local_slot_operand(
     ctx: &FunctionContext<'_>,
@@ -1478,28 +1384,6 @@ fn store_preg_replace_count(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) ->
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_len_reg, 8);
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     Ok(())
-}
-
-/// Returns a string literal value when `value` is defined by a `ConstStr` instruction.
-fn maybe_const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<String>> {
-    let Some(inst_ref) = value_source_instruction(ctx, value)? else {
-        return Ok(None);
-    };
-    if inst_ref.op != Op::ConstStr {
-        return Ok(None);
-    }
-    let Some(Immediate::Data(data)) = inst_ref.immediate else {
-        return Err(CodegenIrError::invalid_module(
-            "preg_replace_callback callback string literal has no data id",
-        ));
-    };
-    ctx.module
-        .data
-        .strings
-        .get(data.as_raw() as usize)
-        .cloned()
-        .map(Some)
-        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
 }
 
 /// Returns the instruction that defines an SSA value, when it has one.

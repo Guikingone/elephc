@@ -74,8 +74,9 @@ pub(super) fn resolve_stmt_exprs(
         StmtKind::FunctionVariantMark { name, variant } => {
             StmtKind::FunctionVariantMark { name, variant }
         }
-        StmtKind::IncludeOnceGuard { source_path, body } => StmtKind::IncludeOnceGuard {
+        StmtKind::IncludeOnceGuard { source_path, required, body } => StmtKind::IncludeOnceGuard {
             source_path,
+            required,
             body: resolve_isolated(
                 body,
                 base_dir,

@@ -1,16 +1,16 @@
 ---
-title: "call_user_func() — internals"
+title: "call_user_func() - internals"
 description: "Compiler internals for call_user_func(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 62
 ---
 
-## `call_user_func()` — internals
+## `call_user_func()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/call_user_func.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/call_user_func.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

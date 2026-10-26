@@ -5,9 +5,22 @@
 //! - `crate::ir_lower::program`.
 //!
 //! Key details:
-//! - Keeps program metadata deterministic and EIR lowering behavior unchanged.
+//! - Keeps program metadata deterministic and object-reference ABI shapes consistent.
 
 use super::*;
+
+/// Reserves extra field storage without changing PHP attributes or checker visibility rules.
+pub(super) fn reserve_eval_subclass_property_storage(module: &mut Module) {
+    if !module.required_runtime_features.eval_bridge {
+        return;
+    }
+    for (name, info) in &mut module.class_infos {
+        // Builtin objects may have custom payloads; their layouts remain authoritative.
+        if elephc_builtin_contract::lookup_class(name).is_none() && !info.is_final {
+            info.eval_property_storage = true;
+        }
+    }
+}
 
 /// Converts a PHP source path into the canonical display string stored in EIR metadata.
 pub(super) fn canonical_source_path(source_path: &Path) -> String {
@@ -33,7 +46,12 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
     module.declared_trait_uses = collect_declared_trait_uses(program);
     module.declared_trait_method_names = collect_declared_trait_method_names(program);
     module.declared_trait_methods = collect_declared_trait_methods(program);
-    module.declared_trait_property_names = collect_declared_trait_property_names(program);
+    module.declared_trait_properties = collect_declared_trait_properties(program);
+    module.declared_trait_property_names = module.declared_trait_properties.iter()
+        .map(|(name, properties)| {
+            (name.clone(), properties.iter().map(|property| property.name.clone()).collect())
+        })
+        .collect();
     module.declared_trait_constant_names = collect_declared_trait_constant_names(program);
     module.declared_trait_constants = collect_declared_trait_constants(program);
     module.declared_trait_constant_types = collect_declared_trait_constant_types(program);
@@ -42,8 +60,25 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
     module.declared_trait_final_constants = collect_declared_trait_final_constants(program);
     module.class_infos = check_result.classes.clone();
     normalize_untyped_instance_storage_for_eir(&mut module.class_infos);
-    normalize_class_method_signatures_for_eir(module, &check_result.callable_param_sigs);
+    normalize_class_method_signatures_for_eir(
+        module,
+        &check_result.callable_param_sigs,
+        check_result.user_filters_reachable,
+    );
     module.interface_infos = check_result.interfaces.clone();
+    for interface in module.interface_infos.values_mut() {
+        for signature in interface.methods.values_mut()
+            .chain(interface.static_methods.values_mut())
+        {
+            for (index, (_, ty)) in signature.params.iter_mut().enumerate() {
+                if signature.ref_params.get(index).copied().unwrap_or(false)
+                    && matches!(ty, PhpType::Object(_))
+                {
+                    *ty = PhpType::Mixed;
+                }
+            }
+        }
+    }
     module.enum_infos = check_result.enums.clone();
     module.extern_class_infos = check_result.extern_classes.clone();
     module.packed_class_infos = check_result.packed_classes.clone();
@@ -74,6 +109,16 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
     module.extern_decls.sort_by(|left, right| left.name.cmp(&right.name));
     module.required_runtime_features =
         crate::codegen::runtime_features_for_program_and_classes(program, &check_result.classes);
+    // Callable descriptors can introduce bridge calls only during assembly emission.
+    // Retain their checker requirements alongside calls already present in EIR.
+    module.required_runtime_features.mbstring = check_result.required_libraries
+        .iter().any(|library| library == "elephc_mbstring");
+    let features = module.required_runtime_features;
+    if features.mbstring || features.mbregex || features.eval_bridge {
+        // Library callers need the same default MIME provider and request initialization as CLI.
+        // The CLI backend replaces these defaults when explicit startup overrides are supplied.
+        module.mbstring_startup = Some(vec![b"UTF-8".to_vec(); 3]);
+    }
 }
 
 /// Normalizes untyped instance slots that need EIR's runtime-dispatched storage representation.
@@ -100,18 +145,13 @@ fn normalize_untyped_instance_storage_for_eir(
     classes: &mut crate::fast_hash::FastMap<String, ClassInfo>,
 ) {
     for class_info in classes.values_mut() {
+        class_info.normalize_untyped_array_property_storage();
         for index in 0..class_info.properties.len() {
             let property = class_info.properties[index].0.clone();
             if class_info.property_slot_is_declared(index, &property) {
                 continue;
             }
             match class_info.properties[index].1.codegen_repr() {
-                PhpType::Array(_) | PhpType::AssocArray { .. } => {
-                    class_info.properties[index].1 = PhpType::AssocArray {
-                        key: Box::new(PhpType::Mixed),
-                        value: Box::new(PhpType::Mixed),
-                    };
-                }
                 PhpType::Void | PhpType::Never => {
                     class_info.properties[index].1 = PhpType::Mixed;
                 }
@@ -125,6 +165,7 @@ fn normalize_untyped_instance_storage_for_eir(
 pub(super) fn normalize_class_method_signatures_for_eir(
     module: &mut Module,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
+    user_filters_reachable: bool,
 ) {
     for (class_name, class_info) in module.class_infos.iter_mut() {
         let direct_property_returns = direct_this_property_return_types(class_info);
@@ -134,6 +175,7 @@ pub(super) fn normalize_class_method_signatures_for_eir(
             &class_info.method_decls,
             false,
             callable_param_sigs,
+            user_filters_reachable,
         );
         normalize_method_map_for_eir(
             class_name,
@@ -141,10 +183,17 @@ pub(super) fn normalize_class_method_signatures_for_eir(
             &class_info.method_decls,
             true,
             callable_param_sigs,
+            user_filters_reachable,
         );
         for (method, return_type) in direct_property_returns {
             if let Some(signature) = class_info.methods.get_mut(&method) {
-                if !signature.declared_return {
+                // A getter the checker already returns BOXED keeps the box: that is the storage an
+                // override family or an untyped interface method agreed on, and narrowing it back
+                // to the property type made `$this->name()` through `interface N { function
+                // name(); }` read an unboxed string as Mixed and print "".
+                if !signature.declared_return
+                    && signature.return_type.codegen_repr() != PhpType::Mixed
+                {
                     signature.return_type = return_type;
                 }
             }
@@ -190,12 +239,18 @@ pub(super) fn normalize_method_map_for_eir<S: std::hash::BuildHasher>(
     method_decls: &[ClassMethod],
     is_static: bool,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
+    user_filters_reachable: bool,
 ) {
     // Stream-wrapper and user-filter contract methods are invoked through
     // runtime vtables with raw fixed-ABI arguments; widening their untyped
     // params to boxed Mixed would desynchronize the dispatcher and the body.
-    let is_wrapper_class = methods.contains_key("stream_open");
-    let is_filter_class = methods.contains_key("filter");
+    // Directory-only and metadata-only wrappers need not implement stream_open.
+    // Match the same method inventory that populates the runtime wrapper vtable.
+    let is_wrapper_class = methods.keys().any(|method| {
+        crate::codegen_support::runtime::is_user_wrapper_contract_method(method)
+    });
+    // Only a program that can register a filter has one; see `Checker::user_filters_reachable`.
+    let is_filter_class = user_filters_reachable && methods.contains_key("filter");
     for (method_key, signature) in methods.iter_mut() {
         if (is_wrapper_class
             && crate::codegen_support::runtime::is_user_wrapper_contract_method(method_key))
@@ -231,146 +286,20 @@ pub(super) fn normalize_method_map_for_eir<S: std::hash::BuildHasher>(
 }
 
 /// Returns true when an untyped method return can expose a dynamic parameter directly.
+///
+/// The rule itself lives in `crate::types::dynamic_params`, because the checker has to reach the
+/// same answer when it records a function's inferred return type: when the two disagreed, the
+/// callee returned a boxed cell that the caller read as a raw integer (issue #576).
 pub(super) fn method_return_exposes_dynamic_param(
     method: &ClassMethod,
     signature: &FunctionSig,
     owner_name: &str,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
 ) -> bool {
-    if signature.declared_return {
-        return false;
-    }
-    let dynamic_params = dynamic_untyped_param_names(owner_name, signature, callable_param_sigs);
-    !dynamic_params.is_empty() && body_returns_dynamic_param(&method.body, &dynamic_params)
-}
-
-/// Collects untyped by-value parameter names that need a boxed EIR ABI.
-pub(super) fn dynamic_untyped_param_names(
-    owner_name: &str,
-    signature: &FunctionSig,
-    callable_param_sigs: &HashMap<(String, String), FunctionSig>,
-) -> HashSet<String> {
-    let mut names = HashSet::new();
-    for (index, (name, php_type)) in signature.params.iter().enumerate() {
-        let declared = signature
-            .declared_params
-            .get(index)
-            .copied()
-            .unwrap_or(false);
-        let by_ref = signature.ref_params.get(index).copied().unwrap_or(false);
-        let variadic = signature.variadic.as_deref() == Some(name.as_str());
-        let preserved = matches!(php_type.codegen_repr(), PhpType::Callable)
-            || callable_param_sigs.contains_key(&(owner_name.to_string(), name.to_string()));
-        if !declared && !by_ref && !variadic && !preserved {
-            names.insert(name.clone());
-        }
-    }
-    names
-}
-
-/// Recursively scans a method body for returns that expose dynamic parameters.
-pub(super) fn body_returns_dynamic_param(body: &[Stmt], dynamic_params: &HashSet<String>) -> bool {
-    body.iter()
-        .any(|stmt| stmt_returns_dynamic_param(stmt, dynamic_params))
-}
-
-/// Returns true when one statement can return a dynamic parameter directly.
-pub(super) fn stmt_returns_dynamic_param(stmt: &Stmt, dynamic_params: &HashSet<String>) -> bool {
-    match &stmt.kind {
-        StmtKind::Return(Some(expr)) => expr_exposes_dynamic_param(expr, dynamic_params),
-        StmtKind::Return(None) => false,
-        StmtKind::If {
-            then_body,
-            elseif_clauses,
-            else_body,
-            ..
-        } => {
-            body_returns_dynamic_param(then_body, dynamic_params)
-                || elseif_clauses
-                    .iter()
-                    .any(|(_, body)| body_returns_dynamic_param(body, dynamic_params))
-                || else_body
-                    .as_ref()
-                    .is_some_and(|body| body_returns_dynamic_param(body, dynamic_params))
-        }
-        StmtKind::IfDef {
-            then_body,
-            else_body,
-            ..
-        } => {
-            body_returns_dynamic_param(then_body, dynamic_params)
-                || else_body
-                    .as_ref()
-                    .is_some_and(|body| body_returns_dynamic_param(body, dynamic_params))
-        }
-        StmtKind::While { body, .. }
-        | StmtKind::DoWhile { body, .. }
-        | StmtKind::Foreach { body, .. }
-        | StmtKind::NamespaceBlock { body, .. }
-        | StmtKind::IncludeOnceGuard { body, .. }
-        | StmtKind::Synthetic(body) => body_returns_dynamic_param(body, dynamic_params),
-        StmtKind::For {
-            init, update, body, ..
-        } => {
-            init.as_ref()
-                .is_some_and(|stmt| stmt_returns_dynamic_param(stmt.as_ref(), dynamic_params))
-                || update
-                    .as_ref()
-                    .is_some_and(|stmt| stmt_returns_dynamic_param(stmt.as_ref(), dynamic_params))
-                || body_returns_dynamic_param(body, dynamic_params)
-        }
-        StmtKind::Switch { cases, default, .. } => {
-            cases
-                .iter()
-                .any(|(_, body)| body_returns_dynamic_param(body, dynamic_params))
-                || default
-                    .as_ref()
-                    .is_some_and(|body| body_returns_dynamic_param(body, dynamic_params))
-        }
-        StmtKind::Try {
-            try_body,
-            catches,
-            finally_body,
-        } => {
-            body_returns_dynamic_param(try_body, dynamic_params)
-                || catches
-                    .iter()
-                    .any(|catch| body_returns_dynamic_param(&catch.body, dynamic_params))
-                || finally_body
-                    .as_ref()
-                    .is_some_and(|body| body_returns_dynamic_param(body, dynamic_params))
-        }
-        _ => false,
-    }
-}
-
-/// Returns true when an expression can yield one of the dynamic parameters directly.
-pub(super) fn expr_exposes_dynamic_param(expr: &Expr, dynamic_params: &HashSet<String>) -> bool {
-    match &expr.kind {
-        ExprKind::Variable(name) => dynamic_params.contains(name),
-        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
-            expr_exposes_dynamic_param(value, dynamic_params)
-                || expr_exposes_dynamic_param(default, dynamic_params)
-        }
-        ExprKind::Ternary {
-            then_expr,
-            else_expr,
-            ..
-        } => {
-            expr_exposes_dynamic_param(then_expr, dynamic_params)
-                || expr_exposes_dynamic_param(else_expr, dynamic_params)
-        }
-        ExprKind::Match { arms, default, .. } => {
-            arms.iter()
-                .any(|(_, arm)| expr_exposes_dynamic_param(arm, dynamic_params))
-                || default
-                    .as_ref()
-                    .is_some_and(|expr| expr_exposes_dynamic_param(expr, dynamic_params))
-        }
-        ExprKind::ErrorSuppress(inner) => expr_exposes_dynamic_param(inner, dynamic_params),
-        ExprKind::Assignment { value, .. } => {
-            expr_exposes_dynamic_param(value, dynamic_params)
-        }
-        _ => false,
-    }
+    crate::types::dynamic_params::return_exposes_dynamic_param(
+        &method.body,
+        signature,
+        owner_name,
+        callable_param_sigs,
+    )
 }

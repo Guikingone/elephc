@@ -1,16 +1,16 @@
 ---
-title: "headers_list() — internals"
+title: "headers_list() - internals"
 description: "Compiler internals for headers_list(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 633
+  order: 653
 ---
 
-## `headers_list()` — internals
+## `headers_list()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/headers_list.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/headers_list.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,7 +49,7 @@ function headers_list(): array
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/headers_list.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/headers_list.rs) (`eval_builtin!`)
-- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(23)`).
+- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(89)`).
 - **Dispatch hooks**: _none_ (shared runtime dispatch)
 
 ## Cross-references

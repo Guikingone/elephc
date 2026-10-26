@@ -109,7 +109,7 @@ pub(in crate::interpreter) fn execute_do_while_stmt(
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
             EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
         }
-        if !crate::interpreter::expressions::eval_truthy_expr(condition, context, scope, values)? {
+        if !eval_condition(condition, context, scope, values)? {
             break;
         }
     }
@@ -138,7 +138,7 @@ pub(in crate::interpreter) fn execute_for_stmt(
     }
     loop {
         if let Some(condition) = condition {
-            if !crate::interpreter::expressions::eval_truthy_expr(condition, context, scope, values)? {
+            if !eval_condition(condition, context, scope, values)? {
                 break;
             }
         }
@@ -253,7 +253,7 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
 ///
 /// This is the ownership rule the call machinery already uses for an argument allocated for the
 /// call, widened by the call shapes: an interpreted call hands its return value to the caller —
-/// `release_activation_scope` excludes exactly that handle from the activation's teardown — and
+/// `finish_activation_scope` excludes exactly that handle from the activation's teardown — and
 /// the statement-expression path already releases any expression result on that basis. A read of
 /// existing storage such as `LoadVar` hands back a BORROWED cell and must not be released here.
 pub(in crate::interpreter) fn eval_foreach_owns_subject(expr: &EvalExpr) -> bool {
@@ -301,7 +301,7 @@ pub(super) fn execute_foreach_array_stmt(
             }
             status
         })?;
-        let value = values.array_get(array, key).map_err(|status| {
+        let value = values.array_iter_value(array, index).map_err(|status| {
             if trace {
                 eprintln!("[elephc-eval-trace] phase=foreach_error stage=array_get index={index} status={status:?}");
             }
@@ -314,6 +314,7 @@ pub(super) fn execute_foreach_array_stmt(
                 key_name.to_string(),
                 key,
                 ScopeCellOwnership::Owned,
+                values,
             )? {
                 values.release(replaced)?;
             }
@@ -341,6 +342,7 @@ pub(super) fn execute_foreach_array_stmt(
                 value_name.to_string(),
                 value,
                 ScopeCellOwnership::Owned,
+                values,
             )?
         };
         for replaced in replaced {
@@ -586,6 +588,7 @@ fn execute_foreach_object_by_ref_stmt(
                 key_name.to_string(),
                 key,
                 ScopeCellOwnership::Owned,
+                values,
             )? {
                 values.release(replaced)?;
             }
@@ -629,9 +632,13 @@ pub(super) fn execute_foreach_iterator_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
+    // php runs `next()`/`valid()`/`current()` on the foreach line; the body's own line markers
+    // would otherwise still be current when a backtrace is taken inside them.
+    let foreach_line = context.call_line();
     let result = eval_method_call_result(iterator, "rewind", Vec::new(), context, values)?;
     values.release(result)?;
     loop {
+        context.set_call_line(foreach_line);
         let valid = eval_method_call_result(iterator, "valid", Vec::new(), context, values)?;
         let is_valid = values.truthy(valid)?;
         values.release(valid)?;
@@ -658,6 +665,7 @@ pub(super) fn execute_foreach_iterator_stmt(
                 key_name.to_string(),
                 key,
                 ScopeCellOwnership::Owned,
+                values,
             )? {
                 values.release(replaced)?;
             }
@@ -668,12 +676,14 @@ pub(super) fn execute_foreach_iterator_stmt(
             value_name.to_string(),
             value,
             ScopeCellOwnership::Owned,
+            values,
         )? {
             values.release(replaced)?;
         }
 
         match execute_statements(body, context, scope, values)? {
             EvalControl::None | EvalControl::Continue(1) => {
+                context.set_call_line(foreach_line);
                 let result =
                     eval_method_call_result(iterator, "next", Vec::new(), context, values)?;
                 values.release(result)?;
@@ -708,48 +718,43 @@ pub(in crate::interpreter) fn eval_array_append_key(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
     let mut next_key = None;
-    for position in 0..len {
-        let mut temporaries = [None; 4];
-        let step = (|| {
+    let mut operands = Vec::new();
+    let result = (|| {
+        for position in 0..len {
             let key = values.array_iter_key(array, position)?;
-            temporaries[0] = Some(key);
+            operands.push(key);
             if values.type_tag(key)? != EVAL_TAG_INT {
-                return Ok(false);
+                continue;
             }
             let one = values.int(1)?;
-            temporaries[1] = Some(one);
+            operands.push(one);
             let candidate = values.add(key, one)?;
-            temporaries[2] = Some(candidate);
-            if let Some(current) = next_key {
-                let comparison = values.compare(EvalBinOp::Gt, candidate, current)?;
-                temporaries[3] = Some(comparison);
-                values.truthy(comparison)
+            operands.push(candidate);
+            let replace = if let Some(current) = next_key {
+                let is_greater = values.compare(EvalBinOp::Gt, candidate, current)?;
+                operands.push(is_greater);
+                values.truthy(is_greater)?
             } else {
-                Ok(true)
-            }
-        })();
-        // Track ownership by slot rather than pointer identity: two owned
-        // results may legitimately refer to the same runtime cell.
-        let candidate = if matches!(step, Ok(true)) { temporaries[2].take() } else { None };
-        let mut cleanup_error = None;
-        for cell in temporaries.into_iter().flatten() {
-            if let Err(status) = values.release(cell) {
-                cleanup_error.get_or_insert(status);
+                true
+            };
+            if replace {
+                next_key = Some(candidate);
             }
         }
-        if let Some(status) = step.err().or(cleanup_error) {
-            if let Some(cell) = candidate { let _ = values.release(cell); }
-            if let Some(cell) = next_key { let _ = values.release(cell); }
-            return Err(status);
-        }
-        if let Some(candidate) = candidate {
-            if let Some(previous) = next_key.replace(candidate) {
-                if let Err(status) = values.release(previous) {
-                    let _ = values.release(candidate);
-                    return Err(status);
-                }
-            }
-        }
+        next_key.map_or_else(|| values.int(0), Ok)
+    })();
+    let mut released = Ok(());
+    for operand in operands {
+        if result.as_ref().is_ok_and(|result| *result == operand) { continue; }
+        let cleanup = values.release(operand);
+        if released.is_ok() { released = cleanup; }
     }
-    next_key.map_or_else(|| values.int(0), Ok)
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = values.release(value);
+            Err(status)
+        }
+        (Ok(value), Ok(())) => Ok(value),
+    }
 }

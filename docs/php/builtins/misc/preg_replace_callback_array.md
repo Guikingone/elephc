@@ -2,7 +2,7 @@
 title: "preg_replace_callback_array()"
 description: "Performs a regular expression search and replace using one callback per pattern."
 sidebar:
-  order: 690
+  order: 711
 ---
 
 ## preg_replace_callback_array()
@@ -25,9 +25,9 @@ Performs a regular expression search and replace using one callback per pattern.
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected preg_array prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/regex/preg_replace_callback_array.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_replace_callback_array.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/regex/preg_replace_callback_array.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_replace_callback_array.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

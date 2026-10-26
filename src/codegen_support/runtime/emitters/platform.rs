@@ -13,17 +13,18 @@ use crate::codegen_support::RuntimeFeatures;
 
 /// Emits platform-facing runtime helpers and bridge primitives.
 pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
+    // Opaque eval can call mbstring through the same bridge as static programs.
+    let mbstring = features.mbstring || features.eval_bridge;
     // I/O runtime functions
     // The terminal-stdout indirection every echo/print travels through. Always
     // emitted (every program can echo); its body differs for `--web` builds.
-    io::emit_stdout_write(emitter, features.web);
+    io::emit_stdout_write(emitter, features.web, mbstring);
     // Backs file_get_contents('php://input'); reads the request body under --web,
     // returns false (null) otherwise. Always emitted so the EIR call resolves.
     io::emit_php_input(emitter, features.web);
-    // Back http_response_code()/header(); call the bridge setters under --web,
-    // no-ops otherwise. Always emitted so the EIR calls resolve.
+    // Preserve host status handling and shared mbstring MIME metadata for header operations.
     io::emit_http_response_code(emitter, features.web);
-    io::emit_header(emitter, features.web);
+    io::emit_header(emitter, features.web, mbstring);
     io::emit_header_remove(emitter, features.web);
     io::emit_headers_list(emitter, features.web);
     io::emit_headers_sent(emitter);
@@ -194,6 +195,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_ob_get_status(emitter);
     io::emit_ob_list_handlers(emitter);
     io::emit_file_get_contents(emitter);
+    io::emit_file_get_contents_stdin(emitter);
     io::emit_file_get_contents_range(emitter);
     io::emit_file_put_contents(emitter);
     io::emit_file(emitter);
@@ -266,4 +268,27 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     fibers::emit_fiber_get_current(emitter);
     fibers::emit_fiber_get_return(emitter);
     fibers::emit_fiber_state_getter(emitter);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Keeps response callbacks and terminal commitment available to opaque eval on every target.
+    #[test]
+    fn mbstring_response_capability_includes_opaque_eval() {
+        for name in ["linux-x86_64", "linux-aarch64", "macos-aarch64", "ios-arm64", "ios-sim-arm64"] {
+            for (mbstring, eval_bridge) in [(false, false), (true, false), (false, true), (true, true)] {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                emit_platform_runtime(&mut emitter, RuntimeFeatures {
+                    mbstring, eval_bridge, ..RuntimeFeatures::none()
+                });
+                let assembly = emitter.output();
+                let selected = mbstring || eval_bridge;
+                assert_eq!(assembly.contains("__rt_mbstring_output_header:"), selected, "{name}");
+                assert_eq!(assembly.contains("elephc_mbstring_response_commit_v1"), selected, "{name}");
+            }
+        }
+    }
 }

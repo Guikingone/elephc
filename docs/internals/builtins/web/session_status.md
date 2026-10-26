@@ -1,16 +1,16 @@
 ---
-title: "session_status() — internals"
+title: "session_status() - internals"
 description: "Compiler internals for session_status(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 971
+  order: 1062
 ---
 
-## `session_status()` — internals
+## `session_status()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:2962](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L2962) (`session_status`)
+- **Lowering**: [`src/web_prelude/build.rs`:3135](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3135) (`session_status`)
 - **Function symbol**: `session_status()`
 
 
@@ -38,7 +38,7 @@ function session_status(): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

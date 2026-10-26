@@ -29,22 +29,37 @@ pub(super) fn descriptor_callback_php_type_supported(php_type: &PhpType) -> bool
 }
 
 /// Builds the descriptor-invoker argument container for `call_user_func()`.
+///
+/// Every argument shape has a container form, so this never declines. Named arguments and
+/// spreads build a key-normalized boxed hash; plain positional arguments build an indexed
+/// array. Callers depend on that totality, because the callback is already published in the
+/// unwind chain by the time the container is built and abandoning the lowering here would either
+/// leave an owner record behind or re-evaluate the callback expression on a fallback path.
+///
+/// A spread of a string-keyed array therefore lands in the hash container just as written-out
+/// named arguments do, which is what `$obj->$method(...$named)` and `$class::method(...$named)`
+/// need, since each desugars into a `call_user_func` through here (issue #685); the runtime
+/// walk binds the source's actual keys rather than trusting its static type.
 pub(super) fn lower_descriptor_invoker_arg_container_for_call_user_func(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     sig: Option<&FunctionSig>,
     span: Span,
-) -> Option<LoweredValue> {
-    if crate::types::call_args::has_named_args(args) {
-        if args.iter().any(is_spread_arg) {
-            return None;
-        }
-        return Some(lower_named_descriptor_invoker_arg_container(ctx, args, sig, span));
+) -> LoweredValue {
+    if crate::types::call_args::has_named_args(args)
+        || descriptor_args_need_runtime_unpack_keys(args)
+    {
+        return lower_named_descriptor_invoker_arg_container(ctx, args, sig, span);
     }
-    Some(lower_indexed_descriptor_invoker_arg_array(ctx, args, sig, span))
+    lower_indexed_descriptor_invoker_arg_array(ctx, args, sig, span)
 }
 
-/// Builds an indexed `array<mixed>` argument container, expanding positional spreads.
+/// Builds an indexed `array<mixed>` container for spread-free positional arguments.
+///
+/// The array is published for the whole construction: it is the only owner of every argument
+/// already inserted, and a later argument expression can throw into a catch in this same frame.
+/// It is reloaded from the published slot after every insertion, because growth reallocates the
+/// payload and writes the new pointer back into that slot.
 pub(super) fn lower_indexed_descriptor_invoker_arg_array(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
@@ -61,19 +76,15 @@ pub(super) fn lower_indexed_descriptor_invoker_arg_array(
         Op::ArrayNew.default_effects(),
         Some(span),
     );
+    let owner = publish_constructed_container(ctx, array, span);
     let mut positional_index = 0usize;
     for arg in args {
-        if let ExprKind::Spread(inner) = &arg.kind {
-            let source = lower_expr(ctx, inner);
-            lower_indexed_array_spread_into_array(ctx, array, source, Some(&elem_ty), arg.span);
-            continue;
-        }
-        let value = if let Some(var_name) = invoker_ref_arg_variable(ctx, sig, positional_index, arg) {
-            lower_invoker_ref_arg_marker(ctx, var_name, arg.span)
-        } else {
-            let value = lower_expr(ctx, arg);
-            coerce_variadic_tail_value(ctx, value, &array_ty, arg.span)
-        };
+        let value = lower_signature_invoker_ref_arg_marker(ctx, sig, positional_index, arg)
+            .unwrap_or_else(|| {
+                let value = lower_expr(ctx, arg);
+                coerce_variadic_tail_value(ctx, value, &array_ty, arg.span)
+            });
+        let array = load_published_container(ctx, owner, array_ty.clone(), arg.span);
         ctx.emit_void(
             Op::ArrayPush,
             vec![array.value, value.value],
@@ -81,13 +92,20 @@ pub(super) fn lower_indexed_descriptor_invoker_arg_array(
             Op::ArrayPush.default_effects(),
             Some(arg.span),
         );
+        ctx.refresh_argument_array_guard(array, arg.span);
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, arg.span);
         positional_index += 1;
     }
-    array
+    take_published_container(ctx, owner, array_ty, span)
 }
 
 /// Builds a boxed hash argument container for named `call_user_func()` args.
+///
+/// The hash is published exactly like the indexed container, and reloaded before every insertion.
+/// A spread is merged in through the shared descriptor unpack walk, which reads any physical
+/// array representation and binds integer keys positionally and string keys by name, so the typed
+/// builder covers `f(...$a, name: $x)` without abandoning the callback the caller has already
+/// published. Reference markers and the string-transfer rule stay signature-driven.
 pub(super) fn lower_named_descriptor_invoker_arg_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
@@ -102,55 +120,64 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
         Op::HashNew,
         Vec::new(),
         Some(Immediate::Capacity(args.len() as u32)),
-        hash_ty,
+        hash_ty.clone(),
         Op::HashNew.default_effects(),
         Some(span),
     );
-    let mut next_positional_key = 0i64;
+    let owner = publish_constructed_container(ctx, hash, span);
+    let state = begin_descriptor_unpack(ctx, owner, hash_ty.clone(), span);
+    let mb_variables = sig.is_some_and(|signature| {
+        crate::types::first_class_callable_builtin_sig("mb_convert_variables").as_ref()
+            == Some(signature)
+    });
+    // The runtime key counter owns the argument numbering. This compile-time index only
+    // selects a by-reference signature slot and, exactly as before, counts explicit
+    // positional arguments rather than unpacked entries.
+    let mut positional_index = 0usize;
     for arg in args {
         match &arg.kind {
+            ExprKind::Spread(inner) => {
+                let by_ref_origin = (mb_variables && positional_index >= 2)
+                    .then(|| crate::ir_lower::stmt::promote_by_ref_foreach_source(ctx, inner, true))
+                    .flatten();
+                let source = lower_expr(ctx, inner);
+                lower_descriptor_unpack_source(ctx, &state, source, arg.span, by_ref_origin);
+            }
             ExprKind::NamedArg { name, value } => {
                 let key = lower_string_literal(ctx, name, arg);
                 let param_index = sig.and_then(|sig| {
                     let regular_param_count = crate::types::call_args::regular_param_count(sig);
                     crate::types::call_args::named_param_index(sig, regular_param_count, name)
+                        .or_else(|| {
+                            (sig.variadic.is_some() && variadic_param_is_by_ref(sig))
+                                .then_some(regular_param_count)
+                        })
                 });
                 let value = if let Some(index) = param_index {
-                    invoker_ref_arg_variable(ctx, sig, index, value)
-                        .map(|var_name| lower_invoker_ref_arg_marker(ctx, var_name, value.span))
+                    lower_signature_invoker_ref_arg_marker(ctx, sig, index, value)
                 } else {
                     None
                 }
                 .unwrap_or_else(|| lower_expr(ctx, value));
-                ctx.emit_void(
-                    Op::HashSet,
-                    vec![hash.value, key.value, value.value],
-                    None,
-                    Op::HashSet.default_effects(),
-                    Some(arg.span),
-                );
+                bind_descriptor_unpack_named(ctx, &state, key, value, None, arg.span);
             }
             _ => {
-                let key = emit_i64_at_span(ctx, next_positional_key, arg.span);
-                let value = if let Some(var_name) =
-                    invoker_ref_arg_variable(ctx, sig, next_positional_key as usize, arg)
-                {
-                    lower_invoker_ref_arg_marker(ctx, var_name, arg.span)
-                } else {
-                    lower_expr(ctx, arg)
-                };
-                next_positional_key += 1;
-                ctx.emit_void(
-                    Op::HashSet,
-                    vec![hash.value, key.value, value.value],
-                    None,
-                    Op::HashSet.default_effects(),
-                    Some(arg.span),
-                );
+                let value = lower_signature_invoker_ref_arg_marker(
+                    ctx,
+                    sig,
+                    positional_index,
+                    arg,
+                )
+                .unwrap_or_else(|| lower_expr(ctx, arg));
+                positional_index += 1;
+                bind_descriptor_unpack_positional(ctx, &state, value, None, arg.span);
             }
         }
     }
-    ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(span))
+    let hash = load_published_container(ctx, owner, hash_ty, span);
+    let boxed = ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(span));
+    retire_owned_call_operand(ctx, owner, span);
+    boxed
 }
 
 /// Returns the variable name when this literal argument should be passed by reference.
@@ -164,11 +191,39 @@ pub(super) fn invoker_ref_arg_variable<'a>(
         return None;
     };
     if let Some(sig) = sig {
-        if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        let regular_param_count = crate::types::call_args::regular_param_count(sig);
+        let variadic_reference = index >= regular_param_count && variadic_param_is_by_ref(sig);
+        if !sig.ref_params.get(index).copied().unwrap_or(false) && !variadic_reference {
             return None;
         }
     }
     Some(name.as_str())
+}
+
+/// Emits a signature-driven reference marker after normalizing its caller storage.
+pub(super) fn lower_signature_invoker_ref_arg_marker(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    index: usize,
+    item: &Expr,
+) -> Option<LoweredValue> {
+    let var_name = invoker_ref_arg_variable(ctx, sig, index, item)?;
+    if let Some(sig) = sig {
+        let regular_param_count = crate::types::call_args::regular_param_count(sig);
+        let expects_mixed = (index >= regular_param_count && variadic_param_is_by_ref(sig))
+            || sig
+                .params
+                .get(index)
+                .is_some_and(|(_, ty)| matches!(ty, PhpType::Mixed));
+        if expects_mixed
+            && ctx.boxed_reference_promotion_is_authorized(var_name, item.span)
+            && !ctx.is_ref_bound_local(var_name)
+            && ctx.local_is_promotable_to_ref_cell(var_name)
+        {
+            ctx.promote_local_mixed_ref_cell(var_name, Some(item.span));
+        }
+    }
+    Some(lower_invoker_ref_arg_marker(ctx, var_name, item.span))
 }
 
 /// Returns true when a local slot can be passed directly to a descriptor ref param.
@@ -177,87 +232,88 @@ pub(super) fn invoker_ref_arg_storage_compatible(
     sig: &FunctionSig,
     index: usize,
     var_name: &str,
+    span: Span,
 ) -> bool {
-    let Some((_, param_ty)) = sig.params.get(index) else {
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    let variadic_reference = index >= regular_param_count && variadic_param_is_by_ref(sig);
+    let param = if variadic_reference {
+        crate::types::signatures::variadic_param_index(sig)
+            .and_then(|variadic_index| sig.params.get(variadic_index))
+    } else {
+        sig.params.get(index)
+    };
+    let Some((_, param_ty)) = param else {
         return true;
     };
+    if variadic_reference || matches!(param_ty, PhpType::Mixed) {
+        return ctx.local_type(var_name).codegen_repr() == PhpType::Mixed
+            || (!ctx.is_ref_bound_local(var_name)
+                && ctx.local_is_promotable_to_ref_cell(var_name)
+                && ctx.boxed_reference_promotion_is_authorized(var_name, span));
+    }
     value_ir_type(&param_ty.codegen_repr()) == value_ir_type(&ctx.local_type(var_name).codegen_repr())
 }
 
-/// Emits an invoker reference-cell marker for a local variable argument of a DESCRIPTOR call.
+/// Emits an invoker reference-cell marker for a local variable argument.
 ///
-/// A local that may hold an address INSIDE a container -- a by-reference `foreach` value -- is
-/// bridged through a boxed stack temporary: `$tmp = $v; call(&$tmp); $v = $tmp;`, the rewrite
-/// `ref_place_args` already uses for places a call cannot take directly. The copy-out runs right
-/// after the call that consumes the marker (`write_back_ref_bridges_after`).
-///
-/// Handing the interior address over directly was wrong twice. The marker's boxing retained it
-/// with `__rt_incref` and its release ran `__rt_decref_any` on it, both writing `[address - 12]`
-/// -- a neighbouring element, or the array's capacity for element 0. And an `array<int>` slot is a
-/// raw word, while an untyped `&$x` callee reads and writes the cell as a boxed Mixed. MEASURED
-/// against php 8.5.10, identical on the pristine HEAD compiler:
-///
-///     $d = [1, 2, 3]; foreach ($d as &$v) { $double($v); }      php 2,4,6   elephc: segfault
-///     $c = [1, 'two', 3]; walk(&$c, static fn ($x) => …);       php 1,two,3 elephc: "requested
-///                                                                array size exceeds the maximum"
-///
-/// A stack temporary is ignored by both refcount helpers' heap-range check, and the copy-out goes
-/// through the ordinary local store, which converts back to the element's representation.
+/// The marker points at the local's own storage, so the callee writes straight back into the
+/// caller's slot at the slot's declared type. That is right for a NAMED by-reference parameter:
+/// `f(&$v)` declares what it writes, and the checker holds the caller's local to it.
 pub(super) fn lower_invoker_ref_arg_marker(
     ctx: &mut LoweringContext<'_, '_>,
     var_name: &str,
     span: Span,
 ) -> LoweredValue {
-    if !ctx.is_interior_ref_local(var_name) {
-        return lower_unbridged_invoker_ref_arg_marker(ctx, var_name, span);
-    }
-    let current = lower_expr(ctx, &Expr::new(ExprKind::Variable(var_name.to_string()), span));
-    let boxed = super::coerce_descriptor_invoker_mixed_value(ctx, current, span);
-    let temp = ctx.declare_synthetic_php_local(PhpType::Mixed);
-    ctx.store_local(&temp, boxed, PhpType::Mixed, Some(span));
-    let marker = lower_unbridged_invoker_ref_arg_marker(ctx, &temp, span);
-    ctx.push_pending_ref_bridge(marker.value, var_name, temp);
-    marker
+    lower_invoker_ref_arg_marker_at(ctx, var_name, RefArgStorage::AsDeclared, span)
 }
 
-/// Stores every bridged temporary of the call whose callee value is `callee` back into its local.
-pub(super) fn write_back_ref_bridges_after(
-    ctx: &mut LoweringContext<'_, '_>,
-    callee: crate::ir::ValueId,
-    span: Span,
-) {
-    for (var, temp) in ctx.take_ref_bridges_after(callee) {
-        // Written as the PHP assignment `$v = $tmp;` and lowered by the ordinary assignment path,
-        // not reassembled from `store_local`. The reference slot's flow type (widened to Mixed
-        // once the local was passed to a callee the checker cannot see), its frame storage type
-        // and the representation of the element it aliases can all differ, and the assignment
-        // lowering is the one place that already reconciles them -- `$v = $v * 2` through the
-        // same `foreach` reference is correct. Reassembling it by hand released a raw `int` as a
-        // box, or published a box into an `int` slot.
-        let assignment = Expr::new(
-            ExprKind::Assignment {
-                target: Box::new(Expr::new(ExprKind::Variable(var), span)),
-                value: Box::new(Expr::new(ExprKind::Variable(temp), span)),
-                result_target: None,
-                prelude: Vec::new(),
-                conditional_value_temp: None,
-            },
-            span,
-        );
-        let written = lower_expr(ctx, &assignment);
-        crate::ir_lower::ownership::release_if_owned(ctx, written, Some(span));
-    }
-}
-
-/// Emits the marker itself over `var_name`'s own storage, with no bridge.
+/// Emits the marker for an argument absorbed by a BY-REFERENCE VARIADIC tail, widening the
+/// local to a boxed `Mixed` reference cell first.
 ///
-/// Also the entry point for by-reference VARIADIC arguments of direct calls, which never reach
-/// the descriptor invoke that runs the copy-out.
-pub(super) fn lower_unbridged_invoker_ref_arg_marker(
+/// `&...$items` is the one by-reference form PHP does not constrain. The callee writes through
+/// `$items[n]`, an untyped element of an `array<mixed>`, so it may store a value of any type
+/// into a caller local currently holding something else -- `function r(&...$items) { $items[0] =
+/// "s"; }` called with an `int` local is ordinary PHP. Pointing the marker at the local's
+/// concrete storage made that write land in a slot sized and typed for the OLD value: a string
+/// written over an `I64` slot read back as the string's pointer and printed as an integer, with
+/// no diagnostic (issue #1062).
+///
+/// Widening is confined to this form on purpose. A named by-reference parameter keeps concrete
+/// storage on both sides, and boxing the caller's local there would hand the callee a box
+/// pointer where it expects the value itself.
+///
+/// `promote_local_mixed_ref_cell` is idempotent and is the same helper PDO's `bindColumn` /
+/// `bindParam` use for exactly this situation.
+pub(super) fn lower_invoker_ref_variadic_arg_marker(
     ctx: &mut LoweringContext<'_, '_>,
     var_name: &str,
     span: Span,
 ) -> LoweredValue {
+    lower_invoker_ref_arg_marker_at(ctx, var_name, RefArgStorage::WidenedToMixed, span)
+}
+
+/// How wide the reference cell behind an invoker ref-arg marker has to be.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RefArgStorage {
+    /// The callee writes at the parameter's declared type, so the local keeps its own storage.
+    AsDeclared,
+    /// The callee may write any type, so the local is boxed before it is aliased.
+    WidenedToMixed,
+}
+
+/// Builds the runtime marker that lets a callee update a caller-local reference cell.
+///
+/// `storage` selects whether the caller slot keeps its declared representation or is widened
+/// to boxed `Mixed`; the marker carries the local slot and source span into the invoker array.
+fn lower_invoker_ref_arg_marker_at(
+    ctx: &mut LoweringContext<'_, '_>,
+    var_name: &str,
+    storage: RefArgStorage,
+    span: Span,
+) -> LoweredValue {
+    if storage == RefArgStorage::WidenedToMixed {
+        ctx.promote_local_mixed_ref_cell(var_name, Some(span));
+    }
     let php_type = ctx.local_type(var_name);
     let slot = ctx.declare_local(var_name, php_type);
     ctx.emit_value(
@@ -269,4 +325,3 @@ pub(super) fn lower_unbridged_invoker_ref_arg_marker(
         Some(span),
     )
 }
-

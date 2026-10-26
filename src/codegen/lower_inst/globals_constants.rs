@@ -21,7 +21,7 @@ pub(super) fn lower_load_global(ctx: &mut FunctionContext<'_>, inst: &Instructio
         .ok_or_else(|| CodegenIrError::invalid_module("load_global missing result value"))?;
     let ty = ctx.value_php_type(result)?;
     if ctx.shared.uses_shared_ref_cell(ctx.module, &name) {
-        load_shared_global_to_result(ctx, &symbol);
+        load_shared_global_to_result(ctx, &symbol, &ty);
         return store_if_result(ctx, inst);
     }
     ctx.data
@@ -42,7 +42,9 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
     } else {
         let source_ty = ty.codegen_repr();
         if source_ty != PhpType::Mixed {
-            if ctx.value_can_transfer_ownership_to_consumer(value)? {
+            if ctx.value_can_transfer_ownership_to_consumer(value)?
+                || global_store_owns_persisted_string(ctx, value, &source_ty)
+            {
                 emit_box_current_owned_value_as_mixed(ctx.emitter, &source_ty);
             } else {
                 emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
@@ -84,16 +86,26 @@ pub(in crate::codegen) fn unset_global_name(ctx: &mut FunctionContext<'_>, name:
 pub(super) fn lower_global_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let data = expect_global_name(inst)?;
     let name = ctx.global_name_data(data)?.to_string();
-    if crate::superglobals::is_superglobal(&name) {
-        return Err(CodegenIrError::unsupported("global_ref_cell requires boxed global storage"));
-    }
     let symbol = ir_global_symbol(&name);
     ctx.data.add_comm(symbol.clone(), 8);
     let ready = ctx.next_label("global_ref_cell_ready");
     abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
-    lower_store_shared_global(ctx, &symbol, &PhpType::Mixed)?;
+    if ctx.module.web && crate::superglobals::is_superglobal(&name) {
+        // A `--web` superglobal's cell holds the bare hash every reader expects
+        // (`$s = &$_SESSION` before `session_start()` gets an empty one), not a box.
+        let hash_ty = crate::superglobals::superglobal_type();
+        let capacity_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        let value_tag_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+        abi::emit_load_int_immediate(ctx.emitter, capacity_reg, 16);
+        abi::emit_load_int_immediate(ctx.emitter, value_tag_reg, runtime_value_tag(&PhpType::Mixed) as i64);
+        abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+        lower_store_shared_global(ctx, &symbol, &hash_ty)?;
+    } else {
+        // Off-web a superglobal is stored like any other global: a boxed Mixed.
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
+        lower_store_shared_global(ctx, &symbol, &PhpType::Mixed)?;
+    }
     ctx.emitter.label(&ready);
     abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
     abi::emit_call_label(ctx.emitter, "__rt_global_ref_cell_incref");
@@ -106,7 +118,17 @@ pub(in crate::codegen) fn lower_store_shared_global(
     symbol: &str,
     ty: &PhpType,
 ) -> Result<()> {
-    store_shared_global(ctx, symbol, ty, true)
+    store_shared_global(ctx, symbol, ty, SharedGlobalPrevious::Release)
+}
+
+/// Stores a global through its shared reference cell and leaves the replaced payload owner in
+/// the result register, for a caller that retires it on its own cleanup path.
+pub(in crate::codegen) fn lower_replace_shared_global(
+    ctx: &mut FunctionContext<'_>,
+    symbol: &str,
+    ty: &PhpType,
+) -> Result<()> {
+    store_shared_global(ctx, symbol, ty, SharedGlobalPrevious::Return)
 }
 
 /// Publishes a container that was mutated in place back into its global's shared reference
@@ -125,16 +147,16 @@ pub(in crate::codegen) fn lower_writeback_shared_global(
     symbol: &str,
     ty: &PhpType,
 ) -> Result<()> {
-    store_shared_global(ctx, symbol, ty, false)
+    store_shared_global(ctx, symbol, ty, SharedGlobalPrevious::Keep)
 }
 
 /// Stores the result register into a global's shared reference cell, creating the cell on first
-/// use, and releasing the payload it held when `release_previous` is set.
+/// use; `previous` says what happens to the payload it held.
 fn store_shared_global(
     ctx: &mut FunctionContext<'_>,
     symbol: &str,
     ty: &PhpType,
-    release_previous: bool,
+    previous: SharedGlobalPrevious,
 ) -> Result<()> {
     let store_ty = ty.codegen_repr();
     if !matches!(store_ty, PhpType::AssocArray { .. } | PhpType::Mixed) {
@@ -187,24 +209,35 @@ fn store_shared_global(
 
     ctx.emitter.label(&cell_ready);
     let cell_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let previous_reg = abi::tertiary_scratch_reg(ctx.emitter);
     abi::emit_reg_move(ctx.emitter, cell_reg, abi::int_result_reg(ctx.emitter));
-    abi::emit_push_reg(ctx.emitter, cell_reg);
-    if release_previous {
-        abi::emit_load_from_address(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            cell_reg,
-            0,
-        );
-        let release_payload = if store_ty == PhpType::Mixed {
-            "__rt_decref_mixed"
-        } else {
-            "__rt_decref_hash"
-        };
-        abi::emit_call_label(ctx.emitter, release_payload);
-    }
-    abi::emit_pop_reg(ctx.emitter, cell_reg);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    if store_ty != PhpType::Mixed {
+        // A `--web` superglobal hash: the cell holds a boxed Mixed shared by every alias
+        // (locals, array elements, properties), so the hash goes INTO that box.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x1, x0");                          // the transferred hash is the helper's second argument
+                ctx.emitter.instruction(&format!("mov x0, {cell_reg}"));         // the cell is its first
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                        // the transferred hash is the helper's second argument
+                ctx.emitter.instruction(&format!("mov rax, {cell_reg}"));        // the cell is its first
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_shared_cell_hash_store");
+        match previous {
+            SharedGlobalPrevious::Keep => {}
+            SharedGlobalPrevious::Release => {
+                abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            }
+            SharedGlobalPrevious::Return => {}
+        }
+        return Ok(());
+    }
+    // Publish the new payload before the old one is released: the release can run a
+    // destructor, and php's destructor already reads the replacement through the global.
+    abi::emit_load_from_address(ctx.emitter, previous_reg, cell_reg, 0);
     abi::emit_store_to_address(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
@@ -222,15 +255,59 @@ fn store_shared_global(
         cell_reg,
         8,
     );
+    match previous {
+        SharedGlobalPrevious::Keep => {}
+        SharedGlobalPrevious::Release => {
+            abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), previous_reg);
+            abi::emit_call_label(ctx.emitter, shared_global_payload_release(&store_ty));
+        }
+        SharedGlobalPrevious::Return => {
+            abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), previous_reg);
+        }
+    }
     Ok(())
 }
 
-/// Loads the pointer-sized payload held by a shared global reference cell.
-pub(super) fn load_shared_global_to_result(
+/// What a shared-cell global store does with the payload it replaced.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SharedGlobalPrevious {
+    /// The cell already owns the stored container (an in-place write-back).
+    Keep,
+    /// Release the replaced owner after the new payload is published.
+    Release,
+    /// Leave the replaced owner in the result register for the caller to retire.
+    Return,
+}
+
+/// Returns the release helper for a shared-cell global payload of `store_ty`.
+fn shared_global_payload_release(store_ty: &PhpType) -> &'static str {
+    if *store_ty == PhpType::Mixed {
+        "__rt_decref_mixed"
+    } else {
+        "__rt_decref_hash"
+    }
+}
+
+/// Loads the pointer-sized payload held by a shared global reference cell, as `ty`.
+///
+/// The cell holds a boxed Mixed; a hash-typed reader (a `--web` superglobal) borrows the hash
+/// inside it instead.
+pub(in crate::codegen) fn load_shared_global_to_result(
     ctx: &mut FunctionContext<'_>,
     symbol: &str,
+    ty: &PhpType,
 ) {
     ctx.data.add_comm(symbol.to_string(), 8);
+    if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_load_symbol_to_reg(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            symbol,
+            0,
+        );
+        abi::emit_call_label(ctx.emitter, "__rt_shared_cell_hash_load");
+        return;
+    }
     let done = ctx.next_label("load_web_superglobal_done");
     abi::emit_load_symbol_to_reg(
         ctx.emitter,
@@ -242,6 +319,16 @@ pub(super) fn load_shared_global_to_result(
     let cell_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_from_address(ctx.emitter, cell_reg, cell_reg, 0);
     ctx.emitter.label(&done);
+}
+
+/// Recognizes an acquired string whose sole payload owner must move into the global box.
+fn global_store_owns_persisted_string(ctx: &FunctionContext<'_>, value: ValueId, ty: &PhpType) -> bool {
+    if ty != &PhpType::Str { return false; }
+    let Some(value_ref) = ctx.function.value(value) else { return false; };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else { return false; };
+    let Some(producer) = ctx.function.instruction(inst) else { return false; };
+    matches!(producer.op, Op::Acquire | Op::StrPersist)
+        && !ctx.value_uses().is_released(value)
 }
 
 /// Lowers a C extern global load into the EIR result slot.
@@ -378,21 +465,49 @@ pub(super) fn lower_mixed_box(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let value = expect_operand(inst, 0)?;
     let source_ty = ctx.load_value_to_result(value)?;
     let raw_source_ty = ctx.raw_value_php_type(value)?;
-    let box_ty = if matches!(raw_source_ty, PhpType::Resource(_)) {
-        raw_source_ty
-    } else {
-        source_ty
-    };
+    let box_ty = mixed_box_payload_type(source_ty, raw_source_ty);
     emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
     store_if_result(ctx, inst)
 }
 
-/// Clones a boxed Mixed zval cell so later mutation cannot rewrite an aliased source cell.
+/// Produces an owned Mixed cell whose storage is independent from the assignment source.
+///
+/// Lowering initially inserts `MixedClone` for a boxed result, but optimization may narrow its
+/// producer to a scalar constant. The final SSA storage type is authoritative: clone an existing
+/// Mixed cell, otherwise box the current scalar, string, heap payload, or tagged nullable value.
 pub(super) fn lower_mixed_clone(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    load_value_to_first_int_arg(ctx, value)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+    let source_ir_type = ctx.value_ir_type(value)?;
+    if matches!(
+        source_ir_type,
+        crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)
+    ) {
+        load_value_to_first_int_arg(ctx, value)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+    } else {
+        let source_ty = ctx.load_value_to_result(value)?;
+        let raw_source_ty = ctx.raw_value_php_type(value)?;
+        let box_ty = mixed_box_payload_type(source_ty, raw_source_ty);
+        emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+    }
     store_if_result(ctx, inst)
+}
+
+/// Selects the runtime boxing strategy without losing erased array-layout metadata.
+fn mixed_box_payload_type(source_ty: PhpType, raw_source_ty: PhpType) -> PhpType {
+    if matches!(
+        &source_ty,
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed
+    ) {
+        // `Array<Mixed>` is the raw ABI used for PHP arrays whose runtime storage may already
+        // be associative. Reuse the iterable boxer so the owned Mixed cell records tag 4 or 5
+        // from the payload's heap kind instead of stamping every value as indexed storage.
+        PhpType::Iterable
+    } else if matches!(raw_source_ty, PhpType::Resource(_)) {
+        raw_source_ty
+    } else {
+        source_ty
+    }
 }
 
 /// Lowers an invoker-only by-reference argument marker for descriptor calls.
@@ -458,26 +573,9 @@ fn lower_global_array_ref_marker(
             "array reference to non-superglobal global ${name}"
         )));
     }
-    if !ctx.module.web {
-        // Outside `--web` a reference INTO a superglobal is not wired: the CLI stores every
-        // global as a boxed Mixed while the marker's writers expect the bare hash `--web` keeps,
-        // so the alias would compile and silently not write through (`['query' => &$_GET]` then
-        // `$box['query']['hit'] = 'x'` leaves `$_GET` empty where php fills it). A wrong answer
-        // is worse than a refusal, and a refusal at COMPILE time stopped programs that never run
-        // the construct: Symfony's `GenericRuntime::getArgument()` builds
-        // `['session' => &$_SESSION]` only for an `array $request` argument, and the console's
-        // front controller asks for `array $context`. So the construct compiles, and reaching it
-        // throws a catchable `Error` naming the gap -- which replaces the
-        // `ELEPHC_BROKEN_CLI_SUPERGLOBAL_REF` build override that used to be the only way past.
-        super::exceptions::emit_error(
-            ctx,
-            &format!(
-                "A reference to ${name} is not supported outside --web by this compiler"
-            ),
-        );
-        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-        return store_if_result(ctx, inst);
-    }
+    // The superglobal's shared cell holds a boxed Mixed in every mode (`store_shared_global`),
+    // so the marker advertises a Mixed payload and its writers go through the same box the
+    // superglobal's own hash-typed readers unwrap.
     let symbol = ir_global_symbol(&name);
     ctx.data.add_comm(symbol.clone(), 8);
     abi::emit_load_symbol_to_reg(
@@ -499,7 +597,7 @@ fn lower_global_array_ref_marker(
     abi::emit_load_int_immediate(
         ctx.emitter,
         source_tag_reg,
-        runtime_value_tag(&crate::superglobals::superglobal_type()) as i64,
+        runtime_value_tag(&PhpType::Mixed) as i64,
     );
     emit_box_runtime_payload_as_mixed(
         ctx.emitter,

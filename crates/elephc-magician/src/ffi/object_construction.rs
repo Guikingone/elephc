@@ -18,7 +18,10 @@
 //!   `ElephcEvalResult`.
 
 use super::util::{abi_name_to_string, clear_result, write_outcome};
-use crate::abi::{ElephcEvalContext, ElephcEvalResult, ABI_VERSION};
+use crate::abi::{
+    ElephcEvalContext, ElephcEvalResult, ABI_VERSION, EVAL_ARG_PACK_COLLECTOR_COUNTS,
+    EVAL_ARG_PACK_SURPLUS_COLLECTOR,
+};
 use crate::context::native_frame_called_class_override_context;
 use crate::errors::EvalStatus;
 use crate::interpreter::{self, RuntimeValueOps};
@@ -69,6 +72,68 @@ pub unsafe extern "C" fn __elephc_eval_try_new_object(
     crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_try_new_object");
     std::panic::catch_unwind(|| unsafe {
         eval_try_new_object_inner(ctx, name_ptr, name_len, args, arg_count, out, None)
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Allocates an eval-declared class WITHOUT running its constructor.
+///
+/// This is a compiled `ReflectionClass::newInstanceWithoutConstructor()` whose class no compiled
+/// case matched. `ctx` may be null: the request-global autoload contexts are tried in turn, then a
+/// fresh context importing the process-global classes. Returns -1 when no context declares it.
+///
+/// # Safety
+/// `name_ptr` must be readable for `name_len` bytes when `name_len > 0`; `out` may be null.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_try_new_object_without_constructor(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_try_new_object_without_constructor");
+    std::panic::catch_unwind(|| unsafe {
+        let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
+            return EvalStatus::RuntimeFatal.code();
+        };
+        clear_result(out);
+        let try_context = |context: &mut ElephcEvalContext| -> Option<i32> {
+            if context.abi_version() != ABI_VERSION {
+                return Some(EvalStatus::AbiMismatch.code());
+            }
+            let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+            match interpreter::execute_context_try_new_object_without_constructor_outcome(
+                context,
+                &name,
+                &mut values,
+            ) {
+                Ok(Some(outcome)) => Some(write_outcome(outcome, out).code()),
+                Ok(None) => None,
+                Err(status) => Some(status.code()),
+            }
+        };
+        if let Some(context) = ctx.as_mut() {
+            return try_context(context).unwrap_or(-1);
+        }
+        for owner in crate::context::global_eval_autoload_contexts_snapshot() {
+            let Some(context) = owner.as_mut() else {
+                continue;
+            };
+            if let Some(status) = try_context(context) {
+                return status;
+            }
+        }
+        // Heap, for the reason `eval_try_new_object_from_global_autoload_contexts` gives: the new
+        // object registers this context as its owner and reads it back when destroyed.
+        let fallback_context = crate::ffi::context::__elephc_eval_context_new();
+        let Some(context) = fallback_context.as_mut() else {
+            return EvalStatus::RuntimeFatal.code();
+        };
+        crate::context::sync_global_eval_aot_metadata(context);
+        let status = try_context(context).unwrap_or(-1);
+        crate::ffi::context::__elephc_eval_context_free(fallback_context);
+        status
     })
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
@@ -157,7 +222,9 @@ fn execute_native_new_at(
     if let Some(class_name) = &native_caller_class {
         context.push_class_scope(class_name.clone());
     }
-    let outcome = interpreter::execute_context_try_new_object_named_outcome(context, name, args, values);
+    let outcome = context.with_native_global_sync(|context| {
+        interpreter::execute_context_try_new_object_named_outcome(context, name, args, values)
+    });
     if native_caller_class.is_some() {
         context.pop_class_scope();
     }
@@ -340,12 +407,14 @@ unsafe fn eval_new_object_inner(
     } else {
         slice::from_raw_parts(args, arg_count)
             .iter()
-            .map(|arg| RuntimeCellHandle::from_raw(*arg))
+            .map(|arg| RuntimeCellHandle::from_raw(*arg).borrowed())
             .collect()
     };
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match interpreter::execute_context_new_object_outcome(context, &name, args, &mut values) {
+    match context.with_native_global_sync(|context| {
+        interpreter::execute_context_new_object_outcome(context, &name, args, &mut values)
+    }) {
         Ok(outcome) => {
             if crate::eval_trace::enabled() {
                 eprintln!("[elephc-eval-trace] phase=new_object_ok class={name:?}");
@@ -384,6 +453,9 @@ unsafe fn eval_try_new_object_from_global_autoload_contexts(
         if context.abi_version() != ABI_VERSION {
             continue;
         }
+        // An autoload owner may predate the published snapshot; a constructor bound without its
+        // signature misses the hidden `func_get_args` collector and the bridge refuses it.
+        crate::context::sync_global_eval_aot_metadata_when_empty(context);
         let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
         match execute_native_new_at(
             context,
@@ -490,7 +562,7 @@ unsafe fn eval_try_new_object_inner_spread(
     } else {
         slice::from_raw_parts(args, arg_count)
             .iter()
-            .map(|arg| RuntimeCellHandle::from_raw(*arg))
+            .map(|arg| RuntimeCellHandle::from_raw(*arg).borrowed())
             .collect()
     };
     clear_result(out);
@@ -549,21 +621,19 @@ unsafe fn eval_static_method_call_inner(
     let Some((class_name, method)) = target.rsplit_once("::") else {
         return EvalStatus::RuntimeFatal.code();
     };
-    let arg_count = *arg_pack;
-    let arg_ptrs = arg_pack.add(1) as *const *mut RuntimeCell;
-    let args = if arg_count == 0 {
-        Vec::new()
-    } else {
-        slice::from_raw_parts(arg_ptrs, arg_count)
-            .iter()
-            .map(|arg| RuntimeCellHandle::from_raw(*arg))
-            .collect()
-    };
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match interpreter::execute_context_static_method_call_outcome(
+    let (args, spliced) = match read_method_call_arg_pack(arg_pack, &mut values) {
+        Ok(pack) => pack,
+        Err(status) => return status.code(),
+    };
+    let outcome = interpreter::execute_context_static_method_call_outcome(
         context, class_name, method, args, &mut values,
-    ) {
+    );
+    for element in spliced {
+        let _ = values.release(element);
+    }
+    match outcome {
         Ok(outcome) => write_outcome(outcome, out).code(),
         Err(status) => status.code(),
     }
@@ -602,25 +672,23 @@ unsafe fn eval_native_frame_static_method_call_inner(
     if context.abi_version() != ABI_VERSION {
         return EvalStatus::AbiMismatch.code();
     }
-    let arg_count = *arg_pack;
-    let arg_ptrs = arg_pack.add(1) as *const *mut RuntimeCell;
-    let args = if arg_count == 0 {
-        Vec::new()
-    } else {
-        slice::from_raw_parts(arg_ptrs, arg_count)
-            .iter()
-            .map(|arg| RuntimeCellHandle::from_raw(*arg))
-            .collect()
-    };
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match interpreter::execute_context_static_method_call_outcome(
+    let (args, spliced) = match read_method_call_arg_pack(arg_pack, &mut values) {
+        Ok(pack) => pack,
+        Err(status) => return status.code(),
+    };
+    let outcome = interpreter::execute_context_static_method_call_outcome(
         context,
         &called_class,
         &method,
         args,
         &mut values,
-    ) {
+    );
+    for element in spliced {
+        let _ = values.release(element);
+    }
+    match outcome {
         Ok(outcome) => write_outcome(outcome, out).code(),
         Err(status) => status.code(),
     }
@@ -666,6 +734,13 @@ unsafe fn eval_method_call_inner(
     if context.abi_version() != ABI_VERSION {
         return EvalStatus::AbiMismatch.code();
     }
+    // A compiled caller publishes its source position in `_php_site` before it can enter PHP
+    // code. Carry it into the interpreter: the synthetic frame pushed for the native callee, and
+    // any diagnostic raised while entering it, name the compiled call site (`Router.php:188`)
+    // instead of the empty position the context held.
+    if let Some((file, directory, line)) = unsafe { crate::ffi::compiled_site::compiled_call_site() } {
+        context.set_call_site(file, directory, line);
+    }
     let forwarded_scopes = caller_context
         .filter(|caller| !std::ptr::eq(*caller, context))
         .and_then(|caller| unsafe { caller.as_ref() })
@@ -695,18 +770,12 @@ unsafe fn eval_method_call_inner(
     if let Some(class_name) = &native_caller_class {
         context.push_class_scope(class_name.clone());
     }
-    let arg_count = *arg_pack;
-    let arg_ptrs = arg_pack.add(1) as *const *mut RuntimeCell;
-    let args = if arg_count == 0 {
-        Vec::new()
-    } else {
-        slice::from_raw_parts(arg_ptrs, arg_count)
-            .iter()
-            .map(|arg| RuntimeCellHandle::from_raw(*arg))
-            .collect()
-    };
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    let (args, spliced) = match read_method_call_arg_pack(arg_pack, &mut values) {
+        Ok(pack) => pack,
+        Err(status) => return status.code(),
+    };
     if crate::eval_trace::enabled() {
         let call_site = context.call_site();
         eprintln!(
@@ -717,13 +786,15 @@ unsafe fn eval_method_call_inner(
             call_site.2,
         );
     }
-    let outcome = interpreter::execute_context_method_call_outcome(
-        context,
-        object,
-        &method,
-        args,
-        &mut values,
-    );
+    let outcome = context.with_native_global_sync(|context| {
+        interpreter::execute_context_method_call_outcome(
+            context,
+            object.borrowed(),
+            &method,
+            args,
+            &mut values,
+        )
+    });
     if let Some((class_scope, called_class_scope)) = forwarded_scopes {
         if called_class_scope.is_some() {
             context.pop_called_class_scope();
@@ -734,6 +805,9 @@ unsafe fn eval_method_call_inner(
     }
     if native_caller_class.is_some() {
         context.pop_class_scope();
+    }
+    for element in spliced {
+        let _ = values.release(element);
     }
     match outcome {
         Ok(outcome) => write_outcome(outcome, out).code(),
@@ -751,6 +825,66 @@ unsafe fn eval_method_call_inner(
             status.code()
         }
     }
+}
+
+/// Reads a method-call (instance or static) argument pack as borrowed argument cells.
+///
+/// A compiled call planned against a signature carrying the hidden `func_get_args()` collector
+/// passes that collector as its last operand and says so in the count word's high bits. The
+/// interpreted callee declares only its source parameters, so the collector is spliced back into
+/// the arguments PHP actually passed: its elements are the surplus, and a collector that opens
+/// with the actual count also says how many of the regular operands the caller really supplied
+/// rather than filled in from the compiled defaults. Returns the arguments plus the owned element
+/// reads the caller releases once the call is done.
+///
+/// # Safety
+/// `arg_pack` must point at a count word followed by that many runtime-cell pointers.
+#[cfg(not(test))]
+unsafe fn read_method_call_arg_pack(
+    arg_pack: *const usize,
+    values: &mut ElephcRuntimeOps,
+) -> Result<(Vec<RuntimeCellHandle>, Vec<RuntimeCellHandle>), EvalStatus> {
+    let word = *arg_pack;
+    let flags = EVAL_ARG_PACK_SURPLUS_COLLECTOR | EVAL_ARG_PACK_COLLECTOR_COUNTS;
+    let arg_count = word & !flags;
+    let arg_ptrs = arg_pack.add(1) as *const *mut RuntimeCell;
+    let mut args: Vec<RuntimeCellHandle> = if arg_count == 0 {
+        Vec::new()
+    } else {
+        slice::from_raw_parts(arg_ptrs, arg_count)
+            .iter()
+            .map(|arg| RuntimeCellHandle::from_raw(*arg).borrowed())
+            .collect()
+    };
+    let mut spliced = Vec::new();
+    if word & EVAL_ARG_PACK_SURPLUS_COLLECTOR == 0 {
+        return Ok((args, spliced));
+    }
+    let Some(collector) = args.pop() else {
+        return Ok((args, spliced));
+    };
+    if !values.is_array_like(collector)? {
+        return Ok((args, spliced));
+    }
+    let len = values.array_len(collector)?;
+    let mut position = 0;
+    if word & EVAL_ARG_PACK_COLLECTOR_COUNTS != 0 && len > 0 {
+        let count = values.array_iter_value(collector, 0)?;
+        let actual = values.raw_value_word(count)? as usize;
+        values.release(count)?;
+        position = 1;
+        if actual < args.len() {
+            args.truncate(actual);
+            return Ok((args, spliced));
+        }
+    }
+    while position < len {
+        let element = values.array_iter_value(collector, position)?;
+        args.push(element.borrowed());
+        spliced.push(element);
+        position += 1;
+    }
+    Ok((args, spliced))
 }
 
 /// Runs the eval property-read ABI body after installing a panic boundary.
@@ -857,7 +991,7 @@ unsafe fn eval_string_context_inner(
     if value.is_null() {
         return EvalStatus::RuntimeFatal.code();
     }
-    let value = RuntimeCellHandle::from_raw(value);
+    let value = RuntimeCellHandle::from_raw(value).borrowed();
     let mut probe = ElephcRuntimeOps::new();
     let owner = probe.object_identity(value).ok().and_then(|identity| {
         crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)

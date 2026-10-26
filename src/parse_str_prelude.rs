@@ -40,7 +40,7 @@
 use crate::parser::ast::{BinOp, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_assign, e_binop, e_bool, e_call, e_const, e_index, e_int, e_not, e_str, e_var,
-    function, internal_declarations, t_array, s_array_assign, s_array_push, s_assign, s_break, s_continue,
+    function, php_semantics_declarations, t_array, s_array_assign, s_array_push, s_assign, s_break, s_continue,
     s_expr, s_foreach, s_if, s_return, s_return_void, s_while,
 };
 
@@ -76,7 +76,7 @@ fn when(condition: Expr, then_body: Vec<Stmt>, otherwise: Option<Vec<Stmt>>) -> 
 
 /// Returns the `parse_str()` declarations for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| {
+    php_semantics_declarations(|| {
         vec![
             decl_fn_hex(),
             decl_fn_decode(),

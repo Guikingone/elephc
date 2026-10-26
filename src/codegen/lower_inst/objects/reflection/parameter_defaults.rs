@@ -24,13 +24,7 @@ pub(super) fn reflection_parameter_default_value(
     if let Some(value) = reflection_literal_parameter_default_value(default) {
         return Ok(Some(value));
     }
-    match &default.kind {
-        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
-            let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
-            Ok(reflection_parameter_default_from_constant_value(value))
-        }
-        _ => Ok(None),
-    }
+    reflection_constant_parameter_default_value(ctx, current_class, current_info, default)
 }
 
 /// Converts a top-level object parameter default into Reflection metadata.
@@ -128,8 +122,21 @@ pub(super) fn reflection_parameter_default_non_object_value(
     if let Some(value) = reflection_literal_parameter_default_non_object_value(default) {
         return Ok(Some(value));
     }
+    reflection_constant_parameter_default_value(ctx, current_class, current_info, default)
+}
+
+/// Resolves class-scoped constants and nested arrays for both default-metadata paths.
+fn reflection_constant_parameter_default_value(
+    ctx: &FunctionContext<'_>,
+    current_class: &str,
+    current_info: Option<&crate::types::ClassInfo>,
+    default: &Expr,
+) -> Result<Option<ReflectionParameterDefaultValue>> {
     match &default.kind {
-        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
+        ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::ArrayLiteral(_)
+        | ExprKind::ArrayLiteralAssoc(_) => {
             let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
             Ok(reflection_parameter_default_from_constant_value(value))
         }
@@ -162,7 +169,8 @@ pub(super) fn reflection_default_value_contains_object(value: &ReflectionParamet
         | ReflectionParameterDefaultValue::Bool(_)
         | ReflectionParameterDefaultValue::Float(_)
         | ReflectionParameterDefaultValue::Str(_)
-        | ReflectionParameterDefaultValue::Null => false,
+        | ReflectionParameterDefaultValue::Null
+        | ReflectionParameterDefaultValue::EnumCase { .. } => false,
     }
 }
 
@@ -170,6 +178,11 @@ pub(super) fn reflection_default_value_contains_object(value: &ReflectionParamet
 pub(super) fn reflection_literal_parameter_default_value(
     default: &Expr,
 ) -> Option<ReflectionParameterDefaultValue> {
+    if let Some(ExprKind::StringLiteral(value)) =
+        crate::codegen::literal_defaults::fold_named_class_constant(&default.kind)
+    {
+        return Some(ReflectionParameterDefaultValue::Str(value));
+    }
     match &default.kind {
         ExprKind::IntLiteral(value) => Some(ReflectionParameterDefaultValue::Int(*value)),
         ExprKind::BoolLiteral(value) => Some(ReflectionParameterDefaultValue::Bool(*value)),
@@ -210,6 +223,11 @@ pub(super) fn reflection_assoc_array_default_value(
 
 /// Converts one supported associative-array key expression into PHP-normalized metadata.
 pub(super) fn reflection_default_array_key(key: &Expr) -> Option<ReflectionDefaultArrayKey> {
+    if let Some(ExprKind::StringLiteral(value)) =
+        crate::codegen::literal_defaults::fold_named_class_constant(&key.kind)
+    {
+        return reflection_default_string_array_key(&value);
+    }
     match &key.kind {
         ExprKind::IntLiteral(value) => Some(ReflectionDefaultArrayKey::Int(*value)),
         ExprKind::BoolLiteral(value) => Some(ReflectionDefaultArrayKey::Int(i64::from(*value))),
@@ -250,7 +268,9 @@ pub(super) fn reflection_parameter_default_from_constant_value(
         ReflectionConstantValue::Str(value) => Some(ReflectionParameterDefaultValue::Str(value)),
         ReflectionConstantValue::Null => Some(ReflectionParameterDefaultValue::Null),
         ReflectionConstantValue::Array(value) => Some(value),
-        ReflectionConstantValue::EnumCase { .. } => None,
+        ReflectionConstantValue::EnumCase { enum_name, case_name } => {
+            Some(ReflectionParameterDefaultValue::EnumCase { enum_name, case_name })
+        }
     }
 }
 
@@ -307,15 +327,7 @@ pub(super) fn reflection_declared_type_metadata(
                 .filter(|member| !matches!(member, TypeExpr::Void))
                 .map(reflection_named_type_metadata_from_type_expr)
                 .collect::<Option<Vec<_>>>()?;
-            if types.len() == 1 {
-                let mut metadata = types.into_iter().next()?;
-                metadata.allows_null = allows_null;
-                Some(ReflectionParameterTypeMetadata::Named(metadata))
-            } else {
-                (!types.is_empty()).then_some(ReflectionParameterTypeMetadata::Union(
-                    ReflectionUnionTypeMetadata { types, allows_null },
-                ))
-            }
+            reflection_union_members_metadata(types, allows_null)
         }
         TypeExpr::Intersection(members) => reflection_intersection_type_metadata(members),
         _ => reflection_named_type_metadata_from_type_expr(type_expr)
@@ -347,20 +359,9 @@ pub(super) fn reflection_method_return_type_metadata(
 ) -> Option<ReflectionParameterTypeMetadata> {
     if sig.declared_return {
         if let Some(return_type) = late_static_return {
-            let mut metadata = reflection_declared_type_metadata(return_type)?;
-            if let ReflectionParameterTypeMetadata::Union(union) = &mut metadata {
-                // PHP reports named class/interface members before `static`, then builtins.
-                union.types.sort_by_key(|member| {
-                    if member.name.eq_ignore_ascii_case("static") {
-                        1
-                    } else if member.is_builtin {
-                        2
-                    } else {
-                        0
-                    }
-                });
-            }
-            return Some(metadata);
+            // The declared-type path already orders the members as php does: named
+            // class/interface members, then `static`, then builtins.
+            return reflection_declared_type_metadata(return_type);
         }
     }
     reflection_return_type_metadata(sig)
@@ -368,11 +369,15 @@ pub(super) fn reflection_method_return_type_metadata(
 
 /// Converts a normalized non-union parameter type into a simple `ReflectionNamedType`.
 pub(super) fn reflection_named_type_metadata(ty: &PhpType) -> Option<ReflectionNamedTypeMetadata> {
+    if ty.is_php_array() {
+        return Some(reflection_builtin_named_type("array", false));
+    }
     match ty {
         PhpType::Int => Some(reflection_builtin_named_type("int", false)),
         PhpType::Float => Some(reflection_builtin_named_type("float", false)),
         PhpType::Str => Some(reflection_builtin_named_type("string", false)),
         PhpType::Bool => Some(reflection_builtin_named_type("bool", false)),
+        PhpType::False => Some(reflection_builtin_named_type("false", false)),
         PhpType::Iterable => Some(reflection_builtin_named_type("iterable", false)),
         PhpType::Mixed => Some(reflection_builtin_named_type("mixed", true)),
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
@@ -402,22 +407,89 @@ pub(super) fn reflection_union_or_nullable_type_metadata(
     members: &[PhpType],
 ) -> Option<ReflectionParameterTypeMetadata> {
     let allows_null = members.iter().any(|member| matches!(member, PhpType::Void));
-    let non_null_members = members
+    let types = members
         .iter()
         .filter(|member| !matches!(member, PhpType::Void))
-        .collect::<Vec<_>>();
-    if non_null_members.len() == 1 {
-        let mut metadata = reflection_named_type_metadata(non_null_members[0])?;
-        metadata.allows_null = allows_null;
-        return Some(ReflectionParameterTypeMetadata::Named(metadata));
-    }
-    let types = non_null_members
-        .into_iter()
         .map(reflection_named_type_metadata)
         .collect::<Option<Vec<_>>>()?;
-    (!types.is_empty()).then_some(ReflectionParameterTypeMetadata::Union(
-        ReflectionUnionTypeMetadata { types, allows_null },
-    ))
+    reflection_union_members_metadata(types, allows_null)
+}
+
+/// Builds php's `ReflectionNamedType` or `ReflectionUnionType` view of a union's members.
+///
+/// php does not keep the declared order: `zend_type_to_string()` and `getTypes()` list class and
+/// interface members first (as declared), then `static`, then the builtins in one fixed order,
+/// and `null` last -- `int|string|null` reflects as `string|int|null`. Inside a union `iterable`
+/// is the alias `Traversable|array`. A nullable union lists `null` among `getTypes()`; a single
+/// member with `null` is the nullable named type `?T`. Duplicate members (packed and keyed array
+/// storage are one PHP `array`) collapse.
+pub(super) fn reflection_union_members_metadata(
+    members: Vec<ReflectionNamedTypeMetadata>,
+    allows_null: bool,
+) -> Option<ReflectionParameterTypeMetadata> {
+    let expand_iterable = members.len() > 1;
+    let mut types = Vec::<ReflectionNamedTypeMetadata>::new();
+    for member in members {
+        let expanded = if expand_iterable && member.is_builtin && member.name.eq_ignore_ascii_case("iterable") {
+            vec![
+                ReflectionNamedTypeMetadata {
+                    name: "Traversable".to_string(),
+                    allows_null: false,
+                    is_builtin: false,
+                },
+                reflection_builtin_named_type("array", false),
+            ]
+        } else {
+            vec![member]
+        };
+        for member in expanded {
+            if !types.iter().any(|existing| {
+                existing.is_builtin == member.is_builtin
+                    && existing.name.eq_ignore_ascii_case(&member.name)
+            }) {
+                types.push(member);
+            }
+        }
+    }
+    if types.len() == 1 {
+        let mut metadata = types.pop()?;
+        metadata.allows_null = allows_null || metadata.allows_null;
+        return Some(ReflectionParameterTypeMetadata::Named(metadata));
+    }
+    if types.is_empty() {
+        return None;
+    }
+    // A stable sort keeps the declared order among class and interface members.
+    types.sort_by_key(reflection_union_member_rank);
+    if allows_null {
+        types.push(reflection_builtin_named_type("null", true));
+    }
+    Some(ReflectionParameterTypeMetadata::Union(ReflectionUnionTypeMetadata { types, allows_null }))
+}
+
+/// Ranks one union member in php's canonical rendering order (`zend_type_to_string()`).
+fn reflection_union_member_rank(member: &ReflectionNamedTypeMetadata) -> u8 {
+    if member.name.eq_ignore_ascii_case("static") {
+        return 1;
+    }
+    if !member.is_builtin {
+        return 0;
+    }
+    match member.name.to_ascii_lowercase().as_str() {
+        "callable" => 2,
+        "object" => 3,
+        "array" => 4,
+        "string" => 5,
+        "int" => 6,
+        "float" => 7,
+        "bool" => 8,
+        "false" => 9,
+        "true" => 10,
+        "void" => 11,
+        "never" => 12,
+        "mixed" => 13,
+        _ => 14,
+    }
 }
 
 /// Converts a declared `A&B` type into `ReflectionIntersectionType` metadata.

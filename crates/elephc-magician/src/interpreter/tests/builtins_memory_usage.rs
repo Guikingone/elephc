@@ -80,13 +80,21 @@ echo gettype(memory_get_peak_usage(true));"#),
     );
 }
 
-/// Verifies a second argument is refused rather than ignored. php raises `ArgumentCountError`
-/// ("expects at most 1 argument, 2 given"); the interpreter's equivalent is a runtime fatal.
+/// Verifies a second argument is refused rather than ignored, with php's catchable
+/// `ArgumentCountError`. `php -n` 8.5: `memory_get_usage() expects at most 1 argument, 2 given`,
+/// and the same wording for `memory_get_peak_usage()`. Uncaught, it ends the fragment as an
+/// uncaught throwable.
 #[test]
 fn memory_reporters_refuse_a_second_argument() {
-    assert_eq!(status(br#"memory_get_usage(true, 1);"#), EvalStatus::RuntimeFatal);
+    assert_eq!(status(br#"memory_get_usage(true, 1);"#), EvalStatus::UncaughtThrowable);
     assert_eq!(
         status(br#"memory_get_peak_usage(true, 1);"#),
-        EvalStatus::RuntimeFatal
+        EvalStatus::UncaughtThrowable
+    );
+    assert_eq!(
+        out(br#"try { memory_get_usage(true, 1); } catch (ArgumentCountError $e) { echo get_class($e), ": ", $e->getMessage(), "|"; }
+try { memory_get_peak_usage(true, 1); } catch (ArgumentCountError $e) { echo get_class($e), ": ", $e->getMessage(); }"#),
+        "ArgumentCountError: memory_get_usage() expects at most 1 argument, 2 given|\
+ArgumentCountError: memory_get_peak_usage() expects at most 1 argument, 2 given",
     );
 }

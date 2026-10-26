@@ -173,7 +173,9 @@ fn eval_spl_autoload_queue(
         if std::ptr::eq(owner, here) {
             eval_invoke_autoload_callback(callback, class_name, context, values)?;
         } else {
-            unsafe { eval_spl_autoload_callback_in_owner(owner, callback, class_name) }?;
+            let invoked = unsafe { eval_spl_autoload_callback_in_owner(owner, callback, class_name) };
+            move_owner_pending_throw(&invoked, owner, context);
+            invoked?;
             context.sync_global_eval_classes();
             let loaded_class = unsafe {
                 owner
@@ -191,6 +193,26 @@ fn eval_spl_autoload_queue(
         }
     }
     Ok(false)
+}
+
+/// Moves a Throwable an autoload callback raised from its OWNER context to the probing caller.
+///
+/// A callback registered by compiled code runs on the owner's context, which is where its
+/// escaping Throwable is parked, while the caller's `try` (or the eval result) consults its own.
+/// Left there, `class_exists()` / `new Missing` surfaced a bare `UncaughtThrowable` status with
+/// nothing to throw, and the exception vanished.
+#[cfg(not(test))]
+fn move_owner_pending_throw<T>(
+    result: &Result<T, EvalStatus>,
+    owner: *mut ElephcEvalContext,
+    caller: &mut ElephcEvalContext,
+) {
+    if !matches!(result, Err(EvalStatus::UncaughtThrowable)) {
+        return;
+    }
+    if let Some(thrown) = unsafe { owner.as_mut() }.and_then(|owner| owner.take_pending_throw()) {
+        caller.set_pending_throw(thrown);
+    }
 }
 
 /// Invokes ONE callback with runtime hooks bound to the context that registered it.
@@ -304,7 +326,9 @@ pub(crate) fn eval_spl_autoload_classlike_definition(
         if std::ptr::eq(owner, context) {
             continue;
         }
-        let _ = unsafe { eval_spl_autoload_class_in_owner(owner, class_name) }?;
+        let invoked = unsafe { eval_spl_autoload_class_in_owner(owner, class_name) };
+        move_owner_pending_throw(&invoked, owner, context);
+        let _ = invoked?;
         context.sync_global_eval_classes();
         if context.has_class(class_name)
             || context.has_interface(class_name)
@@ -326,6 +350,13 @@ fn eval_spl_autoload_class_local(
     if !context.begin_autoload_class(class_name) {
         return Ok(false);
     }
+    // The callbacks run in THIS context, which may be an owner the registration ABI allocated
+    // before any metadata existed -- Composer's loader, registered from compiled code. Without a
+    // native signature `loadClass($class)` was bound without its hidden `func_get_args` collector
+    // and the generated method bridge refused it on arity: every request after the first died in
+    // Twig's `new CoreExtension(...)`. The foreign-owner path below already took the snapshot.
+    #[cfg(not(test))]
+    crate::context::sync_global_eval_aot_metadata_when_empty(context);
     let class = values.string(class_name)?;
     let callbacks = context.autoload_callbacks();
     if crate::eval_trace::enabled() {

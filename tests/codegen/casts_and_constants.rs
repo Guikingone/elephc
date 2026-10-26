@@ -11,6 +11,8 @@ use crate::support::*;
 
 #[path = "casts_and_constants/casts.rs"]
 mod casts;
+#[path = "casts_and_constants/object_cast.rs"]
+mod object_cast;
 #[path = "casts_and_constants/introspection.rs"]
 mod introspection;
 #[path = "casts_and_constants/predicates.rs"]

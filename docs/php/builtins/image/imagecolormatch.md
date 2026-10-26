@@ -1,8 +1,8 @@
 ---
 title: "imagecolormatch()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Adjusts a palette image's colors to better match a truecolor original."
 sidebar:
-  order: 487
+  order: 488
 ---
 
 ## imagecolormatch()
@@ -11,7 +11,7 @@ sidebar:
 function imagecolormatch(mixed $image1, mixed $image2): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Adjusts a palette image's colors to better match a truecolor original.
 
 **Parameters**:
 - `$image1` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

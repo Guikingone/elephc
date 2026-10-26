@@ -847,3 +847,143 @@ echo load_value(__DIR__ . '/seven.php'), "\n";
     );
     assert_eq!(out, "7\n");
 }
+
+/// Issue #476 review follow-up: an include inside a CLOSURE in a `for` clause is DEFERRED, so
+/// the clause's include restriction must not reach it.
+///
+/// `include`/`require` cannot run as the clause itself — the resolver expands a value-include
+/// by rewriting the surrounding statement LIST, which a clause is not — and the parser rejects
+/// those two shapes with a named diagnostic. A closure body is different: its include runs when
+/// the closure is CALLED, after the loop. The first version of the guard reused the resolver's
+/// `has_includes`, which descends into closure bodies, and rejected a program PHP accepts.
+///
+/// The ordering in the expected output is the proof: the loop body and `compiled` print first,
+/// and the included file's own output appears only at the call. Measured on PHP 8.5.10.
+#[test]
+fn test_for_clause_allows_a_deferred_include_inside_a_closure() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nfor ($f = function () { include 'inner.php'; }, $i = 0; $i < 1; $i++) {\n\
+                 echo 'body ', $i, \"\\n\";\n}\necho \"compiled\\n\";\n$f();\necho \"|called\\n\";\n",
+            ),
+            ("inner.php", "<?php\necho 'inc';\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "body 0\ncompiled\ninc|called\n");
+}
+
+
+/// An include-variant declaration is not "never called" just because its generated symbol is not
+/// the name the call site wrote.
+///
+/// A function declared in an included file is registered under
+/// `__elephc_include_variant_{hash}_{local}`, while the call site names it as the source wrote
+/// it. `widen_dynamic_only_passthrough_returns` compares those two, so a variant whose body
+/// returns one of its parameters looked like a function no caller had ever touched — its return
+/// was widened to `mixed` while the caller still expected the specialized type, and
+/// `count($items)` printed a raw pointer instead of `3`.
+///
+/// `append_item` is the shape that matters: an untyped parameter returned straight back, with a
+/// real call site that passes it an array. `load_items` sits beside it as the control — it takes
+/// no parameters at all, so the rule must not reach it for a different reason.
+///
+/// Every expectation is the host PHP 8.5.10 output for the same fixture.
+#[test]
+fn test_include_variant_returning_its_parameter_keeps_the_call_site_type() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire 'lib.php';\n$items = load_items();\n$items = append_item($items, \"c\");\necho count($items) . ':' . $items[2];\n",
+            ),
+            (
+                "lib.php",
+                "<?php\nfunction load_items() {\n    return [\"a\", \"b\"];\n}\n\nfunction append_item($items, $value) {\n    if (count($items) > 0) {\n        $items[] = $value;\n    }\n    return $items;\n}\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "3:c");
+}
+
+/// An included file whose one line runs past column 65535 must compile (#1292).
+///
+/// Included spans pack their source identity into the end column's high bits, which left 16 bits
+/// for the column, and a wider column aborted the compiler. Including the file twice gives two
+/// source identities past that column, so both copies take the interned encoding. The output
+/// only proves that the program compiles and runs correctly; that the two copies stay distinct
+/// map keys is pinned by the unit tests in `src/span.rs`. Expected output is the host PHP 8.5.10
+/// output for the same fixture.
+#[test]
+fn test_included_line_wider_than_16_bit_columns_compiles() {
+    let row = format!(
+        "<?php{}$rows[] = [strlen($word), str_repeat($word, 2)];\n",
+        " ".repeat(70_000)
+    );
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\n$rows = [];\n$word = 'ab';\ninclude __DIR__ . '/row.php';\n$word = 'xyz';\ninclude __DIR__ . '/row.php';\nforeach ($rows as $r) { echo $r[0], ' ', $r[1], \"\\n\"; }\n",
+            ),
+            ("row.php", row.as_str()),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "2 abab\n3 xyzxyz\n");
+}
+
+/// A diagnostic reported past column 65535 of an included line names the real column (#1292).
+///
+/// The column survives the interned span encoding: an undefined call that starts at column
+/// 70006 is reported there, not at a truncated or wrapped value.
+#[test]
+fn test_included_line_diagnostic_past_16_bit_columns_reports_the_real_column() {
+    let dir = make_cli_test_dir("elephc_wide_column_diagnostic");
+    std::fs::write(
+        dir.join("row.php"),
+        format!("<?php{}undefined_wide_fn();\n", " ".repeat(70_000)),
+    )
+    .expect("failed to write the wide included line");
+    std::fs::write(dir.join("main.php"), "<?php\ninclude __DIR__ . '/row.php';\n")
+        .expect("failed to write the including file");
+
+    let output = elephc_cli_command(&dir)
+        .arg("main.php")
+        .output()
+        .expect("failed to run elephc");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "the undefined call must be refused: {stderr}");
+    assert!(
+        stderr.contains(":70006]: Undefined function: undefined_wide_fn"),
+        "the diagnostic must name column 70006: {stderr}"
+    );
+}
+
+/// An `include_once` inside a closure declares the included interface when the closure runs, and
+/// only then. Both whole-program scans stopped at statements: the activation event inside the
+/// closure was missed, so the interface got a second, top-level event and the call raised
+/// "Cannot redeclare interface", and the file was not registered as a source, which failed EIR
+/// validation with `UnresolvedSource`. Symfony's compiled container keeps its service factories
+/// exactly this way.
+#[test]
+fn test_include_once_inside_a_closure_declares_its_interface_once() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php require __DIR__ . '/lib/Box.php'; echo interface_exists('BagI', false) ? 'early|' : 'late|'; $b = new Box; echo ($b->privates['bag'])(), '|', ($b->privates['bag'])(), \"\\n\";",
+            ),
+            (
+                "lib/Box.php",
+                "<?php class Box { public array $privates = []; public function __construct() { $this->privates['bag'] = static function () { include_once \\dirname(__DIR__) . '/lib/BagI.php'; return interface_exists('BagI', false) ? 'yes' : 'no'; }; } }",
+            ),
+            ("lib/BagI.php", "<?php interface BagI { public function all(): array; }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "late|yes|yes\n");
+}

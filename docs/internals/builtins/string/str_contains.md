@@ -1,16 +1,16 @@
 ---
-title: "str_contains() — internals"
+title: "str_contains() - internals"
 description: "Compiler internals for str_contains(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 870
+  order: 963
 ---
 
-## `str_contains()` — internals
+## `str_contains()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/str_contains.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_contains.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

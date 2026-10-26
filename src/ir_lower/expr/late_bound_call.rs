@@ -74,3 +74,63 @@ pub(super) fn lower_late_bound_undefined_call(
     let null = super::lower_null(ctx, call_expr);
     Some(ctx.box_value_as_mixed(null, crate::types::PhpType::Mixed, Some(span)))
 }
+
+/// Lowers an `eval()` of a computed string in a closed-world build to `throw new Error(...)`.
+///
+/// The build links no interpreter, so nothing could run the string. The throw is catchable like
+/// php's own `Error`s, and uncaught it reports a fatal.
+pub(super) fn lower_closed_world_eval_unavailable(
+    ctx: &mut LoweringContext<'_, '_>,
+    call_expr: &Expr,
+) -> LoweredValue {
+    let span = call_expr.span;
+    let message_expr = Expr::new(
+        ExprKind::StringLiteral(crate::closed_world::EVAL_UNAVAILABLE_MESSAGE.to_string()),
+        span,
+    );
+    let new_error_expr = Expr::new(
+        ExprKind::NewObject {
+            class_name: Name::unqualified("Error"),
+            args: vec![message_expr],
+        },
+        span,
+    );
+    let error_value = super::lower_expr(ctx, &new_error_expr);
+    ctx.emit_void(
+        crate::ir::Op::ThrowException,
+        vec![error_value.value],
+        None,
+        crate::ir::Op::ThrowException.default_effects(),
+        Some(span),
+    );
+    let null = super::lower_null(ctx, call_expr);
+    ctx.box_value_as_mixed(null, crate::types::PhpType::Mixed, Some(span))
+}
+
+/// Lowers a static call on a class that is not part of a closed-world build to php's own
+/// `Error: Class "X" not found`.
+pub(super) fn lower_closed_world_class_not_found(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    call_expr: &Expr,
+) -> LoweredValue {
+    let span = call_expr.span;
+    let message = format!("Class \"{}\" not found", class_name.trim_start_matches('\\'));
+    let new_error_expr = Expr::new(
+        ExprKind::NewObject {
+            class_name: Name::unqualified("Error"),
+            args: vec![Expr::new(ExprKind::StringLiteral(message), span)],
+        },
+        span,
+    );
+    let error_value = super::lower_expr(ctx, &new_error_expr);
+    ctx.emit_void(
+        crate::ir::Op::ThrowException,
+        vec![error_value.value],
+        None,
+        crate::ir::Op::ThrowException.default_effects(),
+        Some(span),
+    );
+    let null = super::lower_null(ctx, call_expr);
+    ctx.box_value_as_mixed(null, crate::types::PhpType::Mixed, Some(span))
+}

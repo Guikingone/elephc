@@ -1,16 +1,16 @@
 ---
-title: "reset() — internals"
+title: "reset() - internals"
 description: "Compiler internals for reset(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 77
 ---
 
-## `reset()` — internals
+## `reset()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/reset.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/reset.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -14,11 +14,13 @@
 //!   (`"\0ClassName\0prop"` / `"\0*\0prop"`) instead of a plain (public) one -- the exact bug
 //!   PLAN.md warns about: a wrong mangling here corrupts the app's own cache-freshness metadata
 //!   with no crash, just a wrong decision.
-//! - NOT implemented (measured absent from the real 404 payloads and out of this wave's scope):
-//!   `__serialize()`/`Serializable` magic methods, and php's `r:`/`R:` reference back-edges for
-//!   a value or object that appears more than once in the same structure -- a self-referencing
-//!   structure is refused with a `RuntimeFatal` (via a simple object-identity cycle guard)
-//!   instead of looping forever, which is not php's behavior but is safe.
+//! - An object that appears again in the same structure is written as `r:<n>;`, where `n` is the
+//!   1-based index of its first occurrence. php numbers every value it writes (an `r:` back-edge
+//!   included) but never an array/object KEY, so the counter below advances once per value and
+//!   not for keys; a self-referencing structure therefore ends in a back-edge instead of looping.
+//!   `R:` (a PHP reference shared by two slots) is not written: the interpreter cannot tell two
+//!   by-value copies from one reference here, so a shared scalar serializes as two plain values.
+//! - NOT implemented: `Serializable` payloads.
 
 use super::super::super::*;
 
@@ -85,6 +87,41 @@ pub(crate) fn eval_serialize_object_fragment(
     eval_serialize_result(object, context, values)
 }
 
+/// php's value numbering for `r:` back-edges while one `serialize()` call writes its output.
+struct EvalSerializeState {
+    /// Index the next written value takes (1-based, as `r:<n>;` counts).
+    next_index: u64,
+    /// Objects already written, with the index of their first occurrence.
+    objects: Vec<(usize, u64)>,
+}
+
+impl EvalSerializeState {
+    /// Takes the next value index.
+    fn take_index(&mut self) -> u64 {
+        let index = self.next_index;
+        self.next_index += 1;
+        index
+    }
+}
+
+/// Appends an array/object key, which php writes directly and does not number.
+fn eval_serialize_append_key(
+    key: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+    buf: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
+    if values.type_tag(key)? == EVAL_TAG_INT {
+        let n = eval_int_value(key, values)?;
+        buf.extend_from_slice(format!("i:{n};").as_bytes());
+    } else {
+        let bytes = values.string_bytes(key)?;
+        buf.extend_from_slice(format!("s:{}:\"", bytes.len()).as_bytes());
+        buf.extend_from_slice(&bytes);
+        buf.extend_from_slice(b"\";");
+    }
+    Ok(())
+}
+
 /// Serializes one eval value into php's storable-representation byte string.
 fn eval_serialize_result(
     value: RuntimeCellHandle,
@@ -92,8 +129,8 @@ fn eval_serialize_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut buf = Vec::new();
-    let mut objects_seen = Vec::new();
-    eval_serialize_append_value(value, context, values, &mut objects_seen, &mut buf)?;
+    let mut state = EvalSerializeState { next_index: 1, objects: Vec::new() };
+    eval_serialize_append_value(value, context, values, &mut state, &mut buf)?;
     values.string_bytes_value(&buf)
 }
 
@@ -102,9 +139,11 @@ fn eval_serialize_append_value(
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-    objects_seen: &mut Vec<usize>,
+    state: &mut EvalSerializeState,
     buf: &mut Vec<u8>,
 ) -> Result<(), EvalStatus> {
+    // Every value takes an index, the `r:` back-edge below included.
+    let index = state.take_index();
     match values.type_tag(value)? {
         EVAL_TAG_NULL => buf.extend_from_slice(b"N;"),
         EVAL_TAG_BOOL => {
@@ -149,26 +188,24 @@ fn eval_serialize_append_value(
             for position in 0..len {
                 let key = values.array_iter_key(value, position)?;
                 let element = values.array_get(value, key)?;
-                eval_serialize_append_value(key, context, values, objects_seen, buf)?;
-                eval_serialize_append_value(element, context, values, objects_seen, buf)?;
+                eval_serialize_append_key(key, values, buf)?;
+                eval_serialize_append_value(element, context, values, state, buf)?;
             }
             buf.push(b'}');
         }
         EVAL_TAG_OBJECT => {
             let identity = eval_debug_object_identity(value, values);
             let object_key = identity.unwrap_or(value.as_ptr() as usize as u64) as usize;
-            if objects_seen.contains(&object_key) {
-                // php would emit an `r:`/`R:` back-reference here; not implemented (see the
-                // module doc). Refusing beats looping forever on a self-referencing structure.
-                return Err(EvalStatus::RuntimeFatal);
+            if let Some((_, first)) = state.objects.iter().find(|(seen, _)| *seen == object_key) {
+                buf.extend_from_slice(format!("r:{first};").as_bytes());
+                return Ok(());
             }
-            objects_seen.push(object_key);
+            state.objects.push((object_key, index));
             let class_name = eval_debug_object_class_name(value, identity, context, values)?;
             if eval_serialize_object_has_method(identity, &class_name, "__serialize", context, values)? {
                 eval_serialize_append_magic_serialize(
-                    value, &class_name, context, values, objects_seen, buf,
+                    value, &class_name, context, values, state, buf,
                 )?;
-                objects_seen.pop();
                 return Ok(());
             }
             let mut entries = eval_serialize_object_entries(value, identity, &class_name, context, values)?;
@@ -179,7 +216,6 @@ fn eval_serialize_append_value(
                     }
                     None => {
                         buf.extend_from_slice(b"N;");
-                        objects_seen.pop();
                         return Ok(());
                     }
                 }
@@ -192,10 +228,9 @@ fn eval_serialize_append_value(
                 buf.extend_from_slice(format!("s:{}:\"", key.len()).as_bytes());
                 buf.extend_from_slice(key);
                 buf.extend_from_slice(b"\";");
-                eval_serialize_append_value(*element, context, values, objects_seen, buf)?;
+                eval_serialize_append_value(*element, context, values, state, buf)?;
             }
             buf.push(b'}');
-            objects_seen.pop();
         }
         // A resource carries no storable state; php serializes it as `i:0;` with no warning
         // (measured: `serialize(fopen(...))` -> `i:0;`, open or closed).
@@ -228,7 +263,7 @@ fn eval_serialize_append_magic_serialize(
     class_name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-    objects_seen: &mut Vec<usize>,
+    state: &mut EvalSerializeState,
     buf: &mut Vec<u8>,
 ) -> Result<(), EvalStatus> {
     let data = eval_method_call_result_with_evaluated_args(
@@ -251,8 +286,8 @@ fn eval_serialize_append_magic_serialize(
     for position in 0..len {
         let key = values.array_iter_key(data, position)?;
         let element = values.array_get(data, key)?;
-        eval_serialize_append_value(key, context, values, objects_seen, buf)?;
-        eval_serialize_append_value(element, context, values, objects_seen, buf)?;
+        eval_serialize_append_key(key, values, buf)?;
+        eval_serialize_append_value(element, context, values, state, buf)?;
     }
     buf.push(b'}');
     values.release(data)

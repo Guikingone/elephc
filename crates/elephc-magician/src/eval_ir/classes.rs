@@ -10,7 +10,7 @@
 use super::*;
 
 /// Runtime class declared by an eval fragment.
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct EvalClass {
     name: String,
     source_location: Option<EvalSourceLocation>,
@@ -415,6 +415,12 @@ impl EvalClass {
         &self.properties
     }
 
+    /// Replaces property declarations after trait expansion and inherited hook resolution.
+    pub(crate) fn with_properties(mut self, properties: Vec<EvalClassProperty>) -> Self {
+        self.properties = properties;
+        self
+    }
+
     /// Returns public methods declared directly by this eval class.
     pub fn methods(&self) -> &[EvalClassMethod] {
         &self.methods
@@ -436,7 +442,7 @@ impl EvalClass {
 }
 
 /// Adaptation rule declared in a runtime eval class `use Trait { ... }` block.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalTraitAdaptation {
     Alias {
         trait_name: Option<String>,
@@ -452,7 +458,7 @@ pub enum EvalTraitAdaptation {
 }
 
 /// Constant metadata for a runtime eval class.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalClassConstant {
     name: String,
     trait_origin: Option<String>,

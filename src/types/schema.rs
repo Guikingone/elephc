@@ -9,6 +9,7 @@
 //! Key details:
 //! - Schema data is the canonical contract for inheritance, calls, property access, and method validation.
 
+use crate::parser::ast::BinOp;
 use std::collections::{HashMap, HashSet};
 
 use crate::parser::ast::{
@@ -126,8 +127,27 @@ fn fold_attr_value(expr: &Expr) -> Option<AttrArgValue> {
         ExprKind::BoolLiteral(value) => Some(AttrArgValue::Bool(*value)),
         ExprKind::Null => Some(AttrArgValue::Null),
         ExprKind::ConstRef(name) => Some(AttrArgValue::ConstRef(name.as_str().to_string())),
+        ExprKind::ScopedConstantAccess {
+            receiver: StaticReceiver::Named(class),
+            name,
+        } if builtin_attribute_flag(class.as_str(), name).is_some() => {
+            builtin_attribute_flag(class.as_str(), name).map(AttrArgValue::Int)
+        }
         ExprKind::ScopedConstantAccess { receiver, name } => scoped_receiver_type_name(receiver)
             .map(|type_name| AttrArgValue::ScopedConst(type_name, name.clone())),
+        // `#[\Attribute(\Attribute::TARGET_CLASS | \Attribute::IS_REPEATABLE)]`: flags combine.
+        ExprKind::BinaryOp {
+            left,
+            op: op @ (BinOp::BitOr | BinOp::BitAnd | BinOp::BitXor),
+            right,
+        } => match (fold_attr_value(left)?, fold_attr_value(right)?) {
+            (AttrArgValue::Int(l), AttrArgValue::Int(r)) => Some(AttrArgValue::Int(match op {
+                BinOp::BitOr => l | r,
+                BinOp::BitAnd => l & r,
+                _ => l ^ r,
+            })),
+            _ => None,
+        },
         ExprKind::ClassConstant {
             receiver: StaticReceiver::Named(name),
         } => Some(AttrArgValue::Str(name.as_str().to_string())),
@@ -161,6 +181,30 @@ fn fold_attr_value(expr: &Expr) -> Option<AttrArgValue> {
     }
 }
 
+/// Value of a constant of php's built-in `Attribute` class (php 8.5).
+///
+/// The class has no schema here, so `Attribute::TARGET_METHOD` stayed a symbolic reference the
+/// post-pass (`checker::schema::attribute_refs`) found unresolvable, and the WHOLE attribute
+/// disappeared from `getAttributes()` -- every `#[\Attribute(\Attribute::TARGET_CLASS)]` class
+/// Symfony declares. Same table as Magician's `eval_attribute_builtin_class_constant`.
+fn builtin_attribute_flag(class: &str, constant: &str) -> Option<i64> {
+    if !class.trim_start_matches('\\').eq_ignore_ascii_case("Attribute") {
+        return None;
+    }
+    Some(match constant {
+        "TARGET_CLASS" => 1,
+        "TARGET_FUNCTION" => 2,
+        "TARGET_METHOD" => 4,
+        "TARGET_PROPERTY" => 8,
+        "TARGET_CLASS_CONSTANT" => 16,
+        "TARGET_PARAMETER" => 32,
+        "TARGET_CONSTANT" => 64,
+        "TARGET_ALL" => 127,
+        "IS_REPEATABLE" => 128,
+        _ => return None,
+    })
+}
+
 /// Folds one supported associative attribute array key.
 fn fold_attr_key(expr: &Expr) -> Option<AttrKey> {
     match &expr.kind {
@@ -178,7 +222,14 @@ fn fold_attr_key(expr: &Expr) -> Option<AttrKey> {
 fn scoped_receiver_type_name(receiver: &StaticReceiver) -> Option<String> {
     match receiver {
         StaticReceiver::Named(name) => Some(name.as_str().to_string()),
-        StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => None,
+        // `self::CONST` / `static::CONST` / `parent::CONST` name the class the attribute is declared
+        // on, which this folding does not know. The spelling is kept so the post-pass in
+        // `checker::schema::attribute_refs` can substitute the declaring class (or its parent);
+        // dropping the argument made the WHOLE attribute vanish from `getAttributes()` --
+        // Symfony's `#[AsCommand(name: 'app:add-user', help: self::HELP)]`.
+        StaticReceiver::Self_ => Some("self".to_string()),
+        StaticReceiver::Static => Some("static".to_string()),
+        StaticReceiver::Parent => Some("parent".to_string()),
     }
 }
 
@@ -241,6 +292,9 @@ pub struct InterfaceInfo {
     pub static_method_order: Vec<String>,
     /// Interface constants (PHP 5.0+). Inherited from parent interfaces.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
+    /// The names in `constants` in PHP's order: the interface's own in declaration order, then
+    /// each parent interface's.
+    pub constant_order: Vec<String>,
     /// PHP 8.3 declared types for visible interface constants.
     pub constant_types: HashMap<String, TypeExpr>,
     /// Declaring interface for each visible constant, keyed by case-sensitive constant name.
@@ -258,6 +312,13 @@ pub struct ClassInfo {
     pub declaration_span: crate::span::Span,
     /// Verbatim PHP doc comment declared directly on this class, when present.
     pub doc_comment: Option<String>,
+    /// `true` when elephc itself declares the class: a runtime-registered builtin, or a class
+    /// from compiler-generated source such as an injected prelude (whose declarations can carry
+    /// real spans, so the dummy span above does not identify them). `false` for a class written
+    /// in the program's own source. Behaviour PHP ties to an internal class must check this, not
+    /// the name alone: a program that does not pull in a prelude may declare its own class with
+    /// that prelude's class name.
+    pub is_internal: bool,
     pub parent: Option<String>,
     pub is_abstract: bool,
     pub is_final: bool,
@@ -267,10 +328,29 @@ pub struct ClassInfo {
     /// Codegen routes undeclared property storage through a per-object
     /// side-table when this flag is set.
     pub allow_dynamic_properties: bool,
+    /// EIR reserves a GC-visible property hash for subclasses declared by opaque eval.
+    /// This is a storage capability, not PHP's permission to create dynamic properties.
+    pub eval_property_storage: bool,
+    /// EIR reserves the same GC-visible property hash for a class a two-argument `clone()`
+    /// can reach with an override key whose name is only known at run time. Like
+    /// `eval_property_storage` this is a storage capability, not PHP's permission: creating
+    /// the property still emits php 8.5's `Creation of dynamic property C::$n is deprecated`.
+    pub clone_override_property_storage: bool,
+    /// EIR reserves the same GC-visible property hash for a class a reachable MUTATION can
+    /// address under a strict ancestor's private name.
+    ///
+    /// php 7.4 removed shadow properties: `$child->p = 1` outside the class that declared
+    /// `private $p` creates a DISTINCT dynamic property and leaves the ancestor's slot alone.
+    /// Without a hash the write has nowhere to go and the backend's by-name ladder falls back
+    /// onto the ancestor's physical slot, which is the storage escape phase B2 exists to close.
+    /// Like the two flags above this is a storage capability, not php's permission: creating the
+    /// property still emits php 8.5's `Creation of dynamic property C::$n is deprecated`.
+    pub scope_dynamic_property_storage: bool,
     /// User-declared class constants (PHP 7.1+). Maps the constant name to
     /// its value expression — codegen inlines the literal at access time.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
-    /// Class constant names in declaration order for PHP reflection iteration.
+    /// The names in `constants`, in declaration order (trait constants after the class's own).
+    /// `constants` is a map and has no order; `ReflectionClass::getConstants()` needs PHP's.
     pub constant_order: Vec<String>,
     /// Deprecation reason for class constants carrying `#[\Deprecated]`, keyed
     /// by the case-sensitive constant name. An empty string means no reason.
@@ -380,6 +460,8 @@ pub struct ClassInfo {
     /// redeclared here. `methods` and `static_methods` are hashed signature maps, so any order
     /// read from them is the hasher's.
     pub reflection_methods: Vec<String>,
+    /// Concrete and inherited hooks, including whether the visible property has backing storage.
+    pub property_hooks: HashMap<String, crate::parser::ast::PropertyHooks>,
     pub static_properties: Vec<(String, PhpType)>,
     pub static_defaults: Vec<Option<Expr>>,
     pub static_property_declaring_classes: HashMap<String, String>,
@@ -461,7 +543,303 @@ pub fn constructor_owner<'a>(
     None
 }
 
+/// What php does with ONE property NAME on one class, seen from one scope.
+///
+/// A by-name property dispatch has FOUR possible answers, not two, and this compiler's
+/// `ClassInfo` cannot distinguish them on its own: `properties` is the PHYSICAL slot table, so it
+/// still carries a strict ancestor's private slot under its plain name, and `property_offsets`,
+/// `property_visibilities` and `property_declaring_classes` all still answer for that name.
+/// Every by-name dispatch has to ask `resolve_property_name` before it matches a runtime name
+/// against a slot. All four outcomes were measured against php 8.5.10.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PropertyNameResolution {
+    /// The name addresses the slot `visible_property_index` resolves on this class.
+    Visible,
+    /// The name addresses the private slot `scope` declares and this class INHERITS.
+    ///
+    /// The index is the scope class's own layout index, which is also the receiver's because the
+    /// physical layout of a subclass starts with its parent's slots in order. This is the same
+    /// fact `crate::ir_lower::clone_overrides::scoped_setters` relies on, and it is what keeps
+    /// `Base::readP()` on a `Child` that redeclares `private $p` reading BASE's slot.
+    ScopePrivate {
+        /// Class that declares the private property, an ancestor of the receiver's class.
+        scope: String,
+        /// That class's own physical slot index for the property.
+        index: usize,
+    },
+    /// The name is not in this class's by-name table from this scope, so it is a DYNAMIC property.
+    ///
+    /// php 7.4 removed shadow properties: a strict ancestor's private property lives under a
+    /// mangled key and the child's by-name table does not contain it at all. Outside the
+    /// declaring class a read reports `Undefined property`, `isset()` answers false, `unset()` is
+    /// a no-op, and a write CREATES a distinct dynamic property with the usual deprecation.
+    Dynamic,
+    /// The name is in the table, but this scope may not touch it: php raises a catchable `Error`.
+    ///
+    /// `Cannot access private property D::$n` for a private property declared by the receiver's
+    /// OWN class, `Cannot access protected property P::$p` for a protected one reached from an
+    /// unrelated scope. Both verbatim from php 8.5.10, with no scope suffix.
+    Inaccessible(Visibility),
+}
+
+/// Resolves one property NAME against a receiver class and an invocation scope, `None` for global.
+///
+/// php's own order, measured against php 8.5.10 across the declaring scope, a child scope, an
+/// unrelated scope and global scope:
+///
+/// 1. A scope that DECLARES a private property of this name, and that the receiver is an instance
+///    of, selects its own slot. This is what makes a parent-private property reachable on a child
+///    object and what keeps two same-named private slots apart.
+/// 2. A name with no visible declaration is dynamic.
+/// 3. Public is always visible.
+/// 4. Protected needs php's ancestor-or-descendant test against the DECLARING class.
+/// 5. Private declared by a STRICT ancestor is invisible, so it is dynamic; private declared by
+///    the receiver's own class is an access error, because step 1 already took the one scope that
+///    may reach it.
+pub fn resolve_property_name(
+    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
+    class_name: &str,
+    property: &str,
+    scope: Option<&str>,
+) -> PropertyNameResolution {
+    if let Some(resolution) =
+        resolve_scope_private_property_name(classes, class_name, property, scope)
+    {
+        return resolution;
+    }
+    let Some(info) = classes.get(class_name) else {
+        return PropertyNameResolution::Dynamic;
+    };
+    if info.visible_property_index(property).is_none() {
+        return PropertyNameResolution::Dynamic;
+    }
+    let visibility = info
+        .property_visibilities
+        .get(property)
+        .cloned()
+        .unwrap_or(Visibility::Public);
+    let declaring = info
+        .property_declaring_classes
+        .get(property)
+        .map(String::as_str)
+        .unwrap_or(class_name);
+    match visibility {
+        Visibility::Public => PropertyNameResolution::Visible,
+        Visibility::Protected => {
+            if scope_shares_class_hierarchy(classes, scope, declaring) {
+                PropertyNameResolution::Visible
+            } else {
+                PropertyNameResolution::Inaccessible(Visibility::Protected)
+            }
+        }
+        // Checker-injected builtin subclasses use synthetic PHP bodies to model engine-owned
+        // methods. Those bodies must be able to reach the private storage inherited from another
+        // injected builtin, such as FilterIterator::__construct writing IteratorIterator::$inner.
+        // User code never receives this privilege: its lexical scope is not a catalog builtin.
+        Visibility::Private
+            if builtin_scope_owns_inherited_storage(classes, class_name, declaring, scope) =>
+        {
+            PropertyNameResolution::Visible
+        }
+        // Step 1 already answered for the declaring scope, so reaching here means this scope is
+        // not it. A STRICT ancestor's slot is invisible rather than refused.
+        Visibility::Private if declaring != class_name => PropertyNameResolution::Dynamic,
+        Visibility::Private => PropertyNameResolution::Inaccessible(Visibility::Private),
+    }
+}
+
+/// Returns whether a checker-injected builtin method is accessing inherited engine storage.
+///
+/// Builtin class bodies are synthetic compiler implementation details, not user-authored PHP.
+/// Requiring their inherited private slots to follow userland dynamic-property rules would either
+/// add a hash to fixed builtin layouts or reject every program that injects the relevant prelude.
+/// The receiver and lexical scope must name the same builtin subclass, and the declaring class
+/// must be a builtin ancestor, so ordinary subclasses and unrelated builtin receivers remain
+/// governed by PHP visibility.
+fn builtin_scope_owns_inherited_storage(
+    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
+    class_name: &str,
+    declaring: &str,
+    scope: Option<&str>,
+) -> bool {
+    let Some(scope) = scope else {
+        return false;
+    };
+    let is_checker_injected = |name| {
+        elephc_builtin_contract::lookup_class(name).is_some_and(|contract| {
+            contract.aot == elephc_builtin_contract::ClassRoute::CheckerInjected
+        })
+    };
+    scope == class_name
+        && declaring != class_name
+        && class_inherits_from(classes, class_name, declaring)
+        && is_checker_injected(scope)
+        && is_checker_injected(declaring)
+}
+
+/// Returns whether the layout of `class_name` carries `property` but php resolves it to a
+/// DYNAMIC property from `scope`.
+///
+/// This is the strict-ancestor-private shape and nothing else. `resolve_property_name` alone is
+/// too wide for it: that function answers `Dynamic` for EVERY name a class does not declare, so
+/// an ordinary undeclared name on an `#[\AllowDynamicProperties]` class would pass too. The
+/// physical-slot test is what narrows it, because only a strict ancestor's private slot is both
+/// present in the layout and invisible by name.
+///
+/// It is the single authority for three decisions that must agree: which mutation sites reserve
+/// per-instance hash storage (`crate::types::checker::scope_dynamic_storage`), which names the
+/// backend must keep away from the physical slot
+/// (`crate::codegen::lower_inst::objects::property_name_is_scope_dynamic`), and which names the
+/// checker must not validate against the ancestor's declared type.
+pub fn property_name_shadows_ancestor_private_slot(
+    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
+    class_name: &str,
+    property: &str,
+    scope: Option<&str>,
+) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    classes.get(normalized).is_some_and(|class_info| {
+        class_info
+            .properties
+            .iter()
+            .any(|(name, _)| name == property)
+    }) && resolve_property_name(classes, normalized, property, scope)
+        == PropertyNameResolution::Dynamic
+}
+
+/// Returns the scope-selected private slot for a name, when the scope owns one the receiver has.
+fn resolve_scope_private_property_name(
+    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
+    class_name: &str,
+    property: &str,
+    scope: Option<&str>,
+) -> Option<PropertyNameResolution> {
+    let scope_name = scope?;
+    let scope_info = classes.get(scope_name)?;
+    if !class_declares_private_property(scope_info, scope_name, property) {
+        return None;
+    }
+    if scope_name == class_name {
+        return Some(PropertyNameResolution::Visible);
+    }
+    if !class_inherits_from(classes, class_name, scope_name) {
+        return None;
+    }
+    // The receiver's own by-name table resolves this name to its own shadowing slot, so the arm
+    // has to carry the SCOPE's layout index instead of taking the receiver's answer.
+    let index = scope_info.visible_property_index(property)?;
+    Some(PropertyNameResolution::ScopePrivate {
+        scope: scope_name.to_string(),
+        index,
+    })
+}
+
+/// Returns whether `class_info` itself declares `property` as private.
+pub fn class_declares_private_property(
+    class_info: &ClassInfo,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    class_info.visible_property_index(property).is_some()
+        && class_info.property_visibilities.get(property) == Some(&Visibility::Private)
+        && class_info
+            .property_declaring_classes
+            .get(property)
+            .map(String::as_str)
+            .unwrap_or(class_name)
+            == class_name
+}
+
+/// Returns whether `child` reaches `ancestor` through the declared parent chain.
+pub fn class_inherits_from(
+    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
+    child: &str,
+    ancestor: &str,
+) -> bool {
+    let mut current = classes.get(child).and_then(|info| info.parent.as_deref());
+    let mut guard = 0usize;
+    while let Some(name) = current {
+        if name == ancestor {
+            return true;
+        }
+        guard += 1;
+        if guard > classes.len() + 1 {
+            return false;
+        }
+        current = classes.get(name).and_then(|info| info.parent.as_deref());
+    }
+    false
+}
+
+/// Returns php-src's `zend_check_protected` verdict: the scope is the class, an ancestor OR a
+/// descendant of it.
+pub fn scope_shares_class_hierarchy(
+    classes: &HashMap<String, ClassInfo, impl std::hash::BuildHasher>,
+    scope: Option<&str>,
+    declaring: &str,
+) -> bool {
+    let Some(scope) = scope else {
+        return false;
+    };
+    scope == declaring
+        || class_inherits_from(classes, scope, declaring)
+        || class_inherits_from(classes, declaring, scope)
+}
+
+/// Returns the physical object payload size: the class-id word, every declared property slot,
+/// and the optional trailing dynamic-property hash slot.
+///
+/// This is the single authority shared by object allocation and the free path's
+/// `_class_object_payload_sizes` table. They used to disagree: the Throwable allocation asked
+/// `allow_dynamic_properties` while the table asked `has_property_hash_storage`, so a compiled
+/// throwable subclass owned by eval storage was allocated eight bytes short. Freeing it then read
+/// the following heap block's word as its property hash and released an unrelated live array.
+pub fn object_payload_size(class_name: &str, info: &ClassInfo) -> usize {
+    let tail = class_name.eq_ignore_ascii_case("stdClass") || info.has_property_hash_storage();
+    8 + info.properties.len() * 16 + usize::from(tail) * 8
+}
+
 impl ClassInfo {
+    /// Returns whether the physical object layout includes a trailing property hash pointer.
+    pub fn has_property_hash_storage(&self) -> bool {
+        self.allow_dynamic_properties
+            || self.eval_property_storage
+            || self.clone_override_property_storage
+            || self.scope_dynamic_property_storage
+    }
+
+    /// Returns whether CREATING a dynamic property on an instance is deprecated rather than free.
+    ///
+    /// The clone-override hash is reserved by the compiler, not requested by the program, so php
+    /// 8.5 still reports `Creation of dynamic property C::$n is deprecated` for every class that
+    /// carries neither `#[\AllowDynamicProperties]` nor stdClass's engine exemption. Eval's own
+    /// reserved storage keeps its established behavior and is deliberately not consulted here.
+    pub fn dynamic_property_creation_is_deprecated(&self) -> bool {
+        (self.clone_override_property_storage || self.scope_dynamic_property_storage)
+            && !self.allow_dynamic_properties
+    }
+
+    /// Returns whether an UNDECLARED property name addresses this class's hash directly.
+    ///
+    /// Eval's reserved storage is deliberately excluded: it is reached only through
+    /// `__elephc_eval_property_hash_slot`, which gates every access on eval ownership so an
+    /// ordinary native instance of the same class keeps refusing the name.
+    pub fn dynamic_property_hash_is_name_addressable(&self) -> bool {
+        self.allow_dynamic_properties
+            || self.clone_override_property_storage
+            || self.scope_dynamic_property_storage
+    }
+
+    /// Returns whether a method-map entry is a generated property accessor rather than a PHP method.
+    pub fn is_property_hook_method(&self, method: &str) -> bool {
+        self.property_hooks.iter().any(|(property, hooks)| hooks.matches_accessor(property, method))
+    }
+
+    /// Returns whether the visible property has hooks but no backing value anywhere in its ancestry.
+    pub fn property_is_virtual(&self, property: &str) -> bool {
+        self.property_hooks.get(property).is_some_and(|hooks| hooks.is_virtual())
+    }
+
     /// Resolves the layout index of the property visible by name on this class.
     ///
     /// The result follows `property_offsets` when present so private parent
@@ -490,6 +868,34 @@ impl ClassInfo {
             .get(index)
             .copied()
             .unwrap_or_else(|| self.declared_properties.contains(property))
+    }
+
+    /// Establishes the runtime layout of untyped array slots before return inference reads them.
+    /// A hash with boxed values represents both lists and keyed arrays. Keeping a precise packed
+    /// type here until EIR metadata is built lets a forwarding function retain that obsolete ABI
+    /// after its getter has switched to the hash layout. Declared and scalar slots are unchanged.
+    pub(crate) fn normalize_untyped_array_property_storage(&mut self) {
+        for index in 0..self.properties.len() {
+            let (property, ty) = &self.properties[index];
+            if self.property_slot_is_declared(index, property)
+                || !matches!(ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+            {
+                continue;
+            }
+            self.properties[index].1 = Self::untyped_array_property_storage(ty.clone());
+        }
+    }
+
+    /// Applies the same array layout when an untyped slot first acquires its type from a write.
+    pub(crate) fn untyped_array_property_storage(ty: PhpType) -> PhpType {
+        if matches!(ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            }
+        } else {
+            ty
+        }
     }
 
     /// Returns whether the property visible by name has a declared PHP type.

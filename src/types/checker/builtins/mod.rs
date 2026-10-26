@@ -34,9 +34,9 @@ pub(crate) use catalog::{
 pub(crate) use catalog::is_php_visible_builtin_function;
 pub(crate) use callables::{
     array_element_type, array_filter_callback_arg_types, array_key_type,
-    array_walk_callback_arg_types, callback_supports_complex_descriptor_env,
-    check_array_callback_builtin_call, check_call_user_func, check_call_user_func_array,
-    check_function_exists,
+    callback_supports_complex_descriptor_env,
+    check_array_callback_builtin_call, check_array_walk_callback_builtin_call,
+    check_call_user_func, check_call_user_func_array, check_function_exists,
     check_preg_replace_callback_first_class_call, preg_operand_may_be_array,
     contextual_callback_arg_positions,
     runtime_callable_array_type,
@@ -116,6 +116,7 @@ impl Checker {
         name: &str,
         args: &[Expr],
         plan: Option<&crate::types::call_args::CallArgPlan>,
+        env: &TypeEnv,
     ) -> Result<(), CompileError> {
         let regular_param_count = def
             .params
@@ -146,6 +147,21 @@ impl Checker {
             // surely; only the LVALUE-SHAPE diagnostic underneath has nothing to say about a
             // spread, which is what that bail-out is for.
             self.record_reference_alias_root(arg);
+            // `sort($o->inner->items)` writes the sorted array back through a receiver whose
+            // class the checker cannot name, as a runtime-shaped value. Any class's untyped
+            // `$items` may be the slot, so none of them can keep a refined raw shape: the backend
+            // refuses a boxed value into one at run time. Same widening an `unset()` through such
+            // a receiver needs.
+            if let ExprKind::PropertyAccess { object, property } = &arg.kind {
+                let object_ty = self.infer_type(object, env)?;
+                if crate::types::checker::single_object_class_name(&object_ty).is_none() {
+                    super::clone_override_storage::record_property_unset_destination(
+                        self,
+                        &object_ty,
+                        Some(property.as_str()),
+                    );
+                }
+            }
             if matches!(arg.kind, ExprKind::Spread(_)) {
                 continue;
             }
@@ -211,24 +227,54 @@ impl Checker {
         // spreads. Only these arguments say how many values a spread of a written-out array
         // actually supplies, which is what the arity check below needs.
         let source_args = args;
+        // CUF accepts named variadic entries, then checks them against the callback.
+        // Its own callback parameter must still obey duplicate and ordering rules.
+        let forwards_callback_names = builtin_key == "call_user_func";
         let normalized_args;
         let mut builtin_arg_plan = None;
         let args = if let Some(sig) =
             (!is_lazy_construct).then(|| crate::types::builtin_call_sig(name)).flatten()
         {
-            let plan = self.plan_builtin_call_args(
-                &sig,
-                args,
-                span,
-                &format!("Builtin '{}'", name),
-                env,
-            )?;
-            normalized_args = plan.normalized_args();
-            builtin_arg_plan = Some(plan);
+            normalized_args = if forwards_callback_names {
+                self.normalize_named_call_args(&sig, args, span, &format!("Builtin '{}'", name), env)?
+            } else {
+                let plan = self.plan_builtin_call_args(
+                    &sig,
+                    args,
+                    span,
+                    &format!("Builtin '{}'", name),
+                    env,
+                )?;
+                let normalized = plan.normalized_args();
+                builtin_arg_plan = Some(plan);
+                normalized
+            };
             normalized_args.as_slice()
         } else {
             args
         };
+        // The source planner keeps indexed unpacks visible for runtime checks.
+        // Builtin signatures count literal unpacked values instead of containers,
+        // but only after the planner has validated ordering and named arguments.
+        let static_positional_args = (!is_lazy_construct)
+            .then(|| crate::types::call_args::expand_planned_positional_spreads(args))
+            .flatten();
+        let args = static_positional_args.as_deref().unwrap_or(args);
+        let mut spread_type_error = None;
+        let indexed_spread_args = (!is_lazy_construct && !forwards_callback_names
+            && crate::types::builtin_call_sig(name)
+                .is_some_and(|sig| !sig.ref_params.iter().any(|by_ref| *by_ref)))
+            .then(|| crate::types::call_args::coalesce_planned_indexed_spreads(args, |source| {
+                match self.infer_type(source, env) {
+                    Ok(ty) => matches!(ty.codegen_repr(), PhpType::Array(_)),
+                    Err(error) => { spread_type_error = Some(error); false }
+                }
+            }))
+            .flatten();
+        if let Some(error) = spread_type_error {
+            return Err(error);
+        }
+        let args = indexed_spread_args.as_deref().unwrap_or(args);
 
         if name == "eval" {
             // eval is not registry-backed, and argument normalization tolerates
@@ -240,6 +286,11 @@ impl Checker {
             // The magician archive contains the encoding-aware `mb_strlen()` implementation;
             // macOS exposes iconv through a separate system library while Linux keeps it in libc.
             self.require_macos_builtin_library("iconv");
+            // Eval can select any generated method or constructor by a runtime string. Magician
+            // collects every source variadic in a boxed-Mixed array, so the native frame must use
+            // that same storage even when PHP declared a narrower element type. The declaration's
+            // type expression remains authoritative for per-element coercion and Reflection.
+            self.promote_eval_native_variadic_containers()?;
             self.infer_type(&args[0], env)?;
             return Ok(Some(PhpType::Mixed));
         }
@@ -264,7 +315,19 @@ impl Checker {
                 .any(|arg| matches!(arg.kind, ExprKind::Spread(_)));
             let written_out_spread = has_spread_arg && spread_expanded_arg_count(source_args).is_some();
             let unknown_length_spread = has_spread_arg && !written_out_spread;
-            if !unknown_length_spread {
+            // An unpack contributes its runtime entries, not one argument. Shared
+            // validators accept unknown argument types and leave dynamic bounds to
+            // EIR binding. Mbstring checker hooks also accept dynamic spreads;
+            // other legacy hooks still require their fixed AST shape.
+            let runtime_arity = builtin_arg_plan.as_ref().is_some_and(|plan| plan.has_spread_args())
+                || has_spread_arg;
+            let runtime_arity = runtime_arity
+                && (builtin_key.starts_with("mb_")
+                    || !matches!(
+                        def.spec.semantics.validation,
+                        crate::builtins::semantics::BuiltinValidation::CheckerHook { .. }
+                    ));
+            if !unknown_length_spread && !(runtime_arity && !written_out_spread) {
                 crate::builtins::registry::check_arity(name, args.len(), span)?;
             }
             // A builtin the registry knows but this target does not provide is a hard error,
@@ -278,7 +341,7 @@ impl Checker {
                     ),
                 ));
             }
-            self.validate_registry_by_ref_args(def, name, args, builtin_arg_plan.as_ref())?;
+            self.validate_registry_by_ref_args(def, name, args, builtin_arg_plan.as_ref(), env)?;
             let requirement_input = crate::builtins::semantics::BuiltinRequirementInput {
                 args,
             };
@@ -312,15 +375,22 @@ impl Checker {
             // rather than the polymorphic runtime call, and that shape needs each operand named
             // at compile time. They are refused here, with the actual reason, rather than left to
             // surface as an operand-count mismatch from EIR validation.
-            if unknown_length_spread {
+            // Mbstring checker hooks read a spread themselves (see `runtime_arity` above), so
+            // they keep their own validation instead of this positional bail-out.
+            if unknown_length_spread && !builtin_key.starts_with("mb_") {
                 for arg in args {
                     self.infer_type(arg, env)?;
                 }
+                // `array_map(...$params)`, `range(...explode('-', $s))`: the operand count is a
+                // run-time value, and `crate::array_gradual_prelude` carries a helper that
+                // dispatches on it, so these are answered with the declared (`mixed`) type
+                // instead of being refused.
                 if matches!(
                     def.spec.semantics.validation,
                     crate::builtins::semantics::BuiltinValidation::CheckerHook { .. }
-                ) && args.len() < crate::builtins::registry::enforced_arity_bounds(name)
-                    .map_or(0, |(min, _)| min)
+                ) && crate::array_gradual_prelude::spread_helper(&builtin_key).is_none()
+                    && args.len() < crate::builtins::registry::enforced_arity_bounds(name)
+                        .map_or(0, |(min, _)| min)
                 {
                     return Err(CompileError::new(
                         span,
@@ -407,6 +477,20 @@ impl Checker {
                 env,
             };
             let ret = check(&mut cx)?;
+            {
+                // A callback written as an assignment -- `array_any($tags, $closure = function
+                // (array $tag) { ... })` (Symfony monolog-bundle `AddProcessorsPass`), reusing
+                // `$closure` on the next line -- was skipped above, so the variable never
+                // reached the environment and its later read was `Undefined variable`. The hook
+                // has now checked the closure with its contextual parameter types; binding the
+                // variable is best-effort and must never turn that valid check into a refusal.
+                let contextual = contextual_callback_arg_positions(name);
+                for (idx, arg) in args.iter().enumerate() {
+                    if contextual.contains(&idx) && matches!(arg.kind, ExprKind::Assignment { .. }) {
+                        let _ = self.infer_type(arg, env);
+                    }
+                }
+            }
             return Ok(Some(ret));
         }
 

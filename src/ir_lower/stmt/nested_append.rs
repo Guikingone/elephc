@@ -248,6 +248,19 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         // Anything else (a `Mixed` property, an object) is out of scope: fall open to today's
         // lowering, which is what the parser's desugar already produces. Keep key evaluation in
         // that path so unsupported receivers do not evaluate it twice.
+        //
+        // The probe read above still produced a value, and for a `Mixed` property it is an OWNED
+        // box (`prop_get` retains one). Nothing below consumes it, so it is retired here; left
+        // alone it leaked one box per append (`$this->tags[$name][] = $attributes`, Symfony's
+        // `Definition::addTag`).
+        //
+        // Only an OWNING read is retired. A static property load BORROWS the slot's box, and
+        // releasing it dropped the static's own reference: after the merge a typed static `array`
+        // reaches this path as a boxed php-array, and `self::$b[$k][] = $v` freed the bucket it
+        // was about to append to (`count()` then read an int, siblings vanished).
+        if ctx.value_is_owning_temporary(container) {
+            crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
+        }
         super::lower_stmt(ctx, group.read);
         super::lower_stmt(ctx, group.push);
         super::lower_stmt(ctx, group.write_back);

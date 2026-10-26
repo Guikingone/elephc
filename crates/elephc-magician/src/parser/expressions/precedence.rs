@@ -266,7 +266,7 @@ impl Parser {
         {
             return Ok(None);
         }
-        if !is_assignment_target(target) {
+        if !is_assignment_target(target) && !target.is_call_result() {
             return Err(EvalParseError::UnexpectedToken);
         }
         self.advance();
@@ -536,7 +536,9 @@ impl Parser {
                 expr: Box::new(expr),
             });
         }
-        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "clone")) {
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "clone"))
+            && !matches!(self.peek(), TokenKind::LParen)
+        {
             self.advance();
             let expr = self.parse_unary()?;
             return Ok(EvalExpr::Clone(Box::new(expr)));

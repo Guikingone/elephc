@@ -1,16 +1,16 @@
 ---
-title: "constant() — internals"
+title: "constant() - internals"
 description: "Compiler internals for constant(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 617
+  order: 619
 ---
 
-## `constant()` — internals
+## `constant()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/constant.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/constant.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

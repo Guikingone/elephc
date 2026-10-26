@@ -236,7 +236,13 @@ fn publish_cell_through_by_ref_slot(
     slot: LocalSlotId,
     array: ValueId,
 ) -> Result<()> {
-    crate::codegen::lower_inst::store_value_through_ref_cell_slot(ctx, slot, array, &PhpType::Mixed)
+    crate::codegen::lower_inst::store_value_through_ref_cell_slot(
+        ctx,
+        slot,
+        array,
+        &PhpType::Mixed,
+        crate::codegen::lower_inst::RefCellStorePrevious::Keep,
+    )
 }
 
 /// Emits one runtime-kind branch of `array_pop`'s dynamic path.
@@ -438,15 +444,6 @@ pub(super) fn lower_assoc_array_shift(
     array: ValueId,
 ) -> Result<()> {
     lower_assoc_array_remove(ctx, inst, array, "__rt_hash_shift")
-}
-
-/// Lowers `array_pop()` directly on associative hash storage and writes the shortened hash back.
-pub(super) fn lower_assoc_array_pop(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    array: ValueId,
-) -> Result<()> {
-    lower_assoc_array_remove(ctx, inst, array, "__rt_hash_pop")
 }
 
 /// Applies one associative end-removal helper and publishes both its container and value results.

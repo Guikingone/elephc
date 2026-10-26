@@ -17,6 +17,7 @@ pub(super) fn coerce_to_return_type(
 ) -> LoweredValue {
     let return_php_type = ctx.return_php_type.clone();
     let value = guard_generic_object_nominal_return(ctx, value, &return_php_type, span);
+    let value = guard_gradual_union_return(ctx, value, &return_php_type, span);
     let source_declared_type = ctx.builder.value_php_type(value.value).clone();
     let value = match crate::types::param_binding::scalar_param_cast(
         &return_php_type,
@@ -48,6 +49,9 @@ pub(super) fn coerce_to_return_type(
     if let Some(value) = coerce_container_to_return_type(ctx, value, span) {
         return value;
     }
+    if let Some(value) = relabel_concrete_container_as_iterable(ctx, value, span) {
+        return value;
+    }
     if value.ir_type == ctx.return_type {
         return value;
     }
@@ -66,14 +70,24 @@ pub(super) fn coerce_to_return_type(
         IrType::Heap(_) if ctx.return_php_type.codegen_repr() == PhpType::Mixed => {
             ctx.box_value_as_mixed(value, ctx.return_php_type.clone(), span)
         }
-        IrType::Heap(_) => ctx.emit_value(
-            Op::RuntimeCall,
-            vec![value.value],
-            None,
-            ctx.return_php_type.clone(),
-            effects_lookup::runtime_effects(),
-            span,
-        ),
+        IrType::Heap(_) => {
+            let converted = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value.value],
+                None,
+                ctx.return_php_type.clone(),
+                effects_lookup::runtime_effects(),
+                span,
+            );
+            // The conversion hands back its own owner of the payload; an owned boxed source
+            // (`fn ($r) => array_reverse($r)` inferred `: array`) was otherwise never released.
+            if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Mixed
+                && ctx.value_is_owning_temporary(value)
+            {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+            }
+            converted
+        }
         IrType::Void => value,
     }
 }
@@ -128,8 +142,10 @@ fn declared_int_return_boundary(
     // `private ?int $requestType` and returns it from `getRequestType(): int`, which reference
     // PHP accepts and raises on only when the value really is null.
     let value = if matches!(source_repr, PhpType::TaggedScalar) {
-        let source_php_type = ctx.builder.value_php_type(value.value).clone();
-        ctx.box_value_as_mixed(value, source_php_type, span)
+        // The result is a real heap box, so it is typed `mixed`: typed as the compact `int|null`
+        // it came from, it was not an owning temporary and the release below never ran, leaking
+        // one box per `return $nullableInt;` from a declared `: int` function.
+        ctx.box_value_as_mixed(value, PhpType::Mixed, span)
     } else {
         value
     };
@@ -147,6 +163,51 @@ fn declared_int_return_boundary(
         crate::ir_lower::ownership::release_if_owned(ctx, value, span);
     }
     Some(verified)
+}
+
+/// Checks a boxed value returned through a declared scalar/array union at run time.
+///
+/// A declared `array` is the packed-or-hash union, stored boxed, so a `mixed` value crossing it
+/// needs no conversion -- and then nothing checked it: `function relay(mixed $v): array { return
+/// $v; }` handed a string back where php raises "relay(): Return value must be of type array,
+/// string returned". The parameter guard does the tag check; the data it carries is the full
+/// message prefix, which tells the backend to word the error as a return.
+fn guard_gradual_union_return(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    return_type: &PhpType,
+    span: Option<Span>,
+) -> LoweredValue {
+    if !ctx.return_type_is_declared {
+        return value;
+    }
+    let source_type = ctx.builder.value_php_type(value.value).clone();
+    if !crate::types::param_binding::gradual_union_requires_runtime_param_guard(
+        return_type,
+        &source_type,
+    ) {
+        return value;
+    }
+    let prefix = format!(
+        "{}(): Return value must be of type {}, ",
+        ctx.owner_name(),
+        return_type
+    );
+    let name = ctx.intern_string(&prefix);
+    // Only the check matters: the guard hands back the same box, and returning the original
+    // value keeps its ownership, which the backend's return path requires to be unambiguous.
+    ctx.emit_value(
+        Op::RuntimeCall,
+        vec![value.value],
+        Some(Immediate::ParameterType {
+            name,
+            strict_types: ctx.php_strict_types,
+        }),
+        return_type.clone(),
+        crate::ir_lower::effects_lookup::runtime_effects(),
+        span,
+    );
+    value
 }
 
 /// Inserts the runtime class guard required when an object crosses a narrower nominal boundary.
@@ -170,7 +231,12 @@ fn guard_generic_object_nominal_return(
     else {
         return value;
     };
+    // A generic `object` source (`Object("")`) proves no class: `function f(object $v): ?C
+    // { return $v; }` handed any object back unchecked where php throws the return TypeError.
+    let generic_object_source = matches!(&source_type, PhpType::Object(name)
+        if name.is_empty() || name.eq_ignore_ascii_case("object"));
     if matches!(source_type, PhpType::Object(_))
+        && !generic_object_source
         && crate::ir_lower::expr::param_accepts_object_without_string_coercion(
         ctx,
         return_type,
@@ -193,8 +259,13 @@ fn guard_generic_object_nominal_return(
     // A boxed source is unboxed into an object the guard takes its own reference on, so an owning
     // box is done with: `function f(mixed $m): Iterator { return $m->make(); }` leaked the box and
     // the object it still held, and the iterator's destructor never ran.
-    if matches!(source_type, PhpType::Mixed | PhpType::Union(_))
-        && matches!(return_type.codegen_repr(), PhpType::Object(_))
+    // An object source is the same story: the guard materializes its own owner (`__rt_incref` in
+    // `store_nominal_object_result`), so an owned call result -- `return parent::add($i);` in an
+    // override narrowing `DateTime` to `static` -- leaked one object per call.
+    if matches!(
+        source_type,
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)
+    ) && matches!(return_type.codegen_repr(), PhpType::Object(_))
         && ctx.value_is_owning_temporary(value)
     {
         crate::ir_lower::ownership::release_if_owned(ctx, value, span);
@@ -282,6 +353,46 @@ pub(super) fn coerce_container_to_return_type(
     }
     let acquired = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, span);
     coerce_owned_container_to_return_type(ctx, acquired, span)
+}
+
+/// Relabels a concrete array or object as an `iterable` return without converting it.
+///
+/// An `iterable` result shares the container's own representation, so the value is the same
+/// pointer under a different static type. Going through the generic runtime conversion instead
+/// declared the result a fresh owner while handing back the source's storage: `return $n;` of a
+/// frame-local array then skipped the return retain, the epilogue released the local, and the
+/// caller received a freed array (a `mixed` receiver boxed it as null). The relabel is an `Op::Move` of an owner:
+/// the return acquires a borrowed source first, and an owning temporary simply moves on.
+fn relabel_concrete_container_as_iterable(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> Option<LoweredValue> {
+    if ctx.return_php_type.codegen_repr() != PhpType::Iterable {
+        return None;
+    }
+    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    if !matches!(
+        source_ty,
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+    ) {
+        return None;
+    }
+    // A borrowed source (a frame local or a property) keeps its own reference for the frame
+    // epilogue, so the returned value takes one of its own; an owning temporary just moves on.
+    let owner = if ctx.value_is_owning_temporary(value) {
+        value
+    } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, span)
+    };
+    Some(ctx.emit_value(
+        Op::Move,
+        vec![owner.value],
+        None,
+        PhpType::Iterable,
+        Op::Move.default_effects(),
+        span,
+    ))
 }
 
 /// Whether `coerce_owned_container_to_return_type` converts a `source` container for `ret`.

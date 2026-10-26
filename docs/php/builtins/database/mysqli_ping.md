@@ -1,8 +1,8 @@
 ---
 title: "mysqli_ping()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Checks the connection and reconnects when that is enabled."
 sidebar:
-  order: 157
+  order: 158
 ---
 
 ## mysqli_ping()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_ping(mixed $mysql): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Checks the connection and reconnects when that is enabled.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

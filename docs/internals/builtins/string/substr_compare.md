@@ -1,16 +1,16 @@
 ---
-title: "substr_compare() — internals"
+title: "substr_compare() - internals"
 description: "Compiler internals for substr_compare(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 899
+  order: 993
 ---
 
-## `substr_compare()` — internals
+## `substr_compare()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/substr_compare.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/substr_compare.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

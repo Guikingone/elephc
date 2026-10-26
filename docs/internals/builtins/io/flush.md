@@ -1,16 +1,16 @@
 ---
-title: "flush() — internals"
+title: "flush() - internals"
 description: "Compiler internals for flush(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 333
+  order: 334
 ---
 
-## `flush()` — internals
+## `flush()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/flush.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/flush.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

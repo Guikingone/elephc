@@ -1,16 +1,16 @@
 ---
-title: "empty() — internals"
+title: "empty() - internals"
 description: "Compiler internals for empty(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 620
+  order: 624
 ---
 
-## `empty()` — internals
+## `empty()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/count_empty.rs`:500](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/count_empty.rs#L500) (`lower_empty`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/count_empty.rs`:601](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/count_empty.rs#L601) (`lower_empty`)
 - **Function symbol**: `lower_empty()`
 
 

@@ -160,10 +160,75 @@ impl Checker {
         folded_map_key(&self.extern_functions, name)
     }
 
-    /// Resolves type signatures for all user functions that were not already resolved during the
-    /// initial pass. Iterates `fn_decls`, calls `initial_function_param_types` then
-    /// `resolve_function_signature` for each unchecked function, and finally resolves all variant
-    /// groups via `resolve_function_variant_groups`. Appends errors to `errors`.
+    /// Re-resolves every user function whose return type is inferred, with the parameter types it
+    /// already has, and answers whether any return type changed. Diagnostics are not collected:
+    /// the first resolution reported them, and the final top-level pass reports what remains.
+    pub(super) fn reinfer_undeclared_function_returns(&mut self) -> bool {
+        let candidates: Vec<(String, Vec<(String, crate::types::PhpType)>, crate::types::PhpType)> = self
+            .functions
+            .iter()
+            // A `mixed` return is already the widest answer; re-resolving could only narrow it,
+            // which is what undid `widen_dynamic_only_passthrough_returns`.
+            .filter(|(name, sig)| {
+                !sig.declared_return
+                    && sig.return_type.codegen_repr() != crate::types::PhpType::Mixed
+                    && self.fn_decls.contains_key(*name)
+            })
+            .map(|(name, sig)| (name.clone(), sig.params.clone(), sig.return_type.clone()))
+            .collect();
+        let mut changed = false;
+        for (name, params, before) in candidates {
+            let Some(decl) = self.fn_decls.get(&name).cloned() else {
+                continue;
+            };
+            if self.resolve_function_signature(&name, &decl, params).is_err() {
+                continue;
+            }
+            if self.functions.get(&name).is_some_and(|sig| sig.return_type != before) {
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Rechecks only functions carrying a scalar-foreach diagnostic after return types settle.
+    /// Declared returns (notably void) skip return reinference, but their loop subjects can also
+    /// depend on a method's provisional return. Rewalk the body so locals derived from that
+    /// return are refreshed too; merely reinferring the subject in its old environment is stale.
+    pub(super) fn recheck_foreach_warning_functions(&mut self, errors: &mut Vec<CompileError>) {
+        let mut names: Vec<String> = self
+            .foreach_warnings
+            .values()
+            .filter_map(|(function, _)| function.clone())
+            .collect();
+        names.sort();
+        names.dedup();
+        for name in names {
+            let Some(decl) = self.fn_decls.get(&name).cloned() else {
+                continue;
+            };
+            let Some((params, return_type)) = self
+                .functions
+                .get(&name)
+                .map(|sig| (sig.params.clone(), sig.return_type.clone()))
+            else {
+                continue;
+            };
+            if let Err(error) = self.resolve_function_signature(&name, &decl, params) {
+                errors.extend(error.flatten());
+            }
+            // A diagnostic rewalk uses the direct-call parameter types. They cannot narrow a
+            // Mixed return already widened for dynamic callers that may supply other values.
+            if return_type == crate::types::PhpType::Mixed {
+                if let Some(signature) = self.functions.get_mut(&name) {
+                    signature.return_type = return_type;
+                }
+            }
+        }
+    }
+
+    /// Resolves type signatures for user functions not already resolved during the initial pass,
+    /// then resolves variant groups. Appends errors to `errors`.
     pub(super) fn resolve_unchecked_functions(&mut self, errors: &mut Vec<CompileError>) {
         let unchecked: Vec<String> = self
             .fn_decls
@@ -234,6 +299,77 @@ impl Checker {
             // parameter each carry a real fact and keep it.
             if !declared && !has_default && !by_ref && *param_ty == crate::types::PhpType::Int {
                 *param_ty = crate::types::PhpType::Mixed;
+            }
+        }
+    }
+
+    /// Reports whether a real call site ever invoked this declaration with an argument list.
+    ///
+    /// An include-variant declaration is registered under a GENERATED symbol
+    /// (`__elephc_include_variant_{hash}_{local}`) while the call site names the function the way
+    /// the source wrote it, so the two never match directly. The mapping is read back out of
+    /// `function_variant_groups`, whose key IS the public PHP name and whose values are exactly
+    /// the symbols the resolver generated for it — not parsed back out of the symbol's spelling,
+    /// which a user function named like a generated variant could imitate.
+    ///
+    /// A call to `append_item` reaches whichever variant of `append_item` is live, so any variant
+    /// of a called name counts as called. That is the conservative direction: the only effect is
+    /// to leave a return type alone. A variant reachable solely through a dynamic callable
+    /// therefore keeps the placeholder, exactly as it did before the widening existed.
+    fn function_was_called_directly(&self, name: &str) -> bool {
+        if self.functions_called_directly.contains(name) {
+            return true;
+        }
+        self.function_variant_groups
+            .iter()
+            .any(|(public_name, variants)| {
+                variants.iter().any(|variant| variant == name)
+                    && self.functions_called_directly.contains(public_name)
+            })
+    }
+
+    /// Records `mixed` for every function that returns one of its own untyped parameters and was
+    /// never called with an argument list.
+    ///
+    /// An untyped parameter starts as the `Int` PLACEHOLDER, which a real call site replaces with
+    /// the argument's type. A function no call site ever passed anything to keeps it — so a return
+    /// inferred from that parameter records `Int` for a value that is really whatever the caller
+    /// passes. Reached through `call_user_func`, `array_map` or a first-class callable, the
+    /// runtime-callable invoker then coerces through the recorded type and a returned string
+    /// arrives as `int(0)`, silently (issue #576).
+    ///
+    /// The gate is `functions_called_directly`, not membership in `functions`. Those differ for
+    /// exactly the shape that matters: `array_map(h(...), […])` RESOLVES `h` while checking the
+    /// callable expression, inserting a placeholder-based signature, without ever calling it.
+    ///
+    /// Gated at all ON PURPOSE. Widening every pass-through body instead feeds back:
+    /// `function grow($arr) { … ; return $arr; }` called as `$arr = grow($arr);` would record
+    /// `mixed`, the caller's local would become `mixed`, the next call would re-specialize the
+    /// parameter to `mixed`, and `array_push($arr, …)` inside the body would stop type-checking.
+    pub(super) fn widen_dynamic_only_passthrough_returns(&mut self) {
+        let candidates: Vec<String> = self
+            .fn_decls
+            .keys()
+            .filter(|name| !self.function_was_called_directly(name))
+            .cloned()
+            .collect();
+        for name in candidates {
+            let Some(decl) = self.fn_decls.get(&name).cloned() else {
+                continue;
+            };
+            let Some(signature) = self.functions.get(&name) else {
+                continue;
+            };
+            if !crate::types::dynamic_params::return_exposes_dynamic_param(
+                &decl.body,
+                signature,
+                &name,
+                &self.callable_param_sigs,
+            ) {
+                continue;
+            }
+            if let Some(signature) = self.functions.get_mut(&name) {
+                signature.return_type = crate::types::PhpType::Mixed;
             }
         }
     }
@@ -357,6 +493,12 @@ impl Checker {
     /// before individual variants are fully resolved. Returns `Ok(None)` if no declaration exists
     /// for the variant. `uncalled` widens the undeclared parameters' seeds exactly as the variants
     /// themselves are widened, so the placeholder never advertises a type they will not have.
+    ///
+    ///
+    /// A recursive call inside an include-loaded variant names the group, so this placeholder is
+    /// what types that self-call while the variant's body is walked. It is built by the same
+    /// `provisional_function_sig` the free-function path uses, so the declared return hint (or
+    /// `Generator` for a body with `yield`) seeds it instead of a blanket `Int` (issue #635).
     fn provisional_variant_group_sig(
         &mut self,
         first_variant: &str,
@@ -369,29 +511,7 @@ impl Checker {
         if uncalled {
             Self::widen_unrefined_params_of_an_uncalled_function(&decl, &mut param_types);
         }
-        Ok(Some(FunctionSig {
-            params: param_types,
-            param_type_exprs: decl
-                .param_types
-                .iter()
-                .cloned()
-                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
-                .collect(),
-            param_attributes: decl.param_attributes.clone(),
-            defaults: decl.defaults,
-            return_type: crate::types::PhpType::Int,
-            declared_return: decl.return_type.is_some(),
-            by_ref_return: false,
-            ref_params: decl.ref_params,
-            declared_params: decl
-                .param_types
-                .iter()
-                .map(|type_ann| type_ann.is_some())
-                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
-                .collect(),
-            variadic: decl.variadic,
-            deprecation: None,
-        }))
+        Ok(Some(self.provisional_function_sig(&decl, param_types)))
     }
 }
 

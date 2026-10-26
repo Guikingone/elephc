@@ -22,7 +22,7 @@ mod merge;
 mod validation;
 
 #[derive(Debug, Clone)]
-/// A class with all traits fully expanded, property/method conflicts resolved,
+/// A class with all traits fully expanded, property/method/constant conflicts resolved,
 /// and direct members merged. Produced by `flatten_classes` and consumed by
 /// schema building, type checking, and codegen.
 pub struct FlattenedClass {
@@ -53,7 +53,7 @@ struct TraitDeclInfo {
 }
 
 #[derive(Clone)]
-/// Cached result of fully expanding a trait: all properties and methods
+/// Cached result of fully expanding a trait: all properties, methods, and constants
 /// after applying trait_uses, conflict resolution, and adaptations.
 /// Stored in the expansion cache to avoid repeated work.
 struct ExpandedTrait {
@@ -136,6 +136,7 @@ pub fn flatten_classes(
         }
     }
 
+    let inherited_implementations = index_declared_implementations(program);
     let mut cache = HashMap::new();
     let mut stack = Vec::new();
     let mut flattened = Vec::new();
@@ -178,6 +179,11 @@ pub fn flatten_classes(
                             continue;
                         }
                     };
+                let imported_methods = drop_abstract_methods_implemented_by_ancestor(
+                    imported_methods,
+                    extends.as_ref().map(|parent| parent.as_str()),
+                    &inherited_implementations,
+                );
                 let merged_props = match merge::merge_class_properties(
                     &imported_props,
                     properties,
@@ -215,13 +221,16 @@ pub fn flatten_classes(
                         continue;
                     }
                 };
-                let (merged_props, merged_methods, merged_constants) =
+                let (merged_props, mut merged_methods, merged_constants) =
                     crate::magic_constants::bind_trait_class_constants(
                         merged_props,
                         merged_methods,
                         merged_constants,
                         name,
                     );
+                if extends.is_none() {
+                    drop_branches_guarded_by_absent_self_static(&mut merged_methods, &merged_props);
+                }
                 flattened.push(FlattenedClass {
                     name: name.clone(),
                     span: stmt.span,
@@ -336,6 +345,45 @@ pub fn flatten_classes(
 }
 
 /// Returns the direct trait names from a group of trait-use declarations.
+/// Empties `if (isset(self::$p)) { ... }` bodies in a parentless class that declares no static
+/// `$p`, once its trait methods are copied in.
+///
+/// `self::` in a trait method is the using class, so in that copy the condition is php's
+/// constant `false` and the body never runs. Symfony's `HttpClientTrait` guards
+/// `foreach (self::$emptyDefaults ...)` this way and `CachingHttpClient` declares no such
+/// static; checking the dead body refused the whole file. A class with a parent is left alone,
+/// since an ancestor may declare the static.
+fn drop_branches_guarded_by_absent_self_static(
+    methods: &mut [ClassMethod],
+    properties: &[crate::parser::ast::ClassProperty],
+) {
+    use crate::parser::ast::visit::{walk_nodes_mut, NodeMut};
+    use crate::parser::ast::{ExprKind, StaticReceiver};
+    let declares = |property: &str| {
+        properties
+            .iter()
+            .any(|declared| declared.is_static && declared.name == property)
+    };
+    for method in methods.iter_mut() {
+        walk_nodes_mut(&mut method.body, &mut |node| {
+            let NodeMut::Stmt(stmt) = node else { return };
+            let StmtKind::If { condition, then_body, .. } = &mut stmt.kind else { return };
+            let ExprKind::FunctionCall { name, args } = &condition.kind else { return };
+            if !name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("isset") || args.len() != 1 {
+                return;
+            }
+            if let ExprKind::StaticPropertyAccess { receiver: StaticReceiver::Self_, property } =
+                &args[0].kind
+            {
+                if !declares(property) {
+                    then_body.clear();
+                    condition.kind = ExprKind::BoolLiteral(false);
+                }
+            }
+        });
+    }
+}
+
 fn used_trait_names(trait_uses: &[TraitUse]) -> Vec<String> {
     trait_uses
         .iter()
@@ -390,4 +438,69 @@ fn trait_alias_source_trait(
             .any(|candidate| candidate.name.eq_ignore_ascii_case(method))
             .then(|| trait_name.as_str().to_string())
     })
+}
+
+/// Per class: its parent and the instance methods it declares WITH a body.
+type DeclaredImplementations = HashMap<String, (Option<String>, HashSet<String>)>;
+
+/// Indexes, for every class declaration, its parent and its directly declared implementations.
+fn index_declared_implementations(program: &Program) -> DeclaredImplementations {
+    let mut index = HashMap::new();
+    for stmt in program {
+        if let StmtKind::ClassDecl { name, extends, methods, .. } = &stmt.kind {
+            index.insert(
+                php_symbol_key(name),
+                (
+                    extends.as_ref().map(|parent| php_symbol_key(parent.as_str())),
+                    methods
+                        .iter()
+                        .filter(|method| !method.is_abstract && !method.is_static)
+                        .map(|method| php_symbol_key(&method.name))
+                        .collect(),
+                ),
+            );
+        }
+    }
+    index
+}
+
+/// Drops an ABSTRACT method a trait imports when an ancestor class already implements it.
+///
+/// A trait's `abstract public function getParentKey();` states a requirement, not a
+/// declaration to install: when the parent class provides the implementation, php keeps it and
+/// the requirement is met. Laravel's `HasOne extends HasOneOrMany` and uses
+/// `ComparesRelatedModels` for exactly that. Left in, the abstract import was applied over the
+/// inherited body and refused as "Cannot make concrete method abstract".
+fn drop_abstract_methods_implemented_by_ancestor(
+    imported: Vec<ClassMethod>,
+    parent: Option<&str>,
+    index: &DeclaredImplementations,
+) -> Vec<ClassMethod> {
+    if parent.is_none() || !imported.iter().any(|method| method.is_abstract) {
+        return imported;
+    }
+    imported
+        .into_iter()
+        .filter(|method| {
+            if !method.is_abstract || method.is_static {
+                return true;
+            }
+            let key = php_symbol_key(&method.name);
+            let mut cursor = parent.map(php_symbol_key);
+            let mut seen = HashSet::new();
+            while let Some(class_key) = cursor {
+                if !seen.insert(class_key.clone()) {
+                    break;
+                }
+                let Some((next, implemented)) = index.get(&class_key) else {
+                    break;
+                };
+                if implemented.contains(&key) {
+                    return false;
+                }
+                cursor = next.clone();
+            }
+            true
+        })
+        .collect()
 }

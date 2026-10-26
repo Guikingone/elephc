@@ -69,10 +69,17 @@ pub(in crate::interpreter) fn eval_implode_result(
             output.extend_from_slice(&separator);
         }
         let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        let value = eval_string_context_value(value, context, values)?;
-        let value = values.string_bytes(value)?;
-        output.extend_from_slice(&value);
+        let element = values.array_get(array, key)?;
+        // The key and the element read are this iteration's owners; keeping them leaked two
+        // cells per element. `__toString()` hands back a fresh string cell of its own.
+        values.release(key)?;
+        let text = eval_string_context_value(element, context, values)?;
+        let bytes = values.string_bytes(text)?;
+        if text.as_ptr() != element.as_ptr() {
+            values.release(text)?;
+        }
+        values.release(element)?;
+        output.extend_from_slice(&bytes);
     }
     values.string_bytes_value(&output)
 }

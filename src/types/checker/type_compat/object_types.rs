@@ -11,6 +11,7 @@
 use std::collections::HashSet;
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, Visibility};
 use crate::types::{EnumInfo, PhpType, TypeEnv};
 
@@ -30,6 +31,21 @@ pub(crate) fn type_is_gradual_object_family(ty: &PhpType) -> bool {
             )
         }),
         _ => false,
+    }
+}
+
+/// Returns PHP's canonical spelling for a global builtin iterable interface name.
+///
+/// Matching the complete normalized name keeps a namespaced user interface such as
+/// `Domain\Traversable` nominal and prevents it from acquiring builtin foreach semantics.
+pub(super) fn canonical_builtin_iterable_interface_name(
+    type_name: &str,
+) -> Option<&'static str> {
+    match php_symbol_key(type_name.trim_start_matches('\\')).as_str() {
+        "traversable" => Some("Traversable"),
+        "iterator" => Some("Iterator"),
+        "iteratoraggregate" => Some("IteratorAggregate"),
+        _ => None,
     }
 }
 
@@ -97,6 +113,30 @@ impl Checker {
             }),
             Visibility::Private => self.current_class.as_deref() == Some(declaring_class),
         }
+    }
+
+    /// Whether `[$object, 'method']` names an instance method the class being checked cannot reach.
+    ///
+    /// php does not reject such a callable when it is written: `call_user_func()` and the other
+    /// callback builtins validate it when they run and throw a `TypeError`, or hand the call to
+    /// `__call()`. The checker therefore must not bind the pair to the method as though it were
+    /// callable here; a callable it leaves unresolved takes the runtime callable-array path,
+    /// which raises php's error. A method the class does not hold at all stays "reachable" so the
+    /// existing undefined-method handling is untouched.
+    pub(crate) fn instance_callable_method_unreachable(&self, class_name: &str, method: &str) -> bool {
+        let method_key = crate::names::php_symbol_key(method);
+        let Some(class_info) = self.classes.get(class_name) else {
+            return false;
+        };
+        let Some(visibility) = class_info.method_visibilities.get(&method_key) else {
+            return false;
+        };
+        let declaring_class = class_info
+            .method_declaring_classes
+            .get(&method_key)
+            .map(String::as_str)
+            .unwrap_or(class_name);
+        !self.can_access_member(declaring_class, visibility)
     }
 
     /// Returns the string label ("public", "protected", "private") for a visibility level.
@@ -189,6 +229,54 @@ impl Checker {
         false
     }
 
+    /// Returns true when a value statically typed `type_name`, which does not itself implement
+    /// `ArrayAccess`, can still be an `ArrayAccess` object at run time.
+    ///
+    /// A parameter typed with a CONTRACT (`Illuminate\Contracts\Container\Container`) or with a
+    /// non-final base class says nothing about the object behind it: the concrete class that
+    /// implements the contract is the one that adds `ArrayAccess`, and php indexes it without
+    /// complaint. The read is then a run-time dispatch, exactly like a `mixed` receiver; only
+    /// a type no `ArrayAccess` class can inhabit (a final class, or an interface/class none of
+    /// whose known implementers is indexable) keeps the compile-time refusal. The program's class
+    /// set is closed unless it can load classes the compiler never saw.
+    pub(crate) fn object_type_may_gain_array_access(&self, type_name: &str) -> bool {
+        let type_name = type_name.trim_start_matches('\\');
+        if self.object_type_implements_interface(type_name, "ArrayAccess") {
+            return true;
+        }
+        // The bare `object` type (an empty class name) names no contract at all: any object,
+        // `ArrayAccess` implementers included, can sit behind it. A property declared
+        // `private object $component` and read as `$this->component[$name]` under
+        // `$this->component instanceof \ArrayAccess && isset(...)` (Symfony UX
+        // `ComputedPropertiesProxy`) reads through the same boxed run-time dispatch.
+        if type_name.is_empty() {
+            return true;
+        }
+        let open_world = self.program_defers_unknown_classes || self.eval_barrier_active;
+        if self.interfaces.contains_key(type_name) {
+            return open_world
+                || self.classes.iter().any(|(name, info)| {
+                    self.class_implements_interface(name, "ArrayAccess")
+                        && info.interfaces.iter().any(|interface| {
+                            interface == type_name
+                                || self.interface_extends_interface(interface, type_name)
+                        })
+                });
+        }
+        let Some(info) = self.classes.get(type_name) else {
+            return self.object_type_may_be_eval_declared(type_name);
+        };
+        if info.is_final {
+            return false;
+        }
+        open_world
+            || self.classes.keys().any(|name| {
+                name != type_name
+                    && self.is_subclass_of(name, type_name)
+                    && self.class_implements_interface(name, "ArrayAccess")
+            })
+    }
+
     /// Returns true if `interface_name` is or transitively extends `ancestor_name`.
     /// Uses a DFS with cycle detection to walk interface parent chains.
     pub(crate) fn interface_extends_interface(
@@ -218,6 +306,14 @@ impl Checker {
         false
     }
 
+    /// Returns true when a name is unresolved after eval made the runtime class set open.
+    /// Such an object needs the runtime throw check instead of a closed-world diagnostic.
+    pub(crate) fn object_type_may_be_eval_declared(&self, type_name: &str) -> bool {
+        self.eval_barrier_active
+            && !self.classes.contains_key(type_name)
+            && !self.interfaces.contains_key(type_name)
+    }
+
     /// Returns true if `type_name` (a class or interface) implements `Throwable`,
     /// checking both direct implementation and interface extension chains.
     pub(crate) fn object_type_implements_throwable(&self, type_name: &str) -> bool {
@@ -236,7 +332,8 @@ impl Checker {
     /// Returns true if `type_name` (a class or interface) implements `Iterator` or
     /// `IteratorAggregate`, which are the interfaces that make a type usable in `foreach`.
     pub(crate) fn object_type_implements_iterable(&self, type_name: &str) -> bool {
-        if type_name == "Traversable" {
+        let type_name = type_name.trim_start_matches('\\');
+        if canonical_builtin_iterable_interface_name(type_name).is_some() {
             return true;
         }
         if self.classes.contains_key(type_name) {
@@ -446,6 +543,19 @@ impl Checker {
         param_index: usize,
         arg_ty: &PhpType,
     ) {
+        let param_is_ref = self
+            .classes
+            .get(instantiated_class)
+            .and_then(|class_info| class_info.methods.get("__construct"))
+            .and_then(|sig| sig.ref_params.get(param_index))
+            .copied()
+            .unwrap_or(false);
+        // An untyped parameter the constructor tests with `instanceof` stays `mixed`, as it does
+        // for methods (`keep_instanceof_tested_params_gradual`). Guzzle's `Request::__construct`
+        // does `if (!$uri instanceof UriInterface) { $uri = new Uri($uri); }`: one `new` passed a
+        // `Uri`, the parameter became `Uri`, and `new Uri($uri)` was refused in the body.
+        let param_is_instanceof_tested =
+            self.instanceof_tested_param(instantiated_class, "__construct", param_index);
         let Some((prop_name, declaring_class)) =
             self.classes.get(instantiated_class).and_then(|class_info| {
                 class_info
@@ -494,21 +604,45 @@ impl Checker {
         };
         let arg_ty = &joined;
 
-        for class_info in self.classes.values_mut() {
-            let shares_inherited_property = class_info
-                .property_declaring_classes
-                .get(&prop_name)
-                .is_some_and(|owner| owner == &declaring_class);
-
-            if !shares_inherited_property {
-                continue;
+        // Which classes inherit this property from `declaring_class` is fixed once the class table
+        // is built, and this runs for every constructor argument of every `new`: a scan over all
+        // classes (a hash probe each) per argument was the dominant cost of a pass. One pass over
+        // the table indexes every (declaring class, property) pair.
+        if self.shared_property_classes_count != self.classes.len() {
+            let mut index: std::collections::HashMap<(String, String), Vec<String>> =
+                std::collections::HashMap::new();
+            for (class_name, class_info) in &self.classes {
+                for (property, owner) in &class_info.property_declaring_classes {
+                    index
+                        .entry((owner.clone(), property.clone()))
+                        .or_default()
+                        .push(class_name.clone());
+                }
             }
+            self.shared_property_classes = index;
+            self.shared_property_classes_count = self.classes.len();
+        }
+        let sharing_names = self
+            .shared_property_classes
+            .get(&(declaring_class.clone(), prop_name.clone()))
+            .cloned()
+            .unwrap_or_default();
+        for sharing_name in &sharing_names {
+            #[cfg(test)]
+            crate::types::checker::SHARED_PROPERTY_CLASSES_VISITED.with(|count| count.set(count.get() + 1));
+            let Some(class_info) = self.classes.get_mut(sharing_name) else {
+                continue;
+            };
 
             let property_has_declared_type = class_info.visible_property_is_declared(&prop_name);
             if !property_has_declared_type {
                 if let Some(slot) = class_info.visible_property_index(&prop_name) {
                     if let Some(prop) = class_info.properties.get_mut(slot) {
-                        prop.1 = arg_ty.clone();
+                        prop.1 = if param_is_ref {
+                            PhpType::Mixed
+                        } else {
+                            arg_ty.clone()
+                        };
                     }
                 }
             }
@@ -525,10 +659,19 @@ impl Checker {
                 .copied()
                 .unwrap_or(false);
 
-            if constructor_maps_same_property && !constructor_param_is_declared {
+            if constructor_maps_same_property
+                && !constructor_param_is_declared
+                && !param_is_instanceof_tested
+            {
                 if let Some(sig) = class_info.methods.get_mut("__construct") {
-                    if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
-                        *param_ty = arg_ty.clone();
+                    if !sig.declared_params.get(param_index).copied().unwrap_or(false) {
+                        if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
+                            *param_ty = if param_is_ref {
+                                PhpType::Mixed
+                            } else {
+                                arg_ty.clone()
+                            };
+                        }
                     }
                 }
             }

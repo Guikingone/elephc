@@ -9,7 +9,7 @@
 //! - Pass ordering is observable: magic constants and conditionals run before resolver/name resolution and type checking.
 //! - Check/EIR/assembly-only paths return before read-only native artifact resolution.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -30,9 +30,12 @@ use crate::{
     web_prelude,
 };
 
+mod artifact_io;
+pub(crate) use artifact_io::write_artifact;
 mod backend;
 mod eir_output;
 mod frontend;
+mod mbstring_configuration;
 mod output;
 
 use output::{dynamic_eval_capability_warning, output_paths, OutputPaths};
@@ -41,6 +44,8 @@ use output::{dynamic_eval_capability_warning, output_paths, OutputPaths};
 /// Reads PHP source, tokenizes, parses, resolves names, type-checks, optimizes,
 /// generates assembly, and links into a native binary. Exits on any error.
 pub(crate) fn compile(config: CliConfig) {
+    // One numbering of included/autoloaded files per compile; see `resolver::resolve_*`.
+    crate::span::Span::reset_source_ids();
     let CliConfig {
         filename,
         heap_size,
@@ -70,12 +75,15 @@ pub(crate) fn compile(config: CliConfig) {
         defines,
         strict_php,
         strict_locals,
+        lint,
         web,
+        closed_world,
         web_isolation,
         with_crates,
         quiet,
         ini_overrides,
     } = config;
+    crate::closed_world::set_enabled(closed_world);
     let filename = filename.as_str();
     crate::progress::init(quiet);
     codegen::set_null_repr(null_repr);
@@ -84,6 +92,7 @@ pub(crate) fn compile(config: CliConfig) {
     // `PHP_SAPI`, `phpversion()`), which is baked far below this function's parameter list — in
     // `codegen_support::prescan::collect_constants` and in the `phpversion()` const-fold.
     codegen::set_compile_profile(php_version, web);
+    codegen::set_ini_overrides(ini_overrides.clone());
     crate::superglobals::set_compiling_for_web(web);
     // The SAPI also reaches the LEXER: php's CLI removes a leading `#!` line from every file it
     // compiles and a web SAPI echoes it (`crate::sapi`). This runs on the dedicated compile
@@ -139,9 +148,39 @@ pub(crate) fn compile(config: CliConfig) {
             process::exit(1);
         }
     }
+    // BEFORE ANY WORK RUNS. Every generated path is derived from the source filename, so a
+    // tree someone else controls chooses them; refusing a symlink destination up front is
+    // the only way to cover the ones an external assembler or linker writes, which this
+    // process never opens itself (issue #888).
+    let artifact_plan = artifact_io::ArtifactPlan::for_run(
+        check_only,
+        emit_ir,
+        emit_asm,
+        emit_source_map,
+        with_crates.contains("probe"),
+    );
+    if let Err(error) = artifact_io::reject_unsafe_destinations(&output_paths, &artifact_plan) {
+        eprintln!("error: {error}");
+        process::exit(1);
+    }
     let mut timings = CompileTimings::new(emit_timings);
 
     let (parsed, entry_source_unit) = frontend::read_and_parse(filename, source_mode, &defines, &mut timings);
+
+    // `opcache.preload` becomes an implicit `require_once` at the very top of the entry program,
+    // which is what reference PHP's startup preload pass IS for a compiler: the resolver inlines
+    // the target below, so its declarations are baked into the binary and its top-level code runs
+    // first. Injected BEFORE the autoload registry so a preload file that registers an autoloader
+    // or declares an autoloadable class is seen by both, and before `resolve` so its transitive
+    // requires join the OPcache script manifest. An unresolvable path is refused in here, at the
+    // compile-time position closest to reference's startup fatal.
+    let parsed = opcache_prelude::inject_preload_require(
+        parsed,
+        php_version,
+        web,
+        &ini_overrides,
+        filename,
+    );
 
     crate::progress::phase("autoload-build");
     let phase_started = Instant::now();
@@ -168,6 +207,15 @@ pub(crate) fn compile(config: CliConfig) {
         }
     };
     let ast = autoload::collect_aliases(ast);
+    // The runtime self-include (`autoload_runtime.php` requires `$_SERVER['SCRIPT_FILENAME']`) is
+    // value-producing, so the compiler-included skip cannot answer it. Give the entry's trailing
+    // capture-less closure a synthetic unit function the runtime include-unit dispatch can call,
+    // and keep the entry's own statements untouched. Runs on the USER program only, before any
+    // compiler prelude is injected: the preludes' own top-level statements would otherwise look
+    // like entry side effects and disqualify the shape. CLI entries take it too (`bin/console` is
+    // the same shape): the unit is only injected when re-running the entry's prefix would do
+    // nothing, so serving the closure IS php's re-execution.
+    let (ast, entry_return_injected) = crate::entry_return::inject(ast);
     timings.record_since("resolve", phase_started);
 
 
@@ -217,9 +265,11 @@ pub(crate) fn compile(config: CliConfig) {
     // consumed only when `opcache.preload` is set (see `opcache_prelude::preload_statistics`).
     let opcache_preload_symbols = opcache_prelude::collect_preload_symbols(&ast);
 
-    // Standard DOM classes are ordinary PHP declarations so they participate in name
-    // resolution, type checking, EIR lowering, and closed-world pruning like user classes.
-    let ast = dom_prelude::inject(ast);
+    // Standard DOM classes are built as AST so they participate in name resolution, type
+    // checking, EIR lowering, and closed-world pruning like user classes. They are injected only
+    // when the program names one (or a `libxml_*` function); the late gate below covers a program
+    // that only an autoloaded class reaches them from.
+    let ast = dom_prelude::inject_if_used(ast, &mut prelude_inventory);
 
     // Inject the PDO standard-library prelude (extern bridge + PDO classes,
     // written in elephc-PHP) only when the program references PDO, so non-PDO
@@ -331,6 +381,13 @@ pub(crate) fn compile(config: CliConfig) {
     // manifest deliberately drops entries it cannot stat, so its first element is not a
     // dependable stand-in. See `opcache_prelude::restrict_api_denies`.
     let opcache_entry_path = opcache_prelude::canonical_entry_path(filename);
+    // The SAME verdict for the eval bridge: an OPcache call hidden in a runtime-provided
+    // `eval()` source gets no native body, so the interpreter must refuse it itself.
+    codegen::set_opcache_api_restricted(opcache_prelude::restrict_api_denies(
+        opcache_entry_path.as_deref(),
+        php_version.version_id(),
+        &ini_overrides,
+    ));
     // `opcache.preload` is a COMPILE-TIME decision, resolved here for the same reason
     // `restrict_api` is: reference PHP preloads during STARTUP, before the script runs, and
     // elephc's INI is fixed when the binary is built. The three outcomes mirror reference exactly
@@ -338,11 +395,11 @@ pub(crate) fn compile(config: CliConfig) {
     // - unresolvable path with the cache enabled → HARD COMPILE ERROR, the AOT equivalent of
     //   reference's startup fatal. It fires whether or not the program calls an OPcache function,
     //   because reference's fatal does not depend on that either.
-    // - resolvable but outside the compile-time script manifest → a WARNING only: preloading a file
-    //   this program never includes is a legitimate configuration and must not break a build. That
-    //   arm depends on the COMPLETE manifest, so it is evaluated after `autoload::run` below; only
-    //   the manifest-independent compile ERROR is decided here, matching reference PHP, which
-    //   fatals at startup regardless of what the script does.
+    // - resolvable → the file is preloaded. `inject_preload_require` makes it part of this binary,
+    //   so it is always a member of the script manifest and there is no out-of-manifest diagnostic.
+    //   Only the manifest-independent compile ERROR is decided here, matching reference PHP, which
+    //   fatals at startup regardless of what the script does; the verdict is taken again against
+    //   the COMPLETE manifest after `autoload::run`, for `preload_statistics`.
     // - empty directive, or a disabled cache → nothing at all happens (reference does not preload
     //   when the accelerator is off, and does not even validate the path).
     let opcache_preload =
@@ -401,6 +458,7 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = crate::password_prelude::inject_if_used(ast, &mut prelude_inventory);
     // php 8.5's `array_first()`/`array_last()`; the late gate below covers autoloaded callers.
     let ast = crate::array_edge_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::array_gradual_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_ucompare_prelude::inject_if_used(ast, &mut prelude_inventory);
     // php 8.4's `Dom\HTMLDocument` and its node classes; the late gate below covers a program
     // that only an autoloaded class (symfony/html-sanitizer's `NativeParser`) names it from.
@@ -447,6 +505,24 @@ pub(crate) fn compile(config: CliConfig) {
     );
     timings.record_since("xml-prelude", phase_started);
 
+    // The resolved `opcache.preload` path, so the web prelude can find that file's guard by
+    // label and lift it out of the per-request handler. Recomputed rather than threaded down
+    // from `inject_preload_require`: the verdict is a pure function of the directives and the
+    // entry, and passing it through six intervening phases to save one call would be worse.
+    let preload_startup_path = if web {
+        match opcache_prelude::preload_verdict(php_version, web, &ini_overrides, &[]) {
+            opcache_prelude::PreloadVerdict::Preloading { resolved, .. }
+                if opcache_prelude::canonical_entry_path(filename)
+                    .is_none_or(|entry| entry != resolved) =>
+            {
+                Some(std::path::PathBuf::from(resolved))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
     let ast = web_prelude::inject_if_web(
@@ -456,6 +532,7 @@ pub(crate) fn compile(config: CliConfig) {
         &ini_overrides,
         Path::new(filename),
         &mut prelude_inventory,
+        preload_startup_path.as_deref(),
     );
     timings.record_since("web-prelude", phase_started);
     decl_trace("after web-prelude", &ast);
@@ -465,6 +542,7 @@ pub(crate) fn compile(config: CliConfig) {
     // setup or the `elephc_web_run` entry point into a one-shot CLI executable.
     crate::progress::phase("session-prelude");
     let phase_started = Instant::now();
+    let session_reached_unseen = !web && crate::session_prelude::unseen_source_may_call_sessions(&ast, &prelude_inventory);
     let ast = crate::session_prelude::inject_cli_session_surface(
         ast,
         web,
@@ -475,8 +553,11 @@ pub(crate) fn compile(config: CliConfig) {
     );
     if !web {
         // Session APIs are callable from source loaded dynamically as well as statically visible
-        // code; preserve their implementation as PHP's built-in extension surface does.
-        forced_groups.insert(crate::session_prelude::SESSION_PRELUDE_GROUP.to_string());
+        // code; preserve their implementation as PHP's built-in extension surface does. A
+        // program with no such source keeps only what it names, through ordinary reachability.
+        if session_reached_unseen {
+            forced_groups.insert(crate::session_prelude::SESSION_PRELUDE_GROUP.to_string());
+        }
         if !linked_php_surfaces
             .iter()
             .any(|surface| surface.eq_ignore_ascii_case("session"))
@@ -564,6 +645,35 @@ pub(crate) fn compile(config: CliConfig) {
     timings.record_since("opcache-preload", phase_started);
     decl_trace("after opcache-preload", &ast);
 
+    // A closed-world binary has no interpreter to run a file it did not compile, and an include
+    // path computed at run time can name any of the project's data files
+    // (`opcache_preload_sources::project_data_units`). Built BEFORE the autoload pass, so the
+    // classes their bodies name (a bundle's `Resources/config/*.php` names every service class
+    // as `X::class`) are walked like any other reference.
+    let ast = if crate::closed_world::is_enabled() {
+        let mut ast = ast;
+        if let Some(root) = crate::autoload::project_root(parent) {
+            match crate::opcache_preload_sources::project_data_units(
+                &root,
+                &defines,
+                &preload_include_units,
+            ) {
+                Ok((functions, units)) => {
+                    ast.splice(0..0, functions);
+                    preload_include_units.extend(units);
+                }
+                Err(e) => {
+                    crate::progress::clear();
+                    errors::report(&e);
+                    process::exit(1);
+                }
+            }
+        }
+        ast
+    } else {
+        ast
+    };
+
     crate::progress::phase("autoload-run");
     let phase_started = Instant::now();
     // `run_collecting_included` also hands back the canonical path of every file the autoload
@@ -614,15 +724,6 @@ pub(crate) fn compile(config: CliConfig) {
         Path::new(filename),
         &mut prelude_inventory,
     );
-    // The engine-diagnostic dispatch pair is reached from the generated runtime, never from
-    // PHP, so declaration reachability would delete it. Forcing its group is what keeps
-    // `set_error_handler()` able to see a warning raised by compiled code.
-    if prelude_inventory
-        .groups
-        .contains_key(web_prelude::DIAG_DISPATCH_GROUP)
-    {
-        forced_groups.insert(web_prelude::DIAG_DISPATCH_GROUP.to_string());
-    }
     // `__elephc_shutdown_run` is likewise reached from EMITTED CODE and never from PHP off
     // `--web`: `lower_exit` and `emit_main_epilogue` call it by symbol. Forcing its group is
     // what keeps `register_shutdown_function()`'s queue drained at `exit()` and at the normal
@@ -649,6 +750,56 @@ pub(crate) fn compile(config: CliConfig) {
         &mut prelude_inventory,
     );
     let ast = crate::assert_prelude::inject_if_used(ast);
+    // PDO and mysqli, which php loads as extensions: Doctrine DBAL is autoloaded, so the early
+    // gates saw only the entry program, and symfony/demo's `PDO::connect()` became a static call
+    // to a class the closed world does not define. Both preludes carry `namespace`/`use`
+    // statements, and name resolution already ran: they are built alone and resolved first.
+    let late_pdo = !pdo_used && pdo_prelude::program_uses_pdo(&ast);
+    let late_mysqli = !mysqli_used && mysqli_prelude::program_uses_mysqli(&ast);
+    let ast = if late_pdo || late_mysqli {
+        let mut prelude = Vec::new();
+        if late_pdo {
+            linked_php_surfaces.push("PDO".to_string());
+            prelude = pdo_prelude::inject_if_used_for_version(
+                prelude, true, php_version, &mut prelude_inventory,
+            );
+        }
+        if late_mysqli {
+            linked_php_surfaces.push("mysqli".to_string());
+            prelude =
+                mysqli_prelude::inject_if_used(prelude, true, php_version, &mut prelude_inventory);
+        }
+        let prelude = match name_resolver::resolve(prelude) {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                crate::progress::clear();
+                errors::report(&e);
+                process::exit(1);
+            }
+        };
+        // An early surface already declared the shared bridge externs.
+        let declared_externs: HashSet<String> = ast
+            .iter()
+            .filter_map(|stmt| match &stmt.kind {
+                crate::parser::ast::StmtKind::ExternFunctionDecl { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut combined: crate::parser::ast::Program = prelude
+            .into_iter()
+            .filter(|stmt| match &stmt.kind {
+                crate::parser::ast::StmtKind::ExternFunctionDecl { name, .. } => {
+                    !declared_externs.contains(name)
+                }
+                _ => true,
+            })
+            .collect();
+        combined.extend(ast);
+        combined
+    } else {
+        ast
+    };
+    let ast = crate::throwable_string_prelude::inject(ast, &mut prelude_inventory);
     // `ErrorException` is what a user error handler throws for a warning; Symfony's
     // `ErrorHandler` does it for every warning it is configured to throw on, from a class the
     // autoload pass splices in, so the gate has to read the complete program like the rest here.
@@ -659,8 +810,19 @@ pub(crate) fn compile(config: CliConfig) {
     // Symfony's `NativePasswordHasher` is autoloaded, so its `password_verify()` call is only
     // visible here.
     let ast = crate::password_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // An autoloaded class that streams a hash (`hash_init()` / `HashContext`) is only visible
+    // here; the early hash gate saw the entry program alone.
+    let ast = crate::hash_prelude::inject_late_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_edge_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::array_gradual_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_ucompare_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // The classic DOM classes: an autoloaded vendor class (Symfony's `XmlDescriptor`, Termwind's
+    // `HtmlRenderer`) is usually the first to name them.
+    let ast = crate::dom_prelude::inject_if_used(ast, &mut prelude_inventory);
+    if prelude_inventory.groups.contains_key(crate::dom_prelude::GROUP) {
+        // eval()-interpreted vendor code reaches these classes through the native-class bridge.
+        forced_groups.insert(crate::dom_prelude::GROUP.to_string());
+    }
     let ast = crate::dom_html_prelude::inject_if_used(ast, php_version, false, &mut prelude_inventory);
     if prelude_inventory.groups.contains_key(crate::dom_html_prelude::GROUP) {
         // eval()-interpreted vendor code reaches these classes through the native-class bridge.
@@ -673,7 +835,6 @@ pub(crate) fn compile(config: CliConfig) {
     if prelude_inventory.groups.contains_key("array_merge") {
         forced_groups.insert("array_merge".to_string());
     }
-    let ast = crate::array_reduce_prelude::inject_if_used(ast);
     let ast = crate::filter_var_prelude::inject_if_used(ast, &mut prelude_inventory);
     if prelude_inventory
         .groups
@@ -682,6 +843,19 @@ pub(crate) fn compile(config: CliConfig) {
         forced_groups.insert(crate::filter_var_prelude::FILTER_VAR_GROUP.to_string());
     }
     let ast = crate::backend_gap_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // The early injection only saw the entry program: a `var_export()` that first appears in an
+    // autoloaded file (Nette's `Helpers::formatValue`) found no declaration, fell through to the
+    // language-construct path the backend refuses, and cost the demo a whole recompile round.
+    // Idempotent: a program that already carries the helpers is returned unchanged.
+    let ast = var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // The gradual array helpers are called by synthesized lowering, which reachability cannot
+    // see; the group holds only the helpers the program's call shapes need.
+    if prelude_inventory
+        .groups
+        .contains_key(crate::array_gradual_prelude::GROUP)
+    {
+        forced_groups.insert(crate::array_gradual_prelude::GROUP.to_string());
+    }
     if prelude_inventory
         .groups
         .contains_key(crate::backend_gap_prelude::BACKEND_GAP_GROUP)
@@ -690,6 +864,41 @@ pub(crate) fn compile(config: CliConfig) {
     }
     timings.record_since("compat-preludes", phase_started);
     decl_trace("after compat-preludes", &ast);
+
+    // Inject the object-cast prelude (two pure elephc-PHP functions) only when the program
+    // spells a `(object)` cast, so other binaries carry nothing.
+    //
+    // Runs AFTER `autoload::run`, unlike every prelude above, because the cast is detected
+    // syntactically and an autoloaded class file is not part of the AST until here: a program
+    // whose only `(object)` cast lives in a PSR-4 class saw no injection, and the call
+    // `ir_lower` synthesizes for the cast then failed codegen with
+    // `unsupported EIR backend feature: language construct __elephc_cast_object`. The
+    // declarations are name-resolved on the way in, exactly as `autoload::run` resolves the
+    // files it splices, because the position is past the pipeline's own name-resolution pass.
+    crate::progress::phase("object-cast-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("object-cast-prelude", phase_started);
+
+    // The timezone-introspection prelude again, for a use that only an autoloaded class file
+    // makes (see `tz_prelude::inject_late_if_used`).
+    let phase_started = Instant::now();
+    let ast = match tz_prelude::inject_late_if_used(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("tz-prelude-late", phase_started);
 
     // Desugar PHP's argument-introspection constructs (`func_num_args`, `func_get_args`,
     // `func_get_arg`) into plain PHP: every function scope that uses one gains the hidden
@@ -710,6 +919,8 @@ pub(crate) fn compile(config: CliConfig) {
     };
     timings.record_since("func-args", phase_started);
     decl_trace("after func-args", &ast);
+    // A static default naming a class only the run time knows is evaluated at first use.
+    let ast = crate::lazy_static_defaults::apply(ast);
 
     // Complete the OPcache script manifest now that all three groups exist, and re-render the
     // manifest-dependent functions injected above against it. This is a pure substitution of
@@ -724,16 +935,15 @@ pub(crate) fn compile(config: CliConfig) {
         &opcache_included_files,
         &opcache_autoloaded_files,
     );
-    // Re-decide `opcache.preload` against the complete manifest. Only the `in_manifest` arm can
-    // differ from the verdict taken above (the directive, the SAPI gate and the path resolution
-    // are all manifest-independent), so this second call exists purely to emit the
-    // outside-the-manifest WARNING against the truthful set — reporting it against the
-    // placeholder manifest would warn about files that are, in fact, compiled in.
+    // The manifest's scripts hold hash slots, so the runtime tier gets what they leave.
+    codegen::set_opcache_manifest_len(opcache_manifest.len());
+    // Re-decide `opcache.preload` against the COMPLETE manifest, which is the set
+    // `preload_statistics` reports. Only the `in_manifest` arm can differ from the verdict taken
+    // above (the directive, the SAPI gate and the path resolution are all manifest-independent).
+    // There is no out-of-manifest diagnostic to emit any more: `inject_preload_require` has
+    // already made the preload file part of this binary, so it is always a manifest member.
     let opcache_preload =
         opcache_prelude::preload_verdict(php_version, web, &ini_overrides, &opcache_manifest);
-    if let Some(message) = opcache_preload.compile_warning() {
-        errors::report_warning(&errors::CompileWarning::new(Span::new(0, 0), &message));
-    }
     let opcache_preload_statistics = opcache_prelude::preload_statistics(
         &opcache_preload,
         &opcache_manifest,
@@ -764,11 +974,21 @@ pub(crate) fn compile(config: CliConfig) {
     // mechanism is what keeps `function_exists()` and the call site telling a program the same
     // thing. Placed after folding, so a guard the target already decided is never given a group,
     // and before the checker, which is the first stage that reads the declaration set.
+    // A `static` a closure captures by reference becomes a hidden global bound by reference,
+    // which every backend path supports (see `static_ref_capture`).
+    let ast = crate::static_ref_capture::rewrite_captured_statics(ast);
+
     crate::progress::phase("conditional-functions");
     let phase_started = Instant::now();
+    let ast = crate::conditional_functions::hoist_autoload_callback_function_marks(ast);
     let ast = crate::conditional_functions::bind_conditional_declarations(ast, target);
     timings.record_since("conditional-functions", phase_started);
     decl_trace("after conditional-functions", &ast);
+
+    // A class-like declared under a condition is missing from the class table unless it is lifted
+    // to file scope; a name declared only once has one possible body, so lifting it is safe.
+    let ast = crate::conditional_classes::hoist_unique_conditional_class_likes(ast);
+    decl_trace("after conditional-classes", &ast);
 
     crate::progress::phase("typecheck");
     let phase_started = Instant::now();
@@ -779,6 +999,7 @@ pub(crate) fn compile(config: CliConfig) {
     // `Checker::program_defers_unknown_classes`.
     let check_options = types::CheckOptions {
         strict_locals,
+        lint,
         registers_autoloader: autoload_registry.rule_count() > 0,
     };
     // A class file the autoload pass loaded is one php would only have parsed when something
@@ -789,7 +1010,62 @@ pub(crate) fn compile(config: CliConfig) {
     // same holds for the preloaded graph. The entry's own static includes and Composer's eager
     // `files` are never deferrable: nothing at run time would load them again.
     let mut ast = ast;
+    // Literal-path includes left in function and method bodies run at run time; each one whose
+    // file can be a unit is compiled as one (`opcache_preload_sources::literal_include_units`).
+    match crate::opcache_preload_sources::literal_include_units(
+        &ast,
+        &defines,
+        &preload_include_units,
+    ) {
+        Ok((functions, units)) => {
+            // At the FRONT: the optimizer drops what follows a top-level `return`, and an entry
+            // such as `bin/console` ends with one.
+            ast.splice(0..0, functions);
+            preload_include_units.extend(units);
+        }
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    }
+    // A computed-path include of a template directory, which a unit cannot answer because the
+    // template reads its caller's scope, runs the template as a closure bound to that scope
+    // instead (`scoped_include_units`). Only a closed world needs it: elsewhere the interpreter
+    // includes the file.
+    if crate::closed_world::is_enabled() {
+        match crate::scoped_include_units::rewrite_scoped_include_sites(
+            &mut ast,
+            &defines,
+            &preload_include_units,
+        ) {
+            Ok(functions) => {
+                ast.splice(0..0, functions);
+            }
+            Err(e) => {
+                crate::progress::clear();
+                errors::report(&e);
+                process::exit(1);
+            }
+        }
+    }
+    // Taken before any deferral removes a declaration: `runtime_faults` must know which compiled
+    // classes a deferred class descended from, and nothing else keeps that once it is gone.
+    let class_parent_edges = crate::autoload::deferral::class_parent_edges(&ast);
     let mut opcache_autoloaded_files = opcache_autoloaded_files;
+    // The preloaded class files stay deferrable even though `inject_preload_require` makes the
+    // preload script a static include of the entry, which files every class file it requires
+    // among the entry's own includes: php's autoloader loads a preloaded class's file on demand
+    // all the same. Without this, one unsupported construct in any preloaded class (Laravel's
+    // whole framework is preloaded) failed the build instead of leaving that file to run time.
+    let preloaded_class_paths: HashSet<PathBuf> = preload_class_files
+        .values()
+        .map(|path| Path::new(path).canonicalize().unwrap_or_else(|_| PathBuf::from(path)))
+        .collect();
+    // Kept for reflection: a preloaded class's `getFileName()` names its own file. Without it the
+    // lookup fell back to the entry script, and symfony/demo's source panel showed `index.php`
+    // with lines from `BlogController.php` (and `Undefined array key` warnings past its end).
+    let preload_class_source_files = preload_class_files.clone();
     let mut deferral_class_files = preload_class_files;
     deferral_class_files.extend(
         declaration_source_files
@@ -809,7 +1085,8 @@ pub(crate) fn compile(config: CliConfig) {
                 .class_likes
                 .values()
                 .chain(entry_included_sources.functions.values())
-                .map(|path| canonical(Path::new(path))),
+                .map(|path| canonical(Path::new(path)))
+                .filter(|path| !preloaded_class_paths.contains(path)),
         );
         fixed.insert(canonical(Path::new(filename)));
         opcache_autoloaded_files
@@ -820,20 +1097,78 @@ pub(crate) fn compile(config: CliConfig) {
             .collect()
     };
     let mut deferred_class_files: HashSet<PathBuf> = HashSet::new();
+    // Closed world only: refused files whose classes the program names only through existence
+    // probes (`X::class`, `class_exists()`). php loads such a file only when something uses one of
+    // its classes, so leaving it out keeps php's behaviour everywhere else; a run-time use raises
+    // php's include Error. They are reported as notes and do not refuse the build.
+    let mut probe_only_deferred: HashSet<PathBuf> = HashSet::new();
+    // Why each file was handed back, for the deferral memo this build leaves for the next one.
+    let mut deferral_reasons: HashMap<PathBuf, String> = HashMap::new();
     // A re-run the backend asked for (`autoload::deferral::BackendDeferral`) starts with the files
     // an earlier round already handed back; they were reported when they were first handed back.
     for path in crate::autoload::deferral::inherited_deferred_files() {
         let path = path.canonicalize().unwrap_or(path);
         if deferrable_class_files.contains(&path) {
+            deferral_reasons
+                .entry(path.clone())
+                .or_insert_with(|| "the backend could not lower it".to_string());
             deferred_class_files.insert(path);
         }
     }
-    report_by_ref_place_deferrals(crate::autoload::deferral::propagate_by_ref_place_constructions(
+    // Files an earlier build of this same program handed back, while their bytes are unchanged:
+    // deferring them now saves the type-check rounds and the backend re-run that found them.
+    // A remembered file is classified like a newly refused one: closed world keeps a file whose
+    // classes are only probed out of the reasons it refuses the build.
+    let mut memo_probe_names: Option<HashSet<String>> = None;
+    for remembered in crate::autoload::deferral_memo::load(Path::new(filename)) {
+        let path = remembered.path.canonicalize().unwrap_or(remembered.path);
+        if !deferrable_class_files.contains(&path) || !deferred_class_files.insert(path.clone()) {
+            continue;
+        }
+        if crate::closed_world::is_enabled() {
+            let probe_names = memo_probe_names.get_or_insert_with(|| {
+                crate::autoload::probe_only_class_names(&ast)
+                    .iter()
+                    .map(|name| crate::names::php_symbol_key(name.trim_start_matches('\\')))
+                    .collect()
+            });
+            if declares_only_probed_classes(&path, &deferral_class_files, probe_names) {
+                probe_only_deferred.insert(path.clone());
+                errors::report_note(&format!(
+                    "autoload: '{}' is not compiled ({}; remembered from an earlier build); the \
+                     program names its classes only through existence probes, and a run-time use \
+                     of one raises php's include Error",
+                    path.display(),
+                    remembered.reason
+                ));
+                deferral_reasons.insert(path, remembered.reason);
+                continue;
+            }
+        }
+        errors::report_warning(&errors::CompileWarning::new(
+            Span::dummy(),
+            &format!(
+                "autoload: '{}' is not compiled ({}; remembered from an earlier build, \
+                 ELEPHC_DEFERRAL_MEMO=0 retries it); its classes are loaded at run time by the \
+                 autoloader instead",
+                path.display(),
+                remembered.reason
+            ),
+        ));
+        deferral_reasons.insert(path, remembered.reason);
+    }
+    let by_ref_reason = "it passes a property or array element to a by-reference constructor \
+                         parameter, which a native call cannot keep linked";
+    let by_ref_files = crate::autoload::deferral::propagate_by_ref_place_constructions(
         &ast,
         &deferral_class_files,
         &deferrable_class_files,
         &mut deferred_class_files,
-    ));
+    );
+    for path in &by_ref_files {
+        deferral_reasons.insert(path.clone(), by_ref_reason.to_string());
+    }
+    report_by_ref_place_deferrals(by_ref_files);
     if !deferred_class_files.is_empty() {
         crate::autoload::deferral::propagate_to_subclasses(
             &ast,
@@ -847,10 +1182,81 @@ pub(crate) fn compile(config: CliConfig) {
             &deferred_class_files,
         );
     }
+    // Each `(span, message)` `runtime_faults` already rewrote: an error that comes back for one
+    // of them is not helped by rewriting, and the file is deferred like any other.
+    let mut demotion_attempts: HashSet<(Span, String)> = HashSet::new();
+    let mut runtime_fault_helpers_injected = false;
     let mut check_result = loop {
         let e = match types::check_with_target_and_options(&ast, target, check_options) {
             Ok(result) => break result,
             Err(e) => e,
+        };
+        // Before a refused class file is handed back, each refused construct the checker could
+        // name php's run-time fault for is compiled as that fault instead (`autoload::
+        // runtime_faults`), and the program is checked again with the file still in it. Only
+        // the errors nothing could be compiled for go on to defer their files, in the SAME
+        // round: a full check of a Laravel program is 85 s, and a round that only demoted would
+        // meet the very same refusals again on the next one.
+        let e = {
+            let autoload_lookup =
+                |name: &str| autoload_registry.psr4().lookup(name).is_some();
+            let world = crate::autoload::runtime_faults::World {
+                class_files: &deferral_class_files,
+                deferrable: &deferrable_class_files,
+                deferred: &deferred_class_files,
+                class_parents: &class_parent_edges,
+                autoload_lookup: &autoload_lookup,
+            };
+            let demotions = crate::autoload::runtime_faults::demote(
+                &mut ast,
+                &e,
+                &world,
+                &mut demotion_attempts,
+            );
+            if demotions.is_empty() {
+                e
+            } else {
+                for demotion in &demotions {
+                    errors::report_note(&demotion.note());
+                }
+                if !runtime_fault_helpers_injected {
+                    runtime_fault_helpers_injected = true;
+                    let helpers = crate::autoload::runtime_faults::declarations();
+                    prelude_inventory
+                        .record_program(crate::autoload::runtime_faults::PRELUDE_GROUP, &helpers);
+                    ast.splice(0..0, helpers);
+                }
+                let demoted: HashSet<(Span, &str)> = demotions
+                    .iter()
+                    .map(|demotion| (demotion.span, demotion.message.as_str()))
+                    .collect();
+                // An error left in a file this round just rewrote can be a cascade of the
+                // rewritten construct: a refused `if` condition never installed the locals its
+                // `||` assigns, so the read after it was "undefined" too (symfony/framework-
+                // bundle's `DebugAutowiringCommand::getFileLink()`). Such a file is checked again
+                // before it is deferred; an error that is real comes back on that round.
+                let demoted_files: HashSet<PathBuf> = demotions
+                    .iter()
+                    .map(|demotion| {
+                        Path::new(&demotion.path)
+                            .canonicalize()
+                            .unwrap_or_else(|_| PathBuf::from(&demotion.path))
+                    })
+                    .collect();
+                let remaining: Vec<errors::CompileError> = e
+                    .flatten()
+                    .into_iter()
+                    .filter(|error| !demoted.contains(&(error.span, error.message.as_str())))
+                    .filter(|error| {
+                        crate::autoload::deferral::error_class_file(error, &deferral_class_files)
+                            .is_none_or(|path| !demoted_files.contains(&path))
+                    })
+                    .collect();
+                if remaining.is_empty() {
+                    continue;
+                }
+                errors::CompileError::from_many(remaining)
+            }
         };
         let mut newly_deferred = crate::autoload::deferral::deferrable_class_files(
             &e,
@@ -867,19 +1273,36 @@ pub(crate) fn compile(config: CliConfig) {
             )
         });
         if !newly_deferred.is_empty() {
+            let probe_only_names: HashSet<String> = if crate::closed_world::is_enabled() {
+                crate::autoload::probe_only_class_names(&ast)
+                    .iter()
+                    .map(|name| crate::names::php_symbol_key(name.trim_start_matches('\\')))
+                    .collect()
+            } else {
+                HashSet::new()
+            };
             for (path, message) in &newly_deferred {
-                errors::report_warning(&errors::CompileWarning::new(
-                    Span::dummy(),
-                    &format!(
-                        "autoload: '{path}' is not compiled ({message}); its classes are loaded \
-                         at run time by the autoloader instead"
-                    ),
-                ));
-                deferred_class_files.insert(
-                    Path::new(path)
-                        .canonicalize()
-                        .unwrap_or_else(|_| PathBuf::from(path)),
-                );
+                let canonical = Path::new(path)
+                    .canonicalize()
+                    .unwrap_or_else(|_| PathBuf::from(path));
+                if declares_only_probed_classes(&canonical, &deferral_class_files, &probe_only_names) {
+                    probe_only_deferred.insert(canonical.clone());
+                    errors::report_note(&format!(
+                        "autoload: '{path}' is not compiled ({message}); the program names its \
+                         classes only through existence probes, and a run-time use of one raises \
+                         php's include Error"
+                    ));
+                } else {
+                    errors::report_warning(&errors::CompileWarning::new(
+                        Span::dummy(),
+                        &format!(
+                            "autoload: '{path}' is not compiled ({message}); its classes are loaded \
+                             at run time by the autoloader instead"
+                        ),
+                    ));
+                }
+                deferral_reasons.insert(canonical.clone(), message.clone());
+                deferred_class_files.insert(canonical);
             }
             for path in crate::autoload::deferral::propagate_to_subclasses(
                 &ast,
@@ -887,6 +1310,10 @@ pub(crate) fn compile(config: CliConfig) {
                 &deferrable_class_files,
                 &mut deferred_class_files,
             ) {
+                deferral_reasons.insert(
+                    path.clone(),
+                    "a class it declares extends, implements or uses one that is not".to_string(),
+                );
                 errors::report_warning(&errors::CompileWarning::new(
                     Span::dummy(),
                     &format!(
@@ -897,14 +1324,16 @@ pub(crate) fn compile(config: CliConfig) {
                     ),
                 ));
             }
-            report_by_ref_place_deferrals(
-                crate::autoload::deferral::propagate_by_ref_place_constructions(
-                    &ast,
-                    &deferral_class_files,
-                    &deferrable_class_files,
-                    &mut deferred_class_files,
-                ),
+            let by_ref_files = crate::autoload::deferral::propagate_by_ref_place_constructions(
+                &ast,
+                &deferral_class_files,
+                &deferrable_class_files,
+                &mut deferred_class_files,
             );
+            for path in &by_ref_files {
+                deferral_reasons.insert(path.clone(), by_ref_reason.to_string());
+            }
+            report_by_ref_place_deferrals(by_ref_files);
             ast = crate::autoload::deferral::remove_deferred_declarations(
                 ast,
                 &deferral_class_files,
@@ -929,6 +1358,17 @@ pub(crate) fn compile(config: CliConfig) {
         errors::report(&e.resolve_declaration_files(&declaration_paths));
         process::exit(1);
     };
+    {
+        let mut remembered: Vec<crate::autoload::deferral_memo::MemoEntry> = deferred_class_files
+            .iter()
+            .map(|path| crate::autoload::deferral_memo::MemoEntry {
+                path: path.clone(),
+                reason: deferral_reasons.get(path).cloned().unwrap_or_default(),
+            })
+            .collect();
+        remembered.sort_by(|left, right| left.path.cmp(&right.path));
+        crate::autoload::deferral_memo::store(Path::new(filename), &remembered);
+    }
     // A deferred file was never compiled, so the runtime must not treat it as already included.
     opcache_autoloaded_files.retain(|path| {
         !deferred_class_files.contains(&path.canonicalize().unwrap_or_else(|_| path.clone()))
@@ -1002,7 +1442,9 @@ pub(crate) fn compile(config: CliConfig) {
     // Substituting a literal for a read of a local the checker boxed as `mixed` would hand EIR
     // lowering a concrete type the checker never approved for that name, so the pass is told which
     // names those are and refuses to record a fact for them.
-    let ast = post_typecheck_optimizer.propagate(ast, check_result.mixed_storage_local_names());
+    let ast = post_typecheck_optimizer.propagate(
+        ast, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone(),
+    );
     timings.record_since("opt-prop", phase_started);
     decl_trace("after opt-prop", &ast);
 
@@ -1051,6 +1493,29 @@ pub(crate) fn compile(config: CliConfig) {
     // Nothing in the program calls an include unit by name -- a runtime include reaches it through
     // the unit table -- so it is rooted here, like an export, or pruning would drop it.
     exported_function_names.extend(preload_include_units.iter().map(|unit| unit.function.clone()));
+    if entry_return_injected {
+        exported_function_names.insert(crate::entry_return::ENTRY_RETURN_FUNCTION.to_string());
+    }
+    // The hoisted `opcache.preload` body is a reachability ROOT. Nothing in PHP calls it --
+    // the `--web` entry stub does, in assembly, before the request loop -- so the declaration
+    // pruner sees an unreferenced function and removes it, taking the preload's side effects
+    // with it. That failure is silent: the responses come out clean, which is what the hoist
+    // was for, and the preload simply never runs.
+    if preload_startup_path.is_some() {
+        exported_function_names.insert(crate::web_prelude::PRELOAD_STARTUP_FN.to_string());
+    }
+    // Lowering calls the Throwable string helpers for `getTraceAsString()`, `__toString()` and a
+    // Throwable's string conversion; no declaration-level call edge leads to them.
+    exported_function_names.extend(
+        crate::throwable_string_prelude::FUNCTIONS
+            .iter()
+            .map(|name| name.to_string()),
+    );
+    // `assert($x)` is routed to its prelude helper during lowering, after this pass; no call edge
+    // names the helper in the AST, so without a root the pruner removed it and the compiled binary
+    // died with `Call to undefined function __elephc_assert_one_arg()`.
+    exported_function_names.insert(crate::assert_prelude::ASSERT_ONE_ARG_NAME.to_string());
+    let exported_function_names = exported_function_names;
     let ast = optimize::prune_unreachable_declarations(
         ast,
         &mut check_result,
@@ -1129,10 +1594,30 @@ pub(crate) fn compile(config: CliConfig) {
     // source identity. Fill only absent manifest paths; duplicate snapshots keep
     // the existing conflict check above rather than silently replacing content.
     let activation_source_paths = classlike_activation_source_paths(&ast);
+    // Preloaded class files and the preload graph's fully-declared sources are physical inputs of
+    // this module: a class declaration merged from the preload keeps its span, and the runtime
+    // activation/reflection tables need the canonical source row. Without it a preloaded class
+    // reached through a runtime `include_once` (Symfony's generated service factories do exactly
+    // that) fell back to the autoloader and became an eval-declared class, whose reflection lost
+    // the method visibility. Adding a single extra preload class was enough to shift which pass
+    // loaded the app controller and exposed this.
+    let preload_source_paths: Vec<std::path::PathBuf> = preload_class_source_files
+        .values()
+        .map(std::path::PathBuf::from)
+        .chain(preload_compiled_whole.iter().cloned())
+        .collect();
+    // A unit's file is a source of this module too: the closed-world include table has one row
+    // per catalog source, and a unit whose file has no row is never reached.
+    let unit_source_paths: Vec<std::path::PathBuf> = preload_include_units
+        .iter()
+        .map(|unit| unit.canonical_path.clone())
+        .collect();
     for path in opcache_included_files
         .iter()
         .chain(opcache_autoloaded_files.iter())
         .chain(activation_source_paths.iter())
+        .chain(preload_source_paths.iter())
+        .chain(unit_source_paths.iter())
     {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
         if source_units.contains_key(&canonical) {
@@ -1172,6 +1657,7 @@ pub(crate) fn compile(config: CliConfig) {
     // back like a body the backend refuses: its class file goes to the runtime autoloader and the
     // build runs again. Without them, validation stays fail-fast.
     ir_lower::collect_invalid_bodies(!deferrable_class_files.is_empty());
+    ir_lower::set_class_files_deferred(!deferred_class_files.is_empty());
     let mut ir_module = match ir_lower::lower_program_with_source_catalog(
         &ast,
         &check_result,
@@ -1193,8 +1679,27 @@ pub(crate) fn compile(config: CliConfig) {
             .rerun_without_refused_bodies(&failures);
             for (body, error) in &failures {
                 eprintln!("EIR validation failure in {body}: {error}");
+                // The whole refused body: an operand id alone does not say which source built it.
+                if std::env::var("ELEPHC_EIR_DUMP_INVALID").as_deref() == Ok("1") {
+                    if let Some(function) = module
+                        .functions
+                        .iter()
+                        .chain(module.class_methods.iter())
+                        .chain(module.closures.iter())
+                        .find(|function| &function.name == body)
+                    {
+                        eprintln!("{}", crate::ir::print_function(function));
+                    }
+                }
             }
             eprintln!("EIR lowering error: EIR validation failed: {first:?}");
+            process::exit(1);
+        }
+        Err(ir_lower::LoweringError::Unsupported(error)) => {
+            // A refused shape is an ordinary source-level diagnostic, so it is reported with the
+            // same file/line formatting as a checker error instead of a bare backend message.
+            crate::progress::clear();
+            errors::report(&error.with_file(filename.to_string()));
             process::exit(1);
         }
         Err(err) => {
@@ -1208,6 +1713,12 @@ pub(crate) fn compile(config: CliConfig) {
     ir_module
         .declared_class_source_files
         .extend(declaration_source_files.class_likes);
+    for (class_key, path) in &preload_class_source_files {
+        ir_module
+            .declared_class_source_files
+            .entry(class_key.clone())
+            .or_insert_with(|| path.clone());
+    }
     ir_module.declared_function_source_files =
         std::mem::take(&mut entry_included_sources.functions);
     ir_module
@@ -1230,8 +1741,45 @@ pub(crate) fn compile(config: CliConfig) {
         })
         .cloned()
         .collect();
+    if entry_return_injected {
+        if let Some(entry_path) = ir_module.source_path.clone() {
+            if ir_module.functions.iter().any(|function| {
+                function
+                    .name
+                    .eq_ignore_ascii_case(crate::entry_return::ENTRY_RETURN_FUNCTION)
+            }) {
+                ir_module.include_units.push(crate::ir::IncludeUnit {
+                    canonical_path: std::path::PathBuf::from(entry_path),
+                    function: crate::entry_return::ENTRY_RETURN_FUNCTION.to_string(),
+                });
+            }
+        }
+    }
     let mut compile_time_inclusions = opcache_autoloaded_files.clone();
     compile_time_inclusions.extend(preload_compiled_whole);
+    // A class the preload named through the container's `$classes` list is compiled here, but its
+    // file is not in `preload_compiled_whole` (that set only carries fully-declared includes of
+    // the preload's own require graph). Symfony's generated service factories `include_once` the
+    // class file; without this mark the interpreter executed it and redeclared the AOT class as an
+    // eval class. Only files whose class actually reached the module are marked, so a deferred
+    // class keeps its runtime include.
+    // Every class-like counts: Symfony's list names interfaces and traits too
+    // (`ContainerInterface`, `CompiledUrlMatcherTrait`), and a closed-world binary refuses the
+    // autoloader's include of a file the table cannot answer for.
+    let compiled_class_keys: std::collections::HashSet<String> = ir_module
+        .class_infos
+        .keys()
+        .chain(ir_module.interface_infos.keys())
+        .chain(ir_module.enum_infos.keys())
+        .chain(ir_module.declared_trait_names.iter())
+        .map(|name| crate::names::php_symbol_key(name.trim_start_matches('\\')))
+        .collect();
+    compile_time_inclusions.extend(
+        preload_class_source_files
+            .iter()
+            .filter(|(class_key, _)| compiled_class_keys.contains(class_key.as_str()))
+            .map(|(_, path)| std::path::PathBuf::from(path)),
+    );
     crate::autoload::record_compile_time_inclusions(
         &mut ir_module,
         &ast,
@@ -1241,6 +1789,47 @@ pub(crate) fn compile(config: CliConfig) {
         .interface_infos
         .values()
         .any(|info| info.declaration_span != crate::span::Span::dummy());
+    ir_module.included_files = opcache_manifest
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
+    if closed_world {
+        // A runtime include is answered from the compiled-source table; the rest of the world
+        // must not need the interpreter at all, and the build says why when it does.
+        if ir_lower::module_has_dynamic_include(&ir_module) {
+            ir_module.closed_includes = Some(crate::closed_world::include_table(&ir_module));
+        }
+        let mut reasons = Vec::new();
+        let refused_class_files: Vec<&PathBuf> = deferred_class_files
+            .iter()
+            .filter(|path| !probe_only_deferred.contains(*path))
+            .collect();
+        if !refused_class_files.is_empty() {
+            let mut files = refused_class_files
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>();
+            files.sort();
+            reasons.push(format!(
+                "{} class file(s) handed to the runtime autoloader instead of compiled: {}",
+                files.len(),
+                files.join(", ")
+            ));
+        }
+        reasons.extend(ir_lower::closed_world_bridge_reasons(&ir_module));
+        if !reasons.is_empty() {
+            crate::progress::clear();
+            eprintln!(
+                "error: --closed-world: the program still needs the interpreter ({} reason{}):",
+                reasons.len(),
+                if reasons.len() == 1 { "" } else { "s" }
+            );
+            for reason in &reasons {
+                eprintln!("  - {reason}");
+            }
+            process::exit(1);
+        }
+    }
     timings.record_since("ir-lower", phase_started);
     if let Ok(target) = std::env::var("ELEPHC_DECL_TRACE") {
         let key = crate::names::php_symbol_key(target.trim_start_matches('\\'));
@@ -1307,6 +1896,7 @@ pub(crate) fn compile(config: CliConfig) {
         deferral,
         filename,
         with_crates: &with_crates,
+        ini_overrides: &ini_overrides,
         linked_php_surfaces: &linked_php_surfaces,
         ir_module,
         web,
@@ -1358,102 +1948,18 @@ fn classlike_activation_source_paths(
 ) -> std::collections::BTreeSet<std::path::PathBuf> {
     use crate::parser::ast::StmtKind;
 
-    fn collect(
-        statements: &[crate::parser::ast::Stmt],
-        paths: &mut std::collections::BTreeSet<std::path::PathBuf>,
-    ) {
-        for statement in statements {
-            match &statement.kind {
-                StmtKind::ClassLikeActivate { source_path, .. } => {
-                    paths.insert(source_path.clone());
-                }
-                StmtKind::IncludeOnceMark { source_path } => {
-                    paths.insert(source_path.clone());
-                }
-                StmtKind::NamespaceBlock { body, .. }
-                | StmtKind::Synthetic(body)
-                | StmtKind::While { body, .. }
-                | StmtKind::DoWhile { body, .. }
-                | StmtKind::Foreach { body, .. } => collect(body, paths),
-                StmtKind::IncludeOnceGuard { source_path, body } => {
-                    paths.insert(source_path.clone());
-                    collect(body, paths);
-                }
-                StmtKind::If {
-                    then_body,
-                    elseif_clauses,
-                    else_body,
-                    ..
-                } => {
-                    collect(then_body, paths);
-                    for (_, body) in elseif_clauses {
-                        collect(body, paths);
-                    }
-                    if let Some(body) = else_body {
-                        collect(body, paths);
-                    }
-                }
-                StmtKind::IfDef {
-                    then_body,
-                    else_body,
-                    ..
-                } => {
-                    collect(then_body, paths);
-                    if let Some(body) = else_body {
-                        collect(body, paths);
-                    }
-                }
-                StmtKind::For {
-                    init,
-                    update,
-                    body,
-                    ..
-                } => {
-                    if let Some(init) = init {
-                        collect(std::slice::from_ref(init.as_ref()), paths);
-                    }
-                    if let Some(update) = update {
-                        collect(std::slice::from_ref(update.as_ref()), paths);
-                    }
-                    collect(body, paths);
-                }
-                StmtKind::FunctionDecl { body, .. } => collect(body, paths),
-                StmtKind::ClassDecl { methods, .. }
-                | StmtKind::InterfaceDecl { methods, .. }
-                | StmtKind::TraitDecl { methods, .. }
-                | StmtKind::EnumDecl { methods, .. } => {
-                    for method in methods {
-                        collect(&method.body, paths);
-                    }
-                }
-                StmtKind::Switch { cases, default, .. } => {
-                    for (_, body) in cases {
-                        collect(body, paths);
-                    }
-                    if let Some(body) = default {
-                        collect(body, paths);
-                    }
-                }
-                StmtKind::Try {
-                    try_body,
-                    catches,
-                    finally_body,
-                } => {
-                    collect(try_body, paths);
-                    for catch in catches {
-                        collect(&catch.body, paths);
-                    }
-                    if let Some(body) = finally_body {
-                        collect(body, paths);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
+    // Every depth, closures included: a compiled DI container keeps `include_once` factories in
+    // closure literals, and a marker there whose source was never registered failed EIR
+    // validation with `UnresolvedSource`.
     let mut paths = std::collections::BTreeSet::new();
-    collect(program, &mut paths);
+    crate::parser::ast::visit::walk_stmts(program, &mut |statement| match &statement.kind {
+        StmtKind::ClassLikeActivate { source_path, .. }
+        | StmtKind::IncludeOnceMark { source_path }
+        | StmtKind::IncludeOnceGuard { source_path, .. } => {
+            paths.insert(source_path.clone());
+        }
+        _ => {}
+    });
     paths
 }
 
@@ -1462,6 +1968,12 @@ fn classlike_activation_source_paths(
 /// The directive is the only input: a program that does not set it compiles exactly as before, and
 /// one that does gets the same world a preloaded php-fpm serves. Nothing here knows what framework
 /// wrote the file.
+///
+/// Every `opcache.preload` given is a root, in order, not only the last one: a binary has no
+/// startup per environment, so one that must answer like php under more than one configuration
+/// (Symfony's `--env=prod` and `--env=dev`, each with the preload file its own container dump
+/// wrote) needs the declarations of every one of them. A later preload contributes only what the
+/// earlier ones did not already declare, as php declares each class once.
 fn preloaded_declarations(
     ini_overrides: &[(String, String)],
     cache_enabled: bool,
@@ -1469,33 +1981,53 @@ fn preloaded_declarations(
     defines: &std::collections::HashSet<String>,
     autoload: &autoload::Registry,
 ) -> Result<Option<crate::opcache_preload_sources::PreloadedDeclarations>, errors::CompileError> {
-    let Some((_, directive)) = ini_overrides
-        .iter()
-        .rev()
-        .find(|(key, _)| key.eq_ignore_ascii_case("opcache.preload"))
-    else {
-        return Ok(None);
-    };
     // php does not preload when the accelerator is off, and does not even look at the path: a
     // CLI build without `opcache.enable_cli=1` preloads nothing, as `preload_verdict` reports.
     if !cache_enabled {
         return Ok(None);
     }
-    let Some(path) = crate::opcache_preload_sources::resolve_preload_path(directive, base_dir)
-    else {
-        return Ok(None);
-    };
-    if !path.exists() {
-        // php treats an unreadable preload file as a startup FATAL, and the AOT equivalent of
-        // "not there" is a compile error -- the same verdict `opcache_prelude::preload_verdict`
-        // already reaches for the directive's own reporting.
-        return Err(errors::CompileError::new(
-            crate::span::Span::dummy(),
-            &format!("opcache.preload: '{}' does not exist", path.display()),
-        ));
+    let mut merged: Option<crate::opcache_preload_sources::PreloadedDeclarations> = None;
+    for (_, directive) in ini_overrides
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case("opcache.preload"))
+    {
+        let Some(path) = crate::opcache_preload_sources::resolve_preload_path(directive, base_dir)
+        else {
+            continue;
+        };
+        if !path.exists() {
+            // php treats an unreadable preload file as a startup FATAL, and the AOT equivalent of
+            // "not there" is a compile error -- the same verdict `opcache_prelude::preload_verdict`
+            // already reaches for the directive's own reporting.
+            return Err(errors::CompileError::new(
+                crate::span::Span::dummy(),
+                &format!("opcache.preload: '{}' does not exist", path.display()),
+            ));
+        }
+        let next =
+            crate::opcache_preload_sources::preload_declarations(&path, base_dir, defines, autoload)?;
+        merged = Some(match merged {
+            None => next,
+            Some(mut acc) => {
+                let declared = crate::opcache_preload_sources::declared_names(&acc.declarations);
+                acc.declarations.extend(crate::opcache_preload_sources::without_redeclarations(
+                    next.declarations,
+                    &declared,
+                ));
+                for file in next.compiled_whole {
+                    if !acc.compiled_whole.contains(&file) {
+                        acc.compiled_whole.push(file);
+                    }
+                }
+                for (class, file) in next.class_files {
+                    acc.class_files.entry(class).or_insert(file);
+                }
+                acc.include_units.extend(next.include_units);
+                acc
+            }
+        });
     }
-    crate::opcache_preload_sources::preload_declarations(&path, base_dir, defines, autoload)
-        .map(Some)
+    Ok(merged)
 }
 
 // ===== `ELEPHC_DECL_TRACE`: where one function declaration is lost =====
@@ -1613,7 +2145,7 @@ fn decl_trace_kind(stmt: &crate::parser::ast::Stmt) -> String {
             format!("NamespaceBlock({name:?})[{}]", body.len())
         }
         StmtKind::NamespaceDecl { name } => format!("NamespaceDecl({name:?})"),
-        StmtKind::IncludeOnceGuard { source_path, body } => {
+        StmtKind::IncludeOnceGuard { source_path, body, .. } => {
             format!("IncludeOnceGuard({source_path:?})[{}]", body.len())
         }
         StmtKind::ExprStmt(_) => "ExprStmt".to_string(),
@@ -1697,4 +2229,25 @@ fn declaration_source_file_paths(
         );
     }
     paths
+}
+
+/// Whether every class `file` declares is named by the program only through existence probes.
+fn declares_only_probed_classes<V: AsRef<str>>(
+    file: &Path,
+    class_files: &HashMap<String, V>,
+    probe_only_names: &HashSet<String>,
+) -> bool {
+    let declared: Vec<&String> = class_files
+        .iter()
+        .filter(|(_, declaring)| {
+            Path::new(declaring.as_ref())
+                .canonicalize()
+                .is_ok_and(|declaring| declaring == file)
+        })
+        .map(|(class, _)| class)
+        .collect();
+    !declared.is_empty()
+        && declared
+            .iter()
+            .all(|class| probe_only_names.contains(&crate::names::php_symbol_key(class)))
 }

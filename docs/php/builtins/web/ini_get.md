@@ -1,8 +1,8 @@
 ---
 title: "ini_get()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Returns the value of a configuration directive."
 sidebar:
-  order: 945
+  order: 1038
 ---
 
 ## ini_get()
@@ -11,7 +11,7 @@ sidebar:
 function ini_get(string $option): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Returns the value of a configuration directive.
 
 **Parameters**:
 - `$option` (`string`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

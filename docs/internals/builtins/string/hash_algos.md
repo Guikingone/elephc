@@ -1,16 +1,16 @@
 ---
-title: "hash_algos() — internals"
+title: "hash_algos() - internals"
 description: "Compiler internals for hash_algos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 807
+  order: 839
 ---
 
-## `hash_algos()` — internals
+## `hash_algos()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/hash_algos.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_algos.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

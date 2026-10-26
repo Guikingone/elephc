@@ -35,14 +35,91 @@ pub(crate) fn lower_ref_assign_property(
         return;
     };
     let object = lower_expr(ctx, object);
-    let value_type = property_get_result_type(ctx, object.value, property, Op::PropGet, source);
+    let receiver_repr = ctx.builder.value_php_type(object.value).codegen_repr();
+    let dynamic_receiver = matches!(receiver_repr, PhpType::Mixed | PhpType::Union(_));
+    // A receiver lowered as `Mixed` may still be one class to the checker (an untyped parameter
+    // inferred from its call sites), which then promoted that class's cell at its own payload
+    // type. The alias takes the payload every promoted cell of this name shares, and the guarded
+    // load raises an `Error` for any runtime class whose cell stores another representation:
+    // reading it as `Mixed` wrote a box pointer into a raw `int` cell.
+    let value_type = match dynamic_receiver.then(|| shared_reference_cell_payload(ctx, property)) {
+        Some(Some(shared)) => shared,
+        _ => property_get_result_type(ctx, object.value, property, Op::PropGet, source),
+    };
+    let owns_cell = match receiver_repr {
+        PhpType::Object(class) => ctx.classes.get(class.as_str())
+            .is_some_and(|info| info.owned_reference_properties.contains(property)),
+        _ => false,
+    };
     let data = ctx.intern_string(property);
+    let cell_ptr = if dynamic_receiver {
+        ctx.emit_value(
+            Op::LoadPropRefCellChecked,
+            vec![object.value],
+            Some(Immediate::Data(data)),
+            value_type.clone(),
+            Op::LoadPropRefCellChecked.default_effects(),
+            Some(span),
+        )
+    } else {
+        ctx.emit_value(
+            Op::LoadPropRefCell,
+            vec![object.value],
+            Some(Immediate::Data(data)),
+            PhpType::Pointer(None),
+            Op::LoadPropRefCell.default_effects(),
+            Some(span),
+        )
+    };
+    if owns_cell {
+        ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+        release_owning_receiver_temporary(ctx, object, span);
+    } else {
+        ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+    }
+}
+
+/// Returns the payload type every class's reference cell for `$property` stores, when they agree.
+fn shared_reference_cell_payload(ctx: &LoweringContext<'_, '_>, property: &str) -> Option<PhpType> {
+    let mut shared: Option<PhpType> = None;
+    for info in ctx.classes.values() {
+        if !info.reference_properties.contains(property) {
+            continue;
+        }
+        let Some((_, ty)) = info.properties.iter().find(|(name, _)| name == property) else {
+            continue;
+        };
+        match &shared {
+            None => shared = Some(ty.clone()),
+            Some(seen) if seen.reference_payload_compatible(ty) => {}
+            Some(_) => return None,
+        }
+    }
+    shared
+}
+
+/// Binds a local alias directly to a native static property's process-lifetime storage slot.
+///
+/// The static symbol owns its payload, so the alias itself is borrowed. Container replacements
+/// written through the alias are immediately visible through `C::$property`, and the same alias
+/// gives `IterStart` a local origin that can reload the replacement after hash growth.
+pub(crate) fn lower_ref_assign_static_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &str,
+    source: &Expr,
+    span: Span,
+) {
+    let ExprKind::StaticPropertyAccess { receiver, property } = &source.kind else {
+        return;
+    };
+    let data = crate::ir_lower::stmt::static_property_ref_data(ctx, receiver, property);
+    let value_type = static_property_result_type(ctx, receiver, property, source);
     let cell_ptr = ctx.emit_value(
-        Op::LoadPropRefCell,
-        vec![object.value],
+        Op::LoadStaticPropertyRefCell,
+        Vec::new(),
         Some(Immediate::Data(data)),
-        value_type.clone(),
-        Op::LoadPropRefCell.default_effects(),
+        PhpType::Pointer(None),
+        Op::LoadStaticPropertyRefCell.default_effects(),
         Some(span),
     );
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
@@ -82,8 +159,24 @@ pub(crate) fn lower_ref_assign_dynamic_property(
 }
 
 /// Lowers `$target = &call()`: binds `$target` to the reference cell returned by a
-/// by-reference-returning callee. The call yields the cell pointer; the target shares it
-/// non-owning (the owner is the object property the callee returned a reference to).
+/// by-reference-returning callee.
+///
+/// The staging that adopts the transferred cell is declared and PUBLISHED in the unwind chain
+/// before the source expression is lowered. That ordering is what makes the lease survive a
+/// same-frame catch: the record nests outside every root the call's own arguments publish, so it
+/// is still live while the callee's argument temporaries are retired, while an owning receiver is
+/// destroyed, and while this function retires whatever `$target` was bound to before. Any of
+/// those steps can run a destructor that throws, and none of them may leave the lease held with
+/// nothing to release it.
+///
+/// Only a call whose SELECTED lowering actually returns a raw cell can be bound, which
+/// `finish_reference_return_call` reports by adopting into that staging. A statically declared
+/// by-reference signature is NOT sufficient on its own, because a call that reaches a dynamic
+/// descriptor invoker gets an ordinary owned `Mixed` copy back and the invoker retires the cell
+/// (`codegen::runtime_callable_invoker::reference_return`). Binding that value as a cell pointer
+/// would dereference a payload word as an address, so an unadopted result is refused with a
+/// compile diagnostic instead, and the target is bound to its own managed cell so the remaining
+/// lowering stays well formed.
 pub(crate) fn lower_ref_assign_call(
     ctx: &mut LoweringContext<'_, '_>,
     target: &str,
@@ -101,9 +194,43 @@ pub(crate) fn lower_ref_assign_call(
             return;
         }
     }
-    let cell_ptr = lower_expr(ctx, source);
-    let value_type = ctx.builder.value_php_type(cell_ptr.value);
-    ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+    let (staged, owner) = ctx.predeclare_returned_ref_cell_staging();
+    register_owned_call_operand(ctx, owner, span);
+    let previous = ctx
+        .reference_call_context
+        .replace(crate::ir_lower::context::ReferenceCallContext {
+            depth: ctx.expression_depth + 1,
+            staged: staged.clone(),
+            adopted: false,
+        });
+    let result = lower_expr(ctx, source);
+    let adopted = ctx
+        .reference_call_context
+        .take()
+        .is_some_and(|context| context.adopted);
+    ctx.reference_call_context = previous;
+    if !adopted {
+        // The staging slot stayed zero, so detaching its record releases nothing.
+        unregister_owned_call_operand(ctx, owner, span);
+        crate::ir_lower::diagnostics::refuse(
+            span,
+            "Unsupported reference assignment: this compiler transfers a reference only from a \
+             call it resolves to a by-reference-returning function, method, static method or \
+             closure. PHP also allows the reference here, but the selected lowering hands back a \
+             copied value rather than the callee's reference cell",
+        );
+        let value_type = ctx.builder.value_php_type(result.value);
+        ctx.store_local(target, result, value_type, Some(span));
+        ctx.promote_local_ref_cell(target, Some(span));
+        return;
+    }
+    // Publishing the alias retains the cell in the target's own owner, so the staging lease can
+    // retire. The record is detached first, exactly as `retire_owned_call_operand` does for a
+    // value root: `release_ref_cell_owner` clears the slot before releasing, so a throwing
+    // payload destructor cannot be retried by a later walk of the chain.
+    ctx.alias_local_ref_cell(target, &staged, Some(span));
+    unregister_owned_call_operand(ctx, owner, span);
+    ctx.release_ref_cell_owner(&staged, Some(span));
 }
 
 /// Answers whether a call returns a reference CELL: `Some(true)` for a compiled by-reference
@@ -167,10 +294,12 @@ fn lower_ref_assign_of_value_call(
     );
 }
 
-/// Lowers `$target =& $arr[idx]`: promotes the array element to reference storage and binds
-/// `$target` to it non-owning. Hash promotion may relocate the container, so a static-property
-/// receiver is republished before the alias escapes. The array must remain live while the alias
-/// is in use because the local does not own its storage.
+/// Lowers `$target =& $arr[idx]` using the ownership represented by the container.
+///
+/// The addressable receiver is first represented by a local alias and normalized to hash storage.
+/// Its entry then owns a managed tag-11 cell, so the new local can outlive replacement or
+/// destruction of the parent. This also gives copy-on-write and growth a writable place where
+/// they can publish a replacement reached through a static property or nested element.
 pub(crate) fn lower_ref_assign_array_elem(
     ctx: &mut LoweringContext<'_, '_>,
     target: &str,
@@ -180,6 +309,9 @@ pub(crate) fn lower_ref_assign_array_elem(
     let ExprKind::ArrayAccess { array, index } = &source.kind else {
         return;
     };
+    let prepared_array = prepare_addressable_ref_array_receiver(ctx, array);
+    let array = prepared_array.as_ref().unwrap_or(array);
+    crate::ir_lower::stmt::promote_by_ref_foreach_source(ctx, array, true);
     let array_value = lower_expr(ctx, array);
     let array_value = prepare_local_array_element_reference_container(
         ctx,
@@ -201,63 +333,44 @@ pub(crate) fn lower_ref_assign_array_elem(
         ctx.bind_owned_ref_cell_ptr(target, cell, Some(span));
         return;
     }
-    let mut index_value = lower_expr(ctx, index);
-    // Use the array's declared element type (the inline storage shape), not the
-    // null-capable `TaggedScalar` result type that `array_access_result_type` widens
-    // Int elements to. The ref-cell aliases the raw element slot, so loads and stores
-    // through the alias must match the element's storage width, not the read result.
     let container_type = ctx.builder.value_php_type(array_value.value).codegen_repr();
+    let mut index_value = lower_expr(ctx, index);
     let value_type = match &container_type {
-        PhpType::Array(elem_ty) => normalize_value_php_type((**elem_ty).clone()),
-        PhpType::AssocArray { value, .. } => normalize_value_php_type((**value).clone()),
+        PhpType::Array(elem_ty) => {
+            if elem_ty.codegen_repr() == PhpType::Mixed {
+                PhpType::Mixed
+            } else {
+                index_value = coerce_array_key_to_int_at_span(ctx, index_value, Some(index.span), false);
+                normalize_value_php_type((**elem_ty).clone())
+            }
+        }
+        PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
         _ => array_access_result_type(ctx, array_value.value, Op::ArrayGet, source),
     };
-    let op = if matches!(container_type, PhpType::AssocArray { .. }) {
-        Op::HashRefElement
-    } else {
-        index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
-        Op::LoadArrayElemRefCell
-    };
     let cell_ptr = ctx.emit_value(
-        op,
+        Op::LoadArrayElemRefCell,
         vec![array_value.value, index_value.value],
         None,
         value_type.clone(),
-        op.default_effects(),
+        Op::LoadArrayElemRefCell.default_effects(),
         Some(span),
     );
-    if op == Op::HashRefElement {
-        if let ExprKind::StaticPropertyAccess { receiver, property } = &array.kind {
-            crate::ir_lower::stmt::store_static_property(
-                ctx,
-                receiver,
-                property,
-                array_value.value,
-                span,
-            );
-        }
-        // An INSTANCE property needs the same republication. Inserting the missing key can grow
-        // the hash to a new allocation, so a reference taken into it points into a container the
-        // property no longer holds unless the property is rewritten: Symfony's
-        // `ContainerBuilder::addObjectResource()` does
-        // `if (null === $interface = &$this->classReflectors[$name]) { $interface = new …; }`,
-        // every write went into a stale table, and the cached reflectors read back as garbage.
-        // Only receivers that can be re-read without side effects are republished.
-        if let ExprKind::PropertyAccess { object, property } = &array.kind {
-            if matches!(object.kind, ExprKind::This | ExprKind::Variable(_)) {
-                let object_value = lower_expr(ctx, object);
-                let data = ctx.intern_string(property);
-                ctx.emit_void(
-                    Op::PropSet,
-                    vec![object_value.value, array_value.value],
-                    Some(Immediate::Data(data)),
-                    Op::PropSet.default_effects(),
-                    Some(span),
-                );
-            }
-        }
+    ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+    // A property read that is not addressable storage (a `mixed` property, so no synthetic
+    // alias was reified above) arrives as an OWNING temporary -- `PropGet` acquires -- and
+    // nothing else releases it: the binding above retains the entry's managed cell, not the
+    // container, so the container's owner was simply leaked, one boxed array per
+    // `$r = &$obj->m[k]`. Only the property reads are released here. A concrete container
+    // loaded from a Mixed-widened local also counts as an owning temporary, but that detached
+    // owner is what the backend's consuming store-back transfers, and releasing it too freed
+    // the table under the local.
+    if matches!(
+        ctx.builder.value_defining_op(array_value.value),
+        Some(Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet)
+    ) && ctx.value_is_owning_temporary(array_value)
+    {
+        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(span));
     }
-    ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
 }
 
 /// Returns whether `$target = &$array[$k]` makes the element a shared reference in place.
@@ -329,6 +442,132 @@ pub(crate) fn prepare_local_array_element_reference_container(
     ctx.load_local(name, Some(span))
 }
 
+/// Reifies a static property, stable declared property, or nested element as a local receiver.
+///
+/// Element reference lowering can only republish COW or growth through `ReceiverPlace` when its
+/// receiver comes from a local or ref-cell slot. Each synthetic alias names the original storage,
+/// and recursively normalizing element parents to hash storage gives every level a managed cell.
+pub(crate) fn prepare_addressable_ref_array_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: &Expr,
+) -> Option<Expr> {
+    prepare_addressable_ref_array_receiver_impl(ctx, source, None)
+}
+
+/// Prepares a nested ref-argument receiver and records its managed expression aliases.
+pub(crate) fn prepare_scoped_addressable_ref_array_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: &Expr,
+) -> Option<(Expr, Vec<String>)> {
+    let mut aliases = Vec::new();
+    let receiver = prepare_addressable_ref_array_receiver_impl(ctx, source, Some(&mut aliases))?;
+    Some((receiver, aliases))
+}
+
+fn prepare_addressable_ref_array_receiver_impl(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: &Expr,
+    mut scoped_aliases: Option<&mut Vec<String>>,
+) -> Option<Expr> {
+    match &source.kind {
+        ExprKind::Variable(_) => Some(source.clone()),
+        ExprKind::PropertyAccess { object, property }
+            if by_ref_foreach_property_source_is_addressable(ctx, object, property) =>
+        {
+            let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            lower_ref_assign_property(ctx, &alias, source, source.span);
+            // This alias exists only to make the property's storage addressable for a nested
+            // reference. Detach an exact PHP array zval before the child promotion can update it
+            // in place, while stores through the ref-bound local still publish into the property.
+            crate::ir_lower::stmt::load_array_local_for_write(ctx, &alias, source.span);
+            if let Some(aliases) = scoped_aliases.as_deref_mut() {
+                if publish_scoped_ref_receiver_alias(ctx, &alias, source.span) {
+                    aliases.push(alias.clone());
+                }
+            }
+            Some(Expr::new(ExprKind::Variable(alias), source.span))
+        }
+        ExprKind::StaticPropertyAccess { .. } => {
+            let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            lower_ref_assign_static_property(ctx, &alias, source, source.span);
+            // Static array values are boxed. Clone the zval through the synthetic ref-bound
+            // alias so an earlier by-value copy keeps its own cell while nested writes publish
+            // the detached cell back into the process-lifetime static slot.
+            crate::ir_lower::stmt::load_array_local_for_write(ctx, &alias, source.span);
+            if let Some(aliases) = scoped_aliases.as_deref_mut() {
+                if publish_scoped_ref_receiver_alias(ctx, &alias, source.span) {
+                    aliases.push(alias.clone());
+                }
+            }
+            Some(Expr::new(ExprKind::Variable(alias), source.span))
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            let call_scoped = scoped_aliases.is_some();
+            let parent = prepare_addressable_ref_array_receiver_impl(
+                ctx,
+                array,
+                scoped_aliases.as_deref_mut(),
+            )?;
+            let element = Expr::new(
+                ExprKind::ArrayAccess {
+                    array: Box::new(parent),
+                    index: index.clone(),
+                },
+                source.span,
+            );
+            let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            lower_ref_assign_array_elem(ctx, &alias, &element, source.span);
+            // A persistent `=&` alias must detach a child still shared with a by-value snapshot
+            // before a deeper reference binds one of its slots. A call-scoped argument does not:
+            // the callee's mutating ref-cell path separates and republishes the payload, while a
+            // second argument naming the same element must retain that exact cell. Cloning here
+            // would replace the child between the two leases and split one PHP reference set.
+            if !call_scoped {
+                crate::ir_lower::stmt::load_array_local_for_write(ctx, &alias, source.span);
+            }
+            if let Some(aliases) = scoped_aliases.as_deref_mut() {
+                if publish_scoped_ref_receiver_alias(ctx, &alias, source.span) {
+                    aliases.push(alias.clone());
+                }
+            }
+            Some(Expr::new(ExprKind::Variable(alias), source.span))
+        }
+        _ => None,
+    }
+}
+
+/// Binds a synthetic foreach source alias to an element after its receiver was promoted to hash.
+///
+/// Unlike an ordinary indexed `=&` binding, a promoted hash entry owns a managed reference cell.
+/// Retaining that cell gives the synthetic origin a stable writeback address across table growth,
+/// source replacement, and destruction of the enclosing container.
+pub(crate) fn lower_owned_ref_assign_array_elem(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &str,
+    source: &Expr,
+    span: Span,
+) {
+    let ExprKind::ArrayAccess { array, index } = &source.kind else {
+        return;
+    };
+    let array_value = lower_expr(ctx, array);
+    let index_value = lower_expr(ctx, index);
+    let value_type = match ctx.builder.value_php_type(array_value.value).codegen_repr() {
+        PhpType::Array(elem_ty) => normalize_value_php_type(*elem_ty),
+        PhpType::AssocArray { value, .. } => normalize_value_php_type(*value),
+        _ => PhpType::Mixed,
+    };
+    let cell_ptr = ctx.emit_value(
+        Op::LoadArrayElemRefCellExisting,
+        vec![array_value.value, index_value.value],
+        None,
+        value_type.clone(),
+        Op::LoadArrayElemRefCellExisting.default_effects(),
+        Some(span),
+    );
+    ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+}
+
 /// Lowers a named property read once the receiver is already evaluated.
 pub(super) fn lower_property_get_from_value(
     ctx: &mut LoweringContext<'_, '_>,
@@ -351,7 +590,13 @@ pub(super) fn lower_property_get_from_value(
         // instead of requiring a static slot layout during AOT lowering.
         let object = ctx.box_value_as_mixed(object, PhpType::Mixed, Some(expr.span));
         let property_expr = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
-        return lower_dynamic_property_get_from_value(ctx, object, &property_expr, expr);
+        return lower_dynamic_property_fetch_from_value(
+            ctx,
+            object,
+            &property_expr,
+            PropertyFetchMode::Read,
+            expr,
+        );
     }
     // Route a read of a get-hooked property to its synthetic accessor, except inside that property's
     // own accessor, where `$this->prop` must read the raw backing slot to avoid infinite recursion.
@@ -368,6 +613,20 @@ pub(super) fn lower_property_get_from_value(
         };
         return lower_method_call_with_receiver(ctx, object, &accessor, &[], call_op, expr);
     }
+    // A DECLARED property this scope may not read, on a class that declares `__get`: php answers
+    // `__get('name')`. As a call the answer is the owned value it is; as a slot read it was
+    // treated as borrowed, so every `$entity->private` answered by `__get` leaked its string.
+    if matches!(op, Op::PropGet | Op::NullsafePropGet)
+        && magic_get_answers_declared_property(ctx, object.value, property)
+    {
+        let call_op = if op == Op::NullsafePropGet {
+            Op::NullsafeMethodCall
+        } else {
+            Op::MethodCall
+        };
+        let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
+        return lower_method_call_with_receiver(ctx, object, "__get", &[name], call_op, expr);
+    }
     let data = ctx.intern_string(property);
     let result_type = property_get_result_type(ctx, object.value, property, op, expr);
     let result = ctx.emit_value(
@@ -379,6 +638,27 @@ pub(super) fn lower_property_get_from_value(
         Some(expr.span),
     );
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
+}
+
+/// Whether a read of `property` on this receiver is php's `__get('property')`: one known class,
+/// which declares the property (an undeclared name keeps its own path, with php's recursion guard
+/// inside `__get`) but not visibly to this scope, and declares `__get`.
+fn magic_get_answers_declared_property(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> bool {
+    let object_type = ctx.builder.value_php_type(object);
+    let Some((class_name, _)) = singular_object_class(&object_type) else {
+        return false;
+    };
+    let class_name = class_name.trim_start_matches('\\');
+    let Some(class_info) = ctx.classes.get(class_name) else {
+        return false;
+    };
+    class_info.properties.iter().any(|(name, _)| name == property)
+        && class_info.methods.contains_key(&php_symbol_key("__get"))
+        && !super::native_isset::property_is_accessible_for_ir(ctx, class_name, class_info, property)
 }
 
 /// Returns whether a nominal object type has no declaration metadata in this compilation unit.
@@ -441,7 +721,7 @@ pub(super) fn property_get_result_type(
     op: Op,
     expr: &Expr,
 ) -> PhpType {
-    let slot_ty = slot_property_get_result_type(ctx, object, property, op, expr);
+    let slot_ty = property_result_type(ctx, object, property, op, expr, true);
     let Some(flow_ty) = ctx
         .flow_typed_property_accesses
         .get(&(ctx.loop_storage_scope.clone(), expr.span))
@@ -468,13 +748,34 @@ pub(super) fn property_get_result_type(
     }
 }
 
-/// Returns the type a property read produces from the receiver's declared slot.
-fn slot_property_get_result_type(
+/// Returns the property's slot type, IGNORING the null a receiver that may be a container miss
+/// would otherwise add.
+///
+/// The by-reference `foreach` fetch-for-write read uses this because it never produces that
+/// null: PHP evaluates such a source in a WRITE context, where a null receiver is a fatal
+/// `Error`, and `PropGetForWrite` raises exactly that instead of answering (issue #690).
+pub(super) fn property_slot_result_type(
     ctx: &LoweringContext<'_, '_>,
     object: crate::ir::ValueId,
     property: &str,
     op: Op,
     expr: &Expr,
+) -> PhpType {
+    property_result_type(ctx, object, property, op, expr, false)
+}
+
+/// Shared body of the two property result-type queries.
+///
+/// `receiver_miss_is_null` says whether a receiver read that can MISS its container -- an array
+/// or hash element -- makes the answer nullable. A read does produce null there; a
+/// fetch-for-write does not.
+fn property_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+    op: Op,
+    expr: &Expr,
+    receiver_miss_is_null: bool,
 ) -> PhpType {
     if op == Op::NullsafePropGet {
         return PhpType::Mixed;
@@ -496,7 +797,8 @@ fn slot_property_get_result_type(
         }
         return fallback_expr_type(expr);
     };
-    let nullable = nullable || value_may_carry_container_miss(ctx, object);
+    let nullable =
+        nullable || (receiver_miss_is_null && value_may_carry_container_miss(ctx, object));
     let normalized = class_name.trim_start_matches('\\');
     if normalized.is_empty() {
         return if nullable {
@@ -513,7 +815,9 @@ fn slot_property_get_result_type(
         };
     }
     if let Some(property_ty) =
-        crate::types::checker::reflection_virtual_property_type(normalized, property)
+        crate::types::checker::reflection_virtual_property_type_in(normalized, property, |c| {
+            ctx.classes.get(c).and_then(|info| info.parent.clone())
+        })
     {
         return if nullable {
             nullable_result_type(property_ty)
@@ -529,16 +833,39 @@ fn slot_property_get_result_type(
         };
     }
     let Some(class_info) = ctx.classes.get(normalized) else {
+        // An interface that declares no such property in its contract has no slot to type the
+        // read from; the implementers' class-id ladder answers it as a boxed value. The syntactic
+        // guess (`int`) typed Doctrine's `$entry->class` read as an integer and printed `0`.
+        if ctx.interfaces.contains_key(normalized) {
+            return PhpType::Mixed;
+        }
         return fallback_expr_type(expr);
     };
-    let property = crate::types::checker::reflection_virtual_property_backing(normalized, property)
-        .unwrap_or(property);
+    let property = crate::types::checker::reflection_virtual_property_backing_in(
+        normalized,
+        property,
+        |c| ctx.classes.get(c).and_then(|info| info.parent.clone()),
+    )
+    .unwrap_or(property);
     if let Some(property_ty) = runtime_property_type_override(ctx, normalized, property) {
         let property_ty = normalize_value_php_type(property_ty);
         return if nullable {
             nullable_result_type(property_ty)
         } else {
             property_ty
+        };
+    }
+    // `visible_property` still answers for a strict ancestor's PRIVATE slot, which php resolves
+    // to a dynamic property everywhere but the class that declared it. Typing the read from that
+    // slot handed the backend a non-null-capable result for a name whose answer is the dynamic
+    // hash, or php `null`.
+    if class_info.visible_property(property).is_some()
+        && property_name_is_dynamic_in_scope(ctx, normalized, property)
+    {
+        return if nullable {
+            nullable_result_type(PhpType::Mixed)
+        } else {
+            PhpType::Mixed
         };
     }
     if !property_is_accessible_for_ir(ctx, normalized, class_info, property) {
@@ -558,7 +885,9 @@ fn slot_property_get_result_type(
                 magic_ty
             };
         }
-        if class_info.allow_dynamic_properties {
+        // The clone-override hash answers an undeclared name exactly like the attribute's does,
+        // so both reserve the same boxed `mixed` result rather than a declared slot type.
+        if class_info.dynamic_property_hash_is_name_addressable() {
             return if nullable {
                 nullable_result_type(PhpType::Mixed)
             } else {
@@ -661,14 +990,15 @@ pub(super) fn class_declares_hook_accessor(
 /// Returns true when reading `property` on `object` can hit PHP's
 /// "must not be accessed before initialization" fatal.
 ///
-/// A property is uninitialized only while it is DECLARED WITH A TYPE and has no default:
+/// A property is uninitialized while it is DECLARED WITH A TYPE and has no default:
 /// `public ?P $p;` and `public string $s;` both start uninitialized, and PHP fatals on a plain
 /// read of either. A default makes the slot live before the constructor body runs, and an
 /// untyped property is plain null, so neither can ever be in that state — which is what keeps
 /// this gate off the overwhelmingly common shapes.
 ///
-/// The one case it misses is `unset($this->s)`, which returns an already-initialized typed
-/// property to the uninitialized state in PHP.
+/// A reachable `unset()` also widens an untyped fixed slot to boxed `Mixed` storage. Its high
+/// word carries the same marker, but a later value read warns and answers null instead of raising
+/// the typed-property error.
 pub(super) fn property_can_be_uninitialized(
     ctx: &LoweringContext<'_, '_>,
     object: crate::ir::ValueId,
@@ -710,7 +1040,7 @@ pub(super) fn property_can_be_uninitialized(
     let Some(info) = ctx.classes.get(class_name) else {
         return false;
     };
-    let Some(index) = info.properties.iter().position(|(name, _)| name == property) else {
+    let Some((index, (_, property_ty))) = info.visible_property(property) else {
         return false;
     };
     // Whether the slot was DECLARED with a type — asked of the schema, not inferred from the
@@ -726,6 +1056,56 @@ pub(super) fn property_can_be_uninitialized(
     // ordinary read then raises where PHP's `??` answers the default. The runtime probe
     // settles both cases, so the gate asks only whether the property is TYPED.
     info.property_slot_is_declared(index, property)
+        || (!info.property_slot_is_reference(index, property)
+            && property_ty.codegen_repr() == PhpType::Mixed)
+}
+
+/// Reads a property already proven initialized, for `isset()`, `empty()` and `??`.
+///
+/// A receiver that names no single class (a `mixed` value) is resolved by its runtime class, and
+/// on that path the ordinary read enforces visibility: `isset($m->private)` raised "Cannot access
+/// private property" where php answers false in silence. The probe fetch is the same read without
+/// php's access and miss diagnostics; a receiver of one known class keeps the typed slot read.
+pub(super) fn lower_initialized_slot_read(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    lower_initialized_slot_read_in_mode(ctx, object, property, PropertyFetchMode::Probe, expr)
+}
+
+/// The same read with an explicit silent-fetch mode: `??` and `empty()` pass `Coalesce`, so a
+/// receiver whose class declares `__get` is asked for the value (after `__isset`), where `isset()`
+/// stays `Probe` and asks `__isset` alone.
+pub(super) fn lower_initialized_slot_read_in_mode(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    mode: PropertyFetchMode,
+    expr: &Expr,
+) -> LoweredValue {
+    // A receiver of one known class keeps the typed slot read -- but only for a slot this scope
+    // may read. A private or protected one answers through the class's accessors or not at all,
+    // which is what the mode-aware fetch does: `$entity->private ?? 'd'` from outside the class
+    // read the private value where php asks `__isset`/`__get` (or answers the default).
+    let typed_read_allowed = singular_object_class(&ctx.builder.value_php_type(object.value))
+        .map(|(class_name, _)| class_name.to_string())
+        .is_some_and(|class_name| {
+            ctx.classes.get(class_name.as_str()).is_none_or(|class_info| {
+                super::native_isset::property_is_accessible_for_ir(
+                    ctx,
+                    &class_name,
+                    class_info,
+                    property,
+                )
+            })
+        });
+    if typed_read_allowed {
+        lower_property_get_from_value(ctx, object, property, Op::PropGet, expr)
+    } else {
+        lower_property_fetch_mode_from_value(ctx, object, property, mode, expr)
+    }
 }
 
 /// Reads `property` the way `isset()` does: yields null instead of raising when the slot is
@@ -787,7 +1167,9 @@ pub(super) fn lower_initialized_property_value(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(read_block);
-    let read_value = lower_property_get_from_value(ctx, object, property, Op::PropGet, expr);
+    let read_value = lower_initialized_slot_read_in_mode(
+        ctx, object, property, PropertyFetchMode::Coalesce, expr,
+    );
     // Both arms store into one Mixed temporary, so a slot that is not already boxed has to be.
     let read_value = if matches!(
         ctx.builder.value_php_type(read_value.value).codegen_repr(),
@@ -874,8 +1256,7 @@ pub(super) fn lower_initialized_static_property_value(
     let merge = ctx
         .builder
         .create_named_block("coalesce.static_property.merge", Vec::new());
-    let name = format!("{}::{}", receiver_name(receiver), property);
-    let data = ctx.intern_string(&name);
+    let data = crate::ir_lower::stmt::static_property_ref_data(ctx, receiver, property);
     let initialized = ctx.emit_value(
         Op::StaticPropInitialized,
         Vec::new(),
@@ -984,35 +1365,171 @@ pub(super) fn class_extends_class(
     false
 }
 
-/// Lowers a dynamic property read.
-pub(super) fn lower_dynamic_property_get(ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: &Expr, expr: &Expr) -> LoweredValue {
-    let object = lower_expr(ctx, object);
-    lower_dynamic_property_get_from_value(ctx, object, property, expr)
+/// Casts a runtime property name to the `Str` pair the backend property ladders index by.
+///
+/// PHP resolves `$o->{$e}` through a string cast of `$e`, so any scalar name is legal source.
+/// The checker cannot always hand the backend a narrowed one: an `eval()` anywhere in a scope
+/// widens every local there to `Mixed`, which is how `$o->{$name}` after `eval('...')` reached
+/// codegen boxed and was refused outright. Casting here keeps one string-name contract for the
+/// get, set and unset ladders, and leaves an already-`Str` name untouched so its producer stays
+/// visible to the owned-temporary cleanup.
+pub(super) fn coerce_runtime_property_name(
+    ctx: &mut LoweringContext<'_, '_>,
+    property: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if ctx.builder.value_php_type(property.value).codegen_repr() == PhpType::Str {
+        return property;
+    }
+    let name = ctx.emit_value(
+        Op::Cast,
+        vec![property.value],
+        Some(Immediate::CastTarget(IrType::Str)),
+        PhpType::Str,
+        Op::Cast.default_effects(),
+        Some(span),
+    );
+    release_coerced_source_if_owned(ctx, property, Some(span));
+    name
 }
 
-/// Lowers a dynamic property read once the receiver is already evaluated.
-pub(super) fn lower_dynamic_property_get_from_value(
+/// Lowers a dynamic property read.
+pub(super) fn lower_dynamic_property_get(ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: &Expr, expr: &Expr) -> LoweredValue {
+    lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Read, expr)
+}
+
+/// Lowers a dynamic property fetch in php's read or silent-probe mode.
+pub(super) fn lower_dynamic_property_fetch(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &Expr,
+    mode: PropertyFetchMode,
+    expr: &Expr,
+) -> LoweredValue {
+    let object = lower_expr(ctx, object);
+    lower_dynamic_property_fetch_from_value(ctx, object, property, mode, expr)
+}
+
+/// Lowers a dynamic property fetch, in either mode, once the receiver is already evaluated.
+///
+/// The mode travels on the instruction because php's answer for a name this scope may not reach,
+/// or that has never been created, depends on it and on nothing the backend can recover later:
+/// a value read raises `Cannot access private property D::$n` or warns `Undefined property`,
+/// while `isset()`, `empty()` and `??` answer `null` in silence.
+///
+/// The mode is NOT an effect narrowing. It suppresses php's own access and miss diagnostics only;
+/// a probe still reaches `__isset`, `__get` and property hooks, which are user code that can throw
+/// or warn. php 8.5 propagates an exception thrown from `__isset` straight out of `isset()`, so
+/// both modes keep the opcode's conservative contract.
+pub(super) fn lower_dynamic_property_fetch_from_value(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,
     property: &Expr,
+    mode: PropertyFetchMode,
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
-    let object = box_generic_object_for_dynamic_property(ctx, object, expr.span);
+    // A class-typed receiver whose read answers a boxed value goes through the shared runtime-name
+    // helper the boxed receivers use: inline, its ladder spans the class subtree once per site, and
+    // Symfony's `Container::getService()` reads `$this->{$registry}` over the compiled container's
+    // properties, 1.86 MB for one method. A body with a runtime closure scope keeps the inline
+    // ladder: codegen never outlines its reads, and a boxed receiver would widen it to every class.
+    let object = if result_type.codegen_repr() == PhpType::Mixed
+        && matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Object(_))
+        && !ctx.has_local_slot(crate::names::CLOSURE_SCOPE_LOCAL)
+    {
+        ctx.box_value_as_mixed(object, PhpType::Mixed, Some(expr.span))
+    } else {
+        box_generic_object_for_dynamic_property(ctx, object, expr.span)
+    };
     let property = lower_expr(ctx, property);
-    let property = coerce_to_string_at_span(ctx, property, Some(expr.span));
+    let property = coerce_runtime_property_name(ctx, property, expr.span);
+    // A value read CAN THROW (php's access `Error` for a name this scope may not reach). The
+    // coerced name and a call-result receiver are owning temporaries, so a caught refusal used
+    // to skip both releases below and leak them once per throw. Pinning parks them over the
+    // throwing window, as the write and the `unset` do.
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(
+        ctx,
+        &[object.value, property.value],
+        expr.span,
+    );
     let result = ctx.emit_value(
         Op::DynamicPropGet,
         vec![object.value, property.value],
-        None,
+        Some(Immediate::PropertyFetchMode(mode)),
         result_type,
         Op::DynamicPropGet.default_effects(),
         Some(expr.span),
     );
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, expr.span);
     if ctx.value_is_owning_temporary(property) {
         crate::ir_lower::ownership::release_if_owned(ctx, property, Some(expr.span));
     }
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
+}
+
+/// Lowers `$object->name` as a silent probe by reusing the runtime-name fetch with a literal name.
+///
+/// `Op::PropGet` already spends its immediate on the property name, so the probe distinction
+/// cannot ride along with it. A literal-name `DynamicPropGet` reaches exactly the same backend
+/// ladders (`lower_const_dynamic_prop_get` dispatches to the same stdClass, magic, hash and
+/// declared-slot lowerings `lower_prop_get_nonnull` does) with the same result type, ownership
+/// and effects, so routing the probe through it keeps one set of read semantics.
+pub(super) fn lower_property_probe_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    lower_property_fetch_mode_from_value(ctx, object, property, PropertyFetchMode::Probe, expr)
+}
+
+/// Lowers `$object->name` as a silent probe in one explicit fetch mode (`Probe` or `Coalesce`).
+pub(super) fn lower_property_fetch_mode_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    mode: PropertyFetchMode,
+    expr: &Expr,
+) -> LoweredValue {
+    let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
+    lower_dynamic_property_fetch_from_value(ctx, object, &name, mode, expr)
+}
+
+/// Returns whether `$object->name` must be probed through the runtime-name form.
+///
+/// Only a receiver whose class is unknown at compile time needs it: `property_isset_action`
+/// answers for every singular object class, and a name the checker refused never reaches
+/// lowering. A boxed `Mixed` receiver has neither, so its declared-slot ladder is the one place
+/// where a probe would otherwise take the raising value-read arm.
+pub(super) fn property_probe_needs_runtime_name_form(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+) -> bool {
+    if isset_object_expr_class(ctx, object).is_some() {
+        return false;
+    }
+    property_probe_needs_runtime_name_form_for_type(&expr_receiver_type_for_probe(ctx, object))
+}
+
+/// The receiver-TYPE half of the decision above, for a receiver already lowered to a value.
+///
+/// A nullable or union receiver that still resolves to one object class keeps the ordinary named
+/// read: its declared slot is known and the checker has already ruled on the name.
+pub(super) fn property_probe_needs_runtime_name_form_for_type(receiver_ty: &PhpType) -> bool {
+    singular_object_class(receiver_ty).is_none()
+        && matches!(
+            receiver_ty.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+}
+
+/// Returns the lowering-visible PHP type of a probe receiver expression.
+fn expr_receiver_type_for_probe(ctx: &LoweringContext<'_, '_>, object: &Expr) -> PhpType {
+    match &object.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        _ => infer_expr_type_syntactic(object),
+    }
 }
 
 /// Boxes a bare `object` receiver so runtime-name property dispatch can inspect its class id.
@@ -1021,10 +1538,18 @@ pub(super) fn box_generic_object_for_dynamic_property(
     object: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    if matches!(
-        ctx.builder.value_php_type(object.value).codegen_repr(),
-        PhpType::Object(class_name) if class_name.trim_start_matches('\\').is_empty()
-    ) {
+    // An object typed by an INTERFACE (or by a class this program does not compile) has no class
+    // layout to dispatch a runtime name against, so it goes through the runtime-class path a
+    // boxed receiver takes. Doctrine's `RawValuePropertyAccessor::setValue()` narrows `$object`
+    // to `InternalProxy` before `setRawValue()`, and the backend refused "unknown class".
+    let needs_box = match ctx.builder.value_php_type(object.value).codegen_repr() {
+        PhpType::Object(class_name) => {
+            let name = class_name.trim_start_matches('\\');
+            name.is_empty() || !ctx.classes.contains_key(name)
+        }
+        _ => false,
+    };
+    if needs_box {
         ctx.box_value_as_mixed(object, PhpType::Mixed, Some(span))
     } else {
         object
@@ -1064,6 +1589,22 @@ pub(super) fn dynamic_property_get_result_type(
     let Some(class_info) = ctx.classes.get(normalized) else {
         return fallback_expr_type(expr);
     };
+    // A class with a per-instance property hash can answer a name no declaration mentions, so the
+    // declared-slot union below would describe the wrong storage: the hash holds boxed `mixed`.
+    // Reading the union type instead re-interpreted a boxed cell as the single declared slot type,
+    // which printed the null sentinel as an int for `clone($plain, ["zz" => "x"])`.
+    // A name this scope resolves to a DYNAMIC property is dropped from the backend's declared-slot
+    // ladder, so the runtime name can miss and answer php `null`. Typing the read from the
+    // remaining declared slots printed the backend's own miss sentinel as an ordinary value.
+    if class_info.dynamic_property_hash_is_name_addressable()
+        || class_runtime_name_read_can_miss(ctx, normalized)
+    {
+        return if nullable {
+            nullable_result_type(PhpType::Mixed)
+        } else {
+            PhpType::Mixed
+        };
+    }
     let members = class_info
         .properties
         .iter()
@@ -1077,6 +1618,50 @@ pub(super) fn dynamic_property_get_result_type(
         })
         .collect::<Vec<_>>();
     normalize_union_members(members).unwrap_or_else(|| fallback_expr_type(expr))
+}
+
+/// Returns whether php resolves `property` on `class_name` to a DYNAMIC property in this scope.
+///
+/// `crate::types::resolve_property_name` is the authority: `ClassInfo::properties` is the
+/// PHYSICAL slot table, so it still carries a strict ancestor's private slot under its plain
+/// name even though php 7.4 removed shadow properties and the child's by-name table no longer
+/// contains it. The lowering scope is the same one `ir_can_access_member` uses.
+pub(super) fn property_name_is_dynamic_in_scope(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    crate::types::resolve_property_name(
+        ctx.classes,
+        class_name.trim_start_matches('\\'),
+        property,
+        ctx.current_class.as_deref(),
+    ) == crate::types::PropertyNameResolution::Dynamic
+}
+
+/// Returns whether a RUNTIME name on `class_name` can miss every slot the backend will dispatch.
+///
+/// A name this scope resolves to a dynamic property answers from the per-instance hash, and one
+/// php refuses is dropped from a silent probe's ladder. Both reach the ladder's miss arm, whose
+/// answer is php `null`, so a result type built only from the remaining declared slots would
+/// describe storage the read never produced.
+fn class_runtime_name_read_can_miss(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    let Some(class_info) = ctx.classes.get(normalized) else {
+        return false;
+    };
+    class_info.properties.iter().any(|(name, _)| {
+        !matches!(
+            crate::types::resolve_property_name(
+                ctx.classes,
+                normalized,
+                name,
+                ctx.current_class.as_deref(),
+            ),
+            crate::types::PropertyNameResolution::Visible
+                | crate::types::PropertyNameResolution::ScopePrivate { .. }
+        )
+    })
 }
 
 /// Returns true when the normalized class name refers to PHP's builtin stdClass.
@@ -1116,8 +1701,7 @@ pub(super) fn normalize_union_members(members: Vec<PhpType>) -> Option<PhpType> 
 
 /// Lowers a static property read.
 pub(super) fn lower_static_property_get(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, property: &str, expr: &Expr) -> LoweredValue {
-    let name = format!("{}::{}", receiver_name(receiver), property);
-    let data = ctx.intern_string(&name);
+    let data = crate::ir_lower::stmt::static_property_ref_data(ctx, receiver, property);
     let result_type = static_property_result_type(ctx, receiver, property, expr);
     ctx.emit_value(
         Op::LoadStaticProperty,
@@ -1178,7 +1762,7 @@ fn dynamic_static_property_result_type(
 }
 
 /// Returns precise PHP metadata for a static property read when class metadata is available.
-pub(super) fn static_property_result_type(
+pub(crate) fn static_property_result_type(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     property: &str,

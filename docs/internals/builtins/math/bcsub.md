@@ -1,16 +1,16 @@
 ---
-title: "bcsub() — internals"
+title: "bcsub() - internals"
 description: "Compiler internals for bcsub(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 579
+  order: 580
 ---
 
-## `bcsub()` — internals
+## `bcsub()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/bcsub.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/bcsub.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -270,7 +270,7 @@ try {
     );
     assert_eq!(
         out,
-        "4,5|iterator_to_array(): Argument #1 ($iterator) must be of type Traversable, int given"
+        "4,5|iterator_to_array(): Argument #1 ($iterator) must be of type Traversable|array, int given"
     );
 }
 
@@ -1121,7 +1121,40 @@ $args = ["B"];
 echo run_traversable(new Range(), $args);
 echo ":";
 echo run_iterable(new Range(), $args);
+echo ":";
+$namedArgs = ["prefix" => "N"];
+echo run_traversable(new Range(), $namedArgs);
+echo ":";
+echo run_iterable(new Range(), $namedArgs);
 "#,
     );
-    assert_eq!(out, "BB2:BB2");
+    assert_eq!(out, "BB2:BB2:NN2:NN2");
+}
+
+/// Verifies `iterator_to_array()` over an object of a class the program never declares compiles,
+/// and that reaching it fails where php does: at the `new`.
+///
+/// Symfony's `RequestPayloadValueResolver` validates with `symfony/validator`, which an app need
+/// not install; the checker refused the call, so the whole class file was left out of the build
+/// and a closed-world console could not load the resolver at all.
+#[test]
+fn test_iterator_to_array_over_an_undeclared_class_fails_at_the_new() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class R {
+    public function run(bool $validate): string {
+        if ($validate) {
+            $violations = new \Missing\ViolationList();
+            return implode(",", iterator_to_array($violations));
+        }
+        return "skipped";
+    }
+}
+$r = new R();
+echo $r->run($argc > 5), "\n";
+try { $r->run($argc < 5); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert!(out.success, "fixture must not fault: {}", out.stderr);
+    assert_eq!(out.stdout, "skipped\nClass \"Missing\\ViolationList\" not found\n");
 }

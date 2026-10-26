@@ -1,8 +1,8 @@
 ---
 title: "session_cache_limiter()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Reads or sets the cache limiter that controls session response caching."
 sidebar:
-  order: 953
+  order: 1044
 ---
 
 ## session_cache_limiter()
@@ -11,7 +11,7 @@ sidebar:
 function session_cache_limiter(?string $value = null): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Reads or sets the cache limiter that controls session response caching.
 
 **Parameters**:
 - `$value` (`?string`), default `null`, optional
@@ -23,7 +23,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

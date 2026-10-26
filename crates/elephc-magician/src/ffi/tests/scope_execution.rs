@@ -85,6 +85,7 @@ fn scope_set_get_round_trips_cell_and_flags() {
             name.len() as u64,
             cell,
             SCOPE_FLAG_OWNED,
+            &mut std::ptr::null_mut(),
         )
     };
     let mut out_cell = std::ptr::null_mut();
@@ -116,11 +117,12 @@ fn scope_native_binding_flags_roundtrip_and_plain_replacement_clears_them() {
     let scope = __elephc_eval_scope_new();
     let name = b"x";
     let cell = 1usize as *mut RuntimeCell;
+    let mut thrown = std::ptr::null_mut();
     for binding in [SCOPE_FLAG_NATIVE_REF, SCOPE_FLAG_NATIVE_GLOBAL, 0] {
         let mut actual = std::ptr::null_mut();
         let mut flags = 0;
         unsafe {
-            assert_eq!(crate::ffi::scope::__elephc_eval_scope_bind_native(scope, name.as_ptr(), 1, cell, binding), EvalStatus::Ok.code());
+            assert_eq!(crate::ffi::scope::__elephc_eval_scope_bind_native(scope, name.as_ptr(), 1, cell, binding, &mut thrown), EvalStatus::Ok.code());
             assert_eq!(__elephc_eval_scope_get(scope, name.as_ptr(), 1, &mut actual, &mut flags), EvalStatus::Ok.code());
         }
         assert_eq!(actual, cell);
@@ -128,7 +130,7 @@ fn scope_native_binding_flags_roundtrip_and_plain_replacement_clears_them() {
     }
     unsafe {
         assert_eq!(__elephc_eval_scope_set(scope, name.as_ptr(), 1, cell,
-            SCOPE_FLAG_NATIVE_REF | SCOPE_FLAG_NATIVE_GLOBAL), EvalStatus::RuntimeFatal.code());
+            SCOPE_FLAG_NATIVE_REF | SCOPE_FLAG_NATIVE_GLOBAL, &mut thrown), EvalStatus::RuntimeFatal.code());
         __elephc_eval_scope_free(scope);
     }
 }
@@ -171,9 +173,10 @@ fn scope_unset_and_clear_dirty_update_flags() {
             name.len() as u64,
             cell,
             SCOPE_FLAG_OWNED,
+            &mut std::ptr::null_mut(),
         );
         __elephc_eval_scope_clear_dirty(scope);
-        __elephc_eval_scope_unset(scope, name.as_ptr(), name.len() as u64);
+        __elephc_eval_scope_unset(scope, name.as_ptr(), name.len() as u64, &mut std::ptr::null_mut());
     }
     let mut out_cell = cell;
     let mut out_flags = 0;

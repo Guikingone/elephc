@@ -77,6 +77,26 @@ pub fn internal_declarations(build: impl FnOnce() -> Program) -> Program {
     crate::source::with_parse_mode(SourceProfile::new(SourceMode::Internal), build)
 }
 
+/// Builds prelude FUNCTIONS that stand in for a PHP builtin, typed the way user code is.
+///
+/// The checker resolves `array` by where it was written: a user declaration accepts both packed
+/// and hash storage (`PhpType::php_array()`), while a compiler-synthesized one, recognized by its
+/// dummy span, keeps an explicit `array<mixed>` ABI. A helper that replaces `array_walk()` or
+/// `array_sum()` receives whatever the PHP caller holds, so it must be typed like user code: as an
+/// `array<mixed>`, a by-reference `foreach` promoted the caller's packed array to a hash through
+/// the reference while the caller kept reading it as packed, and a hash argument was read with
+/// the packed layout. Each top-level function gets its own synthetic span, which the checker
+/// treats as written source.
+pub fn php_semantics_declarations(build: impl FnOnce() -> Program) -> Program {
+    let mut program = internal_declarations(build);
+    for stmt in &mut program {
+        if matches!(stmt.kind, StmtKind::FunctionDecl { .. }) && !stmt.span.identifies_a_node() {
+            stmt.span = Span::synthetic();
+        }
+    }
+    program
+}
+
 // ---------------------------------------------------------------------------
 // Type helpers
 // ---------------------------------------------------------------------------
@@ -495,7 +515,19 @@ pub fn e_ternary(condition: Expr, then_value: Expr, else_value: Expr) -> Expr {
     )
 }
 
-/// `(int) value`, `(string) value`, … — a scalar cast.
+/// Builds a strict match expression, preserving grouped labels and an optional default.
+pub fn e_match(subject: Expr, arms: Vec<(Vec<Expr>, Expr)>, default: Option<Expr>) -> Expr {
+    Expr::new(
+        ExprKind::Match {
+            subject: Box::new(subject),
+            arms,
+            default: default.map(Box::new),
+        },
+        Span::dummy(),
+    )
+}
+
+/// `(int) value`, `(string) value`: a scalar cast.
 pub fn e_cast(target: CastType, value: Expr) -> Expr {
     Expr::new(
         ExprKind::Cast {
@@ -705,6 +737,7 @@ pub fn e_closure_call(var: &str, args: Vec<Expr>) -> Expr {
 /// by-reference form, so the two are separate calls rather than one with a flag.
 pub struct ClosureBuilder {
     params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
+    variadic: Option<String>,
     return_type: Option<TypeExpr>,
     body: Vec<Stmt>,
     captures: Vec<String>,
@@ -715,6 +748,7 @@ pub struct ClosureBuilder {
 pub fn closure() -> ClosureBuilder {
     ClosureBuilder {
         params: Vec::new(),
+        variadic: None,
         return_type: None,
         body: Vec::new(),
         captures: Vec::new(),
@@ -739,6 +773,12 @@ impl ClosureBuilder {
     pub fn param_default(mut self, name: &str, ty: TypeExpr, default: Expr) -> Self {
         self.params
             .push((name.to_string(), Some(ty), Some(default), false));
+        self
+    }
+
+    /// Declares the closure's untyped variadic parameter (`...$name`).
+    pub fn variadic(mut self, name: &str) -> Self {
+        self.variadic = Some(name.to_string());
         self
     }
 
@@ -776,7 +816,7 @@ impl ClosureBuilder {
         Expr::new(
             ExprKind::Closure {
                 params: self.params,
-                variadic: None,
+                variadic: self.variadic,
                 variadic_by_ref: false,
                 variadic_type: None,
                 return_type: self.return_type,
@@ -883,6 +923,20 @@ pub fn s_prop_assign(object: Expr, property: &str, value: Expr) -> Stmt {
             object: Box::new(object),
             property: property.to_string(),
             value,
+        },
+        Span::dummy(),
+    )
+}
+
+/// `$object->prop = &<source>;` — binds a declared property to the reference cell another
+/// property owns, so both names read and write one value. The classic DOM prelude uses it to make
+/// `data`, `nodeValue` and `textContent` a single storage cell.
+pub fn s_prop_ref_assign(object: Expr, property: &str, source: Expr) -> Stmt {
+    Stmt::new(
+        StmtKind::PropertyRefAssign {
+            object: Box::new(object),
+            property: property.to_string(),
+            source,
         },
         Span::dummy(),
     )
@@ -1150,6 +1204,10 @@ fn walk_stmt(stmt: &Stmt, out: &mut Vec<String>) {
             walk_expr(object, out);
             walk_expr(value, out);
         }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            walk_expr(object, out);
+            walk_expr(source, out);
+        }
         StmtKind::ArrayAssign { array, index, value } => {
             out.push(array.clone());
             walk_expr(index, out);
@@ -1333,6 +1391,18 @@ fn walk_expr(expr: &Expr, out: &mut Vec<String>) {
         ExprKind::Cast { expr: inner, .. }
         | ExprKind::Not(inner)
         | ExprKind::Negate(inner) => walk_expr(inner, out),
+        ExprKind::Match { subject, arms, default } => {
+            walk_expr(subject, out);
+            for (labels, value) in arms {
+                for label in labels {
+                    walk_expr(label, out);
+                }
+                walk_expr(value, out);
+            }
+            if let Some(default) = default {
+                walk_expr(default, out);
+            }
+        }
         ExprKind::InstanceOf { value, .. } => walk_expr(value, out),
         // `new $class(...$args)`: the spread argument READS `$args`, so a parameter that
         // only ever reaches a constructor this way counts as used.
@@ -1658,7 +1728,7 @@ impl MethodBuilder {
     }
 
     /// Builds the method, prepending the `$_unused` consumption when it is needed.
-    fn build(mut self) -> ClassMethod {
+    pub(crate) fn build(mut self) -> ClassMethod {
         let param_attributes = std::mem::take(&mut self.param_attributes);
         let variadic = self.signature.variadic.take();
         let variadic_by_ref = self.signature.variadic_by_ref;
@@ -1883,6 +1953,10 @@ fn audit_stmt(stmt: &Stmt, out: &mut Vec<String>) {
         StmtKind::PropertyAssign { object, value, .. } => {
             audit_expr(object, out);
             audit_expr(value, out);
+        }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            audit_expr(object, out);
+            audit_expr(source, out);
         }
         StmtKind::ArrayAssign { index, value, .. } => {
             audit_expr(index, out);
@@ -2127,6 +2201,18 @@ fn audit_expr(expr: &Expr, out: &mut Vec<String>) {
         ExprKind::Cast { expr: inner, .. }
         | ExprKind::Not(inner)
         | ExprKind::Negate(inner) => audit_expr(inner, out),
+        ExprKind::Match { subject, arms, default } => {
+            audit_expr(subject, out);
+            for (labels, value) in arms {
+                for label in labels {
+                    audit_expr(label, out);
+                }
+                audit_expr(value, out);
+            }
+            if let Some(default) = default {
+                audit_expr(default, out);
+            }
+        }
         ExprKind::InstanceOf { value, .. } => audit_expr(value, out),
         // A closure body is ordinary code and can call anything, so it has to be walked — a
         // leaf arm here would exempt every call written inside one from this whole audit.
@@ -3204,6 +3290,28 @@ function ignore_mode(int $mode = 0): bool {
             panic!("expected a function declaration");
         };
         assert_eq!(body.len(), 1, "a read parameter needs no consumption");
+    }
+
+    /// Match subjects, labels, results and defaults all contribute reads and audited calls.
+    #[test]
+    fn match_operands_are_visible_to_prelude_scans() {
+        let names = ["subject", "first", "second", "result", "fallback"];
+        let operand = |name: &str| e_call(name, vec![e_var(name)]);
+        let mut declaration = function("choose");
+        for name in names {
+            declaration = declaration.param(name, t_mixed());
+        }
+        let built = declaration.returning(e_match(
+            operand("subject"),
+            vec![(vec![operand("first"), operand("second")], operand("result"))],
+            Some(operand("fallback")),
+        )).build();
+        let StmtKind::FunctionDecl { body, .. } = &built.kind else {
+            panic!("expected a function declaration");
+        };
+        assert_eq!(body.len(), 1, "match-only reads must not gain unused-parameter statements");
+        assert_eq!(reads_of(body), names);
+        assert_eq!(called_function_names(&vec![built]), names);
     }
 
     /// Declarations are built under the internal source mode, which exempts them from the

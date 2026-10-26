@@ -1,17 +1,17 @@
 ---
-title: "unregister_tick_function() — internals"
+title: "unregister_tick_function() - internals"
 description: "Compiler internals for unregister_tick_function(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 696
+  order: 727
 ---
 
-## `unregister_tick_function()` — internals
+## `unregister_tick_function()` - internals
 
 ## Where it lives
 
-- **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
+- **Lowering**: unavailable for this backend.
+- **Function symbol**: none.
 
 
 ## Semantic descriptor
@@ -28,7 +28,7 @@ _No compiled lowering: this surface is intentionally eval-only._
 function unregister_tick_function(mixed $callback): void
 ```
 
-## What the type checker enforces
+## Signature constraints
 
 - **Arity**: takes exactly 1 argument.
 

@@ -2,7 +2,7 @@
 title: "parse_str()"
 description: "Parses a query string into an array of variables."
 sidebar:
-  order: 849
+  order: 942
 ---
 
 ## parse_str()
@@ -22,9 +22,9 @@ Parses a query string into an array of variables.
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected parse_str prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/parse_str.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/parse_str.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/parse_str.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/parse_str.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

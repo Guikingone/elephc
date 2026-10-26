@@ -470,3 +470,69 @@ return json_encode([$b->str("title"), f(), $b->col("t", "n", ["k" => true])]);')
         "[{\"type\":\"string\",\"name\":\"title\",\"length\":255},{\"a\":1,\"b\":[2],\"c\":\"x\"},{\"type\":\"t\",\"name\":\"n\",\"k\":true}]\n"
     );
 }
+
+/// A by-reference `int` parameter lent to a method on a gradual receiver keeps its cell's
+/// representation. In a program that can declare methods at run time the callee's by-reference
+/// shape is unknown, and re-binding `int &$cursor` to `mixed` read the caller's raw int as a box
+/// pointer: the next `++$cursor` stored a heap address into it. Symfony's YAML lexer reached it
+/// through `isset($this->line[$cursor])`, whose `ArrayAccess` arm is such a call.
+#[test]
+fn test_by_ref_int_param_lent_to_a_gradual_method_keeps_its_cell() {
+    let out = compile_and_run(
+        r#"<?php
+class Q { public function take($k) { return $k; } }
+class Lexer {
+    private string $line = "ab'cd'";
+    public function quoted(int &$cursor): string {
+        $out = '';
+        for (; strlen($this->line) > $cursor; ++$cursor) {
+            if ("'" === $this->line[$cursor]) {
+                ++$cursor;
+                if (isset($this->line[$cursor]) && "'" === $this->line[$cursor]) { continue; }
+                return $out;
+            }
+            $out .= $this->line[$cursor];
+        }
+        return "malformed";
+    }
+}
+function lend(mixed $o, int &$cursor): void { $o->take($cursor); ++$cursor; }
+$c = 3; echo (new Lexer)->quoted($c), ":", $c, "\n";
+$n = 1; lend(new Q, $n); echo $n, "\n";
+eval('echo "eval\n";');
+"#,
+    );
+
+    assert_eq!(out, "cd:6\n2\neval\n");
+}
+
+/// A declared `iterable` parameter reached through a `mixed` receiver gets the array or
+/// Traversable payload, not the box. In a program that can run eval, `$this` inside a closure is
+/// gradual, so Symfony's table generator called `fillCells(iterable $row)` through the candidate
+/// dispatch, which handed over the boxed cell; `foreach` read it as null and `about` failed.
+#[test]
+fn test_iterable_parameter_through_a_gradual_receiver_gets_the_payload() {
+    let out = compile_and_run(
+        r#"<?php
+class Rows implements IteratorAggregate {
+    public function __construct(private Closure $generator) {}
+    public function getIterator(): Traversable { return ($this->generator)(); }
+}
+class Table {
+    private function fill(iterable $row): iterable { $n = []; foreach ($row as $c) { $n[] = strtoupper($c); } return $n; }
+    public function build(array $rows): Rows {
+        return new Rows(function () use ($rows): Traversable {
+            foreach ($rows as $row) { yield $this->fill($row); }
+        });
+    }
+}
+function viaMixed(mixed $o, mixed $row) { return $o->fill2($row); }
+class Plain { public function fill2(iterable $row): string { return implode(",", is_array($row) ? $row : iterator_to_array($row)); } }
+foreach ((new Table)->build([['a', 'b'], ['c']]) as $cells) { echo implode(",", $cells), "|"; }
+echo viaMixed(new Plain, ['x', 'y']), "|", viaMixed(new Plain, new ArrayIterator(['z'])), "\n";
+eval('echo "eval\n";');
+"#,
+    );
+
+    assert_eq!(out, "A,B|C|x,y|z\neval\n");
+}

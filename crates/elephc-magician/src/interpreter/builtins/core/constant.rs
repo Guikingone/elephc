@@ -72,7 +72,10 @@ fn eval_constant_lookup(
             context,
             values,
         )?;
-        return values.retain(value);
+        // Only a borrowed cell needs the retain. A constant of a COMPILED class comes back from
+        // the native bridge already owned (a fresh box); retaining that too leaked the box and
+        // its string on every call (`constant(static::class . '::FOO')` in a loop).
+        return if value.is_borrowed() { values.retain(value) } else { Ok(value) };
     }
     eval_const_fetch(&name, context, values)
 }

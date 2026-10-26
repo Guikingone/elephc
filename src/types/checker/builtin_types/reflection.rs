@@ -39,6 +39,8 @@ mod function_parameter_classes;
 mod reference_class;
 mod type_classes;
 mod class_model;
+mod class_table_ctor;
+mod member_table_ctor;
 mod class_scalar_methods;
 mod class_relations;
 mod class_collections;
@@ -147,6 +149,53 @@ pub(crate) fn reflection_virtual_property_backing(
         }
         _ => None,
     }
+}
+
+/// Walks a class's parent chain to the built-in Reflection class that owns its virtual
+/// `$name` / `$class` properties, or `None` when no ancestor is one.
+///
+/// A user subclass reads the inherited properties exactly as the built-in does -- Doctrine's
+/// `ReflectionReadonlyProperty extends ReflectionProperty` formats `$this->class` and
+/// `$this->name` -- yet only the built-in names were recognised, so the read was an
+/// "Undefined property". `parent_of` answers one hop for whichever class table the caller owns.
+pub(crate) fn reflection_virtual_owner(
+    class_name: &str,
+    parent_of: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let mut current = class_name.trim_start_matches('\\').to_string();
+    for _ in 0..64 {
+        if reflection_virtual_property_backing(&current, "name").is_some() {
+            return Some(current);
+        }
+        current = parent_of(&current)?.trim_start_matches('\\').to_string();
+    }
+    None
+}
+
+/// [`reflection_virtual_property_backing`] for a class that may merely EXTEND a Reflection class.
+pub(crate) fn reflection_virtual_property_backing_in(
+    class_name: &str,
+    property: &str,
+    parent_of: impl Fn(&str) -> Option<String>,
+) -> Option<&'static str> {
+    if !matches!(property, "name" | "class") {
+        return None;
+    }
+    let owner = reflection_virtual_owner(class_name, parent_of)?;
+    reflection_virtual_property_backing(&owner, property)
+}
+
+/// [`reflection_virtual_property_type`] for a class that may merely EXTEND a Reflection class.
+pub(crate) fn reflection_virtual_property_type_in(
+    class_name: &str,
+    property: &str,
+    parent_of: impl Fn(&str) -> Option<String>,
+) -> Option<PhpType> {
+    if !matches!(property, "name" | "class") {
+        return None;
+    }
+    let owner = reflection_virtual_owner(class_name, parent_of)?;
+    reflection_virtual_property_type(&owner, property)
 }
 
 /// Returns the PHP-visible type of a virtual built-in Reflection property.

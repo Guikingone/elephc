@@ -108,11 +108,14 @@ pub(super) fn eval_null_coalesce_assign(
     let mut location = location?;
     let current = location.current();
     if !values.is_null(current)? {
-        return if location.current_is_borrowed() {
-            values.retain(current)
+        let result = if location.current_is_borrowed() {
+            values.retain(current)?
         } else {
-            Ok(current)
+            current
         };
+        // No write follows: the containers and keys this location fetched go unused.
+        abandon_location(location, context, values)?;
+        return Ok(result);
     }
     if !location.current_is_held_by_storage() {
         eval_release_value(context, values, current)?;
@@ -133,6 +136,27 @@ pub(super) fn eval_null_coalesce_assign(
     context.pop_quiet_property_fetch();
     write_location(location?, assigned, true, context, scope, values)?;
     Ok(assigned)
+}
+
+/// Releases the element value an array-element location read, which no write consumes.
+///
+/// `write_location` writes through the element's PARENT container; the element's own observed
+/// value is only an operand (of a compound assignment) or unused (a plain write), and an owned
+/// read of it leaked one reference per element write. (`??=` already released its observation
+/// before running the default.)
+fn release_element_observation(
+    location: &mut EvaluatedLocation,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if let EvaluatedLocation::ArrayElement { current, .. } = location {
+        if let Some(observed) = current.take() {
+            if !observed.is_borrowed() {
+                eval_release_value(context, values, observed)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Re-reads the containers of an array-element location, keeping its evaluated indexes.
@@ -164,7 +188,9 @@ fn refresh_container(
             let current = eval_static_property_get_result(&class_name, &property, context, values)?;
             Ok(EvaluatedLocation::StaticProperty { class_name, property, current: Some(current) })
         }
-        EvaluatedLocation::Property { object, property, .. } => {
+        EvaluatedLocation::Property { object, property, current: stale } => {
+            // The container read before the default ran is superseded, and nothing consumed it.
+            release_stale_container(stale, context, values)?;
             let current = eval_property_array_target_get_result(object, &property, context, values)?;
             Ok(EvaluatedLocation::Property { object, property, current: Some(current) })
         }
@@ -182,12 +208,72 @@ fn refresh_container(
             let current = entry.map_or_else(|| values.null(), |entry| Ok(entry.cell()))?;
             Ok(EvaluatedLocation::Variable { name, current: Some(current), current_is_borrowed, ownership })
         }
-        EvaluatedLocation::ArrayElement { parent, index, .. } => {
+        EvaluatedLocation::ArrayElement { parent, index, current: stale } => {
+            release_stale_container(stale, context, values)?;
             let parent = refresh_container(*parent, context, scope, values)?;
             let current = eval_array_get_result(parent.current(), index, context, values)?;
             Ok(EvaluatedLocation::ArrayElement { parent: Box::new(parent), index, current: Some(current) })
         }
         other @ EvaluatedLocation::ArrayAccessElement { .. } => Ok(other),
+    }
+}
+
+/// Releases what a location fetched for a write that will not happen: element keys and the
+/// containers above the target. The target's own observed value is the caller's to settle.
+fn abandon_location(
+    location: EvaluatedLocation,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    match location {
+        EvaluatedLocation::ArrayElement { parent, index, .. } => {
+            if !index.is_borrowed() {
+                eval_release_value(context, values, index)?;
+            }
+            abandon_container(*parent, context, values)
+        }
+        EvaluatedLocation::ArrayAccessElement { index, .. } => {
+            if index.is_borrowed() {
+                return Ok(());
+            }
+            eval_release_value(context, values, index)
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Releases a container location's own observed value, then everything above it.
+fn abandon_container(
+    location: EvaluatedLocation,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let held = location.current_is_held_by_storage();
+    let observed = match &location {
+        EvaluatedLocation::GlobalVariable { current, .. }
+        | EvaluatedLocation::Variable { current, .. }
+        | EvaluatedLocation::Property { current, .. }
+        | EvaluatedLocation::StaticProperty { current, .. }
+        | EvaluatedLocation::ArrayElement { current, .. }
+        | EvaluatedLocation::ArrayAccessElement { current, .. } => *current,
+    };
+    if let Some(observed) = observed {
+        if !held && !observed.is_borrowed() {
+            eval_release_value(context, values, observed)?;
+        }
+    }
+    abandon_location(location, context, values)
+}
+
+/// Releases an owned container read that a refreshed location replaces.
+fn release_stale_container(
+    stale: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    match stale {
+        Some(stale) if !stale.is_borrowed() => eval_release_value(context, values, stale),
+        _ => Ok(()),
     }
 }
 
@@ -200,12 +286,57 @@ pub(super) fn eval_compound_assign(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let location = evaluate_location(target, context, scope, values)?;
+    let mut location = evaluate_location(target, context, scope, values)?;
     let current = location.current();
-    let value = eval_expr(value, context, scope, values)?;
-    let assigned = eval_binary_result(op, current, value, context, values)?;
+    // The observed value and the right-hand side are operands only: `eval_binary_result`
+    // borrows both and returns a fresh result. A property or element read handed this
+    // evaluation its own reference, which was never released -- on success, and on a
+    // right-hand side that throws (`$o->s .= f();` in a `try`) -- so every statement-form
+    // property compound assignment leaked its old value.
+    let value = match eval_owned_expr(value, context, scope, values) {
+        Ok(value) => value,
+        Err(status) => {
+            release_compound_operand(&mut location, current, None, context, values)?;
+            abandon_location(location, context, values)?;
+            return Err(status);
+        }
+    };
+    let assigned = eval_binary_result(op, current, value, context, values);
+    let assigned = match assigned {
+        Ok(assigned) => assigned,
+        Err(status) => {
+            eval_release_value(context, values, value)?;
+            release_compound_operand(&mut location, current, None, context, values)?;
+            abandon_location(location, context, values)?;
+            return Err(status);
+        }
+    };
+    if value != assigned {
+        eval_release_value(context, values, value)?;
+    }
+    release_compound_operand(&mut location, current, Some(assigned), context, values)?;
     write_location(location, assigned, true, context, scope, values)?;
     Ok(assigned)
+}
+
+/// Releases a compound assignment's observed value when this evaluation owns it.
+///
+/// A value some storage still holds (a scope variable, a static property slot) is borrowed. A
+/// global's observed copy is released by `write_location` itself, so it is detached instead.
+fn release_compound_operand(
+    location: &mut EvaluatedLocation,
+    current: RuntimeCellHandle,
+    assigned: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if location.current_is_held_by_storage() || current.is_borrowed() || assigned == Some(current) {
+        return Ok(());
+    }
+    if let EvaluatedLocation::GlobalVariable { current: observed, .. } = location {
+        *observed = None;
+    }
+    eval_release_value(context, values, current)
 }
 
 /// Evaluates a postfix increment or decrement and returns the value observed before mutation.
@@ -251,12 +382,13 @@ pub(in crate::interpreter) fn eval_assign(
     } else {
         None
     };
-    let location = evaluate_plain_assignment_location(target, context, scope, values).map_err(|status| {
+    let mut location = evaluate_plain_assignment_location(target, context, scope, values).map_err(|status| {
         if trace {
             eprintln!("[elephc-eval-trace] phase=assign_error stage=location target={target:?} status={status:?}");
         }
         status
     })?;
+    release_element_observation(&mut location, context, values)?;
     let assigned = match early_value {
         Some(assigned) => assigned,
         None => eval_expr(value, context, scope, values).map_err(|status| {
@@ -420,6 +552,14 @@ pub(in crate::interpreter) fn eval_array_append_reference_bind(
     write_reference_location(location, source_target, source_value, context, scope, values)
 }
 
+/// How many `return` statements of by-reference functions have run in this process.
+///
+/// `$x = &f()` reads it around the call: an unchanged count means no by-reference function
+/// returned during the call, so the callee is a by-value one and php's "Only variables should be
+/// assigned by reference" notice applies. A by-reference callee that returned a non-variable has
+/// already raised its own notice, and php raises only that one.
+static BY_REF_RETURN_EXECUTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Executes `return EXPR;` inside a function declared to return BY REFERENCE.
 ///
 /// The caller may bind to what comes back, so the reference has to survive the activation being
@@ -436,6 +576,7 @@ pub(in crate::interpreter) fn eval_by_ref_return(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
+    BY_REF_RETURN_EXECUTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if !eval_expr_binds_a_reference_source(expr) {
         // Same diagnostic channel every other notice-level message here uses.
         values.warning("Only variable references should be returned by reference")?;
@@ -444,6 +585,23 @@ pub(in crate::interpreter) fn eval_by_ref_return(
     }
     let (target, value) = eval_reference_source(expr, context, scope, values)?;
     let target = eval_persistent_return_target(target, context, scope);
+    // An object target names its owner by cell handle, and for `return $this->p;` that handle is
+    // the activation's own `$this` cell, which the frame releases on exit: the caller's alias
+    // keeps a reference of its own, as a property alias bound inside a method does
+    // (`eval_property_reference_target` callers). Symfony's `ContextListener::onKernelResponse`
+    // binds `&$session->getUsageIndex()` and its next write read the freed cell.
+    let target = match target {
+        EvalReferenceTarget::ObjectProperty {
+            object,
+            property,
+            access_scope,
+        } => EvalReferenceTarget::ObjectProperty {
+            object: values.retain(object)?,
+            property,
+            access_scope,
+        },
+        other => other,
+    };
     let retained = values.retain(value)?;
     if let Some(unclaimed) = context.set_pending_return_reference(target, retained) {
         eval_release_value(context, values, unclaimed)?;
@@ -605,6 +763,9 @@ pub(in crate::interpreter) fn eval_array_append_result(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if target.is_call_result() {
+        return eval_call_result_append(target, value, context, scope, values);
+    }
     let location = evaluate_location_with_fetch(target, LocationFetch::ArrayParent, context, scope, values)?;
     let current = location.current();
     if values.type_tag(current)? == EVAL_TAG_OBJECT {
@@ -627,6 +788,32 @@ pub(in crate::interpreter) fn eval_array_append_result(
     let value = eval_expr_value_for_consuming_store(value, context, scope, values)?;
     let updated = values.array_set(array, index, value)?;
     write_location(location, updated, false, context, scope, values)?;
+    Ok(value)
+}
+
+/// `f()[] = $v`: the call's result is a temporary. An `ArrayAccess` object takes the value through
+/// `offsetSet(null, $v)`; any other result is dropped with the append, as in php. Either way the
+/// expression is the assigned value.
+fn eval_call_result_append(
+    target: &EvalExpr,
+    value: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let receiver = eval_owned_expr(target, context, scope, values)?;
+    let value = eval_expr(value, context, scope, values)?;
+    if values.type_tag(receiver)? == EVAL_TAG_OBJECT {
+        if !eval_array_access_object_matches(receiver, context, values)? {
+            eval_release_value(context, values, receiver)?;
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let offset = values.null()?;
+        let result =
+            eval_method_call_result(receiver, "offsetSet", vec![offset, value], context, values)?;
+        eval_release_value(context, values, result)?;
+    }
+    eval_release_value(context, values, receiver)?;
     Ok(value)
 }
 
@@ -871,9 +1058,13 @@ fn evaluate_location_with_fetch(
             {
                 // An array holding PHP references is written in place: its reference slots are
                 // keyed by this very payload, and a copy would silently unlink every one of them.
-                let original = values.raw_value_word(current)?;
-                if !context.array_has_element_aliases(original) {
-                    current = values.copy_value(current)?;
+                if !context.array_has_element_aliases(current) {
+                    // The copy replaces the read, whose own reference nothing else releases.
+                    let copied = values.copy_value(current)?;
+                    if !current.is_borrowed() {
+                        eval_release_value(context, values, current)?;
+                    }
+                    current = copied;
                 }
             }
             if values.type_tag(container)? == EVAL_TAG_OBJECT
@@ -956,14 +1147,26 @@ fn write_location(
             } else {
                 value
             };
-            for replaced in set_scope_cell(context, scope, name, stored, ownership)? {
+            for replaced in set_scope_cell(context, scope, name, stored, ownership, values)? {
                 eval_release_value(context, values, replaced)?;
             }
             Ok(())
         }
         EvaluatedLocation::Property {
             object, property, ..
-        } => eval_property_set_result(object, &property, value, context, values),
+        } => {
+            let result = eval_property_set_result(object, &property, value, context, values);
+            // The receiver was evaluated by `eval_expr`: a variable read hands back a borrowed
+            // handle, but any other receiver (`$a[0]->p = v`, `$o->inner->p = v`, `f()->p = v`)
+            // is an owned reference this write is the last user of. Nothing released it, so the
+            // receiver and everything it reaches stayed live until exit.
+            let released = if object.is_borrowed() {
+                Ok(())
+            } else {
+                eval_release_value(context, values, object)
+            };
+            result.and(released)
+        }
         EvaluatedLocation::StaticProperty {
             class_name,
             property,
@@ -983,14 +1186,29 @@ fn write_location(
                 parent.current()
             };
             let container = eval_array_set_target_for_index(container, index, values)?;
-            let container_identity = values.raw_value_word(container)?;
             if let Some(target) = eval_array_reference_key(index, values)?
-                .and_then(|key| context.array_element_alias(container_identity, &key).cloned())
+                .and_then(|key| context.array_element_alias(container, &key).cloned())
             {
                 return write_back_method_ref_target(&target, value, context, values);
             }
+            // A property setter, and an enclosing element's `array_set` (the runtime's
+            // `__elephc_eval_value_array_set` retains the value it stores), take a reference of
+            // their own to the container, where a variable write consumes it: the container this
+            // write fetched (a detached copy, or a fresh array) is then still this write's to
+            // release. The key is only borrowed by the set.
+            let parent_retains = matches!(
+                *parent,
+                EvaluatedLocation::Property { .. } | EvaluatedLocation::ArrayElement { .. }
+            );
             let updated = values.array_set(container, index, value)?;
-            write_location(*parent, updated, false, context, scope, values)
+            if !index.is_borrowed() {
+                eval_release_value(context, values, index)?;
+            }
+            write_location(*parent, updated, false, context, scope, values)?;
+            if parent_retains {
+                eval_release_value(context, values, updated)?;
+            }
+            Ok(())
         }
         EvaluatedLocation::ArrayAccessElement { object, index, .. } => {
             let result =
@@ -1023,10 +1241,14 @@ fn eval_reference_source(
         // A by-reference RETURN leaves its reference on the context, already retained. Taking it
         // transfers that ownership to this bind; a callee that was NOT declared by reference
         // leaves nothing, and php binds a copy there rather than failing.
+        let by_ref_returns_before = BY_REF_RETURN_EXECUTIONS.load(std::sync::atomic::Ordering::Relaxed);
         let value = eval_expr(source, context, scope, values)?;
         if let Some((target, referenced)) = context.take_pending_return_reference() {
             eval_release_value(context, values, referenced)?;
             return Ok((target, value));
+        }
+        if BY_REF_RETURN_EXECUTIONS.load(std::sync::atomic::Ordering::Relaxed) == by_ref_returns_before {
+            values.warning("Notice: Only variables should be assigned by reference")?;
         }
         return Ok((EvalReferenceTarget::Cell { cell: value }, value));
     }
@@ -1113,6 +1335,6 @@ fn write_reference_location(
             "[elephc-eval-trace] phase=array_reference_bind identity={updated_identity:#x} key={key:?}",
         );
     }
-    context.bind_array_element_alias(updated_identity, key, source_target);
+    context.bind_array_element_alias(updated, key, source_target);
     write_location(*parent, updated, false, context, scope, values)
 }

@@ -1,16 +1,16 @@
 ---
-title: "__elephc_sodium_box() — internals"
+title: "__elephc_sodium_box() - internals"
 description: "Compiler internals for __elephc_sodium_box(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1127
+  order: 1237
 ---
 
-## `__elephc_sodium_box()` — internals
+## `__elephc_sodium_box()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/__elephc_sodium_box.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/__elephc_sodium_box.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,8 +48,8 @@ function __elephc_sodium_box(int $op, string $first, string $second): string
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

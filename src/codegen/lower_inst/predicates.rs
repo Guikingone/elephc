@@ -20,9 +20,24 @@ use crate::codegen::{CodegenIrError, Result};
 /// Lowers scalar PHP truthiness into a concrete boolean integer result.
 pub(super) fn lower_is_truthy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    emit_value_truthiness(ctx, value, inst.op.name())?;
+    store_if_result(ctx, inst)
+}
+
+/// Emits PHP truthiness for one value into the integer result register.
+///
+/// Split out of [`lower_is_truthy`] so a lowering that needs PHP's boolean conversion for an
+/// argument, rather than for an `IsTruthy` instruction, can reuse it. `op_name` only names the
+/// caller in the unsupported-type error.
+pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    op_name: &str,
+) -> Result<()> {
+    // The storage decides first: an inline nullable integer can carry a PHP type (an `int|null`
+    // union) whose match arm below would treat the tag/payload pair as a boxed Mixed cell.
     if ctx.value_ir_type(value)? == IrType::TaggedScalar {
-        emit_tagged_scalar_truthiness(ctx, value)?;
-        return store_if_result(ctx, inst);
+        return emit_tagged_scalar_truthiness(ctx, value);
     }
     match ctx.raw_value_php_type(value)? {
         PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Pointer(_) => {
@@ -41,21 +56,10 @@ pub(super) fn lower_is_truthy(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             emit_array_truthiness(ctx, value)?;
         }
+        PhpType::Object(_) => emit_object_truthiness(ctx, value)?,
         PhpType::Mixed | PhpType::Union(_) => {
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
-        }
-        PhpType::Object(_) => {
-            ctx.load_value_to_result(value)?;
-            emit_int_result_null_container_bool(ctx);
-            match ctx.emitter.target.arch {
-                Arch::AArch64 => {
-                    ctx.emitter.instruction("eor x0, x0, #1");                // only a non-null object payload is truthy
-                }
-                Arch::X86_64 => {
-                    ctx.emitter.instruction("xor rax, 1");                    // invert the null predicate without dereferencing the receiver
-                }
-            }
         }
         PhpType::Packed(_) | PhpType::Resource(_) => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
@@ -63,12 +67,11 @@ pub(super) fn lower_is_truthy(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} for PHP type {:?}",
-                inst.op.name(),
-                other
+                op_name, other
             )))
         }
     }
-    store_if_result(ctx, inst)
+    Ok(())
 }
 
 /// Emits PHP truthiness for a tagged scalar: null is false, otherwise integer truthiness.
@@ -81,6 +84,32 @@ fn emit_tagged_scalar_truthiness(ctx: &mut FunctionContext<'_>, value: ValueId) 
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&null_label);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits PHP object truthiness: every object is `true`, PHP null is `false`.
+///
+/// An object-typed slot still carries PHP null as a zero pointer or as the in-band
+/// null-container sentinel a missed read produces (the same pair `is_null()` tests), so the
+/// answer is "not null" rather than a constant. Used by conditions such as
+/// `if ($row = $it->next())` and by `(bool)` / `boolval()` on an object (issue #1492).
+fn emit_object_truthiness(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let null_label = ctx.next_label("object_truthy_null");
+    let done_label = ctx.next_label("object_truthy_done");
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result_reg,
+        scratch_reg,
+        &null_label,
+    );
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 1);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -154,7 +183,17 @@ pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId)
             emit_int_result_null_sentinel_bool(ctx);
             Ok(())
         }
-        PhpType::Int | PhpType::Callable => {
+        // A callable slot is a descriptor pointer, never the in-band sentinel, and a missed
+        // `callable` element read returns the sentinel under every null representation (only
+        // Int reads widen to `TaggedScalar`). Answering "never null" under the tagged
+        // representation made `static::$resolvers[$driver] ?? null` take the value branch and
+        // hand back a truthy null descriptor (Laravel's `Connection::getResolver()`).
+        PhpType::Callable => {
+            ctx.load_value_to_result(value)?;
+            emit_int_result_null_sentinel_bool(ctx);
+            Ok(())
+        }
+        PhpType::Int => {
             if crate::codegen::sentinels::null_repr_is_tagged() {
                 abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
                 return Ok(());
@@ -472,12 +511,22 @@ mod tests {
                 }
                 module.add_function(function);
                 let asm = generate_user_asm_from_ir(&module, false, false).unwrap();
-                assert!(asm.contains("is_null_container"), "{target:?} {op:?}: {asm}");
-                let inversion = match target.arch {
-                    Arch::AArch64 => "eor x0, x0, #1",
-                    Arch::X86_64 => "xor rax, 1",
+                // The null check on a raw object slot is spelled `object_truthy_null` / `object_truthy_done`
+                // now (it used to be a `*_is_null_container` stem); the contract is the same: a null
+                // pointer reaches the falsy arm without being dereferenced.
+                assert!(asm.contains("object_truthy_null"), "{target:?} {op:?}: {asm}");
+                // Truthiness is no longer computed as "is null" then inverted (`eor x0, x0, #1`):
+                // the null arm and the non-null arm each materialize their own result, so both
+                // constants must be produced.
+                let (truthy, falsy) = match target.arch {
+                    Arch::AArch64 => ("mov x0, #1", "mov x0, #0"),
+                    Arch::X86_64 => ("mov rax, 1", "xor eax, eax"),
                 };
-                assert!(asm.contains(inversion), "{target:?} {op:?}: {asm}");
+                assert!(asm.contains(truthy), "{target:?} {op:?}: missing the truthy arm: {asm}");
+                assert!(
+                    asm.contains(falsy) || asm.contains(&falsy.replace("xor eax, eax", "mov rax, 0")),
+                    "{target:?} {op:?}: missing the falsy arm: {asm}"
+                );
             }
         }
     }

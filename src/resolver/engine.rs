@@ -16,7 +16,10 @@ use crate::names::{canonical_name_for_decl, Name, NameKind, DYNAMIC_INCLUDE_FUNC
 use crate::parser::ast::{BinOp, CatchClause, ClassMethod, Expr, ExprKind, Stmt, StmtKind};
 
 use super::discovery::FunctionVariantRegistry;
-use super::engine_includes::{expand_value_include, resolve_include_stmt, IncludeValueCapture};
+use super::engine_includes::{
+    discard_first_include_return, expand_value_include, resolve_include_stmt,
+    IncludeValueCapture,
+};
 use super::include_path::{
     fold_include_path, is_runtime_dynamic_include_path, stays_runtime_include,
 };
@@ -152,6 +155,45 @@ fn hoist_leading_value_include(stmt: &Stmt) -> Option<Vec<Stmt>> {
     Some(vec![hoisted, rewritten])
 }
 
+/// Rewrites the statement `require COND ? 'a.php' : 'b.php';` into
+/// `if (COND) { require 'a.php'; } else { require 'b.php'; }` when every selectable path is
+/// static, so both files join the closed world like any include under an `if`. Carbon picks its
+/// period and translator base classes this way on `PHP_VERSION`; constant folding later drops
+/// the branch the target never takes. Returns `None` for any other include.
+fn ternary_include_as_if(stmt: &Stmt, path: &Expr, once: bool, required: bool) -> Option<Stmt> {
+    let ExprKind::Ternary { condition, then_expr, else_expr } = &path.kind else {
+        return None;
+    };
+    if !include_branch_is_static(then_expr) || !include_branch_is_static(else_expr) {
+        return None;
+    }
+    let branch = |path: &Expr| {
+        vec![Stmt::new(
+            StmtKind::Include { path: path.clone(), once, required },
+            stmt.span,
+        )]
+    };
+    Some(Stmt::new(
+        StmtKind::If {
+            condition: (**condition).clone(),
+            then_body: branch(then_expr),
+            elseif_clauses: Vec::new(),
+            else_body: Some(branch(else_expr)),
+        },
+        stmt.span,
+    ))
+}
+
+/// Whether a ternary include branch selects only compile-time paths, nested ternaries included.
+fn include_branch_is_static(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Ternary { then_expr, else_expr, .. } => {
+            include_branch_is_static(then_expr) && include_branch_is_static(else_expr)
+        }
+        _ => !super::include_path::is_runtime_dynamic_include_path(expr),
+    }
+}
+
 /// Numbers the temporaries `hoist_leading_value_include` introduces.
 static HOISTED_INCLUDE_COUNTER: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -245,11 +287,22 @@ pub(super) fn resolve_stmts(
         )?;
         match &stmt.kind {
             StmtKind::Include { path, once, required } => {
+                if let Some(branches) = ternary_include_as_if(&stmt, path, *once, *required) {
+                    result.extend(resolve_stmts(
+                        vec![branches],
+                        base_dir,
+                        declared_once,
+                        include_chain,
+                        state,
+                        function_variants,
+                    )?);
+                    continue;
+                }
                 if stays_runtime_include(path, state) {
                     result.push(stmt);
                     continue;
                 }
-                if let Some(resolved) = resolve_include_stmt(
+                if let Some(mut resolved) = resolve_include_stmt(
                     &stmt,
                     path,
                     *once,
@@ -261,6 +314,8 @@ pub(super) fn resolve_stmts(
                     function_variants,
                     false,
                 )? {
+                    // A top-level `return` in the included file ends the FILE, not the caller.
+                    discard_first_include_return(&mut resolved);
                     result.extend(resolved);
                 }
             }

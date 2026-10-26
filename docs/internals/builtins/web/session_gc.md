@@ -1,16 +1,16 @@
 ---
-title: "session_gc() — internals"
+title: "session_gc() - internals"
 description: "Compiler internals for session_gc(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 959
+  order: 1050
 ---
 
-## `session_gc()` — internals
+## `session_gc()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3288](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3288) (`session_gc`)
+- **Lowering**: [`src/web_prelude/build.rs`:3461](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3461) (`session_gc`)
 - **Function symbol**: `session_gc()`
 
 
@@ -38,7 +38,7 @@ function session_gc(): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

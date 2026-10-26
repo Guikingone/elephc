@@ -1,16 +1,16 @@
 ---
-title: "__elephc_curl_multi_setopt() — internals"
+title: "__elephc_curl_multi_setopt() - internals"
 description: "Compiler internals for __elephc_curl_multi_setopt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1076
+  order: 1166
 ---
 
-## `__elephc_curl_multi_setopt()` — internals
+## `__elephc_curl_multi_setopt()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_multi_setopt.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_multi_setopt.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,8 +48,8 @@ function __elephc_curl_multi_setopt(mixed $multi, int $option, int $value): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

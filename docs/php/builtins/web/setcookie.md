@@ -1,8 +1,8 @@
 ---
 title: "setcookie()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Adds a Set-Cookie header, URL-encoding the value."
 sidebar:
-  order: 976
+  order: 1065
 ---
 
 ## setcookie()
@@ -11,7 +11,7 @@ sidebar:
 function setcookie(mixed $name, mixed $value = '', mixed $expires = 0, mixed $path = '', mixed $domain = '', mixed $secure = false, mixed $httponly = false): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Adds a Set-Cookie header, URL-encoding the value.
 
 **Parameters**:
 - `$name` (`mixed`)
@@ -29,7 +29,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

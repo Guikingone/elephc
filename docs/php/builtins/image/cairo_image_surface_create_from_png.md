@@ -1,8 +1,8 @@
 ---
 title: "cairo_image_surface_create_from_png()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an image surface from a PNG file."
 sidebar:
-  order: 423
+  order: 424
 ---
 
 ## cairo_image_surface_create_from_png()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_image_surface_create_from_png(string $filename): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an image surface from a PNG file.
 
 **Parameters**:
 - `$filename` (`string`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

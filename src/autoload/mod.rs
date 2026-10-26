@@ -13,6 +13,8 @@
 
 mod alias;
 pub mod deferral;
+pub mod deferral_memo;
+pub mod runtime_faults;
 mod composer_files;
 mod dynamic_contracts;
 mod index;
@@ -127,6 +129,18 @@ pub fn run_collecting_included_with_defines(
 
 /// Runs autoload expansion and retains physical source paths for introduced declarations.
 pub fn run_collecting_included_with_defines_and_sources(
+    program: Program,
+    base_dir: &Path,
+    registry: &Registry,
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>, DeclarationSourceFiles), CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        run_collecting_included_on_compiler_stack(program, base_dir, registry, defines)
+    })
+}
+
+/// Expands autoloads after the public entry point has established the recursive stack budget.
+fn run_collecting_included_on_compiler_stack(
     mut program: Program,
     base_dir: &Path,
     registry: &Registry,
@@ -302,8 +316,13 @@ pub fn run_collecting_included_with_defines_and_sources(
                 .map(|name| (0, name)),
         );
         let mut insertions: Vec<(usize, Program)> = Vec::new();
+        // Class names are case-insensitive: `class_exists("demo\\thing")` names the declared
+        // `Demo\Thing`, and an exact-case lookup loaded its file a second time ("Duplicate class
+        // declaration: Demo\Thing"). Refreshed after every bundle, which also extends `declared`.
+        let mut declared_keys: HashSet<String> =
+            declared.iter().map(|name| crate::names::php_symbol_key(name)).collect();
         for (stmt_idx, fqn) in reference_points {
-            if declared.contains(&fqn) {
+            if declared.contains(&fqn) || declared_keys.contains(&crate::names::php_symbol_key(&fqn)) {
                 continue;
             }
             if let Some(path) = resolve_class(&fqn, registry) {
@@ -321,6 +340,7 @@ pub fn run_collecting_included_with_defines_and_sources(
                         &mut declaration_sources,
                         &mut deferred,
                         0,
+                        Some(&program[stmt_idx]),
                     )?;
                     if !bundle.is_empty() {
                         // What this bundle declares is declared from here on, not from the next
@@ -331,6 +351,8 @@ pub fn run_collecting_included_with_defines_and_sources(
                         // `require __DIR__.'/Int_.php'` spliced `Int_` a second time and failed
                         // the build with "Duplicate class declaration".
                         declared.extend(collect_declared_fqns(&bundle));
+                        declared_keys =
+                            declared.iter().map(|name| crate::names::php_symbol_key(name)).collect();
                         insertions.push((stmt_idx, bundle));
                     }
                 }
@@ -474,6 +496,12 @@ fn eager_nested_bodies(stmt: &Stmt) -> Vec<&[Stmt]> {
         _ => {}
     }
     bodies
+}
+
+/// The project root a build's autoload index is read from: the nearest ancestor of `entry_dir`
+/// with a supported autoload manifest.
+pub fn project_root(entry_dir: &Path) -> Option<PathBuf> {
+    index::nearest_autoload_manifest_root(entry_dir)
 }
 
 /// Returns the class-like names the program only ever hands to an existence probe.
@@ -717,14 +745,37 @@ fn negated_existence_probe(condition: &Expr) -> Option<String> {
 }
 
 /// Reports a class file whose file-scope guard would throw, left to the runtime autoloader.
+///
+/// A note, not a warning: the program behaves exactly as php does -- the class can never be
+/// loaded, and asking for it throws the guard's exception at the moment php would. Symfony's
+/// `AmpHttpClient` without amphp installed is the usual case, in every application that ships
+/// `symfony/http-client`.
 fn report_throwing_class_file(path: &Path, missing: &str) {
+    crate::errors::report_note(&format!(
+        "autoload: '{}' is not compiled (its file-scope guard throws: '{}' is not available); \
+         its classes are loaded at run time by the autoloader instead",
+        path.display(),
+        missing
+    ));
+}
+
+/// Reports a class file left to the runtime because its file-scope code calls something and
+/// nothing reaches the class at file scope.
+///
+/// php runs that code when the autoloader first includes the file, i.e. when something asks for
+/// one of its classes. Spliced among the declarations it ran at boot: psysh's
+/// `Hoa/ConsoleWindow.php` ends with `Console::advancedInteraction();`, which shells out to
+/// `stty`, so every Laravel artisan command died at startup although none of them touches the
+/// console window. A class named by executable file-scope code keeps its splice point there.
+fn report_effectful_class_file(path: &Path, call: &str) {
     crate::errors::report_warning(&crate::errors::CompileWarning::new(
         Span::dummy(),
         &format!(
-            "autoload: '{}' is not compiled (its file-scope guard throws: '{}' is not \
-             available); its classes are loaded at run time by the autoloader instead",
+            "autoload: '{}' is not compiled (its file-scope code calls `{}`, which php runs only \
+             when the class is first loaded); its classes are loaded at run time by the \
+             autoloader instead",
             path.display(),
-            missing
+            call
         ),
     ));
 }
@@ -854,6 +905,7 @@ fn load_autoloaded_bundle(
     declaration_sources: &mut DeclarationSourceFiles,
     deferred: &mut Vec<PathBuf>,
     depth: usize,
+    reference: Option<&Stmt>,
 ) -> Result<Program, CompileError> {
     trace_autoload_load(fqn, canonical, depth);
     let (loaded, loaded_includes, loaded_sources) =
@@ -866,7 +918,8 @@ fn load_autoloaded_bundle(
             }
             Err(AutoloadFileError::Fatal(error)) => return Err(error),
         };
-    let loaded = fold_file_scope_existence_conditions(loaded, declared, registry);
+    let loaded =
+        fold_file_scope_existence_conditions(loaded, declared, registry, base_dir, defines);
     // Before the bind check: a class the file declares only under a run-time condition cannot be
     // taken by the compiled world at all, and keeping the file claimed would make the runtime skip
     // the one include that declares it. See `walk::first_conditionally_declared_class_like`.
@@ -882,6 +935,28 @@ fn load_autoloaded_bundle(
         report_throwing_class_file(canonical, &missing);
         deferred.push(canonical.to_path_buf());
         return Ok(Vec::new());
+    }
+    // A closed world cannot leave the file to the autoloader for its deprecation notice; see
+    // `walk::strip_file_scope_deprecations`.
+    let mut loaded = loaded;
+    if crate::closed_world::is_enabled() && walk::strip_file_scope_deprecations(&mut loaded) {
+        crate::errors::report_note(&format!(
+            "autoload: '{}' is compiled without its file-scope `trigger_deprecation()`, which php \
+             runs when the class is first loaded",
+            canonical.display()
+        ));
+    }
+    // Reached only from function or method bodies, the file would be spliced among the
+    // declarations and its file-scope code would run at boot; php runs it when the class is
+    // first asked for, which may be never. See `report_effectful_class_file`.
+    if let Some(reference) = reference {
+        if let Some(call) = walk::first_file_scope_effect_call(&loaded) {
+            if !walk::stmt_references_executably(reference, fqn) {
+                report_effectful_class_file(canonical, &call);
+                deferred.push(canonical.to_path_buf());
+                return Ok(Vec::new());
+            }
+        }
     }
 
     // What this file declares ITSELF — directly, or through a `require` the resolver already
@@ -918,6 +993,7 @@ fn load_autoloaded_bundle(
                 declaration_sources,
                 deferred,
                 depth + 1,
+                None,
             )?;
             // Same rule as the caller's loop: a later dependency the one just loaded already
             // declared (a `class_alias()` at its end, say) must not load its own file.
@@ -1008,7 +1084,12 @@ fn load_autoloaded_file(
     })?;
     let file_label = path.display().to_string();
     let source_mode = crate::source::SourceMode::from_path(path);
-    let tokens = crate::lexer::tokenize_with_mode(&content, source_mode)
+    // Its own source identity, so a compiled frame, a warning and a Throwable created in this
+    // class file name THIS file rather than the program's entry file.
+    let source_id = Span::fresh_source_id();
+    let shown_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    Span::register_source_path(source_id, shown_path.display().to_string());
+    let tokens = crate::lexer::tokenize_with_mode_and_source_id(&content, source_mode, source_id)
         .map_err(|e| AutoloadFileError::Unparsed(e.with_file(file_label.clone())))?;
     let parsed = crate::parser::parse_with_mode(&tokens, source_mode)
         .map_err(|e| AutoloadFileError::Unparsed(e.with_file(file_label.clone())))?;
@@ -1302,6 +1383,8 @@ fn fold_file_scope_existence_conditions(
     body: Program,
     declared: &HashSet<String>,
     registry: &Registry,
+    base_dir: &Path,
+    defines: &HashSet<String>,
 ) -> Program {
     let available = |name: &str| {
         let key = crate::names::php_symbol_key(name);
@@ -1310,8 +1393,125 @@ fn fold_file_scope_existence_conditions(
             .any(|declared| crate::names::php_symbol_key(declared) == key)
             || resolve_class(name, registry).is_some()
     };
-    let decide = |condition: &Expr| existence_condition(condition, &available);
-    fold_existence_conditions_in(body, &decide)
+    let has_method = |class: &str, method: &str| {
+        autoloaded_class_has_method(class, method, registry, base_dir, defines, 0)
+    };
+    let decide = |condition: &Expr| existence_condition(condition, &available, &has_method);
+    // After the fold: a profile-decided `require PHP_VERSION < 8.2 ? A : B` only exposes the
+    // self-guarded declaration of the file it keeps once its branch is chosen.
+    let body = fold_existence_conditions_in(body, &decide);
+    inline_self_guarded_declarations(body, &available)
+}
+
+/// Inlines `if (!class_exists(X::class, false)) { class X ... }` when nothing else can supply X.
+///
+/// The non-autoloading probe is otherwise left to run time because its answer depends on load
+/// order. A guard around the file's OWN declaration of X, for an X no other declaration or
+/// autoload entry provides, has one answer the first time the file runs: X is absent, the branch
+/// declares it. Carbon's lazy `DatePeriodBase`/`LazyTranslator` files have exactly this shape,
+/// and refusing it sent `CarbonPeriod` and `Translator` (and with them every date in Laravel) to
+/// the interpreter.
+fn inline_self_guarded_declarations(body: Program, available: &dyn Fn(&str) -> bool) -> Program {
+    let mut out: Program = Vec::with_capacity(body.len());
+    for stmt in body {
+        let span = stmt.span;
+        match stmt.kind {
+            StmtKind::NamespaceBlock { name, body } => {
+                let mut rebuilt = Stmt::new(
+                    StmtKind::NamespaceBlock {
+                        name,
+                        body: inline_self_guarded_declarations(body, available),
+                    },
+                    span,
+                );
+                rebuilt.source_mode = stmt.source_mode;
+                rebuilt.strict_types = stmt.strict_types;
+                rebuilt.attributes = stmt.attributes;
+                out.push(rebuilt);
+            }
+            // A required file arrives wrapped (`Synthetic`, `IncludeOnceGuard`), and its guard is
+            // still file scope inside the wrapper.
+            StmtKind::Synthetic(body) => {
+                let mut rebuilt = Stmt::new(
+                    StmtKind::Synthetic(inline_self_guarded_declarations(body, available)),
+                    span,
+                );
+                rebuilt.source_mode = stmt.source_mode;
+                rebuilt.strict_types = stmt.strict_types;
+                rebuilt.attributes = stmt.attributes;
+                out.push(rebuilt);
+            }
+            StmtKind::IncludeOnceGuard { source_path, required, body } => {
+                let mut rebuilt = Stmt::new(
+                    StmtKind::IncludeOnceGuard {
+                        source_path,
+                        required,
+                        body: inline_self_guarded_declarations(body, available),
+                    },
+                    span,
+                );
+                rebuilt.source_mode = stmt.source_mode;
+                rebuilt.strict_types = stmt.strict_types;
+                rebuilt.attributes = stmt.attributes;
+                out.push(rebuilt);
+            }
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } if elseif_clauses.is_empty()
+                && else_body.is_none()
+                && self_guarded_class(&condition, &then_body)
+                    .is_some_and(|class| !available(&class)) =>
+            {
+                out.extend(then_body);
+            }
+            kind => {
+                let mut rebuilt = Stmt::new(kind, span);
+                rebuilt.source_mode = stmt.source_mode;
+                rebuilt.strict_types = stmt.strict_types;
+                rebuilt.attributes = stmt.attributes;
+                out.push(rebuilt);
+            }
+        }
+    }
+    out
+}
+
+/// The class a `!class_exists(X::class, false)`-style guard probes, when its body declares X.
+fn self_guarded_class(condition: &Expr, then_body: &[Stmt]) -> Option<String> {
+    let ExprKind::Not(inner) = &condition.kind else {
+        return None;
+    };
+    let ExprKind::FunctionCall { name, args } = &inner.kind else {
+        return None;
+    };
+    let function = name.as_canonical().trim_start_matches('\\').to_ascii_lowercase();
+    if !matches!(
+        function.as_str(),
+        "class_exists" | "interface_exists" | "trait_exists" | "enum_exists"
+    ) {
+        return None;
+    }
+    let class = match &args.first()?.kind {
+        ExprKind::ClassConstant {
+            receiver: crate::parser::ast::StaticReceiver::Named(name),
+        } => name.as_canonical().trim_start_matches('\\').to_string(),
+        ExprKind::StringLiteral(name) => name.trim_start_matches('\\').to_string(),
+        _ => return None,
+    };
+    let key = crate::names::php_symbol_key(&class);
+    let declares = then_body.iter().any(|stmt| match &stmt.kind {
+        StmtKind::ClassDecl { name, .. }
+        | StmtKind::InterfaceDecl { name, .. }
+        | StmtKind::TraitDecl { name, .. }
+        | StmtKind::EnumDecl { name, .. } => {
+            crate::names::php_symbol_key(name.trim_start_matches('\\')) == key
+        }
+        _ => false,
+    });
+    declares.then_some(class)
 }
 
 /// Applies [`fold_file_scope_existence_conditions`] to one statement list, through namespaces.
@@ -1319,14 +1519,27 @@ fn fold_existence_conditions_in(body: Program, decide: &dyn Fn(&Expr) -> Option<
     let mut folded: Program = Vec::with_capacity(body.len());
     for stmt in body {
         let span = stmt.span;
+        // A rebuilt statement keeps the metadata of the one it replaces. `Stmt::new` takes the
+        // source profile and `strict_types` from the CURRENT parse (the entry file's, not the
+        // autoloaded file's) and starts with no attributes -- and a declaration's PHP attributes
+        // (`#[AsCommand(...)]` on a class) live on the statement. Every class-like an autoloaded
+        // file declares lost them: `ReflectionClass::getAttributes()` answered nothing for all of
+        // Composer's classes, so every Symfony console command lost its name.
+        let source_mode = stmt.source_mode;
+        let strict_types = stmt.strict_types;
+        let attributes = stmt.attributes;
+        let rebuild = move |kind: StmtKind| {
+            let mut rebuilt = Stmt::new(kind, span);
+            rebuilt.source_mode = source_mode;
+            rebuilt.strict_types = strict_types;
+            rebuilt.attributes = attributes.clone();
+            rebuilt
+        };
         match stmt.kind {
-            StmtKind::NamespaceBlock { name, body } => folded.push(Stmt::new(
-                StmtKind::NamespaceBlock {
-                    name,
-                    body: fold_existence_conditions_in(body, decide),
-                },
-                span,
-            )),
+            StmtKind::NamespaceBlock { name, body } => folded.push(rebuild(StmtKind::NamespaceBlock {
+                name,
+                body: fold_existence_conditions_in(body, decide),
+            })),
             StmtKind::If {
                 condition,
                 then_body,
@@ -1343,56 +1556,175 @@ fn fold_existence_conditions_in(body: Program, decide: &dyn Fn(&Expr) -> Option<
                     span,
                 )])
                 .is_some();
+                // A throwing guard over a class the compiled world provides
+                // (`if (!interface_exists(LocaleAwareInterface::class)) { throw ...; }` atop
+                // symfony/string's `AsciiSlugger.php`) never throws: php's probe autoloads the
+                // class. Kept, it was spliced among the boot-time declarations and ran before
+                // anything registered an autoloader and, in the demo console, before the
+                // interface's own activation -- every command died on "the
+                // symfony/translation-contracts package is not installed".
+                if !declares_class_like
+                    && elseif_clauses.is_empty()
+                    && else_body.is_none()
+                    && then_body.first().is_some_and(stmt_throws)
+                    && decide(&condition) == Some(false)
+                {
+                    continue;
+                }
                 if !declares_class_like {
-                    folded.push(Stmt::new(
-                        StmtKind::If {
-                            condition,
-                            then_body,
-                            elseif_clauses,
-                            else_body,
-                        },
-                        span,
-                    ));
+                    folded.push(rebuild(StmtKind::If {
+                        condition,
+                        then_body,
+                        elseif_clauses,
+                        else_body,
+                    }));
                     continue;
                 }
                 match decided_branch(condition, then_body, elseif_clauses, else_body, span, decide) {
                     Ok(taken) => folded.extend(fold_existence_conditions_in(taken, decide)),
-                    Err(untouched) => folded.push(untouched),
+                    Err(mut untouched) => {
+                        untouched.source_mode = source_mode;
+                        untouched.strict_types = strict_types;
+                        folded.push(untouched);
+                    }
                 }
             }
-            kind => folded.push(Stmt::new(kind, span)),
+            kind => folded.push(rebuild(kind)),
         }
     }
     folded
 }
 
 /// Evaluates an autoloading class-like existence probe (and `!`/`&&`/`||` over probes).
-fn existence_condition(expr: &Expr, available: &dyn Fn(&str) -> bool) -> Option<bool> {
+///
+/// `has_method(class, method)` answers `method_exists(X::class, 'm')` (`None`: undecided).
+fn existence_condition(
+    expr: &Expr,
+    available: &dyn Fn(&str) -> bool,
+    has_method: &dyn Fn(&str, &str) -> Option<bool>,
+) -> Option<bool> {
     match &expr.kind {
-        ExprKind::Not(inner) => existence_condition(inner, available).map(|value| !value),
+        ExprKind::Not(inner) => {
+            existence_condition(inner, available, has_method).map(|value| !value)
+        }
         ExprKind::BinaryOp {
             left,
             op: BinOp::And,
             right,
-        } => match existence_condition(left, available)? {
+        } => match existence_condition(left, available, has_method)? {
             false => Some(false),
-            true => existence_condition(right, available),
+            true => existence_condition(right, available, has_method),
         },
         ExprKind::BinaryOp {
             left,
             op: BinOp::Or,
             right,
-        } => match existence_condition(left, available)? {
+        } => match existence_condition(left, available, has_method)? {
             true => Some(true),
-            false => existence_condition(right, available),
+            false => existence_condition(right, available, has_method),
         },
         ExprKind::FunctionCall { .. } => {
+            if let Some((class, method)) = method_exists_probe(expr) {
+                return has_method(&class, &method);
+            }
             let negated = Expr::new(ExprKind::Not(Box::new(expr.clone())), expr.span);
             let name = negated_existence_probe(&negated)?;
             Some(available(&name))
         }
         _ => profile_condition(expr),
     }
+}
+
+/// Returns `(X, m)` for `method_exists(X::class, 'm')` (or a literal class name).
+fn method_exists_probe(expr: &Expr) -> Option<(String, String)> {
+    let ExprKind::FunctionCall { name, args } = &expr.kind else {
+        return None;
+    };
+    if !name
+        .as_canonical()
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("method_exists")
+        || args.len() != 2
+    {
+        return None;
+    }
+    let class = match &args[0].kind {
+        ExprKind::ClassConstant {
+            receiver: crate::parser::ast::StaticReceiver::Named(name),
+        } => name.as_canonical().trim_start_matches('\\').to_string(),
+        ExprKind::StringLiteral(name) => name.trim_start_matches('\\').to_string(),
+        _ => return None,
+    };
+    let ExprKind::StringLiteral(method) = &args[1].kind else {
+        return None;
+    };
+    (!class.is_empty()).then(|| (class, method.clone()))
+}
+
+/// Answers `method_exists(X::class, 'm')` from X's autoloaded source: whether X, one of its
+/// parents, interfaces or traits declares `m`. `None` when some class-like on the way cannot be
+/// read from the autoload registry, which leaves the condition to run time.
+///
+/// Symfony's `TwigExtraBundle` declares itself twice under
+/// `if (method_exists(KernelInterface::class, 'getShareDir'))`: php answers that while including
+/// the file, from the installed `KernelInterface`, which is the file the registry resolves.
+fn autoloaded_class_has_method(
+    class: &str,
+    method: &str,
+    registry: &Registry,
+    base_dir: &Path,
+    defines: &HashSet<String>,
+    depth: usize,
+) -> Option<bool> {
+    if depth > 32 {
+        return None;
+    }
+    let path = resolve_class(class, registry)?;
+    let (program, _, _) = load_autoloaded_file(&path, base_dir, defines).ok()?;
+    let key = crate::names::php_symbol_key(class);
+    let declaration = program.iter().find_map(|stmt| {
+        let (name, methods, ancestors): (&String, &Vec<_>, Vec<&crate::names::Name>) = match &stmt.kind {
+            StmtKind::ClassDecl { name, extends, implements, trait_uses, methods, .. } => (
+                name,
+                methods,
+                extends
+                    .iter()
+                    .chain(implements)
+                    .chain(trait_uses.iter().flat_map(|uses| &uses.trait_names))
+                    .collect(),
+            ),
+            StmtKind::InterfaceDecl { name, extends, methods, .. } => {
+                (name, methods, extends.iter().collect())
+            }
+            StmtKind::TraitDecl { name, trait_uses, methods, .. } => (
+                name,
+                methods,
+                trait_uses.iter().flat_map(|uses| &uses.trait_names).collect(),
+            ),
+            StmtKind::EnumDecl { name, implements, trait_uses, methods, .. } => (
+                name,
+                methods,
+                implements
+                    .iter()
+                    .chain(trait_uses.iter().flat_map(|uses| &uses.trait_names))
+                    .collect(),
+            ),
+            _ => return None,
+        };
+        (crate::names::php_symbol_key(name.trim_start_matches('\\')) == key)
+            .then_some((methods, ancestors))
+    })?;
+    let (methods, ancestors) = declaration;
+    if methods.iter().any(|m| m.name.eq_ignore_ascii_case(method)) {
+        return Some(true);
+    }
+    for ancestor in ancestors {
+        let ancestor = ancestor.as_canonical().trim_start_matches('\\').to_string();
+        if autoloaded_class_has_method(&ancestor, method, registry, base_dir, defines, depth + 1)? {
+            return Some(true);
+        }
+    }
+    Some(false)
 }
 
 /// Picks the branch of an `if`/`elseif`/`else` chain the profile decides, or hands the statement
@@ -1465,6 +1797,18 @@ fn profile_condition(expr: &Expr) -> Option<bool> {
             | BinOp::NotEq
             | BinOp::StrictEq
             | BinOp::StrictNotEq => {
+                if let Some(ordering) = profile_version_string_ordering(left, right) {
+                    return Some(match op {
+                        BinOp::Lt => ordering.is_lt(),
+                        BinOp::Gt => ordering.is_gt(),
+                        BinOp::LtEq => ordering.is_le(),
+                        BinOp::GtEq => ordering.is_ge(),
+                        BinOp::Eq => ordering.is_eq(),
+                        BinOp::NotEq => ordering.is_ne(),
+                        // `===` against a number is false for a string constant whatever it holds.
+                        _ => return None,
+                    });
+                }
                 let left = profile_int(left)?;
                 let right = profile_int(right)?;
                 Some(match op {
@@ -1480,6 +1824,45 @@ fn profile_condition(expr: &Expr) -> Option<bool> {
         },
         _ => profile_int(expr).map(|value| value != 0),
     }
+}
+
+/// Orders `PHP_VERSION` against a number or string literal the way php 8 compares them.
+///
+/// Carbon picks its lazy `DatePeriod` base with `require PHP_VERSION < 8.2 ? A : B;`. A version
+/// string such as "8.5.0" is not numeric, so php compares the literal's string form with it
+/// byte-wise ("8.5.0" vs "8.2"); two numeric strings compare as numbers.
+fn profile_version_string_ordering(left: &Expr, right: &Expr) -> Option<std::cmp::Ordering> {
+    fn version(expr: &Expr) -> Option<String> {
+        let ExprKind::ConstRef(name) = &expr.kind else {
+            return None;
+        };
+        if name.parts.last()?.as_str() != "PHP_VERSION" {
+            return None;
+        }
+        let profile = crate::codegen_support::compile_php_version();
+        Some(profile.reported_version_string())
+    }
+    fn literal(expr: &Expr) -> Option<String> {
+        match &expr.kind {
+            ExprKind::FloatLiteral(value) => Some(format!("{}", value)),
+            ExprKind::IntLiteral(value) => Some(value.to_string()),
+            ExprKind::StringLiteral(value) => Some(value.clone()),
+            _ => None,
+        }
+    }
+    fn compare(a: &str, b: &str) -> std::cmp::Ordering {
+        match (a.parse::<f64>(), b.parse::<f64>()) {
+            (Ok(x), Ok(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+            _ => a.as_bytes().cmp(b.as_bytes()),
+        }
+    }
+    if let (Some(v), Some(l)) = (version(left), literal(right)) {
+        return Some(compare(&v, &l));
+    }
+    if let (Some(l), Some(v)) = (literal(left), version(right)) {
+        return Some(compare(&l, &v));
+    }
+    None
 }
 
 /// Evaluates an integer expression the compile-time PHP profile decides.
@@ -1504,10 +1887,10 @@ fn profile_int(expr: &Expr) -> Option<i64> {
 fn profile_constant(name: &crate::names::Name) -> Option<i64> {
     let profile = crate::codegen_support::compile_php_version();
     match name.parts.last()?.as_str() {
-        "PHP_VERSION_ID" => Some(i64::from(profile.version_id())),
+        "PHP_VERSION_ID" => Some(i64::from(profile.reported_version_id())),
         "PHP_MAJOR_VERSION" => Some(i64::from(profile.major())),
         "PHP_MINOR_VERSION" => Some(i64::from(profile.minor())),
-        "PHP_RELEASE_VERSION" => Some(i64::from(profile.release())),
+        "PHP_RELEASE_VERSION" => Some(i64::from(profile.reported_release())),
         _ => None,
     }
 }
@@ -1565,79 +1948,14 @@ pub fn activate_entry_interface_declarations(program: Program, entry_path: &Path
 /// The event can sit inside an include-once guard, a conditional, a loop, a function body, or a
 /// method, so a top-level scan is not enough.
 fn collect_activated_class_like_names(program: &[Stmt], out: &mut HashSet<String>) {
-    for statement in program {
-        match &statement.kind {
-            StmtKind::ClassLikeActivate { name, .. } => {
-                out.insert(crate::names::php_symbol_key(name.trim_start_matches('\\')));
-            }
-            StmtKind::NamespaceBlock { body, .. }
-            | StmtKind::Synthetic(body)
-            | StmtKind::While { body, .. }
-            | StmtKind::DoWhile { body, .. }
-            | StmtKind::Foreach { body, .. }
-            | StmtKind::IncludeOnceGuard { body, .. }
-            | StmtKind::FunctionDecl { body, .. } => {
-                collect_activated_class_like_names(body, out)
-            }
-            StmtKind::If {
-                then_body,
-                elseif_clauses,
-                else_body,
-                ..
-            } => {
-                collect_activated_class_like_names(then_body, out);
-                for (_, body) in elseif_clauses {
-                    collect_activated_class_like_names(body, out);
-                }
-                if let Some(body) = else_body {
-                    collect_activated_class_like_names(body, out);
-                }
-            }
-            StmtKind::IfDef {
-                then_body,
-                else_body,
-                ..
-            } => {
-                collect_activated_class_like_names(then_body, out);
-                if let Some(body) = else_body {
-                    collect_activated_class_like_names(body, out);
-                }
-            }
-            StmtKind::For {
-                init, update, body, ..
-            } => {
-                if let Some(init) = init {
-                    collect_activated_class_like_names(std::slice::from_ref(init.as_ref()), out);
-                }
-                if let Some(update) = update {
-                    collect_activated_class_like_names(std::slice::from_ref(update.as_ref()), out);
-                }
-                collect_activated_class_like_names(body, out);
-            }
-            StmtKind::Switch { cases, default, .. } => {
-                for case in cases {
-                    collect_activated_class_like_names(&case.1, out);
-                }
-                if let Some(body) = default {
-                    collect_activated_class_like_names(body, out);
-                }
-            }
-            StmtKind::Try {
-                try_body,
-                catches,
-                finally_body,
-            } => {
-                collect_activated_class_like_names(try_body, out);
-                for catch in catches {
-                    collect_activated_class_like_names(&catch.body, out);
-                }
-                if let Some(body) = finally_body {
-                    collect_activated_class_like_names(body, out);
-                }
-            }
-            _ => {}
+    // Closures included: a compiled DI container keeps `include_once` factories inside closure
+    // literals, and an event there that this scan missed got a second, top-level event that
+    // re-declared the interface at run time ("Cannot redeclare interface").
+    crate::parser::ast::visit::walk_stmts(program, &mut |statement| {
+        if let StmtKind::ClassLikeActivate { name, .. } = &statement.kind {
+            out.insert(crate::names::php_symbol_key(name.trim_start_matches('\\')));
         }
-    }
+    });
 }
 
 /// Adds the activation event every interface this file declares needs to be visible to
@@ -1790,6 +2108,27 @@ mod tests {
                 .map(String::as_str),
             Some("/tmp/Thing.php")
         );
+    }
+
+    /// Verifies a throwing guard over an available class is folded away, and one over a missing
+    /// class is kept. symfony/string's `AsciiSlugger.php` opens with the first shape; kept, it ran
+    /// among the boot-time declarations of the demo console before its interface was active.
+    #[test]
+    fn satisfied_throwing_guard_is_folded_away() {
+        let source = r#"<?php
+namespace Demo;
+if (!interface_exists(Present::class)) { throw new \LogicException('present'); }
+if (!interface_exists(Missing::class)) { throw new \LogicException('missing'); }
+final class Slugger {}
+"#;
+        let tokens = crate::lexer::tokenize(source).expect("tokenization should succeed");
+        let parsed = crate::parser::parse(&tokens).expect("parsing should succeed");
+        let resolved = crate::name_resolver::resolve(parsed).expect("resolution should succeed");
+        let decide = |condition: &Expr| {
+            existence_condition(condition, &|name: &str| name == "Demo\\Present", &|_, _| None)
+        };
+        let folded = fold_existence_conditions_in(resolved, &decide);
+        assert_eq!(file_scope_guard_classes(&folded), vec!["Demo\\Missing".to_string()]);
     }
 
     /// Verifies declaration binding dependencies autoload while callable signature types stay lazy.

@@ -1,16 +1,16 @@
 ---
-title: "setcookie() — internals"
+title: "setcookie() - internals"
 description: "Compiler internals for setcookie(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 976
+  order: 1065
 ---
 
-## `setcookie()` — internals
+## `setcookie()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:1306](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L1306) (`setcookie`)
+- **Lowering**: [`src/web_prelude/build.rs`:1314](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L1314) (`setcookie`)
 - **Function symbol**: `setcookie()`
 
 
@@ -38,7 +38,7 @@ function setcookie(mixed $name, mixed $value = '', mixed $expires = 0, mixed $pa
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -55,6 +55,13 @@ pub(super) fn autoload_pending_class_variance_types(
     let mut names: Vec<String> = Vec::new();
     for method in class.methods() {
         let key = method.name().to_ascii_lowercase();
+        // php exempts constructors from signature-compatibility checks, so it never resolves
+        // their parameter types at declaration time. Autoloading them anyway killed the dev
+        // container build: `ProfilerExtension::__construct(?Stopwatch $stopwatch = null)` has no
+        // Stopwatch package installed, and php declares the class lazily without ever asking.
+        if key == "__construct" {
+            continue;
+        }
         let meets_parent = class
             .parent()
             .is_some_and(|parent| context.class_method(parent, method.name()).is_some());
@@ -84,7 +91,12 @@ pub(super) fn autoload_pending_class_variance_types(
         }
     }
     for name in names {
-        if context.has_class(&name) || context.has_interface(&name) {
+        // A name the COMPILED world already provides counts as loaded too: php never runs the
+        // autoloader for a class it has. Running it anyway sent every compiled type a Laravel
+        // signature names (`Container`, `Request`, ...) through the Composer loader and an
+        // include that the compiler-included mark then skipped -- one wasted round per name
+        // per declared class per request.
+        if eval_class_relation_name_exists(&name, context, values)? {
             continue;
         }
         // The autoloader answers whether it produced the class; a name nothing supplies is left
@@ -330,9 +342,12 @@ pub(super) fn pending_class_method(
     if let Some(method) = class.method(method_name) {
         return Some((class.name().to_string(), method.clone()));
     }
+    // Owned to match the arm above, which borrows from a class the context does not hold yet;
+    // declaration validation runs once per class, not per call.
     class
         .parent()
         .and_then(|parent| context.class_method(parent, method_name))
+        .map(|(declaring_class, method)| (declaring_class, (*method).clone()))
 }
 
 /// Validates one method declaration against inherited eval method metadata.
@@ -510,6 +525,15 @@ pub(super) fn validate_method_aot_parent_override(
     }
     if method.is_abstract() && flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT == 0 {
         return Err(EvalStatus::RuntimeFatal);
+    }
+    // php exempts a constructor from signature compatibility unless the parent's constructor is
+    // abstract: Symfony's generated `App_KernelProdContainer::__construct()` takes no arguments
+    // where `Container::__construct(?ParameterBagInterface $parameterBag = null)` takes one, and
+    // refusing it killed every `--web` worker of symfony/demo at its first request.
+    if method.name().eq_ignore_ascii_case("__construct")
+        && flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT == 0
+    {
+        return Ok(());
     }
     let Some(required) = eval_aot_method_signature_requirement(
         &parent,

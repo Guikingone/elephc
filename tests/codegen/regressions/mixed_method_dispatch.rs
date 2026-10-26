@@ -124,11 +124,12 @@ receiver()->accept(invalidDependency());
 "#,
     );
     assert!(!out.success);
+    // php reports an uncaught error on stdout (display_errors), and so does the runtime.
     assert!(
-        out.stderr
-            .contains("Argument must be of type Dependency, string given"),
-        "unexpected stderr: {}",
-        out.stderr
+        out.stdout.contains("TypeError: ")
+            && out.stdout.contains("must be of type Dependency, string given"),
+        "unexpected stdout: {}",
+        out.stdout
     );
 }
 
@@ -199,7 +200,12 @@ echo target(false)->value();
 "#,
     );
     assert!(!out.success);
-    assert!(out.stderr.contains("Call to a member function value()"));
+    // php: `Uncaught Error: Call to undefined method OtherTarget::value()`, written to stdout.
+    assert!(
+        out.stdout.contains("Call to undefined method OtherTarget::value()"),
+        "unexpected stdout: {}",
+        out.stdout
+    );
 }
 
 /// Verifies a dynamic-receiver method call returning a string works end to end.

@@ -1,8 +1,8 @@
 ---
 title: "mysqli_error()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the error message of the last call on a connection."
 sidebar:
-  order: 122
+  order: 123
 ---
 
 ## mysqli_error()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_error(mixed $mysql): string
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the error message of the last call on a connection.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

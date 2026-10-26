@@ -174,6 +174,23 @@ pub(super) fn resolve_expr(
             state,
             function_variants,
         )?)),
+        ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
+            entries
+                .iter()
+                .map(|entry| {
+                    entry.try_map_exprs(|expr| {
+                        resolve_expr(
+                            expr.clone(),
+                            base_dir,
+                            declared_once,
+                            include_chain,
+                            state,
+                            function_variants,
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, CompileError>>()?,
+        ),
         ExprKind::Match {
             subject,
             arms,

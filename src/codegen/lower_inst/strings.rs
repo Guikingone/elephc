@@ -8,10 +8,11 @@
 //! Key details:
 //! - PHP string coercion treats `false` and `null` as empty strings, while
 //!   integer true and ordinary ints use the existing `__rt_itoa` helper.
+//! - Constant string values register lazy interned origins before native copies can create aliases.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Instruction, Op};
+use crate::ir::{Immediate, Instruction, Op};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -21,8 +22,6 @@ use super::{
 };
 use crate::codegen::{CodegenIrError, Result};
 
-const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
-
 /// Lowers a string constant by materializing its data-section pointer and byte length.
 pub(super) fn lower_const_str(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let data_id = expect_data(inst)?;
@@ -30,6 +29,9 @@ pub(super) fn lower_const_str(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+    if ctx.module.required_runtime_features.mbstring || ctx.module.required_runtime_features.eval_bridge {
+        abi::emit_call_label(ctx.emitter, "__rt_mbstring_ini_literal");
+    }
     store_if_result(ctx, inst)
 }
 
@@ -66,6 +68,24 @@ pub(super) fn lower_const_class_name(ctx: &mut FunctionContext<'_>, inst: &Instr
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `self::class` of a closure that may be rebound: the scope `Closure::bind()` stamped
+/// into the hidden scope capture, else the lexical class the immediate names.
+pub(super) fn lower_closure_scope_class_name(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let data_id = expect_data(inst)?;
+    let lexical = ctx
+        .module
+        .data
+        .class_names
+        .get(data_id.as_raw() as usize)
+        .ok_or_else(|| CodegenIrError::missing_entry("class data", data_id.as_raw()))?
+        .clone();
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    crate::codegen::lower_inst::builtins::eval::emit_effective_scope_name(
+        ctx, &lexical, ptr_reg, len_reg,
+    )?;
     store_if_result(ctx, inst)
 }
 
@@ -257,7 +277,78 @@ fn current_late_static_frame_class<'a>(ctx: &'a FunctionContext<'_>) -> Option<&
 
 /// Loads the late-static class id from the hidden static frame slot or `$this`.
 fn emit_late_static_class_id_to_reg(ctx: &mut FunctionContext<'_>, reg: &str) -> Result<()> {
-    if let Some(slot) = ctx.local_slot_by_name(CALLED_CLASS_ID_PARAM) {
+    // A closure that may be rebound at run time takes `static` from what it is bound to: the
+    // class of its `$this`, else the scope `Closure::bind()` stamped. The called-class id it
+    // captured when it was created names the class it was WRITTEN for, which a rebind replaces.
+    let Some(scope_slot) = ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL) else {
+        return emit_lexical_late_static_class_id_to_reg(ctx, reg);
+    };
+    let done = ctx.next_label("late_static_scope_done");
+    let no_this = ctx.next_label("late_static_scope_no_this");
+    let lexical = ctx.next_label("late_static_scope_lexical");
+    if let Some(this_slot) = ctx.local_slot_by_name("this") {
+        let offset = ctx.local_offset(this_slot)?;
+        if matches!(
+            ctx.local_php_type(this_slot)?.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        ) {
+            // A method-defined closure captures `$this` boxed, and an unbound one holds null.
+            abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #6");                       // runtime tag 6 = object; anything else means no bound object
+                    ctx.emitter.instruction(&format!("b.ne {no_this}"));         // fall back to the stamped scope
+                    ctx.emitter.instruction("mov x0, x1");                       // the unboxed object pointer
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 6");                       // runtime tag 6 = object; anything else means no bound object
+                    ctx.emitter.instruction(&format!("jne {no_this}"));          // fall back to the stamped scope
+                    ctx.emitter.instruction("mov rax, rdi");                     // the unboxed object pointer
+                }
+            }
+            abi::emit_load_from_address(ctx.emitter, reg, abi::int_result_reg(ctx.emitter), 0);
+        } else {
+            abi::load_at_offset(ctx.emitter, reg, offset);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("cbz {reg}, {no_this}"));   // no bound object: fall back to the stamped scope
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("test {reg}, {reg}"));      // is an object bound?
+                    ctx.emitter.instruction(&format!("jz {no_this}"));           // no bound object: fall back to the stamped scope
+                }
+            }
+            abi::emit_load_from_address(ctx.emitter, reg, reg, 0);
+        }
+        abi::emit_jump(ctx.emitter, &done);
+    }
+    ctx.emitter.label(&no_this);
+    let scope_offset = ctx.local_offset(scope_slot)?;
+    abi::load_at_offset(ctx.emitter, reg, scope_offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {reg}, #0"));                  // 0 = never rebound, negative = interpreter-declared scope
+            ctx.emitter.instruction(&format!("b.le {lexical}"));                 // keep the captured called class
+            ctx.emitter.instruction(&format!("sub {reg}, {reg}, #1"));           // undo the +1 encoding: the bound class id
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {reg}, {reg}"));              // 0 = never rebound, negative = interpreter-declared scope
+            ctx.emitter.instruction(&format!("jle {lexical}"));                  // keep the captured called class
+            ctx.emitter.instruction(&format!("sub {reg}, 1"));                   // undo the +1 encoding: the bound class id
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&lexical);
+    emit_lexical_late_static_class_id_to_reg(ctx, reg)?;
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Loads the late-static class id a body was entered with: the forwarded called-class id, else
+/// the class of `$this`.
+fn emit_lexical_late_static_class_id_to_reg(ctx: &mut FunctionContext<'_>, reg: &str) -> Result<()> {
+    if let Some(slot) = ctx.local_slot_by_name(crate::names::CALLED_CLASS_ID_LOCAL) {
         let offset = ctx.local_offset(slot)?;
         abi::load_at_offset(ctx.emitter, reg, offset);
         return Ok(());
@@ -367,20 +458,16 @@ pub(super) fn lower_str_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let len_reg = abi::string_result_regs(ctx.emitter).1;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
-                &format!("mov {}, {}", result_reg, len_reg)
-            );                                                                  // return the byte length of the loaded PHP string
+            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, len_reg)); // return the byte length of the loaded PHP string
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
-                &format!("mov {}, {}", result_reg, len_reg)
-            );                                                                  // return the byte length of the loaded PHP string
+            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, len_reg)); // return the byte length of the loaded PHP string
         }
     }
     store_if_result(ctx, inst)
 }
 
-/// Lowers string indexing to an owned one-byte string or an owned empty string when out of bounds.
+/// Lowers string indexing to one byte or an empty string, warning only for ordinary reads.
 pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let string = expect_operand(inst, 0)?;
     let index = expect_operand(inst, 1)?;
@@ -388,11 +475,13 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let non_negative = ctx.next_label("str_idx_pos");
     let oob = ctx.next_label("str_idx_oob");
     let end = ctx.next_label("str_idx_end");
+    let warn_on_missing = !matches!(inst.immediate, Some(Immediate::Bool(false)));
 
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_string_value_to_regs(string, "x1", "x2")?;
             require_integer_like(ctx.load_value_to_reg(index, "x0")?, inst)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x0", "x1");
             ctx.emitter.instruction("cmp x0, #0");                              // check whether the requested string offset is negative
             ctx.emitter.instruction(&format!("b.ge {}", non_negative));         // keep non-negative string offsets unchanged
             ctx.emitter.instruction("add x0, x2, x0");                          // convert negative string offsets to length plus offset
@@ -403,14 +492,24 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.emitter.instruction(&format!("b.ge {}", oob));                  // offsets at or beyond length return an empty string
             ctx.emitter.instruction("add x1, x1, x0");                          // point the string result at the selected byte
             ctx.emitter.instruction("mov x2, #1");                              // in-bounds string indexing returns one byte
+            abi::emit_pop_reg_pair(ctx.emitter, "x9", "x10");
             ctx.emitter.instruction(&format!("b {}", end));                     // skip the out-of-bounds empty-string result
             ctx.emitter.label(&oob);
-            ctx.emitter.instruction("mov x2, #0");                              // out-of-bounds string indexing returns an empty string
+            abi::emit_pop_reg_pair(ctx.emitter, "x0", "x1");
+            if warn_on_missing {
+                abi::emit_push_reg(ctx.emitter, "x1");
+                abi::emit_call_label(ctx.emitter, "__rt_warn_string_offset");
+                abi::emit_pop_reg(ctx.emitter, "x1");
+            } else {
+                abi::emit_load_int_immediate(ctx.emitter, "x1", crate::codegen::NULL_SENTINEL);
+            }
+            ctx.emitter.instruction("mov x2, #0");                              // a missing offset has no string bytes
             ctx.emitter.label(&end);
         }
         Arch::X86_64 => {
             ctx.load_string_value_to_regs(string, "r8", "r9")?;
             require_integer_like(ctx.load_value_to_reg(index, "rax")?, inst)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "r8");
             ctx.emitter.instruction("cmp rax, 0");                              // check whether the requested string offset is negative
             ctx.emitter.instruction(&format!("jge {}", non_negative));          // keep non-negative string offsets unchanged
             ctx.emitter.instruction("add rax, r9");                             // convert negative string offsets to length plus offset
@@ -422,10 +521,18 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.emitter.instruction("add r8, rax");                             // point the string result at the selected byte
             ctx.emitter.instruction("mov rax, r8");                             // publish the selected byte pointer as the string result pointer
             ctx.emitter.instruction("mov rdx, 1");                              // in-bounds string indexing returns one byte
+            abi::emit_pop_reg_pair(ctx.emitter, "r10", "r11");
             ctx.emitter.instruction(&format!("jmp {}", end));                   // skip the out-of-bounds empty-string result
             ctx.emitter.label(&oob);
-            ctx.emitter.instruction("mov rax, r8");                             // preserve a valid source pointer for the empty string result
-            ctx.emitter.instruction("mov rdx, 0");                              // out-of-bounds string indexing returns an empty string
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "r8");
+            if warn_on_missing {
+                abi::emit_push_reg(ctx.emitter, "r8");
+                abi::emit_call_label(ctx.emitter, "__rt_warn_string_offset");
+                abi::emit_pop_reg(ctx.emitter, "rax");
+            } else {
+                abi::emit_load_int_immediate(ctx.emitter, "rax", crate::codegen::NULL_SENTINEL);
+            }
+            ctx.emitter.instruction("mov rdx, 0");                              // a missing offset has no string bytes
             ctx.emitter.label(&end);
         }
     }

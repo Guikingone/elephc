@@ -1,8 +1,8 @@
 ---
 title: "timezone_abbreviations_list()"
-description: "Implemented by the compiler-injected tz prelude."
+description: "Returns every timezone abbreviation with its offset and DST flag."
 sidebar:
-  order: 256
+  order: 257
 ---
 
 ## timezone_abbreviations_list()
@@ -11,7 +11,7 @@ sidebar:
 function timezone_abbreviations_list(): mixed
 ```
 
-Implemented by the compiler-injected tz prelude.
+Returns every timezone abbreviation with its offset and DST flag.
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected tz prelude.
 - **Compiled (AOT)**: supported through the compiler-injected tz prelude.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

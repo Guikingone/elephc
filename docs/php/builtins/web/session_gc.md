@@ -1,8 +1,8 @@
 ---
 title: "session_gc()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Runs session garbage collection and returns how many sessions it removed."
 sidebar:
-  order: 959
+  order: 1050
 ---
 
 ## session_gc()
@@ -11,7 +11,7 @@ sidebar:
 function session_gc(): mixed
 ```
 
-Implemented by the compiler-injected web prelude.
+Runs session garbage collection and returns how many sessions it removed.
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

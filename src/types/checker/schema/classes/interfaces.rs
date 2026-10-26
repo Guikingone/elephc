@@ -20,8 +20,8 @@ use crate::types::{PhpType, PropertyHookContract};
 use super::super::super::Checker;
 use super::super::super::builtin_interfaces::interface_return_type_is_tentative;
 use super::super::validation::{
-    declared_return_type_compatible, is_pdo_exception_get_code_contract,
-    late_static_return_compatible,
+    declaration_is_source, declared_return_type_compatible,
+    is_pdo_exception_get_code_contract, late_static_return_compatible,
     validate_signature_compatibility,
 };
 use super::state::ClassBuildState;
@@ -331,14 +331,29 @@ fn validate_static_interface_method(
             ))
         }
     };
+    let actual_method = class
+        .methods
+        .iter()
+        .find(|m| m.is_static && php_symbol_key(&m.name) == method_name);
     validate_signature_compatibility(
-        crate::span::Span::dummy(),
+        actual_method.map(|m| m.span).unwrap_or(class.span),
         &class.name,
         method_name,
         actual_sig,
         required_sig,
         "static method",
         "implementing interface",
+        state
+            .static_method_declaring_classes
+            .get(method_name)
+            .is_none_or(|owner| declaration_is_source(checker, owner))
+            && interface_info
+                .static_method_declaring_interfaces
+                .get(method_name)
+                .map_or_else(
+                    || declaration_is_source(checker, interface_name),
+                    |owner| declaration_is_source(checker, owner),
+                ),
     )?;
     let actual_method = class
         .methods
@@ -365,6 +380,7 @@ fn validate_static_interface_method(
         if actual_name != &class.name
             && class_map.contains_key(actual_name)
             && !checker.classes.contains_key(actual_name)
+            && !building.contains(actual_name.as_str())
         {
             super::build_class_info_recursive(
                 actual_name,
@@ -533,6 +549,32 @@ fn method_suppresses_tentative_return_notice(
     })
 }
 
+/// Reports an inherited source-method/interface contract already checked at its parent.
+///
+/// php-src's `zend_do_implement_interfaces` does not repeat signature checks for inherited
+/// interfaces. A deferred abstract slot is not a source declaration and still needs checking.
+fn source_parent_checked_interface_method(
+    class: &FlattenedClass,
+    interface_name: &str,
+    method_name: &str,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &Checker,
+) -> bool {
+    let Some(parent) = class.extends.as_ref().and_then(|name| checker.classes.get(name)) else {
+        return false;
+    };
+    if !parent.interfaces.iter().any(|name| name == interface_name) {
+        return false;
+    }
+    let Some(owner) = parent.method_declaring_classes.get(method_name) else {
+        return false;
+    };
+    declaration_is_source(checker, owner)
+        && class_map.get(owner).is_some_and(|declaration| {
+            declaration.methods.iter().any(|method| php_symbol_key(&method.name) == method_name)
+        })
+}
+
 /// Validates that `class` implements the interface method `method_name` from `interface_name`.
 ///
 /// Checks signature compatibility, return type declarations, visibility (must be public), and
@@ -603,19 +645,30 @@ fn validate_interface_method(
             ))
         }
     };
+    let actual_method = class
+        .methods
+        .iter()
+        .find(|m| php_symbol_key(&m.name) == method_name);
     validate_signature_compatibility(
-        crate::span::Span::dummy(),
+        actual_method.map(|m| m.span).unwrap_or(class.span),
         &class.name,
         method_name,
         actual_sig,
         required_sig,
         "method",
         "implementing interface",
+        state
+            .method_declaring_classes
+            .get(method_name)
+            .is_none_or(|owner| declaration_is_source(checker, owner))
+            && interface_info
+                .method_declaring_interfaces
+                .get(method_name)
+                .map_or_else(
+                    || declaration_is_source(checker, interface_name),
+                    |owner| declaration_is_source(checker, owner),
+                ),
     )?;
-    let actual_method = class
-        .methods
-        .iter()
-        .find(|m| php_symbol_key(&m.name) == method_name);
     if required_sig.declared_return && !actual_sig.declared_return {
         let declaring = declaring_interface(&interface_info, interface_name, method_name);
         if !interface_return_type_is_tentative(declaring, method_name) {
@@ -631,14 +684,38 @@ fn validate_interface_method(
         }
         // Accepted, but not silently: PHP reports the missing declaration as a deprecation and the
         // attribute is what suppresses it.
-        if !method_suppresses_tentative_return_notice(actual_method) {
+        // Resolve the declaration only for this notice; ordinary validation keeps its original
+        // class-local error location and declaration-ownership behavior.
+        let notice_method = actual_method.or_else(|| {
+            state
+                .method_declaring_classes
+                .get(method_name)
+                .and_then(|owner| class_map.get(owner))
+                .and_then(|declaration| {
+                    declaration.methods.iter().find(|m| php_symbol_key(&m.name) == method_name)
+                })
+        });
+        if !method_suppresses_tentative_return_notice(notice_method)
+            && !source_parent_checked_interface_method(
+                class,
+                interface_name,
+                method_name,
+                class_map,
+                checker,
+            )
+        {
+            let owner = state
+                .method_declaring_classes
+                .get(method_name)
+                .map(String::as_str)
+                .unwrap_or(class.name.as_str());
             checker.warnings.push(crate::errors::CompileWarning::new(
-                actual_method
+                notice_method
                     .map(|m| m.span)
                     .unwrap_or_else(crate::span::Span::dummy),
                 &format!(
                     "Return type of {}::{}() should either be compatible with {}::{}(): {}, or the #[\\ReturnTypeWillChange] attribute should be used to temporarily suppress the notice",
-                    class.name, method_name, declaring, method_name, required_sig.return_type
+                    owner, method_name, declaring, method_name, required_sig.return_type
                 ),
             ));
         }
@@ -647,6 +724,7 @@ fn validate_interface_method(
         if actual_name != &class.name
             && class_map.contains_key(actual_name)
             && !checker.classes.contains_key(actual_name)
+            && !building.contains(actual_name.as_str())
         {
             super::build_class_info_recursive(
                 actual_name,
@@ -672,27 +750,35 @@ fn validate_interface_method(
         .get(method_name)
         .map(String::as_str)
         .unwrap_or(&class.name);
-    let return_compatible = (is_pdo_exception_get_code_contract(
-        contract_owner,
-        method_name,
-        &actual_sig.return_type,
-    ) || is_pdo_exception_get_code_contract(
-        &class.name,
-        method_name,
-        &actual_sig.return_type,
-    )) || late_static_compatible.unwrap_or_else(|| {
-        interface_self_return_conforms(
-            checker,
-            class,
-            interface_name,
-            &required_sig.return_type,
-            &actual_sig.return_type,
-        ) || declared_return_type_compatible(
-            checker,
-            &required_sig.return_type,
-            &actual_sig.return_type,
-        )
-    });
+    // The prelude's SQLSTATE `getCode()` keeps `Exception` as its declaring class, so a
+    // subclass that inherits the body is recognized through the class implementing it.
+    let implementing_class = state
+        .method_impl_classes
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(&class.name);
+    // Only Throwable's original contract has PDO's internal SQLSTATE exception.
+    // A user interface can inherit that contract, but its own getCode declaration cannot.
+    let required_owner = interface_info.method_declaring_interfaces
+        .get(method_name).map(String::as_str).unwrap_or(interface_name);
+    let pdo_throwable_exemption = php_symbol_key(required_owner) == "throwable"
+        && [contract_owner, implementing_class, class.name.as_str()]
+        .into_iter()
+        .any(|owner| is_pdo_exception_get_code_contract(owner, method_name, &actual_sig.return_type));
+    let return_compatible = pdo_throwable_exemption
+        || late_static_compatible.unwrap_or_else(|| {
+            interface_self_return_conforms(
+                checker,
+                class,
+                interface_name,
+                &required_sig.return_type,
+                &actual_sig.return_type,
+            ) || declared_return_type_compatible(
+                checker,
+                &required_sig.return_type,
+                &actual_sig.return_type,
+            )
+        });
     // An implementation that declares NO return type has nothing to compare: the missing
     // declaration was settled above (refused, or accepted as php's tentative-type deprecation),
     // and `actual_sig.return_type` is only this checker's inference of the body. Comparing that
@@ -863,9 +949,14 @@ fn ensure_object_type_known(
     building: &mut HashSet<String>,
 ) -> Result<(), CompileError> {
     match ty {
+        // A class already being built further up this chain is known enough for a type
+        // mention: `Carbon` implements an interface whose methods name `CarbonImmutable`, whose
+        // own interface names `Carbon` again. Building it a second time reported circular
+        // inheritance, and both classes went to the interpreter.
         PhpType::Object(name) if name != current_class
             && class_map.contains_key(name)
-            && !checker.classes.contains_key(name) =>
+            && !checker.classes.contains_key(name)
+            && !building.contains(name.as_str()) =>
         {
             super::build_class_info_recursive(name, class_map, checker, next_class_id, building)?;
         }

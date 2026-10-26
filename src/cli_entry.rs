@@ -1,7 +1,7 @@
 //! Command-line dispatch shared through the compiler library.
 //! Preserves startup diagnostics, native/monitor commands and the bounded compiler stack.
 
-use crate::{cli, monitor, native_deps, opcache, pipeline};
+use crate::{cli, monitor, native_deps, opcache, pipeline, project_ini};
 
 #[cfg(test)]
 mod tests {
@@ -38,12 +38,30 @@ pub fn run() {
         cli::print_mascotte();
     }
     match cli::parse_args(&args) {
-        cli::Command::Compile(config) => {
+        cli::Command::Compile(mut config) => {
+            apply_project_ini(&mut config);
             emit_ini_override_warnings(&config);
             run_compile_with_stack(config);
         }
         cli::Command::Native(command) => run_native(command),
         cli::Command::Monitor(command) => std::process::exit(monitor::run(command)),
+    }
+}
+
+/// Puts the project's `elephc.toml` `[ini]` entries AHEAD of the command line's `--ini` ones,
+/// so an `--ini` for the same directive, being the later entry, is the value every consumer
+/// reads. A manifest that cannot be used stops the compile: its directives would otherwise be
+/// dropped without a word.
+fn apply_project_ini(config: &mut cli::CliConfig) {
+    match project_ini::project_ini_overrides(std::path::Path::new(&config.filename)) {
+        Ok(mut entries) => {
+            entries.append(&mut config.ini_overrides);
+            config.ini_overrides = entries;
+        }
+        Err(message) => {
+            eprintln!("error: {message}");
+            std::process::exit(1);
+        }
     }
 }
 

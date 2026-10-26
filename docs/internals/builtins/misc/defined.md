@@ -1,16 +1,16 @@
 ---
-title: "defined() — internals"
+title: "defined() - internals"
 description: "Compiler internals for defined(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 619
+  order: 623
 ---
 
-## `defined()` — internals
+## `defined()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/defined.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/defined.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -26,7 +26,7 @@ sidebar:
 - **Validation**: `signature`
 - **Result type source**: `declared`
 - **Result ownership**: `may_alias_arguments`
-- **Effects**: `static (1 declared effects)`
+- **Effects**: `static (2 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`

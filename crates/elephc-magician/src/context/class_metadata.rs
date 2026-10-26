@@ -9,9 +9,55 @@
 
 use super::*;
 
+/// A method found on an eval-declared class, borrowed from the shared class rather than copied.
+///
+/// WHY. `class_method()` used to hand back the `EvalClassMethod` BY VALUE, and every interpreted
+/// method dispatch paid for a copy of its parameter vectors, attribute lists and name strings --
+/// and for dropping them again -- before a single statement ran; it was a fifth of a Laravel
+/// request. Classes are already `Arc`-shared between contexts, so a handle that keeps the class
+/// alive and derefs to the method costs one refcount bump. Callers that genuinely need an owned
+/// method copy it explicitly from the deref.
+#[derive(Clone)]
+pub struct EvalClassMethodRef {
+    class: Arc<EvalClass>,
+    index: usize,
+}
+
+impl EvalClassMethodRef {
+    /// Returns the class the method is declared on.
+    pub fn class(&self) -> &Arc<EvalClass> {
+        &self.class
+    }
+}
+
+impl std::ops::Deref for EvalClassMethodRef {
+    type Target = EvalClassMethod;
+
+    fn deref(&self) -> &EvalClassMethod {
+        &self.class.methods()[self.index]
+    }
+}
+
+impl std::fmt::Debug for EvalClassMethodRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        (**self).fmt(f)
+    }
+}
+
+/// Position of a method in `class.methods()` by PHP case-insensitive name.
+///
+/// Lives here rather than on `EvalClass`: the script cache fingerprints the `eval_ir` sources,
+/// and a lookup helper is not a change of the stored shape.
+fn class_method_index(class: &EvalClass, method_name: &str) -> Option<usize> {
+    class
+        .methods()
+        .iter()
+        .position(|method| method.name().eq_ignore_ascii_case(method_name))
+}
+
 impl ElephcEvalContext {
     /// Returns eval-declared class metadata from parent to child for construction.
-    pub fn class_chain(&self, name: &str) -> Vec<EvalClass> {
+    pub fn class_chain(&self, name: &str) -> Vec<Arc<EvalClass>> {
         let mut chain = Vec::new();
         let mut seen = HashSet::new();
         self.collect_class_chain(name, &mut chain, &mut seen);
@@ -22,7 +68,7 @@ impl ElephcEvalContext {
     pub(super) fn collect_class_chain(
         &self,
         name: &str,
-        chain: &mut Vec<EvalClass>,
+        chain: &mut Vec<Arc<EvalClass>>,
         seen: &mut HashSet<String>,
     ) {
         let key = normalize_class_name(name);
@@ -35,7 +81,7 @@ impl ElephcEvalContext {
         if let Some(parent) = class.parent() {
             self.collect_class_chain(parent, chain, seen);
         }
-        chain.push(EvalClass::clone(class));
+        chain.push(Arc::clone(class));
     }
 
     /// Finds a method in an eval-declared class or its eval-declared parents.
@@ -43,7 +89,7 @@ impl ElephcEvalContext {
         &self,
         class_name: &str,
         method_name: &str,
-    ) -> Option<(String, EvalClassMethod)> {
+    ) -> Option<(String, EvalClassMethodRef)> {
         let mut current_name = self.resolve_class_name(class_name)?;
         let mut seen = HashSet::new();
         loop {
@@ -52,8 +98,11 @@ impl ElephcEvalContext {
                 return None;
             }
             let class = self.classes.get(&key)?;
-            if let Some(method) = class.method(method_name) {
-                return Some((class.name().to_string(), method.clone()));
+            if let Some(index) = class_method_index(class, method_name) {
+                return Some((
+                    class.name().to_string(),
+                    EvalClassMethodRef { class: Arc::clone(class), index },
+                ));
             }
             current_name = class.parent()?.to_string();
         }
@@ -64,11 +113,13 @@ impl ElephcEvalContext {
         &self,
         class_name: &str,
         method_name: &str,
-    ) -> Option<(String, EvalClassMethod)> {
-        let class = self.class(class_name)?;
-        class
-            .method(method_name)
-            .map(|method| (class.name().to_string(), method.clone()))
+    ) -> Option<(String, EvalClassMethodRef)> {
+        let class = self.class_shared(class_name)?;
+        let index = class_method_index(class, method_name)?;
+        Some((
+            class.name().to_string(),
+            EvalClassMethodRef { class: Arc::clone(class), index },
+        ))
     }
 
     /// Finds a class-like constant on an eval class, interface, trait, or inherited relation.
@@ -104,7 +155,13 @@ impl ElephcEvalContext {
             if !seen.insert(key.clone()) {
                 return None;
             }
-            let class = self.classes.get(&key)?;
+            // A native parent (`class Carbon extends DateTime`) ends the eval chain, NOT the
+            // lookup: the interfaces below still declare constants. Returning here hid every
+            // interface constant of a class with a native parent (Carbon's
+            // `static::YEARS_PER_MILLENNIUM`, declared by `UnitValue` through `CarbonInterface`).
+            let Some(class) = self.classes.get(&key) else {
+                break;
+            };
             if let Some(constant) = class.constant(constant_name) {
                 return Some((class.name().to_string(), constant.clone()));
             }
@@ -443,6 +500,9 @@ impl ElephcEvalContext {
         let mut seen = HashSet::new();
         for class in self.class_chain(class_name).into_iter().rev() {
             for method in class.methods() {
+                if class.properties().iter().any(|property| property.matches_hook_method(method.name())) {
+                    continue;
+                }
                 push_unique_method_name(method.name(), &mut names, &mut seen);
             }
             if let Some(enum_decl) = self.enum_decl(class.name()) {

@@ -105,8 +105,9 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
     match kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(apply_stmts(stmts, defines)),
         StmtKind::IncludeOnceMark { source_path } => StmtKind::IncludeOnceMark { source_path },
-        StmtKind::IncludeOnceGuard { source_path, body } => StmtKind::IncludeOnceGuard {
+        StmtKind::IncludeOnceGuard { source_path, required, body } => StmtKind::IncludeOnceGuard {
             source_path,
+            required,
             body: apply_stmts(body, defines),
         },
         StmtKind::Echo(expr) => StmtKind::Echo(rewrite_expr(expr, defines)),

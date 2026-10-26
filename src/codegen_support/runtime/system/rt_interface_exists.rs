@@ -51,8 +51,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cbz x0, {}", immutable));                      // names without an event use immutable metadata
     emitter.instruction("ldr x0, [x0, #16]");                                   // load request-active cell address
     emitter.instruction("ldr x0, [x0]");                                        // read activation state
-    emitter.instruction("ldp x29, x30, [sp], #32");                             // release query storage and restore frame
-    emitter.instruction("ret");                                                 // return the activation result
+    emitter.instruction("b L_rt_interface_exists_release");                     // give the lowered copy back before returning
 
     // -- search the interface registry --
     emitter.label(immutable);
@@ -64,6 +63,12 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_sorted_name_search");                          // search for the interface name
     emitter.instruction("cmp x0, #0");                                          // did the search return a matching entry?
     emitter.instruction("cset x0, ne");                                         // map a non-null entry pointer to true
+    // -- strtolower returns an OWNED copy; release it on every exit --
+    emitter.label("L_rt_interface_exists_release");
+    emitter.instruction("str x0, [sp, #24]");                                   // preserve the answer across the copy release (length no longer needed)
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the owned lowered query copy
+    emitter.instruction("bl __rt_decref_any");                                  // give the lowered copy back
+    emitter.instruction("ldr x0, [sp, #24]");                                   // restore the answer
     emitter.instruction("ldp x29, x30, [sp], #32");                             // release query storage and restore frame
     emitter.instruction("ret");                                                 // return the boolean in x0
 }
@@ -98,8 +103,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("je {}", immutable));                           // names without an event use immutable metadata
     emitter.instruction("mov rax, [rax + 16]");                                 // load request-active cell address
     emitter.instruction("mov rax, [rax]");                                      // read activation state
-    emitter.instruction("leave");                                               // release query storage and restore frame
-    emitter.instruction("ret");                                                 // return the activation result
+    emitter.instruction("jmp L_rt_interface_exists_release_x");                 // give the lowered copy back before returning
 
     // -- search the interface registry --
     emitter.label(immutable);
@@ -112,6 +116,12 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did the search return a matching entry?
     emitter.instruction("setne al");                                            // map a non-null entry pointer to true
     emitter.instruction("movzx eax, al");                                       // widen the boolean byte into the result register
+    // -- strtolower returns an OWNED copy; release it on every exit --
+    emitter.label("L_rt_interface_exists_release_x");
+    emitter.instruction("mov [rsp + 8], rax");                                  // preserve the answer across the copy release (length no longer needed)
+    emitter.instruction("mov rax, [rsp]");                                      // reload the owned lowered query copy
+    emitter.instruction("call __rt_decref_any");                                // give the lowered copy back
+    emitter.instruction("mov rax, [rsp + 8]");                                  // restore the answer
     emitter.instruction("leave");                                               // release query storage and restore frame
     emitter.instruction("ret");                                                 // return the boolean in rax
 }

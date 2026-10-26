@@ -41,6 +41,7 @@ mod tests {
             StmtKind::NamespaceBlock { name: None, body: vec![Stmt::new(
                 StmtKind::IncludeOnceGuard {
                     source_path: std::path::PathBuf::from("unit.php"),
+                    required: false,
                     body: vec![group()],
                 }, Span::dummy(),
             )] }, Span::dummy(),

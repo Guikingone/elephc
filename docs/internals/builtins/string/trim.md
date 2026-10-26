@@ -1,16 +1,16 @@
 ---
-title: "trim() — internals"
+title: "trim() - internals"
 description: "Compiler internals for trim(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 902
+  order: 996
 ---
 
-## `trim()` — internals
+## `trim()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/trim.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/trim.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function trim(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string
+function trim(string $string, string $characters = " \n\r\t\x0B\x0C\x00"): string
 ```
 
 ## What the type checker enforces

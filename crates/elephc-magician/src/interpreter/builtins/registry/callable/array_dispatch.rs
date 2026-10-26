@@ -18,15 +18,14 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
         EvaluatedCallable::ForeignContext { callback, owner } => {
-            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_evaluated_callable_with_call_array_args(
-                callback,
-                evaluated_args,
-                owner_context,
-                values,
-            )
+            with_foreign_owner_context(owner, context, values, |owner_context, values| {
+                eval_evaluated_callable_with_call_array_args(
+                    callback,
+                    evaluated_args,
+                    owner_context,
+                    values,
+                )
+            })
         }
         EvaluatedCallable::Named { name, .. } => {
             if let Some(closure) = context.closure(name).cloned() {
@@ -133,13 +132,19 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                 context,
                 values,
             ),
-            None => eval_object_method_with_call_user_func_args(
-                *object,
-                method,
-                EvalObjectCallbackKind::Method,
-                evaluated_args,
+            None => super::execution::with_closure_method_scope(
+                bridge_scope.as_deref(),
                 context,
-                values,
+                |context| {
+                    eval_object_method_with_call_user_func_args(
+                        *object,
+                        method,
+                        EvalObjectCallbackKind::Method,
+                        evaluated_args,
+                        context,
+                        values,
+                    )
+                },
             ),
             }
         }
@@ -201,6 +206,17 @@ pub(in crate::interpreter) fn eval_callable_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
+        return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
+    }
+    if let Some(parameters) = eval_opcache_parameters(name, context) {
+        return eval_opcache_call_with_evaluated_args(
+            name, parameters, &positional_args(evaluated_args), None, context, values,
+        );
+    }
+    if eval_builtin_uses_owned_arguments(name) {
+        return eval_builtin_callback_with_arguments(name, positional_args(evaluated_args), false, context, values);
+    }
     if let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? {
         return Ok(result);
     }
@@ -231,6 +247,21 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
+        return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
+    }
+    if let Some(parameters) = eval_opcache_parameters(name, context) {
+        return eval_opcache_call_with_evaluated_args(
+            name, parameters, &evaluated_args, None, context, values,
+        );
+    }
+    // Check a known positional count before generic callable dispatch.
+    if evaluated_args.iter().all(|arg| arg.name.is_none()) {
+        eval_check_builtin_arity(name, evaluated_args.len(), context, values)?;
+    }
+    if eval_builtin_uses_owned_arguments(name) {
+        return eval_builtin_callback_with_arguments(name, evaluated_args, true, context, values);
+    }
     if let Some(result) =
         eval_date_procedural_alias_with_evaluated_args(name, evaluated_args.clone(), context, values)?
     {
@@ -242,11 +273,7 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
         return Ok(result);
     }
     if eval_php_visible_builtin_exists(name) {
-        let evaluated_args = bind_evaluated_builtin_args(name, evaluated_args, values)?;
-        let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? else {
-            return Err(EvalStatus::UnsupportedConstruct);
-        };
-        return Ok(result);
+        return eval_bound_builtin_call(name, evaluated_args, context, values);
     }
     if let Some(closure) = context.closure(name).cloned() {
         return eval_closure_with_evaluated_args_and_bound_scope_ref_mode(
@@ -282,6 +309,14 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
             values,
         )?;
         return eval_native_function_with_values(function, evaluated_args, context, values);
+    }
+    // Legacy runtime handlers without registry signatures accept positional values only.
+    if evaluated_args.iter().all(|arg| arg.name.is_none()) {
+        let positional: Vec<RuntimeCellHandle> =
+            evaluated_args.iter().map(|arg| arg.value).collect();
+        if let Some(result) = eval_builtin_with_values(name, &positional, context, values)? {
+            return Ok(result);
+        }
     }
     note_eval_runtime_failure(format!("callable {name}() is not defined"), context);
     Err(EvalStatus::UnsupportedConstruct)

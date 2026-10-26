@@ -26,7 +26,7 @@
 
 use crate::parser::ast::{Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_bool, e_concat, e_not, e_str, e_var, function, internal_declarations, s_assign, s_foreach,
+    e_bool, e_concat, e_not, e_str, e_var, function, php_semantics_declarations, s_assign, s_foreach,
     s_if, s_return, t_array,
 };
 
@@ -35,7 +35,7 @@ pub(crate) const IMPLODE_VALUES_NAME: &str = "__elephc_implode_values";
 
 /// Returns the `implode()` fallback declaration for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| vec![implode_values()])
+    php_semantics_declarations(|| vec![implode_values()])
 }
 
 /// Builds `__elephc_implode_values(string $separator, array $array): string`.

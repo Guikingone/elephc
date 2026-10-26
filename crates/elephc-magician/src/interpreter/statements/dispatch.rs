@@ -130,9 +130,7 @@ pub(in crate::interpreter) fn execute_stmt(
             execute_do_while_stmt(body, condition, context, scope, values)
         }
         EvalStmt::Echo(expr) => {
-            let value = eval_expr(expr, context, scope, values)?;
-            let value = eval_string_context_value(value, context, values)?;
-            values.echo(value)?;
+            eval_echo_expr(expr, context, scope, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::For {
@@ -238,7 +236,7 @@ pub(in crate::interpreter) fn execute_stmt(
             then_branch,
             else_branch,
         } => {
-            if crate::interpreter::expressions::eval_truthy_expr(condition, context, scope, values)? {
+            if eval_condition(condition, context, scope, values)? {
                 execute_statements(then_branch, context, scope, values)
             } else {
                 execute_statements(else_branch, context, scope, values)
@@ -257,41 +255,10 @@ pub(in crate::interpreter) fn execute_stmt(
                         .map(EvalControl::Return);
                 }
             }
-            let value = eval_expr(expr, context, scope, values)?;
-            // A return transfers ownership by `release_activation_scope` SKIPPING the returned
-            // cell -- which only gives the caller a reference when the activation scope actually
-            // owned one. Two named values in scope own nothing to transfer:
-            //
-            // - a `static`, whose cell belongs to the slot and has no scope entry to skip. A
-            //   discarded `f();` then destroyed the value the next call was supposed to read.
-            // - a by-value PARAMETER, which `bind_method_scope_args` binds `Borrowed` on
-            //   purpose. `return $param;` handed back a borrowed cell where every caller treats
-            //   a call result as owned (`eval_expr_result_aliases_storage` deliberately does not
-            //   list a call), so a discarded `f($x);` released the CALLER's `$x`. Symfony's
-            //   `HttpKernel::filterResponse` lost its `$event` to exactly that: it is
-            //   `$this->dispatcher->dispatch($event, ...)` as a statement, and `dispatch()`
-            //   returns its `$event` parameter.
-            if let EvalExpr::LoadVar(name) = expr {
-                // `$this` is excluded: the receiver already has its own compensation on the
-                // CALL side (a method result that aliases the receiver is retained there), so
-                // retaining here too would hand back two references and a discarded
-                // `$obj->fluent();` would never run the object's destructor.
-                let activation_owns = name == "this"
-                    || scope.entry(name).is_some_and(|entry| {
-                        entry.flags().ownership == ScopeCellOwnership::Owned
-                    });
-                if !activation_owns || scope.static_alias_slot(name).is_some() {
-                    return Ok(EvalControl::Return(values.retain(value)?));
-                }
-            }
-            // - a class constant or static property read, which hands out the cell the class
-            //   still holds. `return self::$internalEncoding;` gave the caller that cell as its
-            //   own; `$encoding = mb_internal_encoding(); $encoding = self::getEncoding(...);`
-            //   then released it, and the polyfill's internal encoding read back as "0".
-            if expr_returns_shared_member_cell(expr) {
-                return Ok(EvalControl::Return(values.retain(value)?));
-            }
-            Ok(EvalControl::Return(value))
+            // The returned value is an independent owner: a storage read (a variable, a static, a
+            // class constant, a by-value parameter) is copied by `eval_owned_expr`, so a discarded
+            // `f($x);` can never release the CALLER's `$x`.
+            Ok(EvalControl::Return(eval_owned_expr(expr, context, scope, values)?))
         }
         EvalStmt::Return(None) => Ok(EvalControl::ReturnVoid),
         EvalStmt::ReferenceAssign { target, source } => {
@@ -344,45 +311,35 @@ pub(in crate::interpreter) fn execute_stmt(
         }
         EvalStmt::StoreVar { name, value } => {
             let trace = crate::eval_trace::enabled();
-            // Mirrors `eval_assign`'s copy rule for the expression form of the same assignment:
-            // any RHS that aliases persistent storage -- a variable read, but also a class
-            // constant or static property fetch -- needs an independent copy before the scope
-            // takes ownership of it, or a later reassignment releases storage this statement
-            // never owned. This used to check `LoadVar` alone, which is what let `$state =
-            // self::STATE_B;` bind straight to the class constant's shared cell.
-            let value_expr = value;
-            let copies_borrowed_variable = eval_expr_result_aliases_storage(value_expr);
-            let value = eval_expr(value, context, scope, values).map_err(|status| {
+            let value = eval_owned_expr(value, context, scope, values).map_err(|status| {
                 if trace {
                     eprintln!("[elephc-eval-trace] phase=store_var_error stage=value name={name:?} status={status:?}");
                 }
                 status
             })?;
-            let value = if copies_borrowed_variable {
-                values.copy_value(value)?
-            } else {
-                eval_detach_property_read(value_expr, value, context, values)?
-            };
             let reference_target = scope.reference_target(name).cloned();
             if let Some(target) = reference_target {
                 write_back_method_ref_target(&target, value, context, values).map_err(|status| {
                     if trace {
-                        eprintln!("[elephc-eval-trace] phase=store_var_error stage=writeback name={name:?} status={status:?}");
+                        eprintln!("[elephc-eval-trace] phase=store_var_error stage=writeback name={name:?} status={status:?} target={}", target.kind_name());
                     }
                     status
                 })?;
             }
-            let replaced = set_scope_cell(
-                context,
-                scope,
-                name.clone(),
-                value,
-                if scope.reference_target(name).is_some() {
-                    ScopeCellOwnership::Borrowed
-                } else {
-                    ScopeCellOwnership::Owned
-                },
-            ).map_err(|status| {
+            let replaced = if scope.reference_target(name).is_some() {
+                // The by-reference target took the value; the local entry only borrows it.
+                set_scope_cell(
+                    context,
+                    scope,
+                    name.clone(),
+                    value,
+                    ScopeCellOwnership::Borrowed,
+                    values,
+                )
+            } else {
+                set_owned_scope_cell(context, scope, name.clone(), value, values)
+            }
+            .map_err(|status| {
                 if trace {
                     eprintln!("[elephc-eval-trace] phase=store_var_error stage=scope name={name:?} status={status:?}");
                 }
@@ -402,15 +359,11 @@ pub(in crate::interpreter) fn execute_stmt(
             execute_switch_stmt(expr, cases, context, scope, values)
         }
         EvalStmt::Throw(expr) => {
-            // The unwinding owns what it carries. `throw $exception;` re-throws a variable, whose
-            // read hands back the scope's own cell: letting that travel as the thrown value gave
-            // the variable and the unwind one reference between them, so once the catch scope
-            // dropped `$exception` the outer handler received freed memory ("int given" for a
-            // `Throwable` parameter). Laravel's route-binding middleware re-throws exactly so.
-            let thrown = crate::interpreter::expressions::eval_expr_value_for_consuming_store(
-                expr, context, scope, values,
-            )?;
-            if values.type_tag(thrown)? != EVAL_TAG_OBJECT {
+            let thrown = eval_owned_expr(expr, context, scope, values)?;
+            let tag = values.type_tag(thrown);
+            if tag != Ok(EVAL_TAG_OBJECT) {
+                let _ = eval_release_value(context, values, thrown);
+                tag?;
                 return Err(EvalStatus::RuntimeFatal);
             }
             Ok(EvalControl::Throw(thrown))
@@ -425,7 +378,7 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::UnsetVar { name } => {
-            if let Some(replaced) = unset_scope_cell(scope, name.clone()) {
+            if let Some(replaced) = unset_scope_cell(context, scope, name.clone()) {
                 eval_release_value(context, values, replaced)?;
             }
             Ok(EvalControl::None)
@@ -435,13 +388,17 @@ pub(in crate::interpreter) fn execute_stmt(
             let name = crate::interpreter::expressions::eval_dynamic_member_name(
                 name, context, scope, values,
             )?;
-            if let Some(replaced) = unset_scope_cell(scope, name) {
+            if let Some(replaced) = unset_scope_cell(context, scope, name) {
                 eval_release_value(context, values, replaced)?;
             }
             Ok(EvalControl::None)
         }
+        EvalStmt::GcCollect => {
+            values.collect_cycles()?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::While { condition, body } => {
-            while crate::interpreter::expressions::eval_truthy_expr(condition, context, scope, values)? {
+            while eval_condition(condition, context, scope, values)? {
                 match execute_statements(body, context, scope, values)? {
                     EvalControl::None | EvalControl::Continue(1) => {}
                     EvalControl::Break(1) => break,
@@ -467,13 +424,7 @@ pub(in crate::interpreter) fn execute_stmt(
                 return Ok(EvalControl::None);
             }
             let result = eval_expr(expr, context, scope, values)?;
-            // An expression used as a statement discards its value, but an ASSIGNMENT hands back
-            // the very cell it just stored and a variable read hands back the scope's own. The
-            // storage owns those; releasing them here gave back a reference the statement never
-            // took, which destroyed the object the variable still pointed at.
-            if !eval_expr_result_aliases_storage(expr) {
-                eval_release_value(context, values, result)?;
-            }
+            release_expr_result(result, context, values)?;
             Ok(EvalControl::None)
         }
     }

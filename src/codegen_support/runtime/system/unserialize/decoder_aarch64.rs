@@ -74,6 +74,26 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction("b __rt_throw_current");                                // resume propagation at the caller's exception handler
 }
 
+/// Records a scalar value's wire position in its reserved `_unser_values` slot as `(pos << 1) | 1`.
+///
+/// A later `R:N` that names the scalar re-decodes it from that position, because scalars are not
+/// kept alive after parsing and a published pointer would dangle. Real pointers are 8-byte aligned,
+/// so the low bit tells the two apart. This yields value semantics: php makes both slots one PHP
+/// reference, elephc gives the `R:` slot an equal copy. Overflow slots stay unregistered.
+fn emit_tag_scalar_position(emitter: &mut Emitter, kind: &str) {
+    let skip = format!("__rt_unser_at_{kind}_untagged");
+    emitter.instruction("ldr x12, [sp, #88]");                                  // this scalar's reserved zero-based registry index
+    emitter.instruction("mov x13, #65536");                                     // materialize the physical reference-registry capacity
+    emitter.instruction("cmp x12, x13");                                        // is the reserved slot inside the fixed registry?
+    emitter.instruction(&format!("b.hs {skip}"));                               // overflow values remain deliberately unregistered
+    emitter.instruction("ldr x14, [sp, #8]");                                   // wire position of the scalar's type byte
+    emitter.instruction("lsl x14, x14, #1");                                    // make room for the scalar marker bit
+    emitter.instruction("orr x14, x14, #1");                                    // tag the slot as a wire position, not a box pointer
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_unser_values");
+    emitter.instruction("str x14, [x10, x12, lsl #3]");                         // publish the position for later R: back-references
+    emitter.label(&skip);
+}
+
 /// Emits the AArch64 recursive decoder for one prevalidated serialized value.
 pub(super) fn emit_parser(emitter: &mut Emitter) {
     // -- __rt_unser_at(base=x0, pos=x1, end=x2) -> x0=boxed Mixed (0 on fail), x1=newpos --
@@ -100,7 +120,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_unser_at_fail");                             // nothing left to parse
     emitter.instruction("ldrb w9, [x0, x1]");                                   // load the leading type byte
     // -- back-reference? r:N; (object identity) or R:N; (PHP reference) resolves
-    //    to a previously parsed value and consumes no new index --
+    //    to a previously parsed value. Only R consumes no new index: php pushes
+    //    every value but a PHP reference, so an r takes the next index itself --
     emitter.instruction("cmp w9, #114");                                        // ASCII 'r'?
     emitter.instruction("b.eq __rt_unser_at_ref");                              // resolve an object back-reference
     emitter.instruction("cmp w9, #82");                                         // ASCII 'R'?
@@ -137,6 +158,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- null: "N;" --
     emitter.label("__rt_unser_at_null");
+    emit_tag_scalar_position(emitter, "null");
     emitter.instruction("mov x0, #8");                                          // value tag = null
     emitter.instruction("mov x1, #0");                                          // null payload low word
     emitter.instruction("mov x2, #0");                                          // null payload high word
@@ -147,6 +169,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- bool: "b:0;" / "b:1;" --
     emitter.label("__rt_unser_at_bool");
+    emit_tag_scalar_position(emitter, "bool");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload base
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload position
     emitter.instruction("add x12, x10, x11");                                   // pointer to the type byte
@@ -162,6 +185,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- int: "i:" + optional '-' + digits + ";" --
     emitter.label("__rt_unser_at_int");
+    emit_tag_scalar_position(emitter, "int");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload base
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload position
     emitter.instruction("add x10, x10, x11");                                   // pointer to the type byte
@@ -202,6 +226,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- float: "d:" + (INF/-INF/NAN | digits) + ";" --
     emitter.label("__rt_unser_at_float");
+    emit_tag_scalar_position(emitter, "float");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload base
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload position
     emitter.instruction("add x0, x10, x11");                                    // pointer to the type byte
@@ -236,6 +261,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- string: "s:" + bytelen + ":\"" + raw + "\";" --
     emitter.label("__rt_unser_at_str");
+    emit_tag_scalar_position(emitter, "str");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload base
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload position
     emitter.instruction("add x10, x10, x11");                                   // pointer to the type byte
@@ -348,6 +374,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the hash pointer
     emitter.instruction("str x9, [x0, #8]");                                    // store the hash pointer (ownership transferred, no incref)
     emitter.instruction("str xzr, [x0, #16]");                                  // clear the high payload word
+    emitter.instruction("ldr x1, [sp, #88]");                                   // pass this array's reserved zero-based index beside its box
+    emitter.instruction("bl __rt_unserialize_register_array");                  // retain a context lease for references after hydration
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload position (at the closing '}')
     emitter.instruction("add x1, x1, #1");                                      // newpos skips the '}'
     emitter.instruction("b __rt_unser_at_ret");                                 // return the box and new position
@@ -514,10 +542,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #40]");                                   // persist the entry index
     emitter.instruction("b __rt_unser_obj_data_loop");                          // continue with the next entry
     emitter.label("__rt_unser_obj_data_done");
-    emitter.instruction("ldr x0, [sp, #24]");                                   // $this receiver = first argument
-    emitter.instruction("ldr x1, [sp, #80]");                                   // $data assoc array (bare hash) = second argument
-    emitter.instruction("ldr x10, [sp, #72]");                                  // reload the __unserialize target
-    emitter.instruction("blr x10");                                             // call __unserialize($this, $data)
+    super::magic_call::emit_unserialize_magic_call(emitter);
     emitter.instruction("b __rt_unser_at_obj_box");                             // box the object (position is at the closing '}')
     emitter.label("__rt_unser_obj_default");
     emitter.instruction("ldr x9, [sp, #80]");                                   // blocked objects own an opaque Mixed property hash
@@ -671,10 +696,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #1");                                          // non-zero failure status
     emitter.syscall(1);                                                          // terminate the hostile parse immediately
 
-    // -- back-reference: r:N; / R:N; -> a fresh box aliasing the Nth parsed value.
-    //    N is 1-based (PHP's value index); objects are retained so refcounts stay
-    //    balanced. An out-of-range or never-registered index yields null. --
+    // Back-references clone a registered value with its payload retain. Lowercase r
+    // accepts object identity only; uppercase R can also read a completed array.
     emitter.label("__rt_unser_at_ref");
+    emitter.instruction("str x9, [sp, #64]");                                   // preserve the reference marker across index parsing
     emitter.instruction("ldr x10, [sp, #0]");                                   // base
     emitter.instruction("ldr x11, [sp, #8]");                                   // position
     emitter.instruction("add x10, x10, x11");                                   // pointer to the leading 'r'/'R'
@@ -709,27 +734,49 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_values");
     emitter.instruction("ldr x13, [x9, x12, lsl #3]");                          // the registered value box (0 if none)
     emitter.instruction("cbz x13, __rt_unser_at_ref_fail");                     // reserved but unpublished registry slot → null
-    emitter.instruction("str x13, [sp, #64]");                                  // save the source box across the alloc
-    emitter.instruction("mov x0, #24");                                         // a fresh boxed Mixed cell
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate it
-    emitter.instruction("ldr x13, [sp, #64]");                                  // reload the source box
-    emitter.instruction("ldur x9, [x13, #-8]");                                 // source heap header
-    emitter.instruction("str x9, [x0, #-8]");                                   // copy the heap header
-    emitter.instruction("ldr x9, [x13]");                                       // source value tag
-    emitter.instruction("str x9, [x0]");                                        // copy the value tag
-    emitter.instruction("ldr x10, [x13, #8]");                                  // source low payload (object pointer)
-    emitter.instruction("str x10, [x0, #8]");                                   // copy the low payload
-    emitter.instruction("ldr x11, [x13, #16]");                                 // source high payload
-    emitter.instruction("str x11, [x0, #16]");                                  // copy the high payload
-    emitter.instruction("cmp x9, #6");                                          // does the alias point at an object?
-    emitter.instruction("b.ne __rt_unser_at_ref_boxed");                        // non-objects need no retain
-    emitter.instruction("str x0, [sp, #64]");                                   // save the fresh box across the retain
-    emitter.instruction("mov x0, x10");                                         // object pointer
-    emitter.instruction("bl __rt_incref");                                      // retain the shared object
-    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the fresh box
-    emitter.label("__rt_unser_at_ref_boxed");
+    emitter.instruction("tbnz x13, #0, __rt_unser_at_ref_scalar");              // a tagged slot holds a scalar's wire position
+    emitter.instruction("ldr x10, [sp, #64]");                                  // recover the original reference marker
+    emitter.instruction("cmp x10, #114");                                       // lowercase r denotes object identity, not an array reference
+    emitter.instruction("b.ne __rt_unser_at_ref_clone");                        // uppercase R accepts any published value shape
+    emitter.instruction("ldr x10, [x13]");                                      // inspect the published value tag
+    emitter.instruction("cmp x10, #6");                                         // require an object for lowercase r
+    emitter.instruction("b.ne __rt_unser_at_ref_fail");                         // reject a non-object identity target
+    // An object back-reference is itself a value php numbers: the next r:/R: index after it
+    // belongs to whatever follows, so the reference reserves one and publishes the SAME object
+    // box there. Skipping it shifted every later index by one, and a Symfony container's
+    // second `BoundArgument` resolved `r:N` to a bool and failed the whole unserialize().
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_count");
+    emitter.instruction("ldr x10, [x9]");                                       // zero-based slot this reference takes
+    emitter.instruction("add x12, x10, #1");                                    // advance the registry counter past it
+    emitter.instruction("str x12, [x9]");                                       // publish the advanced counter
+    emitter.instruction("mov x12, #65536");                                     // materialize the physical reference-registry capacity
+    emitter.instruction("cmp x10, x12");                                        // is the reserved slot inside the fixed registry?
+    emitter.instruction("b.hs __rt_unser_at_ref_clone");                        // overflow values remain deliberately unregistered
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_values");
+    emitter.instruction("str x13, [x9, x10, lsl #3]");                          // alias the target's borrowed box, which outlives this parse
+    emitter.label("__rt_unser_at_ref_clone");
+    emitter.instruction("mov x0, x13");                                         // supply the borrowed registry cell to the shared clone helper
+    emitter.instruction("bl __rt_mixed_clone");                                 // detach a result box and retain its object or array payload
     emitter.instruction("ldr x1, [sp, #8]");                                    // newpos past the ';'
     emitter.instruction("b __rt_unser_at_ret");                                 // return the aliasing box
+    // R: onto a scalar: decode it again from its recorded wire position. The nested decode
+    // reserves one registry index, which is handed back so the R: itself consumes none.
+    emitter.label("__rt_unser_at_ref_scalar");
+    emitter.instruction("ldr x10, [sp, #64]");                                  // recover the original reference marker
+    emitter.instruction("cmp x10, #114");                                       // lowercase r denotes object identity only
+    emitter.instruction("b.eq __rt_unser_at_ref_fail");                         // a scalar is never an object target
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_count");
+    emitter.instruction("ldr x10, [x9]");                                       // registry count before the nested decode
+    emitter.instruction("str x10, [sp, #72]");                                  // keep it to hand the index back
+    emitter.instruction("ldr x0, [sp, #0]");                                    // base
+    emitter.instruction("lsr x1, x13, #1");                                     // recover the scalar's wire position
+    emitter.instruction("ldr x2, [sp, #16]");                                   // end
+    emitter.instruction("bl __rt_unser_at");                                    // decode the scalar into a fresh owned box
+    emitter.instruction("ldr x10, [sp, #72]");                                  // registry count before the nested decode
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_count");
+    emitter.instruction("str x10, [x9]");                                       // the R: does not take an index of its own
+    emitter.instruction("ldr x1, [sp, #8]");                                    // newpos past the ';'
+    emitter.instruction("b __rt_unser_at_ret");                                 // return the copied scalar box
     emitter.label("__rt_unser_at_ref_fail");
     emitter.instruction("mov x0, #0");                                          // unresolved reference → null
     emitter.instruction("ldr x1, [sp, #8]");                                    // newpos past the ';'

@@ -1,16 +1,16 @@
 ---
-title: "jdtojewish() — internals"
+title: "jdtojewish() - internals"
 description: "Compiler internals for jdtojewish(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 244
+  order: 245
 ---
 
-## `jdtojewish()` — internals
+## `jdtojewish()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:824](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L824) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:847](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L847) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

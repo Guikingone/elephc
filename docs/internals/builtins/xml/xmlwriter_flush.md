@@ -1,11 +1,11 @@
 ---
-title: "xmlwriter_flush() — internals"
+title: "xmlwriter_flush() - internals"
 description: "Compiler internals for xmlwriter_flush(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1011
+  order: 1099
 ---
 
-## `xmlwriter_flush()` — internals
+## `xmlwriter_flush()` - internals
 
 ## Where it lives
 

@@ -68,6 +68,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_class_exists(
         .target
         .extern_symbol("__elephc_eval_dynamic_class_exists");
     abi::emit_call_label(ctx.emitter, &symbol);
+    super::super::member_queries::emit_rethrow_probe_throwable(ctx, EVAL_STACK_BYTES);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     box_eval_bool_result_if_mixed(ctx, inst);
     store_if_result(ctx, inst)

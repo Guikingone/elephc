@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - EIR construction and codegen share the local-storage compatibility predicate.
 
 use super::*;
 
@@ -20,21 +21,25 @@ pub(super) fn lower_int_compare(ctx: &mut FunctionContext<'_>, inst: &Instructio
     require_integer_like(ctx.load_value_to_reg(rhs, rhs_reg)?, inst)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("cmp {}, {}", result_reg, rhs_reg)); // compare signed integer operands for the EIR predicate
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // compare signed integer operands for the EIR predicate
+                "cmp {}, {}", result_reg, rhs_reg
+            ));
+            ctx.emitter.instruction(&format!(                                   // materialize the predicate result as 0 or 1
                 "cset {}, {}",
                 result_reg,
                 aarch64_condition(predicate)?
-            ));                                                                 // materialize the predicate result as 0 or 1
+            ));
         }
         Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("cmp {}, {}", result_reg, rhs_reg)); // compare signed integer operands for the EIR predicate
-            ctx.emitter
-                .instruction(&format!("set{} al", x86_64_condition(predicate)?)); // materialize the predicate result in the low byte
-            ctx.emitter
-                .instruction(&format!("movzx {}, al", result_reg)); // widen the predicate byte into the integer result register
+            ctx.emitter.instruction(&format!(                                   // compare signed integer operands for the EIR predicate
+                "cmp {}, {}", result_reg, rhs_reg
+            ));
+            ctx.emitter.instruction(&format!(                                   // materialize the predicate result in the low byte
+                "set{} al", x86_64_condition(predicate)?
+            ));
+            ctx.emitter.instruction(&format!(                                   // widen the predicate byte into the integer result register
+                "movzx {}, al", result_reg
+            ));
         }
     }
     store_if_result(ctx, inst)
@@ -48,8 +53,85 @@ pub(super) fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction
         .ok_or_else(|| CodegenIrError::invalid_module("load_local missing result value"))?;
     let source_ty = ctx.load_local_to_result(slot)?;
     let result_ty = ctx.value_php_type(result)?;
-    coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+    // A by-value PARAMETER slot the prologue boxed (a store later widened it to `Mixed`) is read
+    // here as a concrete heap value, and the generic coercion unboxes with a retained payload of
+    // its own. Lowering treats a parameter read as a borrow -- parameters borrow their caller's
+    // payload -- so it emits no release for that retain: `function expand(iterable $v) { $v =
+    // new Bag($v); ... }` leaked the caller's array on every call. When nothing releases or takes
+    // over the loaded value, borrow the box's payload instead, as the string case below does.
+    if ctx.function.params.get(slot.as_raw() as usize).is_some_and(|param| !param.by_ref)
+        && matches!(source_ty.codegen_repr(), PhpType::Mixed)
+        && matches!(
+            result_ty.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Iterable
+        )
+        && !ctx.value_is_released_later(result)
+        && !ctx.value_uses().is_consumed_beyond_box(result)
+    {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
+        return ctx.store_result_value(result);
+    }
+    coerce_loaded_local_for_value(ctx, &source_ty, &result_ty, result)?;
     ctx.store_result_value(result)
+}
+
+/// Coerces a raw local load to its result type, borrowing a boxed string nothing releases.
+fn coerce_loaded_local_for_value(
+    ctx: &mut FunctionContext<'_>,
+    source_ty: &PhpType,
+    result_ty: &PhpType,
+    result: ValueId,
+) -> Result<()> {
+    if matches!(source_ty.codegen_repr(), PhpType::Mixed)
+        && matches!(result_ty.codegen_repr(), PhpType::Str)
+        && !ctx.value_is_released_later(result)
+        // A value a `return`, a branch argument or a store takes over must own its payload: the
+        // epilogue frees the box it was borrowed from, and Laravel's
+        // `ComponentTagCompiler::compileTags()` returned the freed bytes (`return $value;` over a
+        // boxed `$value`), which the caller freed again -- every Blade page died.
+        && !ctx.value_uses().is_consumed(result)
+    {
+        emit_mixed_local_to_borrowed_string(ctx);
+        return Ok(());
+    }
+    coerce_loaded_local_to_result_type(ctx, source_ty, result_ty)
+}
+
+/// Reads a boxed local as a string BORROWED from its box, for a load nothing releases.
+///
+/// A `string` slot gets boxed `mixed` frame storage when a later statement can promote it to a
+/// reference cell (`$ignore($key)` with an unknown callable): a cell holds one word, a string
+/// two. A load lowered before that promotion was typed as a borrowed read of a plain string
+/// slot, so the IR never releases it -- but `__rt_mixed_cast_string` hands back a fresh copy of
+/// a string payload, and every such read leaked it (Laravel Prompts' key handler, once per
+/// keystroke). The box owns its payload for as long as the slot keeps it, which is what a
+/// borrowed read promises; any other tag still goes through the conversion, whose results are
+/// scratch.
+fn emit_mixed_local_to_borrowed_string(ctx: &mut FunctionContext<'_>) {
+    let convert = ctx.next_label("mixed_local_string_convert");
+    let done = ctx.next_label("mixed_local_string_done");
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    abi::emit_push_reg(ctx.emitter, &result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #1");                              // runtime tag 1 is a string payload owned by the box
+            ctx.emitter.instruction(&format!("b.ne {}", convert));              // any other payload needs the string conversion
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 1");                              // runtime tag 1 is a string payload owned by the box
+            ctx.emitter.instruction(&format!("jne {}", convert));               // any other payload needs the string conversion
+            ctx.emitter.instruction("mov rax, rdi");                            // borrow the payload pointer; rdx already holds its length
+        }
+    }
+    ctx.emit_branch(&done);
+    ctx.emitter.label(&convert);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, 0);
+    move_int_result_to_first_arg(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+    ctx.emitter.label(&done);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
 }
 
 /// Lowers an explicit local ref-cell load into the result register and SSA slot.
@@ -60,12 +142,35 @@ pub(super) fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruct
         .ok_or_else(|| CodegenIrError::invalid_module("load_ref_cell missing result value"))?;
     let result_ty = ctx.value_php_type(result)?;
     if ctx.local_ref_cell_representation_is_definite(slot) {
+        // A cell whose storage is a Mixed box can be read under a narrowed OBJECT flow type
+        // (`function f(&$v) { if ($v instanceof \Stringable) { $v = (string) $v; } }`). The word
+        // in the cell is then the box, and taking it for the object read the box's tag (6) as a
+        // class id: `(string)` failed on "ArrayIterator" and Symfony's `UrlGenerator` `$caster`
+        // killed the demo's login redirect. Borrow the box's object payload instead.
+        if matches!(result_ty.codegen_repr(), PhpType::Object(_))
+            && matches!(
+                ctx.local_php_type(slot)?.codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            )
+        {
+            load_ref_cell_local_to_result_as(ctx, slot, &PhpType::Mixed)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x0, x1");                      // borrow the boxed object payload the cell's box keeps owning
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rax, rdi");                    // borrow the boxed object payload the cell's box keeps owning
+                }
+            }
+            return ctx.store_result_value(result);
+        }
         load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
         return ctx.store_result_value(result);
     }
     if !ctx.local_ref_cell_representation_is_dynamic(slot) {
         let source_ty = ctx.load_raw_local_to_result(slot)?;
-        coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+        coerce_loaded_local_for_value(ctx, &source_ty, &result_ty, result)?;
         return ctx.store_result_value(result);
     }
     let state_offset = ctx.ref_cell_state_offset(slot).ok_or_else(|| {
@@ -80,19 +185,19 @@ pub(super) fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruct
     abi::load_at_offset(ctx.emitter, state_reg, state_offset);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // select the alias representation after runtime promotion
                 &format!("cbnz {}, {}", state_reg, ref_cell)
-            );                                                                  // select the alias representation after runtime promotion
+            );
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // test the slot's runtime representation flag
                 &format!("test {}, {}", state_reg, state_reg)
-            );                                                                  // test the slot's runtime representation flag
+            );
             ctx.emitter.instruction(&format!("jne {}", ref_cell));              // select the alias representation after runtime promotion
         }
     }
     let source_ty = ctx.load_raw_local_to_result(slot)?;
-    coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+    coerce_loaded_local_for_value(ctx, &source_ty, &result_ty, result)?;
     ctx.emit_branch(&done);
     ctx.emitter.label(&ref_cell);
     load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
@@ -158,7 +263,7 @@ pub(super) fn load_ref_cell_local_to_result_as(
 /// narrowed a slot holding an eval closure OBJECT to `callable`, and the call then jumped through
 /// the object as if it were a descriptor. The invoker helper builds a bridge descriptor for it,
 /// already owned by the caller.
-fn emit_mixed_local_to_owned_callable_descriptor(ctx: &mut FunctionContext<'_>) {
+pub(super) fn emit_mixed_local_to_owned_callable_descriptor(ctx: &mut FunctionContext<'_>) {
     let convert = ctx.next_label("mixed_local_callable_convert");
     let done = ctx.next_label("mixed_local_callable_done");
     let result_reg = abi::int_result_reg(ctx.emitter).to_string();
@@ -180,10 +285,8 @@ fn emit_mixed_local_to_owned_callable_descriptor(ctx: &mut FunctionContext<'_>) 
     ctx.emit_branch(&done);
     ctx.emitter.label(&convert);
     abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, 0);
-    abi::emit_call_label(
-        ctx.emitter,
-        crate::codegen::runtime_callable_invoker::INVOKER_CALLABLE_ARG_HELPER,
-    );
+    ctx.shared.require_callable_argument_normalizer();
+    abi::emit_call_label(ctx.emitter, super::CALLABLE_ARGUMENT_NORMALIZER);
     ctx.emitter.label(&done);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
 }
@@ -196,7 +299,7 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
 ) -> Result<()> {
     let source_ty = source_ty.codegen_repr();
     let result_ty = result_ty.codegen_repr();
-    if local_load_types_share_storage(&source_ty, &result_ty) {
+    if crate::ir::local_load_types_share_storage(&source_ty, &result_ty) {
         return Ok(());
     }
     match (&source_ty, &result_ty) {
@@ -281,27 +384,3 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
     }
 }
 
-/// Returns true when two PHP types use the same local-frame representation.
-pub(super) fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &PhpType) -> bool {
-    if source_ty == result_ty {
-        return true;
-    }
-    matches!(
-        (source_ty, result_ty),
-        (
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never
-        ) | (PhpType::Array(_), PhpType::Array(_))
-            | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
-            | (PhpType::Object(_), PhpType::Object(_))
-            // An `iterable` slot holds the UNBOXED payload (coercing a gradual value to
-            // `iterable` emits `Op::MixedUnbox`), so once `instanceof` has proven the value is
-            // the Traversable half, the pointer already IS the object pointer: the narrowed
-            // load is a move, not a conversion. This pairing only became reachable when
-            // `instanceof` on an `iterable` operand stopped folding to a constant false --
-            // before that the narrowed branch was dead code and never lowered, which is why
-            // `local load from PHP type Iterable as Object(..)` had never been hit.
-            | (PhpType::Iterable, PhpType::Object(_))
-            | (PhpType::Object(_), PhpType::Iterable)
-    )
-}

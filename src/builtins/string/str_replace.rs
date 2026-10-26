@@ -6,14 +6,15 @@
 //!   `crate::builtins::registry`.
 //!
 //! Key details:
-//! - The declared signature includes an optional `count` param, but `max_args: 3`
-//!   caps arity so only three arguments are accepted, matching PHP's practical use.
+//! - The by-reference `$count` (fourth argument) is routed to
+//!   `crate::str_replace_count_prelude`, which counts as it replaces.
 //! - The declared `string` return is only right for a STRING `$subject`. php answers an array
 //!   for an array `$subject`, and `subject_shaped_result_type` is what tells the checker and
 //!   EIR that — see its own comment for the miscompile it closes. `str_ireplace` shares it.
 
 use crate::builtins::semantics::{
-    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+    runtime_fn_semantics, BuiltinEffects, BuiltinResultType, BuiltinSemanticInput,
+    BuiltinSemantics,
 };
 use crate::types::PhpType;
 
@@ -26,7 +27,22 @@ builtin! {
 const fn str_replace_semantics() -> BuiltinSemantics {
     let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::StrReplace);
     semantics.result_type = BuiltinResultType::Shared(subject_shaped_result_type);
+    semantics.effects = BuiltinEffects::Shared(str_replace_effects);
     semantics
+}
+
+/// The three-argument form is pure; the by-reference `$count` form writes a caller variable.
+///
+/// A static, empty effect set would call `str_replace($s, $r, $subject, $count)` pure, and the
+/// optimizer substitutes known values into pure calls and may drop their unused results, which
+/// would lose the write to `$count`. Only the count form carries the write.
+fn str_replace_effects(input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
+    let base = crate::ir::RuntimeFnId::StrReplace.effects();
+    if input.args.len() >= 4 {
+        base | crate::ir::Effects::WRITES_HEAP | crate::ir::Effects::WRITES_LOCAL
+    } else {
+        base
+    }
 }
 
 /// Returns `array<string>` for an array `$subject` and `string` for every other subject.

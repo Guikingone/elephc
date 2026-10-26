@@ -70,8 +70,7 @@ pub(super) fn eval_array_element_default_is_supported(element: &EvalArrayElement
             eval_constant_expression_default_is_supported(key)
                 && eval_constant_expression_default_is_supported(value)
         }
-        // A spread needs a runtime array; a compile-time default is not one.
-        EvalArrayElement::KeyReference { .. } | EvalArrayElement::Spread(_) => false,
+        EvalArrayElement::KeyReference { .. } => false,
     }
 }
 

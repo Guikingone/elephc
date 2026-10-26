@@ -2,7 +2,7 @@
 title: "preg_filter()"
 description: "Performs a regular expression search and replace, keeping only the subjects that matched."
 sidebar:
-  order: 686
+  order: 707
 ---
 
 ## preg_filter()
@@ -25,9 +25,9 @@ Performs a regular expression search and replace, keeping only the subjects that
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected preg_array prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/regex/preg_filter.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_filter.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/regex/preg_filter.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_filter.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

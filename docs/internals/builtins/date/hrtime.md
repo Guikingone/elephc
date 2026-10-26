@@ -1,16 +1,16 @@
 ---
-title: "hrtime() — internals"
+title: "hrtime() - internals"
 description: "Compiler internals for hrtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 238
+  order: 239
 ---
 
-## `hrtime()` — internals
+## `hrtime()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/hrtime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/hrtime.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `signature`
 - **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (2 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`

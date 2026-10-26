@@ -28,7 +28,7 @@ use crate::types::PhpType;
 /// read through `types::predefined_constants`): fixed values are materialized as literals
 /// straight from their contract, while the TARGET- AND PROFILE-DEPENDENT ones
 /// (`ConstValue::TargetDependent`: `PHP_OS`, the `PHP_VERSION*` / `PHP_SAPI` version surface,
-/// `DIRECTORY_SEPARATOR`, the platform-specific `FNM_*` / `LC_*` families, `PHP_MAXPATHLEN`,
+/// `DIRECTORY_SEPARATOR`, `E_ALL`, the platform-specific `FNM_*` / `LC_*` families, `PHP_MAXPATHLEN`,
 /// `ICONV_IMPL` / `ICONV_VERSION`)
 /// are computed here under their catalogued names. The version surface reads the compilation's
 /// `--php-version` profile and `--web` mode from the codegen thread-local pair
@@ -91,12 +91,13 @@ pub(crate) fn collect_constants(
     let computed = [
         ("PHP_OS", str_const(target_platform.php_os_name().to_string())),
         ("PHP_OS_FAMILY", str_const(target_platform.php_os_family_name().to_string())),
-        ("PHP_VERSION", str_const(php_version.version_string().to_string())),
-        ("PHP_VERSION_ID", int_const(i64::from(php_version.version_id()))),
+        ("PHP_VERSION", str_const(php_version.reported_version_string())),
+        ("PHP_VERSION_ID", int_const(i64::from(php_version.reported_version_id()))),
         ("PHP_MAJOR_VERSION", int_const(i64::from(php_version.major()))),
         ("PHP_MINOR_VERSION", int_const(i64::from(php_version.minor()))),
-        ("PHP_RELEASE_VERSION", int_const(i64::from(php_version.release()))),
+        ("PHP_RELEASE_VERSION", int_const(i64::from(php_version.reported_release()))),
         ("PHP_EXTRA_VERSION", str_const(php_version.extra_version().to_string())),
+        ("E_ALL", int_const(php_version.error_reporting_mask())),
         (
             "PHP_SAPI",
             str_const(
@@ -105,6 +106,11 @@ pub(crate) fn collect_constants(
             ),
         ),
         ("DIRECTORY_SEPARATOR", str_const(std::path::MAIN_SEPARATOR.to_string())),
+        // The `include_path` list separator: `;` where the directory separator is `\\`.
+        (
+            "PATH_SEPARATOR",
+            str_const(if std::path::MAIN_SEPARATOR == '\\' { ";" } else { ":" }.to_string()),
+        ),
         ("FNM_NOESCAPE", int_const(fnm_noescape)),
         ("FNM_PATHNAME", int_const(fnm_pathname)),
         ("ICONV_IMPL", str_const(iconv_impl(target_platform == Platform::MacOS).to_string())),
@@ -256,6 +262,16 @@ mod tests {
         // The runtime's own `setlocale()` call sites read the same category from `Platform`.
         assert_eq!(i64::from(Platform::MacOS.lc_ctype()), int_constant(&mac, "LC_CTYPE"));
         assert_eq!(i64::from(Platform::Linux.lc_ctype()), int_constant(&linux, "LC_CTYPE"));
+    }
+
+    /// Verifies the prescanned `E_ALL` literal follows the selected PHP profile.
+    #[test]
+    fn test_error_all_follows_php_profile() {
+        let default_profile = collect_constants(
+            &vec![],
+            Target::new(Platform::Linux, crate::codegen_support::platform::Arch::X86_64),
+        );
+        assert_eq!(int_constant(&default_profile, "E_ALL"), 30_719);
     }
 
     /// Verifies every catalogued constant the compiler registers gets a value here, on every

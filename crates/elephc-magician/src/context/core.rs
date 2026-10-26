@@ -9,6 +9,14 @@
 
 use super::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
+use crate::errors::EvalStatus;
+
+/// One installed eval user error handler and its accepted level mask.
+#[derive(Clone, Copy)]
+pub(crate) struct EvalErrorHandlerState {
+    pub(crate) callback: RuntimeCellHandle,
+    pub(crate) levels: i64,
+}
 
 /// One PHP handler retained by Magician for a process signal.
 #[derive(Clone, Copy)]
@@ -41,34 +49,37 @@ pub(super) struct GlobalEvalSyncMark {
 pub struct ElephcEvalContext {
     pub(super) abi_version: u32,
     pub(crate) native_global_sync: Option<NativeGlobalSyncHooks>,
+    pub(super) abi_owner_count: usize,
     /// SHARED, not owned: a context imports class-likes another context declared on every
     /// `sync_global_eval_classes`, and a deep copy of each `EvalClass` — method bodies and
     /// all — was ~13% of a Symfony request, paid again on teardown when the request-scoped
     /// context dropped every copy.
-    pub(super) classes: HashMap<String, Arc<EvalClass>>,
+    pub(super) classes: rustc_hash::FxHashMap<String, Arc<EvalClass>>,
     /// How much of the process-global class registry this context has already imported.
     pub(super) global_eval_sync: GlobalEvalSyncMark,
     pub(super) class_source_files: HashMap<String, String>,
-    pub(super) class_aliases: HashMap<String, EvalClassAlias>,
+    pub(super) class_aliases: rustc_hash::FxHashMap<String, EvalClassAlias>,
     /// Names declared before this context adopted the snapshot: SHARED, never written.
     pub(super) declared_class_names: Arc<Vec<String>>,
     /// Names this context declared itself, appended without copying the shared prefix.
     pub(super) own_declared_class_names: Vec<String>,
-    pub(super) interfaces: HashMap<String, EvalInterface>,
+    pub(super) interfaces: rustc_hash::FxHashMap<String, Arc<EvalInterface>>,
     /// Names declared before this context adopted the snapshot: SHARED, never written.
     pub(super) declared_interface_names: Arc<Vec<String>>,
     /// Names this context declared itself, appended without copying the shared prefix.
     pub(super) own_declared_interface_names: Vec<String>,
-    pub(super) traits: HashMap<String, EvalTrait>,
+    pub(super) traits: rustc_hash::FxHashMap<String, Arc<EvalTrait>>,
     /// Names declared before this context adopted the snapshot: SHARED, never written.
     pub(super) declared_trait_names: Arc<Vec<String>>,
     /// Names this context declared itself, appended without copying the shared prefix.
     pub(super) own_declared_trait_names: Vec<String>,
-    pub(super) enums: HashMap<String, EvalEnum>,
+    pub(super) enums: rustc_hash::FxHashMap<String, Arc<EvalEnum>>,
     pub(super) declared_enum_names: Vec<String>,
     pub(super) enum_cases: HashMap<(String, String), RuntimeCellHandle>,
     pub(super) enum_case_values: HashMap<(String, String), RuntimeCellHandle>,
     pub(super) constants: HashMap<String, RuntimeCellHandle>,
+    pub(super) native_global_constants: Arc<HashMap<String, EvalNativeGlobalConstant>>,
+    pub(super) native_user_constants: Arc<HashMap<String, EvalNativeUserConstant>>,
     pub(super) functions: HashMap<String, EvalFunction>,
     pub(super) closures: HashMap<String, EvalClosure>,
     pub(super) closure_objects: HashMap<u64, EvalClosureObjectTarget>,
@@ -81,6 +92,15 @@ pub struct ElephcEvalContext {
     pub(super) retained_context_free_requested: AtomicBool,
     pub(super) next_closure_id: usize,
     pub(super) native_functions: Arc<HashMap<String, NativeFunction>>,
+    /// Native functions THIS context registered after adopting the shared AOT table.
+    ///
+    /// WHY. `native_functions` is the module's whole function table, shared between every
+    /// context through the AOT snapshot. Reflecting a compiled closure registers it under a
+    /// per-descriptor name, and inserting that into the shared table meant `Arc::make_mut`
+    /// copied the entire table -- thousands of entries -- for the first such registration in
+    /// every context; on a Laravel request that copy alone was a sixth of the work. Late
+    /// registrations go here instead, and lookups consult this overlay before the shared table.
+    pub(super) local_native_functions: HashMap<String, NativeFunction>,
     pub(super) native_methods: Arc<HashMap<(String, String), NativeCallableSignature>>,
     pub(super) native_static_methods: Arc<HashMap<(String, String), NativeCallableSignature>>,
     pub(super) native_constructors: Arc<HashMap<String, NativeCallableSignature>>,
@@ -108,6 +128,13 @@ pub struct ElephcEvalContext {
     pub(super) include_state: super::request_includes::SharedIncludeState,
     pub(super) claimed_aot_include_classlikes: HashSet<String>,
     pub(super) include_execution_stack: Vec<bool>,
+    pub(super) included_file_order: Vec<String>,
+    pub(super) included_main_file: Option<String>,
+    pub(super) error_reporting: i64,
+    pub(super) error_handler: Option<EvalErrorHandlerState>,
+    pub(super) error_handler_stack: Vec<Option<EvalErrorHandlerState>>,
+    pub(super) exception_handler: Option<RuntimeCellHandle>,
+    pub(super) exception_handler_stack: Vec<Option<RuntimeCellHandle>>,
     pub(super) dynamic_objects: HashMap<u64, String>,
     pub(super) dynamic_destructing_objects: HashSet<u64>,
     pub(super) dynamic_destructed_objects: HashSet<u64>,
@@ -118,11 +145,15 @@ pub struct ElephcEvalContext {
     /// above cannot answer that. Everything that ENUMERATES an object reads its order from
     /// here, so the answer is PHP's rather than a hash order or an alphabetical stand-in.
     pub(super) dynamic_property_order: HashMap<u64, Vec<String>>,
+    pub(super) clone_reinitialized_properties: HashMap<u64, HashSet<String>>,
     pub(super) dynamic_property_aliases: HashMap<(u64, String), EvalReferenceTarget>,
-    pub(super) array_element_aliases: HashMap<(u64, EvalArrayReferenceKey), EvalReferenceTarget>,
+    pub(super) array_element_aliases: HashMap<usize, EvalArrayReferenceAliases>,
+    pub(super) array_reference_retirements: crate::ffi::array_references::ArrayReferenceRetirements,
     pub(super) array_cursors: HashMap<usize, EvalArrayCursor>,
-    pub(super) pcntl_foreign_callables:
-        HashMap<usize, pcntl_runtime::EvalPcntlContextLease>,
+    pub(super) pcntl_foreign_callables: HashMap<
+        usize,
+        (RuntimeCellHandle, pcntl_runtime::EvalPcntlContextLease),
+    >,
     pub(super) dynamic_initialized_properties: HashSet<(u64, String)>,
     /// Live interpreter call frames, innermost last, for `debug_backtrace()`.
     /// Execution state of every live generator, keyed by its object identity.
@@ -157,6 +188,8 @@ pub struct ElephcEvalContext {
     pub(super) tick_running: bool,
     pub(super) array_iterators: HashMap<u64, EvalArrayIteratorState>,
     pub(super) pending_return_reference: Option<(EvalReferenceTarget, RuntimeCellHandle)>,
+    pub(super) function_args_stack: Vec<EvalBacktraceFrame>,
+    pub(super) eval_backtrace_boundaries: Vec<(usize, EvalBacktraceFrame)>,
     pub(super) class_stack: Vec<String>,
     pub(super) called_class_stack: Vec<String>,
     pub(super) magic_stack: Vec<EvalMagicScope>,
@@ -206,23 +239,26 @@ impl ElephcEvalContext {
         Self {
             abi_version: ABI_VERSION,
             native_global_sync: None,
-            classes: HashMap::new(),
+            abi_owner_count: 1,
+            classes: rustc_hash::FxHashMap::default(),
             global_eval_sync: GlobalEvalSyncMark::default(),
             class_source_files: HashMap::new(),
-            class_aliases: HashMap::new(),
+            class_aliases: rustc_hash::FxHashMap::default(),
             declared_class_names: shared_empty!(Vec<String>),
             own_declared_class_names: Vec::new(),
-            interfaces: HashMap::new(),
+            interfaces: rustc_hash::FxHashMap::default(),
             declared_interface_names: shared_empty!(Vec<String>),
             own_declared_interface_names: Vec::new(),
-            traits: HashMap::new(),
+            traits: rustc_hash::FxHashMap::default(),
             declared_trait_names: shared_empty!(Vec<String>),
             own_declared_trait_names: Vec::new(),
-            enums: HashMap::new(),
+            enums: rustc_hash::FxHashMap::default(),
             declared_enum_names: Vec::new(),
             enum_cases: HashMap::new(),
             enum_case_values: HashMap::new(),
             constants: HashMap::new(),
+            native_global_constants: Arc::default(),
+            native_user_constants: Arc::default(),
             functions: HashMap::new(),
             closures: HashMap::new(),
             closure_objects: HashMap::new(),
@@ -234,6 +270,7 @@ impl ElephcEvalContext {
             retained_context_free_requested: AtomicBool::new(false),
             next_closure_id: 0,
             native_functions: shared_empty!(HashMap<String, NativeFunction>),
+            local_native_functions: HashMap::new(),
             native_methods: shared_empty!(HashMap<(String, String), NativeCallableSignature>),
             native_static_methods: shared_empty!(HashMap<(String, String), NativeCallableSignature>),
             native_constructors: shared_empty!(HashMap<String, NativeCallableSignature>),
@@ -252,13 +289,22 @@ impl ElephcEvalContext {
             include_state: super::request_includes::current_include_state(),
             claimed_aot_include_classlikes: HashSet::new(),
             include_execution_stack: Vec::new(),
+            included_file_order: Vec::new(),
+            included_main_file: None,
+            error_reporting: crate::eval_php_profile::eval_all_error_mask(),
+            error_handler: None,
+            error_handler_stack: Vec::new(),
+            exception_handler: None,
+            exception_handler_stack: Vec::new(),
             dynamic_objects: HashMap::new(),
             dynamic_destructing_objects: HashSet::new(),
             dynamic_destructed_objects: HashSet::new(),
             dynamic_property_values: HashMap::new(),
             dynamic_property_order: HashMap::new(),
+            clone_reinitialized_properties: HashMap::new(),
             dynamic_property_aliases: HashMap::new(),
             array_element_aliases: HashMap::new(),
+            array_reference_retirements: Default::default(),
             array_cursors: HashMap::new(),
             pcntl_foreign_callables: HashMap::new(),
             dynamic_initialized_properties: HashSet::new(),
@@ -286,6 +332,8 @@ impl ElephcEvalContext {
             tick_running: false,
             array_iterators: HashMap::new(),
             pending_return_reference: None,
+            function_args_stack: Vec::new(),
+            eval_backtrace_boundaries: Vec::new(),
             class_stack: Vec::new(),
             called_class_stack: Vec::new(),
             magic_stack: Vec::new(),
@@ -312,23 +360,26 @@ impl ElephcEvalContext {
         Self {
             abi_version,
             native_global_sync: None,
-            classes: HashMap::new(),
+            abi_owner_count: 1,
+            classes: rustc_hash::FxHashMap::default(),
             global_eval_sync: GlobalEvalSyncMark::default(),
             class_source_files: HashMap::new(),
-            class_aliases: HashMap::new(),
+            class_aliases: rustc_hash::FxHashMap::default(),
             declared_class_names: Arc::default(),
             own_declared_class_names: Vec::new(),
-            interfaces: HashMap::new(),
+            interfaces: rustc_hash::FxHashMap::default(),
             declared_interface_names: Arc::default(),
             own_declared_interface_names: Vec::new(),
-            traits: HashMap::new(),
+            traits: rustc_hash::FxHashMap::default(),
             declared_trait_names: Arc::default(),
             own_declared_trait_names: Vec::new(),
-            enums: HashMap::new(),
+            enums: rustc_hash::FxHashMap::default(),
             declared_enum_names: Vec::new(),
             enum_cases: HashMap::new(),
             enum_case_values: HashMap::new(),
             constants: HashMap::new(),
+            native_global_constants: Arc::default(),
+            native_user_constants: Arc::default(),
             functions: HashMap::new(),
             closures: HashMap::new(),
             closure_objects: HashMap::new(),
@@ -340,6 +391,7 @@ impl ElephcEvalContext {
             retained_context_free_requested: AtomicBool::new(false),
             next_closure_id: 0,
             native_functions: Arc::default(),
+            local_native_functions: HashMap::new(),
             native_methods: Arc::default(),
             native_static_methods: Arc::default(),
             native_constructors: Arc::default(),
@@ -358,13 +410,22 @@ impl ElephcEvalContext {
             include_state: super::request_includes::current_include_state(),
             claimed_aot_include_classlikes: HashSet::new(),
             include_execution_stack: Vec::new(),
+            included_file_order: Vec::new(),
+            included_main_file: None,
+            error_reporting: crate::eval_php_profile::eval_all_error_mask(),
+            error_handler: None,
+            error_handler_stack: Vec::new(),
+            exception_handler: None,
+            exception_handler_stack: Vec::new(),
             dynamic_objects: HashMap::new(),
             dynamic_destructing_objects: HashSet::new(),
             dynamic_destructed_objects: HashSet::new(),
             dynamic_property_values: HashMap::new(),
             dynamic_property_order: HashMap::new(),
+            clone_reinitialized_properties: HashMap::new(),
             dynamic_property_aliases: HashMap::new(),
             array_element_aliases: HashMap::new(),
+            array_reference_retirements: Default::default(),
             array_cursors: HashMap::new(),
             pcntl_foreign_callables: HashMap::new(),
             dynamic_initialized_properties: HashSet::new(),
@@ -392,6 +453,8 @@ impl ElephcEvalContext {
             tick_running: false,
             array_iterators: HashMap::new(),
             pending_return_reference: None,
+            function_args_stack: Vec::new(),
+            eval_backtrace_boundaries: Vec::new(),
             class_stack: Vec::new(),
             called_class_stack: Vec::new(),
             magic_stack: Vec::new(),
@@ -469,6 +532,30 @@ impl ElephcEvalContext {
     pub fn leave_call_barrier(&mut self, saved: usize) {
         set_thread_quiet_property_fetch(saved);
     }
+
+    /// Adds one opaque ABI owner that can keep this heap context alive past its frame.
+    pub(crate) fn retain_abi_owner(&mut self) -> Result<(), EvalStatus> {
+        self.abi_owner_count = self
+            .abi_owner_count
+            .checked_add(1)
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        Ok(())
+    }
+
+    /// Reports whether a deferred context acquired a new opaque ABI callback owner.
+    pub(crate) fn has_abi_owners(&self) -> bool {
+        self.abi_owner_count != 0
+    }
+
+    /// Drops one opaque ABI owner and reports whether the heap context can be destroyed.
+    pub(crate) fn release_abi_owner(&mut self) -> bool {
+        if self.abi_owner_count == 0 {
+            return false;
+        }
+        self.abi_owner_count -= 1;
+        self.abi_owner_count == 0
+    }
+
 }
 
 /// Enters one quiet-fetch operand scope on this thread.

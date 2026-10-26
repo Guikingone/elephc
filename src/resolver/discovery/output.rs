@@ -26,6 +26,13 @@ use super::super::state::ResolveState;
 pub(in crate::resolver) struct IncludeDiscovery {
     pub(in crate::resolver) declarations: Vec<Stmt>,
     pub(in crate::resolver) function_variants: FunctionVariantRegistry,
+    /// The file each discovered class-like was declared in, keyed like
+    /// `ResolveState::declared_class_files`. Discovery reaches files the resolution pass never
+    /// expands (an `include_once` in a method body stays a run-time include), so this is the only
+    /// record of where their declarations came from.
+    pub(in crate::resolver) class_files: std::collections::HashMap<String, String>,
+    /// The same record for functions.
+    pub(in crate::resolver) function_files: std::collections::HashMap<String, String>,
 }
 
 /// A key identifying a specific function variant within a concrete file path.
@@ -213,6 +220,19 @@ impl DiscoveryOutput {
     /// Runs two passes of function-variant rewriting and rebuilds declarations
     /// from source statements using the resolved function variant registry.
     pub(super) fn into_include_discovery(mut self) -> Result<IncludeDiscovery, CompileError> {
+        // Where each discovered declaration came from. Discovery reaches files the resolution
+        // pass never expands -- an `include_once` in a method body, which Symfony's dumped
+        // container writes for service classes, stays a run-time include -- so without this the
+        // build never learned the file was compiled: the autoload walk skipped the already
+        // declared class, and the runtime autoloader's include of its file was refused.
+        let mut sources = ResolveState::default();
+        for entry in &self.entries {
+            super::super::engine_includes::record_declaration_sources(
+                &entry.source_stmts,
+                &entry.canonical,
+                &mut sources,
+            )?;
+        }
         let (_, preliminary_function_variants) =
             function_variants::rewrite_include_loaded_function_variants(&mut self.entries);
         self.rebuild_declarations(&preliminary_function_variants)?;
@@ -234,6 +254,8 @@ impl DiscoveryOutput {
         Ok(IncludeDiscovery {
             declarations,
             function_variants,
+            class_files: sources.declared_class_files,
+            function_files: sources.declared_function_files,
         })
     }
 

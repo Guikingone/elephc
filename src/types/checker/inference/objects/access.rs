@@ -8,7 +8,7 @@
 //! Key details:
 //! - Object inference depends on flattened class metadata, visibility, inheritance, and declared property types.
 
-use crate::errors::CompileError;
+use crate::errors::{CompileError, RuntimeFault};
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::types::{PhpType, TypeEnv};
@@ -41,8 +41,19 @@ impl Checker {
             .is_some_and(|key| env.contains_key(&key));
         let obj_ty = self.infer_type(object, env)?;
         if let PhpType::Object(class_name) = &obj_ty {
-            let property_ty =
-                self.infer_property_on_class_type(class_name, property, object, expr)?;
+            let inferred =
+                self.infer_property_on_class_type(class_name, property, object, expr);
+            if inferred.is_err()
+                && self.closure_depth > 0
+                && matches!(object.kind, ExprKind::This)
+            {
+                // A method-nested closure initially captures the enclosing receiver, but PHP
+                // can later rebind it to an unrelated class. Keep precise types for properties
+                // that exist on the enclosing class; an otherwise-invalid `$this` member is a
+                // runtime-shaped access whose validity and type depend on the bound receiver.
+                return Ok(PhpType::Mixed);
+            }
+            let property_ty = inferred?;
             if receiver_is_flow_narrowed {
                 self.flow_typed_property_accesses.insert(
                     (self.current_loop_storage_scope.clone(), expr.span),
@@ -80,16 +91,27 @@ impl Checker {
             if object_classes.len() >= 2 {
                 let mut property_types = Vec::with_capacity(object_classes.len());
                 for class_name in &object_classes {
-                    property_types.push(self.infer_property_on_class_type(
-                        class_name,
-                        property,
-                        object,
-                        expr,
-                    )?);
+                    // One member lacking the property keeps the error's run-time-fault tag: an
+                    // autoloaded file compiles the read through `runtime_faults`' by-name helper,
+                    // where the other members answer it and the lacking one raises php's Warning
+                    // (`isset($mapping->enumType)` over `JoinColumnMapping|FieldMapping|...` in
+                    // Doctrine's `SchemaTool`, and `$AST->selectClause` over
+                    // `SelectStatement|DeleteStatement`).
+                    let property_ty =
+                        self.infer_property_on_class_type(class_name, property, object, expr)?;
+                    property_types.push(property_ty);
                 }
                 return Ok(self.normalize_union_type(property_types));
             }
-            // No object class at all: surface the strict diagnostic.
+            // No object class at all. A plain `->` read of a scalar union is a runtime-shaped
+            // access, not a type error: php warns and reads null, and the union can be a
+            // transient of the checker's own narrowing -- `$d instanceof BackedEnum &&
+            // !is_string($d = $d->value)` re-reads `$d->value` after `$d` took the enum's
+            // `int|string` value, and refusing it kept Route, RouteRegistrar and UrlGenerator
+            // out of the compiled program. Only the nullsafe form keeps the strict diagnostic.
+            if matches!(expr.kind, ExprKind::PropertyAccess { .. }) {
+                return Ok(PhpType::Mixed);
+            }
             self.nullsafe_object_receiver(&obj_ty, expr, "property access")?;
         }
         if let PhpType::Pointer(Some(class_name)) = &obj_ty {
@@ -185,7 +207,7 @@ impl Checker {
         }
 
         let property_ty = self.infer_type(property, env)?;
-        if !matches!(property_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
+        if !property_ty.is_dynamic_property_name() {
             return Err(CompileError::new(
                 property.span,
                 "Dynamic property name must be string or integer",
@@ -233,7 +255,9 @@ impl Checker {
             return Ok(PhpType::Mixed);
         }
         if let Some(property_ty) =
-            crate::types::checker::reflection_virtual_property_type(class_name, property)
+            crate::types::checker::reflection_virtual_property_type_in(class_name, property, |c| {
+                self.classes.get(c).and_then(|info| info.parent.clone())
+            })
         {
             return Ok(property_ty);
         }
@@ -261,7 +285,11 @@ impl Checker {
                 members.push(PhpType::Void);
                 return Ok(self.normalize_union_type(members));
             }
-            if self.null_probe_depth > 0 {
+            // An implementation that answers undeclared reads itself (`__get`, or
+            // `#[\AllowDynamicProperties]`) makes the read the run-time object's to resolve:
+            // Carbon's language files read `$date->dayOfWeek` off a `CarbonInterface`, which only
+            // `Carbon::__get` serves. The value is whatever that hook returns.
+            if self.descendant_answers_undeclared_reads(class_name) || self.null_probe_depth > 0 {
                 return Ok(PhpType::Mixed);
             }
             return Err(CompileError::new(
@@ -271,6 +299,21 @@ impl Checker {
         }
         if let Some(class_info) = self.classes.get(class_name) {
             if let Some(visibility) = class_info.property_visibilities.get(property) {
+                // `property_visibilities` answers for the PHYSICAL slot table, which still carries
+                // a strict ancestor's private slot under its plain name. php 7.4 removed shadow
+                // properties, so outside the class that declared it that name is a DYNAMIC
+                // property: a read warns `Undefined property` and answers null rather than being
+                // an access error. `resolve_property_name` is the authority for which of the two
+                // this is, so the refusal below stays exactly where php raises it.
+                let resolution = crate::types::resolve_property_name(
+                    &self.classes,
+                    class_name,
+                    property,
+                    self.current_class.as_deref(),
+                );
+                if resolution == crate::types::PropertyNameResolution::Dynamic {
+                    return Ok(PhpType::Mixed);
+                }
                 let declaring_class = class_info
                     .property_declaring_classes
                     .get(property)
@@ -309,6 +352,11 @@ impl Checker {
             if let Some((_, (_, ty))) = class_info.visible_property(property) {
                 return Ok(ty.clone());
             }
+            if super::super::super::scope_dynamic_storage::magic_set_reentry_property_is_readable(
+                self, class_name, property,
+            ) {
+                return Ok(PhpType::Mixed);
+            }
             if let Some(sig) = class_info.methods.get("__get") {
                 return Ok(sig.return_type.clone());
             }
@@ -336,10 +384,16 @@ impl Checker {
             if self.null_probe_depth > 0 {
                 return Ok(PhpType::Void);
             }
+            // A read php answers with a Warning and null when it runs, judged against this
+            // class and the descendants the checker knows; see `RuntimeFault::UndefinedProperty`.
             return Err(CompileError::new(
                 expr.span,
                 &format!("Undefined property: {}::{}", class_name, property),
-            ));
+            )
+            .with_runtime_fault(RuntimeFault::UndefinedProperty {
+                class: class_name.to_string(),
+                property: property.to_string(),
+            }));
         }
         if self.allows_absent_runtime_class() {
             // PHP permits a declaration to name an absent class. In a function-like body that
@@ -538,7 +592,10 @@ impl Checker {
             return Err(CompileError::new(
                 expr.span,
                 &format!("Undefined class: {}", class_name),
-            ));
+            )
+            .with_runtime_fault(RuntimeFault::UnknownClass {
+                class: class_name.clone(),
+            }));
         };
         if let Some(visibility) = class_info.static_property_visibilities.get(property) {
             let declaring_class = class_info
@@ -558,16 +615,31 @@ impl Checker {
                 ));
             }
         }
+        // `isset(self::$p)` / `self::$p ?? $d` on a class without `$p` (Symfony's
+        // `HttpClientTrait` in a client that declares no `$emptyDefaults`) is php's plain `false`:
+        // the probe reads as null, and lowering answers it without touching storage.
+        let declared = class_info.static_properties.iter().any(|(name, _)| name == property);        if !declared && self.null_probe_depth > 0 && !self.eval_barrier_active {
+            return Ok(PhpType::Void);
+        }
         class_info
             .static_properties
             .iter()
             .find(|(name, _)| name == property)
             .map(|(_, ty)| ty.clone())
             .ok_or_else(|| {
-                CompileError::new(
+                let error = CompileError::new(
                     expr.span,
                     &format!("Undefined static property: {}::{}", class_name, property),
-                )
+                );
+                // `isset(self::$p)` answers false in php rather than throwing, so only a plain
+                // read is the `Error` the fault names.
+                if self.null_probe_depth > 0 {
+                    return error;
+                }
+                error.with_runtime_fault(RuntimeFault::UndefinedStaticProperty {
+                    class: class_name.clone(),
+                    property: property.to_string(),
+                })
             })
     }
 
@@ -716,6 +788,16 @@ impl Checker {
     ///
     /// Duplicates are dropped so a property declared identically down a long hierarchy does not
     /// turn into a union of one type repeated.
+    /// Returns whether some class below `ancestor` serves undeclared property reads itself: it
+    /// has a `__get` (own or inherited) or allows dynamic properties.
+    pub(crate) fn descendant_answers_undeclared_reads(&self, ancestor: &str) -> bool {
+        self.classes.iter().any(|(name, info)| {
+            name.as_str() != ancestor
+                && (info.methods.contains_key("__get") || info.allow_dynamic_properties)
+                && self.class_descends_from(name, ancestor)
+        })
+    }
+
     pub(crate) fn descendant_declared_property_types(
         &self,
         ancestor: &str,

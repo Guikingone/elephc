@@ -12,13 +12,14 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::ir::{Immediate, Instruction, IrHeapKind, IrType, ValueId};
-use crate::names::{label_fragment, method_symbol};
+use crate::names::label_fragment;
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
 use super::{
-    direct_call_stack_pad_bytes, emit_dynamic_instance_method_call,
-    emit_mixed_method_class_dispatch, expect_operand, load_value_to_first_int_arg,
+    direct_call_stack_pad_bytes, emit_mixed_method_class_dispatch, emit_resolved_method_call,
+    expect_operand,
+    load_value_to_first_int_arg,
     lower_runtime_object_method_call, materialize_method_call_args_with_receiver_reg_and_refs,
     mixed_method_candidates, predicates, store_if_result, strings,
 };
@@ -249,6 +250,18 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
         }
         PhpType::Mixed | PhpType::Union(_) => {
+            if matches!(inst.immediate, Some(Immediate::StringOffsetCast)) {
+                load_value_to_first_int_arg(ctx, value)?;
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+                let no_warning = ctx.next_label("string_offset_no_cast_warning");
+                predicates::emit_mixed_tag_eq(ctx, value, 2)?;
+                abi::emit_branch_if_int_result_zero(ctx.emitter, &no_warning);
+                super::floats::emit_string_offset_cast_warning(ctx);
+                ctx.emitter.label(&no_warning);
+                abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+                return store_if_result(ctx, inst);
+            }
             load_value_to_first_int_arg(ctx, value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
         }
@@ -357,6 +370,9 @@ pub(super) fn lower_cast_to_string(
         }
         PhpType::Mixed | PhpType::Union(_) => {
             emit_mixed_string_context_result(ctx, value)?;
+            if let Some(result) = inst.result {
+                ctx.store_runtime_return_ownership(result);
+            }
             store_if_result(ctx, inst)
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
@@ -545,17 +561,56 @@ fn emit_mixed_tostring_candidate_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    if let Some(slot) = candidate.target.dynamic_slot {
-        emit_dynamic_instance_method_call(ctx, slot);
-    } else {
-        abi::emit_call_label(
-            ctx.emitter,
-            &method_symbol(&candidate.target.impl_class, &candidate.target.method_key),
-        );
-    }
+    emit_resolved_method_call(ctx, &candidate.target)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    retire_tostring_call_temporaries(ctx, &call_args, &candidate.target.return_ty);
     Ok(candidate.target.return_ty.clone())
+}
+
+/// Retires the argument temporaries a `__toString()` candidate call staged, keeping its result.
+///
+/// Once `debug_backtrace()` arms the hidden `func_get_args()` collector, the call passes a fresh
+/// empty array for it and links a cleanup record to it. The ladder never unlinked the record nor
+/// released its stack, so `exc_call_frame_top` kept pointing at stack the next call reused, and a
+/// later unwind ran the overwritten record: Laravel's `ResponseHeaderBag::all()` crashed on its
+/// `(string) $cookie`. The result sits in the result registers, which the releases clobber, so it
+/// is pushed first and every record offset moves by that push.
+fn retire_tostring_call_temporaries(
+    ctx: &mut FunctionContext<'_>,
+    call_args: &super::CallArgMaterialization,
+    return_ty: &PhpType,
+) {
+    if call_args.cleanup_slots.is_empty() && call_args.cleanup_guard_bytes == 0 {
+        return;
+    }
+    let repr = return_ty.codegen_repr();
+    let pushed = if matches!(repr, PhpType::Void | PhpType::Never) { 0 } else { 16 };
+    abi::emit_push_result_value(ctx.emitter, &repr);
+    for cleanup in call_args.cleanup_slots.iter().rev() {
+        abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, cleanup.offset + 16 + pushed);
+        abi::emit_load_temporary_stack_slot(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            cleanup.offset + pushed,
+        );
+        super::call_cleanup::emit_call_arg_cleanup_release(ctx, &cleanup.ty);
+    }
+    match repr {
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+        }
+        PhpType::Float => abi::emit_pop_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter)),
+        PhpType::TaggedScalar => {
+            let tag_reg = crate::codegen_support::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            abi::emit_pop_reg_pair(ctx.emitter, abi::int_result_reg(ctx.emitter), tag_reg);
+        }
+        PhpType::Void | PhpType::Never => {}
+        _ => abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)),
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.cleanup_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.cleanup_guard_bytes);
 }
 
 /// Normalizes a `__toString()` return into a string result pair.
@@ -572,60 +627,6 @@ fn coerce_tostring_return_to_string_result(
             "__toString return value for PHP type {:?}",
             other
         ))),
-    }
-}
-
-/// Throws PHP's catchable object-to-string `Error`, including the runtime class name.
-fn emit_mixed_missing_tostring_error(ctx: &mut FunctionContext<'_>, receiver_reg: &str) {
-    let (message_ptr, message_len) = abi::string_result_regs(ctx.emitter);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr x9, [{}]", receiver_reg));    // load the receiver class id
-            abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_entries");
-            ctx.emitter.instruction("add x10, x10, x9, lsl #4");                // address the receiver class-name row
-            ctx.emitter.instruction(&format!("ldr {}, [x10]", message_ptr));    // borrow the receiver class-name pointer
-            ctx.emitter.instruction(&format!("ldr {}, [x10, #8]", message_len)); // borrow the receiver class-name length
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov r9, QWORD PTR [{}]", receiver_reg)); // load the receiver class id
-            abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
-            ctx.emitter.instruction("shl r9, 4");                               // scale the class id to its metadata row
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9]", message_ptr)); // borrow the receiver class-name pointer
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9 + 8]", message_len)); // borrow the receiver class-name length
-        }
-    }
-    emit_string_result_concat_prefix(ctx, "Object of class ");
-    emit_string_result_concat_suffix(ctx, " could not be converted to string");
-    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-    super::exceptions::emit_error_from_string_result(ctx);
-}
-
-/// Prepends a static fragment to the active string result.
-fn emit_string_result_concat_prefix(ctx: &mut FunctionContext<'_>, prefix: &str) {
-    let (text_ptr, text_len) = abi::string_result_regs(ctx.emitter);
-    let (right_ptr, right_len) = concat_right_operand_regs(ctx);
-    let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
-    ctx.emitter.instruction(&format!("mov {}, {}", right_ptr, text_ptr));       // move the runtime class name into concat's right operand
-    ctx.emitter.instruction(&format!("mov {}, {}", right_len, text_len));       // preserve the runtime class-name length
-    abi::emit_symbol_address(ctx.emitter, text_ptr, &prefix_label);
-    abi::emit_load_int_immediate(ctx.emitter, text_len, prefix_len as i64);
-    abi::emit_call_label(ctx.emitter, "__rt_concat");
-}
-
-/// Appends a static fragment to the active string result.
-fn emit_string_result_concat_suffix(ctx: &mut FunctionContext<'_>, suffix: &str) {
-    let (right_ptr, right_len) = concat_right_operand_regs(ctx);
-    let (suffix_label, suffix_len) = ctx.data.add_string(suffix.as_bytes());
-    abi::emit_symbol_address(ctx.emitter, right_ptr, &suffix_label);
-    abi::emit_load_int_immediate(ctx.emitter, right_len, suffix_len as i64);
-    abi::emit_call_label(ctx.emitter, "__rt_concat");
-}
-
-/// Returns the register pair used by the right operand of `__rt_concat`.
-fn concat_right_operand_regs(ctx: &FunctionContext<'_>) -> (&'static str, &'static str) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ("x3", "x4"),
-        Arch::X86_64 => ("rdi", "rsi"),
     }
 }
 
@@ -717,6 +718,7 @@ fn emit_resource_display_id_to_int(ctx: &mut FunctionContext<'_>) {
 fn expect_cast_target(inst: &Instruction) -> Result<IrType> {
     match inst.immediate {
         Some(Immediate::CastTarget(target)) => Ok(target),
+        Some(Immediate::StringOffsetCast) => Ok(IrType::I64),
         _ => Err(CodegenIrError::invalid_module(format!(
             "{} missing cast target immediate",
             inst.op.name()

@@ -108,8 +108,10 @@ echo $alias;
 /// Verifies deferred releases are pruned when the loop-carried slot stays scalar.
 #[test]
 fn test_release_local_slot_is_pruned_for_scalar_loop_slot_in_both_modes() {
+    // Keep the unrelated counter scalar even without optimization. A checked `i++`
+    // now legitimately retires its temporary Mixed owner before the next store.
     let source = r#"<?php
-for ($i = 0; $i < $argc; $i++) {
+for ($i = 0; $i < $argc; $i = (int)($i + 1)) {
     $value = 7;
     echo $value;
 }
@@ -126,10 +128,11 @@ for ($i = 0; $i < $argc; $i++) {
 /// Verifies a slot promoted before the loop uses ref-cell stores without raw-slot releases.
 #[test]
 fn test_release_local_slot_is_excluded_for_already_ref_bound_slot() {
+    // Isolate the promoted value from the unoptimized counter's boxed arithmetic.
     let source = r#"<?php
 $value = 0;
 $alias =& $value;
-for ($i = 0; $i < $argc; $i++) {
+for ($i = 0; $i < $argc; $i = (int)($i + 1)) {
     $value = 0;
     $value++;
 }
@@ -169,6 +172,50 @@ echo count($set);
         assert!(
             stderr.contains("HEAP DEBUG: leak summary: clean"),
             "expected issue #538 to leave a clean heap with ir_opt={ir_opt}, got: {stderr}"
+        );
+    }
+}
+
+/// Verifies an in-loop unset retires the final boxed local representation.
+#[test]
+fn test_unset_loop_retype_cleanup_uses_final_mixed_slot_type_in_both_modes() {
+    let source = r#"<?php
+function identity(mixed $value): mixed { return $value; }
+$descriptor = identity(...);
+for ($i = 0; $i < 8; $i++) {
+    $string = "borrowed";
+    $result = $descriptor($string);
+    unset($result, $string);
+}
+echo "ok";
+"#;
+
+    for ir_opt in [false, true] {
+        let ir = emit_release_ir(source, ir_opt);
+        // The slot NUMBER depends on how many hidden locals the program prologue declares, so
+        // the `$string` slot is read off the invoker argument rather than hard-coded.
+        let invoker_slot = ir
+            .lines()
+            .find_map(|line| {
+                let (_, rest) = line.split_once("php=mixed own=owned = invoker_ref_arg ")?;
+                rest.split_whitespace().next().map(str::to_string)
+            });
+        let Some(invoker_slot) = invoker_slot else {
+            panic!("the live local must be widened to Mixed before the call with ir_opt={ir_opt}:\n{ir}");
+        };
+        let cleanup = ir.lines().find(|line| {
+            line.contains(&format!("release_local_slot {invoker_slot}")) && line.contains("span: 5:5")
+        });
+        assert!(
+            cleanup.is_some(),
+            "assignment cleanup must retire the local slot with ir_opt={ir_opt}:\n{ir}"
+        );
+
+        let (stdout, stderr) = run_release_fixture(source, ir_opt);
+        assert_eq!(stdout, "ok");
+        assert!(
+            stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "expected unset/retype loop to leave a clean heap with ir_opt={ir_opt}, got: {stderr}"
         );
     }
 }

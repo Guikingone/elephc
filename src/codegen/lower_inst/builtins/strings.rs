@@ -26,6 +26,8 @@ use super::{
 pub(in crate::codegen::lower_inst) mod common;
 mod compression;
 mod hash;
+mod implode_source;
+mod mbstring;
 mod network;
 mod parse_url;
 mod printf;
@@ -42,6 +44,8 @@ use common::*;
 use compression::*;
 #[allow(unused_imports)]
 use hash::*;
+#[allow(unused_imports)]
+use implode_source::*;
 #[allow(unused_imports)]
 use network::*;
 #[allow(unused_imports)]
@@ -62,17 +66,20 @@ pub(crate) use compression::{
 };
 pub(crate) use hash::{
     lower_crc32, lower_hash, lower_hash_algos, lower_hash_copy, lower_hash_equals,
-    lower_hash_final, lower_hash_hmac, lower_hash_init, lower_hash_update, lower_mb_strlen,
+    lower_hash_final, lower_hash_hmac, lower_hash_init, lower_hash_update,
     lower_md5, lower_sha1,
 };
+pub(crate) use mbstring::lower_mbstring;
 pub(crate) use network::{lower_inet, lower_ip2long, lower_long2ip};
 pub(crate) use sodium::{lower_sodium_box, lower_sodium_status};
 pub(crate) use parse_url::lower_parse_url;
 pub(crate) use printf::{lower_printf, lower_sprintf, lower_vprintf, lower_vsprintf};
 pub(crate) use replace_wrap::{lower_str_pad, lower_string_replace, lower_wordwrap};
 pub(crate) use scalar::{
-    emit_explicit_float_result_to_int, emit_signal_float_result_to_int, load_as_explicit_int,
-    lower_chr, lower_number_format, lower_ord,
+    emit_explicit_float_result_to_int, emit_float_result_int_coercion_diagnostics,
+    emit_signal_float_result_to_int, emit_weak_float_result_to_int, load_as_explicit_int, lower_chr,
+    lower_number_format,
+    lower_ord,
 };
 pub(crate) use search::{
     lower_str_contains, lower_str_repeat, lower_string_position, lower_string_span, lower_strstr,

@@ -1,8 +1,8 @@
 ---
 title: "cairo_set_fill_rule()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Selects the fill rule used to decide which regions a path encloses."
 sidebar:
-  order: 448
+  order: 449
 ---
 
 ## cairo_set_fill_rule()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_set_fill_rule(mixed $context, int $fillRule): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Selects the fill rule used to decide which regions a path encloses.
 
 **Parameters**:
 - `$context` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -161,6 +161,36 @@ where
     memoized_with_fold(cache, class_name, member_name, true, compute)
 }
 
+/// [`memoized`] for a type-EXISTENCE query, keeping only a positive answer.
+///
+/// Whether a compiled interface (or probe-only class) exists is load state, not a constant: it
+/// turns true when its source activates, which an autoloader's skipped `include` of that source
+/// does (`__elephc_eval_source_activate`). Symfony's `Preloader` asked
+/// `ReflectionClass(DependencyInjection\ContainerInterface)` before the file was activated; the
+/// cached `false` then outlived the activation, the autoloader re-included the file through
+/// Composer's `vendor/composer/../` spelling, and the interpreter declared it itself and failed on
+/// its compiled parent. A type never stops existing within a process, so `true` stays cached.
+pub(super) fn memoized_existence<E>(
+    class_name: &str,
+    tag: &str,
+    compute: impl FnOnce() -> Result<bool, E>,
+) -> Result<bool, E> {
+    if !memo_enabled() {
+        return compute();
+    }
+    let key = memo_key(class_name, tag, true);
+    if KIND_EXISTS.with(|table| table.borrow().get(&key).copied()) == Some(true) {
+        return Ok(true);
+    }
+    let value = compute()?;
+    if value {
+        KIND_EXISTS.with(|table| {
+            table.borrow_mut().insert(key, true);
+        });
+    }
+    Ok(value)
+}
+
 /// [`memoized`] for a PROPERTY query: the member half of the key keeps its case.
 pub(super) fn memoized_property<V, E>(
     cache: &'static LocalKey<MemoTable<V>>,

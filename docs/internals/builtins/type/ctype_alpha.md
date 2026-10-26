@@ -1,16 +1,16 @@
 ---
-title: "ctype_alpha() — internals"
+title: "ctype_alpha() - internals"
 description: "Compiler internals for ctype_alpha(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 914
+  order: 1008
 ---
 
-## `ctype_alpha()` — internals
+## `ctype_alpha()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/ctype_alpha.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ctype_alpha.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

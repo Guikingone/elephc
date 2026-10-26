@@ -1,11 +1,11 @@
 ---
-title: "preg_replace_callback_array() — internals"
+title: "preg_replace_callback_array() - internals"
 description: "Compiler internals for preg_replace_callback_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 690
+  order: 711
 ---
 
-## `preg_replace_callback_array()` — internals
+## `preg_replace_callback_array()` - internals
 
 ## Where it lives
 

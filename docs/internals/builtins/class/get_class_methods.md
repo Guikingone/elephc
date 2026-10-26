@@ -1,16 +1,16 @@
 ---
-title: "get_class_methods() — internals"
+title: "get_class_methods() - internals"
 description: "Compiler internals for get_class_methods(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 98
+  order: 99
 ---
 
-## `get_class_methods()` — internals
+## `get_class_methods()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/get_class_methods.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/get_class_methods.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function get_class_methods(mixed $object_or_class): mixed
+function get_class_methods(mixed $object_or_class): array
 ```
 
 ## What the type checker enforces

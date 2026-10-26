@@ -9,6 +9,30 @@
 
 use super::*;
 
+/// Dedicated predefined-constant tokens remain names inside qualified references.
+#[test]
+fn test_qualified_predefined_constant_names() {
+    for spelling in [r"\Demo\Math\NAN", r"Math\PHP_EOL", r"\App\STDIN"] {
+        let stmts = parse_source(&format!("<?php echo {spelling};"));
+        let ExprKind::ConstRef(name) = echoed_expr(&stmts) else {
+            panic!("expected qualified constant reference");
+        };
+        assert_eq!(name.as_canonical(), spelling.trim_start_matches('\\'));
+    }
+}
+
+/// Qualified class contexts must not interpret INF as a floating-point value.
+#[test]
+fn test_qualified_predefined_class_names() {
+    for source in [r"<?php new \INF;", r"<?php \INF::class;", r"<?php \INF::method();"] {
+        let stmts = parse_source(source);
+        let StmtKind::ExprStmt(expr) = &stmts[0].kind else {
+            panic!("expected expression statement");
+        };
+        assert!(matches!(expr.kind, ExprKind::NewObject { .. } | ExprKind::ClassConstant { .. } | ExprKind::StaticMethodCall { .. }), "{:?}", expr.kind);
+    }
+}
+
 /// Parses a namespace declaration with semicolon syntax and a use group import
 /// that combines class, function, and const imports with aliases.
 #[test]
@@ -117,4 +141,16 @@ fn test_parse_dunder_namespace_magic_constant() {
         echoed_expr(&stmts),
         &ExprKind::MagicConstant(MagicConstant::Namespace)
     );
+}
+
+/// Verifies a fully qualified predefined constant's span starts at its leading `\` (#1307), so a
+/// diagnostic on `\PHP_EOL` points at the whole name rather than past the separator.
+#[test]
+fn test_fully_qualified_predefined_constant_span_starts_at_the_backslash() {
+    let stmts = parse_source("<?php echo \\PHP_EOL;");
+    let StmtKind::Echo(expr) = &stmts[0].kind else {
+        panic!("expected an echo statement, got {:?}", stmts[0].kind);
+    };
+    // `<?php echo ` is eleven columns, so the `\` is at column 12.
+    assert_eq!((expr.span.line, expr.span.col), (1, 12));
 }

@@ -367,8 +367,8 @@ echo "done\n";
 ///   satisfies `$error['type']` and fails here.
 /// - `type=1024` / `type2=512` — `E_USER_NOTICE` and `E_USER_WARNING` reach the record with
 ///   their own levels, so `trigger_error()` is not flattened to one severity.
-/// - `cleared=null` — `error_clear_last()` returns the slot to its never-written state, which
-///   is why the record carries a presence flag rather than an empty array.
+/// - `cleared=null` — `error_clear_last()` returns the slot to its never-written state, not to
+///   an empty array.
 /// - `kept=kept` — THE TRAP. A handler that returns true records nothing AND does not clear
 ///   what was already there; `kept=swallowed` means the write point is wrong, `kept=` (empty)
 ///   means it clears.
@@ -424,11 +424,10 @@ echo 'masked=', error_get_last()['message'], "\n";
 
 /// Verifies a diagnostic raised by COMPILED code records php's `file` and `line`.
 ///
-/// `trigger_error()` cannot be used for this: the prelude passes `e_magic_line()`, which is
-/// the integer `0` because there is no `MagicConstant::Line` for a synthetic node to carry
-/// (see that helper's doc comment). An ENGINE diagnostic is the case where the raise site does
-/// supply a real location, and `__elephc_diag_render` forwards it, so this is what pins that
-/// the location reaches the record rather than being dropped or swapped with the message.
+/// An ENGINE diagnostic is the case where the raise site publishes its own location
+/// (`_php_diagnostic_file` / `_php_diagnostic_line`), and the native dispatcher records it with
+/// the message, so this pins that the location reaches the record rather than being dropped or
+/// swapped with the message.
 ///
 /// php 8.5.10 on this exact source prints all four lines identically:
 ///
@@ -438,16 +437,6 @@ echo 'masked=', error_get_last()['message'], "\n";
 /// file=1
 /// line=4
 /// ```
-///
-/// WHICH RAISE SITE IS USED MATTERS, and the first draft of this test picked the wrong one.
-/// `$row = []; $value = $row['absent'];` records `file=""` and `line=0` here — but so does the
-/// DEFAULT DISPLAY for that same site, which prints a bare `Warning: Undefined array key
-/// "absent"` where php prints ` in FILE on line 3`. That is a pre-existing gap in what the
-/// raise site hands `__rt_diag_warning`, not in the record: `__elephc_diag_render` forwards
-/// whatever location it is given and deliberately falls back to the unlocated rendering when
-/// there is none. The shape below is the one
-/// `a_warning_raised_by_compiled_code_reaches_a_cli_handler` already proves carries a location,
-/// so this test pins the record and not the raise site's separate limitation.
 #[test]
 fn an_engine_diagnostic_records_php_s_file_and_line() {
     let source = r#"<?php
@@ -469,12 +458,94 @@ echo 'line=', $e['line'], "\n";
     );
 }
 
-/// PAY-FOR-USE. A program that never mentions the surface must not grow by a byte.
+/// Verifies the record rule for ENGINE diagnostics and every handler outcome.
 ///
-/// This is the assertion the injection gate exists for, and it cannot be seen from a program
-/// that USES the surface. Compares the emitted assembly for a trivial script against the same
-/// script with one `error_reporting()` call added: the first must be strictly smaller, and it
-/// must contain none of the prelude's symbols.
+/// The record was dropped by the origin/main merge: main made the warning dispatcher and
+/// `trigger_error()` native and nothing wrote the record any more, so every line below printed
+/// `null`. Expected output is php 8.5.10's stdout on this exact source (`php -n`, display to
+/// stderr). Each line pins one rule: `@` and `error_reporting(0)` silence the display only; a
+/// handler returning `true` or `null` takes the diagnostic and leaves the PREVIOUS record; a
+/// handler returning `false`, or one whose mask excludes the level, falls through and records.
+/// The eval'd warning's `file` is left out: php names an `eval()'d code` pseudo-file there and
+/// elephc publishes the host file, a separate location gap.
+#[test]
+fn error_get_last_records_every_untaken_engine_diagnostic() {
+    let source = r#"<?php
+function show(string $label): void {
+    $e = error_get_last();
+    if ($e === null) {
+        echo $label, ": null\n";
+        return;
+    }
+    echo $label, ': ', $e['type'], '|', $e['message'], '|', $e['file'] === __FILE__ ? 'F' : 'other', '|', $e['line'], "\n";
+}
+$a = ['k' => 'v'];
+$x = @$a['at'];
+show('at');
+error_reporting(0);
+$x = $a['masked'];
+error_reporting(E_ALL);
+show('masked');
+set_error_handler(function ($n, $s, $f, $l) { return true; });
+$x = $a['taken'];
+restore_error_handler();
+show('true');
+set_error_handler(function ($n, $s, $f, $l) { return null; });
+$x = $a['null'];
+restore_error_handler();
+show('null');
+set_error_handler(function ($n, $s, $f, $l) { return false; });
+$x = @$a['false'];
+restore_error_handler();
+show('false');
+set_error_handler(function ($n, $s, $f, $l) { return true; }, E_NOTICE);
+$x = @$a['outside'];
+restore_error_handler();
+show('outside');
+@trigger_error('deprecated', E_USER_DEPRECATED);
+show('trigger');
+$s = 'abc';
+$y = @$s[10];
+show('offset');
+eval('$b = []; $z = @$b["eval"];');
+$e = error_get_last();
+echo 'eval-warning: ', $e['type'], '|', $e['message'], '|', $e['line'], "\n";
+eval('@trigger_error("eval-trigger", E_USER_WARNING);');
+$e = error_get_last();
+echo 'eval-trigger: ', $e['type'], '|', $e['message'], "\n";
+$z = @$a['compiled'];
+$e = eval('return error_get_last();');
+echo 'eval-reads: ', $e['message'], "\n";
+eval('error_clear_last();');
+show('eval-cleared');
+"#;
+    let (stdout, _) = compile_and_run("errsurface_getlast_engine", source);
+    assert_eq!(
+        stdout,
+        "at: 2|Undefined array key \"at\"|F|11\n\
+         masked: 2|Undefined array key \"masked\"|F|14\n\
+         true: 2|Undefined array key \"masked\"|F|14\n\
+         null: 2|Undefined array key \"masked\"|F|14\n\
+         false: 2|Undefined array key \"false\"|F|26\n\
+         outside: 2|Undefined array key \"outside\"|F|30\n\
+         trigger: 16384|deprecated|F|33\n\
+         offset: 2|Uninitialized string offset 10|F|36\n\
+         eval-warning: 2|Undefined array key \"eval\"|1\n\
+         eval-trigger: 512|eval-trigger\n\
+         eval-reads: Undefined array key \"compiled\"\n\
+         eval-cleared: null\n",
+        "error_get_last() must match php 8.5.10 on this source"
+    );
+}
+
+/// PAY-FOR-USE. A program that never mentions the prelude surface must not carry its bodies.
+///
+/// `error_reporting()`, the handler stacks, `trigger_error()`, the warning dispatcher and the
+/// last-error record are native: they live in the shared runtime every program links, which is
+/// what lets an engine warning reach a handler at all. What stays pay-for-use is the AST prelude
+/// (`error_handling_prelude`), and this is the assertion its injection gate exists for: a trivial
+/// script must not contain `error_get_last()` / `error_clear_last()` bodies, and the same script
+/// naming `error_get_last()` must, and must be larger.
 #[test]
 fn a_program_that_names_nothing_emits_no_error_handling_code() {
     let dir = make_test_dir("errsurface_payforuse");
@@ -497,28 +568,20 @@ fn a_program_that_names_nothing_emits_no_error_handling_code() {
     };
 
     let bare = emit_asm("bare", "<?php echo 1;\n");
-    let using = emit_asm("using", "<?php echo 1; error_reporting(E_ALL);\n");
+    let using = emit_asm("using", "<?php echo 1; var_dump(error_get_last());\n");
 
-    // `__elephc_last_error_state` is listed for the reason the whole test exists: the record
-    // is written from `__elephc_diag_dispatch`, which every diagnostic reaches, so a careless
-    // wiring would compile it into programs that raise warnings but never ASK for the last
-    // error. The gate is the surface name, not the write point.
-    for symbol in [
-        "error_reporting",
-        "error_get_last",
-        "error_clear_last",
-        "__elephc_last_error_state",
-        "__elephc_diag_dispatch",
-        "__elephc_diag_render",
-    ] {
+    // The prelude bodies' symbols, without the platform's leading underscore. The record they
+    // read is written natively by every diagnostic, so the gate is the surface NAME: a program
+    // that raises warnings but never asks for the last error carries no reader.
+    for symbol in ["fn_error_u_get_u_last", "fn_error_u_clear_u_last"] {
         assert!(
             !bare.contains(symbol),
             "a program that names no error function must not carry {symbol}"
         );
     }
     assert!(
-        using.contains("__elephc_diag_render"),
-        "the dispatch pair is forced for a program that does name one"
+        using.contains("fn_error_u_get_u_last"),
+        "the prelude reader is injected for a program that names error_get_last()"
     );
     assert!(
         bare.len() < using.len(),

@@ -149,8 +149,10 @@ fn pdoexception_construct() -> MethodBuilder {
         .param_default("code", TypeExpr::Int, e_int(0))
         .param_default("previous", t_nullable(t_class("Throwable")), e_null())
         .body(vec![
-            s_prop_assign(e_this(), "message", e_var("message")),
-            s_prop_assign(e_this(), "code", e_var("code")),
+            s_expr(e_parent_call(
+                "__construct",
+                vec![e_var("message"), e_var("code"), e_var("previous")],
+            )),
             s_prop_assign(e_this(), "previous", e_var("previous")),
         ])
 }
@@ -227,14 +229,7 @@ fn pdoexception_getcode() -> MethodBuilder {
         ])
 }
 
-/// `getPrevious` — lifted out of `decl_class_pdoexception` so it builds in its own stack frame.
-fn pdoexception_getprevious() -> MethodBuilder {
-    method("getPrevious")
-        .returns(t_nullable(t_class("Throwable")))
-        .body(vec![
-            s_return(e_this_prop("previous")),
-        ])
-}
+
 
 /// `create` — lifted out of `decl_class_elephcpdosqliteblobstream` so it builds in its own stack frame.
 fn elephcpdosqliteblobstream_create() -> MethodBuilder {
@@ -10135,8 +10130,7 @@ fn decl_class_pdoexception() -> Stmt {
         .prop("previous", t_nullable(t_class("Throwable")), Some(e_null()))
         .method(pdoexception_construct())
         .method(pdoexception_elephcfromerrorinfo())
-        .method(pdoexception_getcode())
-        .method(pdoexception_getprevious())
+.method(pdoexception_getcode())
         .build()
 }
 

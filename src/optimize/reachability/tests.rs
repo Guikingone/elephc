@@ -517,18 +517,29 @@ fn scan_declared_class_queries_are_dynamic_class_hazards() {
     }
 }
 
-/// Verifies eval-only introspection names do not invent hazards in the AOT declaration graph.
+/// Verifies function enumeration keeps declarations without widening dynamic callability.
 #[test]
-fn scan_eval_only_introspection_names_are_not_aot_hazards() {
-    for source in [
-        "<?php get_defined_functions();",
-        "<?php get_class_methods($value);",
-    ] {
-        let hazards = scan_program(&parse(source)).hazards;
-        assert!(!hazards.dynamic_function);
-        assert!(!hazards.dynamic_method);
-        assert!(!hazards.dynamic_class);
-    }
+fn scan_core_introspection_records_only_required_hazards() {
+    let defined = scan_program(&parse("<?php get_defined_functions();")).hazards;
+    assert!(defined.enumerates_functions);
+    assert!(!defined.dynamic_function);
+    assert!(!defined.dynamic_method);
+    assert!(!defined.dynamic_class);
+
+    let methods = scan_program(&parse("<?php get_class_methods($value);")).hazards;
+    assert!(!methods.dynamic_function);
+    assert!(methods.dynamic_method);
+    assert!(methods.dynamic_class);
+}
+
+/// Verifies function enumeration preserves otherwise unused user declarations for the inventory.
+#[test]
+fn prune_get_defined_functions_keeps_user_declarations() {
+    let (program, check) = prune(
+        "<?php function visible_but_unused(): int { return 1; } get_defined_functions();",
+    );
+    assert!(has_function(&program, "visible_but_unused"));
+    assert!(check.functions.contains_key("visible_but_unused"));
 }
 
 /// Verifies an unpacked builtin callback that cannot be identified widens callable reachability.
@@ -1154,6 +1165,48 @@ fn prune_ignores_internal_prelude_closure_dispatch_hazard() {
     );
     assert!(has_method(&program, "T", "dispatch"));
     assert!(!has_method(&program, "T", "sibling"));
+}
+
+/// Verifies a forced, array-iterating prelude body does not root the iterator protocol by name.
+///
+/// A `foreach` over an untyped parameter normally keeps every live class's `getIterator()`,
+/// `current()`, ... because the value might be a user `Traversable`. A compiler-owned helper
+/// declared `array_iteration_only` walks arrays, so its loop must not pin them.
+#[test]
+fn prune_array_iteration_only_prelude_does_not_root_iterator_protocol() {
+    let prelude = parse("<?php function walk_rows($rows) { foreach ($rows as $row) { echo $row; } }");
+    let user = parse(
+        "<?php class Box { public function getIterator() { return 1; } public function other() { return 2; } } $box = new Box(); echo $box->other();",
+    );
+    let run = |array_only: bool| {
+        let mut program = prelude.clone();
+        program.extend(user.clone());
+        let mut check = crate::types::check(&program).expect("fixture must type check");
+        let mut inventory = PreludeInventory::new();
+        inventory.record_program("test", &prelude);
+        if array_only {
+            inventory.record_array_iteration_only("test");
+        }
+        let forced: HashSet<String> = ["test".to_string()].into_iter().collect();
+        let roots = HashSet::new();
+        prune_unreachable_declarations(
+            program,
+            &mut check,
+            PruneOptions {
+                inventory: &inventory,
+                forced_groups: &forced,
+                exported_functions: &roots,
+                eval_forced: false,
+            },
+        )
+    };
+    assert!(
+        has_method(&run(false), "Box", "getIterator"),
+        "an untyped foreach in a forced body must keep the protocol surface by name"
+    );
+    let pruned = run(true);
+    assert!(!has_method(&pruned, "Box", "getIterator"));
+    assert!(has_method(&pruned, "Box", "other"));
 }
 
 /// Verifies `method_exists` observes static declarations as well as instance methods.

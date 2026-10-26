@@ -16,6 +16,10 @@ mod null_coalesce_assign;
 
 pub(in crate::interpreter) use calls::*;
 mod evaluation;
+mod owned;
+
+use owned::*;
+pub(in crate::interpreter) use owned::eval_output_expr;
 
 pub(in crate::interpreter) use evaluation::{
     eval_array_access_object_matches, eval_array_get_result, eval_binary_result,
@@ -24,6 +28,7 @@ pub(in crate::interpreter) use evaluation::{
 };
 pub(in crate::interpreter) use evaluation::eval_object_array_cast_value;
 pub(in crate::interpreter) use evaluation::eval_values_loosely_equal;
+pub(in crate::interpreter) use evaluation::initialize_native_throwable_source;
 use evaluation::*;
 pub(in crate::interpreter) use null_coalesce_assign::{
     eval_assign,
@@ -189,7 +194,7 @@ pub(in crate::interpreter) fn eval_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let result = eval_expr_dispatch(expr, context, scope, values);
+    let result = eval_expr_with_result_ownership(expr, context, scope, values, false);
     if matches!(result, Err(EvalStatus::RuntimeFatal)) {
         note_eval_runtime_failure(
             format!("unsupported {} expression", eval_expr_kind(expr)),
@@ -231,12 +236,59 @@ fn eval_expr_kind(expr: &EvalExpr) -> String {
         .to_string()
 }
 
-/// Evaluates one expression by variant.
-fn eval_expr_dispatch(
+/// Evaluates a value that can be stored or returned independently of the current scope.
+pub(in crate::interpreter) fn eval_owned_expr(
     expr: &EvalExpr,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let value = eval_expr_with_result_ownership(expr, context, scope, values, true)?;
+    if value.is_borrowed() {
+        copy_scope_value(value, context, values)
+    } else if eval_owned_result_may_share_storage(expr) {
+        detach_owned_storage_cell(value, context, values)
+    } else {
+        Ok(value)
+    }
+}
+
+/// Whether an owned expression result can still be the cell some storage holds.
+///
+/// A property read and an assignment (`$a = $b = []`) both answer with the cell they read or
+/// stored, retained rather than copied; see `detach_owned_storage_cell`.
+fn eval_owned_result_may_share_storage(expr: &EvalExpr) -> bool {
+    match expr {
+        EvalExpr::Assign { .. }
+        | EvalExpr::CompoundAssign { .. }
+        | EvalExpr::ArrayAppendAssign { .. }
+        | EvalExpr::NullCoalesceAssign { .. } => true,
+        EvalExpr::Ternary {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            eval_owned_result_may_share_storage(then_branch.as_deref().unwrap_or(condition))
+                || eval_owned_result_may_share_storage(else_branch)
+        }
+        EvalExpr::Unary { op: EvalUnaryOp::ErrorSuppress, expr } => {
+            eval_owned_result_may_share_storage(expr)
+        }
+        EvalExpr::NullCoalesce { value, default } => {
+            eval_owned_result_may_share_storage(value) || eval_owned_result_may_share_storage(default)
+        }
+        _ => eval_expr_reads_instance_property(expr),
+    }
+}
+
+/// Evaluates one expression by variant, preserving expression evaluation order while optionally
+/// owning the selected result.
+fn eval_expr_with_result_ownership(
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+    own_result: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match expr {
         EvalExpr::Array(elements) => {
@@ -263,9 +315,10 @@ fn eval_expr_dispatch(
                 let name = eval_global_name(index, context, scope, values)?;
                 return read_global_value(&name, context.quiet_property_fetch(), context, scope, values);
             }
-            let array = eval_expr(array, context, scope, values)?;
-            let index = eval_expr(index, context, scope, values)?;
-            eval_array_get_result(array, index, context, values)
+            with_eval_operands(&[array, index], context, scope, values, |args, context, _, values| {
+                let result = eval_array_get_result(args[0], args[1], context, values)?;
+                if result.is_borrowed() { values.retain(result) } else { Ok(result) }
+            })
         }
         EvalExpr::ArrayDestructureAssign { targets, value } => {
             eval_array_destructure_assign(targets, value, context, scope, values)
@@ -303,102 +356,83 @@ fn eval_expr_dispatch(
             method,
             args,
         } => {
-            let receiver_is_temporary = eval_method_receiver_is_temporary(object);
-            let object = eval_expr(object, context, scope, values)?;
-            let result = (|| {
+            with_eval_operands(&[object], context, scope, values, |receiver, context, scope, values| {
                 let method = eval_dynamic_member_name(method, context, scope, values)?;
-                let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-                eval_method_call_result_with_evaluated_args(
-                    object,
-                    &method,
-                    evaluated_args,
-                    context,
-                    values,
-                )
-            })();
-            eval_method_call_with_temporary_receiver_cleanup(
-                object,
-                receiver_is_temporary,
-                result,
-                context,
-                values,
-            )
+                with_eval_method_arguments(args, context, scope, values, |arguments, context, _, values| {
+                    eval_method_call_result_with_evaluated_args(receiver[0], &method, arguments, context, values)
+                })
+            })
         }
         EvalExpr::DynamicNewObject { class_name, args } => {
-            let class_name = eval_expr(class_name, context, scope, values).map_err(|status| {
-                trace_dynamic_new_error("class_expression", None, status, context)
-            })?;
-            let class_name = eval_dynamic_class_name(class_name, context, values).map_err(|status| {
-                trace_dynamic_new_error("class_name", None, status, context)
-            })?;
-            let args = eval_method_call_arg_values(args, context, scope, values).map_err(|status| {
-                trace_dynamic_new_error("arguments", Some(&class_name), status, context)
-            })?;
-            eval_new_object_result(&class_name, args, context, scope, values).map_err(|status| {
-                trace_dynamic_new_error("construction", Some(&class_name), status, context)
+            with_eval_operands(&[class_name], context, scope, values, |receiver, context, scope, values| {
+                let class_name = eval_dynamic_class_name(receiver[0], context, values).map_err(|status| {
+                    trace_dynamic_new_error("class_name", None, status, context)
+                })?;
+                with_eval_call_arguments(args, context, scope, values, |arguments, context, scope, values| {
+                    eval_new_object_result(&class_name, arguments, context, scope, values).map_err(|status| {
+                        trace_dynamic_new_error("construction", Some(&class_name), status, context)
+                    })
+                })
             })
         }
         EvalExpr::DynamicPropertyGet { object, property } => {
-            let object = eval_expr(object, context, scope, values)?;
-            let property = eval_dynamic_member_name(property, context, scope, values)?;
-            eval_property_get_result(object, &property, context, values)
+            with_owned_receiver(object, context, scope, values, |object, context, scope, values| {
+                let property = eval_dynamic_member_name(property, context, scope, values)?;
+                eval_property_get_with_result_ownership(object, &property, context, values, true)
+            })
         }
         EvalExpr::DynamicStaticMethodCall {
             class_name,
             method,
             args,
         } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
-            let method = eval_dynamic_member_name(method, context, scope, values)?;
-            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_static_method_call_result_from_scope(
-                &class_name,
-                &method,
-                evaluated_args,
-                scope,
-                context,
-                values,
-            )
+            with_eval_operands(&[class_name], context, scope, values, |receiver, context, scope, values| {
+                let class_name = eval_dynamic_class_name(receiver[0], context, values)?;
+                let method = eval_dynamic_member_name(method, context, scope, values)?;
+                with_eval_method_arguments(args, context, scope, values, |arguments, context, scope, values| {
+                    eval_static_method_call_result_from_scope(&class_name, &method, arguments, scope, context, values)
+                })
+            })
         }
         EvalExpr::DynamicStaticPropertyGet {
             class_name,
             property,
-        } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
-            eval_static_property_get_result(&class_name, property, context, values)
-        }
+        } => with_eval_operands(&[class_name], context, scope, values, |classes, context, _, values| {
+            let class_name = eval_dynamic_class_name(classes[0], context, values)?;
+            eval_static_property_get_with_result_ownership(&class_name, property, context, values, own_result)
+        }),
         EvalExpr::DynamicStaticPropertyNameGet {
             class_name,
             property,
-        } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+        } => with_eval_operands(&[class_name], context, scope, values, |classes, context, scope, values| {
+            let class_name = eval_dynamic_class_name(classes[0], context, values)?;
             let property = eval_dynamic_member_name(property, context, scope, values)?;
-            eval_static_property_get_result(&class_name, &property, context, values)
-        }
+            eval_static_property_get_with_result_ownership(&class_name, &property, context, values, own_result)
+        }),
         EvalExpr::DynamicClassConstantFetch {
             class_name,
             constant,
-        } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+        } => with_eval_operands(&[class_name], context, scope, values, |classes, context, _, values| {
+            let class_name = eval_dynamic_class_name(classes[0], context, values)?;
             eval_class_constant_fetch_result(&class_name, constant, context, values)
-        }
+        }),
         EvalExpr::DynamicClassConstantNameFetch {
             class_name,
             constant,
-        } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+        } => with_eval_operands(&[class_name], context, scope, values, |classes, context, scope, values| {
+            let class_name = eval_dynamic_class_name(classes[0], context, values)?;
             let constant = eval_dynamic_member_name(constant, context, scope, values)?;
             eval_class_constant_fetch_result(&class_name, &constant, context, values)
-        }
-        EvalExpr::DynamicClassNameFetch { class_name } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            eval_dynamic_class_name_fetch_result(class_name, context, values)
-        }
+        }),
+        EvalExpr::DynamicClassNameFetch { class_name } => with_eval_operands(
+            &[class_name],
+            context,
+            scope,
+            values,
+            |classes, context, _, values| {
+                eval_dynamic_class_name_fetch_result(classes[0], context, values)
+            },
+        ),
         EvalExpr::Include {
             path,
             required,
@@ -408,8 +442,23 @@ fn eval_expr_dispatch(
             eval_instanceof_expr(value, target, context, scope, values)
         }
         EvalExpr::LoadVar(name) => match visible_scope_cell(context, scope, name) {
-            Some(cell) => Ok(cell),
+            Some(cell) => {
+                if own_result {
+                    copy_scope_value(cell, context, values)
+                } else {
+                    Ok(cell)
+                }
+            }
             None => {
+                if super::superglobals::seed_cli_superglobal_on_read(name, context, scope, values)? {
+                    if let Some(cell) = visible_scope_cell(context, scope, name) {
+                        return if own_result {
+                            copy_scope_value(cell, context, values)
+                        } else {
+                            Ok(cell)
+                        };
+                    }
+                }
                 // php: `Warning: Undefined variable $x`, and the value is still null -- an unset
                 // variable is a WARNING, never an error. 18 cases in the php-src sweep printed
                 // the right value and no diagnostic at all.
@@ -434,11 +483,14 @@ fn eval_expr_dispatch(
             subject,
             arms,
             default,
-        } => eval_match_expr(subject, arms, default.as_deref(), context, scope, values),
-        EvalExpr::Clone(object) => {
-            let object = eval_expr(object, context, scope, values)?;
-            eval_object_clone_result(object, context, values)
-        }
+        } => eval_match_expr(subject, arms, default.as_deref(), context, scope, values, own_result),
+        EvalExpr::Clone(object) => with_eval_operands(
+            &[object.as_ref()],
+            context,
+            scope,
+            values,
+            |args, context, _, values| eval_object_clone_result(args[0], context, values),
+        ),
         EvalExpr::NamespacedCall {
             name,
             fallback_name,
@@ -449,28 +501,25 @@ fn eval_expr_dispatch(
             fallback_name,
         } => eval_namespaced_const_fetch(name, fallback_name, context, values),
         EvalExpr::NewObject { class_name, args } => {
-            let args = eval_method_call_arg_values(args, context, scope, values)
-                .map_err(|status| trace_new_object_error("arguments", class_name, status, context))?;
-            let class_name = eval_new_object_class_name(class_name, context).map_err(|status| {
-                trace_new_object_error("class_name", class_name, status, context)
-            })?;
-            eval_new_object_result(&class_name, args, context, scope, values)
+            with_eval_call_arguments(args, context, scope, values, |arguments, context, scope, values| {
+                let class_name = eval_new_object_class_name(class_name, context).map_err(|status| {
+                    trace_new_object_error("class_name", class_name, status, context)
+                })?;
+                eval_new_object_result(&class_name, arguments, context, scope, values)
+            })
         }
         EvalExpr::NewAnonymousClass { class, args } => {
             ensure_eval_anonymous_class_decl(class, context, scope, values)?;
-            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            let class = context
-                .class(class.name())
-                .cloned()
-                .ok_or(EvalStatus::RuntimeFatal)?;
-            eval_dynamic_class_new_object(&class, evaluated_args, context, scope, values)
+            with_eval_call_arguments(args, context, scope, values, |arguments, context, scope, values| {
+                let class = context.class(class.name()).cloned().ok_or(EvalStatus::RuntimeFatal)?;
+                eval_dynamic_class_new_object(&class, arguments, context, scope, values)
+            })
         }
         EvalExpr::StaticMethodCall {
             class_name,
             method,
             args,
-        } => {
-            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
+        } => with_eval_method_arguments(args, context, scope, values, |evaluated_args, context, scope, values| {
             eval_static_method_call_result_from_scope(
                 class_name,
                 method,
@@ -479,15 +528,25 @@ fn eval_expr_dispatch(
                 context,
                 values,
             )
-        }
+        }),
         EvalExpr::StaticPropertyGet {
             class_name,
             property,
-        } => eval_static_property_get_result(class_name, property, context, values),
+        } => eval_static_property_get_with_result_ownership(class_name, property, context, values, own_result),
         EvalExpr::ClassConstantFetch {
             class_name,
             constant,
-        } => eval_class_constant_fetch_result(class_name, constant, context, values),
+        } => {
+            let result = eval_class_constant_fetch_result(class_name, constant, context, values);
+            if let Err(status) = &result {
+                if crate::eval_trace::enabled() {
+                    eprintln!(
+                        "[elephc-eval-trace] phase=class_constant_error class={class_name:?} constant={constant:?} status={status:?}"
+                    );
+                }
+            }
+            result
+        }
         EvalExpr::ClassNameFetch { class_name } => {
             eval_class_name_fetch_result(class_name, context, values)
         }
@@ -495,84 +554,36 @@ fn eval_expr_dispatch(
             object,
             method,
             args,
-        } => {
-            let receiver_is_temporary = eval_method_receiver_is_temporary(object);
-            let object = eval_expr(object, context, scope, values)?;
-            let result = (|| {
-                let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-                eval_method_call_result_with_evaluated_args(
-                    object,
-                    method,
-                    evaluated_args,
-                    context,
-                    values,
-                )
-            })();
-            eval_method_call_with_temporary_receiver_cleanup(
-                object,
-                receiver_is_temporary,
-                result,
-                context,
-                values,
-            )
-        }
+        } => with_eval_operands(&[object], context, scope, values, |receiver, context, scope, values| {
+            with_eval_method_arguments(args, context, scope, values, |arguments, context, _, values| {
+                eval_method_call_result_with_evaluated_args(receiver[0], method, arguments, context, values)
+            })
+        }),
         EvalExpr::NullsafeMethodCall {
             object,
             method,
             args,
-        } => {
-            let receiver_is_temporary = eval_method_receiver_is_temporary(object);
-            let object = eval_expr(object, context, scope, values)?;
-            let result = (|| {
-                if values.is_null(object)? {
-                    return values.null();
-                }
-                let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-                eval_method_call_result_with_evaluated_args(
-                    object,
-                    method,
-                    evaluated_args,
-                    context,
-                    values,
-                )
-            })();
-            eval_method_call_with_temporary_receiver_cleanup(
-                object,
-                receiver_is_temporary,
-                result,
-                context,
-                values,
-            )
-        }
+        } => with_eval_operands(&[object], context, scope, values, |receiver, context, scope, values| {
+            if values.is_null(receiver[0])? {
+                return values.null();
+            }
+            with_eval_method_arguments(args, context, scope, values, |arguments, context, _, values| {
+                eval_method_call_result_with_evaluated_args(receiver[0], method, arguments, context, values)
+            })
+        }),
         EvalExpr::NullsafeDynamicMethodCall {
             object,
             method,
             args,
-        } => {
-            let receiver_is_temporary = eval_method_receiver_is_temporary(object);
-            let object = eval_expr(object, context, scope, values)?;
-            let result = (|| {
-                if values.is_null(object)? {
-                    return values.null();
-                }
-                let method = eval_dynamic_member_name(method, context, scope, values)?;
-                let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-                eval_method_call_result_with_evaluated_args(
-                    object,
-                    &method,
-                    evaluated_args,
-                    context,
-                    values,
-                )
-            })();
-            eval_method_call_with_temporary_receiver_cleanup(
-                object,
-                receiver_is_temporary,
-                result,
-                context,
-                values,
-            )
-        }
+        } => with_eval_operands(&[object], context, scope, values, |receiver, context, scope, values| {
+            if values.is_null(receiver[0])? {
+                return values.null();
+            }
+            let method = eval_dynamic_member_name(method, context, scope, values)?;
+            with_eval_method_arguments(args, context, scope, values, |arguments, context, _, values| {
+                eval_method_call_result_with_evaluated_args(receiver[0], &method, arguments, context, values)
+            })
+        }),
         EvalExpr::NullCoalesce { value, default } => {
             // `$x ?? $default` asks whether `$x` is there and must not complain that it is not:
             // php raises no `Undefined variable` for the left operand of `??`. Suppressing around
@@ -584,11 +595,20 @@ fn eval_expr_dispatch(
             // answers `'D'`. The quiet-fetch mode is the second half of the same rule.
             context.push_error_suppression();
             context.push_quiet_property_fetch();
-            let value = eval_expr(value, context, scope, values);
+            let value = if let EvalExpr::LoadVar(name) = value.as_ref() {
+                match visible_scope_cell(context, scope, name) {
+                    Some(value) if own_result => copy_scope_value(value, context, values),
+                    Some(value) => Ok(value),
+                    None => values.null(),
+                }
+            } else {
+                eval_expr_with_result_ownership(value, context, scope, values, own_result)
+            };
             context.pop_quiet_property_fetch();
             context.pop_error_suppression();
             let value = value?;
             if values.is_null(value)? {
+                release_expr_result(value, context, values)?;
                 eval_expr(default, context, scope, values)
             } else {
                 Ok(value)
@@ -617,28 +637,25 @@ fn eval_expr_dispatch(
             eval_reference_bind_result(target, source, context, scope, values)
         }
         EvalExpr::NullsafePropertyGet { object, property } => {
-            let object = eval_expr(object, context, scope, values)?;
-            if values.is_null(object)? {
-                return values.null();
-            }
-            eval_property_get_result(object, property, context, values)
+            with_owned_receiver(object, context, scope, values, |object, context, _scope, values| {
+                if values.is_null(object)? { return values.null(); }
+                eval_property_get_with_result_ownership(object, property, context, values, true)
+            })
         }
         EvalExpr::NullsafeDynamicPropertyGet { object, property } => {
-            let object = eval_expr(object, context, scope, values)?;
-            if values.is_null(object)? {
-                return values.null();
-            }
-            let property = eval_dynamic_member_name(property, context, scope, values)?;
-            eval_property_get_result(object, &property, context, values)
+            with_owned_receiver(object, context, scope, values, |object, context, scope, values| {
+                if values.is_null(object)? { return values.null(); }
+                let property = eval_dynamic_member_name(property, context, scope, values)?;
+                eval_property_get_with_result_ownership(object, &property, context, values, true)
+            })
         }
         EvalExpr::PropertyGet { object, property } => {
-            let object = eval_expr(object, context, scope, values)?;
-            eval_property_get_result(object, property, context, values)
+            with_owned_receiver(object, context, scope, values, |object, context, _scope, values| {
+                eval_property_get_with_result_ownership(object, property, context, values, true)
+            })
         }
         EvalExpr::Print(inner) => {
-            let value = eval_expr(inner, context, scope, values)?;
-            let value = eval_string_context_value(value, context, values)?;
-            values.echo(value)?;
+            eval_output_expr(inner, context, scope, values)?;
             values.int(1)
         }
         EvalExpr::Ternary {
@@ -647,24 +664,23 @@ fn eval_expr_dispatch(
             else_branch,
         } => {
             if let Some(then_branch) = then_branch {
-                return if eval_truthy_expr(condition, context, scope, values)? {
-                    eval_expr(then_branch, context, scope, values)
+                let selected = if eval_condition(condition, context, scope, values)? {
+                    then_branch
                 } else {
-                    eval_expr(else_branch, context, scope, values)
+                    else_branch
                 };
+                return eval_expr(selected, context, scope, values);
             }
-            let condition_value = eval_expr(condition, context, scope, values)?;
-            if values.truthy(condition_value)? {
-                Ok(condition_value)
-            } else {
-                if !eval_expr_result_aliases_storage(condition) {
-                    eval_release_value(context, values, condition_value)?;
-                }
-                eval_expr(else_branch, context, scope, values)
-            }
+            let condition = eval_owned_expr(condition, context, scope, values)?;
+            let truthy = values.truthy(condition);
+            if matches!(truthy, Ok(true)) { return Ok(condition); }
+            let released = eval_release_value(context, values, condition);
+            truthy?;
+            released?;
+            eval_expr(else_branch, context, scope, values)
         }
         EvalExpr::Throw(inner) => {
-            let thrown = eval_expr(inner, context, scope, values)?;
+            let thrown = eval_owned_expr(inner, context, scope, values)?;
             if values.type_tag(thrown)? != EVAL_TAG_OBJECT {
                 return Err(EvalStatus::RuntimeFatal);
             }
@@ -677,134 +693,13 @@ fn eval_expr_dispatch(
         } => {
             context.push_error_suppression();
             crate::runtime_hooks::diag_suppression(true);
-            let result = eval_expr(expr, context, scope, values);
+            let result = eval_expr_with_result_ownership(expr, context, scope, values, own_result);
             crate::runtime_hooks::diag_suppression(false);
             context.pop_error_suppression();
             result
         }
-        EvalExpr::Unary { op: EvalUnaryOp::LogicalNot, expr } => {
-            let truthy = eval_truthy_expr(expr, context, scope, values)?;
-            values.bool_value(!truthy)
-        }
-        EvalExpr::Unary { op, expr: operand } => {
-            let value = eval_expr(operand, context, scope, values)?;
-            // `+x`/`-x` are computed as `0 ± x`; the zero cell and a temporary operand (`-1` is
-            // `Negate(1)`) are this evaluation's to drop, as a binary operator's operands are.
-            let (result, zero) = match op {
-                EvalUnaryOp::Plus => {
-                    let zero = values.int(0)?;
-                    (values.add(zero, value)?, Some(zero))
-                }
-                EvalUnaryOp::Negate => {
-                    let zero = values.int(0)?;
-                    (values.sub(zero, value)?, Some(zero))
-                }
-                EvalUnaryOp::BitNot => (values.bit_not(value)?, None),
-                EvalUnaryOp::LogicalNot | EvalUnaryOp::ErrorSuppress => unreachable!("handled before unary value evaluation"),
-            };
-            if let Some(zero) = zero.filter(|zero| *zero != result) {
-                eval_release_value(context, values, zero)?;
-            }
-            if !eval_expr_result_aliases_storage(operand) && value != result {
-                eval_release_value(context, values, value)?;
-            }
-            Ok(result)
-        }
-        EvalExpr::Binary { op, left, right } => {
-            if *op == EvalBinOp::LogicalAnd {
-                if !eval_truthy_expr(left, context, scope, values)? {
-                    return values.bool_value(false);
-                }
-                let truthy = eval_truthy_expr(right, context, scope, values)?;
-                return values.bool_value(truthy);
-            }
-            if *op == EvalBinOp::LogicalOr {
-                if eval_truthy_expr(left, context, scope, values)? {
-                    return values.bool_value(true);
-                }
-                let truthy = eval_truthy_expr(right, context, scope, values)?;
-                return values.bool_value(truthy);
-            }
-            let left_is_temporary = !eval_expr_result_aliases_storage(left);
-            let right_is_temporary = !eval_expr_result_aliases_storage(right);
-            let left = eval_expr(left, context, scope, values)?;
-            let right = eval_expr(right, context, scope, values)?;
-            let result = eval_binary_result(*op, left, right, context, values)?;
-            // The operator only reads its operands; a temporary one (`"x" . mt_rand()`, the
-            // literal in `$x . "y"`) had no other owner and leaked on every evaluation.
-            if left_is_temporary && left != result {
-                eval_release_value(context, values, left)?;
-            }
-            if right_is_temporary && right != result && right != left {
-                eval_release_value(context, values, right)?;
-            }
-            Ok(result)
-        }
-    }
-}
-
-/// Returns whether evaluating a method receiver produces a disposable value owner.
-fn eval_method_receiver_is_temporary(expr: &EvalExpr) -> bool {
-    matches!(
-        expr,
-        EvalExpr::NewObject { .. }
-            | EvalExpr::DynamicNewObject { .. }
-            | EvalExpr::NewAnonymousClass { .. }
-            | EvalExpr::Clone(_)
-            | EvalExpr::MethodCall { .. }
-            | EvalExpr::DynamicMethodCall { .. }
-            | EvalExpr::NullsafeMethodCall { .. }
-            | EvalExpr::NullsafeDynamicMethodCall { .. }
-            | EvalExpr::StaticMethodCall { .. }
-            | EvalExpr::DynamicStaticMethodCall { .. }
-    )
-}
-
-/// Releases a temporary receiver once its method call either returns or fails, and retains a
-/// result that aliases the receiver so it survives as an independently owned value.
-///
-/// A method that hands back `$this` -- whether the declared return type spells that `self`,
-/// `static`, or the receiver's own class name -- returns the EXACT SAME cell the receiver already
-/// aliases, never a fresh temporary. Every consumer of `eval_expr`'s result (a discard statement,
-/// an assignment, the next link of a chained call) follows the opposite convention: a `MethodCall`
-/// is not on `eval_expr_result_aliases_storage`'s exemption list, so the consumer treats the
-/// result as freshly owned and releases it once done. Without a retain here, that release is one
-/// too many whenever the callee happened to alias its receiver -- and because the receiver here
-/// (`$o` in `$o->add("a");`, or `$this` in a nested call) is an ordinary variable rather than a
-/// disposable temporary, nothing else ever compensates. `$o->add("a");` discarded then released a
-/// reference `$o` still needed: the counted test fixture destructed the object a call early and
-/// again on the very next discarded call, then failed outright on the second release ("released a
-/// fake cell nobody owned"); the compiled runtime surfaced the same corruption as a bare
-/// `unsupported MethodCall expression`, because whatever next touched the freed object refused
-/// with nothing to say about why.
-///
-/// The retain is unconditional on the alias check, not on `receiver_is_temporary`: a temporary
-/// receiver (`(new Foo())->add("x");`) already retained-then-released to hand the SAME alias
-/// safely through its own cleanup below, and moving the check out of that gate changes nothing for
-/// it -- it only ALSO covers the far more common case of a plain-variable receiver, which never had
-/// any compensating retain at all.
-fn eval_method_call_with_temporary_receiver_cleanup(
-    receiver: RuntimeCellHandle,
-    receiver_is_temporary: bool,
-    result: Result<RuntimeCellHandle, EvalStatus>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let result = result.and_then(|result| {
-        if result == receiver {
-            values.retain(result)
-        } else {
-            Ok(result)
-        }
-    });
-    if !receiver_is_temporary {
-        return result;
-    }
-    let cleanup = eval_release_value(context, values, receiver);
-    match (result, cleanup) {
-        (Err(status), _) => Err(status),
-        (Ok(_), Err(status)) => Err(status),
-        (Ok(result), Ok(())) => Ok(result),
+        EvalExpr::Unary { op, expr } => eval_unary_expr(*op, expr, context, scope, values),
+        EvalExpr::Binary { op, left, right } => eval_binary_expr(*op, left, right, context, scope, values),
     }
 }
 

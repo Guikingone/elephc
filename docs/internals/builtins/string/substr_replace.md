@@ -1,16 +1,16 @@
 ---
-title: "substr_replace() — internals"
+title: "substr_replace() - internals"
 description: "Compiler internals for substr_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 901
+  order: 995
 ---
 
-## `substr_replace()` — internals
+## `substr_replace()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/substr_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/substr_replace.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

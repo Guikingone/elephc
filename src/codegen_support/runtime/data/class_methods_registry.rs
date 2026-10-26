@@ -160,6 +160,8 @@ fn method_table(
 
 /// Returns the methods one class declares itself, in declaration order and declared case.
 ///
+/// A property hook's compiler-generated accessor is not a method PHP lists, so it is skipped.
+///
 /// `reflection_methods` carries php's order; a method only the signature maps know (an
 /// interface contract an abstract class leaves open) follows it, sorted so the table is stable.
 fn own_method_names(class_name: &str, info: &ClassInfo) -> Vec<String> {
@@ -174,7 +176,7 @@ fn own_method_names(class_name: &str, info: &ClassInfo) -> Vec<String> {
     for name in &info.reflection_methods {
         let key = php_symbol_key(name);
         let known = info.methods.contains_key(&key) || info.static_methods.contains_key(&key);
-        if known && declares(&key) && seen.insert(key) {
+        if known && declares(&key) && !info.is_property_hook_method(&key) && seen.insert(key) {
             names.push(name.clone());
         }
     }
@@ -182,7 +184,9 @@ fn own_method_names(class_name: &str, info: &ClassInfo) -> Vec<String> {
         .methods
         .keys()
         .chain(info.static_methods.keys())
-        .filter(|key| !seen.contains(key.as_str()) && declares(key))
+        .filter(|key| {
+            !seen.contains(key.as_str()) && declares(key) && !info.is_property_hook_method(key)
+        })
         .map(|key| {
             info.method_decls
                 .iter()

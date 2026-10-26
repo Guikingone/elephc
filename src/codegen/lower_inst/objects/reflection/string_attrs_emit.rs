@@ -60,6 +60,11 @@ pub(super) fn emit_reflection_owner_string_property_by_name(
 }
 
 /// Replaces the Reflection object's default `__attrs` array with populated metadata.
+///
+/// The slot holds the RAW `array<ReflectionAttribute>` (type tag 4 in the high word), as
+/// `patch_reflection_attribute_result` declares it and the `getAttributes()` body reads it.
+/// Main stored a boxed Mixed here; mixing the two read a box as an array and every
+/// `getAttributes()` returned garbage.
 pub(super) fn emit_reflection_attrs_property(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
@@ -284,4 +289,3 @@ pub(super) fn emit_reflection_static_property_array_property_by_name(
     abi::emit_pop_reg(ctx.emitter, result_reg);
     Ok(())
 }
-

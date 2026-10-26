@@ -6,11 +6,12 @@ pub(super) fn lower_classlike_activate(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    let Some(Immediate::ClassLikeActivation { source, kind, name, .. }) = &inst.immediate else {
+    let Some(Immediate::ClassLikeActivation(activation)) = &inst.immediate else {
         return Err(CodegenIrError::invalid_module(
             "class_like_activate requires typed declaration identity",
         ));
     };
+    let (source, kind, name) = (&activation.source, &activation.kind, &activation.name);
     if *kind != crate::parser::ast::ClassLikeKind::Interface {
         return Err(CodegenIrError::unsupported(format!(
             "class-like activation for {:?}", kind

@@ -156,12 +156,71 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 
 ## Built-in string functions
 
+`mb_parse_str($string, &$result)` decodes a URL-encoded query into the output
+array, including nested keys and repeated `[]` entries. AOT and `eval()` use the
+same encoding detection, substitution settings, and Core INI query limits.
+The example in `examples/mbstring/main.php` parses a product search and tags.
+
+The current AOT output adapter accepts local variables and managed aliases, while
+opaque eval also supports a by-reference function parameter. Raw AOT by-reference
+function parameters, property-backed references, and generic callable wrappers
+still require additional output adapters. PHP error-handler routing and shared
+indexed-array root promotion also remain incomplete. These are documented
+call-shape limitations, not missing symbols: all 65 PHP 8.5.10 mbstring functions
+and all 9 constants are registered for native compilation and `eval()`.
+
+Programs using mbstring retain response MIME metadata when `header()` accepts a
+header, including in CLI builds. Output buffering and `print_r(..., true)` keep
+headers mutable until nonempty bytes reach the final output destination. Startup
+`default_mimetype` and `default_charset` settings initialize the response defaults.
+`mb_output_handler($string, $status)` converts buffer phases using the shared
+internal/output encodings, MIME selection, and substitution settings. Direct,
+named, unpacked, and callable calls work in AOT and `eval()`. Use
+`ob_start("mb_output_handler")` to convert buffered output automatically, as in
+`examples/mbstring/main.php`. The contract-owned default MIME expression needs no
+native package. A custom `mbstring.http_output_conv_mimetypes` expression inside
+opaque eval requires the complete `--with-mbstring` capability and managed PCRE2.
+
+Runtime mutation of the Core response settings remains incomplete. Eval handler
+registrations release their retained callback when the individual buffer closes,
+with context teardown handling registrations that remain active. PHP error-handler
+routing and web transport verification remain open.
+
 | Function | Signature | Description |
 |---|---|---|
 | `strlen()` | `strlen($str): int` | Returns string length |
-| `mb_strlen()` | `mb_strlen($str, $encoding = null): int` | Character count in the given encoding. An omitted or `null` encoding counts UTF-8, grouping malformed sequences like mbstring; `8bit`/`binary`/`7bit` return the byte length; other encodings are decoded through the system `iconv`. An unknown encoding name throws `\ValueError` |
-| `mb_strtoupper()` | `mb_strtoupper($str, $encoding = null): string` | Uppercase with mbstring's full Unicode case mapping (`ß` becomes `SS`). An omitted or `null` encoding means UTF-8; an unknown encoding name throws `\ValueError`. See [the case-mapping notes](#mb_strtoupper-and-mb_strtolower) |
-| `mb_strtolower()` | `mb_strtolower($str, $encoding = null): string` | Lowercase with mbstring's full Unicode case mapping, including the Greek final-sigma rule (`ΣΑΣ` becomes `σας`) |
+| `mb_strlen()` | `mb_strlen($str, $encoding = null): int` | Character count through the shared mbstring engine, covering all 79 PHP encoding names and their aliases. An omitted or `null` encoding uses the request internal encoding, initially UTF-8. Invalid names throw `\\ValueError` with the original name in the message. AOT and eval share the same codec behavior and deprecated-encoding lookup cache |
+| `mb_strwidth()` | `mb_strwidth($str, $encoding = null): int` | Counts East Asian wide/fullwidth characters as two display columns and other characters as one |
+| `mb_strtoupper()` / `mb_strtolower()` | `mb_strtoupper($str, $encoding = null): string` | Unicode case conversion, including expanding mappings and contextual Greek sigma |
+| `mb_convert_case()` | `mb_convert_case($str, $mode, $encoding = null): string` | Applies `MB_CASE_UPPER`, `LOWER`, `TITLE`, or `FOLD`, including all four `_SIMPLE` variants |
+| `mb_ucfirst()` / `mb_lcfirst()` | `mb_ucfirst($str, $encoding = null): string` | Changes the first character using Unicode title case or lowercase |
+| `mb_strimwidth()` | `mb_strimwidth($str, $start, $width, $trim_marker = "", $encoding = null): string` | Trims by display columns and includes the marker in the width budget; offsets count characters |
+| `mb_substr()` | `mb_substr($string, $start, $length = null, $encoding = null): string` | Select characters by signed start and nullable length |
+| `mb_str_split()` | `mb_str_split($string, $length = 1, $encoding = null): array` | Split into indexed strings of at most the requested character count; empty input returns an empty array |
+| `mb_list_encodings()` | `mb_list_encodings(): array` | List all canonical encoding names in PHP order; returned arrays can be copied and changed independently |
+| `mb_encoding_aliases()` | `mb_encoding_aliases($encoding): array` | List aliases in PHP catalog order; invalid encoding names throw ValueError |
+| `mb_preferred_mime_name()` | `mb_preferred_mime_name($encoding): string\|false` | Return the preferred MIME name, or warn and return false when none exists |
+| `mb_strcut()` | `mb_strcut($string, $start, $length = null, $encoding = null): string` | Select whole encoded characters within byte boundaries |
+| `mb_scrub()` | `mb_scrub($string, $encoding = null): string` | Replace malformed units with the current substitution setting |
+| `mb_trim()` | `mb_trim($string, $characters = null, $encoding = null): string` | Trim Unicode whitespace or an explicit character set from both ends |
+| `mb_ltrim()` | `mb_ltrim($string, $characters = null, $encoding = null): string` | Trim Unicode whitespace or an explicit set from the beginning |
+| `mb_rtrim()` | `mb_rtrim($string, $characters = null, $encoding = null): string` | Trim Unicode whitespace or an explicit set from the end |
+| `mb_str_pad()` | `mb_str_pad($string, $length, $pad_string = " ", $pad_type = 1, $encoding = null): string` | Pad to a character count using STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH |
+| `mb_convert_kana()` | `mb_convert_kana($string, $mode = "KV", $encoding = null): string` | Convert Japanese width and kana; defaults to KV |
+| `mb_substr_count()` | `mb_substr_count($haystack, $needle, $encoding = null): int` | Count non-overlapping encoded substring occurrences |
+| `mb_ord()` | `mb_ord($string, $encoding = null): int\|false` | Read the first Unicode codepoint; an empty string throws ValueError |
+| `mb_chr()` | `mb_chr($codepoint, $encoding = null): string\|false` | Encode a Unicode codepoint; unrepresentable values return false |
+| `mb_strpos()` | `mb_strpos($haystack, $needle, $offset = 0, $encoding = null): int\|false` | Find the first character position |
+| `mb_stripos()` | `mb_stripos($haystack, $needle, $offset = 0, $encoding = null): int\|false` | Find the first character position using simple case folding |
+| `mb_strrpos()` | `mb_strrpos($haystack, $needle, $offset = 0, $encoding = null): int\|false` | Find the last character position |
+| `mb_strripos()` | `mb_strripos($haystack, $needle, $offset = 0, $encoding = null): int\|false` | Find the last character position using simple case folding |
+| `mb_strstr()` | `mb_strstr($haystack, $needle, $before_needle = false, $encoding = null): string\|false` | Select text before or from the first matching substring |
+| `mb_stristr()` | `mb_stristr($haystack, $needle, $before_needle = false, $encoding = null): string\|false` | Select text around the first case-insensitive substring match |
+| `mb_strrchr()` | `mb_strrchr($haystack, $needle, $before_needle = false, $encoding = null): string\|false` | Select text around the last matching substring |
+| `mb_strrichr()` | `mb_strrichr($haystack, $needle, $before_needle = false, $encoding = null): string\|false` | Select text around the last case-insensitive substring match |
+| `mb_language()` | `mb_language($language = null): string\|bool` | Get the current language, or set it and return true |
+| `mb_internal_encoding()` | `mb_internal_encoding($encoding = null): string\|bool` | Get the default text encoding, or set it and return true |
+| `mb_http_output()` | `mb_http_output($encoding = null): string\|bool` | Get or set the encoding selected for HTTP output conversion |
 | `iconv_strlen()` | `iconv_strlen($str, $encoding = null): int\|false` | Character count through the platform `iconv`. See [iconv](./iconv.md) for the whole extension |
 | `substr()` | `substr($str, $start [, $len]): string` | Extract a substring. Negative `$start` counts from the end; a negative `$len` omits that many trailing bytes from the selected suffix, matching PHP |
 | `strpos()` | `strpos($haystack, $needle, $offset = 0): int\|false` | Find first occurrence at or after `$offset`. A negative `$offset` counts from the end; one outside the haystack raises `ValueError`. Returns `false` if not found |
@@ -194,7 +253,7 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 | `ord()` | `ord($char): int` | ASCII value of first character |
 | `chr()` | `chr($code): string` | Character from ASCII code |
 | `explode()` | `explode($separator, $str [, $limit]): array` | Split string into array. An empty `$separator` throws `\ValueError`. |
-| `implode()` | `implode($separator, $array): string`<br>`implode($array): string` | Join array into string; the one-argument form joins with an empty separator |
+| `implode()` | `implode($separator, $array): string`<br>`implode($array): string` | Join array into string; the one-argument form joins with an empty separator. Takes an indexed or associative array (keys are ignored) of any element type, including one reached through a `?array`, `mixed` or union slot whose shape is only known at run time. A value that is not an array throws `\TypeError`. |
 | `number_format()` | `number_format($n [, $dec [, $dec_point, $thou_sep]]): string` | Format number. A negative `$dec` is not an error: it rounds to that power of ten and formats with no decimals. |
 | `sprintf()` | `sprintf($fmt, ...): string` | Format string (%s, %d, %f, %x, %e, %g, %o, %c, %%) |
 | `printf()` | `printf($fmt, ...): int` | Format and print |
@@ -214,8 +273,8 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 | `hex2bin()` | `hex2bin($str): string` | Convert hex to binary |
 | `long2ip()` | `long2ip($ip): string` | Format a 32-bit integer as a dotted-quad IPv4 address |
 | `ip2long()` | `ip2long($ip): int\|false` | Parse a decimal dotted-quad IPv4 string into an integer, or `false` if invalid |
-| `inet_pton()` | `inet_pton($ip): string\|false` | Pack a dotted-quad IPv4 address into a 4-byte binary string, or `false` if invalid |
-| `inet_ntop()` | `inet_ntop($binary): string\|false` | Render a 4-byte IPv4 binary string as a dotted-quad address, or `false` if the length is not 4 |
+| `inet_pton()` | `inet_pton($ip): string\|false` | Pack an IPv4 or IPv6 address into its network-order binary string -- 4 bytes for IPv4, 16 for IPv6 -- or `false` if invalid. A `:` anywhere selects the IPv6 family, as in PHP. `::` compression and the embedded-IPv4 form (`::ffff:192.0.2.128`) are accepted everywhere. A zone identifier (`fe80::1%eth0`) is passed through to the platform's `inet_pton(3)`, which takes it on macOS and refuses it on Linux — the same split PHP itself has, for the same reason. **Divergence:** the input is bounded at 255 bytes and anything longer is `false` without being parsed, where PHP passes a string of any length to `inet_pton(3)`. See the note below the table. |
+| `inet_ntop()` | `inet_ntop($binary): string\|false` | Render a packed address as text: a 4-byte string as a dotted quad, a 16-byte string as IPv6 in PHP's canonical spelling (longest zero run compressed to `::`, an IPv4-mapped address keeping its dotted-quad tail). Any other length is `false`. |
 | `md5()` | `md5($str, $binary = false): string` | MD5 hash — 32-char lowercase hex by default, or the raw 16 digest bytes when `$binary` is `true` |
 | `sha1()` | `sha1($str, $binary = false): string` | SHA1 hash — 40-char lowercase hex by default, or the raw 20 digest bytes when `$binary` is `true` |
 | `crc32()` | `crc32($str): int` | CRC-32 checksum (standard zlib/PHP polynomial), returned as a non-negative 32-bit integer |
@@ -232,7 +291,7 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 | `openssl_decrypt()` | `openssl_decrypt($data, $cipher_algo, $passphrase, $options = 0, $iv = "", $tag = null, $aad = ""): string\|false` | Decrypt and, for GCM, authenticate data with the supplied tag and AAD. |
 | `openssl_cipher_iv_length()` | `openssl_cipher_iv_length($cipher_algo): int\|false` | Return the default IV length for a supported cipher. |
 | `openssl_get_cipher_methods()` | `openssl_get_cipher_methods($aliases = false): array` | Return the exact cipher matrix implemented by elephc. |
-| `htmlspecialchars()` | `htmlspecialchars($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Escape HTML special chars: `&` `<` `>` `"` `'` (single quote as `&#039;`). The `ENT_*` flag constants (`ENT_QUOTES`, `ENT_COMPAT`, `ENT_NOQUOTES`, `ENT_HTML401`, `ENT_HTML5`, `ENT_XHTML`, `ENT_XML1`, `ENT_SUBSTITUTE`, `ENT_IGNORE`) are defined with PHP's values; `$flags` and `$encoding` are accepted but the escaper currently always applies `ENT_QUOTES` behaviour |
+| `htmlspecialchars()` | `htmlspecialchars($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Escape HTML special chars: `&` `<` `>` always, `"` under `ENT_COMPAT`, `'` under `ENT_QUOTES`; `ENT_NOQUOTES` leaves both quotes literal. The single quote is `&#039;` under `ENT_HTML401` and `&apos;` under `ENT_HTML5`, `ENT_XHTML` or `ENT_XML1`. The `ENT_*` flag constants are defined with PHP's values; `$encoding` is accepted but not applied |
 | `htmlentities()` | `htmlentities($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Alias for htmlspecialchars |
 | `html_entity_decode()` | `html_entity_decode($str): string` | Decode HTML entities |
 | `parse_url()` | `parse_url(string $url, int $component = -1): array\|string\|int\|null\|false` | Parse present URL components without decoding them; `PHP_URL_*` selects one component |
@@ -252,43 +311,23 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 | `ctype_alnum()` | `ctype_alnum($str): bool` | All chars are alphanumeric |
 | `ctype_space()` | `ctype_space($str): bool` | All chars are whitespace |
 
-#### `mb_strtoupper()` and `mb_strtolower()`
+#### Known divergence: `inet_pton()` caps its argument at 255 bytes
 
-Both functions reproduce php 8.5's mbstring byte for byte, in compiled code and inside
-`eval()` alike (the two backends share one implementation):
+PHP hands the whole string argument to `inet_pton(3)`, whatever its length.
+elephc copies it into a 255-byte-plus-NUL stack buffer first and answers `false`
+for anything longer, without parsing it.
 
-- **Full case mapping.** Mappings follow Unicode's SpecialCasing rules, so a character can
-  expand: `mb_strtoupper("straße ﬁ")` is `"STRASSE FI"` and `mb_strtolower("İ")` is `"i̇"`
-  (`i` plus U+0307). Titlecase digraphs map to their pair (`ǅ` uppercases to `Ǆ`).
-- **Final sigma.** `mb_strtolower()` turns a capital sigma into `ς` when a cased letter
-  precedes it and none follows (skipping case-ignorable characters such as `'` or `.`), and
-  into `σ` otherwise: `mb_strtolower("ΣΑΣ")` is `"σας"`.
-- **Invalid input.** Each maximal invalid UTF-8 subpart becomes one `?`:
-  `mb_strtoupper("a\xFFb")` is `"A?B"`, and a truncated `"\xE2\x82"` is a single `?`.
-- **Encodings.** Omitted or `null` means UTF-8 (elephc has no `mb_internal_encoding()`).
-  Names are matched against mbstring's list, case-insensitively, with its aliases (`utf8`,
-  `latin1`, `cp1252`, ...). The result is exact for UTF-8, ASCII, `7bit`, `8bit`/`binary`,
-  every single-byte encoding mbstring ships (`ISO-8859-*`, `Windows-1251/1252/1254`,
-  `CP866`, `CP850`, `KOI8-R`, `KOI8-U`, `ArmSCII-8`), and the UTF-16, UTF-32, UCS-2 and UCS-4
-  families (BOM detection included). A character the target encoding cannot hold becomes `?`
-  (`mb_strtoupper("\xFF", "ISO-8859-1")` is `"?"`, because `Ÿ` is not in Latin-1), and
-  ISO-8859-9 applies the Turkish dotted/dotless `i` rules.
-- **Unknown names** throw `\ValueError` with php's message, quoting the name:
-  `mb_strtoupper(): Argument #2 ($encoding) must be a valid encoding, "nope" given`.
+The two only disagree for input that the platform parser would have accepted
+above 255 bytes. A full IPv6 address with an embedded IPv4 tail is 45 bytes, so
+the only way past the bound is a very long zone identifier — and glibc rejects
+zone identifiers outright, while Darwin's accepts interface names far shorter
+than this. Anything else that long is not an address, and both implementations
+answer `false` for it; elephc just does so without calling the parser.
 
-Two documented differences remain:
-
-- The CJK encodings `EUC-JP`, `SJIS`, `eucJP-win`, `EUC-JP-2004`, `SJIS-2004`, `CP932`,
-  `SJIS-win`, `GB18030`, `EUC-CN`, `CP936`, `BIG-5`, `CP950`, `EUC-KR` and `UHC` go through
-  the platform `iconv`. Valid text converts exactly as in php, but a byte the platform
-  rejects always becomes one `?` where mbstring may map or group it differently, and a
-  platform whose `iconv` lacks the charset throws the unsupported-encoding `\ValueError`
-  below.
-- The remaining names mbstring accepts (`UTF-7`, `UTF7-IMAP`, `HZ`, `EUC-TW`, the
-  `ISO-2022-*`/`JIS`/`CP5022x` family, the `SJIS-mac` and carrier `SJIS-Mobile#*` /
-  `UTF-8-Mobile#*` variants, and the deprecated `BASE64`, `UUENCODE`, `HTML-ENTITIES` and
-  `Quoted-Printable` pseudo-encodings) throw `\ValueError`:
-  `... Argument #2 ($encoding) must be an encoding elephc supports, "UTF-7" given`.
+```php
+var_dump(inet_pton(str_repeat("a", 300)));   // false on both
+var_dump(inet_pton("::1"));                  // 16 bytes on both
+```
 
 #### `explode()` and the `$limit` argument
 
@@ -381,10 +420,6 @@ Known divergences:
 - **HMAC streaming is unsupported.** `hash_init($algo, HASH_HMAC, $key)` is rejected at
   compile time (`Function 'hash_init' expects 1 arguments, got 3`). Use
   [`hash_hmac()`](builtins/string/hash_hmac.md) instead, which is fully supported.
-- **Object rendering omits undeclared dynamic properties.** `print_r()` and
-  `var_export()` render declared object properties, including a `HashContext`'s
-  class-shaped output, but properties created dynamically at runtime are not yet
-  included by the renderer.
 - **Inside `eval()`**, `hash_init()` still returns a resource: the eval interpreter has
   its own hashing implementation that has not been moved to the object model.
 

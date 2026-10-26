@@ -10,7 +10,7 @@
 use super::*;
 
 /// Dynamic eval expressions evaluated by the interpreter against runtime cells.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalExpr {
     Array(Vec<EvalArrayElement>),
     ArrayGet {
@@ -251,15 +251,35 @@ pub enum EvalExpr {
     },
 }
 
+impl EvalExpr {
+    /// Whether this is a call whose RESULT can take an append: `app(Bag::class)[] = $v` appends
+    /// through the returned object's `offsetSet()` (Laravel's `defer()` does this). php accepts
+    /// it for any call; an array result is a temporary, so the append has no effect.
+    pub(crate) fn is_call_result(&self) -> bool {
+        matches!(
+            self,
+            EvalExpr::Call { .. }
+                | EvalExpr::NamespacedCall { .. }
+                | EvalExpr::DynamicCall { .. }
+                | EvalExpr::MethodCall { .. }
+                | EvalExpr::DynamicMethodCall { .. }
+                | EvalExpr::NullsafeMethodCall { .. }
+                | EvalExpr::NullsafeDynamicMethodCall { .. }
+                | EvalExpr::StaticMethodCall { .. }
+                | EvalExpr::DynamicStaticMethodCall { .. }
+        )
+    }
+}
+
 /// The right-hand side accepted by PHP's `instanceof` operator.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalInstanceOfTarget {
     ClassName(String),
     Expr(Box<EvalExpr>),
 }
 
 /// One source-order function or method call argument parsed from eval code.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalCallArg {
     name: Option<String>,
     spread: bool,
@@ -311,7 +331,7 @@ impl EvalCallArg {
 }
 
 /// One element in a PHP array literal parsed from an eval fragment.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalArrayElement {
     Value(EvalExpr),
     Reference(EvalExpr),
@@ -326,32 +346,33 @@ pub enum EvalArrayElement {
 }
 
 /// One ordered arm in a PHP `match` expression parsed from an eval fragment.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalMatchArm {
     pub patterns: Vec<EvalExpr>,
     pub value: EvalExpr,
 }
 
 /// One ordered case arm in a PHP switch parsed from an eval fragment.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalSwitchCase {
     pub condition: Option<EvalExpr>,
     pub body: Vec<EvalStmt>,
 }
 
 /// Literal syntax supported by the initial EvalIR parser.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalConst {
     Null,
     Bool(bool),
     Int(i64),
     Float(f64),
     String(String),
+    /// A literal containing bytes that cannot be stored in a Rust UTF-8 string.
     Bytes(Vec<u8>),
 }
 
 /// PHP magic constants supported by runtime eval fragments.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalMagicConst {
     File,
     Dir,
@@ -364,7 +385,7 @@ pub enum EvalMagicConst {
 }
 
 /// Binary operations supported by the initial EvalIR parser.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalBinOp {
     Add,
     Sub,
@@ -398,7 +419,7 @@ pub enum EvalBinOp {
 /// (`[, , , $x]`), its slots are LVALUES rather than values (`[$this->x, $h["k"], S::$p]`), it
 /// may name keys (`["a" => $x]`), and it nests (`[[$a, $b], $c]`). Modelling it as a list of
 /// optional variable NAMES accepted only the simplest quarter of that.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalDestructureTarget {
     /// The key to read, for the `["a" => $x]` form; positional slots read their index.
     pub key: Option<EvalExpr>,
@@ -407,7 +428,7 @@ pub struct EvalDestructureTarget {
 }
 
 /// The destination of one destructuring slot.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalDestructureSlot {
     /// Any writable PHP lvalue: a variable, a property, an element, a static property.
     Lvalue(EvalExpr),
@@ -416,7 +437,7 @@ pub enum EvalDestructureSlot {
 }
 
 /// Cast targets supported by runtime eval expressions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalCastType {
     Int,
     Float,
@@ -427,7 +448,7 @@ pub enum EvalCastType {
 }
 
 /// Unary operations supported by the initial EvalIR parser.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalUnaryOp {
     Plus,
     Negate,

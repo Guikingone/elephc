@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Reads only; preserves the table pointer so a caller can validate before using it.
+//! - Entries live in the separate storage `hash_layout` addresses, not after the header.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -50,10 +51,7 @@ pub fn emit_hash_debug_validate_chain(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_debug_validate_chain_end");             // yes — compare the walk length with the count
     emitter.instruction("cmp x12, x11");                                        // is the slot index inside the table?
     emitter.instruction("b.hs __rt_hash_debug_validate_chain_fail");            // no — the chain left the table
-    emitter.instruction("mov x14, #64");                                        // hash entry stride in bytes
-    emitter.instruction("mul x15, x12, x14");                                   // byte offset of the visited slot
-    emitter.instruction("add x15, x0, x15");                                    // advance from the table base to the slot
-    emitter.instruction("add x15, x15, #40");                                   // skip the 40-byte hash header
+    super::hash_layout::emit_entry_address(emitter, "x15", "x0", "x12");
     emitter.instruction("ldr x16, [x15]");                                      // load the slot's occupancy flag
     emitter.instruction("cmp x16, #1");                                         // is the visited slot actually occupied?
     emitter.instruction("b.ne __rt_hash_debug_validate_chain_fail");            // no — insertion order points at empty or tombstoned storage
@@ -74,7 +72,6 @@ pub fn emit_hash_debug_validate_chain(emitter: &mut Emitter) {
     emitter.instruction("and x17, x17, #15");                                   // payload pointers are 16-byte aligned
     emitter.instruction("cbnz x17, __rt_hash_debug_validate_chain_fail");       // a misaligned key is a header word, not a pointer
     emitter.label("__rt_hash_debug_validate_chain_counted");
-    emitter.instruction("mov x14, #64");                                        // restore the entry stride the loop reuses
     emitter.instruction("add x13, x13, #1");                                    // count this slot as visited
     emitter.instruction("cmp x13, x11");                                        // has the walk exceeded the table's capacity?
     emitter.instruction("b.hi __rt_hash_debug_validate_chain_fail");            // yes — the chain contains a cycle
@@ -114,8 +111,7 @@ fn emit_hash_debug_validate_chain_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hash_debug_validate_chain_end");               // yes — compare the walk length with the count
     emitter.instruction("cmp r10, r9");                                         // is the slot index inside the table?
     emitter.instruction("jae __rt_hash_debug_validate_chain_fail");             // no — the chain left the table
-    emitter.instruction("imul rcx, r10, 64");                                   // byte offset of the visited slot
-    emitter.instruction("lea rcx, [rax + rcx + 40]");                           // advance past the 40-byte hash header
+    super::hash_layout::emit_entry_address(emitter, "rcx", "rax", "r10");
     emitter.instruction("cmp QWORD PTR [rcx], 1");                              // is the visited slot actually occupied?
     emitter.instruction("jne __rt_hash_debug_validate_chain_fail");             // no — insertion order points at empty or tombstoned storage
     emitter.instruction("cmp QWORD PTR [rcx + 16], -1");                        // is this an inline integer key?

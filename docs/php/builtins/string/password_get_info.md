@@ -2,7 +2,7 @@
 title: "password_get_info()"
 description: "Returns the algorithm and options a password hash was made with."
 sidebar:
-  order: 852
+  order: 945
 ---
 
 ## password_get_info()
@@ -21,9 +21,9 @@ Returns the algorithm and options a password hash was made with.
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected password prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/password_get_info.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/password_get_info.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/password_get_info.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/password_get_info.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

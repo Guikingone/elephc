@@ -18,15 +18,9 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
         EvaluatedCallable::ForeignContext { callback, owner } => {
-            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_evaluated_callable_with_values(
-                callback,
-                evaluated_args,
-                owner_context,
-                values,
-            )
+            with_foreign_owner_context(owner, context, values, |owner_context, values| {
+                eval_evaluated_callable_with_values(callback, evaluated_args, owner_context, values)
+            })
         }
         EvaluatedCallable::Named { name, .. } => {
             if let Some(closure) = context.closure(name).cloned() {
@@ -94,7 +88,9 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
                 context,
                 values,
             ),
-            None => eval_method_call_result(*object, method, evaluated_args, context, values),
+            None => with_closure_method_scope(bridge_scope.as_deref(), context, |context| {
+                eval_method_call_result(*object, method, evaluated_args, context, values)
+            }),
             }
         }
         EvaluatedCallable::StaticMethod {
@@ -249,15 +245,14 @@ pub(super) fn eval_evaluated_callable_with_call_user_func_values(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
         EvaluatedCallable::ForeignContext { callback, owner } => {
-            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_evaluated_callable_with_call_user_func_values(
-                callback,
-                evaluated_args,
-                owner_context,
-                values,
-            )
+            with_foreign_owner_context(owner, context, values, |owner_context, values| {
+                eval_evaluated_callable_with_call_user_func_values(
+                    callback,
+                    evaluated_args,
+                    owner_context,
+                    values,
+                )
+            })
         }
         EvaluatedCallable::Named { name, .. } => {
             eval_named_callable_with_call_user_func_values(name, evaluated_args, context, values)
@@ -334,14 +329,16 @@ pub(super) fn eval_evaluated_callable_with_call_user_func_values(
                     values,
                 )
             }
-            None => eval_object_method_with_call_user_func_values(
-                *object,
-                method,
-                EvalObjectCallbackKind::Method,
-                evaluated_args,
-                context,
-                values,
-            ),
+            None => with_closure_method_scope(bridge_scope.as_deref(), context, |context| {
+                eval_object_method_with_call_user_func_values(
+                    *object,
+                    method,
+                    EvalObjectCallbackKind::Method,
+                    evaluated_args,
+                    context,
+                    values,
+                )
+            }),
             }
         }
         EvaluatedCallable::StaticMethod {
@@ -392,15 +389,14 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
     let evaluated_args = eval_clear_evaluated_arg_ref_targets(evaluated_args);
     match callback {
         EvaluatedCallable::ForeignContext { callback, owner } => {
-            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_evaluated_callable_with_by_value_call_args(
-                callback,
-                evaluated_args,
-                owner_context,
-                values,
-            )
+            with_foreign_owner_context(owner, context, values, |owner_context, values| {
+                eval_evaluated_callable_with_by_value_call_args(
+                    callback,
+                    evaluated_args,
+                    owner_context,
+                    values,
+                )
+            })
         }
         EvaluatedCallable::Named { name, .. } => {
             eval_named_callable_with_call_user_func_args(name, evaluated_args, context, values)
@@ -473,14 +469,16 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
                     values,
                 )
             }
-            None => eval_object_method_with_call_user_func_args(
-                *object,
-                method,
-                EvalObjectCallbackKind::Method,
-                evaluated_args,
-                context,
-                values,
-            ),
+            None => with_closure_method_scope(bridge_scope.as_deref(), context, |context| {
+                eval_object_method_with_call_user_func_args(
+                    *object,
+                    method,
+                    EvalObjectCallbackKind::Method,
+                    evaluated_args,
+                    context,
+                    values,
+                )
+            }),
             }
         }
         EvaluatedCallable::StaticMethod {
@@ -531,7 +529,6 @@ pub(super) fn eval_clear_evaluated_arg_ref_targets(
             name: arg.name,
             value: arg.value,
             ref_target: None,
-            owned: arg.owned,
         })
         .collect()
 }
@@ -553,3 +550,23 @@ fn eval_native_descriptor_call(
     let bound = bind_evaluated_native_function_args(&decoded.function, evaluated_args, context, values)?;
     eval_native_function_with_values(decoded.function, bound, context, values)
 }
+
+/// Runs an interpreted-method dispatch under the class scope its Closure was created in.
+///
+/// Only a first-class callable of an interpreted method carries a `bridge_scope` without a native
+/// class, and php settles that Closure's access where it was made: a call from any other scope
+/// must still reach a protected or private target. Other callbacks have no scope and run as is.
+pub(super) fn with_closure_method_scope<T>(
+    scope: Option<&str>,
+    context: &mut ElephcEvalContext,
+    call: impl FnOnce(&mut ElephcEvalContext) -> Result<T, EvalStatus>,
+) -> Result<T, EvalStatus> {
+    let Some(scope) = scope else {
+        return call(context);
+    };
+    context.push_class_scope(scope);
+    let result = call(context);
+    context.pop_class_scope();
+    result
+}
+

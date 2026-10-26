@@ -2,7 +2,7 @@
 title: "password_needs_rehash()"
 description: "Reports whether a hash does not match the given algorithm and options."
 sidebar:
-  order: 854
+  order: 947
 ---
 
 ## password_needs_rehash()
@@ -23,9 +23,9 @@ Reports whether a hash does not match the given algorithm and options.
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected password prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/password_needs_rehash.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/password_needs_rehash.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/password_needs_rehash.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/password_needs_rehash.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

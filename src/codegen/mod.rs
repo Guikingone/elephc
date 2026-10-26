@@ -13,18 +13,24 @@ mod aarch64_relax;
 mod user_assembly;
 pub use user_assembly::UserAssembly;
 mod block_emit;
+pub(crate) use block_emit::static_property_owner_body;
+pub use block_emit::print_op_stats;
 mod classlike_activation;
 mod source_units;
 pub(crate) mod callable_reachability;
+mod const_default_values;
 pub(crate) mod context;
 mod enum_singletons;
-mod eval_argument_owners;
 mod eval_boxed_callable_helper;
 mod eval_callable_helpers;
 mod eval_class_constant_helpers;
 mod class_id_dispatch;
+mod eval_argument_helpers;
 mod eval_constructor_helpers;
+mod eval_error_handler_helpers;
+mod eval_handler_helpers;
 mod eval_method_helpers;
+mod eval_value_helpers;
 mod eval_property_helpers;
 mod eval_ref_arg_helpers;
 mod eval_reflection_helpers;
@@ -35,16 +41,24 @@ mod frame;
 mod function_variants;
 mod literal_defaults;
 mod local_analysis;
+mod mbstring_configuration;
 pub(crate) mod lower_inst;
 mod lower_term;
 mod runtime_callable_invoker;
+#[cfg(test)]
+pub(crate) use runtime_callable_invoker::function_returns_owned_string;
 mod runtime_metadata;
+mod return_ownership;
 mod shared_count_guard;
 mod shared_helper;
 mod shared_mixed_callable;
 mod shared_mixed_string;
+mod shared_null_method_trace;
 mod shared_static_throw;
+mod shared_type_error_given;
+mod shared_eval_status;
 mod shared_reflection;
+mod shared_mbstring_callable;
 mod shared_state;
 pub(crate) mod stack_guard;
 pub mod value_placement;
@@ -81,7 +95,8 @@ pub use crate::codegen_support::{
 };
 pub use crate::codegen_support::{
     prepare_declared_name_order, set_autoload_rule_count, set_compile_profile,
-    set_linked_extensions,
+    set_ini_overrides, set_linked_extensions, set_opcache_api_restricted,
+    set_opcache_manifest_len,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -215,6 +230,13 @@ pub struct CodegenIrError {
     /// Every body the backend inventory could not lower, by EIR function name. Empty unless the
     /// inventory ran (`ELEPHC_BACKEND_INVENTORY=1` or [`collect_backend_refusals`]).
     failed_bodies: Vec<(String, String)>,
+    /// The deferrable unit this refusal belongs to when it is not the body being emitted.
+    ///
+    /// Static-property defaults are written by the entry program's prologue, so a refused
+    /// initializer surfaced as a `main` failure, which no runtime autoloader can supply, and the
+    /// whole build stopped. Naming the property (`Class::$prop`) lets the inventory record the
+    /// refusal against the declaring class's file, which the deferral round hands back.
+    owner_body: Option<String>,
 }
 
 /// Whether the backend scans every body and reports all refusals together, set by the pipeline
@@ -240,6 +262,7 @@ impl CodegenIrError {
             location: None,
             deferred: false,
             failed_bodies: Vec::new(),
+            owner_body: None,
         }
     }
 
@@ -250,6 +273,7 @@ impl CodegenIrError {
             location: None,
             deferred: false,
             failed_bodies: Vec::new(),
+            owner_body: None,
         }
     }
 
@@ -260,6 +284,7 @@ impl CodegenIrError {
             location: None,
             deferred: false,
             failed_bodies: Vec::new(),
+            owner_body: None,
         }
     }
 
@@ -270,6 +295,7 @@ impl CodegenIrError {
             location: None,
             deferred: false,
             failed_bodies: Vec::new(),
+            owner_body: None,
         }
     }
 
@@ -299,12 +325,24 @@ impl CodegenIrError {
             location: None,
             deferred: true,
             failed_bodies: Vec::new(),
+            owner_body: None,
         }
     }
 
     /// Returns whether this is the deferral signal rather than a backend fault.
     pub(super) fn is_deferred_body(&self) -> bool {
         self.deferred
+    }
+
+    /// Attributes this refusal to a deferrable unit other than the body being emitted.
+    pub(super) fn owned_by(mut self, owner_body: impl Into<String>) -> Self {
+        self.owner_body.get_or_insert_with(|| owner_body.into());
+        self
+    }
+
+    /// Returns the unit the inventory records this refusal against, when not the emitted body.
+    pub(super) fn owner_body(&self) -> Option<&str> {
+        self.owner_body.as_deref()
     }
 
     /// Returns the EIR function names the backend inventory could not lower.
@@ -383,6 +421,51 @@ pub fn generate_user_asm_from_ir_with_options(
     web_isolation: WebIsolation,
     spill_path: Option<&std::path::Path>,
 ) -> Result<UserAssembly> {
+    generate_user_asm_from_ir_with_options_and_features(
+        module,
+        gc_stats,
+        counters,
+        instrument,
+        probe,
+        heap_debug,
+        requires_elephc_tls,
+        emit,
+        exported_functions,
+        regalloc_linear,
+        web,
+        web_isolation,
+        spill_path,
+    )
+    .map(|output| output.asm)
+}
+
+/// User assembly together with runtime dependencies introduced by synthetic codegen wrappers.
+pub struct GeneratedUserAsm {
+    /// Complete target assembly for the user object (possibly spilled to disk while emitting).
+    pub asm: UserAssembly,
+    /// Whether generated wrappers reference native error or exception handler state.
+    pub handler_state: bool,
+    /// Whether generated wrappers reference the native boxed object clone adapter.
+    pub object_clone: bool,
+}
+
+/// Generates user assembly while preserving dependencies discovered after module EIR lowering.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_user_asm_from_ir_with_options_and_features(
+    module: &Module,
+    gc_stats: bool,
+    counters: bool,
+    instrument: Instrumentation,
+    probe: bool,
+    heap_debug: bool,
+    requires_elephc_tls: bool,
+    emit: Emit,
+    exported_functions: &HashMap<String, ExportedFunction>,
+    regalloc_linear: bool,
+    web: bool,
+    web_isolation: WebIsolation,
+    spill_path: Option<&std::path::Path>,
+) -> Result<GeneratedUserAsm> {
     let mut emitter = match emit {
         Emit::Cdylib => Emitter::new_cdylib(module.target),
         // A staticlib joins the executable path: it is linked once into the host
@@ -400,7 +483,7 @@ pub fn generate_user_asm_from_ir_with_options(
         emitter.emit_text_prelude();
     }
     let mut data = DataSection::new();
-    block_emit::emit_module(
+    let shared = block_emit::emit_module(
         module,
         &mut emitter,
         &mut data,
@@ -422,6 +505,7 @@ pub fn generate_user_asm_from_ir_with_options(
         emit,
         exported_functions,
         heap_debug,
+        shared,
     )
 }
 
@@ -433,8 +517,10 @@ fn finalize_user_asm(
     emit: Emit,
     exported_functions: &HashMap<String, ExportedFunction>,
     heap_debug: bool,
-) -> Result<UserAssembly> {
+    mut shared: shared_state::SharedCodegenState,
+) -> Result<GeneratedUserAsm> {
     let eval_bridge = module.required_runtime_features.eval_bridge;
+    mbstring_configuration::emit(module, &mut emitter, &mut data);
     let emit_eval_reflection_metadata =
         eval_bridge || module.required_runtime_features.eval_scope;
     if eval_bridge {
@@ -454,12 +540,6 @@ fn finalize_user_asm(
         eval_callable_support_needed,
         eval_bridge,
     );
-    eval_callable_helpers::emit_invoker_callable_arg_helper(
-        module,
-        &mut emitter,
-        &mut data,
-        &eval_callable_support,
-    );
     if eval_bridge {
         eval_boxed_callable_helper::emit_eval_boxed_callable_descriptor_helper(&mut emitter, &mut data);
         // After the callable support: a `\Closure`-typed property slot converts the boxed eval
@@ -468,6 +548,16 @@ fn finalize_user_asm(
             module,
             &mut emitter,
             &mut data,
+            &eval_callable_support,
+        );
+        eval_error_handler_helpers::emit_eval_error_handler_helpers(
+            module,
+            &mut emitter,
+            &eval_callable_support,
+        );
+        eval_handler_helpers::emit_eval_exception_handler_helpers(
+            module,
+            &mut emitter,
             &eval_callable_support,
         );
         eval_constructor_helpers::emit_eval_constructor_helpers(
@@ -485,25 +575,39 @@ fn finalize_user_asm(
         eval_reflection_helpers::emit_eval_reflection_helpers(module, &mut emitter);
         eval_reflection_owner_helpers::emit_eval_reflection_owner_helpers(module, &mut emitter);
     }
+    if shared.callable_argument_normalizer || eval_callable_support.argument_normalizer_needed {
+        lower_inst::emit_callable_argument_normalizer(module, &mut emitter, &mut data, &mut shared)?;
+    }
     let empty_globals = HashSet::<String>::new();
     let empty_static_vars = HashMap::<(String, String), PhpType>::new();
     let user_functions = runtime_user_function_sigs(module);
     let function_variant_groups = runtime_function_variant_groups(module);
     let mut allowed_class_names = runtime_referenced_class_names(module);
+    // `get_class_methods()` resolves a class NAME through `__rt_class_id_by_name`, which scans
+    // `_classes_by_name`; a class the program only names there (`get_class_methods(C::class)`)
+    // is otherwise trimmed from that table and the call answered php's TypeError.
     if module_uses_dynamic_callable_lookup(module)
         || module_uses_unserialize(module)
         || module.required_runtime_features.eval_bridge
+        || module.required_runtime_features.class_methods_introspection
     {
         allowed_class_names.extend(module.class_infos.keys().cloned());
     }
     let runtime_interfaces = runtime_referenced_interfaces(module, &allowed_class_names);
     let runtime_classes = runtime_class_infos(module);
+    crate::codegen_support::source_method_adapters::emit_source_method_adapters(
+        &mut emitter,
+        &runtime_classes,
+        Some(&allowed_class_names),
+    )
+    .map_err(CodegenIrError::invalid_module)?;
     crate::codegen::interface_wrappers::emit_interface_return_wrappers(
         &mut emitter,
         &runtime_interfaces,
         &runtime_classes,
         Some(&allowed_class_names),
-    );
+    )
+    .map_err(CodegenIrError::invalid_module)?;
     emit_intrinsic_method_wrappers(module, &mut emitter);
     if emit.is_library() {
         let mut sorted_exports: Vec<&ExportedFunction> = exported_functions.values().collect();
@@ -514,8 +618,13 @@ fn finalize_user_asm(
             module.target,
             &sorted_exports,
             heap_debug,
+            module.mbstring_startup.as_ref().map(|_| "__rt_mbstring_startup_status"),
         );
     }
+    let property_initializer_ids = module.functions.iter()
+        .filter(|function| function.flags.is_synthetic)
+        .filter_map(|function| function.name.strip_prefix("_class_propinit_")?.parse::<u64>().ok())
+        .collect();
     let user_data = runtime::emit_runtime_data_user(
         &empty_globals,
         &empty_static_vars,
@@ -529,6 +638,7 @@ fn finalize_user_asm(
         &module.declared_class_source_files,
         &runtime_classes,
         &module.enum_infos,
+        &property_initializer_ids,
         Some(&allowed_class_names),
         emit_eval_reflection_metadata,
         // The source path now feeds `Throwable::getFile()` and the ` in <file>:<line>`
@@ -539,7 +649,8 @@ fn finalize_user_asm(
         // prints it in every fatal error.
         module.source_path.as_deref(),
         module.target,
-    );
+    )
+    .map_err(CodegenIrError::invalid_module)?;
 
     let activation_names = classlike_activation::collect_activation_registry_names(module);
     if module.required_runtime_features.class_introspection {
@@ -664,6 +775,7 @@ fn finalize_user_asm(
     } else {
         &[]
     };
+    let generated_runtime_features = shared.generated_runtime_features();
     let footer = crate::codegen::visibility::hidden_directives_suffix(
         &[prefix.as_str(), &text, &user_asm],
         &exported,
@@ -673,7 +785,11 @@ fn finalize_user_asm(
     drop(prefix);
     let mut suffix = user_asm;
     suffix.push_str(&footer);
-    Ok(UserAssembly::new(spilled, text, edits, suffix))
+    Ok(GeneratedUserAsm {
+        asm: UserAssembly::new(spilled, text, edits, suffix),
+        handler_state: generated_runtime_features.handler_state,
+        object_clone: generated_runtime_features.object_clone,
+    })
 }
 
 #[cfg(test)]

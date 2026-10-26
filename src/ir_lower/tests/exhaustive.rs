@@ -15,7 +15,7 @@ use crate::codegen::platform::Target;
 use crate::ir::print_module;
 use crate::names::Name;
 use crate::parser::ast::{
-    BinOp, CallableTarget, CastType, CatchClause, ClassConst, ClassMethod, ClassProperty,
+    ArrayEntry, BinOp, CallableTarget, CastType, CatchClause, ClassConst, ClassMethod, ClassProperty,
     CType, EnumCaseDecl, Expr, ExprKind, ExternField, ExternParam, InstanceOfTarget,
     MagicConstant, PackedField, Program, PropertyHooks, StaticReceiver, Stmt, StmtKind,
     TraitUse, TypeExpr, UseItem, UseKind, Visibility,
@@ -83,6 +83,7 @@ fn dummy_check_result() -> CheckResult {
             declared_params: vec![true],
             variadic: None,
             deprecation: None,
+            is_generator: false,
         },
     );
 
@@ -140,16 +141,23 @@ fn dummy_check_result() -> CheckResult {
         throw_access_sites: HashMap::new(),
         builtin_call_types: HashMap::new(),
         flow_typed_property_accesses: HashMap::new(),
+        boxed_reference_promotion_sites: HashMap::new(),
+        buffer_read_sites: Default::default(),
+        first_class_builtin_call_types: HashMap::new(),
         loop_storage_types: HashMap::new(),
         string_incdec_locals: Default::default(),
         by_ref_local_storage_types: HashMap::new(),
         ref_param_escaping_callees: Default::default(),
+        property_bound_promotion_sites: Default::default(),
+        by_ref_call_result_sites: Default::default(),
         runtime_define_names: Default::default(),
         undefined_constant_reads: Default::default(),
         dynamic_ref_local_types: HashMap::new(),
         local_bind_kill_sites: Default::default(),
+        local_ref_detach_sites: Default::default(),
         local_retype_sites: Default::default(),
         mixed_storage_store_sites: Default::default(),
+        user_filters_reachable: true,
     }
 }
 
@@ -167,6 +175,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         declared_params: Vec::new(),
         variadic: None,
         deprecation: None,
+        is_generator: false,
     };
     let mut methods = crate::fast_hash::FastMap::default();
     methods.insert("m".to_string(), method_sig.clone());
@@ -176,11 +185,15 @@ fn class_info(_class_name: &str) -> ClassInfo {
         class_id: 1,
         declaration_span: crate::span::Span::dummy(),
         doc_comment: None,
+        is_internal: false,
         parent: None,
         is_abstract: false,
         is_final: false,
         is_readonly_class: false,
         allow_dynamic_properties: true,
+        eval_property_storage: false,
+        clone_override_property_storage: false,
+        scope_dynamic_property_storage: false,
         constants: HashMap::new(),
         constant_order: Vec::new(),
         constant_deprecations: HashMap::new(),
@@ -218,7 +231,14 @@ fn class_info(_class_name: &str) -> ClassInfo {
         abstract_property_hooks: HashMap::new(),
         reflection_properties: Vec::new(),
         reflection_methods: Vec::new(),
-        static_properties: Vec::new(),
+        property_hooks: HashMap::new(),
+        // `sp` backs the static-property statements below. The checker only lets an element
+        // reference (`C::$sp[0] = &C::$sp[1]`) reach lowering for an array static property, so
+        // the fixture declares one instead of leaving it to the untyped `Mixed` fallback.
+        static_properties: vec![(
+            "sp".to_string(),
+            PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed) },
+        )],
         static_defaults: Vec::new(),
         static_property_declaring_classes: HashMap::new(),
         static_property_visibilities: HashMap::new(),
@@ -317,6 +337,11 @@ fn lowers_every_expr_variant_smoke() {
         expr(ExprKind::FunctionCall { name: name("strlen"), args: vec![str_lit("abc")] }),
         expr(ExprKind::ArrayLiteral(vec![int(1), int(2)])),
         expr(ExprKind::ArrayLiteralAssoc(vec![(str_lit("k"), int(1))])),
+        expr(ExprKind::ArrayLiteralMixed(vec![
+            ArrayEntry::Keyed(str_lit("k"), int(1)),
+            ArrayEntry::Spread(expr(ExprKind::ArrayLiteral(vec![int(2)]))),
+            ArrayEntry::Value(int(3)),
+        ])),
         expr(ExprKind::Match {
             subject: Box::new(int(1)),
             arms: vec![(vec![int(1)], str_lit("one"))],
@@ -399,6 +424,7 @@ fn lowers_include_source_path_markers() {
         stmt(StmtKind::IncludeOnceMark { source_path: "/included.php".into() }),
         stmt(StmtKind::IncludeOnceGuard {
             source_path: "/included.php".into(),
+            required: true,
             body: vec![stmt(StmtKind::Echo(str_lit("guard")))],
         }),
     ]);
@@ -487,7 +513,7 @@ fn lowers_every_stmt_variant_smoke() {
         }),
         stmt(StmtKind::Include { path: str_lit("file.php"), once: false, required: false }),
         stmt(StmtKind::IncludeOnceMark { source_path: "inc".into() }),
-        stmt(StmtKind::IncludeOnceGuard { source_path: "inc".into(), body: vec![stmt(StmtKind::Echo(str_lit("guard")))] }),
+        stmt(StmtKind::IncludeOnceGuard { source_path: "inc".into(), required: true, body: vec![stmt(StmtKind::Echo(str_lit("guard")))] }),
         stmt(StmtKind::Throw(object.clone())),
         stmt(StmtKind::Synthetic(vec![stmt(StmtKind::Echo(str_lit("synthetic")))])),
         stmt(StmtKind::Try {
@@ -575,5 +601,54 @@ fn class_method(name: &str, is_static: bool) -> ClassMethod {
         body: vec![stmt(StmtKind::Return(Some(int(1))))],
         span: sp(),
         attributes: Vec::new(),
+    }
+}
+
+/// Verifies the three `ArrayLiteralMixed` entry forms lower to the ops their order depends on.
+///
+/// The smoke list above only proves the node lowers at all. `["k" => 1, ...[2], 3]` is the shape
+/// the ORDER matters for -- the spread's elements take the next free integer key where the
+/// spread sits -- so each form has to emit its own op, in source order, into the one hash the
+/// literal opens with. The bare value appends through a generic `runtime_call` rather than an
+/// op of its own, so this also pins that the call takes the literal's hash as its receiver.
+#[test]
+fn lowers_a_mixed_array_literal_through_set_spread_and_append() {
+    let text = lower_program(vec![stmt(StmtKind::Assign {
+        name: "mixed".to_string(),
+        value: expr(ExprKind::ArrayLiteralMixed(vec![
+            ArrayEntry::Keyed(str_lit("k"), int(1)),
+            ArrayEntry::Spread(expr(ExprKind::ArrayLiteral(vec![int(2)]))),
+            ArrayEntry::Value(int(3)),
+        ])),
+    })]);
+
+    let ops: Vec<&str> = text
+        .lines()
+        .filter_map(|line| {
+            ["hash_new", "hash_set", "array_to_hash", "hash_spread", "runtime_call"]
+                .into_iter()
+                .find(|op| line.contains(op))
+        })
+        .collect();
+    assert_eq!(
+        ops,
+        vec!["hash_new", "hash_set", "array_to_hash", "hash_spread", "runtime_call"],
+        "unexpected mixed-literal EIR: {text}"
+    );
+
+    // The one hash every entry writes into: an indexed source is promoted to its own hash first
+    // (`array_to_hash`), so "a hash exists" is not enough to prove the append went to the right
+    // one.
+    let hash = text
+        .lines()
+        .find_map(|line| line.split_once(": Heap(Hash)"))
+        .map(|(value, _)| value.trim())
+        .unwrap_or_else(|| panic!("no hash in mixed-literal EIR: {text}"));
+    for op in ["hash_set", "hash_spread", "runtime_call"] {
+        assert!(
+            text.lines()
+                .any(|line| line.trim().starts_with(&format!("{op} {hash} "))),
+            "{op} does not write into the literal's own hash {hash}: {text}"
+        );
     }
 }

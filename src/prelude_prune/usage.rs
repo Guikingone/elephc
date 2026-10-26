@@ -101,6 +101,10 @@ pub(crate) struct Usage {
     /// `types::checker::builtin_class_gate` (the throwable set) and
     /// `types::checker::builtin_types::reflection::gate` (the fourteen Reflection classes) do.
     pub(crate) includes_runtime_php: bool,
+    /// An `eval()` that is not a transparent literal fragment (see `transparent_literal_eval`):
+    /// text this walk cannot fully account for, which may load code, reach the program's own
+    /// classes and functions, or run in the interpreter.
+    pub(crate) opaque_eval: bool,
 }
 
 impl Usage {
@@ -693,6 +697,19 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 if !read && !args.is_empty() {
                     usage.dynamic_function_call = true;
                 }
+            } else if name == "eval" {
+                // A TRANSPARENT fragment (see `transparent_literal_eval`) is source like any
+                // other: its names are read here. Anything else hands the program the whole
+                // symbol table. Treating `eval('return 1;')` as introspection disabled every
+                // prelude's pruning and, through the session group's interpreter calls, linked
+                // the eval bridge into a program whose eval compiles ahead of time.
+                match transparent_literal_eval(args) {
+                    Some(fragment) => scan_program(&fragment, usage),
+                    None => {
+                        usage.opaque_eval = true;
+                        usage.introspects = true;
+                    }
+                }
             } else if INTROSPECTION_BUILTINS.contains(&name.as_str()) {
                 usage.introspects = true;
             }
@@ -793,6 +810,13 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             for (key, value) in items {
                 scan_expr(key, usage);
                 scan_expr(value, usage);
+            }
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries.iter() {
+                for expr in entry.exprs() {
+                    scan_expr(expr, usage);
+                }
             }
         }
         ExprKind::Match {
@@ -961,4 +985,63 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         }
         ExprKind::DynamicScopedConstantAccess { receiver, .. } => scan_expr(receiver, usage),
     }
+}
+
+/// The parsed statements of an `eval()` whose argument is a TRANSPARENT literal fragment: it
+/// parses, declares nothing, and calls functions by name only -- no class, method, static
+/// member, dynamic call, runtime include, further opaque `eval`, or a builtin that defines a
+/// symbol at run time. Such a fragment cannot load code, so every walk may read it as ordinary
+/// source, its named functions included. A fragment that touches classes keeps the opaque
+/// treatment: the interpreter may run it, and it needs their bridge metadata.
+pub(crate) fn transparent_literal_eval(args: &[Expr]) -> Option<Vec<Stmt>> {
+    let ExprKind::StringLiteral(fragment) = &args.first()?.kind else {
+        return None;
+    };
+    // Any include loads a file this walk never reads, whatever its path spells: the file may not
+    // even exist until run time.
+    let lowered = fragment.to_ascii_lowercase();
+    if lowered.contains("include") || lowered.contains("require") {
+        return None;
+    }
+    let program = crate::eval_aot::parse_literal_fragment(fragment, false)?;
+    if fragment_declares(&program) {
+        return None;
+    }
+    let usage = collect(&program);
+    let builtin_only = !usage.opaque_eval
+        && !usage.dynamic_function_call
+        && !usage.includes_runtime_php
+        && !usage.introspects
+        && !usage.constructs_dynamic_class
+        && usage.methods.is_empty()
+        && usage.classes.is_empty()
+        && !usage.functions.iter().any(|name| {
+            matches!(
+                name.as_str(),
+                "define" | "class_alias" | "spl_autoload_register" | "set_include_path"
+            )
+        });
+    builtin_only.then_some(program)
+}
+
+/// Whether a parsed fragment declares a function, class-like or constant at any depth.
+fn fragment_declares(program: &[Stmt]) -> bool {
+    fn declares(stmt: &Stmt) -> bool {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { .. }
+            | StmtKind::ClassDecl { .. }
+            | StmtKind::InterfaceDecl { .. }
+            | StmtKind::TraitDecl { .. }
+            | StmtKind::EnumDecl { .. }
+            | StmtKind::ConstDecl { .. } => true,
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                then_body.iter().any(declares)
+                    || elseif_clauses.iter().any(|(_, body)| body.iter().any(declares))
+                    || else_body.as_ref().is_some_and(|body| body.iter().any(declares))
+            }
+            StmtKind::NamespaceBlock { body, .. } => body.iter().any(declares),
+            _ => false,
+        }
+    }
+    program.iter().any(declares)
 }

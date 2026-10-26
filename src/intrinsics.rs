@@ -3,10 +3,11 @@
 //! Centralizes the small set of method calls that must bypass normal PHP method bodies.
 //!
 //! Called from:
-//! - `crate::codegen::expr::objects::dispatch`
+//! - EIR intrinsic call lowering and `crate::codegen::eval_method_helpers`.
 //!
 //! Key details:
 //! - Intrinsics preserve PHP-facing class/method signatures while routing codegen directly to runtime helpers.
+//! - Runtime helpers that consume boxed `Mixed` arguments declare the exact parameter indexes here.
 
 use crate::names::php_symbol_key;
 
@@ -492,6 +493,20 @@ impl IntrinsicCall {
     pub fn runtime_helper(self) -> Option<&'static str> {
         INTRINSICS[self.spec_index].runtime_helper
     }
+
+    /// Lists visible boxed argument positions whose owners the SPL helper consumes.
+    /// Offset readers release their index cells, while writers also consume stored values.
+    pub fn consumed_mixed_parameters(self) -> &'static [usize] {
+        use IntrinsicCallKind::*;
+        match self.kind {
+            SplDllPush | SplDllUnshift | SplQueueEnqueue
+            | SplDllOffsetExists | SplDllOffsetGet | SplDllOffsetUnset
+            | SplFixedOffsetExists | SplFixedOffsetGet | SplFixedOffsetUnset => &[0],
+            SplDllAdd => &[1],
+            SplDllOffsetSet | SplFixedOffsetSet => &[0, 1],
+            _ => &[],
+        }
+    }
 }
 
 /// Looks up an intrinsic by call form, PHP class name, and method name.
@@ -540,5 +555,23 @@ mod tests {
     fn ignores_user_classes_with_matching_method_names() {
         assert!(IntrinsicCall::instance_method("UserFiber", "start").is_none());
         assert!(IntrinsicCall::instance_method("Box", "current").is_none());
+    }
+
+    /// Verifies SPL storage mutators declare only the boxed Mixed owners they consume.
+    #[test]
+    fn spl_mutators_declare_consumed_mixed_parameters() {
+        let cases: &[(&str, &str, &[usize])] = &[
+            ("SplDoublyLinkedList", "push", &[0]),
+            ("SplDoublyLinkedList", "add", &[1]),
+            ("SplDoublyLinkedList", "offsetSet", &[0, 1]),
+            ("SplQueue", "enqueue", &[0]),
+            ("SplFixedArray", "offsetSet", &[0, 1]),
+            ("SplFixedArray", "offsetGet", &[0]),
+        ];
+        for &(class, method, expected) in cases {
+            let call = IntrinsicCall::instance_method(class, method)
+                .expect("SPL method should have intrinsic metadata");
+            assert_eq!(call.consumed_mixed_parameters(), expected, "{class}::{method}");
+        }
     }
 }

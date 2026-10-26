@@ -59,6 +59,59 @@ impl PhpType {
         )
     }
 
+    /// Returns whether a runtime property name of this type converts to a string the way php's
+    /// `$object->{$name}` does: strings and integers directly, `null`, booleans and floats through
+    /// their string form, and a union only when every member does. Arrays, objects and resources
+    /// are rejected, as php raises on them.
+    pub(crate) fn is_dynamic_property_name(&self) -> bool {
+        match self {
+            PhpType::Str
+            | PhpType::Int
+            | PhpType::Mixed
+            | PhpType::Void
+            // The element of an empty-array literal (`foreach ([] as $column)`): the body is
+            // unreachable at run time, so any name it uses is vacuously valid.
+            | PhpType::Never
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Float
+            | PhpType::TaggedScalar => true,
+            PhpType::Union(members) => members.iter().all(PhpType::is_dynamic_property_name),
+            _ => false,
+        }
+    }
+
+    /// Represents PHP's unrestricted array contract with a boxed packed-or-hash payload.
+    /// Unlike a concrete storage type, this declaration cannot narrow to one call site's layout.
+    pub(crate) fn php_array() -> Self {
+        Self::Union(vec![
+            Self::Array(Box::new(Self::Mixed)),
+            Self::AssocArray { key: Box::new(Self::Mixed), value: Box::new(Self::Mixed) },
+        ])
+    }
+
+    /// Identifies the exact non-null PHP array contract, not a union that also permits scalars.
+    /// Returns the representation a `new static` candidate's parameter is compared with.
+    ///
+    /// A declared `array` is the boxed packed-or-hash union, whose representation is `Mixed`; it
+    /// still holds only arrays, so it is compared as one. Otherwise
+    /// `HttpException::fromStatusCode()` planned `new static($statusCode, ...)` against
+    /// `MethodNotAllowedHttpException(array $allow, ...)` and refused the int.
+    pub(crate) fn late_bound_param_storage(&self) -> PhpType {
+        if self.is_php_array() {
+            PhpType::Array(Box::new(PhpType::Mixed))
+        } else {
+            self.codegen_repr()
+        }
+    }
+
+    pub(crate) fn is_php_array(&self) -> bool {
+        matches!(self, Self::Union(members) if members.len() == 2
+            && members.iter().any(|member| matches!(member, Self::Array(value) if **value == Self::Mixed))
+            && members.iter().any(|member| matches!(member, Self::AssocArray { key, value }
+                if **key == Self::Mixed && **value == Self::Mixed)))
+    }
+
     /// Returns a `PhpType::Resource(Some("stream"))` representing a stream resource.
     pub fn stream_resource() -> PhpType {
         PhpType::Resource(Some("stream".to_string()))
@@ -229,6 +282,26 @@ impl PhpType {
         }
     }
 
+    /// Returns whether a reference cell can be read with either payload representation.
+    ///
+    /// Object class names do not change pointer storage; semantic return compatibility is
+    /// checked separately. Container element layouts still matter even when both outer
+    /// values are pointers, so comparing only their EIR heap kind would be too permissive.
+    pub(crate) fn reference_payload_compatible(&self, expected: &PhpType) -> bool {
+        match (self.codegen_repr(), expected.codegen_repr()) {
+            (PhpType::Object(_), PhpType::Object(_)) => true,
+            (PhpType::Array(actual), PhpType::Array(expected)) => {
+                actual.reference_payload_compatible(&expected)
+            }
+            (
+                PhpType::AssocArray { key: actual_key, value: actual_value },
+                PhpType::AssocArray { key: expected_key, value: expected_value },
+            ) => actual_key.reference_payload_compatible(&expected_key)
+                && actual_value.reference_payload_compatible(&expected_value),
+            (actual, expected) => actual == expected,
+        }
+    }
+
     /// Returns true if this is an indexed array of a scalar (int/float/bool) element type.
     ///
     /// The hash-based builtins accept such indexed inputs by converting them to integer-keyed
@@ -327,6 +400,9 @@ impl fmt::Display for PhpType {
     /// Formats the type as a human-readable string using PHP-style syntax (e.g., `int`, `array<int>`,
     /// `resource<stream>`, `ptr<MyClass>`). Used for error messages and debug output.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_php_array() {
+            return write!(f, "array");
+        }
         match self {
             PhpType::Int => write!(f, "int"),
             PhpType::Float => write!(f, "float"),

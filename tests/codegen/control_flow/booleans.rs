@@ -336,3 +336,95 @@ echo (0 ?: fallback());
     );
     assert_eq!(out, "1:rhs7");
 }
+
+/// Verifies an object-valued assignment works as a ternary condition (issue #1492).
+///
+/// The backend had no truthiness for object-typed values and refused the program with
+/// `is_truthy for PHP type Object("C")`.
+#[test]
+fn test_object_assignment_as_ternary_condition() {
+    let out = compile_and_run(
+        r#"<?php
+class C {}
+function t(int $n) { $c = new C(); $o = new C(); echo ($c = $o) ? "y" : "n", "\n"; }
+t(1);
+"#,
+    );
+    assert_eq!(out, "y\n");
+}
+
+/// Verifies object truthiness in every condition shape and cast (issue #1492): an assignment in
+/// `if`, a `while` loop over a method that returns an object, `!`, `&&`, `?:`, `(bool)` and
+/// `boolval()`. Expected output is PHP 8.5.10's.
+#[test]
+fn test_object_truthiness_in_conditions_and_casts() {
+    let out = compile_and_run(
+        r#"<?php
+class Row { public function __construct(public int $n) {} }
+class Rows {
+    private int $i = 0;
+    public function next(): Row { $this->i++; return new Row($this->i); }
+}
+$o = new Row(0);
+if ($c = $o) { echo "if-assign|"; }
+$it = new Rows();
+$seen = 0;
+while ($row = $it->next()) {
+    $seen += $row->n;
+    if ($row->n === 3) { break; }
+}
+echo $seen, "|";
+echo !$o ? "neg" : "pos", "|";
+echo $o && $seen ? "and" : "no", "|";
+echo ($o ?: null) === $o ? "short" : "lost", "|";
+var_dump((bool) $o, boolval($o));
+"#,
+    );
+    assert_eq!(out, "if-assign|6|pos|and|short|bool(true)\nbool(true)\n");
+}
+
+/// Verifies an object-typed value that holds PHP null (a missed array read) is falsy, so object
+/// truthiness is a null test rather than a constant `true`. Expected output is PHP 8.5.10's.
+#[test]
+fn test_null_object_slot_is_falsy() {
+    let out = compile_and_run(
+        r#"<?php
+class C {}
+$arr = [new C(), new C()];
+echo @$arr[5] ? "t" : "f", "|";
+$x = @$arr[7];
+echo $x ? "t" : "f", "|";
+var_dump((bool) @$arr[9]);
+"#,
+    );
+    assert_eq!(out, "f|f|bool(false)\n");
+}
+
+/// Keeps the null default of a short ternary over a boolean condition.
+///
+/// `$cond ?: null` merged as `bool`, so its null branch reached a `string|bool|null` parameter
+/// as `boolean`, `??=` skipped it, and `sprintf($format)` printed the null sentinel
+/// `9223372036854775806` -- Symfony's `debug:config` env placeholders. Expected output is
+/// `php -n` 8.5's.
+#[test]
+fn test_short_ternary_with_a_null_default_stays_nullable() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function a(string|bool|null $format): string {
+    $format ??= 'x%sx';
+    return \sprintf($format, 'y');
+}
+function b(string|bool|null $format): string {
+    if (true === $format ??= 'x%sx') { return 'T'; }
+    return \sprintf($format, 'y');
+}
+function t(string|bool|null $format): string { return gettype($format); }
+function u(bool|null $format): string { return gettype($format); }
+$n = $argc > 5 ?: null;
+echo a($n), "|", b($n), "|", t($n), "|", u($n), "|", gettype($n), "|", t($argc > 5 ?: null), "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "xyx|xyx|NULL|NULL|NULL|NULL\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

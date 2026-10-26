@@ -163,7 +163,7 @@ fn emit_one_helper(
     let label = helper_label(strict_php);
     let function = helper_function(label, strict_php);
     let inst = function.instructions[0].clone();
-    let layout = frame::layout_for_function(&function, emitter.target, regalloc_linear, false);
+    let layout = frame::layout_for_function(&function, emitter.target, regalloc_linear, false, false);
     let mut ctx = FunctionContext::new(
         module,
         &function,
@@ -182,6 +182,7 @@ fn emit_one_helper(
     frame::emit_function_prologue_with_label(&mut ctx, label)?;
     load_helper_param_value(&mut ctx, 0, callback_value())?;
     load_helper_param_value(&mut ctx, 1, arg_container_value())?;
+    load_helper_param_value(&mut ctx, 2, kind_value())?;
     lower_inst::lower_mixed_callable_descriptor_invoke_inline(
         &mut ctx,
         &inst,
@@ -190,7 +191,12 @@ fn emit_one_helper(
         "callable_descriptor_invoke",
     )?;
     ctx.load_value_to_result(result_value())?;
-    frame::emit_function_return_epilogue(&mut ctx, None);
+    // The invoker hands back a fresh Mixed cell, which this helper returns as it is.
+    frame::emit_function_return_epilogue(
+        &mut ctx,
+        None,
+        super::return_ownership::ReturnOwnershipStatus::Static(true),
+    );
     Ok(())
 }
 
@@ -228,6 +234,13 @@ fn helper_function(label: &str, strict_php: bool) -> Function {
             by_ref: false,
             variadic: false,
         },
+        FunctionParam {
+            name: "kind".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        },
     ];
     let callback_slot = function.add_local(
         Some("callback".to_string()),
@@ -241,8 +254,15 @@ fn helper_function(label: &str, strict_php: bool) -> Function {
         array_ty.clone(),
         LocalKind::BorrowedTemp,
     );
+    let kind_slot = function.add_local(
+        Some("kind".to_string()),
+        IrType::I64,
+        PhpType::Int,
+        LocalKind::BorrowedTemp,
+    );
     function.no_epilogue_cleanup_slots.insert(callback_slot);
     function.no_epilogue_cleanup_slots.insert(arguments_slot);
+    function.no_epilogue_cleanup_slots.insert(kind_slot);
     function.values = vec![
         Value {
             ir_type: mixed_ir.clone(),
@@ -272,6 +292,15 @@ fn helper_function(label: &str, strict_php: bool) -> Function {
             },
             ownership: Ownership::Owned,
         },
+        Value {
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            def: ValueDef::BlockParam {
+                block: entry,
+                index: 2,
+            },
+            ownership: Ownership::Borrowed,
+        },
     ];
     function.instructions.push(Instruction::new(
         Op::CallableDescriptorInvoke,
@@ -287,7 +316,7 @@ fn helper_function(label: &str, strict_php: bool) -> Function {
     let mut block = BasicBlock::new(
         entry,
         "entry".to_string(),
-        vec![callback_value(), arg_container_value()],
+        vec![callback_value(), arg_container_value(), kind_value()],
     );
     block.instructions.push(inst_id);
     block.terminator = Some(Terminator::Return {
@@ -306,6 +335,16 @@ fn callback_value() -> ValueId {
 /// Returns the helper argument-container SSA value.
 fn arg_container_value() -> ValueId {
     ValueId::from_raw(1)
+}
+
+/// Returns the helper's callback-kind SSA value; see [`lower_inst::callback_kind_for_instruction`].
+pub(super) fn kind_value() -> ValueId {
+    ValueId::from_raw(3)
+}
+
+/// Returns whether `name` is one of the module-wide open Mixed callable helpers.
+pub(super) fn is_shared_helper_name(name: &str) -> bool {
+    name == MIXED_CALLABLE_LABEL || name == STRICT_MIXED_CALLABLE_LABEL
 }
 
 /// Returns the helper's owned Mixed result SSA value.

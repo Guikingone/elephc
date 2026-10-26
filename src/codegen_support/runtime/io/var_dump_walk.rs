@@ -38,7 +38,7 @@
 //!   `_vd_seen` recursion guard; tag 7 unboxes a Mixed cell and redispatches.
 //!   Mutual recursion with the container walkers gives arbitrary nesting depth.
 //! - Associative arrays (hashes) are handled by `__rt_var_dump_hash`, which
-//!   iterates entries via `__rt_hash_iter_next`, formats string/integer keys and
+//!   iterates entries via `__rt_hash_iter_next_value`, formats string/integer keys and
 //!   delegates every value to `__rt_var_dump_value`.
 //! - Objects (tag 6) render their full body — see `super::var_dump_object` for
 //!   the per-class descriptor, the initialized-property count, and the
@@ -1472,6 +1472,22 @@ pub fn emit_var_dump_indexed(emitter: &mut Emitter) {
     emitter.comment("--- runtime: var_dump_indexed ---");
     emitter.label_global("__rt_var_dump_indexed");
 
+    // -- hand a run-time promoted array to the hash walker --
+    // A statically `Array(Mixed)` local can hold HASH storage at run time: the write helper
+    // `__rt_array_set_mixed_key` promotes the destination when a key does not fit the packed
+    // layout, and the static type does not move with it. Walking that as an indexed array
+    // reads hash internals — `var_dump` printed `[0]=> int(9)` for a one-entry `[5] => 3`.
+    // The probe is the uniform heap-kind byte, the same one `__rt_array_edge_key` dispatches
+    // on, and the hash walker takes its argument in the same register, so this is a tail
+    // jump. The conditional branch skips OVER an unconditional one because AArch64 cannot
+    // point a conditional branch at an external label.
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
+    emitter.instruction("cmp x9, #3");                                          // kind 3 = associative hash storage
+    emitter.instruction("b.ne __rt_var_dump_indexed_packed");                   // packed storage walks inline below
+    emitter.instruction("b __rt_var_dump_hash");                                // hash storage is the hash walker's job
+    emitter.label("__rt_var_dump_indexed_packed");
+
     // Frame (64 bytes): [0]arr [8]index [16]count [24]stamp [48]x29 [56]x30.
     emitter.instruction("sub sp, sp, #64");                                     // allocate the indexed-walk frame
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
@@ -1550,6 +1566,16 @@ fn emit_var_dump_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: var_dump_indexed ---");
     emitter.label_global("__rt_var_dump_indexed");
+
+    // -- hand a run-time promoted array to the hash walker --
+    // Same runtime-promotion probe as the AArch64 path; see its comment for why a statically
+    // indexed argument can arrive holding hash storage.
+    emitter.instruction("mov rax, QWORD PTR [rdi - 8]");                        // load the uniform heap-kind header word
+    emitter.instruction("and rax, 0xff");                                       // isolate the low-byte heap kind
+    emitter.instruction("cmp rax, 3");                                          // kind 3 = associative hash storage
+    emitter.instruction("jne __rt_var_dump_indexed_packed");                    // packed storage walks inline below
+    emitter.instruction("jmp __rt_var_dump_hash");                              // hash storage is the hash walker's job
+    emitter.label("__rt_var_dump_indexed_packed");
 
     // rbp-relative frame: [-8]arr [-16]index [-24]count [-32]stamp.
     emitter.instruction("push rbp");                                            // save caller frame pointer
@@ -1743,6 +1769,10 @@ fn emit_var_dump_emit_string_key_linux_x86_64(emitter: &mut Emitter) {
 /// to `__rt_var_dump_value`, which unboxes Mixed cells and recurses into nested
 /// arrays/hashes, so a hash nests to arbitrary depth. Objects still render as
 /// `NULL` (see the module preamble).
+/// An entry that a by-reference `foreach` joined to a reference set holds tag 11 and a managed
+/// reference cell; the walk reads it raw, notes whether the cell has another holder, and then
+/// dereferences it, so `foreach ($a as &$v) { $b[] = &$v; }` prints `&` on `$a`'s entries as php
+/// does. The flag is published only after the key line, whose indent would otherwise consume it.
 /// Input: AArch64 x0 / x86_64 rdi = hash table pointer.
 pub fn emit_var_dump_hash(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -1756,7 +1786,7 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
 
     // Frame (96 bytes): [0]=hash ptr, [8]=cursor, [16]=count, [24]=items,
     //   [32]=key_ptr, [40]=key_len, [48]=val_lo, [56]=val_hi, [64]=val_tag,
-    //   [80]=x29, [88]=x30.
+    //   [72]=shared-reference flag, [80]=x29, [88]=x30.
     emitter.instruction("sub sp, sp, #96");                                     // allocate the hash-walk frame
     emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #80");                                    // establish runtime frame pointer
@@ -1774,7 +1804,17 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
 
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload hash pointer
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // x0=next cursor, x1=key ptr, x2=key len, x3=val_lo, x4=val_hi, x5=val_tag
+    emitter.instruction("bl __rt_hash_iter_next");                              // x0=next cursor, x1=key ptr, x2=key len, x3=val_lo, x4=val_hi, x5=raw val_tag
+    emitter.instruction("str xzr, [sp, #72]");                                  // assume the entry is not a shared reference
+    emitter.instruction("cmp x5, #11");                                         // does the entry hold a hash-entry reference cell?
+    emitter.instruction("b.ne __rt_vd_hash_deref");                             // ordinary entries carry no reference marker
+    emitter.instruction("ldr w9, [x3, #-12]");                                  // the reference cell's holder count
+    emitter.instruction("cmp w9, #1");                                          // held by anything besides this entry?
+    emitter.instruction("b.ls __rt_vd_hash_deref");                             // a lone reference prints as a value
+    emitter.instruction("mov x9, #1");                                          // shared reference
+    emitter.instruction("str x9, [sp, #72]");                                   // print `&` on this entry's value line
+    emitter.label("__rt_vd_hash_deref");
+    emitter.instruction("bl __rt_hash_entry_deref");                            // replace a reference-cell payload with the value it owns
     emitter.instruction("str x0, [sp, #8]");                                    // save the next iterator cursor
     emitter.instruction("str x1, [sp, #32]");                                   // save key ptr (or integer payload)
     emitter.instruction("str x2, [sp, #40]");                                   // save key len (-1 sentinel for integer keys)
@@ -1795,6 +1835,11 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_var_dump_emit_indexed_key");                   // emit `<indent>[N]=>\n`
 
     emitter.label("__rt_vd_hash_after_key");
+    emitter.instruction("ldr x9, [sp, #72]");                                   // reload the shared-reference flag
+    emitter.instruction("cbz x9, __rt_vd_hash_value");                          // an ordinary entry prints no marker
+    abi::emit_symbol_address(emitter, "x10", "_vd_ref_pending");                // flag the value line
+    emitter.instruction("str x9, [x10]");                                       // `__rt_vd_pad` prints the `&`
+    emitter.label("__rt_vd_hash_value");
     // -- render the value line; __rt_var_dump_value unboxes Mixed cells (tag 7)
     //    and recurses into nested arrays/hashes (tags 4/5) on its own --
     emitter.instruction("ldr x0, [sp, #64]");                                   // value tag → value renderer
@@ -1821,7 +1866,8 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_var_dump_hash");
 
     // rbp-relative frame: [-8]=hash ptr, [-16]=cursor, [-24]=count, [-32]=items,
-    //   [-40]=key_ptr, [-48]=key_len, [-56]=val_lo, [-64]=val_hi, [-72]=val_tag.
+    //   [-40]=key_ptr, [-48]=key_len, [-56]=val_lo, [-64]=val_hi, [-72]=val_tag,
+    //   [-80]=shared-reference flag.
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
     emitter.instruction("sub rsp, 96");                                         // allocate the hash-walk frame
@@ -1839,7 +1885,15 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // rax=next cursor, rdi=key ptr, rdx=key len, rcx=val_lo, r8=val_hi, r9=val_tag
+    emitter.instruction("call __rt_hash_iter_next");                            // rax=next cursor, rdi=key ptr, rdx=key len, rcx=val_lo, r8=val_hi, r9=raw val_tag
+    emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // assume the entry is not a shared reference
+    emitter.instruction("cmp r9, 11");                                          // does the entry hold a hash-entry reference cell?
+    emitter.instruction("jne __rt_vd_hash_deref_x86");                          // ordinary entries carry no reference marker
+    emitter.instruction("cmp DWORD PTR [rcx - 12], 1");                         // held by anything besides this entry?
+    emitter.instruction("jbe __rt_vd_hash_deref_x86");                          // a lone reference prints as a value
+    emitter.instruction("mov QWORD PTR [rbp - 80], 1");                         // print `&` on this entry's value line
+    emitter.label("__rt_vd_hash_deref_x86");
+    emitter.instruction("call __rt_hash_entry_deref");                          // replace a reference-cell payload with the value it owns
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the next iterator cursor
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save key ptr (or integer payload)
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save key len (-1 sentinel for integer keys)
@@ -1859,6 +1913,11 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_var_dump_emit_indexed_key");                 // emit `<indent>[N]=>\n`
 
     emitter.label("__rt_vd_hash_after_key_x86");
+    emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // is this entry a shared reference?
+    emitter.instruction("je __rt_vd_hash_value_x86");                           // an ordinary entry prints no marker
+    abi::emit_symbol_address(emitter, "r10", "_vd_ref_pending");                // flag the value line
+    emitter.instruction("mov QWORD PTR [r10], 1");                              // `__rt_vd_pad` prints the `&`
+    emitter.label("__rt_vd_hash_value_x86");
     // -- render the value line; __rt_var_dump_value unboxes Mixed cells (tag 7)
     //    and recurses into nested arrays/hashes (tags 4/5) on its own --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 72]");                       // value tag → value renderer

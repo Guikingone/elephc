@@ -104,7 +104,14 @@ impl Checker {
                 self.collect_widened_ref_params(&key, &params, &method.body, &mut widened);
             }
         }
-        let escaping = self.propagate_widened_ref_params(program, classes, &mut widened);
+        let (escaping, property_bound) =
+            self.propagate_widened_ref_params(program, classes, &mut widened);
+        // A parameter forwarded into a property-bound one carries the same cell, so its callers
+        // must hand over a managed cell too.
+        for (scope, param) in property_bound {
+            self.property_bound_ref_params
+                .insert((folded_scope_key(&scope), param));
+        }
         // Codegen matches a call to its callee by NAME alone (a method call may reach several
         // implementations), so the escape fact is published as the bare lowercase name.
         for (scope, _) in &escaping {
@@ -117,6 +124,9 @@ impl Checker {
             }
             for (scope, param) in &escaping {
                 eprintln!("[ref-escape] {scope} ${param}");
+            }
+            for (scope, param) in &self.property_bound_ref_params {
+                eprintln!("[ref-property-bound] {scope} ${param}");
             }
         }
         for (scope, param) in widened {
@@ -149,7 +159,10 @@ impl Checker {
         program: &Program,
         classes: &[FlattenedClass],
         widened: &mut Vec<(String, String)>,
-    ) -> std::collections::HashSet<(String, String)> {
+    ) -> (
+        std::collections::HashSet<(String, String)>,
+        std::collections::HashSet<(String, String)>,
+    ) {
         let mut bodies: Vec<RefBody<'_>> = Vec::new();
         // By-reference parameters whose DECLARED type is already a boxed cell -- `?array &`,
         // `mixed &`, a non-int union. They never enter `widened` (their representation is right
@@ -353,10 +366,19 @@ impl Checker {
         // it and runs long after `doGet` returned -- reading freed stack as the container.
         let mut captured: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
+        let mut property_bound: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
         for body in &bodies {
             for (param, by_ref) in &body.params {
                 if !by_ref {
                     continue;
+                }
+                // A property binding ESCAPES but is not widened: the property keeps its own
+                // declared representation, which the caller's cell already has.
+                if binds_property_to_ref_param(&body.body, param)
+                    || binds_array_element_to_ref_param(&body.body, param)
+                {
+                    property_bound.insert((body.scope.clone(), param.clone()));
                 }
                 let mut is_captured = false;
                 for_each_call(&body.body, &mut |call| {
@@ -381,7 +403,8 @@ impl Checker {
 
         let mut escaping = captured;
         grow(&mut escaping, &std::collections::HashSet::new());
-        escaping
+        grow(&mut property_bound, &std::collections::HashSet::new());
+        (escaping, property_bound)
     }
 
     /// Rewrites every widened by-reference parameter's type in the resolved signatures, once all
@@ -887,6 +910,20 @@ impl Checker {
         }
     }
 
+    /// Whether some body binds a property to by-reference parameter `param` of `scope`, or,
+    /// with no resolved callee, of any user callee.
+    pub(crate) fn ref_param_is_property_bound(&self, scope: Option<&str>, param: &str) -> bool {
+        match scope {
+            Some(scope) => self
+                .property_bound_ref_params
+                .contains(&(folded_scope_key(scope), param.to_string())),
+            None => self
+                .property_bound_ref_params
+                .iter()
+                .any(|(_, bound)| bound == param),
+        }
+    }
+
     /// Returns whether `param`'s by-reference cell in `scope` was widened to boxed storage.
     pub(crate) fn ref_param_is_widened(&self, scope: &str, param: &str) -> bool {
         self.widened_ref_params
@@ -940,7 +977,7 @@ impl Checker {
 /// DECLARATION on one side and from the CALL on the other. `php_symbol_key` is applied per segment
 /// so `Foo::Bar` and `foo::bar` agree without `Foo::bar` colliding with a function named `foo::bar`
 /// (which cannot exist).
-fn folded_scope_key(scope: &str) -> String {
+pub(crate) fn folded_scope_key(scope: &str) -> String {
     match scope.split_once("::") {
         Some((class, method)) => {
             format!("{}::{}", php_symbol_key(class), php_symbol_key(method))
@@ -999,6 +1036,43 @@ fn declared_is_raw_scalar(declared: &PhpType) -> bool {
             | PhpType::Str
             | PhpType::TaggedScalar
     )
+}
+
+/// Returns whether a body binds a property to by-reference parameter `param`'s cell:
+/// `$this->p = &$param`, which the parser spells as the pair `$this->p = $param;
+/// $param = &$this->p;` (`parse_complex_ref_assignment`).
+///
+/// The property keeps the CALLER's reference for the object's whole life, exactly like a closure
+/// capturing `use (&$param)`, so the parameter escapes: the caller must hand over a managed cell
+/// that outlives the call, and the callee binds the property to that cell
+/// (`ir_lower::stmt::param_property_reference`). Symfony's `ContainerConfigurator` and
+/// `ServicesConfigurator` constructors share the loader's `$instanceof` this way.
+pub(crate) fn binds_property_to_ref_param(body: &[Stmt], param: &str) -> bool {
+    let mut found = false;
+    crate::parser::ast::visit::walk_stmts(body, &mut |stmt| {
+        found |= crate::parser::ast::visit::param_property_reference_pair(stmt).is_some_and(|(_, _, name)| name == param);
+    });
+    found
+}
+
+/// Returns whether a body stores a reference to by-reference parameter `param` into an array:
+/// `$store[] = &$param`, `$store['k'] = &$param` or `[&$param]`.
+///
+/// The array keeps the CALLER's reference for as long as it lives, exactly like a property bound
+/// to the parameter, so the caller must hand over a managed cell. A variable lent by its frame
+/// address was released into a marker that incremented and later decremented a "header" in the
+/// caller's stack: `keep($v)` with `function keep(&$r) { global $refs; $refs[] = &$r; }` ended
+/// in `heap debug detected bad refcount` and a corrupted stack neighbour.
+pub(crate) fn binds_array_element_to_ref_param(body: &[Stmt], param: &str) -> bool {
+    let mut found = false;
+    crate::parser::ast::visit::walk_nodes(body, &mut |node| {
+        if let crate::parser::ast::visit::Node::Expr(expr) = node {
+            if let ExprKind::ArrayReference(inner) = &expr.kind {
+                found |= matches!(&inner.kind, ExprKind::Variable(name) if name == param);
+            }
+        }
+    });
+    found
 }
 
 /// One function or method body with its parameters, for the forwarding fixpoint.
@@ -1222,7 +1296,18 @@ fn for_each_call_in_expr<'a>(expr: &'a Expr, visit: &mut dyn FnMut(CallSite<'a>)
                 for_each_call_in_expr(arg, visit);
             }
         }
-        ExprKind::NewObject { args, .. } => {
+        // `new Foo(...)` runs `Foo::__construct`, and a constructor is where a by-reference
+        // parameter is most often kept (`$this->p = &$param`).
+        ExprKind::NewObject { class_name, args } => {
+            visit(CallSite {
+                target: CallTarget::Method {
+                    method: "__construct".to_string(),
+                    receiver_class: Some(ReceiverClass::Named(
+                        class_name.as_str().trim_start_matches('\\').to_string(),
+                    )),
+                },
+                args,
+            });
             for arg in args {
                 for_each_call_in_expr(arg, visit);
             }

@@ -21,6 +21,7 @@ mod keyword_name;
 mod stmt;
 pub(crate) use stmt::classlike_doc_comment;
 mod terminal_goto;
+pub(crate) mod variable_variables;
 
 pub(crate) use attributes::{consume_attribute_lists, parse_attribute_lists};
 
@@ -129,6 +130,11 @@ pub fn parse_with_recovery_in_mode(
 /// Implements recovery parsing after the source-mode scope has been installed.
 fn parse_with_recovery_inner(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileError>> {
     reject_excessive_nesting(tokens)?;
+    crate::compiler_stack::with_compiler_stack(|| parse_checked_tokens(tokens))
+}
+
+/// Parses tokens whose nesting depth is already known to be within the compiler's limit.
+fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileError>> {
     let mut pos = 0;
     let mut stmts = Vec::new();
     let mut errors = Vec::new();
@@ -172,7 +178,7 @@ fn parse_with_recovery_inner(tokens: &[SpannedToken]) -> Result<Program, Vec<Com
                     if matches!(stmt.kind, crate::parser::ast::StmtKind::NamespaceDecl { .. }) {
                         stmts.append(&mut take_anonymous_classes());
                     }
-                    stmts.push(stmt)
+                    stmt::push_parsed_stmt(&mut stmts, stmt)
                 }
                 Err(error) => {
                     errors.extend(error.flatten());

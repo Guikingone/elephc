@@ -49,7 +49,22 @@ pub(super) fn apply_properties(
         if prop.is_static {
             apply_static_property(state, class, checker, prop)?;
         } else {
+            let mut hooks = prop.hooks.clone();
+            if !hooks.any() {
+                hooks.uses_backing_slot = true;
+            }
+            if state.property_visibilities.get(&prop.name) != Some(&Visibility::Private) {
+                if let Some(inherited) = state.property_hooks.get(&prop.name) {
+                    hooks.uses_backing_slot |= !inherited.is_virtual();
+                    if !hooks.requires_get() {
+                        hooks.get = inherited.get;
+                        hooks.get_by_ref = inherited.get_by_ref;
+                    }
+                    hooks.set |= inherited.set;
+                }
+            }
             apply_instance_property(state, class, checker, prop)?;
+            state.property_hooks.insert(prop.name.clone(), hooks);
         }
     }
     Ok(())
@@ -826,7 +841,7 @@ where
 /// splits the single PHP `array` hint into integer-keyed `Array` (list) and `AssocArray` (hash)
 /// storage; both correspond to the same PHP-visible `array` type.
 fn is_php_array_family(ty: &PhpType) -> bool {
-    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+    ty.is_php_array() || matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
 }
 
 /// Checks PHP property-type invariance between a parent and child redeclaration. Property types

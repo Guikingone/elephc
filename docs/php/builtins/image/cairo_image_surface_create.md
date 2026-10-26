@@ -1,8 +1,8 @@
 ---
 title: "cairo_image_surface_create()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an in-memory image surface of the given pixel format and size."
 sidebar:
-  order: 422
+  order: 423
 ---
 
 ## cairo_image_surface_create()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_image_surface_create(int $format, int $width, int $height): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an in-memory image surface of the given pixel format and size.
 
 **Parameters**:
 - `$format` (`int`)
@@ -25,7 +25,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

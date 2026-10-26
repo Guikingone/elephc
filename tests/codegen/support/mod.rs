@@ -99,6 +99,7 @@ mod compiler;
 mod curl_native;
 mod native_cache;
 mod native_projects;
+mod oniguruma;
 mod projects;
 pub(crate) mod xml_native;
 
@@ -107,6 +108,7 @@ pub(crate) use runner::*;
 pub(crate) use compiler::*;
 pub(crate) use curl_native::*;
 pub(crate) use native_projects::*;
+pub(crate) use oniguruma::*;
 pub(crate) use projects::*;
 // Named rather than globbed: `xml_native::available()` would otherwise collide with
 // `curl_native::available()` under two `*` imports. Reach it as

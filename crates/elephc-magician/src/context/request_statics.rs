@@ -24,6 +24,9 @@ struct RequestStatics {
     scope: Box<ElephcEvalScope>,
     properties: HashMap<(String, String), RuntimeCellHandle>,
     aliases: HashMap<(String, String), EvalReferenceTarget>,
+    /// `strtok()`'s tokenizer state: the string and the byte offset of the next scan. Plain
+    /// bytes, no handles, so a reset simply drops it.
+    strtok: Option<(Vec<u8>, usize)>,
 }
 
 impl RequestStatics {
@@ -33,6 +36,7 @@ impl RequestStatics {
             scope: Box::new(ElephcEvalScope::new()),
             properties: HashMap::new(),
             aliases: HashMap::new(),
+            strtok: None,
         }
     }
 }
@@ -84,6 +88,11 @@ pub(super) fn bind_request_static_property_alias(
     target: EvalReferenceTarget,
 ) -> Option<EvalReferenceTarget> {
     REQUEST_STATICS.with(|statics| statics.borrow_mut().aliases.insert(key, target))
+}
+
+/// Runs `f` on the request's `strtok()` state (`None` until a string was given).
+pub(crate) fn with_request_strtok<R>(f: impl FnOnce(&mut Option<(Vec<u8>, usize)>) -> R) -> R {
+    REQUEST_STATICS.with(|statics| f(&mut statics.borrow_mut().strtok))
 }
 
 /// Forgets every request static at a `--web` boundary.

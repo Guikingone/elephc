@@ -1,16 +1,16 @@
 ---
-title: "stream_socket_enable_crypto() — internals"
+title: "stream_socket_enable_crypto() - internals"
 description: "Compiler internals for stream_socket_enable_crypto(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 400
+  order: 401
 ---
 
-## `stream_socket_enable_crypto()` — internals
+## `stream_socket_enable_crypto()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_socket_enable_crypto.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_enable_crypto.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

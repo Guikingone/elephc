@@ -11,6 +11,8 @@
 //! - Classes without constructors are treated as successful no-ops, matching PHP.
 //! - Constructors are bridged for scalar/Mixed/array/object arguments, including
 //!   generated variadic array slots and supported scalar/Mixed by-reference parameters.
+//! - By-value arguments stay borrowed from the caller's normalized argument array for the whole
+//!   native activation. Only by-reference slots acquire a raw owner for writeback.
 //! - Non-public constructors are accepted when the active eval class scope
 //!   satisfies PHP visibility.
 
@@ -32,12 +34,13 @@ use crate::types::{ClassInfo, FunctionSig, PhpType};
 use super::eval_ref_arg_helpers::{
     EvalRefArgSlot, eval_abi_param_types_for_refs, eval_arg_temp_slot_size,
     eval_normalized_ref_params, eval_ref_arg_slots, eval_signature_ref_params_supported,
-    emit_aarch64_write_back_ref_args, emit_x86_64_write_back_ref_args,
+    emit_aarch64_write_back_ref_args, emit_acquire_mixed_ref_args, emit_x86_64_write_back_ref_args,
 };
 use super::eval_callable_helpers::{EVAL_ARG_BOXED_VALUE_AARCH64_OFFSET, EVAL_ARG_BOXED_VALUE_X86_64_OFFSET,
     EVAL_ARG_CONTEXT_AARCH64_OFFSET};
 use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 use super::class_id_dispatch::{emit_class_id_switch, ClassIdSwitch};
+use super::eval_argument_helpers::emit_borrowed_string_arg;
 
 /// Every builtin Throwable the eval bridge can construct from a runtime string.
 ///
@@ -82,6 +85,23 @@ const CONSTRUCTOR_HELPER_FRAME_SIZE: usize =
     CONSTRUCTOR_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
 const X86_64_CONSTRUCTOR_CONTEXT_FRAME_OFFSET: usize = 64;
 
+/// Whether one staged constructor argument keeps an owner beyond the cast that produced it.
+///
+/// A BY-VALUE argument is rooted by Magician's normalized argument array for the whole native
+/// activation, so the bridge stages only a borrowed payload. The generated function prologue
+/// independently retains parameter slots that its ownership analysis marks as owned.
+///
+/// A BY-REFERENCE slot is different. `eval_ref_arg_slots` gives constructor slots
+/// `raw_refcounted_owned = true`, so writeback releases the raw slot on the changed and the
+/// unchanged path alike. The bridge acquires one owner after argument preparation succeeds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConstructorArgOwner {
+    /// The argument array keeps the payload alive for the whole native activation.
+    Borrowed,
+    /// The raw by-reference slot owns the staged payload until writeback releases it.
+    Owned,
+}
+
 /// Constructor metadata needed by the eval constructor bridge.
 #[derive(Clone)]
 struct EvalConstructorSlot {
@@ -117,6 +137,35 @@ pub(super) fn emit_eval_constructor_helpers(
         &builtin_throwable_class_ids,
         callable_support,
     );
+}
+
+/// Returns true when this module emits `__elephc_eval_value_construct_object`.
+///
+/// The descriptor invoker's object-valued parameter defaults construct through that bridge, so
+/// they are only materializable in a module that actually emits it.
+pub(super) fn module_emits_eval_constructor_bridge(module: &Module) -> bool {
+    module_uses_eval(module)
+}
+
+/// Returns whether this binary links the eval bridge, and therefore needs these helpers.
+///
+/// THE INVARIANT IS "LINKED", NOT "USES EVAL". `libelephc_magician.a` references the
+/// `__elephc_eval_*` callbacks unconditionally, so any binary that links it must define
+/// them or fail to link — `__elephc_eval_reflection_attribute_new` undefined and a dozen
+/// like it. This used to scan for functions carrying an eval local instead, which is a
+/// different question that happened to give the same answer while the ONLY reason to link
+/// the archive was an `eval()` in the program.
+///
+/// That stopped being the only reason. `opcache_compile_file()` populates the runtime script
+/// cache, which lives in the archive, so a program calling it needs the archive whether or
+/// not it ever evaluates a string. Keeping the narrower scan here made that combination
+/// unlinkable, which is what kept the fold in place and left the function answering `false`
+/// where reference answers `true`.
+///
+/// The call sites are all inside a block already gated on the same flag, so for a program
+/// that does use `eval()` nothing changes.
+fn module_uses_eval(module: &Module) -> bool {
+    module.required_runtime_features.eval_bridge
 }
 
 /// Collects AOT and runtime-backed constructors in stable class-id order.
@@ -202,7 +251,7 @@ fn collect_class_constructor_slot(
     let supported =
         constructor_visibility_supported(visibility) && constructor_signature_supported(sig);
     let params = if supported {
-        sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect()
+        sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect()
     } else {
         Vec::new()
     };
@@ -353,14 +402,11 @@ fn emit_constructor_aarch64(
     let success_label = "__elephc_eval_value_construct_success";
     let fail_label = "__elephc_eval_value_construct_fail";
     let done_label = "__elephc_eval_value_construct_done";
-    let owner_count = slots.iter().map(|slot| slot.params.len()).max().unwrap_or(0).max(3);
-    let frame_size = super::eval_argument_owners::frame_size(emitter, CONSTRUCTOR_HELPER_FRAME_SIZE, owner_count);
-    emitter.instruction(
-        &format!("sub sp, sp, #{}", frame_size)
-    );                                                                          //reserve helper frame plus a boundary exception handler
+    emitter.instruction(                                                        //reserve helper frame plus a boundary exception handler
+        &format!("sub sp, sp, #{}", CONSTRUCTOR_HELPER_FRAME_SIZE)
+    );
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
-    super::eval_argument_owners::initialize(emitter, owner_count);
     emitter.instruction("str x2, [sp, #0]");                                    // save the active eval class-scope pointer
     emitter.instruction("str x3, [sp, #8]");                                    // save the active eval class-scope length
     emitter.instruction("str x1, [sp, #24]");                                   // save the boxed eval argument array
@@ -400,11 +446,10 @@ fn emit_constructor_aarch64(
     emitter.label(success_label);
     emitter.instruction("mov x0, #1");                                          // report successful construction or no-op
     emitter.label(done_label);
-    super::eval_argument_owners::release(emitter, owner_count);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
-    emitter.instruction(
-        &format!("add sp, sp, #{}", frame_size)
-    );                                                                          //release the constructor helper frame and boundary handler
+    emitter.instruction(                                                        //release the constructor helper frame and boundary handler
+        &format!("add sp, sp, #{}", CONSTRUCTOR_HELPER_FRAME_SIZE)
+    );
     emitter.instruction("ret");                                                 // return the constructor status flag to Rust
 }
 
@@ -420,12 +465,9 @@ fn emit_constructor_x86_64(
     let success_label = "__elephc_eval_value_construct_success_x";
     let fail_label = "__elephc_eval_value_construct_fail_x";
     let done_label = "__elephc_eval_value_construct_done_x";
-    let owner_count = slots.iter().map(|slot| slot.params.len()).max().unwrap_or(0).max(3);
-    let frame_size = super::eval_argument_owners::frame_size(emitter, CONSTRUCTOR_HELPER_FRAME_SIZE, owner_count);
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction(&format!("sub rsp, {}", frame_size));                   // reserve aligned slots plus a boundary exception handler and argument owners
-    super::eval_argument_owners::initialize(emitter, owner_count);
+    emitter.instruction(&format!("sub rsp, {}", CONSTRUCTOR_HELPER_FRAME_SIZE)); // reserve aligned slots plus a boundary exception handler
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the active eval class-scope pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save the active eval class-scope length
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the boxed eval argument array
@@ -467,8 +509,6 @@ fn emit_constructor_x86_64(
     emitter.label(success_label);
     emitter.instruction("mov eax, 1");                                          // report successful construction or no-op
     emitter.label(done_label);
-    emitter.instruction(&format!("lea rsp, [rbp - {}]", frame_size));           // restore the full frame before cleanup after any argument-preparation failure
-    super::eval_argument_owners::release(emitter, owner_count);
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the constructor status flag to Rust
@@ -483,13 +523,13 @@ fn emit_aarch64_constructor_exception_boundary_push(emitter: &mut Emitter, escap
     abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
     emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset + 8));   // preserve the caller activation frame across constructor unwinding
     abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // save diagnostic suppression depth for restoration
         "str x10, [x29, #{}]",
         handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // save diagnostic suppression depth for restoration
+    ));
     emitter.instruction(&format!("add x10, x29, #{}", handler_offset));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // pass the boundary jmp_buf to setjmp
         "add x0, x29, #{}",
         handler_offset + TRY_HANDLER_JMP_BUF_OFFSET
     ));                                                                         // pass the boundary jmp_buf to setjmp
@@ -503,10 +543,10 @@ fn emit_aarch64_constructor_exception_boundary_pop(emitter: &mut Emitter) {
     emitter.comment("pop eval constructor exception boundary");
     emitter.instruction(&format!("ldr x10, [x29, #{}]", handler_offset));       // reload the previous native exception-handler head
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // reload the saved diagnostic suppression depth
         "ldr x10, [x29, #{}]",
         handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // reload the saved diagnostic suppression depth
+    ));
     abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
 }
 
@@ -515,21 +555,21 @@ fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape
     let handler_base = CONSTRUCTOR_HELPER_FRAME_SIZE;
     emitter.comment("push eval constructor exception boundary");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(
+    emitter.instruction(                                                        //save the previous native exception-handler head
         &format!("mov QWORD PTR [rbp - {}], r10", handler_base)
-    );                                                                          //save the previous native exception-handler head
+    );
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-    emitter.instruction(
+    emitter.instruction(                                                        //preserve the caller activation frame across constructor unwinding
         &format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)
-    );                                                                          //preserve the caller activation frame across constructor unwinding
+    );
     abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // save diagnostic suppression depth for restoration
         "mov QWORD PTR [rbp - {}], r10",
         handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // save diagnostic suppression depth for restoration
+    ));
     emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // pass the boundary jmp_buf to setjmp
         "lea rdi, [rbp - {}]",
         handler_base - TRY_HANDLER_JMP_BUF_OFFSET
     ));                                                                         // pass the boundary jmp_buf to setjmp
@@ -542,34 +582,29 @@ fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape
 fn emit_x86_64_constructor_exception_boundary_pop(emitter: &mut Emitter) {
     let handler_base = CONSTRUCTOR_HELPER_FRAME_SIZE;
     emitter.comment("pop eval constructor exception boundary");
-    emitter.instruction(
+    emitter.instruction(                                                        //reload the previous native exception-handler head
         &format!("mov r10, QWORD PTR [rbp - {}]", handler_base)
-    );                                                                          //reload the previous native exception-handler head
+    );
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // reload the saved diagnostic suppression depth
         "mov r10, QWORD PTR [rbp - {}]",
         handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // reload the saved diagnostic suppression depth
+    ));
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
 }
 
-/// Emits a C helper that transfers `_exc_value` ownership to magician.
+/// Transfers the pending native exception as one owned box through the versioned eval ABI.
 fn emit_take_pending_throwable_helper(module: &Module, emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- eval bridge: take pending throwable ---");
-    label_c_global(module, emitter, "__elephc_eval_value_take_pending_throwable");
-    match module.target.arch {
-        Arch::AArch64 => {
-            abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0);
-            abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-            emitter.instruction("ret");                                         // return the pending Throwable pointer to magician
-        }
-        Arch::X86_64 => {
-            abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0);
-            abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-            emitter.instruction("ret");                                         // return the pending Throwable pointer to magician
-        }
-    }
+    label_c_global(module, emitter, "__elephc_eval_value_take_pending_throwable_v2");
+    let result = abi::int_result_reg(emitter);
+    abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_eval_no_pending_throwable");
+    abi::emit_jump(emitter, "__rt_throwable_box_owned");
+    emitter.label("__rt_eval_no_pending_throwable");
+    abi::emit_return(emitter);
 }
 
 /// Emits ARM64 dispatch for compact builtin Throwable constructors.
@@ -654,28 +689,20 @@ fn emit_aarch64_builtin_throwable_constructor_body(
     callable_support: &EvalCallableDescriptorSupport,
 ) {
     emit_aarch64_validate_builtin_throwable_arg_count(module, emitter, fail_label);
+    emit_aarch64_default_builtin_throwable_fields(emitter);
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload constructor argc before testing the message argument
     emitter.instruction("cmp x9, #0");                                          // did the eval call pass a message argument?
     emitter.instruction(&format!("b.eq {}", success_label));                    // keep the empty Throwable defaults when no message was supplied
-    emit_aarch64_load_eval_arg(module, emitter, 0);
-    emit_aarch64_cast_eval_arg(
-        module,
-        emitter,
-        &PhpType::Str,
-        "__elephc_eval_builtin_throwable_message",
-        fail_label,
-        data,
-        callable_support,
-    );
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the initialized Throwable for message replacement
-    emitter.instruction("ldr x0, [x9, #8]");                                    // release the previous owned message before replacing its field
-    emitter.instruction("str x1, [x9, #8]");                                    // store the message pointer in the compact Throwable payload
+    emit_aarch64_load_eval_arg(module, emitter, 0, fail_label);
+    emit_borrowed_string_arg(emitter, &PhpType::Str, 16, fail_label);
+    abi::emit_call_label(emitter, "__rt_str_persist");
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for message initialization
+    emitter.instruction("str x1, [x9, #8]");                                    // transfer the owned message pointer into the compact Throwable payload
     emitter.instruction("str x2, [x9, #16]");                                   // store the message length in the compact Throwable payload
-    abi::emit_call_label(emitter, "__rt_decref_any");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload constructor argc before testing the code argument
     emitter.instruction("cmp x9, #1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("b.le {}", success_label));                    // keep code zero when only the message was supplied
-    emit_aarch64_load_eval_arg(module, emitter, 1);
+    emit_aarch64_load_eval_arg(module, emitter, 1, fail_label);
     emit_aarch64_cast_eval_arg(
         module,
         emitter,
@@ -684,6 +711,7 @@ fn emit_aarch64_builtin_throwable_constructor_body(
         fail_label,
         data,
         callable_support,
+        ConstructorArgOwner::Borrowed,
     );
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for code initialization
     emitter.instruction("str x0, [x9, #24]");                                   // store the integer exception code
@@ -705,29 +733,20 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     callable_support: &EvalCallableDescriptorSupport,
 ) {
     emit_x86_64_validate_builtin_throwable_arg_count(module, emitter, fail_label);
+    emit_x86_64_default_builtin_throwable_fields(emitter);
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload constructor argc before testing the message argument
     emitter.instruction("cmp r11, 0");                                          // did the eval call pass a message argument?
     emitter.instruction(&format!("je {}", success_label));                      // keep the empty Throwable defaults when no message was supplied
-    emit_x86_64_load_eval_arg(module, emitter, 0);
-    emit_x86_64_cast_eval_arg(
-        module,
-        emitter,
-        &PhpType::Str,
-        "__elephc_eval_builtin_throwable_message_x",
-        fail_label,
-        data,
-        callable_support,
-    );
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the initialized Throwable while preserving the new message
-    emitter.instruction("mov r10, QWORD PTR [r11 + 8]");                        // preserve the previous message owner before publishing the new string
-    emitter.instruction("mov QWORD PTR [r11 + 8], rax");                        // store the message pointer in the compact Throwable payload
+    emit_x86_64_load_eval_arg(module, emitter, 0, fail_label);
+    emit_borrowed_string_arg(emitter, &PhpType::Str, 40, fail_label);
+    abi::emit_call_label(emitter, "__rt_str_persist");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for message initialization
+    emitter.instruction("mov QWORD PTR [r11 + 8], rax");                        // transfer the owned message pointer into the compact Throwable payload
     emitter.instruction("mov QWORD PTR [r11 + 16], rdx");                       // store the message length in the compact Throwable payload
-    emitter.instruction("mov rax, r10");                                        // release the old string only after the replacement is visible
-    abi::emit_call_label(emitter, "__rt_decref_any");
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload constructor argc before testing the code argument
     emitter.instruction("cmp r11, 1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("jle {}", success_label));                     // keep code zero when only the message was supplied
-    emit_x86_64_load_eval_arg(module, emitter, 1);
+    emit_x86_64_load_eval_arg(module, emitter, 1, fail_label);
     emit_x86_64_cast_eval_arg(
         module,
         emitter,
@@ -736,6 +755,7 @@ fn emit_x86_64_builtin_throwable_constructor_body(
         fail_label,
         data,
         callable_support,
+        ConstructorArgOwner::Borrowed,
     );
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for code initialization
     emitter.instruction("mov QWORD PTR [r11 + 24], rax");                       // store the integer exception code
@@ -747,7 +767,7 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     );
 }
 
-/// Stores the nullable third Throwable constructor argument on ARM64.
+/// Stores the nullable previous argument using the receiver's compact or ordinary ARM64 layout.
 fn emit_aarch64_builtin_throwable_previous_arg(
     module: &Module,
     emitter: &mut Emitter,
@@ -757,24 +777,26 @@ fn emit_aarch64_builtin_throwable_previous_arg(
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload argc before testing the previous argument
     emitter.instruction("cmp x9, #2");                                          // did eval supply the normalized previous argument?
     emitter.instruction(&format!("b.le {}", success_label));                    // keep null when the legacy bridge omitted previous
-    emit_aarch64_load_eval_arg(module, emitter, 2);
+    emit_aarch64_load_eval_arg(module, emitter, 2, fail_label);
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed previous argument for inspection
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the nullable previous payload
     emitter.instruction("cmp x0, #8");                                          // runtime tag 8 means the previous argument is null
     emitter.instruction(&format!("b.eq {}", success_label));                    // keep the default raw null previous pointer
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the previous argument is an object
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject malformed non-object previous arguments
-    emitter.instruction("mov x0, x1");                                          // move the previous object payload into the retain ABI
+    emitter.instruction("ldr x9, [sp, #16]");                                   // inspect the actual receiver allocated by AOT or the by-name eval bridge
+    emitter.instruction("ldr x10, [x9, #-8]");                                  // recover the heap kind independently of the PHP class id
+    emitter.instruction("and x10, x10, #0xff");                                 // discard collector and ownership flags
+    emitter.instruction("cmp x10, #6");                                         // only compact Throwable payloads own a raw previous pointer
+    emitter.instruction("ldr x0, [x29, #-16]");                                 // ordinary objects retain the nullable property's Mixed argument cell
+    emitter.instruction("csel x0, x1, x0, eq");                                 // compact objects instead retain the unboxed previous object
     abi::emit_call_label(emitter, "__rt_incref");
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object after retaining previous
-    emitter.instruction(&format!("ldr x10, [x9, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // preserve the old previous-field owner before publishing its replacement
-    emitter.instruction(&format!("str x0, [x9, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // store the retained previous object pointer
-    emitter.instruction("mov x0, x10");                                         // release the old owner after destructors can observe the new previous field
-    abi::emit_call_label(emitter, "__rt_decref_any");
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the receiver after retaining its previous owner
+    emitter.instruction(&format!("str x0, [x9, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // store the previous owner in the representation its reader and cleanup expect
     emitter.instruction(&format!("b {}", success_label));                       // builtin Throwable construction completed
 }
 
-/// Stores the nullable third Throwable constructor argument on x86_64.
+/// Stores the nullable previous argument using the receiver's compact or ordinary x86_64 layout.
 fn emit_x86_64_builtin_throwable_previous_arg(
     module: &Module,
     emitter: &mut Emitter,
@@ -784,20 +806,22 @@ fn emit_x86_64_builtin_throwable_previous_arg(
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload argc before testing the previous argument
     emitter.instruction("cmp r11, 2");                                          // did eval supply the normalized previous argument?
     emitter.instruction(&format!("jle {}", success_label));                     // keep null when the legacy bridge omitted previous
-    emit_x86_64_load_eval_arg(module, emitter, 2);
+    emit_x86_64_load_eval_arg(module, emitter, 2, fail_label);
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed previous argument for inspection
     emitter.instruction("call __rt_mixed_unbox");                               // expose the nullable previous payload
     emitter.instruction("cmp rax, 8");                                          // runtime tag 8 means the previous argument is null
     emitter.instruction(&format!("je {}", success_label));                      // keep the default raw null previous pointer
     emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means the previous argument is an object
     emitter.instruction(&format!("jne {}", fail_label));                        // reject malformed non-object previous arguments
-    emitter.instruction("mov rax, rdi");                                        // move the previous object payload into the retain ABI
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // inspect the receiver allocated by AOT or the by-name eval bridge
+    emitter.instruction("mov r10, QWORD PTR [r11 - 8]");                        // recover the actual heap layout independently of the PHP class id
+    emitter.instruction("and r10, 0xff");                                       // discard the heap marker and collector flags
+    emitter.instruction("cmp r10, 6");                                          // compact Throwable payloads own raw previous pointers
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // ordinary objects retain the nullable property's Mixed argument cell
+    emitter.instruction("cmove rax, rdi");                                      // compact objects instead retain the unboxed previous object
     abi::emit_call_label(emitter, "__rt_incref");
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object after retaining previous
-    emitter.instruction(&format!("mov r10, QWORD PTR [r11 + {}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // preserve the old previous-field owner before publishing its replacement
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // store the retained previous object pointer
-    emitter.instruction("mov rax, r10");                                        // release the old owner after destructors can observe the new previous field
-    abi::emit_call_label(emitter, "__rt_decref_any");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the receiver after retaining its previous owner
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // store the previous owner in its reader and cleanup representation
     emitter.instruction(&format!("jmp {}", success_label));                     // builtin Throwable construction completed
 }
 
@@ -847,6 +871,16 @@ fn emit_aarch64_constructor_dispatch_target(emitter: &mut Emitter) {
     emitter.label(done_label);
 }
 
+/// Writes ARM64 empty-message, zero-code, and null-previous Throwable defaults.
+fn emit_aarch64_default_builtin_throwable_fields(emitter: &mut Emitter) {
+    emit_release_builtin_throwable_defaults(emitter);
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for default initialization
+    emitter.instruction("str xzr, [x9, #8]");                                   // default the message pointer to an empty string payload
+    emitter.instruction("str xzr, [x9, #16]");                                  // default the message length to zero
+    emitter.instruction("str xzr, [x9, #24]");                                  // default the exception code to zero
+    emitter.instruction(&format!("str xzr, [x9, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // default the previous Throwable pointer to null
+}
+
 /// Selects the constructor dispatch id from either an AOT target name or the receiver on x86_64.
 fn emit_x86_64_constructor_dispatch_target(emitter: &mut Emitter) {
     let receiver_label = "__elephc_eval_constructor_receiver_target_x";
@@ -863,6 +897,36 @@ fn emit_x86_64_constructor_dispatch_target(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the receiver runtime class id
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // retain the receiver constructor class id across dispatch tests
     emitter.label(done_label);
+}
+
+/// Writes x86_64 empty-message, zero-code, and null-previous Throwable defaults.
+fn emit_x86_64_default_builtin_throwable_fields(emitter: &mut Emitter) {
+    emit_release_builtin_throwable_defaults(emitter);
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for default initialization
+    emitter.instruction("mov QWORD PTR [r11 + 8], 0");                          // default the message pointer to an empty string payload
+    emitter.instruction("mov QWORD PTR [r11 + 16], 0");                         // default the message length to zero
+    emitter.instruction("mov QWORD PTR [r11 + 24], 0");                         // default the exception code to zero
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // default the previous Throwable pointer to null
+}
+
+/// Releases the default owners installed by by-name allocation before compact Throwable setup.
+fn emit_release_builtin_throwable_defaults(emitter: &mut Emitter) {
+    let object_frame_offset = match emitter.target.arch {
+        Arch::AArch64 => 32,
+        Arch::X86_64 => 24,
+    };
+    let object = abi::symbol_scratch_reg(emitter);
+    let value = abi::int_result_reg(emitter);
+    for (offset, release) in [(8, "__rt_heap_free_safe"), (crate::codegen_support::throwable_layout::PREVIOUS_OFFSET, "__rt_decref_any")] {
+        abi::load_at_offset(emitter, object, object_frame_offset);
+        abi::emit_load_from_address(emitter, value, object, offset);
+        // Detach before release, since a previous exception may run a user destructor.
+        abi::emit_store_zero_to_address(emitter, object, offset);
+        if offset == 8 {
+            abi::emit_store_zero_to_address(emitter, object, 16);
+        }
+        abi::emit_call_label(emitter, release);
+    }
 }
 
 /// Emits ARM64 class-id dispatch for supported constructor bodies.
@@ -949,6 +1013,8 @@ fn emit_aarch64_constructor_body(
     emit_aarch64_validate_constructor_arg_count(module, emitter, slot, fail_label);
     let body_label = constructor_body_label(module, slot);
     let prep_fail_label = format!("{}_prep_fail", body_label);
+    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
+    super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
     let (arg_temp_bytes, ref_slots) =
         emit_aarch64_prepare_constructor_args(
             module,
@@ -958,8 +1024,8 @@ fn emit_aarch64_constructor_body(
             &prep_fail_label,
             callable_support,
         );
+    emit_acquire_mixed_ref_args(emitter, &ref_slots, arg_temp_bytes);
     let escape_label = format!("{}_escape", body_label);
-    super::eval_ref_arg_helpers::emit_retain_mixed_ref_arg_slots(emitter, &ref_slots, arg_temp_bytes);
     emit_aarch64_constructor_exception_boundary_push(emitter, &escape_label);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     let overflow_bytes =
@@ -981,6 +1047,7 @@ fn emit_aarch64_constructor_body(
     );
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
     emit_aarch64_constructor_exception_boundary_pop(emitter);
+    super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
     emitter.instruction(&format!("b {}", success_label));                       // constructor returned normally
     emitter.label(&escape_label);
     abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -988,6 +1055,7 @@ fn emit_aarch64_constructor_body(
     emit_aarch64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
     emit_aarch64_constructor_exception_boundary_pop(emitter);
+    super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
     emitter.instruction(&format!("b {}", fail_label));                          // return failure after preserving by-reference writes
     emitter.label(&prep_fail_label);
     emit_aarch64_constructor_prep_fail_cleanup(emitter, fail_label);
@@ -1015,6 +1083,8 @@ fn emit_x86_64_constructor_body(
     emit_x86_64_validate_constructor_arg_count(module, emitter, slot, fail_label);
     let body_label = constructor_body_label(module, slot);
     let prep_fail_label = format!("{}_prep_fail_x", body_label);
+    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
+    super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
     let (arg_temp_bytes, ref_slots) =
         emit_x86_64_prepare_constructor_args(
             module,
@@ -1024,8 +1094,8 @@ fn emit_x86_64_constructor_body(
             &prep_fail_label,
             callable_support,
         );
+    emit_acquire_mixed_ref_args(emitter, &ref_slots, arg_temp_bytes);
     let escape_label = format!("{}_escape_x", body_label);
-    super::eval_ref_arg_helpers::emit_retain_mixed_ref_arg_slots(emitter, &ref_slots, arg_temp_bytes);
     emit_x86_64_constructor_exception_boundary_push(emitter, &escape_label);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     let overflow_bytes =
@@ -1047,6 +1117,7 @@ fn emit_x86_64_constructor_body(
     );
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
     emit_x86_64_constructor_exception_boundary_pop(emitter);
+    super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
     emitter.instruction(&format!("jmp {}", success_label));                     // constructor returned normally
     emitter.label(&escape_label);
     abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -1054,6 +1125,7 @@ fn emit_x86_64_constructor_body(
     emit_x86_64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
     emit_x86_64_constructor_exception_boundary_pop(emitter);
+    super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
     emitter.instruction(&format!("jmp {}", fail_label));                        // return failure after preserving by-reference writes
     emitter.label(&prep_fail_label);
     emit_x86_64_constructor_prep_fail_cleanup(emitter, fail_label);
@@ -1129,7 +1201,7 @@ fn emit_aarch64_validate_constructor_arg_count(
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the eval argument array for arity validation
     let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
-    emitter.instruction("str x0, [sp, #32]");                                   // save the supplied constructor argument count
+    emitter.instruction("str x0, [x29, #-8]");                                  // save argc frame-relative, clear of the borrowed argument spill
     abi::emit_load_int_immediate(emitter, "x9", slot.params.len() as i64);
     emitter.instruction("cmp x0, x9");                                          // compare supplied eval argument count with the constructor signature
     if slot.zero_default_first_arg {
@@ -1189,6 +1261,8 @@ fn emit_aarch64_prepare_constructor_args(
         fail_label,
         callable_support,
     );
+    // The body reserved one zeroed owner slot per by-value callable below these cells.
+    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("ldr x0, [x29, #-32]");                                 // load the unboxed receiver as the first constructor argument
@@ -1198,9 +1272,9 @@ fn emit_aarch64_prepare_constructor_args(
         if slot.zero_default_first_arg && index == 0 {
             let default_label = format!("{}_arg_{}_default", body_label, index);
             let done_label = format!("{}_arg_{}_done", body_label, index);
-            emitter.instruction("ldr x9, [sp, #32]");                           // reload argc before selecting the optional constructor default
+            emitter.instruction("ldr x9, [x29, #-8]");                          // reload argc before selecting the optional constructor default
             emitter.instruction(&format!("cbz x9, {}", default_label));         // omitted SplFixedArray size uses PHP's zero default
-            emit_aarch64_load_eval_arg(module, emitter, index);
+            emit_aarch64_load_eval_arg(module, emitter, index, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
             emit_aarch64_cast_eval_arg(
                 module,
@@ -1210,8 +1284,8 @@ fn emit_aarch64_prepare_constructor_args(
                 fail_label,
                 data,
                 callable_support,
+                ConstructorArgOwner::Borrowed,
             );
-            super::eval_argument_owners::record_constructor_conversion(emitter, index, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
             emitter.instruction(&format!("b {}", done_label));                  // skip default materialization after an explicit argument
             emitter.label(&default_label);
@@ -1226,18 +1300,26 @@ fn emit_aarch64_prepare_constructor_args(
             );
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
-            emit_aarch64_load_eval_arg(module, emitter, index);
+            emit_aarch64_load_eval_arg(module, emitter, index, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_aarch64_cast_eval_arg(
-                module,
+            if !emit_borrowed_string_arg(emitter, param_ty, 16, fail_label) {
+                emit_aarch64_cast_eval_arg(
+                    module,
+                    emitter,
+                    param_ty,
+                    &label_prefix,
+                    fail_label,
+                    data,
+                    callable_support,
+                    ConstructorArgOwner::Borrowed,
+                );
+            }
+            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
                 emitter,
-                param_ty,
-                &label_prefix,
-                fail_label,
-                data,
-                callable_support,
+                &callable_owners,
+                index,
+                ref_slots.len() * 32 + arg_temp_bytes,
             );
-            super::eval_argument_owners::record_constructor_conversion(emitter, index, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1265,6 +1347,8 @@ fn emit_x86_64_prepare_constructor_args(
         fail_label,
         callable_support,
     );
+    // The body reserved one zeroed owner slot per by-value callable below these cells.
+    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // load the unboxed receiver as the first constructor argument
@@ -1277,7 +1361,7 @@ fn emit_x86_64_prepare_constructor_args(
             emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // reload argc before selecting the optional constructor default
             emitter.instruction("test r10, r10");                               // did eval pass an explicit constructor argument?
             emitter.instruction(&format!("jz {}", default_label));              // omitted SplFixedArray size uses PHP's zero default
-            emit_x86_64_load_eval_arg(module, emitter, index);
+            emit_x86_64_load_eval_arg(module, emitter, index, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
             emit_x86_64_cast_eval_arg(
                 module,
@@ -1287,8 +1371,8 @@ fn emit_x86_64_prepare_constructor_args(
                 fail_label,
                 data,
                 callable_support,
+                ConstructorArgOwner::Borrowed,
             );
-            super::eval_argument_owners::record_constructor_conversion(emitter, index, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
             emitter.instruction(&format!("jmp {}", done_label));                // skip default materialization after an explicit argument
             emitter.label(&default_label);
@@ -1303,18 +1387,26 @@ fn emit_x86_64_prepare_constructor_args(
             );
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
-            emit_x86_64_load_eval_arg(module, emitter, index);
+            emit_x86_64_load_eval_arg(module, emitter, index, fail_label);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_x86_64_cast_eval_arg(
-                module,
+            if !emit_borrowed_string_arg(emitter, param_ty, 40, fail_label) {
+                emit_x86_64_cast_eval_arg(
+                    module,
+                    emitter,
+                    param_ty,
+                    &label_prefix,
+                    fail_label,
+                    data,
+                    callable_support,
+                    ConstructorArgOwner::Borrowed,
+                );
+            }
+            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
                 emitter,
-                param_ty,
-                &label_prefix,
-                fail_label,
-                data,
-                callable_support,
+                &callable_owners,
+                index,
+                ref_slots.len() * 32 + arg_temp_bytes,
             );
-            super::eval_argument_owners::record_constructor_conversion(emitter, index, param_ty);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1350,7 +1442,7 @@ fn emit_aarch64_constructor_ref_arg_cells(
 ) -> Vec<EvalRefArgSlot> {
     let ref_slots = eval_ref_arg_slots(param_types, ref_params, true);
     for slot in &ref_slots {
-        emit_aarch64_load_eval_arg(module, emitter, slot.param_index);
+        emit_aarch64_load_eval_arg(module, emitter, slot.param_index, fail_label);
         emitter.instruction("ldr x0, [x29, #-16]");                             // reload the original eval Mixed cell for by-reference writeback
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
@@ -1366,7 +1458,11 @@ fn emit_aarch64_constructor_ref_arg_cells(
                 fail_label,
                 data,
                 callable_support,
+                ConstructorArgOwner::Owned,
             );
+            if slot.param_ty.codegen_repr() == PhpType::Str {
+                abi::emit_call_label(emitter, "__rt_str_persist");
+            }
             abi::emit_push_result_value(emitter, &slot.param_ty);
         }
     }
@@ -1386,7 +1482,7 @@ fn emit_x86_64_constructor_ref_arg_cells(
 ) -> Vec<EvalRefArgSlot> {
     let ref_slots = eval_ref_arg_slots(param_types, ref_params, true);
     for slot in &ref_slots {
-        emit_x86_64_load_eval_arg(module, emitter, slot.param_index);
+        emit_x86_64_load_eval_arg(module, emitter, slot.param_index, fail_label);
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // reload the original eval Mixed cell for by-reference writeback
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
@@ -1402,47 +1498,41 @@ fn emit_x86_64_constructor_ref_arg_cells(
                 fail_label,
                 data,
                 callable_support,
+                ConstructorArgOwner::Owned,
             );
+            if slot.param_ty.codegen_repr() == PhpType::Str {
+                abi::emit_call_label(emitter, "__rt_str_persist");
+            }
             abi::emit_push_result_value(emitter, &slot.param_ty);
         }
     }
     ref_slots
 }
 
-/// Loads one eval argument into an ARM64 spill slot as a boxed Mixed cell.
-fn emit_aarch64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usize) {
-    let value_int_symbol = module.target.extern_symbol("__elephc_eval_value_int");
-    let array_get_symbol = module.target.extern_symbol("__elephc_eval_value_array_get");
-    abi::emit_load_int_immediate(emitter, "x0", index as i64);
-    abi::emit_call_label(emitter, &value_int_symbol);
-    emitter.instruction("str x0, [x29, #-16]");                                 // save the boxed index while loading from the argument array
-    emitter.instruction("ldr x1, [x29, #-16]");                                 // pass the boxed index to the eval array reader
-    emitter.instruction("ldr x0, [x29, #-24]");                                 // pass the eval argument array to the reader
-    abi::emit_call_label(emitter, &array_get_symbol);
-    abi::emit_push_reg(emitter, "x0");
-    emitter.instruction("ldr x0, [x29, #-16]");                                 // release the temporary index borrowed by the array reader
-    abi::emit_call_label(emitter, "__rt_decref_any");
-    abi::emit_pop_reg(emitter, "x0");
-    super::eval_argument_owners::record(emitter, index);
-    emitter.instruction("str x0, [x29, #-16]");                                 // save the boxed eval argument for coercion
+/// Borrows one normalized eval argument in an ARM64 spill slot for constructor dispatch.
+fn emit_aarch64_load_eval_arg(_module: &Module, emitter: &mut Emitter, index: usize, fail_label: &str) {
+    super::eval_argument_helpers::emit_borrowed_argument(emitter, index, 24, 16, fail_label);
 }
 
-/// Loads one eval argument into an x86_64 spill slot as a boxed Mixed cell.
-fn emit_x86_64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usize) {
-    let value_int_symbol = module.target.extern_symbol("__elephc_eval_value_int");
-    let array_get_symbol = module.target.extern_symbol("__elephc_eval_value_array_get");
-    abi::emit_load_int_immediate(emitter, "rdi", index as i64);
-    abi::emit_call_label(emitter, &value_int_symbol);
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed index while loading from the argument array
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the boxed index to the eval array reader
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the eval argument array to the reader
-    abi::emit_call_label(emitter, &array_get_symbol);
-    abi::emit_push_reg(emitter, "rax");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // release the temporary index borrowed by the array reader
-    abi::emit_call_label(emitter, "__rt_decref_any");
-    abi::emit_pop_reg(emitter, "rax");
-    super::eval_argument_owners::record(emitter, index);
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed eval argument for coercion
+/// Borrows one normalized eval argument in an x86_64 spill slot for constructor dispatch.
+fn emit_x86_64_load_eval_arg(_module: &Module, emitter: &mut Emitter, index: usize, fail_label: &str) {
+    super::eval_argument_helpers::emit_borrowed_argument(emitter, index, 32, 40, fail_label);
+}
+
+/// Acquires an owner for a staged constructor argument only when the slot owns it.
+///
+/// `abi::emit_incref_if_refcounted` already selects the active ABI, so both targets share this
+/// rule. A borrowed by-value argument keeps exactly one owner, the one Magician's normalized
+/// argument array holds across the whole native activation; acquiring a second one here would
+/// leak a reference the bridge has no path on which to release it.
+fn emit_acquire_staged_constructor_arg(
+    emitter: &mut Emitter,
+    param_ty: &PhpType,
+    owner: ConstructorArgOwner,
+) {
+    if owner == ConstructorArgOwner::Owned {
+        abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+    }
 }
 
 /// Casts one boxed eval argument into ARM64 result registers for temporary staging.
@@ -1454,7 +1544,12 @@ fn emit_aarch64_cast_eval_arg(
     fail_label: &str,
     data: &mut DataSection,
     callable_support: &EvalCallableDescriptorSupport,
+    owner: ConstructorArgOwner,
 ) {
+    if param_ty.is_php_array() {
+        emitter.instruction("ldr x0, [x29, #-16]");                             // borrow the boxed argument before checking its PHP array constraint
+        super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match param_ty.codegen_repr() {
         PhpType::Int => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for integer coercion
@@ -1470,7 +1565,7 @@ fn emit_aarch64_cast_eval_arg(
         }
         PhpType::Str => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for string coercion
-            emitter.instruction("bl __rt_mixed_cast_string");                   // coerce the eval argument to a PHP string pair in x1/x2
+            super::eval_value_helpers::emit_borrowed_eval_string_argument(emitter, label_prefix);
         }
         PhpType::Callable => {
             super::eval_callable_helpers::emit_aarch64_cast_eval_callable_arg(
@@ -1496,16 +1591,18 @@ fn emit_aarch64_cast_eval_arg(
             emitter.instruction("cmp x0, #6");                                  // runtime tag 6 means the eval argument is an object
             emitter.instruction(&format!("b.ne {}", fail_label));               // reject malformed non-object constructor arguments
             emitter.instruction("mov x0, x1");                                  // move the unboxed object payload into the result register
-            abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+            emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
         }
         PhpType::Array(_) => {
-            emit_aarch64_cast_eval_array_arg(emitter, param_ty, label_prefix, fail_label);
+            emit_aarch64_cast_eval_array_arg(emitter, param_ty, label_prefix, fail_label, owner);
         }
         PhpType::AssocArray { .. } => {
-            emit_aarch64_cast_eval_array_arg(emitter, param_ty, label_prefix, fail_label);
+            emit_aarch64_cast_eval_array_arg(emitter, param_ty, label_prefix, fail_label, owner);
         }
         PhpType::Iterable => {
-            emit_aarch64_cast_eval_iterable_arg(module, emitter, param_ty, label_prefix, fail_label);
+            emit_aarch64_cast_eval_iterable_arg(
+                module, emitter, param_ty, label_prefix, fail_label, owner,
+            );
         }
         _ => {}
     }
@@ -1536,6 +1633,7 @@ fn emit_aarch64_cast_eval_array_arg(
     param_ty: &PhpType,
     label_prefix: &str,
     fail_label: &str,
+    owner: ConstructorArgOwner,
 ) {
     let accepted_label = format!("{label_prefix}_array_accepted");
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for array unboxing
@@ -1546,7 +1644,7 @@ fn emit_aarch64_cast_eval_array_arg(
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-array payloads for PHP array parameters
     emitter.label(&accepted_label);
     emitter.instruction("mov x0, x1");                                          // move the unboxed array payload into the result register
-    abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+    emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
 }
 
 /// Validates and unboxes one ARM64 iterable-typed eval argument for native constructors.
@@ -1556,6 +1654,7 @@ fn emit_aarch64_cast_eval_iterable_arg(
     param_ty: &PhpType,
     label_prefix: &str,
     fail_label: &str,
+    owner: ConstructorArgOwner,
 ) {
     let payload_ok = format!("{}_iterable_payload", label_prefix);
     let object_case = format!("{}_iterable_object", label_prefix);
@@ -1578,7 +1677,7 @@ fn emit_aarch64_cast_eval_iterable_arg(
     emitter.label(&object_ok);
     emitter.instruction("ldr x0, [sp], #16");                                   // restore the iterable object pointer as the result
     emitter.label(&done);
-    abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+    emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
 }
 
 /// Validates the ARM64 object payload saved in `x1` against Traversable interfaces.
@@ -1615,7 +1714,12 @@ fn emit_x86_64_cast_eval_arg(
     fail_label: &str,
     data: &mut DataSection,
     callable_support: &EvalCallableDescriptorSupport,
+    owner: ConstructorArgOwner,
 ) {
+    if param_ty.is_php_array() {
+        emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // borrow the boxed argument before checking its PHP array constraint
+        super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
+    }
     match param_ty.codegen_repr() {
         PhpType::Int => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for integer coercion
@@ -1631,7 +1735,7 @@ fn emit_x86_64_cast_eval_arg(
         }
         PhpType::Str => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for string coercion
-            emitter.instruction("call __rt_mixed_cast_string");                 // coerce the eval argument to a PHP string pair
+            super::eval_value_helpers::emit_borrowed_eval_string_argument(emitter, label_prefix);
         }
         PhpType::Callable => {
             super::eval_callable_helpers::emit_x86_64_cast_eval_callable_arg(
@@ -1657,16 +1761,18 @@ fn emit_x86_64_cast_eval_arg(
             emitter.instruction("cmp rax, 6");                                  // runtime tag 6 means the eval argument is an object
             emitter.instruction(&format!("jne {}", fail_label));                // reject malformed non-object constructor arguments
             emitter.instruction("mov rax, rdi");                                // move the unboxed object payload into the result register
-            abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+            emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
         }
         PhpType::Array(_) => {
-            emit_x86_64_cast_eval_array_arg(emitter, param_ty, label_prefix, fail_label);
+            emit_x86_64_cast_eval_array_arg(emitter, param_ty, label_prefix, fail_label, owner);
         }
         PhpType::AssocArray { .. } => {
-            emit_x86_64_cast_eval_array_arg(emitter, param_ty, label_prefix, fail_label);
+            emit_x86_64_cast_eval_array_arg(emitter, param_ty, label_prefix, fail_label, owner);
         }
         PhpType::Iterable => {
-            emit_x86_64_cast_eval_iterable_arg(module, emitter, param_ty, label_prefix, fail_label);
+            emit_x86_64_cast_eval_iterable_arg(
+                module, emitter, param_ty, label_prefix, fail_label, owner,
+            );
         }
         _ => {}
     }
@@ -1695,6 +1801,7 @@ fn emit_x86_64_cast_eval_array_arg(
     param_ty: &PhpType,
     label_prefix: &str,
     fail_label: &str,
+    owner: ConstructorArgOwner,
 ) {
     let accepted_label = format!("{label_prefix}_array_accepted");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for array unboxing
@@ -1705,7 +1812,7 @@ fn emit_x86_64_cast_eval_array_arg(
     emitter.instruction(&format!("jne {}", fail_label));                        // reject non-array payloads for PHP array parameters
     emitter.label(&accepted_label);
     emitter.instruction("mov rax, rdi");                                        // move the unboxed array payload into the result register
-    abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+    emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
 }
 
 /// Validates and unboxes one x86_64 iterable-typed eval argument for native constructors.
@@ -1715,6 +1822,7 @@ fn emit_x86_64_cast_eval_iterable_arg(
     param_ty: &PhpType,
     label_prefix: &str,
     fail_label: &str,
+    owner: ConstructorArgOwner,
 ) {
     let payload_ok = format!("{}_iterable_payload", label_prefix);
     let object_case = format!("{}_iterable_object", label_prefix);
@@ -1737,7 +1845,7 @@ fn emit_x86_64_cast_eval_iterable_arg(
     emitter.label(&object_ok);
     abi::emit_pop_reg(emitter, "rax");
     emitter.label(&done);
-    abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+    emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
 }
 
 /// Validates the x86_64 object payload saved in `rdi` against Traversable interfaces.
@@ -1866,6 +1974,114 @@ fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
 
 #[cfg(test)]
 mod catalog_tests {
+    /// Pending native exceptions transfer an owned box, while an empty slot remains a null result.
+    #[test]
+    fn pending_throwable_bridge_transfers_boxed_ownership_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen::platform::Target::parse(name).unwrap();
+            let module = super::Module::new(target);
+            let mut emitter = super::Emitter::new(target);
+            super::emit_take_pending_throwable_helper(&module, &mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains(&target.extern_symbol("__elephc_eval_value_take_pending_throwable_v2")), "{name}");
+            assert_eq!(asm.matches("__rt_throwable_box_owned").count(), 1, "{name}");
+            assert!(asm.find("_exc_value").unwrap() < asm.find("__rt_throwable_box_owned").unwrap(), "{name}");
+            assert!(asm.contains("__rt_eval_no_pending_throwable:"), "{name}");
+        }
+    }
+
+    /// Eval construction selects the previous owner from the concrete layout on every target.
+    #[test]
+    fn throwable_previous_initialization_preserves_ordinary_boxed_storage() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen::platform::Target::parse(name).unwrap();
+            let module = super::Module::new(target);
+            let mut emitter = super::Emitter::new(target);
+            let selection = match target.arch {
+                super::Arch::AArch64 => {
+                    super::emit_aarch64_builtin_throwable_previous_arg(&module, &mut emitter, "fail", "done");
+                    "csel x0, x1, x0, eq"
+                }
+                super::Arch::X86_64 => {
+                    super::emit_x86_64_builtin_throwable_previous_arg(&module, &mut emitter, "fail", "done");
+                    "cmove rax, rdi"
+                }
+            };
+            let asm = emitter.output();
+            assert!(asm.find(selection).unwrap() < asm.find("__rt_incref").unwrap(), "{name}");
+            assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}");
+        }
+    }
+
+    /// Both native ABIs release default message and previous owners before overwriting the slots.
+    #[test]
+    fn throwable_default_initialization_releases_displaced_owners_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen::platform::Target::parse(name).unwrap();
+            let mut emitter = super::Emitter::new(target);
+            match target.arch {
+                super::Arch::AArch64 => super::emit_aarch64_default_builtin_throwable_fields(&mut emitter),
+                super::Arch::X86_64 => super::emit_x86_64_default_builtin_throwable_fields(&mut emitter),
+            }
+            let asm = emitter.output();
+            assert_eq!(asm.matches("__rt_heap_free_safe").count(), 1, "{name}");
+            assert_eq!(asm.matches("__rt_decref_any").count(), 1, "{name}");
+            let cleared_previous = match target.arch {
+                super::Arch::AArch64 => format!("str xzr, [x9, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET),
+                super::Arch::X86_64 => format!("mov QWORD PTR [r11 + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET),
+            };
+            assert!(asm.find(cleared_previous.as_str()).unwrap() < asm.find("__rt_decref_any").unwrap(), "{name}");
+        }
+    }
+
+    /// Builtin Throwable construction persists the normalized message before storing it.
+    #[test]
+    fn throwable_message_storage_receives_an_independent_owner_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen::platform::Target::parse(name).unwrap();
+            let module = super::Module::new(target);
+            let mut data = super::DataSection::new();
+            let mut support_emitter = super::Emitter::new(target);
+            let callable_support =
+                crate::codegen::eval_callable_helpers::emit_eval_callable_descriptor_support(
+                    &module,
+                    &mut support_emitter,
+                    &mut data,
+                    false,
+                    false,
+                );
+            let mut emitter = super::Emitter::new(target);
+            let message_store = match target.arch {
+                super::Arch::AArch64 => {
+                    super::emit_aarch64_builtin_throwable_constructor_body(
+                        &module,
+                        &mut emitter,
+                        &mut data,
+                        "fail",
+                        "done",
+                        &callable_support,
+                    );
+                    "str x1, [x9, #8]"
+                }
+                super::Arch::X86_64 => {
+                    super::emit_x86_64_builtin_throwable_constructor_body(
+                        &module,
+                        &mut emitter,
+                        &mut data,
+                        "fail",
+                        "done",
+                        &callable_support,
+                    );
+                    "mov QWORD PTR [r11 + 8], rax"
+                }
+            };
+            let asm = emitter.output();
+            assert!(!asm.contains("__rt_mixed_cast_string"), "{name}: {asm}");
+            assert_eq!(asm.matches("__rt_str_persist").count(), 1, "{name}: {asm}");
+            assert!(asm.find("__rt_str_persist").unwrap() < asm.find(message_store).unwrap(), "{name}: {asm}");
+        }
+    }
+
     /// Every throwable this helper can materialize is a catalogued builtin class.
     #[test]
     fn throwable_list_is_a_subset_of_the_class_catalog() {
@@ -1873,6 +2089,316 @@ mod catalog_tests {
             assert!(
                 elephc_builtin_contract::lookup_class(name).is_some(),
                 "{name} is not in the shared class catalog"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod argument_ownership_tests {
+    use super::*;
+    use crate::codegen::eval_callable_helpers::emit_eval_callable_descriptor_support;
+    use crate::codegen::platform::Target;
+
+    const SUPPORTED_TARGETS: &[&str] = &[
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ];
+
+    /// Builds a one-parameter constructor slot in the shape the bridge collects from a class.
+    fn constructor_slot(param_ty: PhpType, by_ref: bool) -> EvalConstructorSlot {
+        EvalConstructorSlot {
+            class_id: 7,
+            class_name: "Fixture".to_string(),
+            impl_class: "Fixture".to_string(),
+            visibility: Visibility::Public,
+            allowed_scopes: Vec::new(),
+            params: vec![param_ty],
+            ref_params: vec![by_ref],
+            supported: true,
+            runtime_helper: None,
+            zero_default_first_arg: false,
+        }
+    }
+
+    /// Stages one constructor argument and returns the bridge assembly.
+    fn constructor_argument_asm(target: Target, param_ty: PhpType, by_ref: bool) -> String {
+        let module = Module::new(target);
+        let mut emitter = Emitter::new(target);
+        let mut data = DataSection::new();
+        let callable_support =
+            emit_eval_callable_descriptor_support(&module, &mut emitter, &mut data, false, false);
+        let slot = constructor_slot(param_ty, by_ref);
+        match target.arch {
+            Arch::AArch64 => {
+                emit_aarch64_prepare_constructor_args(
+                    &module,
+                    &mut emitter,
+                    &mut data,
+                    &slot,
+                    "fail",
+                    &callable_support,
+                );
+            }
+            Arch::X86_64 => {
+                emit_x86_64_prepare_constructor_args(
+                    &module,
+                    &mut emitter,
+                    &mut data,
+                    &slot,
+                    "fail",
+                    &callable_support,
+                );
+            }
+        }
+        emitter.output()
+    }
+
+    /// By-value refcounted constructor arguments stay borrowed on every target.
+    ///
+    /// Magician's normalized array roots the value for the whole native activation. An extra
+    /// bridge-side owner would have no matching release and would leak once per constructor call.
+    #[test]
+    fn by_value_constructor_arguments_do_not_acquire_bridge_owners_on_every_target() {
+        for param_ty in [
+            PhpType::Str,
+            PhpType::Object("Payload".to_string()),
+            // A typed source variadic reached from eval is promoted to this storage before EIR
+            // lowering. The bridge must pass the raw Mixed-cell container the binder created,
+            // rather than treating it as an inline array of the declared element type.
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        ] {
+            for name in SUPPORTED_TARGETS {
+                let target = Target::parse(name).unwrap();
+                let asm = constructor_argument_asm(target, param_ty.clone(), false);
+                if param_ty == PhpType::Array(Box::new(PhpType::Mixed)) {
+                    assert!(asm.contains("__rt_mixed_unbox"), "{name}: {asm}");
+                }
+                assert!(!asm.contains("__rt_incref"), "{name} {param_ty:?}: {asm}");
+                assert!(!asm.contains("__rt_decref"), "{name} {param_ty:?}: {asm}");
+            }
+        }
+    }
+
+    /// By-reference constructor slots still acquire the owner their writeback releases.
+    ///
+    /// `eval_ref_arg_slots` marks constructor slots `raw_refcounted_owned`, so writeback releases
+    /// the raw slot on both the changed and the unchanged path. Dropping this acquisition would
+    /// turn that release into an over-release.
+    #[test]
+    fn by_reference_constructor_slots_acquire_one_owner_on_every_target() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            let asm = constructor_argument_asm(
+                target,
+                PhpType::Array(Box::new(PhpType::Mixed)),
+                true,
+            );
+            assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");
+        }
+    }
+
+    /// Callable constructor arguments reach the array and invokable-object lookups through
+    /// unconditional AArch64 branches.
+    ///
+    /// The string-name descriptor lookup emitted between the tag ladder and those lookups grows
+    /// with the program's callable names, so a `b.eq` across it can leave the ±1 MiB
+    /// conditional-branch range (#1444). x86_64 keeps its rel32 `je`.
+    #[test]
+    fn callable_constructor_argument_ladder_widens_aarch64_branches() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            let asm = constructor_argument_asm(target, PhpType::Callable, false);
+            let lines = asm.lines().map(str::trim).collect::<Vec<_>>();
+            for (suffix, sites) in [("_callable_array", 2), ("_callable_object", 1)] {
+                let reaches = |line: &str, mnemonic: &str| {
+                    line.strip_prefix(mnemonic).is_some_and(|label| label.ends_with(suffix))
+                };
+                match target.arch {
+                    Arch::AArch64 => {
+                        assert!(
+                            !lines.iter().any(|line| reaches(line, "b.eq ")),
+                            "{name}: near branch to {suffix}:\n{asm}"
+                        );
+                        let wide = lines
+                            .windows(2)
+                            .filter(|pair| pair[0] == "b.ne 1f" && reaches(pair[1], "b "))
+                            .count();
+                        assert_eq!(wide, sites, "{name}: wide branches to {suffix}:\n{asm}");
+                    }
+                    Arch::X86_64 => {
+                        let near = lines.iter().filter(|line| reaches(line, "je ")).count();
+                        assert_eq!(near, sites, "{name}: je branches to {suffix}:\n{asm}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Constructor by-reference slots own their raw payload while method slots borrow it.
+    #[test]
+    fn constructor_reference_slots_stay_owned_unlike_method_slots() {
+        let params = [PhpType::Array(Box::new(PhpType::Mixed))];
+        let slots = eval_ref_arg_slots(&params, &[true], true);
+        assert!(slots[0].raw_refcounted_owned);
+    }
+}
+
+#[cfg(test)]
+mod zero_default_argument_tests {
+    use super::*;
+    use crate::codegen::eval_callable_helpers::emit_eval_callable_descriptor_support;
+    use crate::codegen::platform::Target;
+
+    const SUPPORTED_TARGETS: &[&str] = &[
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ];
+
+    /// Builds the `SplFixedArray::__construct` slot shape, the only zero-default bridge slot.
+    ///
+    /// `collect_class_constructor_slot` derives exactly this shape for `SplFixedArray`: a single
+    /// `int` parameter bridged to the runtime helper, with `zero_default_first_arg` set because
+    /// PHP declares `__construct(int $size = 0)`.
+    fn spl_fixed_array_slot() -> EvalConstructorSlot {
+        let runtime_helper = IntrinsicCall::instance_method("SplFixedArray", "__construct")
+            .and_then(IntrinsicCall::runtime_helper);
+        assert!(runtime_helper.is_some(), "SplFixedArray::__construct lost its runtime helper");
+        EvalConstructorSlot {
+            class_id: 11,
+            class_name: "SplFixedArray".to_string(),
+            impl_class: "SplFixedArray".to_string(),
+            visibility: Visibility::Public,
+            allowed_scopes: Vec::new(),
+            params: vec![PhpType::Int],
+            ref_params: vec![false],
+            supported: true,
+            runtime_helper,
+            zero_default_first_arg: true,
+        }
+    }
+
+    /// Emits arity validation followed by argument staging for the zero-default slot.
+    fn zero_default_staging_asm(target: Target) -> String {
+        let module = Module::new(target);
+        let mut emitter = Emitter::new(target);
+        let mut data = DataSection::new();
+        let callable_support =
+            emit_eval_callable_descriptor_support(&module, &mut emitter, &mut data, false, false);
+        let slot = spl_fixed_array_slot();
+        match target.arch {
+            Arch::AArch64 => {
+                emit_aarch64_validate_constructor_arg_count(&module, &mut emitter, &slot, "fail");
+                emit_aarch64_prepare_constructor_args(
+                    &module,
+                    &mut emitter,
+                    &mut data,
+                    &slot,
+                    "fail",
+                    &callable_support,
+                );
+            }
+            Arch::X86_64 => {
+                emit_x86_64_validate_constructor_arg_count(&module, &mut emitter, &slot, "fail");
+                emit_x86_64_prepare_constructor_args(
+                    &module,
+                    &mut emitter,
+                    &mut data,
+                    &slot,
+                    "fail",
+                    &callable_support,
+                );
+            }
+        }
+        emitter.output()
+    }
+
+    /// The saved argc survives the receiver push that separates its store from its reload.
+    ///
+    /// Staging pushes the unboxed receiver between the two, which moves SP by one temporary slot
+    /// on both ABIs. A stack-pointer-relative reload therefore reads the receiver instead of argc
+    /// and `SplFixedArray::__construct()` with no arguments never reaches its zero default. Both
+    /// targets must address argc through the helper's frame pointer.
+    #[test]
+    fn zero_default_argc_is_reloaded_frame_relative_on_every_target() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            let asm = zero_default_staging_asm(target);
+            let (save, reload, receiver_push) = match target.arch {
+                Arch::AArch64 => (
+                    "str x0, [x29, #-8]",
+                    "ldr x9, [x29, #-8]",
+                    "str x0, [sp, #-16]!",
+                ),
+                Arch::X86_64 => (
+                    "mov QWORD PTR [rbp - 8], rax",
+                    "mov r10, QWORD PTR [rbp - 8]",
+                    "mov QWORD PTR [rsp], rax",
+                ),
+            };
+            assert_eq!(asm.matches(save).count(), 1, "{name}: {asm}");
+            assert_eq!(asm.matches(reload).count(), 1, "{name}: {asm}");
+            let save_at = asm.find(save).unwrap();
+            let push_at = asm.find(receiver_push).unwrap();
+            let reload_at = asm.find(reload).unwrap();
+            assert!(save_at < push_at, "{name}: {asm}");
+            assert!(push_at < reload_at, "{name}: {asm}");
+        }
+    }
+
+    /// The argc slot never aliases the frame slot `emit_borrowed_argument` spills into.
+    ///
+    /// On ARM64 the bridge frame places the borrowed argument at `[x29, #-16]`, which is the same
+    /// byte as the literal `[sp, #32]` the arity check used to write. Reusing it silently
+    /// destroyed argc as soon as the first argument was borrowed.
+    #[test]
+    fn zero_default_argc_slot_is_disjoint_from_the_borrowed_argument_spill() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            let asm = zero_default_staging_asm(target);
+            let (argc_slot, borrow_slot) = match target.arch {
+                Arch::AArch64 => ("[x29, #-8]", "[x29, #-16]"),
+                Arch::X86_64 => ("[rbp - 8]", "[rbp - 40]"),
+            };
+            assert_ne!(argc_slot, borrow_slot, "{name}");
+            assert!(asm.contains(argc_slot), "{name}: {asm}");
+            assert!(asm.contains(borrow_slot), "{name}: {asm}");
+            if matches!(target.arch, Arch::AArch64) {
+                assert!(!asm.contains("[sp, #32]"), "{name}: {asm}");
+            }
+        }
+    }
+
+    /// An omitted `SplFixedArray` size still stages PHP's zero default instead of a borrow.
+    #[test]
+    fn omitted_spl_fixed_array_size_branches_to_the_zero_default() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            let module = Module::new(target);
+            let slot = spl_fixed_array_slot();
+            let body_label = constructor_body_label(&module, &slot);
+            let asm = zero_default_staging_asm(target);
+            let default_label = format!("{}_arg_0_default", body_label);
+            let done_label = format!("{}_arg_0_done", body_label);
+            let branch = match target.arch {
+                Arch::AArch64 => format!("cbz x9, {}", default_label),
+                Arch::X86_64 => format!("jz {}", default_label),
+            };
+            assert!(asm.contains(&branch), "{name}: {asm}");
+            assert!(asm.contains(&format!("{}:", default_label)), "{name}: {asm}");
+            assert!(asm.contains(&format!("{}:", done_label)), "{name}: {asm}");
+            let default_at = asm.find(&format!("{}:", default_label)).unwrap();
+            let done_at = asm.find(&format!("{}:", done_label)).unwrap();
+            assert!(default_at < done_at, "{name}: {asm}");
+            assert!(
+                asm.find(&branch).unwrap() < asm.find("__rt_mixed_cast_int").unwrap(),
+                "{name}: {asm}"
             );
         }
     }

@@ -79,6 +79,47 @@ pub(super) fn reflection_class_metadata_for_name(
     ctx: &FunctionContext<'_>,
     reflected_class: &str,
 ) -> Result<ReflectionOwnerMetadata> {
+    // `Closure` has no declaration to reflect. A program that names `fromCallable` at run time
+    // carries `__ElephcClosureFactory` (`crate::closure_from_callable_prelude`), whose static
+    // `fromCallable()` is the one `Closure` member such a program reflects: Symfony's container
+    // checks its `['Closure', 'fromCallable']` factories through `ReflectionClass('Closure')`.
+    if reflected_class.trim_start_matches('\\').eq_ignore_ascii_case("Closure") {
+        let factory = crate::closure_from_callable_prelude::CLOSURE_FACTORY_CLASS;
+        if resolve_reflection_class(ctx, factory).is_some() {
+            let mut metadata = reflection_class_metadata_for_name(ctx, factory)?;
+            metadata.reflected_name = Some("Closure".to_string());
+            metadata.is_final = true;
+            metadata.is_instantiable = false;
+            // php's own signature, `Closure::fromCallable(callable $callback): Closure`: the helper
+            // declares `mixed` so the conversion keeps its scope (see the prelude).
+            let named = |name: &str, is_builtin: bool| {
+                Some(super::ReflectionParameterTypeMetadata::Named(super::ReflectionNamedTypeMetadata {
+                    name: name.to_string(),
+                    allows_null: false,
+                    is_builtin,
+                }))
+            };
+            for method in &mut metadata.method_members {
+                method.declaring_class_name = Some("Closure".to_string());
+                method.type_metadata = named("Closure", false);
+                for parameter in &mut method.parameters {
+                    parameter.declaring_class_name = Some("Closure".to_string());
+                    parameter.type_metadata = named("callable", true);
+                    parameter.is_callable_type = true;
+                    if let Some(super::ReflectionDeclaringFunctionMember::Method {
+                        declaring_class_name,
+                        type_metadata,
+                        ..
+                    }) = &mut parameter.declaring_function
+                    {
+                        *declaring_class_name = Some("Closure".to_string());
+                        *type_metadata = named("Closure", false);
+                    }
+                }
+            }
+            return Ok(metadata);
+        }
+    }
     if let Some((class_name, info)) = resolve_reflection_class(ctx, &reflected_class) {
         let is_enum = is_reflection_enum(ctx, class_name);
         let method_names = reflection_class_method_names(ctx, class_name);
@@ -98,7 +139,10 @@ pub(super) fn reflection_class_metadata_for_name(
         let method_members = reflection_class_method_members(ctx, class_name, info, &method_names)?;
         let property_members =
             reflection_class_property_members(ctx, class_name, info, &property_names);
-        let constructor_member = reflection_constructor_member(&method_members);
+        let constructor_member = match reflection_constructor_member(&method_members) {
+            Some(member) => Some(member),
+            None => inherited_private_constructor_member(ctx, class_name)?,
+        };
         let is_instantiable =
             reflection_class_is_instantiable(info, is_enum, constructor_member.as_ref());
         let is_cloneable = reflection_class_is_cloneable(class_name, info, is_enum);
@@ -134,6 +178,7 @@ pub(super) fn reflection_class_metadata_for_name(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+        returns_reference: false,
             prototype_member: None,
             is_final: info.is_final,
             is_abstract: info.is_abstract,
@@ -175,7 +220,13 @@ pub(super) fn reflection_class_metadata_for_name(
         let constructor_member = reflection_constructor_member(&method_members);
         return Ok(ReflectionOwnerMetadata {
             reflected_name: Some(interface_name.to_string()),
-            doc_comment: None,
+            // `debug:autowiring` prints each interface's first doc line ("Describes a logger
+            // instance." for `Psr\Log\LoggerInterface`).
+            doc_comment: ctx
+                .module
+                .interface_infos
+                .get(interface_name)
+                .and_then(|info| info.doc_comment.clone()),
             attr_names: Vec::new(),
             attr_args: Vec::new(),
             interface_names: reflection_interface_parent_names(ctx, interface_name),
@@ -204,6 +255,7 @@ pub(super) fn reflection_class_metadata_for_name(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+        returns_reference: false,
             prototype_member: None,
             is_final: false,
             is_abstract: false,
@@ -279,6 +331,7 @@ pub(super) fn reflection_class_metadata_for_name(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+        returns_reference: false,
             prototype_member: None,
             is_final: false,
             is_abstract: false,
@@ -392,7 +445,7 @@ fn reflection_legacy_shallow_class_metadata_for_name(
 }
 
 /// Builds only the fields retained by nested shallow class-like Reflection objects.
-fn reflection_direct_shallow_class_metadata_for_name(
+pub(super) fn reflection_direct_shallow_class_metadata_for_name(
     ctx: &FunctionContext<'_>,
     reflected_class: &str,
 ) -> Result<ReflectionOwnerMetadata> {

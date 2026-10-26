@@ -152,6 +152,10 @@ pub(crate) fn lower_get_debug_type(
         return store_if_result(ctx, inst);
     }
     if matches!(ty, PhpType::Object(_)) {
+        if super::has_eval_context(ctx) {
+            super::eval::emit_eval_object_class_name(ctx, value, "get_class", false)?;
+            return store_if_result(ctx, inst);
+        }
         ctx.load_value_to_result(value)?;
         super::types::emit_dynamic_object_class_name(ctx, "get_class");
         return store_if_result(ctx, inst);
@@ -295,7 +299,13 @@ fn emit_mixed_get_debug_type(
     emit_mixed_resource_debug_type_case(ctx, &resource_case, &done);
 
     ctx.emitter.label(&object_case);
-    super::types::emit_mixed_object_class_name_from_value(ctx, value, "get_class")?;
+    // An interpreter-made object -- an eval closure above all -- is carried by a native object
+    // whose class id names `stdClass`; `get_class()` already asks the bridge, and so must this.
+    if super::has_eval_context(ctx) {
+        super::eval::emit_eval_object_class_name(ctx, value, "get_class", false)?;
+    } else {
+        super::types::emit_mixed_object_class_name_from_value(ctx, value, "get_class")?;
+    }
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&done);
     Ok(())
@@ -447,13 +457,12 @@ pub(in crate::codegen::lower_inst) fn emit_type_name_result(ctx: &mut FunctionCo
 
 /// Emits the reported PHP version string into the string result registers.
 ///
-/// The value is `crate::web_prelude::PhpVersion::version_string()` for the compilation's
-/// `--php-version` profile — the PHP LANGUAGE version elephc targets, never elephc's own
-/// package version. Reference PHP 8.5.6 reports `8.5.6` here; elephc reports `8.5.0`, the
-/// same deliberate `.0` divergence `opcache_get_configuration()['version']['version']` already
-/// makes (see `PhpVersion::version_string` for the rule).
+/// The value is `PhpVersion::reported_version_string()` for the compilation's `--php-version`
+/// profile — the PHP LANGUAGE version elephc targets, never elephc's own package version. A
+/// `major.minor` profile reports `.0` (`8.5.0`); `--php-version 8.5.10` reports `8.5.10`, as the
+/// php the build is pinned to does.
 pub(in crate::codegen::lower_inst) fn emit_reported_php_version(ctx: &mut FunctionContext<'_>) {
-    let version = crate::codegen::compile_php_version().version_string();
+    let version = crate::codegen::compile_php_version().reported_version_string();
     let (label, len) = ctx.data.add_string(version.as_bytes());
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
@@ -551,6 +560,10 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_phpversion(ctx: &mut Functio
 }
 
 /// Lowers `defined("NAME")` for compile-time string constant names.
+///
+/// Direct calls usually fold in EIR. This path still answers `Class::CONST`
+/// names from module class/interface/enum metadata so registry and other
+/// const-string `defined()` calls match PHP existence and visibility checks.
 pub(crate) fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "defined", 1)?;
     let value = expect_operand(inst, 0)?;
@@ -568,7 +581,8 @@ pub(crate) fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         }
         emit_static_bool(
             ctx,
-            ctx.has_global_name(&constant_name) || const_registry_contains(ctx, &constant_name),
+            literal_constant_is_defined(ctx, &constant_name)
+                || const_registry_contains(ctx, &constant_name),
         );
     } else {
         emit_registry_string_lookup(ctx, value, "defined", "__rt_defined")?;
@@ -681,6 +695,18 @@ fn emit_registry_string_lookup(
     }
     abi::emit_call_label(ctx.emitter, helper);
     Ok(())
+}
+
+/// Returns true when a const-string `defined()` name exists as a global or class-like constant.
+fn literal_constant_is_defined(ctx: &FunctionContext<'_>, constant_name: &str) -> bool {
+    ctx.has_global_name(constant_name)
+        || crate::types::class_like_constant_is_defined(
+            &ctx.module.class_infos,
+            &ctx.module.interface_infos,
+            &ctx.module.enum_infos,
+            constant_name,
+            ctx.defined_class_scope(),
+        )
 }
 
 /// Returns the always-available extensions `extension_loaded()` and `get_loaded_extensions(false)`

@@ -396,13 +396,18 @@ pub(in crate::interpreter) fn eval_class_like_constant_cell(
         values,
     );
     context.end_class_constant_evaluation(declaring_class, constant.name());
+    // The cache owns the cell and every read borrows it, the first one included: handing the
+    // freshly evaluated cell to this caller as OWNED let its release free the cached value, and
+    // the next read returned whatever reused the memory -- Laravel's `DateFactory` read
+    // `static::DEFAULT_CLASS_NAME` back as a Carbon translation string.
     let value = value?;
+    let owned = if value.is_borrowed() { values.retain(value)? } else { value };
     if let Some(replaced) =
-        context.set_class_constant_cell(declaring_class, constant.name(), value)
+        context.set_class_constant_cell(declaring_class, constant.name(), owned)
     {
         values.release(replaced)?;
     }
-    Ok(value)
+    Ok(RuntimeCellHandle::borrowed(owned))
 }
 
 /// Evaluates a class-like constant or property initializer with PHP magic scope.
@@ -473,11 +478,7 @@ pub(super) fn initialize_eval_static_properties(
             );
         }
         if let Some(value) = value {
-            if let Some(replaced) =
-                context.set_static_property(class.name(), property.name(), value)
-            {
-                values.release(replaced)?;
-            }
+            store_static_property_value(class.name(), property.name(), value, context, values)?;
         }
     }
     Ok(())

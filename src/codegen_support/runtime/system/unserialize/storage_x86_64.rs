@@ -6,9 +6,13 @@
 //!
 //! Key details:
 //! - Manually boxed values preserve heap markers while parsed ownership moves into final storage.
+//! - Every store writes the slot's high word (the string length, or zero), which clears the
+//!   uninitialized marker a typed property without a default starts with.
 
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::sentinels::PROP_DESC_TAG_TAGGED_SCALAR;
+use crate::codegen_support::sentinels::{
+    TAGGED_SCALAR_PROPERTY_TAG, TAGGED_SCALAR_TAG_INT, TAGGED_SCALAR_TAG_NULL,
+};
 
 /// Emits x86_64 object-property storage and parsed-hash conversion helpers.
 pub(super) fn emit_object_storage(emitter: &mut Emitter) {
@@ -24,6 +28,13 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     // initialization". Exact keys are matched FIRST across all rows so an explicit mangled key
     // still wins over an unmangled alias when a class has both spellings.
     emitter.label_global("__rt_obj_store_prop");
+    // stdClass has no declared slots: its dynamic properties live in the hash at obj+8, so a
+    // serialized property is inserted there (rdi..rcx already match `__rt_stdclass_set`).
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);
+    emitter.instruction("cmp QWORD PTR [rdi], r10");                            // is the receiver a stdClass instance?
+    emitter.instruction("jne __rt_obj_store_prop_declared");                    // declared-layout classes keep the slot matcher
+    emitter.instruction("jmp __rt_stdclass_set");                               // tail-call the hash-backed property store
+    emitter.label("__rt_obj_store_prop_declared");
     emitter.instruction("push rbp");                                            // save the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the store frame
     emitter.instruction("sub rsp, 80");                                         // reserve frame slots
@@ -97,23 +108,41 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
     emitter.instruction("add r10, r8");                                         // address of the property slot
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // value box
+    emitter.instruction("test r9, 0x100");                                      // is this a reference-bound slot?
+    emitter.instruction("jnz __rt_obj_store_prop_ret");                         // it holds a cell pointer, not a value: leave the cell alone
     emitter.instruction("cmp r9, 7");                                           // is this a Mixed/untyped slot?
     emitter.instruction("je __rt_obj_store_prop_mixed");                        // store the boxed cell directly
     emitter.instruction("cmp r9, 1");                                           // is this a string slot?
     emitter.instruction("je __rt_obj_store_prop_str");                          // store pointer and length
     emitter.instruction("cmp r9, 4");                                           // is this an indexed-array slot?
     emitter.instruction("je __rt_obj_store_prop_arr");                          // convert the parsed hash to an indexed array
-    emitter.instruction(&format!("cmp r9, {}", PROP_DESC_TAG_TAGGED_SCALAR));   // is this an inline tagged-scalar slot?
-    emitter.instruction("je __rt_obj_store_prop_tagged");                       // rebuild both the payload and the slot's own runtime tag
+    emitter.instruction(&format!("cmp r9, {}", TAGGED_SCALAR_PROPERTY_TAG));    // is this an inline tagged-scalar (`?int`) slot?
+    emitter.instruction("je __rt_obj_store_prop_tagged");                       // store the payload and its runtime tag inline
     emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // typed scalar/object/hash: unbox the low word
     emitter.instruction("mov QWORD PTR [r10], rax");                            // store it inline in the slot
-    // A single-payload typed slot keeps its initialization marker in the HIGH word; see the
-    // AArch64 sibling for the Symfony failure this leaves behind when it is not cleared.
-    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // an unserialized property is initialized
+    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
+    emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
+    emitter.label("__rt_obj_store_prop_tagged");
+    // Only an int is stored as one; see the AArch64 variant.
+    emitter.instruction(&format!("cmp QWORD PTR [rcx], {}", TAGGED_SCALAR_TAG_INT)); // is the boxed value an int?
+    emitter.instruction("jne __rt_obj_store_prop_tagged_null");                 // null or a mismatched type: store the canonical tagged null pair
+    emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // unbox the integer payload
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // payload word of the tagged slot
+    emitter.instruction(&format!("mov QWORD PTR [r10 + 8], {}", TAGGED_SCALAR_TAG_INT)); // tag word: a non-null tagged int
+    emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
+    emitter.label("__rt_obj_store_prop_tagged_null");
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "rax", crate::codegen_support::NULL_SENTINEL);
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // canonical tagged-null payload word
+    emitter.instruction(&format!("mov QWORD PTR [r10 + 8], {}", TAGGED_SCALAR_TAG_NULL)); // tag word: PHP null
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     // See the AArch64 sibling: only a real list may be flattened into an indexed array, or every
     // string key is renumbered away.
     emitter.label("__rt_obj_store_prop_arr");
+    // See the AArch64 sibling: an interpreter-built list is already an indexed array (tag 4);
+    // only the decoder's parsed hash (tag 5) needs list classification and conversion.
+    emitter.instruction("mov r9, QWORD PTR [rcx]");                             // boxed value tag
+    emitter.instruction("cmp r9, 5");                                           // is this the decoder's parsed hash?
+    emitter.instruction("jne __rt_obj_store_prop_arr_direct");                  // an indexed array is already final
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the property byte offset across the call
     emitter.instruction("mov rdi, QWORD PTR [rcx + 8]");                        // parsed hash pointer (box low word)
     emitter.instruction("mov QWORD PTR [rbp - 80], rdi");                       // keep the parsed hash across the classification
@@ -125,11 +154,14 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_obj_store_prop_arr_store");                   // store whichever container was chosen
     emitter.label("__rt_obj_store_prop_arr_keep_hash");
     emitter.instruction("mov rax, rdi");                                        // the parsed hash is the stored container
+    emitter.instruction("jmp __rt_obj_store_prop_arr_store");                   // publish the chosen container
+    emitter.label("__rt_obj_store_prop_arr_direct");
+    emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // already-built array payload
     emitter.label("__rt_obj_store_prop_arr_store");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
     emitter.instruction("add r10, QWORD PTR [rbp - 64]");                       // slot = object + byte offset
-    emitter.instruction("mov QWORD PTR [r10], rax");                            // store the array pointer
-    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // an unserialized property is initialized
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // store the indexed-array pointer
+    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_str");
     emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // string pointer from the box
@@ -137,30 +169,12 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rcx + 16]");                       // string length from the box
     emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // store the string length
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
-    // A `?int` / `int|null` slot is two inline words: the payload, then the runtime value
-    // tag that says which of int/null the payload is. Writing only the low word (the plain
-    // typed-scalar arm above) would leave a stale tag behind and make `n:null` read back as
-    // the integer `NULL_SENTINEL`, so the tag word is restored from the parsed box too. The
-    // canonical null payload is the in-band sentinel, matching `emit_tagged_scalar_null`.
-    emitter.label("__rt_obj_store_prop_tagged");
-    emitter.instruction("mov rax, QWORD PTR [rcx]");                            // boxed value tag
-    emitter.instruction("mov r11, QWORD PTR [rcx + 8]");                        // boxed payload low word
-    emitter.instruction("cmp rax, 8");                                          // is the parsed value PHP null?
-    emitter.instruction("jne __rt_obj_store_prop_tagged_store");                // a non-null payload is stored exactly as parsed
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r11", crate::codegen_support::NULL_SENTINEL);
-    emitter.label("__rt_obj_store_prop_tagged_store");
-    emitter.instruction("mov QWORD PTR [r10], r11");                            // store the tagged-scalar payload word
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // store the tagged-scalar runtime tag word
-    emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
-    // PHP null goes into the slot as a boxed cell like every other value. Writing the bare
-    // in-band `NULL_SENTINEL` instead would be a shape NO other producer of a Mixed property
-    // slot emits — the constructor's null default and `$o->p = null` both store a cell — and
-    // the unguarded readers (`var_dump`, `===`, `isset`, the `(array)` cast) dereference the
-    // slot's low word on sight, so a sentinel there is a segfault, not a null. It also leaks:
-    // the caller transfers the parsed box unconditionally and never frees it.
+    // A parsed null keeps its boxed tag-8 cell like every other value: the in-band
+    // NULL_SENTINEL is not a Mixed cell pointer, and every reader of the slot
+    // (`=== null`, var_dump, json_encode) dereferenced it.
     emitter.label("__rt_obj_store_prop_mixed");
-    emitter.instruction("mov QWORD PTR [r10], rcx");                            // store the parsed boxed Mixed cell, PHP null included
-    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // an unserialized property is initialized: clear any uninitialized marker
+    emitter.instruction("mov QWORD PTR [r10], rcx");                            // store the boxed Mixed cell pointer
+    emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // the high word marks the typed property initialized
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_next");
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the row index
@@ -196,7 +210,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.label("__rt_hash_to_indexed_array_loop");
     emitter.instruction("mov rdi, rbx");                                        // hash pointer
     emitter.instruction("mov rsi, r13");                                        // resume cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // rcx=value low, rax=next cursor
+    emitter.instruction("call __rt_hash_iter_next_value");                      // rcx=value low, rax=next cursor
     emitter.instruction("cmp rax, -1");                                         // iteration done?
     emitter.instruction("je __rt_hash_to_indexed_array_done");                  // stop when exhausted
     emitter.instruction("mov r13, rax");                                        // save the resume cursor

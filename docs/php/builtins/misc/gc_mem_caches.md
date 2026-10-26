@@ -1,8 +1,8 @@
 ---
 title: "gc_mem_caches()"
-description: "Reclaims memory used by the Zend Engine memory manager and returns the number of bytes freed."
+description: "Drains runtime small-block allocator caches and returns the number of cached bytes released."
 sidebar:
-  order: 628
+  order: 636
 ---
 
 ## gc_mem_caches()
@@ -11,7 +11,7 @@ sidebar:
 function gc_mem_caches(): int
 ```
 
-Reclaims memory used by the Zend Engine memory manager and returns the number of bytes freed.
+Drains runtime small-block allocator caches and returns the number of cached bytes released.
 
 **Parameters**: none.
 
@@ -20,9 +20,9 @@ Reclaims memory used by the Zend Engine memory manager and returns the number of
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/gc.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/gc.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/gc_mem_caches.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/gc_mem_caches.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

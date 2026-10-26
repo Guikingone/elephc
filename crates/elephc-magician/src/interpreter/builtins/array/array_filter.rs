@@ -28,13 +28,28 @@ pub(in crate::interpreter) fn eval_array_filter_declared_call(
 /// Dispatches evaluated-argument eval calls for the `array_filter` array builtin.
 pub(in crate::interpreter) fn eval_array_filter_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
-        [array] => eval_array_filter_result(*array, None, None, context, values),
-        [array, callback] => eval_array_filter_result(*array, Some(*callback), None, context, values),
-        [array, callback, mode] => eval_array_filter_result(*array, Some(*callback), Some(*mode), context, values),
+        [array] => eval_array_filter_result_from_scope(*array, None, None, lexical_scope, context, values),
+        [array, callback] => eval_array_filter_result_from_scope(
+            *array,
+            Some(*callback),
+            None,
+            lexical_scope,
+            context,
+            values,
+        ),
+        [array, callback, mode] => eval_array_filter_result_from_scope(
+            *array,
+            Some(*callback),
+            Some(*mode),
+            lexical_scope,
+            context,
+            values,
+        ),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -80,17 +95,6 @@ pub(in crate::interpreter) fn eval_builtin_array_filter(
     }
 }
 
-/// Filters eval array entries through PHP truthiness or a callable callback.
-pub(in crate::interpreter) fn eval_array_filter_result(
-    array: RuntimeCellHandle,
-    callback: Option<RuntimeCellHandle>,
-    mode: Option<RuntimeCellHandle>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_array_filter_result_from_scope(array, callback, mode, None, context, values)
-}
-
 /// Filters eval array entries with optional lexical scope for callback names.
 fn eval_array_filter_result_from_scope(
     array: RuntimeCellHandle,
@@ -102,7 +106,7 @@ fn eval_array_filter_result_from_scope(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = match callback {
         Some(callback) if !values.is_null(callback)? => {
-            Some(eval_callable_with_optional_scope(
+            Some(eval_callable_for_probe(
                 callback,
                 context,
                 lexical_scope,
@@ -111,33 +115,48 @@ fn eval_array_filter_result_from_scope(
         }
         _ => None,
     };
-    let mode = match mode {
-        Some(mode) => eval_array_filter_mode_value(mode, values)?,
-        None => EVAL_ARRAY_FILTER_USE_VALUE,
+    // A callable array's receiver read (`[$object, 'method']`) is an owner the dispatch
+    // borrows for the whole walk; it is released once, after the last callback.
+    let (callback, callback_receiver) = match callback {
+        Some((callback, receiver)) => (Some(callback), receiver),
+        None => (None, None),
     };
-
-    let len = values.array_len(array)?;
-    let mut result = values.assoc_new(len)?;
-    for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        let keep = if let Some(callback) = callback.as_ref() {
-            let args = eval_array_filter_callback_args(mode, key, value)?;
-            let result = eval_evaluated_callable_with_values(callback, args, context, values)?;
-            values.truthy(result)?
-        } else {
-            values.truthy(value)?
+    let result = (|| -> Result<RuntimeCellHandle, EvalStatus> {
+        let mode = match mode {
+            Some(mode) => eval_array_filter_mode_value(mode, context, values)?,
+            None => EVAL_ARRAY_FILTER_USE_VALUE,
         };
-        if keep {
-            result = values.array_set(result, key, value)?;
+
+        let len = values.array_len(array)?;
+        let mut result = values.assoc_new(len)?;
+        for position in 0..len {
+            let key = values.array_iter_key(array, position)?;
+            let value = values.array_get(array, key)?;
+            let keep = if let Some(callback) = callback.as_ref() {
+                let args = eval_array_filter_callback_args(mode, key, value)?;
+                let verdict = eval_evaluated_callable_with_values(callback, args, context, values)?;
+                let keep = values.truthy(verdict);
+                values.release(verdict)?;
+                keep?
+            } else {
+                values.truthy(value)?
+            };
+            if keep {
+                result = values.array_set(result, key, value)?;
+            }
+            // `array_set` retains what it keeps; this iteration's key and value reads are released.
+            values.release(key)?;
+            values.release(value)?;
         }
-    }
-    Ok(result)
+        Ok(result)
+    })();
+    eval_release_callable_receiver(result, callback_receiver, values)
 }
 
-/// Reads and validates the optional `array_filter()` callback mode.
+/// Normalizes legacy modes and raises a catchable ValueError for invalid PHP 8.6 modes.
 pub(in crate::interpreter) fn eval_array_filter_mode_value(
     mode: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
     let mode = eval_int_value(mode, values)?;
@@ -145,7 +164,12 @@ pub(in crate::interpreter) fn eval_array_filter_mode_value(
         EVAL_ARRAY_FILTER_USE_VALUE | EVAL_ARRAY_FILTER_USE_BOTH | EVAL_ARRAY_FILTER_USE_KEY => {
             Ok(mode)
         }
-        _ => Err(EvalStatus::RuntimeFatal),
+        _ if crate::eval_php_profile::eval_php_version_id() < 80600 => Ok(EVAL_ARRAY_FILTER_USE_VALUE),
+        _ => eval_throw_builtin_value_error(
+            "array_filter(): Argument #3 ($mode) must be one of ARRAY_FILTER_USE_VALUE, ARRAY_FILTER_USE_KEY, or ARRAY_FILTER_USE_BOTH",
+            context,
+            values,
+        ),
     }
 }
 

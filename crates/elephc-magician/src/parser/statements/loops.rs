@@ -178,15 +178,10 @@ impl Parser {
                 let (name, prologue) = self.foreach_target_binding(key.slot);
                 (Some(name), prologue)
             }
-            None => (None, None),
+            None => (None, Vec::new()),
         };
         let mut body = self.parse_statement_body_or_alternative("endforeach")?;
-        if let Some(prologue) = value_prologue {
-            body.insert(0, prologue);
-        }
-        if let Some(prologue) = key_prologue {
-            body.insert(0, prologue);
-        }
+        body.splice(0..0, key_prologue.into_iter().chain(value_prologue));
         Ok(vec![EvalStmt::Foreach {
             array,
             key_name,
@@ -216,6 +211,12 @@ impl Parser {
             return Err(EvalParseError::ExpectedVariable);
         }
         if matches!(self.current(), TokenKind::LBracket) {
+            if let Some(elements) = self.try_parse_flat_reference_pattern() {
+                return Ok(EvalForeachTarget {
+                    slot: EvalForeachSlot::ReferencePattern(elements),
+                    by_ref: true,
+                });
+            }
             return Ok(EvalForeachTarget {
                 slot: EvalForeachSlot::Pattern(self.parse_destructure_pattern()?),
                 by_ref,
@@ -243,38 +244,88 @@ impl Parser {
         })
     }
 
+    /// Parses `[$a, &$b, ...]` -- positional, flat, only variables, at least one `&` -- or leaves
+    /// the cursor untouched and returns `None` for every other pattern.
+    fn try_parse_flat_reference_pattern(&mut self) -> Option<Vec<(String, bool)>> {
+        let mut pos = self.pos + 1;
+        let mut elements = Vec::new();
+        loop {
+            let by_ref = matches!(self.tokens.get(pos), Some(TokenKind::Ampersand));
+            if by_ref {
+                pos += 1;
+            }
+            let Some(TokenKind::DollarIdent(name)) = self.tokens.get(pos) else {
+                return None;
+            };
+            elements.push((name.clone(), by_ref));
+            pos += 1;
+            match self.tokens.get(pos) {
+                Some(TokenKind::Comma) => pos += 1,
+                Some(TokenKind::RBracket) => {
+                    pos += 1;
+                    break;
+                }
+                _ => return None,
+            }
+        }
+        if !elements.iter().any(|(_, by_ref)| *by_ref) {
+            return None;
+        }
+        self.pos = pos;
+        Some(elements)
+    }
+
     /// Returns the name a foreach slot binds to, plus the statement that moves it into place.
-    fn foreach_target_binding(&mut self, slot: EvalForeachSlot) -> (String, Option<EvalStmt>) {
+    fn foreach_target_binding(&mut self, slot: EvalForeachSlot) -> (String, Vec<EvalStmt>) {
         match slot {
-            EvalForeachSlot::Name(name) => (name, None),
+            EvalForeachSlot::Name(name) => (name, Vec::new()),
             EvalForeachSlot::Pattern(targets) => {
                 let name = next_foreach_binding_name();
                 (
                     name.clone(),
-                    Some(EvalStmt::ArrayDestructure {
+                    vec![EvalStmt::ArrayDestructure {
                         targets,
                         value: EvalExpr::LoadVar(name),
-                    }),
+                    }],
                 )
             }
             EvalForeachSlot::Lvalue(target) => {
                 let name = next_foreach_binding_name();
                 (
                     name.clone(),
-                    Some(EvalStmt::Expr(EvalExpr::Assign {
+                    vec![EvalStmt::Expr(EvalExpr::Assign {
                         target: Box::new(target),
                         value: Box::new(EvalExpr::LoadVar(name)),
-                    })),
+                    })],
                 )
+            }
+            EvalForeachSlot::ReferencePattern(elements) => {
+                let name = next_foreach_binding_name();
+                let statements = elements
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (variable, by_ref))| {
+                        let element = EvalExpr::ArrayGet {
+                            array: Box::new(EvalExpr::LoadVar(name.clone())),
+                            index: Box::new(EvalExpr::Const(EvalConst::Int(index as i64))),
+                        };
+                        if by_ref {
+                            EvalStmt::VarReferenceBind { target: variable, source: element }
+                        } else {
+                            EvalStmt::StoreVar { name: variable, value: element }
+                        }
+                    })
+                    .collect();
+                (name, statements)
             }
             EvalForeachSlot::Append(target) => {
                 let name = next_foreach_binding_name();
                 (
                     name.clone(),
-                    Some(EvalStmt::Expr(EvalExpr::ArrayAppendAssign {
+                    vec![EvalStmt::Expr(EvalExpr::ArrayAppendAssign {
                         target: Box::new(target),
                         value: Box::new(EvalExpr::LoadVar(name)),
-                    })),
+                    })],
                 )
             }
         }
@@ -297,6 +348,10 @@ pub(in crate::parser) enum EvalForeachSlot {
     Lvalue(EvalExpr),
     /// `$list[]`: each iteration appends its value to the array `$list` names.
     Append(EvalExpr),
+    /// A flat positional pattern with at least one `&` element, `[$multi, &$responses]`: the
+    /// loop iterates BY REFERENCE and each element is bound from the referenced value, by
+    /// reference where the pattern says so (symfony/http-client's `TransportResponseTrait`).
+    ReferencePattern(Vec<(String, bool)>),
 }
 
 /// Returns a scope name for one hidden foreach binding.

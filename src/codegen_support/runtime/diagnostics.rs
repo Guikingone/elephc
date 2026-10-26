@@ -1,7 +1,6 @@
 //! Purpose:
-//! Emits runtime diagnostic suppression and warning-output helpers.
-//! The helpers implement PHP-style @ suppression depth, the `set_error_handler()` hand-off, and
-//! stderr warning writes for each target ABI.
+//! Emits runtime diagnostic suppression and the raw stderr writer.
+//! Ordinary warnings are dispatched by the shared warning-line/handler adapter.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` before PHP-visible helper emission.
@@ -41,7 +40,7 @@ const DIAG_FRAME_BYTES_X86: usize = 112;
 /// Dispatches to `emit_diagnostics_linux_x86_64` when targeting x86_64; otherwise
 /// emits architecture-agnostic ARM64 diagnostic helpers inline. Each helper set
 /// includes `__rt_diag_push_suppression`, `__rt_diag_pop_suppression`, and
-/// `__rt_diag_warning`.
+/// `__rt_diag_write`, plus the shared `__rt_diag_warning` dispatcher.
 ///
 /// # Arguments
 /// * `emitter` - The code emitter used to append instructions and labels.
@@ -52,8 +51,15 @@ const DIAG_FRAME_BYTES_X86: usize = 112;
 /// # ABI behavior
 /// - `__rt_diag_push_suppression`: increments the global `_rt_diag_suppression` counter and returns.
 /// - `__rt_diag_pop_suppression`: decrements the counter (guarded against underflow) and returns.
-/// - `__rt_diag_warning`: writes to stderr when suppression depth is zero; silently returns when suppressed.
+/// - `__rt_diag_write`: writes already-filtered diagnostics when suppression depth is zero.
+/// - `__rt_diag_warning`: dispatches full warning lines through handlers and reporting masks.
 pub(crate) fn emit_diagnostics(emitter: &mut Emitter, features: RuntimeFeatures) {
+    if features.handler_state || features.eval_bridge || features.web {
+        super::handler_state::emit_handler_state(emitter);
+    }
+    super::error_handlers::emit_error_handler_invoke(emitter);
+    super::last_error::emit_last_error(emitter);
+    super::warning_dispatch::emit_warning_dispatch(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_diagnostics_linux_x86_64(emitter, features);
         return;
@@ -78,18 +84,7 @@ pub(crate) fn emit_diagnostics(emitter: &mut Emitter, features: RuntimeFeatures)
     emitter.label("__rt_diag_pop_done");
     emitter.instruction("ret");                                                 // return to the expression wrapper after restoring suppression state
 
-    // A WHOLE diagnostic in one call, which the newline test below cannot recognise: the
-    // interpreter's `RuntimeValueOps::warning` renders "Undefined variable $x" with no severity
-    // word and no trailing newline, so buffering it on the same rule would leave it in the
-    // accumulator forever and glue it onto whatever diagnostic came next.
-    emitter.label_global("__rt_diag_message");
-    if features.diag_user_handler {
-        emitter.instruction("mov x10, #1");
-        abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_complete", 0);  // this call delivers the last fragment
-    }
-    emitter.instruction("b __rt_diag_warning");                                 // otherwise an ordinary diagnostic fragment
-
-    emitter.label_global("__rt_diag_warning");
+    emitter.label_global("__rt_diag_write");
     abi::emit_symbol_address(emitter, "x9", "_rt_diag_suppression");
     emitter.instruction("ldr x10, [x9]");                                       // load suppression depth before deciding whether to emit the warning
     if features.diag_user_handler {
@@ -234,7 +229,7 @@ fn emit_diag_buffered_path_aarch64(emitter: &mut Emitter) {
 /// # ABI constraints
 /// - `__rt_diag_push_suppression`: reads/writes `_rt_diag_suppression` via RIP-relative load/store.
 /// - `__rt_diag_pop_suppression`: guards decrement against zero to prevent underflow.
-/// - `__rt_diag_warning`: uses Linux `write` syscall (number 1) with arguments in rdi, rsi, rdx.
+/// - `__rt_diag_write`: uses Linux `write` syscall (number 1) with arguments in rdi, rsi, rdx.
 fn emit_diagnostics_linux_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.blank();
     emitter.comment("--- runtime: diagnostics ---");
@@ -254,15 +249,7 @@ fn emit_diagnostics_linux_x86_64(emitter: &mut Emitter, features: RuntimeFeature
     emitter.label("__rt_diag_pop_done_linux_x86_64");
     emitter.instruction("ret");                                                 // return to the expression wrapper after restoring suppression state
 
-    // See the AArch64 mirror: a caller with a WHOLE message that does not end in a newline.
-    emitter.label_global("__rt_diag_message");
-    if features.diag_user_handler {
-        emitter.instruction("mov r10, 1");
-        abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_complete", 0);  // this call delivers the last fragment
-    }
-    emitter.instruction("jmp __rt_diag_warning");                               // otherwise an ordinary diagnostic fragment
-
-    emitter.label_global("__rt_diag_warning");
+    emitter.label_global("__rt_diag_write");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);    // load suppression depth before deciding whether to emit the warning
     emitter.instruction("test r10, r10");                                       // is runtime warning output currently suppressed?
     if features.diag_user_handler {

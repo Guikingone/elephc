@@ -398,7 +398,7 @@ pub(super) fn eval_reflection_owner_object_with_members(
 /// dispatcher also defers to these slots for a method an AOT class declares, so a reflector
 /// built in eval for such a method answered from them too. The values are the ones the eval
 /// dispatcher itself answers with (see `eval_reflection_source_location_result`).
-fn eval_reflection_store_native_source_slots(
+pub(super) fn eval_reflection_store_native_source_slots(
     object: RuntimeCellHandle,
     owner_kind: u64,
     context: &mut ElephcEvalContext,
@@ -421,7 +421,19 @@ fn eval_reflection_store_native_source_slots(
     } else {
         "ReflectionFunction"
     };
-    let file_value = values.string(&file)?;
+    eval_reflection_write_source_slots(object, owner_class, &file, source_location, context, values)
+}
+
+/// Stores a reflected declaration's file and line range into the owner's source slots.
+pub(super) fn eval_reflection_write_source_slots(
+    object: RuntimeCellHandle,
+    owner_class: &str,
+    file: &str,
+    source_location: EvalSourceLocation,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let file_value = values.string(file)?;
     let start_value = values.int(source_location.start_line())?;
     let end_value = values.int(source_location.end_line())?;
     let configured = eval_reflection_with_declaring_class_scope(
@@ -475,6 +487,24 @@ pub(super) fn eval_reflection_full_class_object_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_reflection_full_class_object_result_with_relation(class_name, None, context, values)
+}
+
+/// Builds a full `ReflectionClass` object, optionally for a declared relation member.
+///
+/// `getInterfaces()`/`getTraits()` read their names out of a compiled class's own metadata, so
+/// each name is a class-like the program declares. The dynamic existence probes can still answer
+/// false for one of them: a compiled interface whose source file no include ever reached has an
+/// activation cell that no startup path raises, while `interface_exists()` consults exactly that
+/// cell. Returning a non-object for such a name made Symfony's `ReflectionClassResource` recurse
+/// with `false`/null and die on its `\ReflectionClass` parameter. A relation kind therefore lets
+/// the compiled reflection metadata stand in for the missing declaration state.
+fn eval_reflection_full_class_object_result_with_relation(
+    class_name: &str,
+    relation_kind: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     if class_name
         .trim_start_matches('\\')
         .eq_ignore_ascii_case("Closure")
@@ -486,7 +516,11 @@ pub(super) fn eval_reflection_full_class_object_result(
         );
     }
     let Some(metadata) = eval_reflection_class_like_attributes(class_name, context) else {
-        let Some((flags, modifiers)) = eval_reflection_aot_class_flags(class_name, values)? else {
+        let resolved = match eval_reflection_aot_class_flags(class_name, values)? {
+            Some(pair) => Some(pair),
+            None => compiled_relation_flags(class_name, relation_kind, values)?,
+        };
+        let Some((flags, modifiers)) = resolved else {
             return values.bool_value(false);
         };
         let runtime_class_name = class_name.trim_start_matches('\\');
@@ -692,16 +726,60 @@ pub(super) fn eval_reflection_string_assoc_result(
 /// Builds a name-keyed PHP array of full ReflectionClass objects.
 pub(super) fn eval_reflection_class_object_map_result(
     names: &[String],
+    relation_kind: Option<&str>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut result = values.assoc_new(names.len())?;
     for name in names {
         let key = values.string(name)?;
-        let object = eval_reflection_full_class_object_result(name, context, values)?;
+        let object = eval_reflection_full_class_object_result_with_relation(
+            name,
+            relation_kind,
+            context,
+            values,
+        )?;
         result = eval_reflection_array_set_owned(result, key, object, values)?;
     }
     Ok(result)
+}
+
+/// Synthesizes reflection flags for a declared interface or trait of a compiled class.
+///
+/// Only a relation lookup supplies a kind: the name came from the compiled class's own
+/// `interfaces`/`traits` metadata, so it is a class-like the program declares even when the
+/// dynamic existence probes answer false for it (an activation cell no startup path raised).
+/// A name the compiled reflection metadata does not know either yields `None`, so a bogus entry
+/// still cannot fabricate a reflector.
+fn compiled_relation_flags(
+    class_name: &str,
+    relation_kind: Option<&str>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(u64, u64)>, EvalStatus> {
+    let Some(relation_kind) = relation_kind else {
+        return Ok(None);
+    };
+    let runtime_class_name = class_name.trim_start_matches('\\');
+    let row_flags = values.reflection_class_flags(runtime_class_name)?;
+    let has_source = values
+        .reflection_class_source_file(runtime_class_name)?
+        .is_some();
+    if row_flags.is_none() && !has_source {
+        return Ok(None);
+    }
+    let mut flags = row_flags.unwrap_or(0) | EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED;
+    match relation_kind {
+        "interfaces" => flags |= EVAL_REFLECTION_CLASS_FLAG_INTERFACE,
+        "traits" => flags |= EVAL_REFLECTION_CLASS_FLAG_TRAIT,
+        _ => return Ok(None),
+    }
+    let modifiers = eval_reflection_class_modifiers(
+        flags & EVAL_REFLECTION_CLASS_FLAG_FINAL != 0,
+        flags & EVAL_REFLECTION_CLASS_FLAG_ABSTRACT != 0,
+        flags & EVAL_REFLECTION_CLASS_FLAG_READONLY != 0,
+        flags & EVAL_REFLECTION_CLASS_FLAG_ENUM != 0,
+    );
+    Ok(Some((flags, modifiers)))
 }
 
 /// Maps a synthetic reflection owner kind to PHP's `Attribute::TARGET_*` bitmask.
@@ -905,8 +983,17 @@ pub(super) fn eval_reflection_class_like_default_value(
     };
     let trait_name =
         trait_origin.or_else(|| context.has_trait(declaring_class).then_some(declaring_class));
+    // `self::` in a default value is the DECLARING class, and php evaluates the default under
+    // that class scope. Only the magic-constant scope was pushed, so `self::CREATED` in
+    // `MetadataBag::$meta` resolved against whatever class happened to be calling
+    // `ReflectionClass::getDefaultProperties()` -- Symfony's DebugClassLoader -- and failed with
+    // "Undefined constant DebugClassLoader::CREATED".
     context.push_class_like_member_magic_scope(declaring_class, trait_name);
+    context.push_class_scope(declaring_class.to_string());
+    context.push_called_class_scope(declaring_class.to_string());
     let result = eval_method_parameter_default(default, context, values);
+    context.pop_called_class_scope();
+    context.pop_class_scope();
     context.pop_magic_scope();
     result
 }
@@ -1298,9 +1385,11 @@ pub(super) fn eval_reflection_aot_member_object_array_result(
         if !eval_reflection_member_matches_filter(&member, filter) {
             continue;
         }
-        // `names` comes from the AOT reflection member table, which carries each member's
-        // declared spelling; PHP reports that spelling from `getName()` for methods exactly as
-        // it does for properties, so neither kind is folded here.
+        // `names` comes from the generated AOT table, which records each method's DECLARED
+        // spelling. Lowercasing it here made `ReflectionMethod::getName()` inside `eval()`
+        // answer `match` for a method written `Match`, disagreeing with the same program's AOT
+        // reflection and with PHP (issue #571). Property names were never keyed
+        // case-insensitively, so they were already passed through.
         let member_object =
             eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
         let key = values.int(index)?;

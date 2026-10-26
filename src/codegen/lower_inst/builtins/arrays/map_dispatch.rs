@@ -20,6 +20,8 @@ pub(super) enum ArrayMapTarget {
     Indexed,
     /// Associative source: `__rt_hash_map` rebuilds a hash under the source keys.
     Hash,
+    /// Boxed PHP array: runtime storage selects traversal and every callback input is Mixed.
+    Boxed,
 }
 
 /// Runtime location of the single source container consumed by `array_map()`.
@@ -41,8 +43,12 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     super::super::ensure_arg_count(inst, "array_map", 2)?;
     let callback = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
+    if ctx.value_php_type(callback)?.codegen_repr() == PhpType::Void {
+        return boxed_map_callback::lower_array_map_identity(ctx, inst, array);
+    }
     let source_ty = ctx.value_php_type(array)?.codegen_repr();
-    let gradual_source = matches!(source_ty, PhpType::Mixed | PhpType::Union(_));
+    let boxed_source = source_ty == PhpType::Mixed;
+    let gradual_source = matches!(source_ty, PhpType::Union(_));
     // `array<mixed>` can be promoted to hash storage by a runtime string key even when the
     // checker cannot prove that key. `array_map()` with one source preserves keys, so normalize
     // that ambiguous storage to an owned Mixed-valued hash before invoking the callback.
@@ -50,8 +56,16 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         source_ty,
         PhpType::Array(ref value) if value.codegen_repr() == PhpType::Mixed
     );
-    let normalize_source_to_hash = gradual_source || runtime_promotable_mixed_array;
-    let (elem_ty, target) = if gradual_source || runtime_promotable_mixed_array {
+    // A hash whose values `__rt_hash_map` cannot hand to the callback directly (arrays, objects,
+    // floats: `array_map('array_keys', $mappedClasses)` in Symfony's `AttributeMetadataPass`)
+    // is normalized to the same owned Mixed-valued hash a gradual source gets.
+    let boxed_value_hash = matches!(&source_ty, PhpType::AssocArray { .. })
+        && hash_map_source_value_type(&source_ty).is_err();
+    let normalize_source_to_hash =
+        gradual_source || runtime_promotable_mixed_array || boxed_value_hash;
+    let (elem_ty, target) = if boxed_source {
+        (PhpType::Mixed, ArrayMapTarget::Boxed)
+    } else if gradual_source || runtime_promotable_mixed_array || boxed_value_hash {
         (PhpType::Mixed, ArrayMapTarget::Hash)
     } else if matches!(source_ty, PhpType::AssocArray { .. }) {
         (
@@ -66,6 +80,11 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     };
     let source = prepare_array_map_source(ctx, array, normalize_source_to_hash)?;
     match ctx.value_php_type(callback)?.codegen_repr() {
+        PhpType::Mixed => {
+            return boxed_map_callback::lower_array_map_mixed_callback(
+                ctx, inst, callback, array, &elem_ty, target,
+            );
+        }
         PhpType::Callable => {
             let callback_elem_ty = array_map_descriptor_callback_result_element_type(inst)?;
             let result_elem_ty = array_map_result_element_type(inst, &callback_elem_ty)?;
@@ -264,10 +283,11 @@ pub(super) fn lower_array_map_callable_array_descriptor_callback(
 ) -> Result<()> {
     let wrapper_label =
         emit_descriptor_callback_wrapper(ctx, vec![elem_ty.clone()], callback_elem_ty.clone());
-    super::super::super::callables::emit_runtime_callable_array_descriptor_value(
+    super::super::super::callables::emit_runtime_callable_array_descriptor_value_with_callback_error(
         ctx,
         callback,
         "array_map callable array",
+        Some("array_map(): Argument #1 ($callback) must be a valid callback or null"),
     )?;
     let descriptor_reg = abi::int_result_reg(ctx.emitter);
     let env_bytes = reserve_descriptor_callback_env_from_reg(ctx, descriptor_reg);
@@ -295,6 +315,11 @@ pub(super) fn release_descriptor_callback_env_preserving_result(ctx: &mut Functi
 }
 
 /// Emits a descriptor callback wrapper next to the current EIR function body.
+///
+/// The wrapper's global label opens its own ELF text section, so the caller's section is
+/// reopened before the fall-through label: otherwise the caller's tail would land in the
+/// wrapper's section and a near conditional branch into it would need a cross-section
+/// relocation that the linker may place out of AArch64 `b.cond` range.
 pub(super) fn emit_descriptor_callback_wrapper(
     ctx: &mut FunctionContext<'_>,
     visible_arg_types: Vec<PhpType>,
@@ -315,9 +340,12 @@ pub(super) fn emit_descriptor_callback_wrapper(
         capture_types: Vec::new(),
         descriptor_prefix_types: Vec::new(),
         descriptor_return_type: Some(return_ty),
+        invocation_scope_class_id: ctx.lexical_class_id(),
     };
+    let enclosing = ctx.emitter.current_text_section();
     abi::emit_jump(ctx.emitter, &done_label);
     crate::codegen::emit_callback_wrapper(ctx.emitter, &wrapper);
+    ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
     wrapper_label
 }
@@ -405,6 +433,11 @@ where
         len_offset: 8,
         call_reg,
     };
+    // Every case differs only in the descriptor it selects into `call_reg`; the wrapper reads
+    // the descriptor from its env, so one wrapper and one call serve the whole ladder. Emitting
+    // them per case made a single `array_map('name', ...)` site scale with the program's
+    // callable count (a million instructions per site in the Symfony console).
+    let call_label = ctx.next_label(&format!("{}_runtime_string_callback_call", owner));
     for case in &cases {
         let next_case = ctx.next_label(&format!("{}_runtime_string_callback_next", owner));
         let matched_label = ctx.next_label("callable_string_match");
@@ -416,16 +449,18 @@ where
             &matched_label,
             ctx.data,
         );
-        let wrapper_label =
-            emit_descriptor_callback_wrapper(ctx, visible_arg_types.clone(), return_ty.clone());
-        let env_bytes = reserve_descriptor_callback_env_from_reg(ctx, call_reg);
-        emit_call(ctx, &wrapper_label, env_bytes)?;
-        abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
-        abi::emit_jump(ctx.emitter, &done_label);
+        abi::emit_jump(ctx.emitter, &call_label);
         ctx.emitter.label(&next_case);
     }
 
     emit_dynamic_string_callback_abort(ctx, owner, candidate_names.as_deref());
+    if !cases.is_empty() {
+        ctx.emitter.label(&call_label);
+        let wrapper_label = emit_descriptor_callback_wrapper(ctx, visible_arg_types, return_ty);
+        let env_bytes = reserve_descriptor_callback_env_from_reg(ctx, call_reg);
+        emit_call(ctx, &wrapper_label, env_bytes)?;
+        abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
+    }
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())

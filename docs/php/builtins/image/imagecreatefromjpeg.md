@@ -1,8 +1,8 @@
 ---
 title: "imagecreatefromjpeg()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Creates an image from a JPEG file."
 sidebar:
-  order: 503
+  order: 504
 ---
 
 ## imagecreatefromjpeg()
@@ -11,7 +11,7 @@ sidebar:
 function imagecreatefromjpeg(string $filename): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Creates an image from a JPEG file.
 
 **Parameters**:
 - `$filename` (`string`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

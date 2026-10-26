@@ -1,16 +1,16 @@
 ---
-title: "json_encode() — internals"
+title: "json_encode() - internals"
 description: "Compiler internals for json_encode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 556
+  order: 557
 ---
 
-## `json_encode()` — internals
+## `json_encode()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/json_encode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/json_encode.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

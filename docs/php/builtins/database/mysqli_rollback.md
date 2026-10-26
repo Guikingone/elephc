@@ -1,8 +1,8 @@
 ---
 title: "mysqli_rollback()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Rolls back the open transaction."
 sidebar:
-  order: 165
+  order: 166
 ---
 
 ## mysqli_rollback()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_rollback(mixed $mysql, int $flags = 0, ?string $name = null): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Rolls back the open transaction.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -25,7 +25,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

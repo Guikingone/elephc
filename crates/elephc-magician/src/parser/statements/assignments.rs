@@ -882,10 +882,10 @@ impl Parser {
     /// PHP accepts any assignable expression after `=&`, not just a plain variable. The
     /// interpreter's reference machinery can alias every storage shape `eval_call_arg_value()`
     /// resolves to an `EvalReferenceTarget`: a variable, an array element (including a nested
-    /// one), an object property, a static property, and their dynamic-name forms. Anything else
-    /// — a call, a literal, an operator expression — names no storage, so it is reported as an
-    /// unsupported construct instead of being lowered into a binding that would silently degrade
-    /// to a by-value assignment.
+    /// one), an object property, a static property, and their dynamic-name forms, and a CALL,
+    /// whose reference comes from a by-reference callee at run time (a by-value callee binds a
+    /// copy after php's "Only variables should be assigned by reference" notice). A literal or an
+    /// operator expression names no storage and is reported as an unsupported construct.
     pub(in crate::parser) fn parse_reference_source_expr(
         &mut self,
     ) -> Result<EvalExpr, EvalParseError> {

@@ -60,6 +60,8 @@ mod member_object_emit;
 mod parameter_property_emit;
 mod type_object_emit;
 mod flags_offsets;
+mod class_table;
+mod member_table;
 
 use owner_emission::*;
 use materializer::*;
@@ -91,6 +93,12 @@ pub(super) use owner_dispatch::{
 pub(in crate::codegen::lower_inst) use materializer::{
     lower_reflection_fill_members, lower_reflection_materialize,
 };
+pub(in crate::codegen) use class_table::emit_reflection_class_table;
+pub(in crate::codegen::lower_inst) use class_table::{
+    lower_refl_at, lower_refl_callable_name, lower_refl_pool_str, lower_refl_row_lookup, lower_refl_word,
+};
+pub(super) use class_table::table_builds_reflector;
+use owner_dispatch::reflection_class_literal_names_a_compiled_class_like;
 
 /// Compile-time metadata used to populate one Reflection owner object.
 #[derive(Debug, PartialEq)]
@@ -125,6 +133,10 @@ struct ReflectionOwnerMetadata {
     required_parameter_count: i64,
     is_deprecated: bool,
     is_generator: bool,
+    /// Whether the declaration is `function &name()`. PHP answers `returnsReference()` from this
+    /// and prints an `&` before the name in the dump; both read one field so they cannot disagree
+    /// about the same declaration (#1231).
+    returns_reference: bool,
     prototype_member: Option<Box<ReflectionListedMember>>,
     is_final: bool,
     is_abstract: bool,
@@ -169,6 +181,8 @@ struct ReflectionListedMember {
     required_parameter_count: i64,
     is_deprecated: bool,
     is_generator: bool,
+    /// See `ReflectionOwnerMetadata::returns_reference`.
+    returns_reference: bool,
     prototype_member: Option<Box<ReflectionListedMember>>,
     parameters: Vec<ReflectionParameterMember>,
 }
@@ -206,6 +220,7 @@ enum ReflectionDeclaringFunctionMember {
         type_metadata: Option<ReflectionParameterTypeMetadata>,
         is_deprecated: bool,
         is_generator: bool,
+        returns_reference: bool,
     },
     Method {
         name: String,
@@ -217,6 +232,7 @@ enum ReflectionDeclaringFunctionMember {
         type_metadata: Option<ReflectionParameterTypeMetadata>,
         is_deprecated: bool,
         is_generator: bool,
+        returns_reference: bool,
     },
 }
 
@@ -257,6 +273,10 @@ enum ReflectionParameterDefaultValue {
     Float(f64),
     Str(String),
     Null,
+    EnumCase {
+        enum_name: String,
+        case_name: String,
+    },
     Object {
         class_name: String,
         args: Vec<ReflectionParameterDefaultValue>,

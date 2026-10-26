@@ -205,7 +205,7 @@ fn classify_call(
             // execution (for example it branches before requiring a file), leave the original
             // registration and closure in the program so the ordinary SPL implementation can
             // preserve PHP's behavior.
-            Resolved::StripUnmatched(_) => None,
+            Resolved::StripUnmatched => None,
             Resolved::Unknown => None,
         }
     } else if is_builtin_autoload_call(
@@ -217,7 +217,7 @@ fn classify_call(
         let first = args.first()?;
         match resolve_callable(first, var_bindings, function_rules) {
             Resolved::Rule(rule) => Some(CallKind::Unregister { rule }),
-            Resolved::StripUnmatched(_) => None,
+            Resolved::StripUnmatched => None,
             Resolved::Unknown => None,
         }
     } else {
@@ -296,7 +296,7 @@ enum Resolved {
     Rule(AutoloadRule),
     /// First arg is a closure literal that cannot be represented as a static rule.
     /// Keep the original call for ordinary runtime SPL behavior.
-    StripUnmatched(&'static str),
+    StripUnmatched,
     /// First arg is something that cannot be resolved at compile time
     /// (method callable, complex expression, etc.). Leave the call for
     /// the runtime implementation.
@@ -315,7 +315,7 @@ fn resolve_callable(
     match &arg.kind {
         ExprKind::Closure { .. } => match extract_closure_rule(arg) {
             Ok(rule) => Resolved::Rule(rule),
-            Err(reason) => Resolved::StripUnmatched(reason),
+            Err(_) => Resolved::StripUnmatched,
         },
         ExprKind::Variable(name) => match var_bindings.get(name) {
             Some(binding) => Resolved::Rule(binding.rule.clone()),

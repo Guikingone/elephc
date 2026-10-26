@@ -1,16 +1,16 @@
 ---
-title: "session_set_save_handler() — internals"
+title: "session_set_save_handler() - internals"
 description: "Compiler internals for session_set_save_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 969
+  order: 1060
 ---
 
-## `session_set_save_handler()` — internals
+## `session_set_save_handler()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3689](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3689) (`session_set_save_handler`)
+- **Lowering**: [`src/web_prelude/build.rs`:3862](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3862) (`session_set_save_handler`)
 - **Function symbol**: `session_set_save_handler()`
 
 
@@ -38,7 +38,7 @@ function session_set_save_handler(mixed $handler_or_open = null, mixed $register
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

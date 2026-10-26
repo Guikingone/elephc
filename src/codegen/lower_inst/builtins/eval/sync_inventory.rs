@@ -6,26 +6,51 @@
 //!
 //! Key details:
 //! - Only storage types that safely round-trip through Mixed are selected.
+//! - Compiler-generated frame and parser temporaries are excluded here, which is the single
+//!   choke point both the pre-eval FLUSH and the post-eval RELOAD read. Leaking one of them
+//!   would publish `__elephc_func_args#gen` into the eval scope, let `get_defined_vars()`
+//!   inside the fragment report it as a PHP variable, and let an eval assignment to that name
+//!   be written back over the frame's hidden argument collector or its actual-argument count.
 
 use super::*;
 
 /// Collects PHP-visible locals that the current conservative scope sync can round-trip.
 pub(super) fn eval_sync_locals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncLocal> {
-    ctx.function
-        .locals
-        .iter()
+    eval_sync_function_locals(ctx.function)
+        .into_iter()
+        .filter(|local| !local_uses_eval_global_sync(ctx, Some(&local.name)))
+        .collect()
+}
+
+/// Maps PHP parameter names to their active COW shadows, never exposing incoming ABI duplicates.
+fn eval_sync_function_locals(function: &Function) -> Vec<EvalSyncLocal> {
+    let shadows = function.locals.iter()
         .filter(|local| local.kind == LocalKind::PhpLocal)
-        .filter(|local| !local_uses_eval_global_sync(ctx, local.name.as_deref()))
+        .filter_map(|local| local.name.as_deref()?.strip_suffix("#cow"))
+        .collect::<BTreeSet<_>>();
+    function.locals.iter()
+        .filter(|local| local.kind == LocalKind::PhpLocal)
         .filter_map(|local| {
-            let name = local.name.clone()?;
+            let stored_name = local.name.as_deref()?;
+            // `privatize_container_param` leaves the ABI slot in place and redirects PHP reads
+            // and writes to `name#cow`. Eval must use that same binding under the PHP name.
+            let name = if let Some(name) = stored_name.strip_suffix("#cow") {
+                name
+            } else if shadows.contains(stored_name) {
+                return None;
+            } else {
+                stored_name
+            };
+            // The marker survives the `#cow` strip above, so a privatized hidden local is
+            // caught here too.
+            if crate::names::is_generated_local_name(name) {
+                return None;
+            }
             let ty = local.php_type.codegen_repr();
             eval_sync_type_supported(&ty).then_some(EvalSyncLocal {
-                name,
-                slot: local.id,
-                ty,
+                name: name.to_string(), slot: local.id, ty,
             })
-        })
-        .collect()
+        }).collect()
 }
 
 /// Keeps only eval-sync locals whose PHP name appears in `names`.
@@ -98,10 +123,10 @@ pub(super) fn eval_sync_globals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncGlobal
             })
         })
         .collect::<Vec<_>>();
-    // Process arguments become mutable PHP globals, so their native global
-    // storage uses the same boxed contract as ordinary global variables.
-    push_eval_process_superglobal(&mut globals, "argc", PhpType::Mixed);
-    push_eval_process_superglobal(&mut globals, "argv", PhpType::Mixed);
+    // Process globals share ordinary global Mixed storage, including their entry-point initializers.
+    let main_scope_locals = eval_sync_locals(ctx);
+    push_eval_process_superglobal(&mut globals, &main_scope_locals, "argc", PhpType::Mixed);
+    push_eval_process_superglobal(&mut globals, &main_scope_locals, "argv", PhpType::Mixed);
     globals
 }
 
@@ -116,9 +141,16 @@ pub(super) fn filter_eval_sync_globals_by_name(
         .collect()
 }
 
-/// Adds a process superglobal to eval global sync unless normal globals already include it.
-pub(super) fn push_eval_process_superglobal(globals: &mut Vec<EvalSyncGlobal>, name: &str, ty: PhpType) {
-    if globals.iter().any(|global| global.name == name) {
+/// Adds a process superglobal unless the effective main scope already synchronizes it.
+pub(super) fn push_eval_process_superglobal(
+    globals: &mut Vec<EvalSyncGlobal>,
+    main_scope_locals: &[EvalSyncLocal],
+    name: &str,
+    ty: PhpType,
+) {
+    if globals.iter().any(|global| global.name == name)
+        || main_scope_locals.iter().any(|local| local.name == name)
+    {
         return;
     }
     globals.push(EvalSyncGlobal {
@@ -129,6 +161,12 @@ pub(super) fn push_eval_process_superglobal(globals: &mut Vec<EvalSyncGlobal>, n
 
 /// Returns one unambiguous codegen type used for a program global, if available.
 pub(super) fn eval_sync_global_type(ctx: &FunctionContext<'_>, name: &str) -> Option<PhpType> {
+    ctx.shared
+        .eval_sync_global_type_memoized(name, || eval_sync_global_type_uncached(ctx, name))
+}
+
+/// Answers `eval_sync_global_type` by walking every function and closure body.
+fn eval_sync_global_type_uncached(ctx: &FunctionContext<'_>, name: &str) -> Option<PhpType> {
     let is_typed_superglobal = ctx.module.web && crate::superglobals::is_superglobal(name);
     let mut inferred = None;
     for function in ctx
@@ -246,10 +284,15 @@ pub(super) fn flush_eval_scope_locals(ctx: &mut FunctionContext<'_>, locals: &[E
         }
         if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
             emit_box_current_value_as_mixed(ctx.emitter, &ty);
+        } else {
+            // Keep an independent snapshot while eval or another alias replaces the native slot.
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
         }
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-        emit_eval_scope_set(ctx, local, scope_set_flags_for_type(&ty));
+        // Both arms hand the scope its own reference (a fresh box, or the snapshot retained
+        // above), so the scope must own it; a borrowed entry would strand one reference per eval.
+        emit_eval_scope_set(ctx, local, EVAL_SCOPE_FLAG_OWNED);
         if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
             abi::emit_jump(ctx.emitter, &done);
             ctx.emitter.label(&absent);
@@ -288,6 +331,9 @@ pub(super) fn flush_eval_global_scope(
     globals: &[EvalSyncGlobal],
 ) -> Result<()> {
     for global in globals {
+        if main_eval_local_supplies_global(ctx, &global.name) {
+            continue;
+        }
         load_global_to_result(ctx, global);
         if !matches!(global.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             emit_box_current_value_as_mixed(ctx.emitter, &global.ty);
@@ -302,6 +348,9 @@ pub(super) fn flush_eval_global_scope(
 /// Flushes global-backed variables into the local eval scope for scope-read EIR AOT.
 pub(super) fn flush_eval_globals_to_local_scope(ctx: &mut FunctionContext<'_>, globals: &[EvalSyncGlobal]) {
     for global in globals {
+        if main_eval_local_supplies_global(ctx, &global.name) {
+            continue;
+        }
         load_global_to_result(ctx, global);
         if !matches!(global.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             emit_box_current_value_as_mixed(ctx.emitter, &global.ty);
@@ -312,12 +361,23 @@ pub(super) fn flush_eval_globals_to_local_scope(ctx: &mut FunctionContext<'_>, g
     }
 }
 
+/// Keeps top-level local process values authoritative when local and global eval scopes are shared.
+fn main_eval_local_supplies_global(ctx: &FunctionContext<'_>, name: &str) -> bool {
+    ctx.is_main
+        && !main_name_uses_eval_global_scope(ctx, name)
+        && ctx.function.locals.iter().any(|local| {
+            local.kind == LocalKind::PhpLocal
+                && local.name.as_deref() == Some(name)
+                && eval_sync_type_supported(&local.php_type.codegen_repr())
+        })
+}
+
 /// Loads a program-global symbol into result registers using its inferred type.
 pub(super) fn load_global_to_result(ctx: &mut FunctionContext<'_>, global: &EvalSyncGlobal) {
     let symbol = ir_global_symbol(&global.name);
     let ty = global.ty.codegen_repr();
     if ctx.shared.uses_shared_ref_cell(ctx.module, &global.name) {
-        super::super::super::globals_constants::load_shared_global_to_result(ctx, &symbol);
+        super::super::super::globals_constants::load_shared_global_to_result(ctx, &symbol, &ty);
         return;
     }
     ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
@@ -330,5 +390,62 @@ pub(super) fn scope_set_flags_for_type(ty: &PhpType) -> i64 {
         0
     } else {
         EVAL_SCOPE_FLAG_OWNED
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::eval_sync_function_locals;
+    use crate::ir::{Function, IrType, LocalKind};
+    use crate::types::PhpType;
+
+    /// The eval inventory exposes each PHP name once and selects its active COW slot.
+    #[test]
+    fn eval_inventory_uses_parameter_shadows_under_php_names() {
+        let mut function = Function::new("shadow_scope".to_string(), IrType::Void, PhpType::Void);
+        let mut expected = Vec::new();
+        for (name, ty) in [
+            ("value", PhpType::Mixed),
+            ("items", PhpType::Array(Box::new(PhpType::Mixed))),
+        ] {
+            let ir_type = IrType::from_php(&ty);
+            function.add_local(Some(name.to_string()), ir_type, ty.clone(), LocalKind::PhpLocal);
+            let shadow = function.add_local(Some(format!("{name}#cow")), ir_type, ty, LocalKind::PhpLocal);
+            expected.push((name.to_string(), shadow));
+        }
+        let text = function.add_local(Some("text".to_string()), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
+        expected.push(("text".to_string(), text));
+        let actual = eval_sync_function_locals(&function).into_iter()
+            .map(|local| (local.name, local.slot)).collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    /// Compiler-generated frame locals never enter the inventory, privatized ones included.
+    ///
+    /// This is the single list both the pre-eval flush and the post-eval reload read, so a name
+    /// appearing here would be publishable to `get_defined_vars()` inside the fragment AND
+    /// writable back over the frame's hidden argument state. The user variable spelled like a
+    /// hidden local's readable stem is in the same fixture to pin that the filter keys on the
+    /// unforgeable marker rather than on the `__elephc_` prefix.
+    #[test]
+    fn eval_inventory_excludes_generated_frame_locals() {
+        let mut function = Function::new("hidden_scope".to_string(), IrType::Void, PhpType::Void);
+        let visible = function.add_local(
+            Some("__elephc_func_arg_value".to_string()),
+            IrType::Str,
+            PhpType::Str,
+            LocalKind::PhpLocal,
+        );
+        for hidden in [
+            crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
+            crate::func_args::HIDDEN_ARGC_PARAM.to_string(),
+            crate::names::generated_local_name("__elephc_foreach_3_9"),
+            format!("{}#cow", crate::func_args::HIDDEN_ARGS_PARAM),
+        ] {
+            function.add_local(Some(hidden), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
+        }
+        let actual = eval_sync_function_locals(&function).into_iter()
+            .map(|local| (local.name, local.slot)).collect::<Vec<_>>();
+        assert_eq!(actual, vec![("__elephc_func_arg_value".to_string(), visible)]);
     }
 }

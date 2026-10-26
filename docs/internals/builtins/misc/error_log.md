@@ -1,16 +1,16 @@
 ---
-title: "error_log() — internals"
+title: "error_log() - internals"
 description: "Compiler internals for error_log(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 621
+  order: 625
 ---
 
-## `error_log()` — internals
+## `error_log()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/error_log.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/error_log.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -463,3 +463,45 @@ $f->start();
     );
     assert_eq!(out, "NULL\nmain\nbool(true)\n");
 }
+
+/// A Fiber held in an untyped property is a `mixed` receiver: `start`, `resume`, `throw`,
+/// `getReturn` and the state predicates still reach the Fiber runtime, while another class's
+/// `start()` keeps its own method. The boxed dispatch has no candidate for `Fiber`, so these
+/// calls died with "Call to a member function start() on null", and `isRunning()` stored a raw
+/// bool where its mixed result belonged.
+#[test]
+fn test_fiber_methods_on_a_mixed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Session { public function start(): string { return "session"; } }
+class Holder {
+    public $fiber;
+    public $other;
+    public function init(): void {
+        $this->fiber = new Fiber(function (string $a): string {
+            $got = Fiber::suspend($a . "!");
+            try { Fiber::suspend("again " . $got); } catch (Exception $e) { return "caught " . $e->getMessage(); }
+            return "unreached";
+        });
+        $this->other = new Session();
+    }
+}
+$h = new Holder();
+$h->init();
+echo $h->other->start(), "\n";
+echo $h->fiber->start("go"), "\n";
+var_dump($h->fiber->isSuspended());
+echo $h->fiber->resume("v"), "\n";
+var_dump($h->fiber->throw(new Exception("boom")));
+var_dump($h->fiber->isTerminated());
+echo $h->fiber->getReturn(), "\n";
+$cur = null;
+$f = new Fiber(function () use (&$cur): void { $cur = Fiber::getCurrent(); var_dump($cur->isRunning()); });
+$f->start();
+"#,
+    );
+    assert_eq!(
+        out,
+        "session\ngo!\nbool(true)\nagain v\nNULL\nbool(true)\ncaught boom\nbool(true)\n"
+    );
+}

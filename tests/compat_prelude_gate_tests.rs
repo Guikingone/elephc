@@ -459,3 +459,87 @@ fn an_autoloaded_class_reaches_var_export_through_the_global_fallback() {
     );
     assert!(stderr.is_empty(), "no warning is expected:\n{stderr}");
 }
+
+/// An autoloaded class that builds a document with the classic DOM classes and parses HTML with
+/// `loadHTML()` flags, the shape of Symfony's `XmlDescriptor` and Termwind's `HtmlRenderer`.
+const DESCRIBER_USING_DOM: &str = r#"<?php
+namespace App;
+
+class Describer
+{
+    public function describe(array $routes): string
+    {
+        $dom = new \DOMDocument('1.0', 'UTF-8');
+        $dom->appendChild($root = $dom->createElement('routes'));
+        foreach ($routes as $name => $path) {
+            $root->appendChild($route = $dom->createElement('route'));
+            $route->setAttribute('name', $name);
+            $route->appendChild(new \DOMText($path));
+        }
+        $dom->formatOutput = true;
+        return $dom->saveXML();
+    }
+
+    public function texts(string $html): string
+    {
+        $dom = new \DOMDocument();
+        $dom->loadHTML('<?xml encoding="UTF-8">' . $html, LIBXML_NOERROR | LIBXML_HTML_NODEFDTD);
+        $found = [];
+        foreach ($dom->getElementsByTagName('b') as $b) {
+            $found[] = $b->nodeValue;
+        }
+        return implode(',', $found);
+    }
+}
+"#;
+
+/// An entry that names nothing about DOM -- it only calls the autoloaded class.
+const ENTRY_DESCRIBER: &str = r#"<?php
+$d = new App\Describer();
+echo $d->describe(['home' => '/', 'blog' => '/blog/{slug}']);
+echo $d->texts('<p><b>one</b> and <b>two</b></p>'), "\n";
+"#;
+
+/// The classic DOM classes are injected after autoload expansion: the entry names no DOM class,
+/// the autoloaded vendor class does, and the program must still build, serialize and parse.
+///
+/// Expected output captured from php 8.5.10 running the same two files with the class
+/// `require`d instead of autoloaded.
+#[test]
+fn an_autoloaded_class_gates_the_classic_dom_prelude() {
+    let (stdout, stderr) = compile_and_run_project(
+        "compatgate_dom",
+        &[
+            ("module.json", MANIFEST),
+            ("src/Describer.php", DESCRIBER_USING_DOM),
+            ("main.php", ENTRY_DESCRIBER),
+        ],
+        "main.php",
+    );
+
+    assert_eq!(
+        stdout,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<routes>\n  <route name=\"home\">/</route>\n  <route name=\"blog\">/blog/{slug}</route>\n</routes>\none,two\n",
+        "got {stdout:?}"
+    );
+    assert!(stderr.is_empty(), "no warning is expected:\n{stderr}");
+}
+
+/// Pay-for-use: a program that never names a DOM class carries none of the surface, and one that
+/// does carries it. `DOMDocument` is a symbol only the prelude declares.
+#[test]
+fn a_program_that_never_names_dom_pays_nothing() {
+    let without = emit_project_asm(
+        "compatgate_dom_without",
+        &[("main.php", "<?php echo \"hello\\n\";\n")],
+        "main.php",
+    );
+    let with = emit_project_asm(
+        "compatgate_dom_with",
+        &[("main.php", "<?php $d = new DOMDocument(); echo $d->saveXML();\n")],
+        "main.php",
+    );
+
+    assert_eq!(without.matches("DOMDocument").count(), 0, "an unused DOM surface was compiled");
+    assert!(with.matches("DOMDocument").count() > 0, "the named DOM surface was not compiled");
+}

@@ -1,16 +1,16 @@
 ---
-title: "session_decode() — internals"
+title: "session_decode() - internals"
 description: "Compiler internals for session_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 956
+  order: 1047
 ---
 
-## `session_decode()` — internals
+## `session_decode()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3009](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3009) (`session_decode`)
+- **Lowering**: [`src/web_prelude/build.rs`:3182](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3182) (`session_decode`)
 - **Function symbol**: `session_decode()`
 
 
@@ -38,7 +38,7 @@ function session_decode(string $data): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

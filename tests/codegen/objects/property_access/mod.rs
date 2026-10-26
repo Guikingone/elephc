@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for nullsafe property and method access, mutations, deep chains, null-capable int and string property storage, and properties passed as by-reference arguments to mutating array builtins.
+//! - Submodules group focused fixtures for nullsafe property and method access, mutations, deep chains, null-capable int and string property storage, weak-mode typed writes from runtime `mixed` values, properties passed as by-reference arguments to mutating array builtins, and php's scope-dependent answer to one property name on a read.
 
 use super::*;
 
@@ -19,3 +19,7 @@ mod nullable_string_properties;
 mod isset_chains;
 mod nullable_generic_calls;
 mod inherited_callbacks;
+mod scope_visibility;
+mod weak_typed_writes;
+mod dynamic_name_types;
+mod shared_typed_guard;

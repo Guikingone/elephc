@@ -1,12 +1,13 @@
 //! Purpose:
-//! Regression tests for the mbstring prelude and for string temporaries it exposed leaking.
+//! Regression tests for the mbstring functions and for string temporaries they exposed leaking.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - `crate::mbstring_prelude` provides the UTF-8 mbstring functions with no native lowering, only
-//!   when the program calls one and declares no function of that name itself.
+//! - These functions were once a UTF-8-only AST prelude; the native mbstring extension now
+//!   implements every one of them, and a program declaring its own function of the same name
+//!   (a polyfill) still keeps it.
 //! - `$s[$i]` is an owned one-byte copy; it was treated as scratch and never released.
 //! - A builtin's fresh string result was persisted again at returns, wrapper boundaries and before
 //!   a concatenation's call-like right operand, orphaning the first copy.
@@ -36,17 +37,24 @@ echo implode("|", array_map(fn($w) => mb_substr($w, 0, 2), ["été", "über", "�
     assert_eq!(out, "string(5) \"éllo\"\nstring(8) \"✓ 😀\"\nstring(19) \"llo wörld ✓ 😀\"\nstring(2) \"d \"\nstring(9) \"lo wörld\"\nstring(0) \"\"\nstring(0) \"\"\nint(7)\nint(9)\nbool(false)\nbool(false)\nint(9)\nint(4)\nint(1)\nint(3)\narray(4) {\n  [0]=>\n  string(1) \"a\"\n  [1]=>\n  string(2) \"ñ\"\n  [2]=>\n  string(1) \"b\"\n  [3]=>\n  string(3) \"✓\"\n}\narray(3) {\n  [0]=>\n  string(3) \"añ\"\n  [1]=>\n  string(4) \"b✓\"\n  [2]=>\n  string(1) \"c\"\n}\nint(3)\nstring(3) \"llo\"\nstring(3) \"hé\"\nstring(2) \"/c\"\nstring(5) \"ÉLLO\"\nstring(5) \"UTF-8\"\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nstring(11) \"ñ✓✓✓\"\nstring(6) \"ababñ\"\nstring(7) \"xyñxyx\"\nstring(5) \"Élan\"\nstring(5) \"élan\"\nmb_strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\nmb_str_split(): Argument #2 ($length) must be greater than 0\nét|üb|ça\n");
 }
 
-/// A program that declares its own mbstring function (a polyfill) keeps it and still gets the
-/// prelude's other functions, without a second declaration of the same name.
+/// A polyfill guarded by `function_exists()` yields to the native mbstring function, and the
+/// program still gets mbstring's other functions without a second declaration of any name.
+///
+/// mbstring is a native extension now (it used to be an AST prelude a user declaration could
+/// replace), so an UNGUARDED `function mb_substr()` is the `Cannot redeclare` error php itself
+/// raises with the extension loaded. The guarded form is how every real polyfill is written, and
+/// php 8.5 prints `el|2` for this program: the extension's `mb_substr` wins.
 #[test]
 fn test_mbstring_prelude_yields_to_a_declared_polyfill() {
     let out = compile_and_run(
         r#"<?php
-function mb_substr($s, $start, $length = null) { return "poly:" . substr($s, $start, $length ?? 99); }
+if (!function_exists('mb_substr')) {
+    function mb_substr($s, $start, $length = null) { return "poly:" . substr($s, $start, $length ?? 99); }
+}
 echo mb_substr("hello", 1, 2), "|", mb_strpos("héllo", "l"), "\n";
 "#,
     );
-    assert_eq!(out, "poly:el|2\n");
+    assert_eq!(out, "el|2\n");
 }
 
 /// String offsets, builtin results and helper-calling functions release what they allocate.

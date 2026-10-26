@@ -16,8 +16,8 @@ use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{
-    validate_function, validate_module, ExternDecl, ExternParamDecl, Function, Immediate, IrType,
-    InstId, LocalKind, Module, Op, TraitMethodInfo, ValidationError, ValueDef, ValueId,
+    validate_function, validate_module, ExternDecl, ExternParamDecl, Function, Immediate, InstId,
+    Instruction, IrType, LocalKind, Module, Op, TraitMethodInfo, ValidationError, ValueDef, ValueId,
 };
 use crate::ir_lower::{body_contains_eval_call, builtin_datetime, function, LoweringError};
 use crate::names::php_symbol_key;
@@ -59,6 +59,13 @@ use spl_lowering::*;
 
 pub(super) use eval_aot::all_lowered_functions;
 pub(super) use runtime_features::include_lowered_runtime_features;
+#[allow(unused_imports)] // used by the binary's pipeline only
+pub(crate) use runtime_features::module_runs_interpreted_code;
+#[allow(unused_imports)] // used by the binary's pipeline only
+pub(crate) use runtime_features::{closed_world_bridge_reasons, module_has_dynamic_include};
+pub(super) use function_declarations::{
+    close_function_global_names_over_calls, collect_function_global_names,
+};
 pub(super) use spl_discovery::{
     class_data_name, dynamic_object_new_metadata_names, php_method_key, string_data_name,
 };
@@ -78,18 +85,63 @@ pub(crate) fn lower(
     web: bool,
     source_catalog: Option<crate::ir::SourceCatalog>,
 ) -> Result<Module, LoweringError> {
-    let contains_eval_call = body_contains_eval_call(program);
+    crate::compiler_stack::with_compiler_stack(|| {
+        lower_on_compiler_stack(program, check_result, target, source_path, web, source_catalog)
+    })
+}
+
+/// The lowering body, running on the stack [`lower`] established.
+fn lower_on_compiler_stack(
+    program: &Program,
+    check_result: &CheckResult,
+    target: Target,
+    source_path: Option<&Path>,
+    web: bool,
+    source_catalog: Option<crate::ir::SourceCatalog>,
+) -> Result<Module, LoweringError> {
+    super::diagnostics::begin_collection();
+    // A transparent literal `eval()` (`prelude_prune::usage::transparent_literal_eval`) loads no
+    // code: it can neither add a function nor a class the closed world has not seen. Counting it anyway gave
+    // `eval('return 1;')` the run-time fallbacks of a program that loads PHP (ArrayAccess probes
+    // on every `mixed` subscript, eval-context dispatch) and so linked the interpreter.
+    // A closed-world build links no interpreter: a non-literal eval() lowers to a runtime error and
+    // a runtime include is answered from the compiled-source table, so neither counts as a program
+    // that loads code at run time. Whatever still needs the bridge fails the build afterwards.
+    let closed_world = crate::closed_world::is_enabled();
+    let dynamic_code_load = !closed_world && crate::ast_usage::collect(program).dynamic_code_load;
+    let contains_eval_call = !closed_world && body_contains_eval_call(program) && {
+        let usage = crate::prelude_prune::usage::collect(program);
+        usage.opaque_eval
+            || usage.includes_runtime_php
+            || usage.references(crate::names::DYNAMIC_INCLUDE_FUNCTION)
+            || dynamic_code_load
+    };
+    if std::env::var_os("ELEPHC_EXPLAIN_EVAL_BRIDGE").is_some() {
+        // Names which input makes the program "load code at run time", which keeps an eval
+        // context in every web function that calls a method on a mixed receiver.
+        eprintln!(
+            "eval-source: eval_call={} dynamic_code_load={} class_files_deferred={}",
+            contains_eval_call,
+            dynamic_code_load,
+            CLASS_FILES_DEFERRED.load(std::sync::atomic::Ordering::Relaxed)
+        );
+    }
     let _dynamic_function_resolution =
         super::context::enable_runtime_dynamic_function_resolution(contains_eval_call);
     let _program_loads_code = super::context::set_program_loads_code_at_run_time(
-        contains_eval_call || crate::ast_usage::collect(program).dynamic_code_load,
+        !closed_world
+            && (contains_eval_call
+                || dynamic_code_load
+                || CLASS_FILES_DEFERRED.load(std::sync::atomic::Ordering::Relaxed)),
     );
     let mut module = match source_catalog {
         Some(catalog) => Module::with_source_catalog(target, catalog),
         None => Module::new(target),
     };
     module.source_path = source_path.map(canonical_source_path);
+    module.source_files = crate::span::Span::source_paths_snapshot();
     module.web = web;
+    module.closed_world = closed_world;
     module.runtime_bound_functions = std::sync::Arc::new(
         runtime_bindings::collect_runtime_bound_functions(program),
     );
@@ -97,13 +149,29 @@ pub(crate) fn lower(
     module.runtime_define_names = check_result.runtime_define_names.iter().cloned().collect();
     let _runtime_define_names =
         super::context::set_runtime_define_names(check_result.runtime_define_names.clone());
+    super::expr::reset_method_declarer_index();
+    super::builtin_datetime::reset_datetime_descendants();
     let _undefined_constant_reads = crate::types::predefined_constants::set_undefined_constant_reads(
         check_result.undefined_constant_reads.clone(),
     );
     let _ref_param_escaping_callees = super::context::set_ref_param_escaping_callees(
         check_result.ref_param_escaping_callees.clone(),
     );
+    let _property_bound_promotion_sites = super::context::set_property_bound_promotion_sites(
+        check_result.property_bound_promotion_sites.clone(),
+    );
+    let _by_ref_call_result_sites = super::context::set_by_ref_call_result_sites(
+        check_result.by_ref_call_result_sites.clone(),
+    );
     let constants = crate::codegen::collect_constants(program, target);
+    let builtin_constants = crate::codegen::collect_constants(&Vec::new(), target);
+    module.user_defined_constants = constants
+        .keys()
+        .filter(|name| !builtin_constants.contains_key(*name))
+        .filter(|name| !crate::dom_prelude::PRELUDE_CONSTANTS.contains(&name.as_str()))
+        .cloned()
+        .collect();
+    module.user_defined_constants.sort();
     module.global_constants = constants.clone();
     let fiber_return_sigs = crate::ir_lower::fibers::collect_fiber_return_sigs(program);
     populate_metadata(&mut module, program, check_result);
@@ -129,6 +197,12 @@ pub(crate) fn lower(
         &constants,
         &fiber_return_sigs,
     );
+    function::lower_eval_native_default_helpers(
+        &mut module,
+        check_result,
+        &constants,
+        &fiber_return_sigs,
+    );
     lower_literal_eval_aot_functions(&mut module, check_result, &constants, &fiber_return_sigs);
     lower_dynamic_constructor_thunks(&mut module, check_result, &constants, &fiber_return_sigs);
     include_lowered_runtime_features(&mut module);
@@ -146,7 +220,21 @@ pub(crate) fn lower(
         &fiber_return_sigs,
     );
     include_lowered_runtime_features(&mut module);
+    // Applicators are planned from the LOWERED module: their candidate classes and invocation
+    // scopes come from the `RuntimeFnId::CloneWith` sites this program actually contains.
+    super::clone_overrides::lower_clone_override_applicators(
+        &mut module,
+        check_result,
+        &constants,
+        &fiber_return_sigs,
+    )?;
     super::effect_refinement::refine_module(&mut module);
+    reserve_eval_subclass_property_storage(&mut module);
+    // A refused shape is reported before validation: the placeholder EIR those sites emit
+    // keeps the module well formed, but the program must not reach codegen regardless.
+    if let Some(error) = super::diagnostics::take_first() {
+        return Err(LoweringError::Unsupported(error));
+    }
     if COLLECT_INVALID_BODIES.load(std::sync::atomic::Ordering::Relaxed) {
         let failures = invalid_bodies(&module);
         if let Some((_, first)) = failures.first() {
@@ -164,6 +252,12 @@ pub(crate) fn lower(
     validate_lowered_module(&module)?;
     Ok(module)
 }
+
+/// Whether some class file was handed back to the runtime autoloader. Its classes are declared by
+/// the interpreter at run time, so the program loads code even with no `eval()` in its text; set
+/// through `crate::ir_lower::set_class_files_deferred` before lowering.
+pub(super) static CLASS_FILES_DEFERRED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Whether validation collects every failing body instead of stopping at the first; set through
 /// `crate::ir_lower::collect_invalid_bodies` by a build that can hand class files to the runtime.

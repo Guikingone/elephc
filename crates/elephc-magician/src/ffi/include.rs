@@ -118,12 +118,15 @@ pub extern "C" fn __elephc_eval_include_request_reset() {
         // the next request re-declare and re-publish; see `forget_declared_class_likes`.
         #[cfg(not(test))]
         crate::ffi::context::forget_shared_null_handle_declarations();
-        // Both registries are keyed by an address the arena wipe invalidates: an object identity
+        // These registries are keyed by an address the arena wipe invalidates: an object identity
         // for the first, a context and a retained callable for the second. An entry that survives
         // the boundary is reachable from the generated runtime on the next request and answers
         // for storage that no longer belongs to it.
         #[cfg(not(test))]
         crate::ffi::dynamic_destructors::reset_dynamic_object_contexts();
+        // Same hazard: closure child edges keyed by object identity, holding arena cells.
+        #[cfg(not(test))]
+        crate::runtime_hooks::reset_object_owners();
         #[cfg(not(test))]
         crate::ffi::ob_handlers::reset_ob_handlers();
         // Last, because the two owner registries above finalize contexts of their own and this
@@ -138,6 +141,10 @@ pub extern "C" fn __elephc_eval_include_request_reset() {
         // Context cleanup may execute PHP destructors, which must still observe
         // the current request's inclusion state until cleanup has completed.
         crate::context::reset_global_eval_included_files();
+        // Last of all: every finalization above may have pooled its context, and a pooled
+        // context still holds the class-likes of the request that just ended.
+        #[cfg(not(test))]
+        crate::ffi::context::drain_pooled_eval_contexts();
     });
 }
 

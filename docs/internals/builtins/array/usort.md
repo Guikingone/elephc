@@ -1,16 +1,16 @@
 ---
-title: "usort() — internals"
+title: "usort() - internals"
 description: "Compiler internals for usort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 83
+  order: 84
 ---
 
-## `usort()` — internals
+## `usort()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/usort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/usort.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

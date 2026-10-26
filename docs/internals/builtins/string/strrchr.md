@@ -1,16 +1,16 @@
 ---
-title: "strrchr() — internals"
+title: "strrchr() - internals"
 description: "Compiler internals for strrchr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 889
+  order: 982
 ---
 
-## `strrchr()` — internals
+## `strrchr()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strrchr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strrchr.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

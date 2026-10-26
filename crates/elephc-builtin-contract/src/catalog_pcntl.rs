@@ -588,6 +588,25 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         "Returns the terminating signal encoded in a child wait status.",
     ),
     posix_contract(
+        "posix_kill",
+        &[
+            ParamSpec {
+                name: "process_id",
+                ty: TypeSpec::Int,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "signal",
+                ty: TypeSpec::Int,
+                default: None,
+                by_ref: false,
+            },
+        ],
+        TypeSpec::Bool,
+        "Sends a signal to a process; signal 0 only checks that the process exists.",
+    ),
+    posix_contract(
         "posix_setpgid",
         &[
             ParamSpec {

@@ -9,14 +9,17 @@
 
 use super::*;
 
-/// `setTimestamp(int $timestamp)` — sets the stored UNIX timestamp.
+/// `setTimestamp(int $timestamp)` — sets the stored UNIX timestamp. Like PHP it also clears the
+/// sub-second component: the constructor now stamps the current microseconds on `"now"`, and an
+/// explicit whole-second instant must not inherit them.
 pub(super) fn make_set_timestamp(mutable: bool, class_name: &str) -> ClassMethod {
     method(
         "setTimestamp",
         vec![("timestamp".to_string(), Some(TypeExpr::Int), None, false)],
         Some(TypeExpr::Named(Name::unqualified(class_name))),
-        result_tail(
+        result_tail_micro(
             Expr::new(ExprKind::Variable("timestamp".to_string()), dummy()),
+            Some(Expr::new(ExprKind::IntLiteral(0), dummy())),
             mutable,
             class_name,
         ),

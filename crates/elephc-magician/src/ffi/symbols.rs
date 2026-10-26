@@ -341,10 +341,28 @@ unsafe fn eval_dynamic_class_like_exists_inner(
     autoload: i32,
     kind: DynamicClassLikeKind,
 ) -> i32 {
+    // php resolves `'\Foo\Bar'` as `Foo\Bar`. Every lookup below keys bare names, so a leading
+    // separator missed the compiled fast path, built a full fallback context per call, and still
+    // answered false: Laravel's `class_exists('\Illuminate\Console\View\Components\' . ...)`
+    // threw "Console component [info] not found" from every artisan command.
+    let (name_ptr, name_len) = if name_len > 0 && !name_ptr.is_null() && *name_ptr == b'\\' {
+        (name_ptr.add(1), name_len - 1)
+    } else {
+        (name_ptr, name_len)
+    };
     // Compiled code with no eval context of its own asks here for every `class_exists()` it
     // makes, and building a fallback context with a copy of the AOT metadata cost more than the
     // probe. A compiled class-like needs neither: when the generated tables hold it and it may be
     // answered (loaded, or autoloading allowed), the answer is the one the full path gives.
+    // `Closure` is a language intrinsic with no class-table row on either side; the interpreter's
+    // own `class_exists()` answers it the same way (`eval_class_is_declared`).
+    if matches!(kind, DynamicClassLikeKind::Class) {
+        if let Ok(name) = abi_name_to_string(name_ptr, name_len) {
+            if name.trim_start_matches('\\').eq_ignore_ascii_case("Closure") {
+                return 1;
+            }
+        }
+    }
     if ctx.is_null() {
         let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
             return 0;
@@ -402,16 +420,53 @@ unsafe fn eval_dynamic_class_like_exists_inner(
             context,
         ));
     }
-    let _ = eval_spl_autoload_class_bridge(&name, context, &mut values);
+    let bridge = eval_spl_autoload_class_bridge(&name, context, &mut values);
+    // A Throwable an autoloader raised (`ClassExistenceResource::throwOnRequiredClass` throws a
+    // `ReflectionException` out of `class_exists()`) leaves the probe through this channel: the
+    // owned box is parked for `__elephc_eval_take_probe_throwable` and the status is 2, which the
+    // compiled caller turns into a native throw. Answering `false` here swallowed it.
+    let escaped = if matches!(bridge, Err(EvalStatus::UncaughtThrowable)) {
+        context.take_pending_throw().and_then(|thrown| {
+            if thrown.is_borrowed() {
+                values.retain(thrown).ok()
+            } else {
+                Some(thrown)
+            }
+        })
+    } else {
+        None
+    };
     if let Some(argument) = probe_argument {
         context.pop_call_frame();
         let _ = values.release(argument);
+    }
+    if let Some(thrown) = escaped {
+        PROBE_THROWABLE.store(thrown.as_ptr() as usize, std::sync::atomic::Ordering::SeqCst);
+        return PROBE_THROWN_STATUS;
     }
     context.sync_global_eval_classes();
     i32::from(
         eval_context_has_class_like(context, &name, kind)
             || eval_runtime_has_class_like(&mut values, &name, kind),
     )
+}
+
+/// Status a class-like probe returns when an autoloader raised a Throwable.
+#[cfg(not(test))]
+const PROBE_THROWN_STATUS: i32 = 2;
+
+/// Owned Throwable box parked by a probe that returned [`PROBE_THROWN_STATUS`].
+#[cfg(not(test))]
+static PROBE_THROWABLE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Hands the parked probe Throwable (an owned box, or null) to the compiled caller.
+///
+/// # Safety
+/// Only meaningful straight after a `__elephc_eval_dynamic_*_exists` call returned status 2.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_take_probe_throwable() -> *mut crate::value::RuntimeCell {
+    PROBE_THROWABLE.swap(0, std::sync::atomic::Ordering::SeqCst) as *mut crate::value::RuntimeCell
 }
 
 /// Returns the PHP function name of the class-like probe that can start an autoloader.

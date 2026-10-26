@@ -16,7 +16,70 @@ mod externs;
 #[cfg(not(test))]
 mod ops;
 #[cfg(not(test))]
+mod object_owners;
+#[cfg(not(test))]
+pub(crate) use object_owners::reset_object_owners;
+#[cfg(not(test))]
 mod tags;
+#[cfg(not(test))]
+pub(crate) mod release;
+
+/// Publishes the interpreter's current file and line as the call site of the compiled function
+/// it is about to call.
+///
+/// A compiled callee records the caller's file and line in its activation at entry, from the
+/// pair a compiled call site publishes; the interpreter published nothing, so a compiled frame
+/// called from interpreted code reported whatever compiled call ran last (php: the eval'd-code
+/// or included-file line of the call). The descriptor (`{ptr, len}`) outlives every frame that
+/// may point at it: one is interned, and leaked, per distinct file.
+#[cfg(not(test))]
+pub(crate) fn publish_native_call_site(context: &ElephcEvalContext) {
+    if let Some((descriptor, line)) = current_site_descriptor(context) {
+        unsafe { externs::__elephc_eval_publish_native_call_site(descriptor, line) };
+    }
+}
+
+/// Publishes the interpreter's current file and line as the location the next runtime warning
+/// names. A compiled raise site publishes its own before each instruction; the interpreter
+/// published nothing, so a warning raised in eval'd code named the compiled caller's line.
+#[cfg(not(test))]
+pub(crate) fn publish_diagnostic_site(context: &ElephcEvalContext) {
+    if let Some((descriptor, line)) = current_site_descriptor(context) {
+        unsafe { externs::__elephc_eval_publish_diagnostic_site(descriptor, line) };
+    }
+}
+
+/// Returns the interned `{ptr, len}` descriptor of the interpreter's current file, and its line.
+///
+/// The descriptor outlives every frame and diagnostic that may point at it: one is interned,
+/// and leaked, per distinct file.
+#[cfg(not(test))]
+fn current_site_descriptor(context: &ElephcEvalContext) -> Option<(*const usize, i64)> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static DESCRIPTORS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+    let (file, _, line, file_magic) = context.call_site();
+    let file = file_magic.unwrap_or(file);
+    if file.is_empty() {
+        return None;
+    }
+    let descriptor = {
+        let mut table = DESCRIPTORS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *table.entry(file).or_insert_with_key(|file| {
+            let bytes: &'static [u8] = Box::leak(file.clone().into_bytes().into_boxed_slice());
+            let words: &'static [usize; 2] = Box::leak(Box::new([bytes.as_ptr() as usize, bytes.len()]));
+            words.as_ptr() as usize
+        })
+    };
+    Some((descriptor as *const usize, line))
+}
+
+/// Unit tests link no generated runtime, so there is no call site to publish.
+#[cfg(test)]
+pub(crate) fn publish_native_call_site(_context: &crate::abi::ElephcEvalContext) {}
 
 #[cfg(not(test))]
 use crate::errors::EvalStatus;
@@ -32,10 +95,9 @@ use externs::{
     __elephc_eval_install_array_access_hook, __elephc_eval_install_object_clone_hook,
     __elephc_eval_install_object_relation_hook, __elephc_eval_install_serialize_object_hook,
     __elephc_eval_install_throwable_trace_hook, __elephc_eval_install_unserialize_object_hook,
-    __elephc_eval_value_capture_throwable_trace,
     __elephc_eval_value_array_new,
+    __elephc_eval_install_closure_bind_hook, __elephc_eval_install_dynamic_object_clone_hook,
     __elephc_eval_value_array_set, __elephc_eval_value_int, __elephc_eval_value_object_from_raw,
-    __elephc_eval_value_release,
 };
 
 /// Runtime hook adapter that produces and consumes boxed elephc Mixed cells.
@@ -74,31 +136,25 @@ impl ElephcRuntimeOps {
         Self::handle(unsafe { __elephc_eval_value_object_from_raw(object) })
     }
 
-    /// Packs source-order argument cells into the boxed eval array ABI.
-    fn arg_array(args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
+    /// Packs borrowed arguments, releasing temporary keys and unfinished arrays on failure.
+    fn arg_array(&mut self, args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
         let arg_array = unsafe { __elephc_eval_value_array_new(args.len() as u64) };
         let mut arg_array = Self::handle(arg_array)?;
-        for (index, value) in args.into_iter().enumerate() {
-            let index = match Self::handle(unsafe { __elephc_eval_value_int(index as i64) }) {
-                Ok(index) => index,
-                Err(status) => {
-                    unsafe { __elephc_eval_value_release(arg_array.as_ptr()); }
-                    return Err(status);
-                }
-            };
-            let updated = Self::handle(unsafe {
-                __elephc_eval_value_array_set(arg_array.as_ptr(), index.as_ptr(), value.as_ptr())
-            });
-            // The setter borrows its key and retains its value. Only the fresh
-            // index belongs to this adapter; the source argument stays borrowed.
-            unsafe { __elephc_eval_value_release(index.as_ptr()); }
-            match updated {
-                Ok(array) => arg_array = array,
-                Err(status) => {
-                    unsafe { __elephc_eval_value_release(arg_array.as_ptr()); }
-                    return Err(status);
-                }
+        let populated = (|| {
+            for (index, value) in args.into_iter().enumerate() {
+                let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
+                let key = Self::handle(unsafe { __elephc_eval_value_int(index) })?;
+                let inserted = Self::handle(unsafe {
+                    __elephc_eval_value_array_set(arg_array.as_ptr(), key.as_ptr(), value.as_ptr())
+                });
+                self.release_cells([key])?;
+                arg_array = inserted?;
             }
+            Ok(())
+        })();
+        if let Err(status) = populated {
+            self.release_cells([arg_array])?;
+            return Err(status);
         }
         Ok(arg_array)
     }
@@ -115,12 +171,17 @@ impl ElephcRuntimeOps {
     }
 }
 
-/// Installs the eval dynamic object destructor callback, and the owner filter generated code
-/// reads before calling into the registry, into runtime data.
+/// Installs eval destruction, object-edge, and array-reference retirement callbacks, plus the
+/// owner filter generated code reads before calling into the registry.
 #[cfg(not(test))]
 pub(crate) unsafe fn install_dynamic_object_destructor_hook(callback: usize, owner_filter: usize) {
     unsafe {
         __elephc_eval_install_dynamic_object_destructor_hook(callback, owner_filter);
+        externs::__elephc_eval_install_object_owner_hooks(
+            object_owners::object_gc_child as *const () as usize,
+            object_owners::release_object_children as *const () as usize,
+            crate::ffi::array_references::retire_array_reference_cell_callback as *const () as usize,
+        );
     }
 }
 
@@ -227,15 +288,74 @@ pub(crate) unsafe fn install_throwable_trace_hook(callback: usize) {
     }
 }
 
+/// Installs the eval closure `$this` rebinding callback into the generated runtime.
+///
+/// # Safety
+/// `callback` must be the address of a function with the `__elephc_eval_closure_bind_this` ABI.
+#[cfg(not(test))]
+pub(crate) unsafe fn install_closure_bind_hook(callback: usize) {
+    unsafe {
+        __elephc_eval_install_closure_bind_hook(callback);
+    }
+}
+
+/// Installs the eval dynamic-object clone callback into the generated runtime.
+///
+/// # Safety
+/// `callback` must be the address of a function with the
+/// `__elephc_eval_dynamic_object_clone` ABI; the generated `clone` lowering calls
+/// through it before its own shallow-clone adapter runs.
+#[cfg(not(test))]
+pub(crate) unsafe fn install_dynamic_object_clone_hook(callback: usize) {
+    unsafe {
+        __elephc_eval_install_dynamic_object_clone_hook(callback);
+    }
+}
+
+/// Reports whether one natively built override entry still belongs to a live PHP reference set.
+///
+/// Magician's own array-element alias table only knows arrays eval itself built, so an override
+/// array that generated code built is read here instead. Every input stays borrowed.
+#[cfg(not(test))]
+pub(crate) fn array_entry_is_shared_reference(
+    array: RuntimeCellHandle,
+    key: &str,
+    value: Option<RuntimeCellHandle>,
+) -> bool {
+    if array.is_null() {
+        return false;
+    }
+    let shared = unsafe {
+        externs::__elephc_eval_array_entry_is_shared_reference(
+            array.as_ptr(),
+            key.as_ptr(),
+            key.len() as u64,
+            value.map_or(std::ptr::null_mut(), RuntimeCellHandle::as_ptr),
+        )
+    };
+    shared != 0
+}
+
+/// Unit test builds do not link the generated runtime, so no native entry state can exist.
+#[cfg(test)]
+pub(crate) fn array_entry_is_shared_reference(
+    _array: crate::value::RuntimeCellHandle,
+    _key: &str,
+    _value: Option<crate::value::RuntimeCellHandle>,
+) -> bool {
+    false
+}
+
 /// Installs the eval output-buffering handler callback into the generated runtime.
 ///
 /// # Safety
-/// `callback` must be the address of a `fn(i64, *const u8, i64, i64) -> *mut RuntimeCell`
-/// with the eval ob-handler ABI; the runtime calls through it on buffer flushes.
+/// `callback` accepts a writable `OutputHandlerCallV1` pointer and returns a status.
+/// The runtime calls it on buffer flushes and consumes returned owners after Rust exits.
+/// `release` accepts a registry id and boxed-Throwable output pointer and returns a status.
 #[cfg(not(test))]
-pub(crate) unsafe fn install_ob_handler_hook(callback: usize) {
+pub(crate) unsafe fn install_ob_handler_hook(callback: usize, release: usize) {
     unsafe {
-        externs::install_ob_handler_hook_raw(callback);
+        externs::install_ob_handler_hook_raw(callback, release);
     }
 }
 

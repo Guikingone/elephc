@@ -28,24 +28,24 @@ fn test_posix_kill_signal_zero_checks_current_process() {
     assert_eq!(out, "reachable");
 }
 
-/// Verifies every recognized PCNTL call lowers to the explicit unsupported-runtime diagnostic.
+/// Verifies the PCNTL calls a signal-installing helper makes run: the extension is supported, so
+/// none of them lowers to an unsupported-runtime stub any more.
 #[test]
-fn test_pcntl_calls_compile_to_runtime_fatal_stubs() {
-    let source = r#"<?php
+fn test_pcntl_signal_installation_runs() {
+    let out = compile_and_run(
+        r#"<?php
 function installSignals(): void {
     pcntl_async_signals(true);
     $previous = pcntl_signal_get_handler(SIGTERM);
     pcntl_signal(SIGTERM, $previous);
     pcntl_alarm(1);
+    pcntl_alarm(0);
 }
-"#;
-    let dir = make_cli_test_dir("pcntl_runtime_fatal_stubs");
-    let (user_asm, _runtime_asm, _libraries) =
-        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    assert!(user_asm.contains("pcntl_signal() is not supported"));
-    assert!(user_asm.contains("pcntl_async_signals() is not supported"));
-    assert!(user_asm.contains("pcntl_signal_get_handler() is not supported"));
-    assert!(user_asm.contains("pcntl_alarm() is not supported"));
+installSignals();
+echo "installed";
+"#,
+    );
+    assert_eq!(out, "installed");
 }
 
 /// Verifies Windows-only SAPI names are absent on supported targets, matching native PHP.
@@ -57,9 +57,10 @@ fn test_windows_sapi_functions_report_unavailable() {
     assert_eq!(out, "absent");
 }
 
-/// Verifies residual direct Windows SAPI calls lower to precise fatal stubs in vendor bodies.
+/// Verifies residual direct Windows SAPI calls in vendor bodies compile to php's own answer on
+/// these targets: the functions do not exist, so a call raises `Call to undefined function`.
 #[test]
-fn test_windows_sapi_calls_compile_to_runtime_fatal_stubs() {
+fn test_windows_sapi_calls_compile_to_undefined_function_errors() {
     let source = r#"<?php
 function windowsConsoleHelpers($stream): void {
     $cp = sapi_windows_cp_get();
@@ -67,12 +68,16 @@ function windowsConsoleHelpers($stream): void {
     sapi_windows_vt100_support($stream, true);
     sapi_windows_cp_conv('oem', $cp, 'text');
 }
+// Reachable, so the body is emitted; never taken, so nothing raises.
+if ($argc > 99) { windowsConsoleHelpers(STDOUT); }
 "#;
     let dir = make_cli_test_dir("windows_sapi_runtime_fatal_stubs");
     let (user_asm, _runtime_asm, _libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    assert!(user_asm.contains("sapi_windows_cp_get() is unavailable"));
-    assert!(user_asm.contains("sapi_windows_cp_set() is unavailable"));
-    assert!(user_asm.contains("sapi_windows_vt100_support() is unavailable"));
-    assert!(user_asm.contains("sapi_windows_cp_conv() is unavailable"));
+    for name in ["sapi_windows_cp_get", "sapi_windows_cp_set", "sapi_windows_vt100_support", "sapi_windows_cp_conv"] {
+        assert!(
+            user_asm.contains(&format!("Call to undefined function {name}()")),
+            "{name}: {user_asm}"
+        );
+    }
 }

@@ -36,11 +36,18 @@ pub(in crate::interpreter) fn eval_date_procedural_alias_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    if eval_date_alias_key(name).is_none() {
+    let Some(name) = eval_date_alias_key(name) else {
         return Ok(None);
-    }
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    eval_date_procedural_alias_with_evaluated_args(name, evaluated_args, context, values)
+    };
+    with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
+        if eval_date_alias_should_fall_back_to_builtin(&name, &arguments) {
+            // Named mktime/gmmktime calls keep their already evaluated operands at fallback.
+            eval_bound_builtin_call(&name, arguments, context, values)
+        } else {
+            eval_date_procedural_alias_with_evaluated_args(&name, arguments, context, values)?
+                .ok_or(EvalStatus::UnsupportedConstruct)
+        }
+    }).map(Some)
 }
 
 /// Attempts to execute one procedural date/time alias from positional runtime values.
@@ -55,9 +62,8 @@ pub(in crate::interpreter) fn eval_date_procedural_alias_with_values(
         .copied()
         .map(|value| EvaluatedCallArg {
             name: None,
-            value,
+            value: value.borrowed(),
             ref_target: None,
-            owned: false,
         })
         .collect();
     eval_date_procedural_alias_with_evaluated_args(name, evaluated_args, context, values)
@@ -368,12 +374,7 @@ fn eval_timezone_identifiers_country_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message = values.string(EVAL_DATETIMEZONE_PER_COUNTRY_ERROR)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("ValueError", EVAL_DATETIMEZONE_PER_COUNTRY_ERROR, 0, context, values)
 }
 
 /// Calls one object-method alias with selected argument indices.

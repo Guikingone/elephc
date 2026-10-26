@@ -2,7 +2,7 @@
 title: "var_export()"
 description: "Renders a parsable string representation of a variable."
 sidebar:
-  order: 411
+  order: 412
 ---
 
 ## var_export()
@@ -22,9 +22,9 @@ Renders a parsable string representation of a variable.
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected var_export prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/var_export.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/var_export.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/var_export.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/var_export.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

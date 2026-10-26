@@ -1,8 +1,8 @@
 ---
 title: "ini_restore()"
-description: "Implemented by the compiler-injected version prelude."
+description: "Restores a configuration directive to its startup value."
 sidebar:
-  order: 636
+  order: 656
 ---
 
 ## ini_restore()
@@ -11,7 +11,7 @@ sidebar:
 function ini_restore(string $option): void
 ```
 
-Implemented by the compiler-injected version prelude.
+Restores a configuration directive to its startup value.
 
 **Parameters**:
 - `$option` (`string`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected version prelude.
 - **Compiled (AOT)**: supported through the compiler-injected version prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

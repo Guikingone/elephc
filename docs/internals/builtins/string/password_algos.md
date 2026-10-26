@@ -1,11 +1,11 @@
 ---
-title: "password_algos() — internals"
+title: "password_algos() - internals"
 description: "Compiler internals for password_algos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 851
+  order: 944
 ---
 
-## `password_algos()` — internals
+## `password_algos()` - internals
 
 ## Where it lives
 

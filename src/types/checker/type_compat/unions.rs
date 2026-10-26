@@ -12,42 +12,56 @@ use crate::types::PhpType;
 
 use super::super::Checker;
 
+/// Flattens nested unions, drops duplicates, lets `Mixed` absorb everything, and applies
+/// PHP's `bool`/`false` subtype rule — `bool` already contains the literal `false`, so the
+/// two never coexist as separate members.
+///
+/// Free-standing because the inferred-return fold in
+/// `checker::functions::returns::wider_type` is an associated function with no `self` and
+/// must build its unions through the SAME normalizer. Hand-rolled member pushing there
+/// produced `false|string|bool`, whose redundant `False` made two structurally equal types
+/// compare unequal — and `PhpType`/`FunctionSig` equality is what callable-return metadata
+/// is keyed on.
+pub(crate) fn normalize_union_members(members: Vec<PhpType>) -> PhpType {
+    let mut flat = Vec::new();
+    for member in members {
+        match member {
+            PhpType::Union(inner) => flat.extend(inner),
+            PhpType::Mixed => return PhpType::Mixed,
+            PhpType::Never => {}
+            other => flat.push(other),
+        }
+    }
+
+    let mut deduped: Vec<PhpType> = Vec::new();
+    for member in flat {
+        // `bool` already contains the literal `false` subtype. Keep `False` only when the
+        // declaration is specifically false-only (for example `int|false`).
+        if member == PhpType::False && deduped.iter().any(|existing| existing == &PhpType::Bool) {
+            continue;
+        }
+        if member == PhpType::Bool {
+            deduped.retain(|existing| existing != &PhpType::False);
+        }
+        if !deduped.iter().any(|existing| existing == &member) {
+            deduped.push(member);
+        }
+    }
+
+    if deduped.is_empty() {
+        PhpType::Never
+    } else if deduped.len() == 1 {
+        deduped.pop().expect("union member exists")
+    } else {
+        PhpType::Union(deduped)
+    }
+}
+
 impl Checker {
-    /// Flattens nested unions, removes duplicate and bottom (`Never`) members, absorbs into
-    /// `Mixed` when present, and returns a single `PhpType` or a deduped union.
+    /// Flattens nested unions, removes duplicates and `PhpType::Mixed` (which absorbs all),
+    /// and returns a single `PhpType` or a `PhpType::Union` with deduped members.
     pub(crate) fn normalize_union_type(&self, members: Vec<PhpType>) -> PhpType {
-        let mut flat = Vec::new();
-        for member in members {
-            match member {
-                PhpType::Union(inner) => flat.extend(inner),
-                PhpType::Mixed => return PhpType::Mixed,
-                PhpType::Never => {}
-                other => flat.push(other),
-            }
-        }
-
-        let mut deduped = Vec::new();
-        for member in flat {
-            // `bool` already contains the literal `false` subtype. Keep `False` only when the
-            // declaration is specifically false-only (for example `int|false`).
-            if member == PhpType::False && deduped.iter().any(|existing| existing == &PhpType::Bool) {
-                continue;
-            }
-            if member == PhpType::Bool {
-                deduped.retain(|existing| existing != &PhpType::False);
-            }
-            if !deduped.iter().any(|existing| existing == &member) {
-                deduped.push(member);
-            }
-        }
-
-        if deduped.is_empty() {
-            PhpType::Never
-        } else if deduped.len() == 1 {
-            deduped.pop().expect("union member exists")
-        } else {
-            PhpType::Union(deduped)
-        }
+        normalize_union_members(members)
     }
 
     /// Returns true if `expected` type can accept a value of `actual` type (i.e., the
@@ -109,6 +123,15 @@ impl Checker {
             PhpType::Mixed => true,
             PhpType::Bool if matches!(actual, PhpType::False) => true,
             PhpType::Callable if actual.is_closure_object() => true,
+            // The third callable shape: an object whose class declares `__invoke`.
+            // symfony/event-dispatcher's `TraceableEventDispatcher::getListenerPriority(...,
+            // callable|array $listener)` is handed a `WrappedListener`, and the union refused it
+            // (a bare `callable` parameter already accepted it through the call-site coercion).
+            PhpType::Callable
+                if matches!(actual, PhpType::Object(class) if self.class_declares_invoke(class)) =>
+            {
+                true
+            }
             // php's `callable` accepts an ARRAY: `[$object, 'method']` and `['Class', 'method']`
             // are two of the three shapes a callable HAS, not a coercion into one. elephc already
             // resolves both in builtin callback position (`array_map([$g, 'hello'], …)` compiles
@@ -289,6 +312,14 @@ impl Checker {
         }
     }
 
+    /// Whether `class` (or a class it inherits from) declares `__invoke`, which makes its
+    /// instances callable.
+    pub(crate) fn class_declares_invoke(&self, class: &str) -> bool {
+        self.classes
+            .get(class.trim_start_matches('\\'))
+            .is_some_and(|class_info| class_info.methods.contains_key("__invoke"))
+    }
+
     /// The type a slot holds after being assigned `new_ty` while holding
     /// `existing` — the widening that a second write to one variable forces.
     pub(crate) fn merged_assignment_type(
@@ -296,6 +327,20 @@ impl Checker {
         existing: &PhpType,
         new_ty: &PhpType,
     ) -> Option<PhpType> {
+        // A `Callable` slot is a callable DESCRIPTOR: a string or an array stored into it would be
+        // converted, and php keeps the value. `$callback = [$r->getClosureThis(), $r->name]` after
+        // `$callback instanceof \Closure` narrowed it to `Callable` came out of `is_array()` false
+        // and out of `$callback[0]` as "Cannot index non-array" (symfony/cache's
+        // `EarlyExpirationMessage::create()`). Such a store widens the slot to `Mixed`, which keeps
+        // the value as is and still resolves it when it is called, as the scalar pairs below widen.
+        if *existing == PhpType::Callable
+            && matches!(
+                new_ty.codegen_repr(),
+                PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. }
+            )
+        {
+            return Some(PhpType::Mixed);
+        }
         if self.type_contains_values(existing, new_ty) {
             return Some(existing.clone());
         }
@@ -312,6 +357,19 @@ impl Checker {
         }
         if matches!(existing, PhpType::Array(inner) if matches!(inner.as_ref(), PhpType::Never))
             && matches!(new_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        {
+            return Some(new_ty.clone());
+        }
+        // The unrestricted `array` contract (`PhpType::php_array()`, what `array_flip()` and
+        // `array_filter()` return) is a boxed union of the two array layouts, not one of them. An
+        // empty-array binding must still accept it: Symfony's `ChoiceType` seeds
+        // `$unknownValues = []` outside a `use (&$unknownValues)` closure and the closure stores
+        // `$unknownValues = $valueMap` (`array_flip(...)`) -- `cannot reassign ... from
+        // array<never> to array`.
+        if matches!(existing, PhpType::Array(inner) if matches!(inner.as_ref(), PhpType::Never))
+            && matches!(new_ty, PhpType::Union(members)
+                if !members.is_empty()
+                    && members.iter().all(|m| matches!(m, PhpType::Array(_) | PhpType::AssocArray { .. })))
         {
             return Some(new_ty.clone());
         }
@@ -432,6 +490,11 @@ impl Checker {
     ) -> PhpType {
         if !Self::is_generic_array_hint(declared_ty) {
             return declared_ty.clone();
+        }
+        if let PhpType::Union(members) = actual_ty {
+            if members.iter().all(|member| matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })) {
+                return actual_ty.clone();
+            }
         }
         match actual_ty {
             PhpType::Array(element) if matches!(element.as_ref(), PhpType::Never) => {

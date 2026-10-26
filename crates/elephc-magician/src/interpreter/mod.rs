@@ -12,6 +12,10 @@
 //!   to `RuntimeValueOps`, which will be backed by elephc runtime hooks.
 
 mod array_literals;
+mod call_argument_owners;
+
+use call_argument_owners::*;
+pub(crate) mod array_references;
 pub mod builtin_metadata;
 mod builtin_interfaces;
 mod builtins;
@@ -21,14 +25,18 @@ mod control;
 mod dynamic_functions;
 mod expressions;
 mod generators;
+pub(in crate::interpreter) mod highlight;
 mod globals;
 mod include_exec;
+mod operands;
 mod libc_shims;
 mod reflection;
 mod return_type_compat;
 mod return_values;
 mod runtime_ops;
 mod scope_cells;
+mod persistent_references;
+mod superglobals;
 mod statements;
 #[cfg(not(test))]
 mod output_handlers;
@@ -39,8 +47,9 @@ mod throwables;
 use crate::context::{
     decode_callable_descriptor, eval_builtin_is_backtrace_visible, ElephcEvalContext,
     ElephcEvalExecutionScope, EvalArrayCursor, EvalArrayReferenceKey, EvalCallFrame,
-    EvalCallFrameKind, EvalClosure, EvalClosureCaptureBinding, EvalClosureObjectTarget,
-    EvalReferenceTarget, NativeCallableDefault, NativeCallableSignature, NativeFunction,
+    EvalCallFrameKind, EvalClassMethodRef, EvalClosure, EvalClosureCaptureBinding,
+    EvalClosureObjectTarget, EvalReferenceTarget, NativeCallableDefault, NativeCallableSignature,
+    NativeFunction,
 };
 use crate::errors::{report_fatal_diagnostic, EvalParseDiagnostic, EvalStatus};
 use crate::eval_ir::{
@@ -57,6 +66,7 @@ use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;
 use array_literals::*;
+use array_references::eval_owned_reference_target_value;
 use builtin_interfaces::*;
 use builtins::*;
 use constant_eval::*;
@@ -72,19 +82,31 @@ use expressions::*;
 use generators::*;
 use globals::*;
 use include_exec::*;
+use operands::*;
 use libc_shims::*;
 use reflection::*;
 use return_type_compat::*;
 use return_values::*;
 pub use runtime_ops::{aot_member_names_uncached, AotMemberNameKind, RuntimeValueOps};
 pub(crate) use builtins::eval_class_name_is_a_bridge;
+pub(crate) use builtins::eval_highlight_render;
 pub(crate) use dynamic_functions::current_native_call_context;
 pub(crate) use builtins::eval_spl_autoload_class as eval_spl_autoload_class_bridge;
+
+/// Builds the PHP `spl_autoload_functions()` array for generated (AOT) callers.
+pub(crate) fn registered_spl_autoload_functions(
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    builtins::eval_registered_spl_autoload_functions_result(context, values)
+}
 pub(crate) use builtins::eval_spl_autoload_classlike_definition;
 use runtime_ops::*;
 #[cfg(not(test))]
 pub(crate) use pcntl_escape::value_contains_foreign_pcntl_callable;
 use scope_cells::*;
+use persistent_references::*;
+use superglobals::*;
 #[cfg(not(test))]
 pub(crate) use statements::eval_dynamic_destructor_for_object_cell;
 pub(crate) use builtins::eval_json_encode_serialized_object;
@@ -97,7 +119,13 @@ pub(crate) use builtins::eval_serialize_object_fragment;
 #[cfg(not(test))]
 pub(crate) use builtins::eval_throwable_trace_value;
 #[cfg(not(test))]
+pub(crate) use statements::eval_object_clone_with_properties_for_ffi;
+#[cfg(not(test))]
+pub(crate) use statements::eval_property_set_for_ffi;
+#[cfg(not(test))]
 pub(crate) use output_handlers::eval_ob_handler_callback;
+#[cfg(not(test))]
+pub(crate) use output_handlers::release_ob_handler_callbacks;
 use statements::*;
 use throwables::*;
 use std::ffi::{CStr, CString};
@@ -168,10 +196,17 @@ pub fn execute_program_outcome_with_context(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
+    seed_named_cli_superglobals(program, context, scope, values)?;
     match execute_statements(program.statements(), context, scope, values) {
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
-        Ok(EvalControl::Return(result)) => Ok(EvalOutcome::Value(result)),
-        Ok(EvalControl::Throw(result)) => Ok(EvalOutcome::Throwable(result)),
+        Ok(EvalControl::Return(result)) => {
+            let result = if result.is_borrowed() { values.retain(result)? } else { result };
+            Ok(EvalOutcome::Value(result))
+        }
+        Ok(EvalControl::Throw(result)) => {
+            let result = if result.is_borrowed() { values.retain(result)? } else { result };
+            Ok(EvalOutcome::Throwable(result))
+        }
         Ok(EvalControl::Break(_) | EvalControl::Continue(_) | EvalControl::Goto(_)) => {
             Err(EvalStatus::UnsupportedConstruct)
         }
@@ -308,8 +343,10 @@ pub fn execute_context_function_call_array_outcome(
     if !values.is_array_like(arg_array)? {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let evaluated_args = eval_array_call_arg_values(arg_array, context, values)?;
-    match eval_callable_with_call_array_args(name, evaluated_args, context, values) {
+    let result = with_eval_array_call_arguments(arg_array, context, values, |arguments, context, values| {
+        eval_callable_with_call_array_args(name, arguments, context, values)
+    });
+    match result {
         Ok(result) => Ok(EvalOutcome::Value(result)),
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()
@@ -334,6 +371,16 @@ pub fn execute_context_callable_call_array_outcome(
             .ok_or(EvalStatus::UncaughtThrowable),
         Err(status) => Err(status),
     }
+}
+
+/// Rebinds `$this` on an eval `Closure` object on behalf of generated `Closure::bind` code.
+pub fn execute_context_closure_bind_this(
+    context: &mut ElephcEvalContext,
+    closure: RuntimeCellHandle,
+    new_this: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_closure_bind_this_for_ffi(closure, new_this, context, values)
 }
 
 /// Probes whether a callback value is callable in the shared eval context.
@@ -409,9 +456,8 @@ pub fn execute_reflection_new_object_outcome(
         .into_iter()
         .map(|value| EvaluatedCallArg {
             name: None,
-            value,
+            value: value.borrowed(),
             ref_target: None,
-            owned: false,
         })
         .collect();
     match eval_reflection_owner_new_object(name, evaluated_args, context, values) {
@@ -460,6 +506,23 @@ pub fn eval_unpack_constructor_arg_container(
     Ok(args)
 }
 
+/// Allocates an eval-declared class without its constructor; `None` when this context lacks it.
+pub fn execute_context_try_new_object_without_constructor_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
+    match eval_new_object_without_constructor_result(name, context, values) {
+        Ok(result) => Ok(result.map(EvalOutcome::Value)),
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .map(Some)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
 /// Attempts construction with arguments that may carry PHP named-argument names.
 pub fn execute_context_try_new_object_named_outcome(
     context: &mut ElephcEvalContext,
@@ -471,9 +534,8 @@ pub fn execute_context_try_new_object_named_outcome(
         .into_iter()
         .map(|(name, value)| EvaluatedCallArg {
             name,
-            value,
+            value: value.borrowed(),
             ref_target: None,
-            owned: false,
         })
         .collect::<Vec<_>>();
     match eval_reflection_owner_new_object(name, evaluated_args.clone(), context, values) {
@@ -573,8 +635,8 @@ pub fn execute_context_method_call_outcome(
     let evaluated_args = eval_bridge_positional_args(args, values)?;
     match eval_method_call_result_with_evaluated_args(object, method, evaluated_args, context, values) {
         // `return $this` hands back the receiver cell itself without a retain: the CALL side
-        // compensates, as `eval_method_call_with_temporary_receiver_cleanup` does for interpreted
-        // callers. A compiled caller boxed the receiver just for this call and releases that box
+        // compensates, as the interpreter's own operand handling does for interpreted callers.
+        // A compiled caller boxed the receiver just for this call and releases that box
         // afterwards, so without this retain the fluent `$compiler->write(...)->raw(...)` chain
         // Twig's nodes compile with read a freed cell on its second link.
         Ok(result) if result == object => Ok(EvalOutcome::Value(values.retain(result)?)),
@@ -640,9 +702,8 @@ pub fn execute_context_native_iterator(
     let iterator = values.new_object("ArrayIterator")?;
     let args = vec![EvaluatedCallArg {
         name: None,
-        value: entries,
+        value: entries.borrowed(),
         ref_target: None,
-        owned: false,
     }];
     let constructed = eval_native_constructor_with_evaluated_args(
         "ArrayIterator",
@@ -765,9 +826,8 @@ fn eval_bridge_positional_args(
             // whole array alive once per call. A plain argument is the caller's own box.
             Ok(EvaluatedCallArg {
                 name: None,
-                value,
+                value: if value != marker { value } else { value.borrowed() },
                 ref_target,
-                owned: value != marker,
             })
         })
         .collect()

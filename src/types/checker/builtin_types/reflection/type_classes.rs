@@ -259,6 +259,28 @@ pub(super) fn builtin_reflection_composite_type_string_method(
     append_null: bool,
 ) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
+    let type_name =
+        || method_call_expr(variable_expr("type", dummy_span), "getName", Vec::new(), dummy_span);
+    let mut append_member = reflection_composite_type_append_body(type_name(), separator, dummy_span);
+    if append_null {
+        // php lists `null` among a union's `getTypes()` members, and always renders it last: a
+        // retained `null` member is skipped here and rendered once by the trailing nullability
+        // check, whether or not the producer listed it as a member.
+        append_member = vec![Stmt::new(
+            StmtKind::If {
+                condition: binary_expr(
+                    type_name(),
+                    BinOp::StrictNotEq,
+                    string_lit("null", dummy_span),
+                    dummy_span,
+                ),
+                then_body: append_member,
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            dummy_span,
+        )];
+    }
     let mut body = vec![
         Stmt::new(
             StmtKind::TypedAssign {
@@ -274,16 +296,7 @@ pub(super) fn builtin_reflection_composite_type_string_method(
                 key_var: None,
                 value_var: "type".to_string(),
                 value_by_ref: false,
-                body: reflection_composite_type_append_body(
-                    method_call_expr(
-                        variable_expr("type", dummy_span),
-                        "getName",
-                        Vec::new(),
-                        dummy_span,
-                    ),
-                    separator,
-                    dummy_span,
-                ),
+                body: append_member,
             },
             dummy_span,
         ),

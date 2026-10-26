@@ -611,3 +611,30 @@ EOT
         + "\n";
     assert_eq!(out, expected);
 }
+
+/// `new CallbackFilterIterator(...)` built by the interpreter runs through the class's
+/// `__construct` bridge. Compiled `new` sites build the object inline, so no constructor body was
+/// emitted and the interpreted form was a fatal; Twig's `filter` filter over a `Traversable`
+/// (`form|filter(child => not child.rendered)`) died there, and Symfony's form theme silently
+/// dropped the rows of every compound child (a `RepeatedType`'s two password fields).
+#[test]
+fn test_eval_new_callback_filter_iterator_over_an_aggregate() {
+    let out = compile_and_run(
+        r#"<?php
+$compiled = new CallbackFilterIterator(new ArrayIterator([1]), fn($v) => true);
+eval('
+class EvalCfiAggregate implements IteratorAggregate {
+    public array $children = ["a" => 1, "b" => 2, "c" => 3];
+    public function getIterator(): Iterator { return new ArrayIterator($this->children); }
+}
+function eval_cfi_filter($items, $arrow) {
+    return new \CallbackFilterIterator(new \IteratorIterator($items), $arrow);
+}
+foreach (eval_cfi_filter(new EvalCfiAggregate(), fn($v, $k) => $k !== "b") as $k => $v) {
+    echo $k, "=", $v, ";";
+}
+');
+"#,
+    );
+    assert_eq!(out, "a=1;c=3;");
+}

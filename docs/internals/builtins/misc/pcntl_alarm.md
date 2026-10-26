@@ -1,16 +1,16 @@
 ---
-title: "pcntl_alarm() — internals"
+title: "pcntl_alarm() - internals"
 description: "Compiler internals for pcntl_alarm(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 648
+  order: 668
 ---
 
-## `pcntl_alarm()` — internals
+## `pcntl_alarm()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_alarm.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_alarm.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

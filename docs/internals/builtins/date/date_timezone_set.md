@@ -1,16 +1,16 @@
 ---
-title: "date_timezone_set() — internals"
+title: "date_timezone_set() - internals"
 description: "Compiler internals for date_timezone_set(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 228
+  order: 229
 ---
 
-## `date_timezone_set()` — internals
+## `date_timezone_set()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:966](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L966) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:989](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L989) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

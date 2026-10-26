@@ -212,7 +212,7 @@ fn test_error_extern_callable_requires_literal_function_name() {
     // Verifies that passing a variable string as an extern callback is rejected because it is not a callable descriptor.
     expect_error(
         "<?php extern function signal(int $sig, callable $handler): ptr; function on_signal($sig) {} $fn = \"on_signal\"; signal(15, $fn);",
-        "expects a string literal naming a user function or a callable value",
+        "Extern callable value uses unsupported C callback types; only int, float, bool, ptr, and void are supported",
     );
 }
 

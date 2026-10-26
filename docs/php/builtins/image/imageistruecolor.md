@@ -1,8 +1,8 @@
 ---
 title: "imageistruecolor()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Reports whether an image is truecolor rather than palette-based."
 sidebar:
-  order: 528
+  order: 529
 ---
 
 ## imageistruecolor()
@@ -11,7 +11,7 @@ sidebar:
 function imageistruecolor(mixed $image): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Reports whether an image is truecolor rather than palette-based.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

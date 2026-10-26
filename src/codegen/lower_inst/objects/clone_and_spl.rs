@@ -41,20 +41,20 @@ fn emit_eval_clone_adoption(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let done_label = ctx.next_label("clone_adopt_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_symbol_to_reg(ctx.emitter, "x12", "_elephc_eval_object_clone_fn", 0);
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x12", "_elephc_eval_object_clone_adopt_fn", 0);
             ctx.emitter.instruction(&format!("cbz x12, {}", done_label)); // no bridge hook: the clone is already complete
             ctx.load_value_to_reg(source, "x0")?;
             ctx.load_value_to_reg(result, "x1")?;
-            abi::emit_load_symbol_to_reg(ctx.emitter, "x12", "_elephc_eval_object_clone_fn", 0);
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x12", "_elephc_eval_object_clone_adopt_fn", 0);
             ctx.emitter.instruction("blr x12"); // register the clone with the source's eval class
         }
         Arch::X86_64 => {
-            abi::emit_load_symbol_to_reg(ctx.emitter, "r11", "_elephc_eval_object_clone_fn", 0);
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r11", "_elephc_eval_object_clone_adopt_fn", 0);
             ctx.emitter.instruction("test r11, r11"); // is the bridge hook installed?
             ctx.emitter.instruction(&format!("jz {}", done_label)); // no bridge hook: the clone is already complete
             ctx.load_value_to_reg(source, "rdi")?;
             ctx.load_value_to_reg(result, "rsi")?;
-            abi::emit_load_symbol_to_reg(ctx.emitter, "r11", "_elephc_eval_object_clone_fn", 0);
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r11", "_elephc_eval_object_clone_adopt_fn", 0);
             ctx.emitter.instruction("call r11"); // register the clone with the source's eval class
         }
     }
@@ -277,7 +277,7 @@ fn lower_known_class_object_clone(
         (
             class_info.class_id,
             class_info.properties.len(),
-            class_info.allow_dynamic_properties,
+            class_info.has_property_hash_storage(),
             retained_offsets,
             persisted_offsets,
             owned_reference_property_offsets,
@@ -295,7 +295,7 @@ fn lower_known_class_object_clone(
         property_count,
         allow_dynamic_properties,
         &[],
-        &owned_reference_property_offsets,
+        &[],
     )?;
     ctx.store_result_value(result)?;
     let source_reg = abi::secondary_scratch_reg(ctx.emitter);
@@ -309,6 +309,7 @@ fn lower_known_class_object_clone(
         property_count,
         &retained_offsets,
         &persisted_offsets,
+        &owned_reference_property_offsets,
     );
     if allow_dynamic_properties {
         emit_clone_dynamic_property_hash(
@@ -462,7 +463,7 @@ pub(super) fn lower_callback_filter_iterator_new(
             ctx.module.class_infos.get(class_name).ok_or_else(|| {
                 CodegenIrError::unsupported(format!("unknown class {}", class_name))
             })?;
-        if class_info.allow_dynamic_properties {
+        if class_info.has_property_hash_storage() {
             return Err(CodegenIrError::unsupported(format!(
                 "object allocation requiring dynamic properties for {}",
                 class_name
@@ -484,6 +485,16 @@ pub(super) fn lower_callback_filter_iterator_new(
     };
     let inner_slot = resolve_property_slot_for_class(ctx, class_name, "inner", inst)?;
     let callback_slot = resolve_property_slot_for_class(ctx, class_name, "callback", inst)?;
+    // `$callback` is declared untyped, so its schema default is a boxed null, but its storage is
+    // a callable descriptor (`runtime_property_type_override`). The constructor store below
+    // releases the slot's previous value AS a descriptor, so a boxed null left there was read
+    // past its end and freed through the descriptor path: a crash whenever the bytes after the
+    // box happened to look like a capture table. The allocation's zero word is the descriptor
+    // slot's null, and the store overwrites it at once.
+    let property_defaults = property_defaults
+        .into_iter()
+        .filter(|default| default.offset != callback_slot.offset)
+        .collect::<Vec<_>>();
     emit_object_allocation(
         ctx,
         class_id,

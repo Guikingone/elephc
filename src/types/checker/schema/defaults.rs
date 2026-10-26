@@ -8,6 +8,11 @@
 //! Key details:
 //! - The initial schema pass cannot reliably resolve inheritance or interface relationships.
 //! - Direct scoped-constant declaration defaults and Object-to-Object pairs are revisited.
+//! - Directly declared instance and static property defaults are revisited here too, on the same
+//!   rule: enum cases do not exist while class schemas are built, so `public Level $l =
+//!   Level::Low;` is judged once they do (issue #566). It changes WHEN a default is checked,
+//!   never what counts as compatible — a missing case and an incompatible scalar constant are
+//!   both still rejected, from the pass that can tell them apart.
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};
@@ -144,22 +149,69 @@ fn normalize_signature_default_receivers(
     owner_class: &str,
     parent_class: Option<&str>,
 ) {
-    for default in &mut signature.defaults {
-        let Some(Expr {
-            kind: ExprKind::ScopedConstantAccess { receiver, .. },
-            ..
-        }) = default
-        else {
-            continue;
-        };
-        let resolved = match receiver {
-            StaticReceiver::Named(_) => None,
-            StaticReceiver::Self_ | StaticReceiver::Static => Some(owner_class),
-            StaticReceiver::Parent => parent_class,
-        };
-        if let Some(class_name) = resolved {
-            *receiver = StaticReceiver::Named(Name::from(class_name.to_string()));
+    for default in signature.defaults.iter_mut().flatten() {
+        normalize_default_expr_receivers(default, owner_class, parent_class);
+    }
+}
+
+/// Resolves the relative receivers anywhere inside one constant default expression.
+///
+/// A default is often an expression OVER constants, not one constant: Symfony's
+/// `ReflectionExtractor::__construct(int $magicMethodsFlags = self::ALLOW_MAGIC_GET |
+/// self::ALLOW_MAGIC_SET)`. Only a bare `self::X` was rewritten, so the `|` kept `self`, the
+/// caller lowered it in ITS class, and `new ReflectionExtractor()` in the demo's container threw
+/// `Undefined constant getPropertyAccessorService::ALLOW_MAGIC_GET`.
+fn normalize_default_expr_receivers(
+    expr: &mut Expr,
+    owner_class: &str,
+    parent_class: Option<&str>,
+) {
+    match &mut expr.kind {
+        ExprKind::ScopedConstantAccess { receiver, .. } => {
+            let resolved = match receiver {
+                StaticReceiver::Named(_) => None,
+                StaticReceiver::Self_ | StaticReceiver::Static => Some(owner_class),
+                StaticReceiver::Parent => parent_class,
+            };
+            if let Some(class_name) = resolved {
+                *receiver = StaticReceiver::Named(Name::from(class_name.to_string()));
+            }
         }
+        ExprKind::BinaryOp { left, right, .. } => {
+            normalize_default_expr_receivers(left, owner_class, parent_class);
+            normalize_default_expr_receivers(right, owner_class, parent_class);
+        }
+        ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner) => {
+            normalize_default_expr_receivers(inner, owner_class, parent_class);
+        }
+        ExprKind::Cast { expr: inner, .. } => {
+            normalize_default_expr_receivers(inner, owner_class, parent_class);
+        }
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
+            normalize_default_expr_receivers(value, owner_class, parent_class);
+            normalize_default_expr_receivers(default, owner_class, parent_class);
+        }
+        ExprKind::Ternary { condition, then_expr, else_expr } => {
+            normalize_default_expr_receivers(condition, owner_class, parent_class);
+            normalize_default_expr_receivers(then_expr, owner_class, parent_class);
+            normalize_default_expr_receivers(else_expr, owner_class, parent_class);
+        }
+        ExprKind::ArrayLiteral(items) => {
+            for item in items {
+                normalize_default_expr_receivers(item, owner_class, parent_class);
+            }
+        }
+        ExprKind::ArrayLiteralAssoc(entries) => {
+            for (key, value) in entries {
+                normalize_default_expr_receivers(key, owner_class, parent_class);
+                normalize_default_expr_receivers(value, owner_class, parent_class);
+            }
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            normalize_default_expr_receivers(array, owner_class, parent_class);
+            normalize_default_expr_receivers(index, owner_class, parent_class);
+        }
+        _ => {}
     }
 }
 
@@ -168,7 +220,10 @@ fn validate_class_defaults(checker: &mut Checker, class_name: &str, errors: &mut
     let Some(class_info) = checker.classes.get(class_name).cloned() else {
         return;
     };
+    // A property default resolves `self::` against its own class, as a parameter default does.
+    let previous_class = checker.current_class.replace(class_name.to_string());
     validate_class_property_defaults(checker, class_name, &class_info, errors);
+    checker.current_class = previous_class;
 
     for method in &class_info.method_decls {
         let method_key = php_symbol_key(&method.name);
@@ -209,21 +264,7 @@ fn validate_class_property_defaults(
         let Some(default) = class_info.defaults.get(index).and_then(Option::as_ref) else {
             continue;
         };
-        if matches!(default.kind, ExprKind::ScopedConstantAccess { .. }) {
-            let previous_class = checker.current_class.replace(class_name.to_string());
-            let result = checker.validate_resolved_declared_default_type(
-                expected_ty,
-                Some(default),
-                default.span,
-                &format!("Property {}::${} default", class_name, property_name),
-            );
-            checker.current_class = previous_class;
-            if let Err(error) = result {
-                errors.extend(error.flatten());
-            }
-            continue;
-        }
-        validate_object_default(
+        validate_deferred_default(
             checker,
             expected_ty,
             default,
@@ -250,21 +291,7 @@ fn validate_class_property_defaults(
         else {
             continue;
         };
-        if matches!(default.kind, ExprKind::ScopedConstantAccess { .. }) {
-            let previous_class = checker.current_class.replace(class_name.to_string());
-            let result = checker.validate_resolved_declared_default_type(
-                expected_ty,
-                Some(default),
-                default.span,
-                &format!("Static property {}::${} default", class_name, property_name),
-            );
-            checker.current_class = previous_class;
-            if let Err(error) = result {
-                errors.extend(error.flatten());
-            }
-            continue;
-        }
-        validate_object_default(
+        validate_deferred_default(
             checker,
             expected_ty,
             default,
@@ -301,7 +328,7 @@ fn validate_signature_deferred_defaults(
         let Some(default) = default.as_ref() else {
             continue;
         };
-        validate_deferred_parameter_default(
+        validate_deferred_default(
             checker,
             expected_ty,
             default,
@@ -313,7 +340,11 @@ fn validate_signature_deferred_defaults(
 }
 
 /// Resolves a direct scoped-constant default semantically, or rechecks a deferred object pair.
-fn validate_deferred_parameter_default(
+///
+/// Shared by parameters and by directly declared properties: both defer a scoped constant at
+/// schema time, for the same reason — enum cases and class constants do not exist yet — so both
+/// have to be resolved here, where they do (issue #566).
+fn validate_deferred_default(
     checker: &mut Checker,
     expected_ty: &PhpType,
     default: &Expr,

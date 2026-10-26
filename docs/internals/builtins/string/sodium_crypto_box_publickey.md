@@ -1,11 +1,11 @@
 ---
-title: "sodium_crypto_box_publickey() — internals"
+title: "sodium_crypto_box_publickey() - internals"
 description: "Compiler internals for sodium_crypto_box_publickey(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 865
+  order: 958
 ---
 
-## `sodium_crypto_box_publickey()` — internals
+## `sodium_crypto_box_publickey()` - internals
 
 ## Where it lives
 

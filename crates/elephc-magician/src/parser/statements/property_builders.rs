@@ -212,10 +212,61 @@ pub(super) fn property_array_set_stmt(
     }
 }
 
+/// Returns whether an attribute argument is a constant expression reflection can evaluate later.
+///
+/// php accepts only constant expressions as attribute arguments (a variable or a call is a
+/// compile-time error), so only those are kept as `EvalAttributeArg::Expr`; anything else leaves
+/// the attribute's arguments unsupported, as before. `new` is excluded too: it yields an object,
+/// which has no attribute-literal form.
+pub(super) fn eval_attribute_expr_is_constant(expr: &EvalExpr) -> bool {
+    match expr {
+        EvalExpr::Const(_)
+        | EvalExpr::ConstFetch(_)
+        | EvalExpr::NamespacedConstFetch { .. }
+        | EvalExpr::ClassConstantFetch { .. }
+        | EvalExpr::ClassNameFetch { .. }
+        | EvalExpr::Magic(_) => true,
+        EvalExpr::Unary { expr, .. } | EvalExpr::Cast { expr, .. } => {
+            eval_attribute_expr_is_constant(expr)
+        }
+        EvalExpr::Binary { left, right, .. } => {
+            eval_attribute_expr_is_constant(left) && eval_attribute_expr_is_constant(right)
+        }
+        EvalExpr::Ternary {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            eval_attribute_expr_is_constant(condition)
+                && then_branch
+                    .as_deref()
+                    .is_none_or(eval_attribute_expr_is_constant)
+                && eval_attribute_expr_is_constant(else_branch)
+        }
+        EvalExpr::NullCoalesce { value, default } => {
+            eval_attribute_expr_is_constant(value) && eval_attribute_expr_is_constant(default)
+        }
+        EvalExpr::ArrayGet { array, index } => {
+            eval_attribute_expr_is_constant(array) && eval_attribute_expr_is_constant(index)
+        }
+        EvalExpr::Array(elements) => elements.iter().all(|element| match element {
+            EvalArrayElement::Value(value) | EvalArrayElement::Spread(value) => {
+                eval_attribute_expr_is_constant(value)
+            }
+            EvalArrayElement::KeyValue { key, value } => {
+                eval_attribute_expr_is_constant(key) && eval_attribute_expr_is_constant(value)
+            }
+            EvalArrayElement::Reference(_) | EvalArrayElement::KeyReference { .. } => false,
+        }),
+        _ => false,
+    }
+}
+
 /// Converts a parsed attribute argument expression into retained literal metadata.
 pub(super) fn eval_attribute_arg_from_expr(expr: &EvalExpr) -> Option<EvalAttributeArg> {
     match expr {
         EvalExpr::Const(EvalConst::String(value)) => Some(EvalAttributeArg::String(value.clone())),
+        EvalExpr::Const(EvalConst::Bytes(value)) => Some(EvalAttributeArg::Bytes(value.clone())),
         EvalExpr::Const(EvalConst::Int(value)) => Some(EvalAttributeArg::Int(*value)),
         EvalExpr::Const(EvalConst::Float(value)) => Some(EvalAttributeArg::Float(value.to_bits())),
         EvalExpr::Const(EvalConst::Bool(value)) => Some(EvalAttributeArg::Bool(*value)),
@@ -296,8 +347,7 @@ pub(super) fn eval_attribute_array_arg_from_elements(
                 let value = eval_attribute_arg_from_expr(value)?;
                 eval_attribute_array_keyed_arg(key, value)
             }
-            // An attribute argument is retained metadata, and a spread is not a literal.
-            EvalArrayElement::KeyReference { .. } | EvalArrayElement::Spread(_) => None,
+            EvalArrayElement::KeyReference { .. } => None,
         })
         .collect::<Option<Vec<_>>>()
         .map(EvalAttributeArg::Array)

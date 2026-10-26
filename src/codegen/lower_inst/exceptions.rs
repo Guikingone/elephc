@@ -34,12 +34,12 @@ use super::super::context::FunctionContext;
 use super::super::Result;
 
 /// Throws a catchable PHP `Error` carrying a static message.
-pub(super) fn emit_error(ctx: &mut FunctionContext<'_>, message: &str) {
+pub(in crate::codegen) fn emit_error(ctx: &mut FunctionContext<'_>, message: &str) {
     emit_static_exception(ctx, "Error", "_spl_error_class_id", message);
 }
 
 /// Throws a catchable PHP `TypeError` carrying a static message.
-pub(super) fn emit_type_error(ctx: &mut FunctionContext<'_>, message: &str) {
+pub(in crate::codegen) fn emit_type_error(ctx: &mut FunctionContext<'_>, message: &str) {
     emit_static_exception(ctx, "TypeError", "_spl_type_error_class_id", message);
 }
 
@@ -381,12 +381,19 @@ fn emit_static_exception_at(
     // values below differ. They become one interned record and the site becomes its address plus
     // a call — `--counters` and `--instrument` keep the inlined form, and are what still tests it.
     if let Some(helper) = crate::codegen::shared_static_throw::shared_throw_label(ctx) {
+        let record_line = if location.is_none()
+            && crate::codegen::shared_static_throw::raises_on_calling_site(ctx)
+        {
+            crate::codegen::shared_static_throw::LINE_OF_CALLING_SITE
+        } else {
+            creation_line
+        };
         let record = crate::codegen::shared_static_throw::throw_descriptor(
             ctx.data,
             class_id_symbol,
             &message_label,
             message_len,
-            creation_line,
+            record_line,
             &fatal_label,
             fatal_len,
             crate::codegen::shared_static_throw::REPORT_UNCAUGHT,

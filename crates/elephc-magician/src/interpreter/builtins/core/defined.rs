@@ -56,7 +56,10 @@ fn eval_defined_name(
     if let Some((class_name, constant)) = name.split_once("::") {
         return eval_defined_class_constant(class_name, constant, context, values);
     }
-    Ok(eval_predefined_constant_value(&name).is_some() || context.has_constant(&name))
+    Ok(context.has_native_global_constant(&name)
+        || context.has_native_user_constant(&name)
+        || eval_predefined_constant_value(&name).is_some()
+        || context.has_constant(&name))
 }
 
 /// Answers `defined('Class::CONST')`.

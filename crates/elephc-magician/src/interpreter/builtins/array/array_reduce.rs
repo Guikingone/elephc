@@ -28,15 +28,30 @@ pub(in crate::interpreter) fn eval_array_reduce_declared_call(
 /// Dispatches evaluated-argument eval calls for the `array_reduce` array builtin.
 pub(in crate::interpreter) fn eval_array_reduce_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
         [array, callback] => {
             let initial = values.null()?;
-            eval_array_reduce_result(*array, *callback, initial, context, values)
+            eval_array_reduce_result_from_scope(
+                *array,
+                *callback,
+                initial,
+                lexical_scope,
+                context,
+                values,
+            )
         }
-        [array, callback, initial] => eval_array_reduce_result(*array, *callback, *initial, context, values),
+        [array, callback, initial] => eval_array_reduce_result_from_scope(
+            *array,
+            *callback,
+            *initial,
+            lexical_scope,
+            context,
+            values,
+        ),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -65,17 +80,6 @@ pub(in crate::interpreter) fn eval_builtin_array_reduce(
     eval_array_reduce_result_from_scope(array, callback, initial, Some(scope), context, values)
 }
 
-/// Reduces one eval array by invoking a callable with carry and item cells.
-pub(in crate::interpreter) fn eval_array_reduce_result(
-    array: RuntimeCellHandle,
-    callback: RuntimeCellHandle,
-    initial: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_array_reduce_result_from_scope(array, callback, initial, None, context, values)
-}
-
 /// Reduces one eval array with optional lexical scope for callback names.
 fn eval_array_reduce_result_from_scope(
     array: RuntimeCellHandle,
@@ -85,14 +89,30 @@ fn eval_array_reduce_result_from_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
-    let len = values.array_len(array)?;
-    let mut carry = initial;
-    for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        carry =
-            eval_evaluated_callable_with_values(&callback, vec![carry, value], context, values)?;
-    }
-    Ok(carry)
+    // A callable array's receiver read (`[$object, 'method']`) is an owner the dispatch
+    // borrows for the whole walk; it is released once, after the last callback.
+    let (callback, callback_receiver) =
+        eval_callable_for_probe(callback, context, lexical_scope, values)?;
+    let result = (|| -> Result<RuntimeCellHandle, EvalStatus> {
+        let len = values.array_len(array)?;
+        let mut carry = initial;
+        let mut carry_owned = false;
+        for position in 0..len {
+            let key = values.array_iter_key(array, position)?;
+            let value = values.array_get(array, key)?;
+            values.release(key)?;
+            let next =
+                eval_evaluated_callable_with_values(&callback, vec![carry, value], context, values)?;
+            values.release(value)?;
+            // Each callback result is owned here, even when it is the very cell it was handed; the
+            // previous one is replaced. `initial` is the caller's argument and stays the caller's.
+            if carry_owned {
+                values.release(carry)?;
+            }
+            carry = next;
+            carry_owned = true;
+        }
+        Ok(carry)
+    })();
+    eval_release_callable_receiver(result, callback_receiver, values)
 }

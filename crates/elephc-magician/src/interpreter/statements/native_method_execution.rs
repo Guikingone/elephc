@@ -31,6 +31,64 @@ fn eval_push_native_call_frame(
     true
 }
 
+/// Calls one generated/AOT instance method from already evaluated positional values.
+///
+/// Internal eval operations still have to pass through the native argument binder. The binder
+/// materializes compiler-internal physical slots, including the hidden argument collector, while
+/// keeping the supplied runtime values borrowed from their caller.
+pub(in crate::interpreter) fn eval_native_method_with_positional_values(
+    object: RuntimeCellHandle,
+    method_name: &str,
+    values_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let class_name = eval_runtime_object_class_name(object, values)?;
+    eval_native_method_with_evaluated_args(
+        object,
+        &class_name,
+        method_name,
+        positional_native_method_args(values_args),
+        context,
+        values,
+    )
+}
+
+/// Calls one generated/AOT method from positional values and a prevalidated bridge scope.
+pub(in crate::interpreter) fn eval_native_method_with_positional_values_unchecked_bridge_scope(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    method_name: &str,
+    values_args: Vec<RuntimeCellHandle>,
+    bridge_scope: Option<&str>,
+    called_class_scope: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_native_method_with_evaluated_args_unchecked_bridge_scope(
+        object,
+        class_name,
+        method_name,
+        positional_native_method_args(values_args),
+        bridge_scope,
+        called_class_scope,
+        context,
+        values,
+    )
+}
+
+/// Wraps already evaluated positional values for native signature binding.
+fn positional_native_method_args(values: Vec<RuntimeCellHandle>) -> Vec<EvaluatedCallArg> {
+    values
+        .into_iter()
+        .map(|value| EvaluatedCallArg {
+            name: None,
+            value,
+            ref_target: None,
+        })
+        .collect()
+}
+
 /// Calls one generated/AOT instance method after native signature binding.
 pub(in crate::interpreter) fn eval_native_method_with_evaluated_args(
     object: RuntimeCellHandle,
@@ -227,6 +285,34 @@ pub(in crate::interpreter) fn eval_native_method_with_evaluated_args_for_call_us
     )
 }
 
+/// Whether `object`'s class has no method of this name at all, asked the way `method_exists()` asks.
+///
+/// A failed question counts as "not absent", so only a method php would also call undefined
+/// turns the helper's bare failure into an `Error`.
+fn eval_native_method_is_absent(
+    object: RuntimeCellHandle,
+    method_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> bool {
+    let Ok(name) = values.string(method_name) else {
+        return false;
+    };
+    let exists = crate::interpreter::eval_member_exists_result(
+        "method_exists",
+        &[object, name],
+        context,
+        values,
+    );
+    let _ = values.release(name);
+    let Ok(exists) = exists else {
+        return false;
+    };
+    let absent = values.truthy(exists).is_ok_and(|exists| !exists);
+    let _ = values.release(exists);
+    absent
+}
+
 /// Calls one generated/AOT instance method with a selected by-reference binding mode.
 pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with_ref_mode(
     object: RuntimeCellHandle,
@@ -267,20 +353,22 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
         &arg_values,
         context,
     );
-    let call_result = if let Some(scope) = bridge_scope {
-        eval_native_method_call_with_scope_out(
-            scope,
-            called_class_scope,
-            object,
-            method_name,
-            arg_values,
-            &mut result,
-            context,
-            values,
-        )
-    } else {
-        values.method_call_out(object, method_name, arg_values, &mut result)
-    };
+    let call_result = context.with_eval_global_sync(|context| {
+        if let Some(scope) = bridge_scope {
+            eval_native_method_call_with_scope_out(
+                scope,
+                called_class_scope,
+                object,
+                method_name,
+                arg_values,
+                &mut result,
+                context,
+                values,
+            )
+        } else {
+            values.method_call_out(object, method_name, arg_values, &mut result)
+        }
+    });
     if pushed_frame {
         context.pop_call_frame();
     }
@@ -289,17 +377,7 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
     } else {
         Ok(())
     };
-    let released = release_owned_bound_args(
-        &bound_args,
-        call_result.is_ok().then_some(result),
-        context,
-        values,
-    );
-    let writeback = match (writeback, released) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
-        (Ok(()), Ok(())) => Ok(()),
-    };
-    match (call_result, writeback) {
+    let result = match (call_result, writeback) {
         (Err(status), _) => {
             if crate::eval_trace::enabled() {
                 eprintln!(
@@ -307,39 +385,48 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
                     context.current_class_scope(),
                 );
             }
-            Err(status)
+            // The generated method helper answers a name the object's class lacks with a bare
+            // failure and no pending throwable, which surfaced as an uncatchable fatal. php
+            // raises a catchable `Error` there, and `try { $o->nope(); } catch (Error $e)` in
+            // interpreted code depends on it (Laravel's console probes models this way).
+            if status == EvalStatus::RuntimeFatal
+                && eval_native_method_is_absent(object, method_name, context, values)
+            {
+                eval_throw_undefined_method_call_error(class_name, method_name, context, values)
+            } else {
+                Err(status)
+            }
         }
-        (_, Err(status)) => {
+        (Ok(()), Err(status)) => {
             if crate::eval_trace::enabled() {
                 eprintln!(
                     "[elephc-eval-trace] phase=native_method_error stage=writeback class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
                     context.current_class_scope(),
                 );
             }
+            let _ = release_expr_result(result, context, values);
             Err(status)
         }
         (Ok(()), Ok(())) => {
             if crate::eval_trace::enabled() {
                 let result_ptr = result.as_ptr();
                 // This block used to read three words straight through the handle and aborted the
-                // whole process — a non-unwinding panic, SIGABRT with no backtrace and no
+                // whole process -- a non-unwinding panic, SIGABRT with no backtrace and no
                 // `test result:` line, so it read as an infrastructure failure rather than as one
                 // bad read. It fired only with the trace ON.
                 //
                 // The handle is not always a cell pointer. `RuntimeValueOps` has two
                 // implementations, and the test harness mints handles from indices, so its
-                // `as_ptr()` yields values like `0x1`: not null, not aligned, not readable. Three
-                // symptoms in that order — a null check alone still aborted on the alignment
-                // precondition, and bypassing that segfaulted. Only the implementation that owns
-                // the representation may look, so the peek is a trait method whose default is
-                // `None`.
+                // `as_ptr()` yields values like `0x1`: not null, not aligned, not readable. Only
+                // the implementation that owns the representation may look, so the peek is a trait
+                // method whose default is `None`.
                 let words = values.trace_result_words(result);
                 let tag = values.type_tag(result);
                 let object_refs = matches!(tag, Ok(EVAL_TAG_OBJECT)).then(|| {
                     let object_ptr = words.map_or(std::ptr::null(), |w| w[1] as *const u8);
                     // Kept as a braceless closure body on purpose: wrapping it in `{ }` makes
-                    // `unsafe { … }` a STATEMENT, and the `&` that follows is then parsed as a
-                    // reference rather than a bitwise and — `expected (), found u32`.
+                    // `unsafe { ... }` a STATEMENT, and the `&` that follows is then parsed as a
+                    // reference rather than a bitwise and -- `expected (), found u32`.
                     (!object_ptr.is_null())
                         .then(|| unsafe { object_ptr.sub(12).cast::<u32>().read_unaligned() } & 0x7fff_ffff)
                 });
@@ -359,17 +446,18 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
                 context,
                 values,
             )
+            .map_err(|status| {
+                if crate::eval_trace::enabled() {
+                    eprintln!(
+                        "[elephc-eval-trace] phase=native_method_error stage=return_value class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
+                        context.current_class_scope(),
+                    );
+                }
+                status
+            })
         }
-        .map_err(|status| {
-            if crate::eval_trace::enabled() {
-                eprintln!(
-                    "[elephc-eval-trace] phase=native_method_error stage=return_value class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
-                    context.current_class_scope(),
-                );
-            }
-            status
-        }),
-    }
+    };
+    finish_native_bound_call(result, &bound_args, context, values)
 }
 
 /// Calls one generated/AOT static method after native signature binding.
@@ -453,25 +541,6 @@ pub(super) fn eval_native_static_method_with_evaluated_args_bridge_scope(
         evaluated_args,
         resolved_bridge_scope.as_deref(),
         called_class_scope,
-        context,
-        values,
-    )
-}
-
-/// Calls one generated/AOT static method without enforcing member visibility.
-pub(super) fn eval_native_static_method_with_evaluated_args_unchecked(
-    class_name: &str,
-    method_name: &str,
-    evaluated_args: Vec<EvaluatedCallArg>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_native_static_method_with_evaluated_args_unchecked_bridge_scope(
-        class_name,
-        method_name,
-        evaluated_args,
-        None,
-        None,
         context,
         values,
     )
@@ -608,11 +677,13 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
     } else {
         Ok(())
     };
-    let released =
-        release_owned_bound_args(&bound_args, result.as_ref().ok().copied(), context, values);
-    match (result, writeback, released) {
-        (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
-        (Ok(result), Ok(()), Ok(())) => eval_declared_native_return_value(
+    let result = match (result, writeback) {
+        (Ok(result), Err(status)) => {
+            let _ = release_expr_result(result, context, values);
+            Err(status)
+        }
+        (Err(status), _) => Err(status),
+        (Ok(result), Ok(())) => eval_declared_native_return_value(
             return_type.as_ref(),
             Some(signature_owner),
             called_class_scope.or(Some(class_name)),
@@ -620,7 +691,8 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
             context,
             values,
         ),
-    }
+    };
+    finish_native_bound_call(result, &bound_args, context, values)
 }
 
 /// Returns whether a generated/AOT class has an instance `__call()` fallback.

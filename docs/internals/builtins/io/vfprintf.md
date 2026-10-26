@@ -1,16 +1,16 @@
 ---
-title: "vfprintf() — internals"
+title: "vfprintf() - internals"
 description: "Compiler internals for vfprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 412
+  order: 413
 ---
 
-## `vfprintf()` — internals
+## `vfprintf()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/vfprintf.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/vfprintf.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

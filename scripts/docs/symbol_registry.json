@@ -4517,6 +4517,150 @@
       },
       "extension": false,
       "internal": false,
+      "module": "standard",
+      "name": "CREDITS_ALL",
+      "route": "predefined",
+      "since": null,
+      "value": 4294967295
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "CREDITS_DOCS",
+      "route": "predefined",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "CREDITS_FULLPAGE",
+      "route": "predefined",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "CREDITS_GENERAL",
+      "route": "predefined",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "CREDITS_GROUP",
+      "route": "predefined",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "CREDITS_MODULES",
+      "route": "predefined",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "CREDITS_QA",
+      "route": "predefined",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "CREDITS_SAPI",
+      "route": "predefined",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
       "module": "curl",
       "name": "CURLALTSVC_H1",
       "route": "predefined",
@@ -17573,7 +17717,9 @@
       "name": "E_ALL",
       "route": "predefined",
       "since": null,
-      "value": 32767
+      "value": {
+        "target_dependent": "int"
+      }
     },
     {
       "aot": {
@@ -20208,6 +20354,150 @@
       "extension": false,
       "internal": false,
       "module": "standard",
+      "name": "INFO_ALL",
+      "route": "predefined",
+      "since": null,
+      "value": 4294967295
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "INFO_CONFIGURATION",
+      "route": "predefined",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "INFO_CREDITS",
+      "route": "predefined",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "INFO_ENVIRONMENT",
+      "route": "predefined",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "INFO_GENERAL",
+      "route": "predefined",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "INFO_LICENSE",
+      "route": "predefined",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "INFO_MODULES",
+      "route": "predefined",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "INFO_VARIABLES",
+      "route": "predefined",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
       "name": "INI_SCANNER_NORMAL",
       "route": "predefined",
       "since": null,
@@ -21795,6 +22085,24 @@
     },
     {
       "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mbstring",
+      "name": "MB_ONIGURUMA_VERSION",
+      "route": "predefined",
+      "since": null,
+      "value": "6.9.10"
+    },
+    {
+      "aot": {
         "kind": "prelude",
         "supported": true
       },
@@ -23270,6 +23578,26 @@
       "route": "predefined",
       "since": null,
       "value": 8
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PATH_SEPARATOR",
+      "route": "predefined",
+      "since": null,
+      "value": {
+        "target_dependent": "str"
+      }
     },
     {
       "aot": {
@@ -25230,6 +25558,114 @@
       "extension": false,
       "internal": false,
       "module": "standard",
+      "name": "STREAM_CRYPTO_METHOD_SSLv23_CLIENT",
+      "route": "predefined",
+      "since": null,
+      "value": 57
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_METHOD_SSLv23_SERVER",
+      "route": "predefined",
+      "since": null,
+      "value": 120
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_METHOD_SSLv2_CLIENT",
+      "route": "predefined",
+      "since": null,
+      "value": 3
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_METHOD_SSLv2_SERVER",
+      "route": "predefined",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_METHOD_SSLv3_CLIENT",
+      "route": "predefined",
+      "since": null,
+      "value": 5
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_METHOD_SSLv3_SERVER",
+      "route": "predefined",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
       "name": "STREAM_CRYPTO_METHOD_TLS_CLIENT",
       "route": "predefined",
       "since": null,
@@ -25252,6 +25688,240 @@
       "route": "predefined",
       "since": null,
       "value": 120
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT",
+      "route": "predefined",
+      "since": null,
+      "value": 9
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_METHOD_TLSv1_0_SERVER",
+      "route": "predefined",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT",
+      "route": "predefined",
+      "since": null,
+      "value": 17
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_METHOD_TLSv1_1_SERVER",
+      "route": "predefined",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT",
+      "route": "predefined",
+      "since": null,
+      "value": 33
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_METHOD_TLSv1_2_SERVER",
+      "route": "predefined",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT",
+      "route": "predefined",
+      "since": null,
+      "value": 65
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_METHOD_TLSv1_3_SERVER",
+      "route": "predefined",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_PROTO_SSLv3",
+      "route": "predefined",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_PROTO_TLSv1_0",
+      "route": "predefined",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_PROTO_TLSv1_1",
+      "route": "predefined",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_PROTO_TLSv1_2",
+      "route": "predefined",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_PROTO_TLSv1_3",
+      "route": "predefined",
+      "since": null,
+      "value": 64
     },
     {
       "aot": {
@@ -26962,6 +27632,42 @@
       "route": "predefined",
       "since": null,
       "value": "libxml"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "core",
+      "name": "ZEND_DEBUG_BUILD",
+      "route": "predefined",
+      "since": null,
+      "value": false
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "core",
+      "name": "ZEND_THREAD_SAFE",
+      "route": "predefined",
+      "since": null,
+      "value": false
     }
   ]
 }

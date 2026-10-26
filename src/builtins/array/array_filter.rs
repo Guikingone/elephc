@@ -1,105 +1,57 @@
 //! Purpose:
-//! Home of the PHP `array_filter` builtin: its single-source registry declaration and semantic target.
+//! Declares the AOT array_filter binding and contextual predicate validation.
 //!
 //! Called from:
-//! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
+//! - The shared builtin registry's checker, EIR and callable consumers.
 //!
 //! Key details:
 //! - The PHP golden signature is `optional(&["array","callback","mode"], 1, &[null, 0])`.
-//! - `check` validates the first argument is an array, derives callback argument types from the
-//!   static mode value, and validates a non-null callback signature. Omitting the callback, or
-//!   passing `null`, selects PHP truthiness filtering. The return type preserves the input
-//!   container shape and element metadata.
+//! - Omitted/null callbacks remove empty values; filtering preserves PHP keys and value types.
+//! - Result storage is boxed because indexed inputs may acquire holes or retain string keys.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::builtins::semantics::{
-    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
-};
+use crate::builtins::semantics::{BuiltinArgumentLowering, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics};
 use crate::errors::CompileError;
+use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
     contract: "array_filter",
     check: check,
-    semantics: array_filter_semantics(),
+    lazy_check: true,
+    semantics: semantics(),
 }
 
-/// Builds semantics whose storage result follows the source container representation.
-const fn array_filter_semantics() -> BuiltinSemantics {
-    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayFilter);
+/// Keeps direct, synthetic and callable filter results on the same boxed PHP-array ABI.
+const fn semantics() -> BuiltinSemantics {
+    let mut semantics = crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayFilter);
+    semantics.argument_lowering = BuiltinArgumentLowering::MaterializeDefaults;
     semantics.result_type = BuiltinResultType::Shared(eir_result_type);
     semantics
 }
 
-/// Returns a boxed result for gradual sources and preserves concrete array metadata.
-fn eir_result_type(input: &BuiltinSemanticInput<'_>) -> PhpType {
-    match input.arg_types.first().map(PhpType::codegen_repr) {
-        Some(PhpType::Array(elem)) => PhpType::Array(elem),
-        Some(PhpType::AssocArray { key, value }) => PhpType::AssocArray { key, value },
-        _ => PhpType::Mixed,
-    }
+/// Filtering may retain either integer or string keys, regardless of the input's physical layout.
+fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
+    PhpType::php_array()
 }
 
-/// Returns the filtered array type for an `array_filter` call.
-///
-/// Validates the first argument is an array, derives callback argument types
-/// from the optional mode argument, and validates a non-null callback. Arity is
-/// pre-validated by the registry.
+/// Validates array storage and callback context while leaving dynamic mode dispatch to the runtime.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    let array = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    if !matches!(array.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)) {
+        return Err(CompileError::new(cx.span, "array_filter() first argument must be array"));
+    }
     if let Some(mode) = cx.args.get(2) {
-        cx.checker.infer_type(mode, cx.env)?;
-    }
-    match arr_ty {
-        arr_ty @ PhpType::Array(_) | arr_ty @ PhpType::AssocArray { .. } => {
-            if let Some(callback) = cx.args.get(1) {
-                if !matches!(callback.kind, crate::parser::ast::ExprKind::Null) {
-                    let callback_arg_types =
-                        crate::types::checker::builtins::array_filter_callback_arg_types(
-                            &arr_ty,
-                            cx.args.get(2),
-                        );
-                    crate::types::checker::builtins::check_array_callback_builtin_call(
-                        cx.checker,
-                        callback,
-                        &callback_arg_types,
-                        cx.span,
-                        cx.env,
-                        "array_filter() callback",
-                    )?;
-                }
-            }
-            // A callback that is only a boxed value at run time is answered by
-            // `__elephc_array_filter_callback`, whose result is the key-preserving HASH php's own
-            // `array_filter` produces. The redirect in `compat_preludes` tests the same shape, and
-            // the two must agree or the call site reads the helper's result as its own.
-            if callback_is_gradual(cx)? {
-                return Ok(PhpType::AssocArray {
-                    key: Box::new(PhpType::Mixed),
-                    value: Box::new(PhpType::Mixed),
-                });
-            }
-            Ok(arr_ty)
+        let ty = cx.checker.infer_type(mode, cx.env)?;
+        if !matches!(ty.codegen_repr(), PhpType::Int | PhpType::Bool) {
+            return Err(CompileError::new(mode.span, "array_filter() third argument must be int"));
         }
-        PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
-        _ => Err(CompileError::new(
-            cx.span,
-            "array_filter() first argument must be array",
-        )),
     }
+    if cx.args.get(1).is_none_or(|callback| matches!(callback.kind, ExprKind::Null)) {
+        return Ok(PhpType::php_array());
+    }
+    let types = crate::types::checker::builtins::array_filter_callback_arg_types(&array, cx.args.get(2));
+    super::predicate::check_callback(cx, &types)?;
+    Ok(PhpType::php_array())
 }
 
-/// Returns whether the callback argument is a value the backend cannot bind statically.
-fn callback_is_gradual(cx: &mut BuiltinCheckCtx) -> Result<bool, CompileError> {
-    let Some(callback) = cx.args.get(1).cloned() else {
-        return Ok(false);
-    };
-    if matches!(callback.kind, crate::parser::ast::ExprKind::Null) {
-        return Ok(false);
-    }
-    let callback_ty = cx.checker.infer_type(&callback, cx.env)?;
-    Ok(matches!(
-        callback_ty.codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    ))
-}

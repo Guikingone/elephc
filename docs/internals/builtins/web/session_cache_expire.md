@@ -1,16 +1,16 @@
 ---
-title: "session_cache_expire() — internals"
+title: "session_cache_expire() - internals"
 description: "Compiler internals for session_cache_expire(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 952
+  order: 1043
 ---
 
-## `session_cache_expire()` — internals
+## `session_cache_expire()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3425](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3425) (`session_cache_expire`)
+- **Lowering**: [`src/web_prelude/build.rs`:3598](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3598) (`session_cache_expire`)
 - **Function symbol**: `session_cache_expire()`
 
 
@@ -38,7 +38,7 @@ function session_cache_expire(?int $value = null): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

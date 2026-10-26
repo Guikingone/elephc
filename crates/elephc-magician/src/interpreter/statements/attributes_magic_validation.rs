@@ -246,6 +246,15 @@ pub(super) fn validate_eval_override_attribute(
         // absent method of a compiled parent proves nothing, so the attribute is accepted, as
         // the signature check beside it already does.
         Ok(())
+    } else if class
+        .interfaces()
+        .iter()
+        .any(|interface| !context.has_interface(interface))
+    {
+        // The same holds for a COMPILED interface: Laravel's `Collection::groupBy()` carries
+        // `#[\Override]` for `Enumerable::groupBy()`, the compiled `Enumerable` did not list it,
+        // and an interpreted `Collection` could not be declared at all.
+        Ok(())
     } else {
         Err(EvalStatus::RuntimeFatal)
     }

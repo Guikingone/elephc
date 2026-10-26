@@ -360,13 +360,20 @@ fn ensure_eval_traits_available(
         if context.trait_decl(trait_name).is_some() {
             continue;
         }
-        crate::interpreter::eval_spl_autoload_classlike_definition(
-            trait_name,
-            context,
-            values,
-        )?;
-        #[cfg(not(test))]
-        context.sync_global_eval_classes();
+        // A trait the compiled world has was declared from a file the compiler included, and
+        // the include the autoloader performs for it is skipped on that mark (see the retry
+        // below): the ordinary round can never produce the declaration, so it is skipped
+        // rather than paid -- a Composer `loadClass` and a bridge include per trait per request.
+        let compiled = values.trait_exists(trait_name)?;
+        if !compiled {
+            crate::interpreter::eval_spl_autoload_classlike_definition(
+                trait_name,
+                context,
+                values,
+            )?;
+            #[cfg(not(test))]
+            context.sync_global_eval_classes();
+        }
         if context.trait_decl(trait_name).is_none() {
             // The autoloader ran and the trait is still not here, which for a compiled program has
             // ONE ordinary cause: the compiler already included the trait's file, so the include
@@ -673,8 +680,23 @@ pub(super) fn append_eval_trait_methods(
             &method,
             trait_adaptations,
         );
-        if !trait_method_names.insert(key) {
-            return Err(EvalStatus::RuntimeFatal);
+        if !trait_method_names.insert(key.clone()) {
+            // An ABSTRACT trait method is a requirement, not a body: it never collides with a
+            // concrete one of the same name from another trait, in either order. symfony's
+            // `CurlResponse` uses `CommonResponseTrait` (abstract `close()`) and
+            // `TransportResponseTrait` (concrete `close()`); refusing the pair left the class
+            // undeclared and the Symfony demo dead at boot.
+            let existing = methods
+                .iter()
+                .position(|candidate| candidate.name().eq_ignore_ascii_case(&key));
+            match existing {
+                _ if method.is_abstract() => continue,
+                Some(index) if methods[index].is_abstract() => {
+                    methods[index] = method;
+                    continue;
+                }
+                _ => return Err(EvalStatus::RuntimeFatal),
+            }
         }
         methods.push(method);
     }

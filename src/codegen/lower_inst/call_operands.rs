@@ -47,6 +47,11 @@ pub(in crate::codegen) fn emit_mixed_string_for_persistent_store(ctx: &mut Funct
             ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the generic cast path after the direct string persist
             ctx.emitter.label(&non_string);
             abi::emit_pop_reg(ctx.emitter, mixed_arg);
+            // `__rt_mixed_cast_string` unboxes from the int RESULT register, which the probing
+            // `__rt_mixed_unbox` above overwrote with the runtime tag. Without restoring the
+            // boxed pointer the cast reads a tag as a Mixed cell and every non-string value
+            // lands in the destination as an empty string.
+            ctx.emitter.instruction("mov rax, rdi");                            // restore the boxed value in the cast helper's input register
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
         }
@@ -57,7 +62,8 @@ pub(in crate::codegen) fn emit_mixed_string_for_persistent_store(ctx: &mut Funct
 /// Resolves `value` into the canonical integer result register, unboxing a boxed `Mixed`/`Union`
 /// payload through `__rt_mixed_cast_int`.
 ///
-/// `Int`/`Bool` load directly; every other type is an `unsupported` diagnostic. The `Mixed` path
+/// `Int`/`Bool` load directly; tagged nullable integers normalize null to zero without boxing.
+/// Every other type is an `unsupported` diagnostic. The `Mixed` path
 /// emits a call that clobbers the caller-saved argument registers, so a caller that has already
 /// staged other arguments in those registers must spill across this resolution (the integer is left
 /// in the int result register on return).
@@ -70,9 +76,29 @@ pub(in crate::codegen) fn resolve_int_operand_to_result(
         PhpType::Int | PhpType::Bool => {
             ctx.load_value_to_result(value)?;
         }
+        PhpType::TaggedScalar => {
+            ctx.load_value_to_result(value)?;
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             load_value_to_first_int_arg(ctx, value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+        }
+        // A numeric string reaches an integer parameter through php's weak-mode coercion:
+        // `mktime(0, 0, 0, 12, 28, $year)` over an `explode()`d year, or `range(date('Y') - 120,
+        // date('Y'))`. The runtime parser reads the leading integer, as `(int)` does.
+        PhpType::Str => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
+        }
+        // php's weak mode converts a float passed to an int parameter: an integral value as it
+        // stands, a fractional one with the "loses precision" deprecation, and NaN, the
+        // infinities or an out-of-range value with a `TypeError`. Laravel's `Collection::split()`
+        // passes `floor()`'s float to `array_slice()`; refusing it left `Collection` -- and every
+        // class built on it -- to the runtime autoloader.
+        PhpType::Float => {
+            ctx.load_value_to_result(value)?;
+            super::builtins::strings::emit_weak_float_result_to_int(ctx, context);
         }
         ty => {
             return Err(CodegenIrError::unsupported(format!(

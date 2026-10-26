@@ -14,6 +14,9 @@ use crate::errors::CompileError;
 use crate::parser::ast::{Expr, Visibility};
 use crate::types::traits::FlattenedClass;
 use crate::types::{ClassInfo, FunctionSig, PhpType, PropertyHookContract};
+// One attribute-argument folding for classes, constants, methods and properties: this module
+// carried its own copy, which missed what the shared one learned (`\Attribute::TARGET_*`).
+use crate::types::collect_attribute_args;
 
 use super::constants::resolve_lexical_class_constant_value;
 
@@ -44,6 +47,7 @@ pub(super) struct ClassBuildState {
     pub(super) property_slot_declaring_classes: Vec<String>,
     pub(super) abstract_properties: HashSet<String>,
     pub(super) abstract_property_hooks: HashMap<String, PropertyHookContract>,
+    pub(super) property_hooks: HashMap<String, crate::parser::ast::PropertyHooks>,
     pub(super) static_prop_types: Vec<(String, PhpType)>,
     pub(super) static_defaults: Vec<Option<Expr>>,
     pub(super) static_property_declaring_classes: HashMap<String, String>,
@@ -121,6 +125,7 @@ impl ClassBuildState {
                 })
                 .cloned()
                 .collect();
+            state.property_hooks = parent.property_hooks.clone();
         }
         state
     }
@@ -155,13 +160,15 @@ impl ClassBuildState {
     /// Resolves all class constant expressions via
     /// `resolve_lexical_class_constant_value`, collects attributes, and
     /// merges the accumulated property/method metadata with the flattened
-    /// class AST.  Returns `CompileError` if any constant expression is
-    /// ill-formed.
+    /// class AST.  `is_internal` records whether elephc declared the class
+    /// (`ClassInfo::is_internal`).  Returns `CompileError` if any constant
+    /// expression is ill-formed.
     pub(super) fn into_class_info(
         self,
         class_id: u64,
         class: &FlattenedClass,
         constructor_param_to_prop: Vec<Option<String>>,
+        is_internal: bool,
     ) -> Result<ClassInfo, CompileError> {
         let attribute_args = collect_attribute_args(&class.attributes);
         let constant_attribute_names = class
@@ -190,12 +197,16 @@ impl ClassBuildState {
             class_id,
             declaration_span: class.span,
             doc_comment: None,
+            is_internal,
             parent: class.extends.clone(),
             is_abstract: class.is_abstract,
             is_final: class.is_final,
             is_readonly_class: class.is_readonly_class,
             allow_dynamic_properties: self.allow_dynamic_properties
                 || class_has_allow_dynamic_properties(class),
+            eval_property_storage: false,
+            clone_override_property_storage: false,
+            scope_dynamic_property_storage: false,
             constants: class
                 .constants
                 .iter()
@@ -273,6 +284,7 @@ impl ClassBuildState {
             abstract_property_hooks: self.abstract_property_hooks,
             reflection_properties,
             reflection_methods,
+            property_hooks: self.property_hooks,
             static_properties: self.static_prop_types,
             static_defaults: self.static_defaults,
             static_property_declaring_classes: self.static_property_declaring_classes,
@@ -325,139 +337,6 @@ pub(in crate::types::checker::schema) fn collect_attribute_names(
         }
     }
     out
-}
-
-/// Collect the positional literal arguments of every attribute, in the
-/// same order as `collect_attribute_names`. Captures strings, ints, bools,
-/// and null directly. Negation (`-N`) of an int literal is folded so PHP's
-/// `#[Status(-1)]` survives parsing. Unsupported metadata is marked as
-/// `None` so legal PHP attribute syntax can still compile until a runtime
-/// reflection helper needs the missing argument payload.
-pub(in crate::types::checker::schema) fn collect_attribute_args(
-    groups: &[crate::parser::ast::AttributeGroup],
-) -> Vec<Option<Vec<crate::types::AttrArgEntry>>> {
-    use crate::parser::ast::ExprKind;
-    use crate::types::{AttrArgEntry, AttrKey};
-
-    let mut out = Vec::new();
-    for group in groups {
-        for attr in &group.attributes {
-            let mut entries = Vec::new();
-            let mut supported = true;
-            for arg_expr in &attr.args {
-                // A named argument (`#[A(name: value)]`) keys the entry by its
-                // string name; positional arguments stay unkeyed and reflection
-                // materializes them at sequential integer offsets like PHP.
-                let (key, value_expr) = match &arg_expr.kind {
-                    ExprKind::NamedArg { name, value } => {
-                        (Some(AttrKey::Str(name.clone())), value.as_ref())
-                    }
-                    _ => (None, arg_expr),
-                };
-                match fold_attr_value(value_expr) {
-                    Some(value) => entries.push(AttrArgEntry { key, value }),
-                    None => {
-                        supported = false;
-                        break;
-                    }
-                }
-            }
-            out.push(if supported { Some(entries) } else { None });
-        }
-    }
-    out
-}
-
-/// Folds a single attribute-argument expression to a compile-time
-/// [`AttrArgValue`], or `None` when the expression is not a constant shape
-/// reflection can materialize. Handles scalars (string/int/bool/null/float),
-/// negation of numeric literals, positional/associative array literals, and
-/// symbolic references (global constants, class constants, enum cases). The
-/// symbolic references are captured by canonical name and resolved later, when
-/// the synthetic reflection method bodies are lowered (see [`AttrArgValue`]).
-fn fold_attr_value(expr: &crate::parser::ast::Expr) -> Option<crate::types::AttrArgValue> {
-    use crate::parser::ast::ExprKind;
-    use crate::types::{AttrArgEntry, AttrArgValue};
-
-    match &expr.kind {
-        ExprKind::StringLiteral(value) => Some(AttrArgValue::Str(value.clone())),
-        ExprKind::IntLiteral(value) => Some(AttrArgValue::Int(*value)),
-        ExprKind::FloatLiteral(value) => Some(AttrArgValue::Float(value.to_bits())),
-        ExprKind::BoolLiteral(value) => Some(AttrArgValue::Bool(*value)),
-        ExprKind::Null => Some(AttrArgValue::Null),
-        // A bare constant reference (`#[A(SOME_CONST)]`). Name resolution has
-        // already canonicalised the name, so capture it for late resolution.
-        ExprKind::ConstRef(name) => Some(AttrArgValue::ConstRef(name.as_str().to_string())),
-        // A class constant or enum case (`#[A(C::BAR)]` / `#[A(E::Case)]`). Only
-        // a named (class/enum) receiver can be resolved outside a class scope;
-        // `self`/`parent`/`static` have no meaning here and stay unsupported.
-        ExprKind::ScopedConstantAccess { receiver, name } => {
-            scoped_receiver_type_name(receiver)
-                .map(|type_name| AttrArgValue::ScopedConst(type_name, name.clone()))
-        }
-        // `Foo::class` folds to the class-name string, mirroring the
-        // module-level attribute capture in `src/types/schema.rs`.
-        ExprKind::ClassConstant {
-            receiver: crate::parser::ast::StaticReceiver::Named(name),
-        } => Some(AttrArgValue::Str(name.as_str().to_string())),
-        ExprKind::ClassConstant { .. } => None,
-        ExprKind::Negate(inner) => match &inner.kind {
-            ExprKind::IntLiteral(n) => Some(AttrArgValue::Int(n.wrapping_neg())),
-            ExprKind::FloatLiteral(n) => Some(AttrArgValue::Float((-n).to_bits())),
-            _ => None,
-        },
-        ExprKind::ArrayLiteral(elements) => {
-            let mut entries = Vec::with_capacity(elements.len());
-            for element in elements {
-                entries.push(AttrArgEntry {
-                    key: None,
-                    value: fold_attr_value(element)?,
-                });
-            }
-            Some(AttrArgValue::Array(entries))
-        }
-        ExprKind::ArrayLiteralAssoc(pairs) => {
-            let mut entries = Vec::with_capacity(pairs.len());
-            for (key_expr, value_expr) in pairs {
-                entries.push(AttrArgEntry {
-                    key: Some(fold_attr_key(key_expr)?),
-                    value: fold_attr_value(value_expr)?,
-                });
-            }
-            Some(AttrArgValue::Array(entries))
-        }
-        _ => None,
-    }
-}
-
-/// Folds an associative-array key expression to an [`AttrKey`], or `None` when
-/// it is not an integer or string literal key (the only keys PHP allows).
-fn fold_attr_key(expr: &crate::parser::ast::Expr) -> Option<crate::types::AttrKey> {
-    use crate::parser::ast::ExprKind;
-    use crate::types::AttrKey;
-
-    match &expr.kind {
-        ExprKind::IntLiteral(value) => Some(AttrKey::Int(*value)),
-        ExprKind::Negate(inner) => match &inner.kind {
-            ExprKind::IntLiteral(n) => Some(AttrKey::Int(n.wrapping_neg())),
-            _ => None,
-        },
-        ExprKind::StringLiteral(value) => Some(AttrKey::Str(value.clone())),
-        _ => None,
-    }
-}
-
-/// Returns the canonical type name of a static receiver when it is a named
-/// class/enum (`#[A(C::BAR)]`), or `None` for `self`/`parent`/`static`, which
-/// have no resolvable meaning in the attribute argument position.
-fn scoped_receiver_type_name(
-    receiver: &crate::parser::ast::StaticReceiver,
-) -> Option<String> {
-    use crate::parser::ast::StaticReceiver;
-    match receiver {
-        StaticReceiver::Named(name) => Some(name.as_str().to_string()),
-        StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => None,
-    }
 }
 
 /// Returns `true` if the class declaration carries the PHP 8.2

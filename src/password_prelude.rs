@@ -21,7 +21,7 @@
 use crate::parser::ast::{BinOp, CType, CastType, Program, Stmt, StmtKind, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_array_assoc, e_binop, e_call, e_cast, e_index, e_int, e_new_fq, e_null,
-    e_null_coalesce, e_str, e_var, extern_fn, function, internal_declarations, s_assign, s_if,
+    e_null_coalesce, e_str, e_var, extern_fn, function, php_semantics_declarations, s_assign, s_if,
     s_return, s_throw, t_array, t_mixed,
 };
 
@@ -231,7 +231,7 @@ fn function_declarations() -> Vec<Stmt> {
 
 /// Returns the declarations to inject.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(function_declarations)
+    php_semantics_declarations(function_declarations)
 }
 
 /// Returns whether a top-level, namespace-less, guarded or synthetic statement declares the

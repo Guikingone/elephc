@@ -17,7 +17,8 @@ use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::super::{
-    class_method_already_emitted, direct_call_stack_pad_bytes, emit_ref_arg_writebacks,
+    class_method_already_emitted, direct_call_stack_pad_bytes, emit_call_arg_temp_cleanups,
+    emit_ref_arg_writebacks,
     materialize_method_call_args_with_receiver_reg_and_refs, store_call_result,
 };
 use crate::codegen::{CodegenIrError, Result};
@@ -89,8 +90,16 @@ fn lower_instance_method_callable_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &target.return_ty)?;
-    super::super::emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
+    emit_ref_arg_writebacks(ctx, &call_args)?;
+    // The method is called directly, so the callable operand itself is never consumed. One read
+    // out of a boxed (promoted) local holds its own reference to the descriptor, which leaked it
+    // and its receiver: `$f = $o->m(...); echo $f(); $f = null;` never destroyed `$o`'s object.
+    if ctx.value_can_own_mixed_box_source(callable)? {
+        ctx.load_value_to_reg(callable, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_callable_descriptor_release");
+    }
+    Ok(())
 }
 
 /// Resolves a callable operand back to the receiver-bound method descriptor that produced it.

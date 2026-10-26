@@ -36,18 +36,107 @@ pub enum LinkError {
     MissingBridge {
         /// Authoritative bridge linker name that could not be materialized.
         name: String,
+        /// Archive filename or exact path this bridge resolves to, when known.
+        ///
+        /// An unknown named bridge has no archive path or discovery metadata and renders
+        /// only the first line. An unknown bridge with an exact archive path reports that
+        /// path in `needs:` without inventing fallback locations.
+        archive: Option<String>,
+        /// Per-bridge directory override that takes priority over every search location.
+        env_var: Option<String>,
+        /// Directories that were consulted, in the order they were tried.
+        searched: Vec<String>,
+        /// The `env_var` directory, when it is what short-circuited discovery.
+        ///
+        /// An override does not join the search — it REPLACES it, returning before any
+        /// fallback is consulted. So its presence changes what the message may claim: the
+        /// fallbacks were not tried, and the fix is to correct or unset the variable rather
+        /// than to place an archive next to the binary, which the override would ignore.
+        override_dir: Option<String>,
     },
 }
 
 impl std::fmt::Display for LinkError {
     /// Formats an actionable linker-preparation diagnostic.
+    ///
+    /// "Actionable" means naming the way out, which the bare first line never did: a binary
+    /// copied out of its build tree fails here with nothing to go on, and the archives simply
+    /// have to travel with it (issue #517). So the message reports the archive it wanted, the
+    /// directories it actually looked in, and the environment override — a resolution order
+    /// that is otherwise only discoverable by reading `linker::bridges`.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MissingBridge { name } => {
-                write!(formatter, "required Elephc bridge `{name}` could not be found")
+            Self::MissingBridge {
+                name,
+                archive,
+                env_var,
+                searched,
+                override_dir,
+            } => {
+                write!(formatter, "required Elephc bridge `{name}` could not be found")?;
+                let Some(archive) = archive else {
+                    return Ok(());
+                };
+                write!(formatter, "\n  needs: {archive}")?;
+                if !searched.is_empty() {
+                    write!(formatter, "\n  looked in:")?;
+                    for directory in searched {
+                        write!(formatter, "\n    {directory}")?;
+                    }
+                }
+                let Some(env_var) = env_var else {
+                    return Ok(());
+                };
+                // An override that short-circuited discovery gets the opposite advice: the
+                // fallbacks were never consulted, so telling the user to put the archive next
+                // to the binary would send them somewhere this run will not look.
+                let invalid_file = invalid_archive_filename(archive);
+                match (override_dir, invalid_file) {
+                    (Some(override_dir), Some(filename)) => write!(
+                        formatter,
+                        "\n\n{env_var} is set to {override_dir}, which takes priority over every \
+                         other location, so no other directory was consulted. Replace invalid \
+                         archive {archive} with a non-empty regular file, point {env_var} to a \
+                         directory containing a valid {filename}, or unset {env_var} to search \
+                         the other locations again. `elephc --print-capabilities` lists every \
+                         archive this binary can need."
+                    ),
+                    (Some(override_dir), None) => write!(
+                        formatter,
+                        "\n\n{env_var} is set to {override_dir}, which takes priority over every \
+                         other location — the elephc binary's own directory, a sibling lib/ and \
+                         the build tree were NOT consulted. Put {archive} in {override_dir}, \
+                         point {env_var} somewhere that has it, or unset {env_var} to search \
+                         those locations again. `elephc --print-capabilities` lists every \
+                         archive this binary can need."
+                    ),
+                    (None, Some(filename)) => write!(
+                        formatter,
+                        "\n\nReplace invalid archive {archive} with a non-empty regular \
+                         file, or set {env_var} to a directory containing a valid \
+                         {filename}. `elephc --print-capabilities` lists every archive \
+                         this binary can need."
+                    ),
+                    (None, None) => write!(
+                        formatter,
+                        "\n\nSet {env_var} to a directory containing {archive}, or keep the \
+                         bridge archives next to the elephc binary (or in a sibling lib/). \
+                         `elephc --print-capabilities` lists every archive this binary can need."
+                    ),
+                }
             }
         }
     }
+}
+
+/// Returns the filename of `archive` when it is a full path to an entry that exists but is
+/// not a usable archive, which is how the errors distinguish an invalid file from a missing
+/// one: a missing archive is reported by its bare filename.
+fn invalid_archive_filename(archive: &str) -> Option<&str> {
+    Path::new(archive)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| *name != archive)
 }
 
 impl std::error::Error for LinkError {}
@@ -129,6 +218,78 @@ pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
 /// is proportional to the slice, so more, smaller slices do not add to it.
 const MAX_ASSEMBLER_JOBS: usize = 64;
 
+/// Largest slice of assembly text one `as` run is handed, whatever the job count.
+///
+/// An AArch64 `bl` reaches +-128 MB, and the assembler resolves a call to a symbol defined in the
+/// SAME object itself instead of leaving the linker a relocation it could route through a branch
+/// island. The Symfony demo's preload build wrote 27 GB of assembly, which 18 jobs cut into
+/// 1.5 GB slices of about 150 MB of code each, and every far call inside one failed with "fixup
+/// value out of range".
+///
+/// The bound must hold for the DENSEST text, not the average. Commented code runs about ten
+/// source bytes per code byte, but the eval-bridge dispatch ladders carry no comments: the demo
+/// console's 18 GB of assembly ran 2.6 bytes per code byte, so 768 MB slices held ~300 MB of code
+/// each. A slice is also one Mach-O atom (user objects carry no `.subsections_via_symbols`), and
+/// the linker cannot put a branch island inside an atom: `ld` failed with "atom ... is larger than
+/// the max code size between branch island clusters" and an `arm64_b26` fixup out of range. At
+/// 192 MB a slice stays under ~77 MB of code even at that density.
+const MAX_SLICE_SOURCE_BYTES: usize = 192 << 20;
+
+/// Returns how many slices to cut `source_len` bytes of assembly into: one per job, and more when
+/// the text is large enough that a job-sized slice would exceed [`MAX_SLICE_SOURCE_BYTES`].
+fn slice_parts(jobs: usize, source_len: usize) -> usize {
+    jobs.max(source_len.div_ceil(MAX_SLICE_SOURCE_BYTES))
+}
+
+/// Large inputs need safe object boundaries even when only one assembler may run at a time.
+fn needs_slices(jobs: usize, source_len: usize) -> bool {
+    jobs > 1 || source_len > MAX_SLICE_SOURCE_BYTES
+}
+
+/// Processes slices with a bounded worker pool, preserving per-slice order and panic outcomes.
+///
+/// Slice count is a size-safety decision, not permission to spawn that many assemblers. Catching
+/// each slice's panic preserves the caller's existing fail-closed policy without losing the other
+/// queued outcomes. Results are published only after work completes, outside the work closure.
+fn run_slice_workers<T: Send>(
+    count: usize,
+    jobs: usize,
+    work: impl Fn(usize) -> T + Sync,
+) -> Vec<std::thread::Result<T>> {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let outcomes: std::sync::Mutex<Vec<Option<std::thread::Result<T>>>> =
+        std::sync::Mutex::new((0..count).map(|_| None).collect());
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..count.min(jobs.max(1)))
+            .map(|_| {
+                let (next, outcomes, work) = (&next, &outcomes, &work);
+                scope.spawn(move || loop {
+                    let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if index >= count {
+                        break;
+                    }
+                    let outcome =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(index)));
+                    outcomes.lock().expect("assembler outcomes mutex poisoned")[index] = Some(outcome);
+                })
+            })
+            .collect();
+        for worker in workers {
+            // An unexpected failure outside the slice's catch boundary leaves a missing outcome,
+            // which is returned as a panic below rather than silently omitting an object.
+            let _ = worker.join();
+        }
+    });
+    outcomes
+        .into_inner()
+        .expect("assembler outcomes mutex poisoned")
+        .into_iter()
+        .map(|outcome| {
+            outcome.unwrap_or_else(|| Err(Box::new("assembler worker did not publish its result")))
+        })
+        .collect()
+}
+
 /// Objects produced from one user assembly file, in slice order, plus a note for `--timings`.
 pub(crate) struct AssembledObjects {
     /// Object paths in the order the slices must reach the link line. The first
@@ -141,9 +302,8 @@ pub(crate) struct AssembledObjects {
 
 /// Returns how many `as` processes may assemble one user object.
 ///
-/// `ELEPHC_ASM_JOBS` overrides the host-derived default, and `ELEPHC_ASM_JOBS=1`
-/// is the identity setting: it takes the single-`as` path below, so the `.s` and
-/// the object are byte-for-byte what they are today.
+/// `ELEPHC_ASM_JOBS` overrides the host-derived default. One job preserves the single-object
+/// path for small inputs, but still processes large inputs as safe, sequential slices.
 fn assembler_jobs() -> usize {
     if let Ok(value) = std::env::var("ELEPHC_ASM_JOBS") {
         return value.trim().parse::<usize>().unwrap_or(1).clamp(1, 64);
@@ -158,7 +318,7 @@ fn assembler_jobs() -> usize {
 /// the target supports it, and returns the objects in slice order.
 ///
 /// Every fallback path here produces exactly today's single object: an
-/// unsupported target or artifact, `ELEPHC_ASM_JOBS=1`, `--debug-info` (whose
+/// unsupported target or artifact, a small input with one worker, `--debug-info` (whose
 /// dSYM debug map has to name one object per compilation unit and is not worth
 /// re-deriving for a build the developer is about to step through), an
 /// unreadable `.s`, an assembly with no legal cut, or a failed slice write.
@@ -177,7 +337,14 @@ pub(crate) fn assemble_parallel(
         note: None,
     };
     let jobs = assembler_jobs();
-    if jobs <= 1 || debug_info || !asm_split::supports_split(target, emit) {
+    if debug_info || !asm_split::supports_split(target, emit) {
+        assemble(target, asm_path, obj_path);
+        return single();
+    }
+    let source_len = std::fs::metadata(asm_path)
+        .map(|metadata| usize::try_from(metadata.len()).unwrap_or(usize::MAX))
+        .unwrap_or(0);
+    if !needs_slices(jobs, source_len) {
         assemble(target, asm_path, obj_path);
         return single();
     }
@@ -199,9 +366,11 @@ pub(crate) fn assemble_parallel(
         _ => obj_path.with_extension(format!("slice{index}.o")),
     };
 
-    let Some(plan) = asm_split::plan_split(
+    let parts = slice_parts(jobs, source.len());
+    let plan_started = std::time::Instant::now();
+    let Some(mut plan) = asm_split::plan_split(
         source,
-        jobs,
+        parts,
         target.platform.local_label_prefix(),
         target.arch == crate::codegen::platform::Arch::AArch64 && encode_enabled(),
     ) else {
@@ -209,49 +378,55 @@ pub(crate) fn assemble_parallel(
         assemble(target, asm_path, obj_path);
         return single();
     };
+    if compact_enabled() {
+        plan.compact(target.line_comment_prefix());
+    }
     let slice_count = plan.slices();
+    if trace_enabled() {
+        eprintln!("asm-trace plan: {:.2}s, {slice_count} slices", plan_started.elapsed().as_secs_f64());
+    }
 
     // Every slice is rendered, keyed, written and -- unless the cache already holds its object --
-    // assembled by a worker of its own. Rendering every slice before starting any assembler, as
+    // assembled by a bounded worker pool. Rendering every slice before starting any assembler, as
     // this did, left the assemblers idle for the whole serial render; now the first `as` starts
     // as soon as its own slice is on disk, and no slice ever exists in memory whole: its cache
     // key is folded from the same chunks that are written.
     let caching = asm_cache::is_enabled();
     let identity = caching.then(|| asm_cache::assembler_identity(&assembler_command(target)));
-    let outcomes: Vec<std::thread::Result<std::io::Result<SliceOutcome>>> =
-        std::thread::scope(|scope| {
-            let workers: Vec<_> = (0..slice_count)
-                .map(|index| {
-                    let (plan, identity) = (&plan, identity.as_deref());
-                    scope.spawn(move || -> std::io::Result<SliceOutcome> {
-                        let asm = slice_asm(index);
-                        let mut key = identity.map(asm_cache::slice_key_seed);
-                        let file = std::fs::File::create(&asm)?;
-                        let mut writer = std::io::BufWriter::with_capacity(1 << 20, file);
-                        plan.render_slice(index, &mut |text| {
-                            if let Some(key) = key.as_mut() {
-                                *key = asm_cache::extend_slice_key(*key, text.as_bytes());
-                            }
-                            std::io::Write::write_all(&mut writer, text.as_bytes())
-                        })?;
-                        std::io::Write::flush(&mut writer)?;
-                        drop(writer);
-                        // A restored object is a HARDLINK to the cache entry, so anything that
-                        // writes to it in place would write through into the cache; `reuse`
-                        // unlinks the name first, which leaves the entry's inode untouched.
-                        if let Some(key) = key {
-                            if asm_cache::reuse(key, &slice_obj(index)) {
-                                let _ = std::fs::remove_file(&asm);
-                                return Ok(SliceOutcome { key: Some(key), assembled: false });
-                            }
-                        }
-                        assemble(target, &asm, &slice_obj(index));
-                        Ok(SliceOutcome { key, assembled: true })
-                    })
-                })
-                .collect();
-            workers.into_iter().map(|worker| worker.join()).collect()
-        });
+    let outcomes = run_slice_workers(slice_count, jobs, |index| -> std::io::Result<SliceOutcome> {
+        let asm = slice_asm(index);
+        let started = std::time::Instant::now();
+        let mut key = identity.as_deref().map(asm_cache::slice_key_seed);
+        let file = std::fs::File::create(&asm)?;
+        let mut writer = std::io::BufWriter::with_capacity(1 << 20, file);
+        plan.render_slice(index, &mut |text| {
+            if let Some(key) = key.as_mut() {
+                *key = asm_cache::extend_slice_key(*key, text.as_bytes());
+            }
+            std::io::Write::write_all(&mut writer, text.as_bytes())
+        })?;
+        std::io::Write::flush(&mut writer)?;
+        drop(writer);
+        // A restored object is a HARDLINK to the cache entry, so anything that writes to it in
+        // place would write through into the cache; `reuse` first unlinks the destination name.
+        if let Some(key) = key {
+            if asm_cache::reuse(key, &slice_obj(index)) {
+                let _ = std::fs::remove_file(&asm);
+                return Ok(SliceOutcome { key: Some(key), assembled: false });
+            }
+        }
+        let rendered = started.elapsed();
+        assemble(target, &asm, &slice_obj(index));
+        if trace_enabled() {
+            eprintln!(
+                "asm-trace slice {index}: {} bytes, render {:.2}s, as {:.2}s",
+                std::fs::metadata(&asm).map(|m| m.len()).unwrap_or(0),
+                rendered.as_secs_f64(),
+                (started.elapsed() - rendered).as_secs_f64()
+            );
+        }
+        Ok(SliceOutcome { key, assembled: true })
+    });
     let summary = plan.summary;
     drop(mapped);
 
@@ -303,8 +478,9 @@ pub(crate) fn assemble_parallel(
         let _ = std::fs::remove_file(slice_asm(index));
     }
     let note = format!(
-        "Assembler: {} parallel slices ({} temporaries promoted, {} locals published, {} reused from cache)",
+        "Assembler: {} slices, {} workers ({} temporaries promoted, {} locals published, {} reused from cache)",
         objects.len(),
+        jobs.min(slice_count),
         summary.promoted.len(),
         summary.published,
         cached
@@ -317,6 +493,17 @@ pub(crate) fn assemble_parallel(
 
 /// Whether slices may carry pre-encoded instructions. `ELEPHC_ASM_ENCODE=0` hands `as` the
 /// generated text unchanged, which is also what the object-identity check compares against.
+/// Whether slices are written compact (`asm_split::SplitPlan::compact`). `ELEPHC_ASM_COMPACT=0`
+/// writes them as the `.s` has them, which keeps a failing slice readable.
+fn compact_enabled() -> bool {
+    !matches!(std::env::var("ELEPHC_ASM_COMPACT").as_deref(), Ok("0") | Ok("off"))
+}
+
+/// `ELEPHC_ASM_TRACE=1` prints each slice's size and render/assemble times to stderr.
+fn trace_enabled() -> bool {
+    std::env::var_os("ELEPHC_ASM_TRACE").is_some()
+}
+
 fn encode_enabled() -> bool {
     !matches!(std::env::var("ELEPHC_ASM_ENCODE").as_deref(), Ok("0") | Ok("off"))
 }
@@ -486,4 +673,96 @@ pub(crate) fn link_with_plan(
         prepared.cleanup();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod slice_parts_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Small text keeps one slice per job; text past the cap gets enough slices to stay under it,
+    /// so no slice holds more code than an AArch64 `bl` reaches.
+    #[test]
+    fn large_assembly_gets_more_slices_than_jobs() {
+        assert_eq!(slice_parts(18, 100 << 20), 18);
+        assert_eq!(slice_parts(18, 18 * MAX_SLICE_SOURCE_BYTES), 18);
+        let large = 27usize << 30;
+        let parts = slice_parts(18, large);
+        assert!(parts > 18);
+        assert!(large.div_ceil(parts) <= MAX_SLICE_SOURCE_BYTES);
+    }
+
+    /// A worker limit must not bypass the object-size safety policy.
+    #[test]
+    fn one_worker_still_slices_large_inputs() {
+        assert!(!needs_slices(1, MAX_SLICE_SOURCE_BYTES));
+        assert!(needs_slices(1, MAX_SLICE_SOURCE_BYTES + 1));
+        assert_eq!(slice_parts(1, MAX_SLICE_SOURCE_BYTES + 1), 2);
+        assert!(needs_slices(2, 1));
+    }
+
+    /// More slices than workers must neither oversubscribe nor reorder the link inputs.
+    #[test]
+    fn slice_workers_respect_the_limit_and_preserve_order() {
+        let active = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let first_workers = std::sync::Barrier::new(2);
+        let outcomes = run_slice_workers(17, 2, |index| {
+            let now = active.fetch_add(1, Ordering::Relaxed) + 1;
+            peak.fetch_max(now, Ordering::Relaxed);
+            if index < 2 {
+                first_workers.wait();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(4));
+            active.fetch_sub(1, Ordering::Relaxed);
+            index * 3
+        });
+        let values: Vec<_> = outcomes.into_iter().map(Result::unwrap).collect();
+        assert_eq!(values, (0..17).map(|index| index * 3).collect::<Vec<_>>());
+        assert_eq!(peak.load(Ordering::Relaxed), 2);
+        assert_eq!(active.load(Ordering::Relaxed), 0);
+    }
+
+    /// Sequential work processes every slice, including fallible and panicking callbacks.
+    #[test]
+    fn slice_workers_keep_failures_at_their_original_indices() {
+        let outcomes = run_slice_workers(7, 1, |index| -> Result<usize, &'static str> {
+            match index {
+                2 => panic!("slice worker panic fixture"),
+                4 => Err("slice write fixture"),
+                _ => Ok(index),
+            }
+        });
+        assert_eq!(outcomes.len(), 7);
+        for (index, outcome) in outcomes.into_iter().enumerate() {
+            match index {
+                2 => assert!(outcome.is_err()),
+                4 => assert_eq!(outcome.unwrap(), Err("slice write fixture")),
+                _ => assert_eq!(outcome.unwrap(), Ok(index)),
+            }
+        }
+        assert!(run_slice_workers(0, 1, |_| 0usize).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod probe {
+    #[test]
+    #[ignore]
+    fn probe_assemble_existing_s() {
+        let src = std::env::var("ELEPHC_PROBE_ASM").unwrap();
+        let dir = std::env::var("ELEPHC_PROBE_DIR").unwrap();
+        let s = std::path::Path::new(&dir).join("probe.s");
+        let _ = std::fs::remove_file(&s);
+        std::os::unix::fs::symlink(&src, &s).unwrap();
+        let t = std::time::Instant::now();
+        let r = super::assemble_parallel(
+            crate::codegen::platform::Target::detect_host(),
+            crate::codegen::Emit::Executable,
+            false,
+            &s,
+            &std::path::Path::new(&dir).join("probe.o"),
+        );
+        eprintln!("total {:.2}s {:?}", t.elapsed().as_secs_f64(), r.note);
+    }
 }

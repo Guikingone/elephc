@@ -1,16 +1,16 @@
 ---
-title: "unserialize() — internals"
+title: "unserialize() - internals"
 description: "Compiler internals for unserialize(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 697
+  order: 728
 ---
 
-## `unserialize()` — internals
+## `unserialize()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/unserialize.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/unserialize.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -128,7 +128,13 @@ pub(super) fn reflection_class_has_runtime_managed_storage(class_name: &str) -> 
 /// user code never declares.
 pub(super) fn reflection_class_like_is_internal(class_name: &str) -> bool {
     let trimmed = class_name.trim_start_matches('\\');
-    elephc_builtin_contract::lookup_class(trimmed).is_some()
+    // A class php adds after the compile profile (`SortDirection` is 8.6) is a user class here:
+    // an 8.5 program declares it itself, through a polyfill stub.
+    elephc_builtin_contract::lookup_class(trimmed).is_some_and(|class| {
+        class
+            .since
+            .is_none_or(|since| crate::codegen_support::compile_php_version() >= since)
+    })
         || php_symbol_key(trimmed) == php_symbol_key(UNCATALOGUED_INTERNAL_CLASS)
 }
 
@@ -145,7 +151,7 @@ mod internal_class_tests {
     fn internal_predicate_follows_the_class_catalog() {
         for name in [
             "Iterator", "\\Exception", "ReflectionClass", "Fiber", "DateTime", "PDO", "mysqli",
-            "CurlHandle", "SessionHandler", "SortDirection",
+            "CurlHandle", "SessionHandler",
         ] {
             assert!(reflection_class_like_is_internal(name), "{name}");
         }

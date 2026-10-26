@@ -1,8 +1,8 @@
 ---
 title: "imagegetinterpolation()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the interpolation method used when resampling."
 sidebar:
-  order: 525
+  order: 526
 ---
 
 ## imagegetinterpolation()
@@ -11,7 +11,7 @@ sidebar:
 function imagegetinterpolation(mixed $image): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the interpolation method used when resampling.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

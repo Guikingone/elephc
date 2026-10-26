@@ -88,7 +88,7 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, `instanceof`, nullsafe access (`?->`), abstract classes, final classes, methods and typed/static properties, PHP-style static property redeclarations, constructor property promotion, traits, constructors, instance/static methods, case-insensitive PHP symbol lookup for functions/classes/methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, PHP 8 attributes on declarations, named arguments, first-class callables, typed function and method parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order and integer/numeric-string key normalization, array union with `+`, closures, generator functions and generator closures with `yield` / `yield from`, namespaces, includes, compile-time Composer/SPL autoloading, class/introspection helpers, `PDO` database access (`PDO` / `PDOStatement` / `PDOException`) with SQLite, PostgreSQL, MySQL/MariaDB, and optional DBLIB, Firebird, ODBC, Informix, IBM, SQLSRV, and Oracle drivers, image creation and manipulation (GD raster I/O, drawing, transforms/filters, Exif/IPTC metadata, and the `Imagick`/`Gmagick`/Cairo object APIs) on a pure-Rust codec/raster bridge, and PHP 8.1-style `Fiber` coroutines on the three executable/release hosts: macOS ARM64, Linux ARM64, and Linux x86_64. The iOS compile targets are library-only and do not run Fibers.
 
-Experimental [`eval()` support](docs/php/eval.md) AOT-lowers eligible literal fragments and falls back to the optional, statically linked Magician interpreter for dynamic fragments. Runnable examples live in [`examples/eval/`](examples/eval/), [`examples/eval-globals/`](examples/eval-globals/), and the opt-in regex example [`examples/eval_regex/`](examples/eval_regex/).
+Experimental [`eval()` support](docs/php/eval.md) AOT-lowers eligible literal fragments and falls back to the optional, statically linked Magician interpreter for dynamic fragments. Runnable examples live in [`examples/eval/`](examples/eval/), [`examples/eval-globals/`](examples/eval-globals/), [`examples/eval-throw/`](examples/eval-throw/) for throwing a class declared by `eval()`, and the opt-in regex example [`examples/eval_regex/`](examples/eval_regex/).
 
 For performance-oriented code, elephc exposes compiler extensions beyond standard PHP — see the Why section above.
 
@@ -218,6 +218,15 @@ selection and troubleshooting.
 ```bash
 brew install illegalstudio/tap/elephc
 ```
+
+### mise (alternative)
+
+```bash
+mise use -g github:illegalstudio/elephc@latest
+```
+
+See the [installation guide](docs/getting-started/installation.md#mise-alternative)
+for per-project pinning with `mise.toml`.
 
 ### Nightly builds
 
@@ -349,6 +358,13 @@ elephc --web --web-isolation=pool app.php     # crash containment + concurrent h
 elephc --web --web-isolation=request app.php  # discard all native state after each request
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4
+
+# Bound what one request may cost: bytes, and the time it may take to send them.
+# Both apply in every isolation mode. `--body-read-timeout 0` removes the deadline
+# everywhere; `--max-body-size 0` removes the cap only in the default worker
+# isolation, since `pool` and `request` still refuse a body over the 64 MiB the
+# broker protocol carries to the handler process.
+./app --listen 0.0.0.0:8080 --max-body-size 1048576 --body-read-timeout 10
 ```
 
 For the smallest regex first run:
@@ -487,7 +503,7 @@ The full list of supported constructs, operators, and control structures is in t
 <details>
 <summary>Show the construct highlights</summary>
 
-- **OOP**: classes, abstract/final classes, typed/final/static properties and methods, PHP-style static property redeclarations, direct static array property writes, constructor property promotion, interfaces, `instanceof`, traits, enums, PHP 8 declaration attributes, limited attribute reflection (`ReflectionClass`/`ReflectionMethod`/`ReflectionProperty::getAttributes()`, `ReflectionAttribute::newInstance()`), `readonly`, static/instance methods, case-insensitive class/interface/trait and method lookup, `self::`/`parent::`/`static::`, `::class` reflection (including `$object::class` on object expressions, returning the receiver's runtime class), class constants including PHP 8.3 typed class constants (exposed via `ReflectionClassConstant::hasType()`/`getType()`), `new self()` / `new static()` / `new parent()`, magic methods (`__toString`, `__get`, `__set`, `__isset`, `__unset`, `__call`, `__invoke`, `__clone`, `__destruct`), `clone`, `get_object_vars()` and `(array)` casts on objects
+- **OOP**: classes, abstract/final classes, typed/final/static properties and methods, PHP-style static property redeclarations, direct static array property writes, constructor property promotion, interfaces, `instanceof`, traits, enums, PHP 8 declaration attributes, limited attribute reflection (`ReflectionClass`/`ReflectionMethod`/`ReflectionProperty::getAttributes()`, `ReflectionAttribute::newInstance()`), `readonly`, static/instance methods, case-insensitive class/interface/trait and method lookup, `self::`/`parent::`/`static::`, `::class` reflection (including `$object::class` on object expressions, returning the receiver's runtime class), class constants including PHP 8.3 typed class constants (exposed via `ReflectionClassConstant::hasType()`/`getType()`), `new self()` / `new static()` / `new parent()`, magic methods (`__toString`, `__get`, `__set`, `__isset`, `__unset`, `__call`, `__invoke`, `__clone`, `__destruct`), `clone`, `get_object_vars()`, `(array)` casts on objects, and `(object)` casts (array keys become properties, `null` becomes an empty `stdClass`, a scalar lands on `scalar`, and an object source is returned unchanged)
 - **Functions**: case-insensitive user and built-in function calls, default parameters, variadic/spread, pass by reference, named arguments, global variables, static locals, first-class callables, closures, arrow functions, static closures (`static function () { }`, `static fn () => ...`)
 - **Generators**: generator functions and closures, `yield`, key/value yields, `yield from`, `Generator::send()`, `throw()`, `getReturn()`, and `foreach` over `Iterator` / `IteratorAggregate`
 - **Fibers**: `Fiber`, `FiberError`, `Fiber::suspend()`, `Fiber::getCurrent()`, `start()`, `resume()`, `throw()`, `getReturn()`, state predicates, closure captures, guarded native stacks, and target-aware context switching on the three executable/release hosts (macOS ARM64, Linux ARM64, and Linux x86_64); the iOS compile targets are library-only and do not run Fibers
@@ -500,19 +516,19 @@ The full list of supported constructs, operators, and control structures is in t
 - **Database (PDO)**: `PDO`, `PDOStatement`, `PDOException` with SQLite, PostgreSQL, MySQL/MariaDB, optional FreeTDS PDO_DBLIB, pure-Rust PDO_FIREBIRD, system-driver-manager PDO_ODBC, Client SDK PDO_INFORMIX/PDO_IBM, Microsoft ODBC PDO_SQLSRV, Oracle Instant Client PDO_OCI, and official CCI PDO_CUBRID drivers, positional `?` and named `:name` binds, fetch modes, transactions, and `foreach` over result sets
 - **Database (mysqli)**: a documented `mysqli` / `mysqli_stmt` / `mysqli_result` subset for MySQL/MariaDB over the same pure-Rust client — buffered independent results, prepared statements, `multi_query`, `mysqli_report` error modes, and the full procedural `mysqli_*` alias surface
 - **Process control (PCNTL)**: `pcntl_fork`, wait/status helpers, `pcntl_exec`, signal handlers and async dispatch, masks, priorities, Linux affinity/namespaces, and macOS QoS; see the [PCNTL guide](docs/php/pcntl.md)
-- **XML**: every function, class and constant of `ext/xml` (the `XMLParser` SAX parser, every handler, incremental `xml_parse()`, `xml_parse_into_struct()`, libxml2's error codes) and of `ext/xmlwriter` (`XMLWriter` with memory and URI output) on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`, auto-linked or `--with-xml`), natively and inside `eval()`; see the [XML guide](docs/php/xml.md) and its [runtime limits](docs/php/xml.md#runtime-limits) for the per-handler-invocation heap cost
+- **XML**: the complete function, class and constant inventory of `ext/xml` (the `XMLParser` SAX parser, every handler, incremental `xml_parse()`, `xml_parse_into_struct()`, libxml2's error codes) and `ext/xmlwriter` (`XMLWriter` with memory and URI output) on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`, auto-linked or `--with-xml`), natively and inside `eval()`; see the [XML guide](docs/php/xml.md) for documented behavioral differences and [runtime limits](docs/php/xml.md#runtime-limits)
 - **Date/time**: `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, the PHP 8.3 date exception hierarchy, DST-aware formatting via a bundled IANA timezone database, and `ext/calendar` Julian-Day functions
 - **Crypto**: `md5()`/`sha1()`/`hash()`/`hash_hmac()` hashing and OpenSSL-compatible symmetric ciphers (`openssl_encrypt()`/`openssl_decrypt()`, AES CBC/CTR/ECB/GCM) through a pure-Rust bridge with no system OpenSSL dependency
-- **Native extensions**: complete `iconv` conversion and MIME helpers, plus the supported `curl` easy, multi, share, callback, stream, and multipart API through pay-for-use bridges
+- **Native extensions**: complete PHP 8.5.10 `mbstring` function and constant inventory, complete `iconv` conversion and MIME helpers, plus the supported `curl` easy, multi, share, callback, stream, and multipart API through pay-for-use bridges
 - **Environment**: `getenv()` answers a single variable or the whole environment, `putenv()` sets and removes, and `$_ENV` / `$_SERVER` carry the process environment plus `$_SERVER['argv']` in ordinary CLI programs
 - **Web server (`--web`)**: standalone prefork HTTP server binaries with compile-time `worker` (default), persistent `pool`, or fork-per-`request` isolation; request superglobals and `php://input`; `header()`/`http_response_code()` response control; and PHP-compatible sessions — `$_SESSION`, the complete `session_*()` API, file persistence, custom save handlers, strict mode, cookies and cache limiters, and trans-SID rewriting
 - **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`
 
 </details>
 
-### Built-in functions (974)
+### Built-in functions (1068)
 
-The generated builtin documentation currently exposes 974 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, I/O, images, JSON, math/BCMath, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
+The generated builtin documentation currently exposes 1068 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
 
 ### Constants
 
@@ -721,10 +737,12 @@ crates/
 ├── elephc-image/        # GD/Exif/Imagick/Gmagick/Cairo image bridge
 ├── elephc-instr/        # Exact profiling instrumentation runtime
 ├── elephc-magician/     # Optional EvalIR interpreter staticlib for dynamic eval
+├── elephc-mbstring/     # Shared PHP 8.5.10 mbstring engine and native bridge
 ├── elephc-monitoring-contract/ # Typed monitoring policy shared by the compiler and bridges
 ├── elephc-pcntl/        # Unix process control, wait, exec, and signal bridge
 ├── elephc-pdo/          # Multi-driver PDO bridge
 ├── elephc-phar/         # PHAR/tar/zip bridge
+├── elephc-proc/         # proc_open() process spawning and wait-status bridge
 ├── elephc-probe/        # Sampled profiling and authenticated service endpoint
 ├── elephc-tls/          # TLS stream bridge
 ├── elephc-tz/           # IANA timezone bridge
@@ -747,11 +765,20 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ./scripts/test-linux-x86_64.sh  # Linux x86_64 suite in Docker
 ```
 
+The Docker test scripts limit the test container to one CPU and 8 GiB of memory
+without swap. They check its temporary Cargo target volume every 30 seconds and
+stop the test if it exceeds 24 GiB or Docker's filesystem has less than 20 GiB
+free. These disk checks are periodic, not a filesystem quota. Override the
+defaults with `ELEPHC_DOCKER_CPUS`, `ELEPHC_DOCKER_MEMORY`,
+`ELEPHC_DOCKER_MAX_TARGET_GIB`, `ELEPHC_DOCKER_MIN_FREE_GIB`, and
+`ELEPHC_DOCKER_DISK_CHECK_SECONDS`. The target volume is removed after the run;
+the Docker image and build cache remain available for later runs.
+
 ## Documentation
 
 The **[docs/](docs/)** directory is a complete wiki covering every aspect of the compiler. Inside you'll find:
 
-- **PHP syntax reference**: types, operators, control structures, functions, classes, namespaces, and all 549 built-in functions with signatures and examples
+- **PHP syntax reference**: types, operators, control structures, functions, classes, namespaces, and the generated built-in function reference with signatures and examples
 - **Compiler extensions** — pointers, `buffer<T>`, `packed class`, FFI with `extern`, and conditional compilation with `ifdef` — the features that take PHP beyond the web
 - **Compiler internals** — a step-by-step walkthrough of the full pipeline, from lexing to Pratt parsing to type checking to code generation and runtime structure
 - **ARM64 primer** — an introduction to ARM64 assembly for people who've never seen it, plus a quick reference of the ARM64 instruction set used by elephc's AArch64 backend

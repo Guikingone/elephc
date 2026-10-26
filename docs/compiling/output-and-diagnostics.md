@@ -36,8 +36,9 @@ the boundary contract and the static-linking distinction.
 
 ### `--emit-asm`
 
-Writes the generated assembly next to the source instead of assembling and
-linking a binary. Useful for inspecting exactly what the backend produced.
+Writes the generated assembly next to the source and stops before runtime-object
+preparation, native assembly, or linking. No assembler for the selected target
+is required. Useful for inspecting exactly what the backend produced.
 
 ```bash
 elephc --emit-asm hello.php
@@ -98,6 +99,11 @@ lldb ./hello   # breakpoints and backtraces resolve to hello.php lines
 
 `--debug-info` and `--source-map` compose: the first serves standard DWARF
 consumers, the second serves tools that want the richer JSON schema.
+PHP function ranges exclude native exception-cleanup callbacks. Generator source
+locations describe the coroutine body; its allocation constructor and entry
+wrapper are compiler-generated helpers, not additional PHP debug subprograms.
+Inline eval registration helpers preserve the enclosing PHP function's text
+section, including when emitting native callable invokers on Linux.
 
 ## Compile-time diagnostics
 

@@ -22,7 +22,7 @@
 use crate::parser::ast::{BinOp, CastType, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_binop, e_bool, e_call, e_cast, e_index, e_int, e_new_fq, e_not, e_null, e_str, e_ternary,
-    e_var, function, internal_declarations, s_assign, s_break, s_if, s_return, s_throw, s_while,
+    e_var, function, php_semantics_declarations, s_assign, s_break, s_if, s_return, s_throw, s_while,
     t_nullable, t_union,
 };
 
@@ -51,7 +51,7 @@ const SPECIAL_FORMS: &[(&str, i64)] = &[
 
 /// Returns the `version_compare()` declarations for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| {
+    php_semantics_declarations(|| {
         vec![
             decl_fn_canonicalize(),
             decl_fn_special(),

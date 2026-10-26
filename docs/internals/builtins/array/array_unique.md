@@ -1,16 +1,16 @@
 ---
-title: "array_unique() — internals"
+title: "array_unique() - internals"
 description: "Compiler internals for array_unique(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 55
 ---
 
-## `array_unique()` — internals
+## `array_unique()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_unique.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_unique.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_unique(array $array): array
+function array_unique(array $array, int $flags = 2): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

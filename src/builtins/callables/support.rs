@@ -51,7 +51,7 @@ pub(crate) fn check_class_relation(cx: &mut BuiltinCheckCtx) -> Result<PhpType, 
             autoload_arg.kind,
             ExprKind::BoolLiteral(_) | ExprKind::IntLiteral(_)
         ) {
-            return Err(CompileError::new(
+            return Err(CompileError::aot_literal_required(
                 cx.span,
                 &format!("{}() autoload argument must be a literal bool or int in AOT mode", cx.name),
             ));

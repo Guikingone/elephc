@@ -8,9 +8,8 @@
 //! - AND and XOR stop at the shorter operand; OR keeps the longer operand's untouched tail.
 //! - Results use bounded concat scratch storage and the normal pointer/length string ABI.
 
-use crate::codegen_support::runtime::strings::concat_scratch::{
-    CONCAT_BUF_CAPACITY, CONCAT_TEMP_HEAP_KIND,
-};
+use crate::codegen_support::runtime::strings::concat_scratch::CONCAT_BUF_CAPACITY;
+use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits the target-specific `__rt_str_bitwise` byte-string helper.

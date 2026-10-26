@@ -240,3 +240,42 @@ echo json_encode($gap);
         "[\"a\",\"b\"]|a:2:{i:0;s:1:\"a\";i:1;s:1:\"b\";}|{\"0\":\"a\",\"2\":\"b\"}",
     );
 }
+
+/// A bare `array` parameter stored into one of its own elements (`$context['_parent'] =
+/// $context;`, the first statement of every loop in a compiled Twig template). The write detaches
+/// the boxed parameter into a clone and releases the box the slot held -- which the right-hand
+/// side was still borrowing, so the write stored a freed box: "heap debug detected bad refcount",
+/// and Symfony's `/` route died. Plain, generator and local forms; php's output, clean heap.
+#[test]
+fn test_array_parameter_stored_into_its_own_element_keeps_the_copy() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function plain(array $context): int {
+    $context['_parent'] = $context;
+    $context['loop'] = ['parent' => $context['_parent'], 'index' => 1];
+    return count($context) + count($context['_parent']) + $context['loop']['index'];
+}
+function gen(array $context): iterable {
+    yield 'start';
+    $context['_parent'] = $context;
+    $context['copy'] = $context['greeting'];
+    yield count($context) . ':' . count($context['_parent']) . ':' . $context['copy'];
+}
+function local(): int {
+    $context = ['a' => 1, 'b' => 2];
+    $context['_parent'] = $context;
+    return count($context) + count($context['_parent']);
+}
+$ctx = ['greeting' => 'Hello', 'words' => ['alpha', 'beta']];
+echo local(), "|", plain($ctx), "|";
+foreach (gen($ctx) as $v) { echo $v, "|"; }
+echo json_encode($ctx);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "5|7|start|4:2:Hello|{\"greeting\":\"Hello\",\"words\":[\"alpha\",\"beta\"]}"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

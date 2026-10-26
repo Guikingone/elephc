@@ -1,16 +1,16 @@
 ---
-title: "is_callable() — internals"
+title: "is_callable() - internals"
 description: "Compiler internals for is_callable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 925
+  order: 1019
 ---
 
-## `is_callable()` — internals
+## `is_callable()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_callable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_callable.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

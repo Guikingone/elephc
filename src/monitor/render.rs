@@ -210,19 +210,31 @@ pub(crate) fn decode_field(value: &str) -> String {
 
 /// Demangles a PHP-level symbol to its source spelling: `fn_hot_u_leaf` →
 /// `hot_leaf`, `method_Engine_step` → `Engine::step`, `main` → `{main}`.
-/// `_u_` escapes an underscore inside a name; the placeholder swap keeps it
-/// from being read as the class/method separator.
+///
+/// Names are decoded with `names::demangle_fqn`, and a method's class/method
+/// boundary with `names::split_symbol_fragments`, the inverses of what the
+/// compiler emits: the compact `_method_Engine_step` join and the escaped
+/// `_method___App_N_My_u_Class___run` one any `_`, `\` or non-ASCII name selects
+/// (#922). A symbol neither parses keeps the older best-effort reading, where a
+/// placeholder swap stops `_u_` from being read as the separator.
 pub(crate) fn demangle(symbol: &str) -> String {
     let stem = symbol.trim_start_matches('_');
     if stem == "main" {
         return "{main}".to_string();
     }
     if let Some(rest) = stem.strip_prefix("fn_") {
-        return rest.replace("_u_", "_");
+        return crate::names::demangle_fqn(rest).unwrap_or_else(|| rest.replace("_u_", "_"));
     }
-    if let Some(rest) = stem.strip_prefix("method_").or_else(|| {
-        super::is_static_method_symbol(stem).then(|| &stem["static_".len()..])
-    }) {
+    let tail = if stem.starts_with("method_") {
+        Some(&stem["method".len()..])
+    } else {
+        super::is_static_method_symbol(stem).then(|| &stem["static".len()..])
+    };
+    if let Some(tail) = tail {
+        if let Some(name) = demangle_member(tail) {
+            return name;
+        }
+        let rest = &tail[1..];
         let protected = rest.replace("_u_", "\u{1}");
         if let Some((class, method)) = protected.split_once('_') {
             return format!(
@@ -234,6 +246,21 @@ pub(crate) fn demangle(symbol: &str) -> String {
         return rest.replace("_u_", "_");
     }
     symbol.to_string()
+}
+
+/// Demangles the tail of a method symbol to `Class::method` when it is exactly the two
+/// fragments `names::method_symbol` / `names::static_method_symbol` joined, in either
+/// separator regime; `None` for anything else, such as a suffixed internal label.
+fn demangle_member(tail: &str) -> Option<String> {
+    let fragments = crate::names::split_symbol_fragments(tail)?;
+    let [class, method] = fragments.as_slice() else {
+        return None;
+    };
+    Some(format!(
+        "{}::{}",
+        crate::names::demangle_fqn(class)?,
+        crate::names::demangle_fqn(method)?
+    ))
 }
 
 /// Extracts function and method declaration ranges from PHP source with a

@@ -35,6 +35,45 @@ echo "mixed:$m:$z";
     assert_eq!(out, "arr:10:v|mixed:20:w");
 }
 
+/// Declared arrays keep numeric-key semantics and retain the RHS while a destination replaces it.
+#[test]
+fn test_list_unpack_boxed_array_preserves_source_and_numeric_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function unpackBoxedArray(array $items): string {
+    [$items, $tail] = $items;
+    return $items . ":" . $tail;
+}
+function unpackNullableArray(?array $items): string {
+    if ($items === null) { return "null"; }
+    [$first, $second] = $items;
+    return $first . ":" . $second;
+}
+echo unpackBoxedArray([str_repeat("a", 3), str_repeat("b", 3)]), "|";
+echo unpackBoxedArray([1 => "second", 0 => "first"]), "|";
+echo unpackNullableArray([1 => "one", 0 => "zero"]), "|", unpackNullableArray(null);
+"#,
+    );
+    assert_eq!(out, "aaa:bbb|first:second|zero:one|null");
+}
+
+/// Temporary RHS containers release their owners once every destructured value is retained.
+#[test]
+fn test_list_unpack_releases_temporary_boxed_and_packed_arrays() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function makeUnpackRow(): array { return [str_repeat("a", 48), str_repeat("b", 49)]; }
+for ($i = 0; $i < 3; $i++) {
+    [$first, $second] = makeUnpackRow();
+    [$third, $fourth] = [str_repeat("c", 50), str_repeat("d", 51)];
+    echo strlen($first), ":", strlen($second), ":", strlen($third), ":", strlen($fourth), "|";
+    unset($first, $second, $third, $fourth);
+}
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "48:49:50:51|48:49:50:51|48:49:50:51|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies a null guard ending in `continue` narrows `?array` to `Array` before list unpacking.
 #[test]
 fn test_null_guard_continue_narrows_list_unpack_rhs() {
@@ -304,4 +343,154 @@ echo implode(',', $out), ':', count($out);
 "#,
     );
     assert_eq!(out, "2,4,6:3");
+}
+
+/// Destructures an `ArrayAccess` object through `offsetGet()`, as php does.
+///
+/// Laravel's `Inspiring::formatForConsole()` writes `[$text, $author] = (new Stringable($quote))
+/// ->explode('-')`, which returns a Collection; the checker refused any object on the right-hand
+/// side. Expected output is `php -n` 8.5's.
+#[test]
+fn test_list_unpack_of_an_array_access_object() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class Coll implements ArrayAccess {
+    public function __construct(private array $items) {}
+    public function offsetExists(mixed $o): bool { return isset($this->items[$o]); }
+    public function offsetGet(mixed $o): mixed { return $this->items[$o]; }
+    public function offsetSet(mixed $o, mixed $v): void { $this->items[$o] = $v; }
+    public function offsetUnset(mixed $o): void { unset($this->items[$o]); }
+}
+function viaMixed(mixed $c): string { [$a, $b] = $c; return "$a|$b"; }
+function viaObject(Coll $c): string { [$a, $b] = $c; return "$a|$b"; }
+function make(string $s): Coll { return new Coll(explode('-', $s)); }
+echo viaMixed(new Coll(['x', 'y'])), "\n";
+echo viaObject(new Coll(['p', 'q'])), "\n";
+[$t, $u] = make("left - right");
+echo trim($t), "/", trim($u), "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "x|y\np|q\nleft/right\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Reads and writes locals through variable variables (`$$name`, `${expr}`).
+///
+/// Carbon's `Date::set()`, `Localization::translateTimeString()` and `CarbonInterval`'s
+/// constructor use them, and the parser refused the files, so every Carbon class (and Laravel's
+/// `Illuminate\Support\Carbon` with them) fell out of the compiled program. Expected output is
+/// `php -n` 8.5's.
+#[test]
+fn test_variable_variables_read_and_write_locals() {
+    let out = compile_and_run(
+        r#"<?php
+function setPart(string $name, int $value): string {
+    [$year, $month, $day] = [2024, 1, 15];
+    switch ($name) {
+        case 'month':
+        case 'day':
+            $$name = $value;
+            break;
+    }
+    return "$year-$month-$day";
+}
+function translate(string $from, string $to): string {
+    $out = [];
+    foreach (['from', 'to'] as $key) {
+        $language = $$key;
+        $out[] = strtoupper($language);
+    }
+    return implode(">", $out);
+}
+function units(int $years = 0, int $days = 0): string {
+    $parts = [];
+    foreach (['years', 'days'] as $unit) {
+        $value = $$unit;
+        $parts[] = "$unit=$value";
+    }
+    $n = 'years';
+    $parts[] = ${$n} + ${'days'};
+    return implode(",", $parts);
+}
+echo setPart('month', 7), " ", setPart('day', 3), " ", setPart('x', 9), "\n";
+echo translate('en', 'fr'), "\n";
+echo units(2, 5), "\n";
+$f = function (string $k) { $alpha = 'A'; $beta = 'B'; return $$k; };
+echo $f('beta'), $f('alpha'), "\n";
+"#,
+    );
+    assert_eq!(out, "2024-7-15 2024-1-3 2024-1-15\nEN>FR\nyears=2,days=5,7\nBA\n");
+}
+
+/// Verifies a `foreach` destructuring pattern can bind elements BY REFERENCE (`[$a, &$b]`), keyed
+/// or not, and that php iterates such a loop by reference: writes through the `&` entry reach
+/// the source array. Symfony's `TransportResponseTrait::stream()` uses this shape, and refusing
+/// it sent the whole HTTP client to the interpreter. Expected output is php 8.5's.
+#[test]
+fn test_foreach_destructuring_binds_reference_entries() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [[1, [10, 20]], [2, [30]]];
+foreach ($rows as $i => [$id, &$list]) {
+    $list[] = $id * 100;
+}
+echo json_encode($rows), "\n";
+$pairs = [['k' => 'a', 'v' => 1], ['k' => 'b', 'v' => 2]];
+foreach ($pairs as ['k' => $k, 'v' => &$v]) {
+    $v = $v . $k;
+}
+unset($v);
+echo json_encode($pairs), "\n";
+$m = ['x' => [5, 6]];
+foreach ($m as [&$first, $second]) {
+    $first += $second;
+}
+echo json_encode($m), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "[[1,[10,20,100]],[2,[30,200]]]\n[{\"k\":\"a\",\"v\":\"1a\"},{\"k\":\"b\",\"v\":\"2b\"}]\n{\"x\":[11,6]}\n"
+    );
+}
+
+/// An empty array a loop pushes onto in one branch and pops in another is read with the elements
+/// an earlier iteration appended. Symfony's expression-language `Lexer::tokenize()` keeps its
+/// bracket stack this way: the stack stayed `array<never>` at the loop header, so `array_pop()`
+/// returned null (a silent wrong answer) and the destructuring form was refused outright.
+#[test]
+fn test_loop_stack_pushed_and_popped_in_branches_keeps_its_elements() {
+    let out = compile_and_run(
+        r#"<?php
+function lex(string $e): string {
+    $brackets = [];
+    $out = "";
+    for ($i = 0; $i < strlen($e); $i++) {
+        $c = $e[$i];
+        if ($c === "(") {
+            $brackets[] = [$c, $i];
+        } elseif ($c === ")") {
+            [$expect, $cur] = array_pop($brackets);
+            $out .= $expect . $cur . ";";
+        }
+    }
+    return $out;
+}
+function kinds(string $s): string {
+    $b = [];
+    $o = "";
+    foreach (str_split($s) as $i => $ch) {
+        if ($ch === "(") {
+            $b[] = [$ch, $i];
+        } else {
+            $o .= gettype(array_pop($b)) . ",";
+        }
+    }
+    return $o;
+}
+echo lex("(a(b))"), "|", kinds("(a)"), "\n";
+"#,
+    );
+    assert_eq!(out, "(2;(0;|array,NULL,\n");
 }

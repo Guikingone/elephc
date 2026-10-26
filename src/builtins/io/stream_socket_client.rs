@@ -29,7 +29,7 @@ builtin! {
 /// Validates ref output params are plain variables, then returns `Union(stream_resource, Bool)`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     if let Some(error_code) = cx.args.get(1) {
-        if !matches!(error_code.kind, ExprKind::Variable(_)) {
+        if !is_writable_place(error_code) {
             return Err(CompileError::new(
                 error_code.span,
                 &format!("{}() parameter $error_code must be passed a variable", cx.name),
@@ -37,7 +37,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     }
     if let Some(error_message) = cx.args.get(2) {
-        if !matches!(error_message.kind, ExprKind::Variable(_)) {
+        if !is_writable_place(error_message) {
             return Err(CompileError::new(
                 error_message.span,
                 &format!("{}() parameter $error_message must be passed a variable", cx.name),
@@ -45,4 +45,17 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     }
     Ok(cx.checker.normalize_union_type(vec![PhpType::stream_resource(), PhpType::False]))
+}
+
+/// A by-reference output the call writes back: a variable, or a property, static property or
+/// array element (`@pfsockopen($host, -1, $this->errno, $this->errstr)` in Monolog's
+/// `SocketHandler`), which take the by-reference builtin write-back.
+fn is_writable_place(arg: &crate::parser::ast::Expr) -> bool {
+    matches!(
+        arg.kind,
+        ExprKind::Variable(_)
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+            | ExprKind::ArrayAccess { .. }
+    )
 }

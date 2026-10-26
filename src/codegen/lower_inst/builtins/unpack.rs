@@ -6,8 +6,11 @@
 //! - `super::lower_builtin_call()` for the canonical `unpack` builtin name.
 //!
 //! Key details:
-//! - Literal formats support `C`, `n`, `N`, and `V`, including unnamed `*`
-//!   repetition, named fields separated by `/`, and the optional byte offset.
+//! - Literal formats support `C`, `n`, `v`, `N`, `V`, and the 64-bit `J`, `P`, `Q`, including
+//!   unnamed `*` repetition, named fields separated by `/`, and the optional byte offset.
+//! - A lone unnamed field without a repeat count (`unpack('N', $bytes)[1]`, nette/utils
+//!   `Strings::ord()`, brick/math `BigDecimal::fromFloatExact()`) is stored under the integer key
+//!   `1`, exactly as php numbers an unnamed field.
 //! - Repeated unnamed fields use PHP's one-based integer keys; named fixed
 //!   fields use associative string keys.
 //! - Both target paths return a boxed `array|false` representation and transfer
@@ -36,8 +39,15 @@ enum ByteOrder {
 struct Field {
     width: usize,
     order: ByteOrder,
-    name: String,
+    key: FieldKey,
     byte_offset: usize,
+}
+
+/// Where one unpacked field is stored: under its format name, or under php's integer key `1`
+/// for an unnamed field.
+enum FieldKey {
+    Name(String),
+    Index(i64),
 }
 
 /// Supported lowering shape for one literal `unpack()` format.
@@ -69,6 +79,11 @@ fn parse_format(format: &str) -> Result<FormatPlan> {
     if let Some(code) = format.strip_suffix('*') {
         if code.len() == 1 {
             let (width, order) = integer_directive(code.as_bytes()[0])?;
+            if width > 4 {
+                return Err(CodegenIrError::unsupported(
+                    "unpack() 64-bit directives do not support unnamed `*` repetition",
+                ));
+            }
             return Ok(FormatPlan::Sequence {
                 width: width as i64,
                 order,
@@ -84,20 +99,52 @@ fn parse_format(format: &str) -> Result<FormatPlan> {
             return Err(CodegenIrError::unsupported("unpack() empty format component"));
         };
         let (width, order) = integer_directive(directive)?;
-        if name.is_empty() || name[0].is_ascii_digit() || name[0] == b'*' {
+        // A repeater (`V2a`, `V1`): `count` consecutive fields. php names them `a1`, `a2`, ...
+        // -- or, for a single repetition, just `a` -- and numbers unnamed ones from `1`. A `*`
+        // repeater depends on the input length, which a literal-format lowering cannot size.
+        let digits = name.iter().take_while(|byte| byte.is_ascii_digit()).count();
+        if name.first() == Some(&b'*') {
             return Err(CodegenIrError::unsupported(format!(
-                "unpack() unsupported repeated or unnamed format component {component:?}"
+                "unpack() unsupported repeated format component {component:?}"
             )));
         }
-        let name = std::str::from_utf8(name)
-            .map_err(|_| CodegenIrError::unsupported("unpack() format names must be UTF-8"))?;
-        fields.push(Field {
-            width,
-            order,
-            name: name.to_string(),
-            byte_offset,
-        });
-        byte_offset += width;
+        let repetitions: usize = if digits == 0 {
+            1
+        } else {
+            std::str::from_utf8(&name[..digits])
+                .ok()
+                .and_then(|text| text.parse().ok())
+                .filter(|count| *count >= 1)
+                .ok_or_else(|| {
+                    CodegenIrError::unsupported(format!(
+                        "unpack() unsupported repeated format component {component:?}"
+                    ))
+                })?
+        };
+        let name = &name[digits..];
+        let base = if name.is_empty() {
+            None
+        } else {
+            Some(
+                std::str::from_utf8(name)
+                    .map_err(|_| CodegenIrError::unsupported("unpack() format names must be UTF-8"))?
+                    .to_string(),
+            )
+        };
+        for repetition in 0..repetitions {
+            let key = match &base {
+                None => FieldKey::Index(repetition as i64 + 1),
+                Some(base) if repetitions == 1 => FieldKey::Name(base.clone()),
+                Some(base) => FieldKey::Name(format!("{}{}", base, repetition + 1)),
+            };
+            fields.push(Field {
+                width,
+                order,
+                key,
+                byte_offset,
+            });
+            byte_offset += width;
+        }
     }
     if fields.is_empty() {
         return Err(CodegenIrError::unsupported("unpack() empty format"));
@@ -112,6 +159,9 @@ fn integer_directive(directive: u8) -> Result<(usize, ByteOrder)> {
         b'n' => Ok((2, ByteOrder::Big)),
         b'N' => Ok((4, ByteOrder::Big)),
         b'V' => Ok((4, ByteOrder::Little)),
+        b'v' => Ok((2, ByteOrder::Little)),
+        b'J' => Ok((8, ByteOrder::Big)),
+        b'P' | b'Q' => Ok((8, ByteOrder::Little)),
         other => Err(CodegenIrError::unsupported(format!(
             "unpack() integer format directive {:?}",
             char::from(other)
@@ -209,9 +259,7 @@ fn lower_named_aarch64(
     for field in fields {
         ctx.emitter.instruction("ldr x9, [sp]");                              // reload the stable input cursor
         emit_integer_load_aarch64(ctx, field);
-        let (label, len) = ctx.data.add_string(field.name.as_bytes());
-        abi::emit_symbol_address(ctx.emitter, "x1", &label);
-        abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        emit_field_key_aarch64(ctx, field);
         ctx.emitter.instruction("mov x4, #0");                                // integer values have no high payload word
         ctx.emitter.instruction("mov x5, #0");                                // hash value tag 0 = integer
         ctx.emitter.instruction("ldr x0, [sp, #8]");                          // reload the current hash pointer
@@ -221,6 +269,38 @@ fn lower_named_aarch64(
     ctx.emitter.instruction("ldr x0, [sp, #8]");                              // publish the completed hash
     ctx.emitter.instruction("add sp, sp, #32");                               // release the aligned spill area
     Ok(())
+}
+
+/// Loads one field's hash key into `x1`/`x2`: a string pointer and length, or an integer key
+/// (`x2 == -1`) for an unnamed field.
+fn emit_field_key_aarch64(ctx: &mut FunctionContext<'_>, field: &Field) {
+    match &field.key {
+        FieldKey::Name(name) => {
+            let (label, len) = ctx.data.add_string(name.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        FieldKey::Index(index) => {
+            abi::emit_load_int_immediate(ctx.emitter, "x1", *index);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
+        }
+    }
+}
+
+/// Loads one field's hash key into `rsi`/`rdx`: a string pointer and length, or an integer key
+/// (`rdx == -1`) for an unnamed field.
+fn emit_field_key_x86_64(ctx: &mut FunctionContext<'_>, field: &Field) {
+    match &field.key {
+        FieldKey::Name(name) => {
+            let (label, len) = ctx.data.add_string(name.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+        }
+        FieldKey::Index(index) => {
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", *index);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
+        }
+    }
 }
 
 /// Loads one unsigned integer field into AArch64 hash value register `x3`.
@@ -238,6 +318,12 @@ fn emit_integer_load_aarch64(ctx: &mut FunctionContext<'_>, field: &Field) {
             ctx.emitter.instruction(&format!("ldr w3, {address}"));
             if matches!(field.order, ByteOrder::Big) {
                 ctx.emitter.instruction("rev w3, w3");                         // convert network-order 32-bit input to host order
+            }
+        }
+        8 => {
+            ctx.emitter.instruction(&format!("ldr x3, {address}"));
+            if matches!(field.order, ByteOrder::Big) {
+                ctx.emitter.instruction("rev x3, x3");                         // convert network-order 64-bit input to host order
             }
         }
         _ => unreachable!("validated unpack integer width"),
@@ -273,9 +359,7 @@ fn lower_named_x86_64(
     for field in fields {
         ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                  // reload the stable input cursor
         emit_integer_load_x86_64(ctx, field);
-        let (label, len) = ctx.data.add_string(field.name.as_bytes());
-        abi::emit_symbol_address(ctx.emitter, "rsi", &label);
-        abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+        emit_field_key_x86_64(ctx, field);
         ctx.emitter.instruction("mov r8, 0");                                 // integer values have no high payload word
         ctx.emitter.instruction("mov r9, 0");                                 // hash value tag 0 = integer
         ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");              // reload the current hash pointer
@@ -302,6 +386,12 @@ fn emit_integer_load_x86_64(ctx: &mut FunctionContext<'_>, field: &Field) {
             ctx.emitter.instruction(&format!("mov ecx, DWORD PTR {address}"));
             if matches!(field.order, ByteOrder::Big) {
                 ctx.emitter.instruction("bswap ecx");                          // convert network-order 32-bit input to host order
+            }
+        }
+        8 => {
+            ctx.emitter.instruction(&format!("mov rcx, QWORD PTR {address}"));
+            if matches!(field.order, ByteOrder::Big) {
+                ctx.emitter.instruction("bswap rcx");                          // convert network-order 64-bit input to host order
             }
         }
         _ => unreachable!("validated unpack integer width"),

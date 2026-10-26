@@ -44,6 +44,22 @@ fn aot_visible_cells_exclude_interpreter_only_locals() {
     assert_eq!(scope.aot_visible_cells(), vec![native]);
 }
 
+/// Republishing a synchronized address retires exactly the previous scope-owned lease.
+#[test]
+fn aot_sync_retires_the_prior_scope_lease_for_identical_cells() {
+    let cell = RuntimeCellHandle::from_raw(1usize as *mut crate::value::RuntimeCell);
+    for previous in [ScopeCellOwnership::Borrowed, ScopeCellOwnership::Owned] {
+        for incoming in [ScopeCellOwnership::Borrowed, ScopeCellOwnership::Owned] {
+            let mut scope = ElephcEvalScope::new();
+            scope.set("value", cell, previous);
+            let replaced = scope.set_from_aot("value", cell, incoming);
+            assert_eq!(replaced, (previous == ScopeCellOwnership::Owned).then_some(cell));
+            assert_eq!(scope.entry("value").unwrap().flags().ownership, incoming);
+            assert_eq!(scope.aot_visible_cells(), vec![cell]);
+        }
+    }
+}
+
 /// Verifies unsetting a variable creates a dirty marker that is not visible.
 #[test]
 fn unset_records_missing_dirty_marker() {
@@ -86,6 +102,30 @@ fn set_does_not_return_same_owned_cell() {
     let replaced = scope.set("x", cell, ScopeCellOwnership::Owned);
 
     assert_eq!(replaced, None);
+}
+
+/// Verifies AOT synchronization releases a same-cell owner when the scope starts borrowing it.
+#[test]
+fn set_from_aot_returns_same_cell_when_dropping_scope_ownership() {
+    let mut scope = ElephcEvalScope::new();
+    let cell = RuntimeCellHandle::from_raw(1usize as *mut crate::value::RuntimeCell);
+    scope.set("x", cell, ScopeCellOwnership::Owned);
+
+    let replaced = scope
+        .set_from_aot("x", cell.borrowed(), ScopeCellOwnership::Borrowed)
+        .expect("the previous scope owner must be returned");
+
+    assert_eq!(replaced, cell);
+    assert!(!replaced.is_borrowed());
+    assert_eq!(scope.visible_cell("x"), Some(cell));
+    assert_eq!(
+        scope.entry("x").expect("x").flags().ownership,
+        ScopeCellOwnership::Borrowed
+    );
+    assert_eq!(
+        scope.set_from_aot("x", cell.borrowed(), ScopeCellOwnership::Borrowed),
+        None
+    );
 }
 
 /// Verifies reference binding points two variable names at one runtime cell.
@@ -189,6 +229,24 @@ fn global_alias_to_records_target_name() {
     assert!(scope.is_global_alias("alias"));
     assert_eq!(scope.global_alias_target("alias"), Some("source"));
     assert_eq!(scope.global_alias_target("source"), None);
+}
+
+/// Marks every local reference alias dirty while keeping exactly one owner for the group.
+#[test]
+fn reference_mutation_preserves_alias_ownership() {
+    let mut scope = ElephcEvalScope::new();
+    let value = RuntimeCellHandle::from_raw(1usize as *mut crate::value::RuntimeCell);
+    scope.set("value", value, ScopeCellOwnership::Owned);
+    scope.set_reference("alias", "value", value, ScopeCellOwnership::Owned);
+    let owned_before = ["value", "alias"].map(|name| scope.entry(name).unwrap().flags().ownership);
+    scope.mark_all_clean();
+    scope.mark_reference_changed("alias");
+    for (name, ownership) in ["value", "alias"].into_iter().zip(owned_before) {
+        let entry = scope.entry(name).unwrap();
+        assert!(entry.flags().dirty);
+        assert_eq!(entry.flags().ownership, ownership);
+    }
+    assert_eq!(scope.drain_owned_cells(), vec![value]);
 }
 
 /// Verifies draining a scope returns only visible owned cells.

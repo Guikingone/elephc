@@ -1,8 +1,8 @@
 ---
 title: "mysqli_stmt_store_result()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Buffers a prepared statement's whole result on the client."
 sidebar:
-  order: 189
+  order: 190
 ---
 
 ## mysqli_stmt_store_result()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_store_result(mixed $statement): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Buffers a prepared statement's whole result on the client.
 
 **Parameters**:
 - `$statement` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

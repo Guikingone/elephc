@@ -45,8 +45,18 @@ pub(crate) fn build_class_info_recursive(
     // A class absent from the map is not the one at fault: the error belongs to whoever named
     // it (a child whose parent is missing), and that caller's own wrapper tags it.
     let known = class_map.contains_key(class_name);
+    let already_building = building.contains(class_name);
     build_class_info_recursive_untagged(class_name, class_map, checker, next_class_id, building)
-        .map_err(|error| if known { error.within_declaration(class_name) } else { error })
+        .map_err(|error| {
+            // A class whose build FAILED is not still being built. Leaving its name in `building`
+            // made the next request for it (a later sibling naming it, or the retry after the
+            // deferral pass dropped another file) report "Circular inheritance detected" in place
+            // of the real error: Carbon's own refusal was hidden behind that message.
+            if !already_building {
+                building.remove(class_name);
+            }
+            if known { error.within_declaration(class_name) } else { error }
+        })
 }
 
 /// The body of [`build_class_info_recursive`], before its errors are attributed to the class.
@@ -100,7 +110,16 @@ fn build_class_info_recursive_untagged(
     interfaces::append_implicit_stringable(&mut state, &class);
 
     let constructor_param_to_prop = constructor_param_to_prop_for(&class, parent_info.as_ref());
-    let class_info = state.into_class_info(*next_class_id, &class, constructor_param_to_prop)?;
+    // Builtins registered without source carry no source span; a prelude's classes do, but come
+    // from compiler-generated statements.
+    let is_internal =
+        !class.span.is_from_source() || checker.internal_class_decls.contains(&class.name);
+    let class_info = state.into_class_info(
+        *next_class_id,
+        &class,
+        constructor_param_to_prop,
+        is_internal,
+    )?;
     checker.classes.insert(class.name.clone(), class_info);
     *next_class_id += 1;
     building.remove(class_name);

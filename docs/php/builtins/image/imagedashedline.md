@@ -1,8 +1,8 @@
 ---
 title: "imagedashedline()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws a dashed line. Superseded by imagesetstyle() with imageline()."
 sidebar:
-  order: 511
+  order: 512
 ---
 
 ## imagedashedline()
@@ -11,7 +11,7 @@ sidebar:
 function imagedashedline(mixed $image, int $x1, int $y1, int $x2, int $y2, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws a dashed line. Superseded by imagesetstyle() with imageline().
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -28,7 +28,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

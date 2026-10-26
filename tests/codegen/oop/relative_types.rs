@@ -289,6 +289,203 @@ echo Owner::makeChild() instanceof OwnedChild ? "yes" : "no";
     assert_eq!(out, "built yes");
 }
 
+/// Issue #868: an inherited private constructor with OMITTED DEFAULTS on the named
+/// (`fixed_new`) path.
+///
+/// `ir_lower::expr::object_construction::constructor_signature` read the descendant's own
+/// `methods` map, which a private ancestor constructor is deliberately absent from, so the
+/// call site saw no constructor, padded no defaults, and `fixed_new` rejected the arity with
+/// `constructor call to OwnedDefaults::__construct with 0 args for 1 params`.
+#[test]
+fn test_fixed_new_of_descendant_pads_inherited_private_constructor_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+class OwnerDefaults {
+    private function __construct(private int $n = 4) {}
+    public static function makeChild(): OwnerDefaults { return new OwnedDefaults(); }
+    public function n(): int { return $this->n; }
+}
+class OwnedDefaults extends OwnerDefaults {}
+echo OwnerDefaults::makeChild()->n();
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+/// Only the OMITTED arguments are padded: an explicitly passed one still wins.
+#[test]
+fn test_fixed_new_of_descendant_keeps_an_explicit_argument_over_the_default() {
+    let out = compile_and_run(
+        r#"<?php
+class OwnerMixed {
+    private function __construct(private int $a = 1, private int $b = 2) {}
+    public static function makeChild(): OwnerMixed { return new OwnedMixed(9); }
+    public function sum(): int { return $this->a * 10 + $this->b; }
+}
+class OwnedMixed extends OwnerMixed {}
+echo OwnerMixed::makeChild()->sum();
+"#,
+    );
+    assert_eq!(out, "92");
+}
+
+/// A CONTROL for the reflection half of the same lookup: an inherited PUBLIC constructor IS
+/// copied into the descendant's own `methods` map, so the direct lookup found it too and this
+/// fixture passes either way. The regression test for the changed helper is the
+/// private-ancestor one below.
+#[test]
+fn test_reflection_new_instance_pads_inherited_constructor_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflOwner {
+    public function __construct(public int $n = 5) {}
+}
+class ReflChild extends ReflOwner {}
+$reflected = new ReflectionClass('ReflChild');
+echo $reflected->newInstance()->n;
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// The REGRESSION test for `reflection_new_instance::constructor_signature_for_class_name`: a
+/// descendant of a class with a PRIVATE constructor, which is the only shape where the changed
+/// lookup differs from the direct one, because it is the only shape whose own `methods` map
+/// lacks the entry.
+///
+/// Measured both ways on this fixture: with the owner walk it prints `6` (the default is padded
+/// and the ancestor's constructor runs); reading the descendant's own map it prints `0` — no
+/// signature, so no padding and no constructor call at all, leaving the promoted property at
+/// its zero value.
+///
+/// php-src rejects this program with `Error: Call to private PrivReflOwner::__construct()`,
+/// because `newInstance()` enforces constructor visibility, and elephc now does too. It stays a
+/// REJECTION test: the owner walk is still what names `PrivReflOwner` -- the class whose
+/// constructor the visibility check is asked about -- rather than the descendant, which has none.
+/// (php words the scope `from scope PrivReflChild`; elephc's wording of the scope differs.)
+#[test]
+fn test_reflection_new_instance_resolves_an_inherited_private_constructor() {
+    let out = compile_and_run_expect_failure(
+        r#"<?php
+class PrivReflOwner {
+    private function __construct(public int $n = 6) {}
+}
+class PrivReflChild extends PrivReflOwner {}
+$reflected = new ReflectionClass('PrivReflChild');
+echo $reflected->newInstance()->n;
+"#,
+    );
+    assert!(
+        out.contains("Uncaught Error: Call to private PrivReflOwner::__construct() from"),
+        "{out}"
+    );
+}
+
+/// An inherited PUBLIC constructor with defaults is unaffected — the owner walk stops at the
+/// instantiated class whenever its own map HAS the entry, which a public inherited constructor
+/// does, so this path resolves exactly as before.
+#[test]
+fn test_fixed_new_of_descendant_with_an_inherited_public_constructor_still_pads() {
+    let out = compile_and_run(
+        r#"<?php
+class PublicOwner {
+    public function __construct(public int $n = 3) {}
+}
+class PublicChild extends PublicOwner {}
+echo (new PublicChild())->n, "|", (new PublicChild(8))->n;
+"#,
+    );
+    assert_eq!(out, "3|8");
+}
+
+/// A descendant that REPLACES the inherited constructor keeps its own: the owner walk stops at
+/// the first class whose map has the entry, which is the descendant itself.
+#[test]
+fn test_fixed_new_prefers_the_descendants_own_constructor_over_the_ancestors() {
+    let out = compile_and_run(
+        r#"<?php
+class ShadowOwner {
+    private function __construct(private int $n = 1) {}
+    public function n(): int { return $this->n; }
+}
+class ShadowChild extends ShadowOwner {
+    public function __construct(private int $m = 7) {}
+    public function n(): int { return $this->m; }
+}
+echo (new ShadowChild())->n();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Issue #869: `ReflectionClass::getConstructor()` on a descendant of a class with a PRIVATE
+/// constructor returns a `ReflectionMethod` on the DECLARING class, as PHP does. It used to
+/// answer `null`, because the descendant's own method map deliberately carries no entry.
+#[test]
+fn test_reflection_get_constructor_reports_the_declaring_class_for_an_inherited_private_ctor() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflPrivOwner { private function __construct() {} }
+class ReflPrivChild extends ReflPrivOwner {}
+$constructor = (new ReflectionClass('ReflPrivChild'))->getConstructor();
+var_dump($constructor === null);
+echo $constructor?->getName(), "|", $constructor?->getDeclaringClass()->getName(), "|";
+var_dump($constructor?->isPrivate());
+"#,
+    );
+    assert_eq!(out, "bool(false)\n__construct|ReflPrivOwner|bool(true)\n");
+}
+
+/// `isInstantiable()` follows from the same lookup: the inherited constructor is not public, so
+/// PHP answers `false`. With no constructor member found at all it used to answer `true`.
+#[test]
+fn test_reflection_is_instantiable_is_false_for_an_inherited_private_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class InstOwner { private function __construct() {} }
+class InstChild extends InstOwner {}
+class InstPubOwner { public function __construct() {} }
+class InstPubChild extends InstPubOwner {}
+var_dump(
+    (new ReflectionClass('InstChild'))->isInstantiable(),
+    (new ReflectionClass('InstOwner'))->isInstantiable(),
+    (new ReflectionClass('InstPubChild'))->isInstantiable()
+);
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(false)\nbool(true)\n");
+}
+
+/// The descendant's own method LIST is unchanged: PHP reports `method_exists()` as `false` and
+/// `getMethods()` as empty for an inherited private constructor, and only `getConstructor()`
+/// sees it. Pinning both halves is what keeps the #869 fix from over-reaching.
+#[test]
+fn test_an_inherited_private_constructor_stays_off_the_method_list() {
+    let out = compile_and_run(
+        r#"<?php
+class ListOwner { private function __construct() {} }
+class ListChild extends ListOwner {}
+var_dump(method_exists('ListChild', '__construct'));
+echo count((new ReflectionClass('ListChild'))->getMethods());
+"#,
+    );
+    assert_eq!(out, "bool(false)\n0");
+}
+
+/// The eval bridge reads the same AOT reflection rows, so it must agree with the compiled side.
+#[test]
+fn test_eval_reflection_sees_an_inherited_private_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalOwner { private function __construct() {} }
+class EvalChild extends EvalOwner {}
+echo eval('return (new ReflectionClass("EvalChild"))->getConstructor()?->getDeclaringClass()->getName();'), "|";
+var_dump(eval('return method_exists("EvalChild", "__construct");'));
+"#,
+    );
+    assert_eq!(out, "EvalOwner|bool(false)\n");
+}
+
 /// Verifies the singleton shape this defect actually reached: private constructor, static
 /// accessor, one subclass, and a call through the base type.
 #[test]
@@ -509,4 +706,54 @@ fn test_static_in_trait() {
 fn test_example_relative_class_types_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/relative-class-types/main.php"));
     assert_eq!(out, "599\n3\n6\ntail\nSELECT * WHERE active = 1\n");
+}
+
+
+/// Verifies a descendant whose constructor needs MORE arguments than an inherited `new static`
+/// factory passes does not refuse the program, and raises php's `ArgumentCountError` only when a
+/// receiver of that descendant reaches the factory.
+///
+/// Laravel's `Collection::newInstance()` is `new static($items)`, and `SortedMiddleware extends
+/// Collection` takes two required parameters. The checker refused `Collection` as a whole, the
+/// deferred class then failed to declare at run time and every `--web` request died. The lowering
+/// leaves such a class out of its candidates; its arm now throws instead of reaching the
+/// uncatchable "Dynamic factory class must extend" fatal. Values from `php -n` 8.5.10.
+#[test]
+fn test_new_static_descendant_with_too_few_arguments_throws_only_when_reached() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Coll {
+    public function __construct(protected array $items = []) {}
+    public function map(callable $f): static { return $this->newInstance(array_map($f, $this->items)); }
+    protected function newInstance(array $items = []): static { return new static($items); }
+    public function all(): array { return $this->items; }
+}
+class Sorted extends Coll {
+    public function __construct(array $priority, $middlewares) { parent::__construct([$priority, $middlewares]); }
+}
+class Plain extends Coll {}
+class Base { public static function make(): Base { return new static(); } }
+class Child extends Base { public function __construct(string $name) {} }
+$sorted = new Sorted(['a'], 'm');
+for ($i = 0; $i < 3; $i++) {
+    $a = json_encode((new Coll([1, 2]))->map(fn($x) => $x * 2)->all());
+    $b = get_class((new Plain([3]))->map(fn($x) => $x));
+    $c = json_encode($sorted->all());
+    try {
+        $sorted->map(fn($x) => $x);
+    } catch (ArgumentCountError $e) {
+        $d = strstr($e->getMessage(), ' passed in', true);
+    }
+    try {
+        Child::make();
+    } catch (ArgumentCountError $e) {
+        $f = strstr($e->getMessage(), ' passed in', true);
+    }
+}
+echo $a, "|", $b, "|", $c, "|", $d, "|", $f, "\n";
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "[2,4]|Plain|[[\"a\"],\"m\"]|Too few arguments to function Sorted::__construct(), 1|Too few arguments to function Child::__construct(), 0\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

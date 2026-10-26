@@ -14,7 +14,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_for_call(
     class_name: &str,
     method_name: &str,
     context: &ElephcEvalContext,
-) -> Option<(String, EvalClassMethod)> {
+) -> Option<(String, EvalClassMethodRef)> {
     if let Some(current_class) = context.current_class_scope() {
         if eval_classes_are_related(current_class, class_name, context) {
             if let Some((declaring_class, method)) =
@@ -193,6 +193,24 @@ pub(super) fn eval_dynamic_class_new_object_with_ref_mode(
     let object = eval_dynamic_class_allocate_object(class, context, caller_scope, values).map_err(
         |status| trace_eval_class_new_error("allocation", class.name(), None, status, context),
     )?;
+    // PHP stamps a Throwable's file, line and trace when it is created, before any constructor
+    // runs. The native `new` path does; an interpreted subclass of `Exception` came out of here
+    // with `getFile()` empty and `getLine()` 0. Every Throwable has a native root, so a class
+    // without a native parent skips the runtime `is_a` probe.
+    if context.class_native_parent_name(class.name()).is_some() {
+        if let Err(status) = crate::interpreter::expressions::initialize_native_throwable_source(
+            object, context, values,
+        ) {
+            let _ = values.release(object);
+            return Err(trace_eval_class_new_error(
+                "throwable_source",
+                class.name(),
+                None,
+                status,
+                context,
+            ));
+        }
+    }
     if let Some((constructor_class, constructor)) =
         context.class_method(class.name(), "__construct")
     {
@@ -254,7 +272,7 @@ pub(super) fn eval_dynamic_class_new_object_with_ref_mode(
             // longer declares a constructor (Symfony's `ReflectionTypeResolver`), and refusing it
             // killed every page that resolves a type.
             for arg in evaluated_args {
-                if arg.owned {
+                if !arg.value.is_borrowed() {
                     eval_release_value(context, values, arg.value)?;
                 }
             }
@@ -315,6 +333,17 @@ pub(in crate::interpreter) fn eval_object_clone_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_object_clone_with_properties_result(object, None, None, context, values)
+}
+
+/// Creates a shallow clone, invokes `__clone()`, then applies PHP 8.5 property overrides.
+pub(crate) fn eval_object_clone_with_properties_result(
+    object: RuntimeCellHandle,
+    with_properties: Option<RuntimeCellHandle>,
+    scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let identity = values.object_identity(object)?;
     let dynamic_class_name = context
         .dynamic_object_class(identity)
@@ -332,7 +361,7 @@ pub(in crate::interpreter) fn eval_object_clone_result(
             );
         }
     }
-    let dynamic_native_clone_hook_scope = if clone_method.is_none() {
+    let dynamic_native_clone_hook = if clone_method.is_none() {
         if let Some(class_name) = dynamic_class_name.as_deref() {
             eval_dynamic_native_clone_hook_is_callable(class_name, context, values)?
         } else {
@@ -341,66 +370,190 @@ pub(in crate::interpreter) fn eval_object_clone_result(
     } else {
         None
     };
-    let should_call_aot_clone_hook = if dynamic_class_name.is_none() {
+    let aot_clone_hook = if dynamic_class_name.is_none() {
         eval_aot_clone_hook_is_callable(object, context, values)?
     } else {
-        false
+        None
     };
 
     let clone = values.object_clone_shallow(object)?;
-    if let Some(class_name) = dynamic_class_name {
-        let clone_identity = values.object_identity(clone)?;
-        context.register_dynamic_object(clone_identity, &class_name);
-        for (property, value) in context.dynamic_property_values_for_clone(identity) {
-            // An array is COPIED (its elements stay shared, counted). Handing the clone the same
-            // cell made `$clone->p[] = ...` write the original's array in place, since the cell's
-            // own count says nothing about whether its payload is shared.
-            if values.is_array_like(value)? {
-                let copy = values.copy_value(value)?;
-                if let Some(replaced) = context.set_dynamic_property_value(clone_identity, &property, copy) {
-                    eval_release_value(context, values, replaced)?;
-                }
-                continue;
-            }
-            eval_store_dynamic_property_value(clone_identity, &property, value, context, values)?;
+    let clone_identity = match values.object_identity(clone) {
+        Ok(identity) => identity,
+        Err(status) => {
+            let _ = eval_release_value(context, values, clone);
+            return Err(status);
         }
-        context.clone_dynamic_property_aliases(identity, clone_identity);
-        if let Some((declaring_class, method)) = clone_method {
-            let result = eval_dynamic_method_with_values(
-                &declaring_class,
-                &class_name,
-                &method,
+    };
+    context.begin_clone_initialization(clone_identity);
+    let initialization = (|| {
+        if let Some(class_name) = dynamic_class_name {
+            context.register_dynamic_object(clone_identity, &class_name);
+            for (property, value) in context.dynamic_property_values_for_clone(identity) {
+                // An array is COPIED (its elements stay shared, counted). Handing the clone the same
+                // cell made `$clone->p[] = ...` write the original's array in place, since the cell's
+                // own count says nothing about whether its payload is shared.
+                if values.is_array_like(value)? {
+                    let copy = values.copy_value(value)?;
+                    if let Some(replaced) =
+                        context.set_dynamic_property_value(clone_identity, &property, copy)
+                    {
+                        eval_release_value(context, values, replaced)?;
+                    }
+                    continue;
+                }
+                eval_store_dynamic_property_value(clone_identity, &property, value, context, values)?;
+            }
+            context.clone_dynamic_property_aliases(identity, clone_identity);
+            if let Some((declaring_class, method)) = clone_method {
+                let result = eval_dynamic_method_with_values(
+                    &declaring_class,
+                    &class_name,
+                    &method,
+                    clone,
+                    Vec::new(),
+                    context,
+                    values,
+                )?;
+                eval_release_value(context, values, result)?;
+            } else if let Some(hook) = dynamic_native_clone_hook {
+                let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
+                    clone,
+                    &hook.called_class,
+                    "__clone",
+                    Vec::new(),
+                    Some(&hook.declaring_class),
+                    Some(&hook.called_class),
+                    context,
+                    values,
+                )?;
+                values.release(result)?;
+            }
+        } else if let Some(hook) = aot_clone_hook {
+            let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
                 clone,
-                Vec::new(),
-                context,
-                values,
-            )?;
-            eval_release_value(context, values, result)?;
-        } else if let Some(scope) = dynamic_native_clone_hook_scope {
-            let result = eval_native_method_call_with_scope(
-                &scope,
-                None,
-                clone,
+                &hook.called_class,
                 "__clone",
                 Vec::new(),
+                Some(&hook.declaring_class),
+                Some(&hook.called_class),
                 context,
                 values,
             )?;
             values.release(result)?;
         }
-    } else if should_call_aot_clone_hook {
-        let result = values.method_call(clone, "__clone", Vec::new())?;
-        values.release(result)?;
+
+        context.restart_clone_initialization(clone_identity);
+        if let Some(properties) = with_properties {
+            eval_apply_clone_properties(clone, properties, scope, context, values)?;
+        }
+        Ok(())
+    })();
+    context.end_clone_initialization(clone_identity);
+    if let Err(status) = initialization {
+        let _ = eval_release_value(context, values, clone);
+        return Err(status);
     }
     Ok(clone)
 }
 
-/// Returns the declaring scope for an inherited generated/AOT `__clone()` hook.
+/// Applies clone property overrides in PHP array iteration order.
+fn eval_apply_clone_properties(
+    clone: RuntimeCellHandle,
+    properties: RuntimeCellHandle,
+    scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let len = values.array_len(properties)?;
+    for position in 0..len {
+        let key = values.array_iter_key(properties, position)?;
+        let mut owners = vec![key];
+        let mut result = (|| {
+            let value = values.array_get(properties, key)?;
+            owners.push(value);
+            let key_string = values.cast_string(key)?;
+            owners.push(key_string);
+            let key_bytes = values.string_bytes(key_string)?;
+            let property_name =
+                String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+            if property_name.starts_with('\0') {
+                return eval_throw_error(
+                    "Cannot access property starting with \"\\0\"",
+                    context,
+                    values,
+                );
+            }
+            // Two independent sources can prove this entry is still part of a reference set.
+            // The eval alias table describes targets a hash entry cannot (variables, nested
+            // elements, object and static properties, cells, invoker slots), and it only knows
+            // arrays eval itself built. An override array generated code built carries its
+            // state in the native hash entry instead. Both are read for every entry, and
+            // either one refusing throws at this exact point in php's iteration order.
+            let alias_is_shared = eval_array_reference_key(key, values)?
+                .and_then(|key| context.array_element_alias(properties, &key).cloned())
+                .is_some_and(|reference| eval_clone_property_reference_is_shared(&reference, scope));
+            let entry_is_shared = crate::runtime_hooks::array_entry_is_shared_reference(
+                properties,
+                &property_name,
+                Some(value),
+            );
+            if alias_is_shared || entry_is_shared {
+                return eval_throw_error(
+                    "Cannot assign by reference when cloning with updated properties",
+                    context,
+                    values,
+                );
+            }
+            eval_property_set_result(clone, &property_name, value, context, values)
+        })();
+        for owner in owners.into_iter().rev() {
+            let released = eval_release_value(context, values, owner);
+            if result.is_ok() {
+                result = released;
+            }
+        }
+        result?;
+    }
+    Ok(())
+}
+
+/// Returns whether a clone override still shares its array element with another storage slot.
+fn eval_clone_property_reference_is_shared(target: &EvalReferenceTarget, scope: Option<&ElephcEvalScope>) -> bool {
+    match target {
+        EvalReferenceTarget::Variable { scope, name } => unsafe {
+            scope.live_mut().is_some_and(|scope| scope.contains_visible(name))
+        },
+        EvalReferenceTarget::ArrayElement {
+            scope, array_name, ..
+        } => unsafe {
+            scope
+                .live_mut()
+                .is_some_and(|scope| scope.contains_visible(array_name))
+        },
+        EvalReferenceTarget::NestedArrayElement { array_target, .. } => {
+            eval_clone_property_reference_is_shared(array_target, scope)
+        }
+        EvalReferenceTarget::Cell { cell } => scope.map_or(true, |scope| scope.visible_entries()
+            .iter().any(|(_, visible)| visible.as_ptr() == cell.as_ptr())),
+        EvalReferenceTarget::ObjectProperty { .. }
+        | EvalReferenceTarget::StaticProperty { .. }
+        | EvalReferenceTarget::StaticLocal { .. }
+        | EvalReferenceTarget::InvokerSlot { .. } => true,
+    }
+}
+
+/// Generated clone-hook scopes needed by native method dispatch.
+pub(super) struct EvalNativeCloneHook {
+    declaring_class: String,
+    called_class: String,
+}
+
+/// Returns the declaring and called scopes for an inherited generated/AOT `__clone()` hook.
 pub(super) fn eval_dynamic_native_clone_hook_is_callable(
     class_name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<Option<String>, EvalStatus> {
+) -> Result<Option<EvalNativeCloneHook>, EvalStatus> {
     let Some((declaring_class, visibility, is_static, is_abstract)) =
         eval_dynamic_class_native_method_metadata(class_name, "__clone", context, values)?
     else {
@@ -412,31 +565,10 @@ pub(super) fn eval_dynamic_native_clone_hook_is_callable(
     if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
         return eval_throw_clone_access_error(&declaring_class, visibility, context, values);
     }
-    Ok(Some(declaring_class))
-}
-
-/// Calls one generated/AOT method while presenting an explicit PHP class scope to the bridge.
-pub(super) fn eval_native_method_call_with_scope(
-    scope: &str,
-    called_class_scope: Option<&str>,
-    object: RuntimeCellHandle,
-    method_name: &str,
-    evaluated_args: Vec<RuntimeCellHandle>,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    context.push_class_scope(scope.to_string());
-    if let Some(called_class) = called_class_scope {
-        context.push_called_class_scope(called_class.to_string());
-    }
-    let _called_class_override = called_class_scope
-        .map(|called_class| push_native_frame_called_class_override(context, scope, called_class));
-    let result = values.method_call(object, method_name, evaluated_args);
-    if called_class_scope.is_some() {
-        context.pop_called_class_scope();
-    }
-    context.pop_class_scope();
-    result
+    Ok(Some(EvalNativeCloneHook {
+        declaring_class,
+        called_class: class_name.to_string(),
+    }))
 }
 
 /// Calls one generated/AOT method with explicit PHP scope and caller-owned result storage.
@@ -489,7 +621,7 @@ pub(super) fn eval_native_static_method_call_with_scope(
 }
 
 /// Runs one generated/AOT bridge operation while exposing an explicit PHP class scope.
-pub(super) fn eval_with_native_bridge_scope<T>(
+pub(in crate::interpreter) fn eval_with_native_bridge_scope<T>(
     scope: &str,
     context: &mut ElephcEvalContext,
     call: impl FnOnce() -> Result<T, EvalStatus>,
@@ -510,7 +642,61 @@ pub(super) fn eval_dynamic_class_native_property_metadata(
     let Some(parent) = context.class_native_parent_name(called_class_name) else {
         return Ok(None);
     };
-    eval_reflection_aot_property_access_metadata(&parent, property_name, values)
+    eval_native_instance_property_metadata_for_access(
+        called_class_name,
+        &parent,
+        property_name,
+        context,
+        values,
+    )
+}
+
+/// Resolves native instance metadata while treating a strict ancestor's private name as absent.
+pub(super) fn eval_native_instance_property_metadata_for_access(
+    runtime_class_name: &str,
+    metadata_class_name: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, EvalVisibility, EvalVisibility, bool)>, EvalStatus> {
+    if let Some(scope) = context.current_class_scope() {
+        if native_class_is_a(metadata_class_name, scope, context) {
+            if let Some(metadata) =
+                eval_reflection_aot_property_access_metadata(scope, property_name, values)?
+            {
+                if metadata.1 == EvalVisibility::Private
+                    && !metadata.3
+                    && same_eval_class_name(&metadata.0, scope)
+                {
+                    return Ok(Some(metadata));
+                }
+            }
+        }
+    }
+    let metadata =
+        eval_reflection_aot_property_access_metadata(metadata_class_name, property_name, values)?;
+    Ok(metadata.filter(|(owner, visibility, _, _)| {
+        *visibility != EvalVisibility::Private
+            || same_eval_class_name(owner, runtime_class_name)
+    }))
+}
+
+/// Accesses an already authorized eval property using its non-private native slot's declaring scope.
+/// Eval visibility checks stay at the caller; private parent slots never become child overrides.
+pub(super) fn eval_with_native_property_storage_scope<T, V: RuntimeValueOps>(
+    class_name: &str,
+    storage_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut V,
+    operation: impl FnOnce(&mut V) -> Result<T, EvalStatus>,
+) -> Result<T, EvalStatus> {
+    let native = eval_dynamic_class_native_property_metadata(class_name, storage_name, context, values)?;
+    if let Some((declaring_class, visibility, _, false)) = native {
+        if visibility != EvalVisibility::Private {
+            return eval_with_native_bridge_scope(&declaring_class, context, || operation(values));
+        }
+    }
+    operation(values)
 }
 
 /// Returns generated/AOT class-constant metadata inherited by an eval-declared class.
@@ -539,17 +725,17 @@ pub(super) fn eval_dynamic_class_native_constant_metadata(
     Ok(Some((declaring_class, visibility)))
 }
 
-/// Returns whether an accessible instance AOT `__clone()` hook should run.
+/// Returns the declaring and called scopes for an accessible instance AOT `__clone()` hook.
 pub(super) fn eval_aot_clone_hook_is_callable(
     object: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
+) -> Result<Option<EvalNativeCloneHook>, EvalStatus> {
     let class_name = eval_runtime_object_class_name(object, values)?;
     let Some((declaring_class, visibility, is_static, is_abstract)) =
         eval_aot_method_dispatch_metadata(&class_name, "__clone", values)?
     else {
-        return Ok(false);
+        return Ok(None);
     };
     if is_static || is_abstract {
         return Err(EvalStatus::RuntimeFatal);
@@ -557,7 +743,10 @@ pub(super) fn eval_aot_clone_hook_is_callable(
     if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
         return eval_throw_clone_access_error(&declaring_class, visibility, context, values);
     }
-    Ok(true)
+    Ok(Some(EvalNativeCloneHook {
+        declaring_class,
+        called_class: class_name,
+    }))
 }
 
 /// Reads the PHP-visible runtime class name for one AOT object handle.
@@ -604,7 +793,7 @@ pub(in crate::interpreter) fn eval_dynamic_class_allocate_object(
     context.register_dynamic_object(identity, class.name());
     let mut class_chain = context.class_chain(class.name());
     if class_chain.is_empty() {
-        class_chain.push(class.clone());
+        class_chain.push(std::sync::Arc::new(class.clone()));
     }
     for class in &class_chain {
         for property in class
@@ -670,9 +859,11 @@ pub(in crate::interpreter) fn eval_dynamic_class_allocate_object(
                 // `AbstractRecursivePass::processValue()` kept reading the parent's `false` --
                 // recursing into every scalar argument until `lint:container` died on a
                 // TypeError. The slot exists by construction, so nothing new becomes enumerable.
-                if property.visibility() == EvalVisibility::Public {
-                    let _ = values.property_set(object, &storage_name, value);
-                } else if let Some(declaring_class) = eval_native_parent_inheritable_slot_owner(
+                // The compiled parent's slot is checked FIRST: a public redeclaration of a
+                // protected parent slot (`public int $guard = 15` over `protected int $guard`)
+                // is still a protected slot natively, so the unscoped public write below was
+                // refused and the parent's compiled methods kept reading the parent default.
+                if let Some(declaring_class) = eval_native_parent_inheritable_slot_owner(
                     class.name(),
                     property.name(),
                     context,
@@ -685,14 +876,20 @@ pub(in crate::interpreter) fn eval_dynamic_class_allocate_object(
                         context,
                         |_| values.property_set(object, &storage_name, value),
                     );
+                } else if property.visibility() == EvalVisibility::Public {
+                    let _ = values.property_set(object, &storage_name, value);
                 }
-                eval_store_dynamic_property_value(
+                let stored = eval_store_dynamic_property_value(
                     identity,
                     &storage_name,
                     value,
                     context,
                     values,
-                )?;
+                );
+                // The overlay and the slot each took a reference of their own; the evaluated
+                // default is a temporary of this loop, so its reference goes back here.
+                let released = release_expr_result(value, context, values);
+                stored.and(released)?;
                 context.mark_dynamic_property_initialized(identity, &storage_name);
             }
         }

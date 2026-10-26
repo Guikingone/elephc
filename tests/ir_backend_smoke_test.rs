@@ -2409,7 +2409,7 @@ echo Counter::total();
     );
 }
 
-/// Verifies `static::$items` in static methods writes to the late-bound redeclared array slot.
+/// Late-bound redeclared array writes preserve sparse PHP keys without populating missing indices.
 #[test]
 fn ir_backend_handles_late_bound_static_array_property_writes() {
     let source = r#"<?php
@@ -2437,10 +2437,12 @@ BaseBag::add(1);
 ChildBag::add(2);
 ChildBag::putAtThree(7);
 echo BaseBag::size() . ":" . ChildBag::size();
+echo ":", BaseBag::$items[0], ":", ChildBag::$items[3], ":";
+echo array_key_exists(1, ChildBag::$items) ? "bad" : "gap";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("late_bound_static_array_property_writes", source),
-        "1:4"
+        "1:2:1:7:gap"
     );
 }
 
@@ -2682,7 +2684,7 @@ if ($box->b) { echo "T"; } else { echo "F"; }
     );
 }
 
-/// Verifies indexed-array property defaults allocate real Mixed arrays and support indexed writes.
+/// Boxed array property defaults preserve values and sparse-key semantics after indexed writes.
 #[test]
 fn ir_backend_handles_array_property_defaults() {
     let object_source = r#"<?php
@@ -2704,13 +2706,13 @@ echo count($box->a);
 echo ":";
 echo $box->a[0];
 echo ":";
-echo is_null($box->a[4]) ? "G" : "bad";
+echo array_key_exists(4, $box->a) ? "bad" : "G";
 echo ":";
-echo is_null($box->a[5]) ? "N" : "bad";
+echo array_key_exists(5, $box->a) && is_null($box->a[5]) ? "N" : "bad";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("array_object_property_defaults", object_source),
-        "3:1:N:ok:6:7:G:N"
+        "3:1:N:ok:4:7:G:N"
     );
 
     let assoc_object_source = r#"<?php
@@ -2757,13 +2759,13 @@ echo count(Box::$a);
 echo ":";
 echo Box::$a[0];
 echo ":";
-echo is_null(Box::$a[4]) ? "G" : "bad";
+echo array_key_exists(4, Box::$a) ? "bad" : "G";
 echo ":";
-echo is_null(Box::$a[5]) ? "N" : "bad";
+echo array_key_exists(5, Box::$a) && is_null(Box::$a[5]) ? "N" : "bad";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("array_static_property_defaults", static_source),
-        "3:1:N:ok:6:7:G:N"
+        "3:1:N:ok:4:7:G:N"
     );
 }
 
@@ -4299,9 +4301,18 @@ fn ir_backend_handles_basic_indexed_arrays() {
             "2 20",
         ),
         (
-            "array_push_builtin_return_is_legacy_null",
+            // PHP's `array_push()` returns the new element count. This used to read `null`,
+            // because the builtin was declared `Void` (issue #677).
+            "array_push_builtin_returns_the_new_count",
             "<?php $a = [10]; $n = array_push($a, 20); echo $n; echo ':'; echo $a[1];",
-            ":20",
+            "2:20",
+        ),
+        (
+            // Every value is evaluated before the first append, so `count($a)` sees the
+            // pre-call length.
+            "array_push_builtin_takes_several_values",
+            "<?php $a = [10]; $n = array_push($a, 20, count($a)); echo $n; echo ':'; echo $a[1]; echo $a[2];",
+            "3:201",
         ),
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);

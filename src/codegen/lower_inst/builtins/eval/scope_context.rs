@@ -91,6 +91,11 @@ pub(super) fn ensure_eval_global_scope(ctx: &mut FunctionContext<'_>) -> Result<
 
 /// Returns the hidden frame slot that owns this function's persistent eval scope.
 pub(super) fn eval_scope_slot(ctx: &FunctionContext<'_>) -> Result<LocalSlotId> {
+    // Main executes in the global symbol table, including names first created by
+    // opaque eval. Keep one owning slot so frame cleanup frees the table once.
+    if ctx.is_main {
+        return eval_global_scope_slot(ctx);
+    }
     ctx.function
         .locals
         .iter()
@@ -133,9 +138,93 @@ pub(super) fn set_eval_context_global_scope(ctx: &mut FunctionContext<'_>) {
     emit_eval_status_check(ctx);
 }
 
+/// Returns whether this body is a closure whose scope `Closure::bind` may set at run time.
+pub(in crate::codegen) fn has_runtime_closure_scope(ctx: &FunctionContext<'_>) -> bool {
+    ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL).is_some()
+}
+
+/// Leaves this frame's EFFECTIVE class scope name in `ptr_reg`/`len_reg` (empty = global scope).
+///
+/// That is `fallback` -- the frame's lexical class, as each caller spells it -- unless the body is
+/// a closure carrying the hidden scope capture (`crate::names::CLOSURE_SCOPE_LOCAL`) and
+/// `Closure::bind` stamped it:
+/// - a positive stamp is a compiled class id plus one, named by `_class_name_entries`;
+/// - a negative stamp is an interned `[name_ptr, name_len]` record with bit 63 set, made by
+///   `__elephc_eval_scope_name_token` for a scope class only the interpreter declared.
+///
+/// Every bridge that hands the interpreter a calling scope reads it here: with the lexical class
+/// alone, a closure bound to an interpreted class wrote that class's private properties "from
+/// global scope" and was refused. Clobbers x10-x12 on AArch64 and r10/r11 on x86_64.
+pub(in crate::codegen) fn emit_effective_scope_name(
+    ctx: &mut FunctionContext<'_>,
+    fallback: &str,
+    ptr_reg: &str,
+    len_reg: &str,
+) -> Result<()> {
+    let (fallback_label, fallback_len) = ctx.data.add_string(fallback.as_bytes());
+    let Some(slot) = ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL) else {
+        abi::emit_symbol_address(ctx.emitter, ptr_reg, &fallback_label);
+        abi::emit_load_int_immediate(ctx.emitter, len_reg, fallback_len as i64);
+        return Ok(());
+    };
+    let offset = ctx.local_offset(slot)?;
+    let lexical = ctx.next_label("effective_scope_lexical");
+    let interpreted = ctx.next_label("effective_scope_interpreted");
+    let done = ctx.next_label("effective_scope_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset(ctx.emitter, "x12", offset);
+            ctx.emitter.instruction(&format!("cbz x12, {lexical}"));             // never rebound: the lexical scope
+            ctx.emitter.instruction(&format!("tbnz x12, #63, {interpreted}"));   // bit 63: an interned interpreter class name
+            ctx.emitter.instruction("sub x12, x12, #1");                          // undo the +1 encoding: the bound class id
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_class_name_count", 0);
+            ctx.emitter.instruction("cmp x12, x10");                             // an id past the table names nothing
+            ctx.emitter.instruction(&format!("b.hs {lexical}"));                // keep the lexical scope
+            abi::emit_symbol_address(ctx.emitter, "x11", "_class_name_entries");
+            ctx.emitter.instruction("add x11, x11, x12, lsl #4");                // select the 16-byte class-name row
+            ctx.emitter.instruction(&format!("ldr {ptr_reg}, [x11]"));          // bound class name pointer
+            ctx.emitter.instruction(&format!("ldr {len_reg}, [x11, #8]"));      // bound class name length
+            ctx.emitter.instruction(&format!("b {done}"));                      // scope ready
+            ctx.emitter.label(&interpreted);
+            ctx.emitter.instruction("and x12, x12, #0x7fffffffffffffff");        // strip the marker: the name record address
+            ctx.emitter.instruction(&format!("ldr {ptr_reg}, [x12]"));           // interned name pointer
+            ctx.emitter.instruction(&format!("ldr {len_reg}, [x12, #8]"));       // interned name length
+            ctx.emitter.instruction(&format!("b {done}"));                      // scope ready
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(ctx.emitter, "r10", offset);
+            ctx.emitter.instruction("test r10, r10");                           // never rebound?
+            ctx.emitter.instruction(&format!("jz {lexical}"));                  // the lexical scope
+            ctx.emitter.instruction(&format!("js {interpreted}"));              // bit 63: an interned interpreter class name
+            ctx.emitter.instruction("sub r10, 1");                              // undo the +1 encoding: the bound class id
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r11", "_class_name_count", 0);
+            ctx.emitter.instruction("cmp r10, r11");                            // an id past the table names nothing
+            ctx.emitter.instruction(&format!("jae {lexical}"));                 // keep the lexical scope
+            abi::emit_symbol_address(ctx.emitter, "r11", "_class_name_entries");
+            ctx.emitter.instruction("shl r10, 4");                              // 16-byte class-name rows
+            ctx.emitter.instruction("add r11, r10");                            // select the bound class's row
+            ctx.emitter.instruction(&format!("mov {ptr_reg}, QWORD PTR [r11]")); // bound class name pointer
+            ctx.emitter.instruction(&format!("mov {len_reg}, QWORD PTR [r11 + 8]")); // bound class name length
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // scope ready
+            ctx.emitter.label(&interpreted);
+            ctx.emitter.instruction("btr r10, 63");                             // strip the marker: the name record address
+            ctx.emitter.instruction(&format!("mov {ptr_reg}, QWORD PTR [r10]")); // interned name pointer
+            ctx.emitter.instruction(&format!("mov {len_reg}, QWORD PTR [r10 + 8]")); // interned name length
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // scope ready
+        }
+    }
+    ctx.emitter.label(&lexical);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &fallback_label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, fallback_len as i64);
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
 /// Enters the current AOT method's class scope in the eval context, if any.
 pub(super) fn push_eval_context_class_scope(ctx: &mut FunctionContext<'_>) -> Result<bool> {
-    let Some(class_name) = current_eval_method_class(ctx).map(str::to_string) else {
+    let class_name = current_eval_method_class(ctx).map(str::to_string);
+    let Some(class_name) = class_name.or_else(|| has_runtime_closure_scope(ctx).then(String::new))
+    else {
         return Ok(false);
     };
     emit_eval_called_class_name_result(ctx, &class_name)?;
@@ -143,17 +232,13 @@ pub(super) fn push_eval_context_class_scope(ctx: &mut FunctionContext<'_>) -> Re
     abi::emit_store_to_sp(ctx.emitter, called_ptr_reg, EVAL_CALLED_CLASS_PTR_OFFSET);
     abi::emit_store_to_sp(ctx.emitter, called_len_reg, EVAL_CALLED_CLASS_LEN_OFFSET);
     load_eval_context_to_arg(ctx, 0);
-    let (class_label, class_len) = ctx.data.add_string(class_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &class_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_len as i64,
-    );
+    let target = ctx.emitter.target;
+    emit_effective_scope_name(
+        ctx,
+        &class_name,
+        abi::int_arg_reg_name(target, 1),
+        abi::int_arg_reg_name(target, 2),
+    )?;
     abi::emit_load_temporary_stack_slot(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 3),
@@ -204,27 +289,25 @@ pub(super) fn pop_eval_context_class_scope(ctx: &mut FunctionContext<'_>, pushed
 /// method-call ABI.
 ///
 /// Returns whether anything was pushed, for [`pop_native_caller_class`].
-pub(super) fn push_native_caller_class(ctx: &mut FunctionContext<'_>) -> bool {
-    let Some(class_name) = current_eval_method_class(ctx).map(str::to_string) else {
-        return false;
+pub(super) fn push_native_caller_class(ctx: &mut FunctionContext<'_>) -> Result<bool> {
+    let class_name = current_eval_method_class(ctx).map(str::to_string);
+    let Some(class_name) = class_name.or_else(|| has_runtime_closure_scope(ctx).then(String::new))
+    else {
+        return Ok(false);
     };
-    let (class_label, class_len) = ctx.data.add_string(class_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        &class_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        class_len as i64,
-    );
+    let target = ctx.emitter.target;
+    emit_effective_scope_name(
+        ctx,
+        &class_name,
+        abi::int_arg_reg_name(target, 0),
+        abi::int_arg_reg_name(target, 1),
+    )?;
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_push_native_caller_class");
     abi::emit_call_label(ctx.emitter, &symbol);
-    true
+    Ok(true)
 }
 
 /// Drops the published lexical class, preserving the status the bridge call just returned.
@@ -377,13 +460,13 @@ pub(super) fn emit_eval_called_class_name_result_x86_64(ctx: &mut FunctionContex
 
 /// Returns true when the current method frame can provide a late-static class id.
 pub(super) fn eval_late_static_class_id_available(ctx: &FunctionContext<'_>) -> bool {
-    ctx.local_slot_by_name(CALLED_CLASS_ID_PARAM).is_some()
+    ctx.local_slot_by_name(crate::names::CALLED_CLASS_ID_LOCAL).is_some()
         || ctx.local_slot_by_name("this").is_some()
 }
 
 /// Loads the late-static class id from the hidden static slot or `$this`.
 pub(super) fn emit_eval_late_static_class_id_to_reg(ctx: &mut FunctionContext<'_>, reg: &str) -> Result<()> {
-    if let Some(slot) = ctx.local_slot_by_name(CALLED_CLASS_ID_PARAM) {
+    if let Some(slot) = ctx.local_slot_by_name(crate::names::CALLED_CLASS_ID_LOCAL) {
         let offset = ctx.local_offset(slot)?;
         abi::load_at_offset(ctx.emitter, reg, offset);
         return Ok(());

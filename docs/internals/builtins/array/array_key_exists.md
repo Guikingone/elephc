@@ -1,16 +1,16 @@
 ---
-title: "array_key_exists() — internals"
+title: "array_key_exists() - internals"
 description: "Compiler internals for array_key_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 26
 ---
 
-## `array_key_exists()` — internals
+## `array_key_exists()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_key_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_key_exists.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

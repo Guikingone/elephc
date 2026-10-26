@@ -30,7 +30,7 @@ builtin! {
 }
 
 /// Builds typed runtime semantics while retaining count's one-visible-argument lowering rule.
-const fn count_semantics() -> BuiltinSemantics {
+pub(super) const fn count_semantics() -> BuiltinSemantics {
     let mut semantics = with_argument_lowering(
         runtime_fn_semantics(crate::ir::RuntimeFnId::Count),
         BuiltinArgumentLowering::Count,
@@ -70,7 +70,7 @@ fn effects(input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
 /// PHP is fatal). The guard now raises, so a union whose non-countable arm is taken behaves
 /// exactly like PHP. A union with NO countable member is still refused: that call cannot
 /// succeed, and a compile error beats a certain run-time fatal.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+pub(super) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     match &ty {
         PhpType::Array(_)
@@ -78,10 +78,12 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         | PhpType::Iterable
         | PhpType::Mixed => Ok(PhpType::Int),
         // An object member counts too: `?SplStack` and `Countable|null` are ordinary PHP, and the
-        // null arm raises the run-time `TypeError` like any other non-countable value.
+        // null arm raises the run-time `TypeError` like any other non-countable value. So does an
+        // `iterable` one (`string|iterable|null`), which a bare `iterable` already is.
         PhpType::Union(members)
             if members.iter().any(|member| {
-                union_member_is_countable_array(member) || matches!(member, PhpType::Object(_))
+                union_member_is_countable_array(member)
+                    || matches!(member, PhpType::Object(_) | PhpType::Iterable)
             }) =>
         {
             Ok(PhpType::Int)

@@ -1,8 +1,8 @@
 ---
 title: "date_diff()"
-description: "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
+description: "Returns the DateInterval between two dates."
 sidebar:
-  order: 210
+  order: 211
 ---
 
 ## date_diff()
@@ -11,7 +11,7 @@ sidebar:
 function date_diff(mixed $baseObject, mixed $targetObject, bool $absolute = false): mixed
 ```
 
-Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
+Returns the DateInterval between two dates.
 
 **Parameters**:
 - `$baseObject` (`mixed`)
@@ -25,7 +25,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - **Compiled (AOT)**: supported through the Elephc compiler.
 - **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

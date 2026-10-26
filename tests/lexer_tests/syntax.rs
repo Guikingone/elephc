@@ -119,4 +119,35 @@ fn test_ref_param_in_function() {
     );
 }
 
+/// Verifies `(object)` tokenizes as the ordinary three-token cast window the parser's
+/// `peek_cast` matches — `LParen`, a bare `Identifier`, `RParen` — and NOT as a keyword.
+///
+/// `object` is a type name, not a reserved word: PHP lets it be a function name, a class name
+/// and a namespace segment, so giving it a token of its own would break those. The cast is a
+/// PARSER shape over ordinary tokens, which is what this pins.
+#[test]
+fn test_object_cast_lexes_as_a_plain_identifier_window() {
+    let t = tokens("<?php (object)$v;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::LParen,
+            Token::Identifier("object".into()),
+            Token::RParen,
+            Token::Variable("v".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// The spelling is case-insensitive like every PHP cast, and the lexer preserves the source
+/// casing in the `Identifier` — the parser is what compares case-insensitively.
+#[test]
+fn test_object_cast_keeps_its_source_casing_in_the_identifier() {
+    let t = tokens("<?php (OBJECT)$v;");
+    assert_eq!(t[2], Token::Identifier("OBJECT".into()));
+}
+
 // --- Hex integer literals ---

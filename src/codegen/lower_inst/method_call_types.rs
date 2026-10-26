@@ -18,6 +18,7 @@ pub(super) struct MethodCallTarget {
     pub(super) ref_params: Vec<bool>,
     pub(super) return_ty: PhpType,
     pub(super) by_ref_return: bool,
+    pub(super) source_abi: bool,
 }
 
 /// Concrete runtime class branch available to a `Mixed` receiver method call.
@@ -30,6 +31,8 @@ pub(super) struct MixedMethodCandidate {
     pub(super) defaults: Vec<Option<crate::parser::ast::Expr>>,
     /// The last parameter is a variadic tail the call packs from the surplus operands.
     pub(super) variadic_last: bool,
+    /// That tail is a hidden `func_get_args()` collector opening with the actual argument count.
+    pub(super) tail_counts_args: bool,
 }
 
 /// Outgoing call argument state that must be cleaned up after the call returns.
@@ -37,12 +40,22 @@ pub(super) struct CallArgMaterialization {
     pub(super) overflow_bytes: usize,
     pub(super) ref_writebacks: Vec<RefArgWriteback>,
     pub(super) ref_temp_cells: Vec<RefArgTempCell>,
+    pub(super) preleased_ref_cells: Vec<PreleasedRefArgCell>,
     pub(super) cleanup_slots: Vec<CallArgTempCleanup>,
     pub(super) cleanup_bytes: usize,
+    /// Stack records that transfer conversion cleanup ownership only during exceptional unwind.
+    pub(super) cleanup_guard_bytes: usize,
     pub(super) borrowed_stack_arg_bytes: usize,
 }
 
-/// Caller-owned temporary argument that must be released after the call returns.
+/// A managed element cell acquired during EIR argument evaluation without an EIR call ledger.
+/// The shared ABI cleanup retires its published frame owner after call writeback completes.
+pub(super) struct PreleasedRefArgCell {
+    pub(super) owner_slot: LocalSlotId,
+    pub(super) cell_ty: PhpType,
+}
+
+/// Caller-owned coercion with an adjacent unwind record, retired on return or throw.
 pub(super) struct CallArgTempCleanup {
     pub(super) param_index: usize,
     pub(super) offset: usize,
@@ -56,26 +69,11 @@ pub(super) struct BorrowedStackMixedArg {
     pub(super) source_ty: PhpType,
 }
 
-/// Representation bridge used by a temporary caller-side by-reference cell.
-pub(super) enum RefArgWritebackKind {
-    /// A concrete caller value is boxed while a gradual callee mutates it.
-    ConcreteToMixed,
-    /// A boxed dynamic array is exposed as a raw array only for a typed callee.
-    MixedArrayToRawArray,
-}
-
-/// A caller-side value that crosses a by-reference representation boundary.
-/// How long the caller-side cell for a by-reference argument with no caller variable behind
-/// it has to stay alive.
-///
-/// The distinction is a MEMORY-SAFETY one, not an optimization: a stack cell dies with the
-/// caller's frame, so it may only be used when the callee cannot keep the reference.
+/// Determines whether omitted reference cells can retire the caller's lease after the call.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum RefArgCellLifetime {
-    /// The reference cannot outlive the call, so the cell is a caller-stack slot released
-    /// with the rest of the by-reference cell block. Every ordinary function and method
-    /// call whose callee never binds a by-reference parameter into a closure
-    /// (`use (&$param)`, see [`RefArgCellLifetime::for_callee`]).
+    /// The caller owns a managed lease until return or throw. An escaping closure may
+    /// retain the cell independently, so this lifetime does not prohibit reference escape.
     CallOnly,
     /// The callee may KEEP the reference. A constructor that promotes a by-reference
     /// parameter (`__construct(public int &$value = 1)`) BORROWS the cell for the whole life
@@ -84,39 +82,26 @@ pub(super) enum RefArgCellLifetime {
     /// cell rather than an owned one — so the cell must be heap storage that outlives this
     /// frame. It is never freed, which is a narrower pre-existing defect (one cell per
     /// constructed object, not one per call) that only the object model can fix.
-    ///
-    /// Also every call to a callee a CLOSURE keeps a by-reference parameter of: `use (&$param)`
-    /// binds the cell for the closure's life, and a closure handed out (a `RewindableGenerator`
-    /// factory, a lazy initializer) runs after the call returned. Those cells leak the same way.
     MayOutliveCall,
 }
 
 impl RefArgCellLifetime {
-    /// The lifetime a call to the function or method named `callee` needs, by the checker's
-    /// escape fact (`Module::ref_param_escaping_callees`, matched on the bare lowercase name).
-    pub(super) fn for_callee(ctx: &FunctionContext<'_>, callee: &str) -> Self {
-        let bare = callee.rsplit_once("::").map_or(callee, |(_, method)| method);
-        if ctx
-            .module
-            .ref_param_escaping_callees
-            .contains(&crate::names::php_symbol_key(bare))
-        {
-            RefArgCellLifetime::MayOutliveCall
-        } else {
-            RefArgCellLifetime::CallOnly
-        }
+    /// The lifetime a call to the function or method named `callee` needs.
+    ///
+    /// A closure that binds the callee's by-reference parameter (`use (&$param)`) does not need
+    /// the persistent fallback: closure creation takes its own managed lease on the cell
+    /// (`__rt_reference_cell_owner` + incref in `lower_closure_new`), so the caller may retire its
+    /// lease after the call and the closure's release frees the cell. Only constructors that
+    /// promote a by-reference parameter into a property borrow the cell, and those choose
+    /// `MayOutliveCall` through `constructor_ref_cell_lifetime`.
+    pub(super) fn for_callee(_ctx: &FunctionContext<'_>, _callee: &str) -> Self {
+        RefArgCellLifetime::CallOnly
     }
 }
 
-/// A caller-side stack cell standing in for a by-reference argument that has NO caller
-/// variable behind it — an OMITTED optional by-reference argument (`f($x)` against
-/// `f($x, int &$out = null)`), or any other operand that is neither a local nor an array
-/// element.
-///
-/// It lives in the same pushed cell block as [`RefArgWriteback`] and is released with it
-/// after the call. There is nothing to write back (no source local exists), so the callee's
-/// write into it is simply discarded — which is exactly PHP's semantics for an argument the
-/// caller never supplied.
+/// A managed cell for a reference argument without a caller variable, typically a default.
+/// Its stack slot holds the cell pointer, followed by an unwind record for the caller lease.
+/// There is no source location to write back; escaping closures retain independent leases.
 pub(super) struct RefArgTempCell {
     pub(super) param_index: usize,
     /// `None` for an OMITTED optional by-reference argument: there is no operand to load,
@@ -126,6 +111,9 @@ pub(super) struct RefArgTempCell {
     /// PARAMETER's type, so the cell must be that type and not the argument's.
     pub(super) cell_ty: PhpType,
     pub(super) cell_offset: usize,
+    /// An element-reference operand already is a managed cell. The caller retains that cell
+    /// instead of allocating a second cell, preserving identity with the hash entry.
+    pub(super) retain_existing: bool,
 }
 
 /// A caller-side scalar local boxed into a temporary Mixed by-reference cell.
@@ -134,8 +122,6 @@ pub(super) struct RefArgWriteback {
     pub(super) source_value: ValueId,
     pub(super) source_slot: LocalSlotId,
     pub(super) source_ty: PhpType,
-    pub(super) cell_ty: PhpType,
-    pub(super) kind: RefArgWritebackKind,
     pub(super) cell_offset: usize,
 }
 

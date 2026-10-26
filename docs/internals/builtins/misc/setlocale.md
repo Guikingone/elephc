@@ -1,16 +1,16 @@
 ---
-title: "setlocale() — internals"
+title: "setlocale() - internals"
 description: "Compiler internals for setlocale(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 695
+  order: 725
 ---
 
-## `setlocale()` — internals
+## `setlocale()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/setlocale.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/setlocale.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

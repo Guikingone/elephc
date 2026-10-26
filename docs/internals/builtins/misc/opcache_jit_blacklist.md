@@ -1,16 +1,16 @@
 ---
-title: "opcache_jit_blacklist() — internals"
+title: "opcache_jit_blacklist() - internals"
 description: "Compiler internals for opcache_jit_blacklist(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 646
+  order: 666
 ---
 
-## `opcache_jit_blacklist()` — internals
+## `opcache_jit_blacklist()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/opcache_prelude/build.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L540) (`opcache_jit_blacklist`)
+- **Lowering**: [`src/opcache_prelude/build.rs`:1064](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L1064) (`opcache_jit_blacklist`)
 - **Function symbol**: `opcache_jit_blacklist()`
 
 
@@ -38,7 +38,7 @@ function opcache_jit_blacklist(mixed $closure): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

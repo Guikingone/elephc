@@ -1,16 +1,16 @@
 ---
-title: "date_add() — internals"
+title: "date_add() - internals"
 description: "Compiler internals for date_add(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 202
+  order: 203
 ---
 
-## `date_add()` — internals
+## `date_add()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:960](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L960) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:983](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L983) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

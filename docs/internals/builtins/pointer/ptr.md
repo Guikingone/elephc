@@ -1,16 +1,16 @@
 ---
-title: "ptr() — internals"
+title: "ptr() - internals"
 description: "Compiler internals for ptr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 736
+  order: 768
 ---
 
-## `ptr()` — internals
+## `ptr()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

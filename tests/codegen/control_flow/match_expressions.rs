@@ -815,3 +815,32 @@ echo $result;
     );
     assert_eq!(out, "short");
 }
+
+/// A `match` statement whose arms assign an `int` property in one arm, a `string` property in
+/// another and call a `void` method in a third (Laravel Prompts' `TypedValue` key handler). An
+/// assignment arm was merged with the scalar-biased syntactic guess `int`, so the string arm had
+/// no representation in the `?int` temp and the backend refused the closure.
+#[test]
+fn test_match_arms_assigning_differently_typed_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class Cursor {
+    public string $value = "abc";
+    public int $position = 3;
+    private function wipe(): void { $this->value = ""; }
+    public function key(string $key): string {
+        match ($key) {
+            "left" => $this->position = max(0, $this->position - 1),
+            "delete" => $this->value = substr($this->value, 0, $this->position) . substr($this->value, $this->position + 1),
+            "wipe" => $this->wipe(),
+            default => null,
+        };
+        return $this->value . "@" . $this->position;
+    }
+}
+$c = new Cursor();
+echo $c->key("left"), " ", $c->key("delete"), " ", $c->key("other"), " ", $c->key("wipe");
+"#,
+    );
+    assert_eq!(out, "abc@2 ab@2 ab@2 @2");
+}

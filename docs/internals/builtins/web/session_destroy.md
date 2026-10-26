@@ -1,16 +1,16 @@
 ---
-title: "session_destroy() — internals"
+title: "session_destroy() - internals"
 description: "Compiler internals for session_destroy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 957
+  order: 1048
 ---
 
-## `session_destroy()` — internals
+## `session_destroy()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:2859](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L2859) (`session_destroy`)
+- **Lowering**: [`src/web_prelude/build.rs`:3032](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3032) (`session_destroy`)
 - **Function symbol**: `session_destroy()`
 
 
@@ -38,7 +38,7 @@ function session_destroy(): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

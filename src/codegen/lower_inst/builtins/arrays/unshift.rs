@@ -42,10 +42,11 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
         ));
     }
     let array = expect_operand(inst, 0)?;
-    if matches!(
-        ctx.value_php_type(array)?.codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    ) {
+    if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
+        require_array_unshift_result_type(&inst.result_php_type.codegen_repr())?;
+        return super::boxed_unshift::lower_boxed_array_unshift(ctx, inst, array);
+    }
+    if matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::Union(_)) {
         return super::unshift_dynamic::lower_array_unshift_dynamic(ctx, inst, array);
     }
     if matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::AssocArray { .. }) {
@@ -76,7 +77,9 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
                 Arch::X86_64 => lower_array_unshift_x86_64(ctx, array, value, &elem_ty)?,
             }
         }
-        receiver.store_back_value(ctx, array)?;
+        // The unique source and every growth already own the transition (see
+        // `store_back_after_consuming_split`): a global must only publish the pointer.
+        receiver.store_back_after_consuming_split(ctx, array)?;
     }
     // The helper already returns the running count, but the local-slot write-back above may
     // clobber the result register, and the value-less form never calls the helper at all.

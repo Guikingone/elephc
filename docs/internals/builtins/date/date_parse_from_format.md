@@ -1,16 +1,16 @@
 ---
-title: "date_parse_from_format() — internals"
+title: "date_parse_from_format() - internals"
 description: "Compiler internals for date_parse_from_format(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 219
+  order: 220
 ---
 
-## `date_parse_from_format()` — internals
+## `date_parse_from_format()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:795](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L795) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:818](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L818) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

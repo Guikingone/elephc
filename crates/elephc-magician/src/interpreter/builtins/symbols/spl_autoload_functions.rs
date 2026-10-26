@@ -26,6 +26,17 @@ pub(in crate::interpreter) fn eval_spl_autoload_functions_declared_call(
     eval_builtin_spl_autoload_functions(args, context, scope, values)
 }
 
+/// Builds the PHP `spl_autoload_functions()` array for generated (AOT) callers.
+///
+/// The generated `spl_autoload_register` lowering registers through this crate's request-global
+/// autoload table, so only the interpreter can answer what PHP's queue holds.
+pub(crate) fn eval_registered_spl_autoload_functions_result(
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_spl_autoload_functions_result(&[], context, values)
+}
+
 /// Evaluates materialized `spl_autoload_functions()` arguments.
 pub(in crate::interpreter) fn eval_spl_autoload_functions_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],

@@ -23,16 +23,16 @@ fn test_error_file_get_contents_wrong_args() {
     );
 }
 
-/// Verifies `file_get_contents()` returning `false` is incompatible with declared `string` return type.
+/// Returning `file_get_contents()` (`string|false`) from a function declared `: string` is valid in php's
+/// weak mode (`false` coerces to `""`); elephc now accepts it and the program output matches php.
 #[test]
-fn test_error_file_get_contents_false_return_rejects_string_return_type() {
-    expect_error(
+fn test_file_get_contents_false_return_coerces_to_declared_string() {
+    expect_no_error(
         r#"<?php
 function read_file(): string {
     return file_get_contents("missing.txt");
 }
 "#,
-        "Function 'read_file' return type expects Str, got Union([Str, False])",
     );
 }
 
@@ -48,19 +48,19 @@ fn test_error_hash_file_wrong_args() {
 /// Verifies `readfile()` rejects zero arguments with arity error.
 #[test]
 fn test_error_readfile_wrong_args() {
-    expect_error("<?php readfile();", "readfile() takes exactly 1 argument");
+    expect_error("<?php readfile();", "readfile() takes 1 to 3 arguments");
 }
 
-/// Verifies `readfile()` returning `false` is incompatible with declared `int` return type.
+/// Returning `readfile()` (`int|false`) from a function declared `: int` is valid in php's weak mode
+/// (`false` coerces to `0`); elephc now accepts it and the program output matches php.
 #[test]
-fn test_error_readfile_false_return_rejects_int_return_type() {
-    expect_error(
+fn test_readfile_false_return_coerces_to_declared_int() {
+    expect_no_error(
         r#"<?php
 function dump_file(): int {
     return readfile("missing.txt");
 }
 "#,
-        "Function 'dump_file' return type expects Int, got Union([Int, False])",
     );
 }
 
@@ -87,6 +87,9 @@ fn test_error_file_exists_wrong_args() {
 }
 
 /// Verifies `mkdir()` rejects zero arguments with arity error.
+///
+/// The wording moved with the signature: `$permissions` and `$recursive` were added in
+/// issue #506, so the accepted count is a range now.
 #[test]
 fn test_error_mkdir_wrong_args() {
     expect_error("<?php mkdir();", "mkdir() takes 1 to 4 arguments");
@@ -96,10 +99,11 @@ fn test_error_mkdir_wrong_args() {
     );
 }
 
-/// Verifies `copy()` rejects one argument (requires 2) with arity error.
+/// Verifies `copy()` rejects one argument (requires 2, plus an optional stream context) with an
+/// arity error.
 #[test]
 fn test_error_copy_wrong_args() {
-    expect_error(r#"<?php copy("x");"#, "copy() takes exactly 2 arguments");
+    expect_error(r#"<?php copy("x");"#, "copy() takes 2 or 3 arguments");
 }
 
 /// Verifies `link()` rejects one argument (requires 2) with arity error.

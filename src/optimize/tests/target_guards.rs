@@ -51,9 +51,11 @@ fn test_namespace_polyfill_date_alias_is_desugared() {
     let program = fold_source("<?php namespace App;
         if (!function_exists('date_create')) { function date_create(string $datetime) { return false; } }
         echo date_create('2020-01-01');", "linux-x86_64");
+    // `date_create()` answers `false` for a string it cannot parse where `new DateTime` throws,
+    // so the alias rewrite is `DateTime::__elephc_date_create(...)` (name_resolver/expressions.rs).
     assert!(matches!(&program.last().unwrap().kind,
-        StmtKind::Echo(Expr { kind: ExprKind::NewObject { class_name, .. }, .. })
-            if class_name.as_str() == "DateTime"), "{program:#?}");
+        StmtKind::Echo(Expr { kind: ExprKind::StaticMethodCall { receiver: StaticReceiver::Named(class_name), method, .. }, .. })
+            if class_name.as_str() == "DateTime" && method == "__elephc_date_create"), "{program:#?}");
 }
 
 /// Explicit qualification and function imports must not become calls to the global builtin.
@@ -187,4 +189,25 @@ fn test_target_guard_callable_reference_scope() {
     assert!(matches!(&body.last().unwrap().kind, StmtKind::If { .. }));
     assert!(matches!(&program.last().unwrap().kind,
         StmtKind::Echo(Expr { kind: ExprKind::StringLiteral(value), .. }) if value == "no"));
+}
+
+
+/// Target-dependent pre-check folding must retain a callable's last syntactic yield.
+#[test]
+fn test_target_fold_preserves_a_dead_yield_for_generator_classification() {
+    let program = fold_source(
+        "<?php\nfunction inner(): Generator { yield 1; }\nfunction outer(): Generator {\n    if (PHP_OS_FAMILY === \"Windows\") { yield 2; }\n    return inner();\n}",
+        "linux-x86_64",
+    );
+    let body = program
+        .iter()
+        .find_map(|stmt| match &stmt.kind {
+            StmtKind::FunctionDecl { name, body, .. } if name.as_str() == "outer" => Some(body),
+            _ => None,
+        })
+        .expect("outer generator exists");
+    assert!(
+        crate::types::checker::yield_validation::body_contains_yield(body),
+        "the selected target removed the last yield before type checking"
+    );
 }

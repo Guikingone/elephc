@@ -111,6 +111,7 @@ pub(super) fn emit_reflection_constructor_property(
         super::super::emit_boxed_null(ctx);
     }
     abi::emit_pop_reg(ctx.emitter, object_reg);
+    release_previous_mixed_slot(ctx, low_offset);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
     abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
@@ -175,6 +176,7 @@ pub(super) fn emit_reflection_parent_class_property(
         emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
     }
     abi::emit_pop_reg(ctx.emitter, object_reg);
+    release_previous_mixed_slot(ctx, low_offset);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
     abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
@@ -319,4 +321,18 @@ pub(super) fn emit_reflection_parameter_array_property_by_name(
     abi::emit_push_reg(ctx.emitter, object_reg);
     abi::emit_pop_reg(ctx.emitter, result_reg);
     Ok(())
+}
+
+/// Releases the boxed value the slot at `low_offset` of the object in the scratch register still
+/// holds (the constructor's default), keeping the new value in the result register and the object
+/// in the scratch register.
+pub(super) fn release_previous_mixed_slot(ctx: &mut FunctionContext<'_>, low_offset: usize) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
 }

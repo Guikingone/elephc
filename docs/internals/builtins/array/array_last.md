@@ -1,11 +1,11 @@
 ---
-title: "array_last() — internals"
+title: "array_last() - internals"
 description: "Compiler internals for array_last(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 30
 ---
 
-## `array_last()` — internals
+## `array_last()` - internals
 
 ## Where it lives
 

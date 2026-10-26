@@ -694,17 +694,17 @@ sidebar:
 
 ## Roadmap management
 
-`ROADMAP.md` tracks planned and delivered work, organized by version:
+`ROADMAP.md` tracks planned work, organized by version. Per-version delivered work belongs in `CHANGELOG.md`, not the roadmap.
 
 - Add planned work as `[ ]` under the version where it is expected to ship.
-- When an implementation lands, mark its existing item `[x]`. If it was not planned in the roadmap, add a concise `[x]` item under the version that delivers it.
-- During release preparation, reconcile the current version section with the audited release range and add any missing notable delivered work as `[x]`.
+- When an implementation lands, mark its existing item `[x]`.
+- During release preparation, reconcile the current version section with the audited release range by marking planned items that shipped `[x]`. Do not add a roadmap item for work that was not planned; record that delivery in `CHANGELOG.md`.
 - **Never remove completed items** from a version section. Leave them under the version that delivered them so the roadmap preserves that version's scope.
 - When all items in a version are completed, the version is considered done; do not move items elsewhere.
 
 ## Changelog management
 
-`CHANGELOG.md` is a release artifact, not a development log. It records every released version, newest first, in *Keep a Changelog* style.
+`CHANGELOG.md` is a release artifact, not a development log. It records every released version, newest first, in *Keep a Changelog* style. Per-version delivered work belongs here, including work that was not planned on the roadmap.
 
 - **Do not edit `CHANGELOG.md` during ordinary development.** Feature, fix, refactor, documentation, dependency, and maintenance Pull Requests must not add entries under `[Unreleased]` or a numbered release.
 - Keep `[Unreleased]` empty between releases. Do not accumulate one changelog bullet per Pull Request.
@@ -748,10 +748,11 @@ materializes the bridge `libelephc_*.a` staticlibs that `linker.rs` links into
 compiled programs. Standard build/test/run commands are documented above and in
 `CONTRIBUTING.md`; the notes below are only the non-obvious cloud caveats.
 
-- **Rust toolchain is version-pinned.** CI pins the toolchain in
-  `.github/docker/ci.Dockerfile` (currently `1.95.0`) and the "no warnings" gate
-  greps build output, so use that exact toolchain rather than a floating
-  `stable`. The cloud VM has it installed and set as the rustup default.
+- **Rust toolchain is version-pinned.** CI pins Rust `1.98` in
+  `.github/docker/ci.Dockerfile` (`RUST_VERSION`) and workflow `RUST_TOOLCHAIN`.
+  The "no warnings" gate greps build output, so use that pin rather than a
+  floating `stable`. The cloud VM's rustup default may lag that pin until the
+  environment image is rebuilt.
 - **The compiler shells out to the host `as` + `gcc`/`ld`.** These are present.
   On Linux, compiling a program prints benign linker warnings
   (`gethostbyname` in statically linked apps, missing `.note.GNU-stack`,

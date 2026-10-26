@@ -29,6 +29,12 @@ pub fn type_spec_to_php(ty: &TypeSpec) -> PhpType {
         TypeSpec::Float => PhpType::Float,
         TypeSpec::Str => PhpType::Str,
         TypeSpec::Bool => PhpType::Bool,
+        // The checker model records object types by concrete class name. A neutral `object`
+        // declaration therefore remains open until a builtin check hook can refine it.
+        TypeSpec::Object => PhpType::Mixed,
+        TypeSpec::False => PhpType::False,
+        TypeSpec::Null => PhpType::Void,
+        TypeSpec::Union(members) => PhpType::Union(members.iter().map(type_spec_to_php).collect()),
         TypeSpec::Mixed => PhpType::Mixed,
         TypeSpec::Void => PhpType::Void,
         TypeSpec::Ptr => PhpType::Pointer(None),
@@ -37,6 +43,15 @@ pub fn type_spec_to_php(ty: &TypeSpec) -> PhpType {
         // The checker's type model carries nullability through flow narrowing rather than a
         // type constructor, so a nullable declaration converts to its inner type.
         TypeSpec::Nullable(inner) => type_spec_to_php(inner),
+    }
+}
+
+/// Converts nullable builtin parameters without discarding null in their runtime representation.
+pub(crate) fn type_spec_to_php_preserving_null(ty: &TypeSpec) -> PhpType {
+    match ty {
+        TypeSpec::Nullable(inner) => PhpType::Union(vec![type_spec_to_php_preserving_null(inner), PhpType::Void]),
+        TypeSpec::Union(members) => PhpType::Union(members.iter().map(type_spec_to_php_preserving_null).collect()),
+        _ => type_spec_to_php(ty),
     }
 }
 
@@ -55,6 +70,10 @@ pub fn default_spec_to_expr(d: &DefaultSpec) -> Expr {
         DefaultSpec::Float(f) => Expr::new(ExprKind::FloatLiteral(*f), Span::dummy()),
         DefaultSpec::Str(s) => Expr::new(ExprKind::StringLiteral(s.to_string()), Span::dummy()),
         DefaultSpec::IntMax => Expr::new(ExprKind::IntLiteral(i64::MAX), Span::dummy()),
+        DefaultSpec::ErrorAll => Expr::new(
+            ExprKind::IntLiteral(crate::php_version::PhpVersion::default().error_reporting_mask()),
+            Span::dummy(),
+        ),
         DefaultSpec::EmptyArray => Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy()),
         DefaultSpec::Constant(name) => Expr::new(
             ExprKind::ConstRef(crate::names::Name::from(*name)),
@@ -108,6 +127,7 @@ mod tests {
     fn all_scalar_type_specs_convert() {
         assert_eq!(type_spec_to_php(&TypeSpec::Float), PhpType::Float);
         assert_eq!(type_spec_to_php(&TypeSpec::Bool), PhpType::Bool);
+        assert_eq!(type_spec_to_php(&TypeSpec::Object), PhpType::Mixed);
         assert_eq!(type_spec_to_php(&TypeSpec::Mixed), PhpType::Mixed);
         assert_eq!(type_spec_to_php(&TypeSpec::Void), PhpType::Void);
     }
@@ -165,4 +185,15 @@ mod tests {
         let e = default_spec_to_expr(&DefaultSpec::EmptyArray);
         assert!(matches!(e.kind, ExprKind::ArrayLiteral(ref v) if v.is_empty()));
     }
+    /// Verifies array/string/null declarations preserve every branch for shared argument planning.
+    #[test]
+    fn union_type_specs_preserve_all_alternatives() {
+        let descriptor = TypeSpec::Union(&[TypeSpec::Array, TypeSpec::Str, TypeSpec::Null]);
+        let expected = PhpType::Union(vec![PhpType::Array(Box::new(PhpType::Mixed)), PhpType::Str, PhpType::Void]);
+        assert_eq!(type_spec_to_php(&descriptor), expected);
+        assert_eq!(type_spec_to_php_preserving_null(&descriptor), expected);
+        assert_eq!(type_spec_to_php_preserving_null(&TypeSpec::Nullable(&TypeSpec::Int)),
+            PhpType::Union(vec![PhpType::Int, PhpType::Void]));
+    }
+
 }

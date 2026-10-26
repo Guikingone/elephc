@@ -881,3 +881,186 @@ echo constant($name);
     );
     assert_eq!(out, "resolved");
 }
+
+/// `assert($x)` inside a namespace falls back to the global function like any other builtin.
+/// The resolver only knew the fallback for registry builtins, and `assert()` is served by a
+/// prelude, so the call stayed `A\assert` and died with "Call to undefined function A\assert()".
+#[test]
+fn test_assert_in_a_namespace_resolves_to_the_global_function() {
+    let out = compile_and_run(
+        r#"<?php
+namespace A;
+
+class K {
+    public function f(?object $o): int {
+        assert($o instanceof \stdClass);
+        return 1;
+    }
+}
+function g($x) { assert($x); return 2; }
+echo (new K())->f(new \stdClass()), g(true), "\n";
+try {
+    g(false);
+} catch (\AssertionError $error) {
+    echo get_class($error), "\n";
+}
+try {
+    (new K())->f(null);
+} catch (\AssertionError $error) {
+    echo get_class($error), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "12\nAssertionError\nAssertionError\n");
+}
+
+/// Checks a heap-debug run's stdout and its shared "leak summary: clean" verdict.
+fn assert_ran_clean(out: &ProgramOutput, expected_stdout: &str) {
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, expected_stdout);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// A property store through an `instanceof`-narrowed untyped parameter retained the unboxed
+/// receiver and never released it, leaking the object once per call.
+#[test]
+fn test_property_store_through_instanceof_narrowed_parameter_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class X { public $p; }
+class Y { public $v = 3; }
+function once($n, $v) {
+    if ($n instanceof X) {
+        $n->p = $v;
+    }
+    return $n->p->v;
+}
+$sum = 0;
+for ($i = 0; $i < 300; $i++) {
+    $sum += once(new X(), new Y());
+}
+echo $sum, "\n";
+"#,
+    );
+    assert_ran_clean(&out, "900\n");
+}
+
+/// `$local->a->b = $x` left the owned read of `$local->a` unreleased after the store.
+#[test]
+fn test_chained_property_store_does_not_leak_the_intermediate_read() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class B { public $b; public $v = 4; }
+class A { public $a; }
+function once() {
+    $l = new A();
+    $l->a = new B();
+    $l->a->b = new B();
+    return $l->a->b->v;
+}
+$sum = 0;
+for ($i = 0; $i < 300; $i++) {
+    $sum += once();
+}
+echo $sum, "\n";
+"#,
+    );
+    assert_ran_clean(&out, "1200\n");
+}
+
+/// `array_pop()`/`array_shift()` on a local widened to a boxed slot, a `while` condition that
+/// first assigns its own variable, and `unset($obj->arr[$k])` each dropped one owner.
+#[test]
+fn test_array_pop_shift_loop_condition_and_property_element_unset_do_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class O { public $v = 1; }
+class H { public $arr = []; }
+function popMixed($which) {
+    if ($which == 1) {
+        $u = [new O(), new O(), new O()];
+        $t = array_pop($u);
+        return $t->v + count($u);
+    }
+    if ($which == 2) {
+        $u = ['k' => new O()];
+        return count($u);
+    }
+    return 0;
+}
+function shiftMixed($which) {
+    if ($which == 1) {
+        $u = [new O(), new O(), new O()];
+        $t = array_shift($u);
+        return $t->v + count($u);
+    }
+    if ($which == 2) {
+        $u = ['k' => new O()];
+        return count($u);
+    }
+    return 0;
+}
+function drain() {
+    $stack = [new O(), new O()];
+    $n = 0;
+    while (($item = array_pop($stack)) !== null) {
+        $n += $item->v;
+    }
+    return $n;
+}
+function unsetElement() {
+    $h = new H();
+    $h->arr = ['a' => new O(), 'b' => new O()];
+    unset($h->arr['a']);
+    return count($h->arr);
+}
+$sum = 0;
+for ($i = 0; $i < 200; $i++) {
+    $sum += popMixed(1) + shiftMixed(1) + drain() + unsetElement();
+}
+echo $sum, "\n";
+"#,
+    );
+    assert_ran_clean(&out, "1800\n");
+}
+
+/// A nullable typed property read passed to an object parameter (narrowing guard) or to a
+/// `?Box` parameter (forwarding guard) kept the property read's boxed copy alive, whether or
+/// not the callee rewrote the same property.
+#[test]
+fn test_nullable_property_read_passed_as_argument_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box { public $q = 2; }
+class Holder {
+    public ?Box $tp = null;
+    public function run() {
+        $this->tp = new Box();
+        return $this->take($this->tp);
+    }
+    public function take(?Box $v) {
+        $this->tp = null;
+        return $v->q;
+    }
+}
+function useBox(Box $v) { return $v->q; }
+function keep(?Box $v) { return $v->q; }
+function once() {
+    $h = new Holder();
+    $h->tp = new Box();
+    $n = useBox($h->tp) + keep($h->tp);
+    return $n + $h->run();
+}
+$sum = 0;
+for ($i = 0; $i < 300; $i++) {
+    $sum += once();
+}
+echo $sum, "\n";
+"#,
+    );
+    assert_ran_clean(&out, "1800\n");
+}

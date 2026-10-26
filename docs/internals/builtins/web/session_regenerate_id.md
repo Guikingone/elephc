@@ -1,16 +1,16 @@
 ---
-title: "session_regenerate_id() — internals"
+title: "session_regenerate_id() - internals"
 description: "Compiler internals for session_regenerate_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 964
+  order: 1055
 ---
 
-## `session_regenerate_id()` — internals
+## `session_regenerate_id()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3058](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3058) (`session_regenerate_id`)
+- **Lowering**: [`src/web_prelude/build.rs`:3231](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3231) (`session_regenerate_id`)
 - **Function symbol**: `session_regenerate_id()`
 
 
@@ -38,7 +38,7 @@ function session_regenerate_id(bool $delete_old = false): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

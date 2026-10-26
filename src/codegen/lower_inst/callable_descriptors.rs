@@ -30,21 +30,36 @@ pub(super) fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst
         return store_if_result(ctx, inst);
     }
     if let Some(descriptor) = first_class_callable_descriptor(ctx, &target, strict_php)? {
+        let owns_string_return = descriptor.owns_string_return;
         let invoker_label = descriptor
             .sig
             .as_ref()
-            .map(|sig| super::runtime_wrappers::emit_runtime_callable_invoker_inline_with_boundary(ctx, sig, &[], true));
-        let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
-            ctx.data,
-            &descriptor.entry_label,
-            Some(&target),
-            descriptor.kind,
-            descriptor.sig.as_ref(),
-            &[],
-            &[],
-            descriptor.invocation,
-            invoker_label.as_deref(),
-        );
+            .map(|sig| emit_runtime_callable_invoker_with_string_owner(
+                ctx, sig, &[], owns_string_return,
+                descriptor.kind != callable_descriptor::CALLABLE_DESC_KIND_BUILTIN
+                    && descriptor.kind != callable_descriptor::CALLABLE_DESC_KIND_EXTERN,
+            ));
+        let descriptor_label = match descriptor.entry_label.as_deref() {
+            Some(entry_label) => {
+                callable_descriptor::static_descriptor_with_optional_invoker_meta(
+                    ctx.data,
+                    entry_label,
+                    Some(&target),
+                    descriptor.kind,
+                    descriptor.sig.as_ref(),
+                    &[],
+                    &[],
+                    descriptor.invocation,
+                    invoker_label.as_deref(),
+                )
+            }
+            None => callable_descriptor::static_only_descriptor(
+                ctx.data,
+                &target,
+                descriptor.kind,
+                descriptor.invocation,
+            ),
+        };
         // `f(...)` produces a Closure in PHP and therefore consumes an object
         // handle, exactly like `function () {}` does. Give it the same runtime
         // descriptor storage so the handle can be bound at creation and returned
@@ -108,7 +123,13 @@ pub(super) fn emit_static_late_bound_first_class_callable(
         &wrapper_sig,
         dynamic_slot,
     )?;
-    let invoker_label = super::runtime_wrappers::emit_runtime_callable_invoker_inline_with_boundary(ctx, &wrapper_sig, &captures, true);
+    // The late-bound entry wrapper normalizes each selected implementation's
+    // string ownership before returning, including borrowed-result overrides.
+    let owns_string_return = wrapper_sig.return_type.codegen_repr() == PhpType::Str
+        && !wrapper_sig.by_ref_return;
+    let invoker_label = emit_runtime_callable_invoker_with_string_owner(
+        ctx, &wrapper_sig, &captures, owns_string_return, true,
+    );
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &entry_label,
@@ -158,11 +179,17 @@ pub(super) fn emit_instance_method_first_class_callable(
             target, receiver_ty
         )));
     };
-    if class_name.is_empty() {
+    let normalized_class = class_name.trim_start_matches('\\').to_string();
+    // A class the program does not declare (an uninstalled package's, or an extension's the build
+    // does not link) names no method table: the receiver is resolved when it runs, as for a
+    // generic `object` -- the checker already typed the callable dynamically.
+    if class_name.is_empty()
+        || (!ctx.module.class_infos.contains_key(normalized_class.as_str())
+            && !module_has_interface(ctx, &normalized_class))
+    {
         emit_object_receiver_first_class_callable(ctx, receiver, method_name, None)?;
         return Ok(true);
     }
-    let normalized_class = class_name.trim_start_matches('\\').to_string();
     if module_has_interface(ctx, &normalized_class) {
         emit_object_receiver_first_class_callable(
             ctx,
@@ -193,14 +220,18 @@ pub(super) fn emit_instance_method_first_class_callable(
                         target
                     ))
                 })?;
-            let invoker_label = descriptor
-                .sig
-                .as_ref()
-                .map(|sig| super::runtime_wrappers::emit_runtime_callable_invoker_inline_with_boundary(ctx, sig, &[], true));
-            let descriptor_label =
-                callable_descriptor::static_descriptor_with_optional_invoker_meta(
+            // Bounded: an interpreted caller wraps the call in a PHP `try`, and a native throw
+            // must come back as a status instead of unwinding past it.
+            let owns_string_return = crate::codegen::runtime_callable_invoker::method_returns_owned_string(
+                ctx.module, &normalized_class, &method_key, true,
+            );
+            let invoker_label = descriptor.sig.as_ref().map(|sig| {
+                emit_runtime_callable_invoker_with_string_owner(ctx, sig, &[], owns_string_return, true)
+            });
+            let descriptor_label = match descriptor.entry_label.as_deref() {
+                Some(entry_label) => callable_descriptor::static_descriptor_with_optional_invoker_meta(
                     ctx.data,
-                    &descriptor.entry_label,
+                    entry_label,
                     Some(&static_target),
                     descriptor.kind,
                     descriptor.sig.as_ref(),
@@ -208,7 +239,14 @@ pub(super) fn emit_instance_method_first_class_callable(
                     &[],
                     descriptor.invocation,
                     invoker_label.as_deref(),
-                );
+                ),
+                None => callable_descriptor::static_only_descriptor(
+                    ctx.data,
+                    &static_target,
+                    descriptor.kind,
+                    descriptor.invocation,
+                ),
+            };
             emit_runtime_closure_descriptor_with_captures(ctx, &descriptor_label, &[], &[])?;
             return Ok(true);
         }
@@ -253,11 +291,19 @@ pub(super) fn emit_instance_method_first_class_callable(
     let captures = vec![("receiver".to_string(), receiver_ty.clone(), false)];
     let entry_label =
         emit_instance_method_descriptor_entry_wrapper(ctx, &impl_class, &method_key, &sig)?;
-    let invoker_label = super::runtime_wrappers::emit_runtime_callable_invoker_inline_with_boundary(ctx, &sig, &captures, true);
+    let owns_string_return = crate::codegen::runtime_callable_invoker::method_returns_owned_string(
+        ctx.module, &impl_class, &method_key, false,
+    );
+    let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &sig, &captures, owns_string_return, true);
+    // Named after the receiver's class like the runtime-dispatched templates
+    // (`runtime_instance_method_descriptor_template`): `ReflectionFunction` resolves a method
+    // closure by that name, and `object::m` named no class (Twig's `debug:twig` reflects
+    // `$this->createTranslatable(...)` this way).
+    let php_name = format!("{normalized_class}::{method_name}");
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &entry_label,
-        Some(target),
+        Some(&php_name),
         callable_descriptor::CALLABLE_DESC_KIND_FIRST_CLASS,
         Some(&sig),
         &captures,
@@ -330,6 +376,13 @@ fn emit_mixed_receiver_first_class_callable(
     }
 
     ctx.emitter.label(&fatal_label);
+    // An object the interpreter declared matches no compiled candidate; the eval bridge binds it.
+    if builtins::has_eval_context(ctx) || ctx.module.required_runtime_features.eval_bridge {
+        let null_label = ctx.next_label("mixed_first_class_callable_null");
+        callables::emit_eval_owned_bound_method_descriptor(ctx, receiver, method_name, &null_label)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&null_label);
+    }
     emit_method_call_on_null_fatal(ctx, method_name);
     ctx.emitter.label(&done_label);
     Ok(())

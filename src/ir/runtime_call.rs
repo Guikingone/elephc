@@ -53,9 +53,26 @@ impl ArrayKeySort {
     }
 }
 
+/// Physical argument storage retained independently of a runtime function's PHP signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RuntimeArgumentLayout {
+    /// Each supplied PHP parameter is a separate EIR operand.
+    Values,
+    /// One owned array of copied Mixed values retains the actual positional argument count.
+    IndexedArray,
+}
+
 /// Typed runtime operation selected by backend-neutral EIR lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeCallTarget {
+    /// Initializes a builtin Throwable constructor without assuming a compact receiver layout.
+    ThrowableInitialize,
+    /// Appends an exception to the END of another's `previous` chain, as php-src's
+    /// `zend_exception_set_previous` does when an exception leaves a `finally` that was entered
+    /// with one pending. Borrows the new exception (operand 0) and CONSUMES the pending one
+    /// (operand 1); an overlap between the two chains drops the pending owner instead of
+    /// creating a cycle.
+    ExceptionChain,
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
@@ -75,6 +92,9 @@ pub enum RuntimeCallTarget {
         /// and `$routes = require $dump;` are both real code that reads it.
         value_discarded: bool,
     },
+    /// Borrows a boxed PHP array and returns an independently owned hash for literal unpacking.
+    /// Rejects non-array values without mutating the original cell or its payload.
+    ArrayUnpackToHash,
     /// Promotes an indexed-array payload stored in a boxed Mixed cell to a
     /// Mixed-entry hash and installs the new payload back into that same cell.
     MixedCellPromoteToHash(ArrayKeySort),
@@ -99,18 +119,37 @@ pub enum RuntimeCallTarget {
         /// Whether this enters the scope (true) or leaves it (false).
         enter: bool,
     },
+    /// Registers an owner after the supplied guard (zero means chain head), returning its guard token.
+    ExceptionGuardOwned,
+    /// Removes an owned-value guard without releasing the value on the normal path.
+    ExceptionUnguardOwned,
+    /// Refreshes an active array guard after an append can relocate the container.
+    ExceptionUpdateArrayGuard,
+    /// Refreshes an active associative-array guard after insertion can relocate the hash.
+    ExceptionUpdateHashGuard,
+    /// Validates one boxed dynamic call-unpack source before argument accumulation mutates state.
+    CallArgumentValidateUnpack,
+    /// Appends the numeric entries from one validated call-unpack source to a positional hash.
+    CallArgumentCollectPositionals,
+    /// Copies the string entries from one validated call-unpack source to a named hash.
+    CallArgumentCollectNamed,
     /// A one-string-to-one-string transform implemented by the shared runtime.
     UnaryString(UnaryStringRuntime),
     /// A typed PCNTL process-control operation with target-aware availability.
     Pcntl(crate::ir::PcntlRuntime),
     /// A stable runtime function whose target-aware implementation is backend-owned.
     Function(crate::ir::RuntimeFnId),
-    /// A source-sensitive runtime function plus the call site's strict-PHP visibility profile.
+    /// A source-sensitive runtime function with visibility and parameter-coercion profiles.
     ProfiledFunction {
         /// Stable runtime function dispatched by the backend.
         target: crate::ir::RuntimeFnId,
+        /// Physical operand layout, without changing the PHP-visible function signature.
+        arguments: RuntimeArgumentLayout,
         /// Whether strict PHP is effective at the physical call site.
         strict_php: bool,
+        /// PHP parameter strictness at a direct call site; None inherits the invoking caller.
+        /// Generated callable wrappers defer this choice instead of capturing their creation site.
+        strict_types: Option<bool>,
     },
 }
 
@@ -118,6 +157,14 @@ impl RuntimeCallTarget {
     /// Returns the logical signature shared by EIR validation and backend lowering.
     pub fn signature(self) -> Option<RuntimeCallSignature> {
         match self {
+            RuntimeCallTarget::ThrowableInitialize => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Str, IrType::I64, IrType::Heap(IrHeapKind::Mixed)],
+                result: IrType::Void,
+            }),
+            RuntimeCallTarget::ExceptionChain => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Heap(IrHeapKind::Object)],
+                result: IrType::Void,
+            }),
             RuntimeCallTarget::ArrayFetchForWrite => Some(RuntimeCallSignature::Polymorphic {
                 min_operands: 2,
                 max_operands: Some(2),
@@ -129,7 +176,8 @@ impl RuntimeCallTarget {
                 })
             }
             RuntimeCallTarget::MixedCellPromoteToHash(_)
-            | RuntimeCallTarget::MixedCellPromoteAttachedToHash(_) => {
+            | RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
+            | RuntimeCallTarget::ArrayUnpackToHash => {
                 Some(RuntimeCallSignature::Fixed {
                     parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                     result: IrType::Heap(IrHeapKind::Hash),
@@ -145,6 +193,33 @@ impl RuntimeCallTarget {
                     max_operands: Some(0),
                 })
             }
+            RuntimeCallTarget::ExceptionGuardOwned => Some(RuntimeCallSignature::Polymorphic {
+                min_operands: 2,
+                max_operands: Some(2),
+            }),
+            RuntimeCallTarget::ExceptionUnguardOwned => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::I64],
+                result: IrType::Void,
+            }),
+            RuntimeCallTarget::ExceptionUpdateArrayGuard => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Array), IrType::I64],
+                result: IrType::Void,
+            }),
+            RuntimeCallTarget::ExceptionUpdateHashGuard => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Hash), IrType::I64],
+                result: IrType::Void,
+            }),
+            RuntimeCallTarget::CallArgumentValidateUnpack
+            | RuntimeCallTarget::CallArgumentCollectPositionals
+            | RuntimeCallTarget::CallArgumentCollectNamed => {
+                Some(RuntimeCallSignature::Fixed {
+                    parameters: &[
+                        IrType::Heap(IrHeapKind::Hash),
+                        IrType::Heap(IrHeapKind::Mixed),
+                    ],
+                    result: IrType::Void,
+                })
+            }
             RuntimeCallTarget::UnaryString(_) => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Str],
                 result: IrType::Str,
@@ -153,8 +228,13 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::Function(target) => {
                 target.descriptor().logical_signature
             }
-            RuntimeCallTarget::ProfiledFunction { target, .. } => {
-                target.descriptor().logical_signature
+            RuntimeCallTarget::ProfiledFunction { target, arguments, .. } => {
+                match arguments {
+                    RuntimeArgumentLayout::Values => target.descriptor().logical_signature,
+                    RuntimeArgumentLayout::IndexedArray if target.uses_mbstring_runtime() =>
+                        Some(RuntimeCallSignature::Polymorphic { min_operands: 1, max_operands: Some(1) }),
+                    RuntimeArgumentLayout::IndexedArray => None,
+                }
             }
         }
     }
@@ -162,6 +242,8 @@ impl RuntimeCallTarget {
     /// Returns the stable backend-neutral spelling used by textual EIR.
     pub fn as_eir(self) -> &'static str {
         match self {
+            RuntimeCallTarget::ThrowableInitialize => "object.throwable_initialize",
+            RuntimeCallTarget::ExceptionChain => "object.exception_chain",
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
             RuntimeCallTarget::DynamicInclude {
                 once: false,
@@ -183,6 +265,7 @@ impl RuntimeCallTarget {
                 required: true,
                 ..
             } => "require.dynamic_once",
+            RuntimeCallTarget::ArrayUnpackToHash => "array.unpack_to_hash",
             RuntimeCallTarget::MixedCellPromoteToHash(ArrayKeySort::Ascending) => {
                 "array.mixed_cell_promote_to_hash_ksort"
             }
@@ -198,6 +281,15 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::MixedCellClone => "array.mixed_cell_clone",
             RuntimeCallTarget::EvalQuietPropertyFetch { enter: true } => "eval.quiet_fetch_enter",
             RuntimeCallTarget::EvalQuietPropertyFetch { enter: false } => "eval.quiet_fetch_leave",
+            RuntimeCallTarget::ExceptionGuardOwned => "exception.guard_owned",
+            RuntimeCallTarget::ExceptionUnguardOwned => "exception.unguard_owned",
+            RuntimeCallTarget::ExceptionUpdateArrayGuard => "exception.update_array_guard",
+            RuntimeCallTarget::ExceptionUpdateHashGuard => "exception.update_hash_guard",
+            RuntimeCallTarget::CallArgumentValidateUnpack => "call_argument.validate_unpack",
+            RuntimeCallTarget::CallArgumentCollectPositionals => {
+                "call_argument.collect_positionals"
+            }
+            RuntimeCallTarget::CallArgumentCollectNamed => "call_argument.collect_named",
             RuntimeCallTarget::UnaryString(runtime) => runtime.as_eir(),
             RuntimeCallTarget::Pcntl(target) => target.as_eir(),
             RuntimeCallTarget::Function(target) => target.as_eir(),

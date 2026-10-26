@@ -11,6 +11,7 @@
 use crate::errors::CompileError;
 use crate::parser::ast::{Stmt, StmtKind};
 use crate::types::param_binding::param_accepts_weak_string_coercion;
+use crate::types::checker::type_compat::unions::normalize_union_members;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -22,6 +23,21 @@ pub(crate) struct ReturnInfo {
     pub ty: PhpType,
     pub has_value: bool,
     pub strict_types: bool,
+}
+
+/// Adds one scalar member to an inferred return type, the way [`nullable_return_type`] adds
+/// `Void` — the shared shape behind `string|false` and `?string`.
+///
+/// `Checker::resolve_type_expr` expands a declared `string|false` to `Union([Str, False])`,
+/// so building the same shape here keeps a hint-less union return byte-identical to the
+/// declared spelling, which already lowered correctly. `codegen_repr()` maps such a union to
+/// a boxed representation, which is what carries `false` distinctly from `""` instead of
+/// coercing it into the other arm's zero value.
+///
+/// `Mixed` already admits every value and is left alone; an existing union gains the member
+/// rather than nesting, so folding three or more returns pairwise stays flat.
+fn union_return_type(other: &PhpType, member: PhpType) -> PhpType {
+    normalize_union_members(vec![other.clone(), member])
 }
 
 /// Makes an inferred return type nullable, the way a declared `?T` hint resolves.
@@ -179,6 +195,24 @@ impl Checker {
             }
             other => other,
         }
+    }
+
+    /// Adds php's implicit `null` to the type inferred for an UNDECLARED return type whose body
+    /// can run off its end after some `return <value>;`.
+    ///
+    /// `function f($a) { if ($a) { return new X; } }` answers `null` when the end is reached, but
+    /// the returns alone inferred a non-null `X`: the default return then had no value of that
+    /// type to produce (the backend refused the whole file -- Laravel's `getGenericUser()`,
+    /// `TableGuesser::guess()`, `ProviderRepository::loadManifest()`), and a caller was free to
+    /// fold `=== null` on a result that can be null. A body whose end is unreachable (every path
+    /// returns or throws) keeps its exact type. `Mixed` already carries null.
+    pub(crate) fn widen_return_for_fall_off(&self, body: &[Stmt], inferred: PhpType) -> PhpType {
+        if matches!(inferred, PhpType::Void | PhpType::Never | PhpType::Mixed)
+            || self.body_cannot_fall_through(body)
+        {
+            return inferred;
+        }
+        Self::wider_type(&inferred, &PhpType::Void)
     }
 
     /// Recursively collects ReturnInfo from all return statements in `stmt` and its
@@ -468,37 +502,28 @@ impl Checker {
         body.iter().any(Self::stmt_contains_return)
     }
 
-    /// Checks that a function or closure body ends with a return on every control-flow path
-    /// when the declared return type is not Void or Never. Uses the shared function-exit analysis,
-    /// extended with checker-known `never` calls, to determine if the body always exits; emits a
-    /// "must return a value" error if not.
+    /// Accepts a body that can fall off the end of a declared non-void return type.
+    ///
+    /// php compiles such a body and raises `TypeError: f(): Return value must be of type T, none
+    /// returned` only when a call really falls off the end, so refusing it here rejected programs
+    /// php runs: Symfony's `TagAwareAdapter::getItem(): CacheItem` returns from inside a `foreach`
+    /// and has nothing after it. EIR lowering raises that `TypeError` on the fall-off path
+    /// (`crate::ir_lower::function::terminate_open_block`); this stays the single place the
+    /// three declaration kinds consult, so a future compile-time warning has one home.
     pub(crate) fn require_declared_return_coverage(
         &self,
-        declared_ret: &PhpType,
-        body: &[Stmt],
-        span: crate::span::Span,
-        context: &str,
+        _declared_ret: &PhpType,
+        _body: &[Stmt],
+        _span: crate::span::Span,
+        _context: &str,
     ) -> Result<(), CompileError> {
-        if matches!(declared_ret, PhpType::Void | PhpType::Never | PhpType::Mixed) {
-            return Ok(());
-        }
-
-        if crate::termination::block_guarantees_function_exit_with_divergence(body, &|expr| {
-            self.expr_is_declared_never_call(expr)
-        }) {
-            Ok(())
-        } else {
-            Err(CompileError::new(
-                span,
-                &format!("{} must return a value on every path", context),
-            ))
-        }
+        Ok(())
     }
 
     /// Checks that an actual return type is compatible with the declared return type.
     /// Handles three cases: void-returning functions (no value allowed), value-returning
     /// functions (value required and must be assignable to `expected`), and nullability
-    /// via `return_type_accepts_null`. In coercive source, a `Stringable` object may satisfy a
+    /// via `declared_type_accepts_null`. In coercive source, a `Stringable` object may satisfy a
     /// string return boundary; `strict_types` disables that PHP conversion. Delegates to
     /// `require_compatible_arg_type` for the final assignability check.
     pub(crate) fn require_compatible_return_type(
@@ -520,14 +545,18 @@ impl Checker {
             ));
         }
 
-        if matches!(expected, PhpType::Void) {
+        // A standalone `null` return type parses to the same `Void` as `void`, and its body says
+        // `return null;`. PHP refuses that statement only under `void`, at compile time, so no
+        // valid program reaches here with it: accepting it keeps `: null` methods compiled
+        // (Symfony's `NullCoalescedNameNode::evaluate(): null`).
+        if matches!(expected, PhpType::Void) && !matches!(actual, PhpType::Void) {
             return Err(CompileError::new(
                 span,
                 &format!("{} must not return a value", context),
             ));
         }
 
-        if matches!(actual, PhpType::Void) && !Self::return_type_accepts_null(expected) {
+        if matches!(actual, PhpType::Void) && !Self::declared_type_accepts_null(expected) {
             return Err(CompileError::new(
                 span,
                 &format!("{} expects {:?}, got Void", context, expected),
@@ -602,10 +631,16 @@ impl Checker {
 
     /// Returns true if `ty` can accept a null/void value — covers PhpType::Mixed,
     /// PhpType::Void, and PhpType::Union types where any member accepts null.
-    fn return_type_accepts_null(ty: &PhpType) -> bool {
+    ///
+    /// Shared with the by-reference PARAMETER position
+    /// (`Checker::require_by_ref_argument_storage`), which asks the identical question of a
+    /// declared type: PHP's `?int`/`mixed` accept null in both positions and a bare `int`
+    /// accepts it in neither. Kept as one predicate rather than two so the two sites cannot
+    /// drift on a type either of them later learns about.
+    pub(crate) fn declared_type_accepts_null(ty: &PhpType) -> bool {
         match ty {
             PhpType::Mixed => true,
-            PhpType::Union(members) => members.iter().any(Self::return_type_accepts_null),
+            PhpType::Union(members) => members.iter().any(Self::declared_type_accepts_null),
             PhpType::Void => true,
             _ => false,
         }
@@ -695,25 +730,44 @@ impl Checker {
     /// saw `""` instead of `NULL`. Writing `: ?string` was already correct, and the ternary
     /// spelling of the same function already inferred `string|null` through
     /// `nullable_match_arm_type` — this makes the multi-`return` fold agree with both.
+    /// `False` and `Bool` are subject to the SAME rule as `Void`, for the same reason, and
+    /// their arms must likewise precede `Str`/`Float` (issue #398).
+    ///
+    /// `false` is a VALUE, not a width. A function that returns `false` on failure and a
+    /// string otherwise returns `string|false`, and every PHP caller tests that with
+    /// `=== false`. Letting `Str` absorb it below inferred plain `Str`, so the failure arm
+    /// was lowered as a string and the caller saw `""` — `image_type_to_extension()` on an
+    /// unknown type returned `""` instead of `false`, and so did any hint-less user function
+    /// of that shape. `Float` did the same with `0.0`, and `Bool` was absorbed into `"1"`.
+    ///
+    /// `int|false` never had the bug only because it fell through to `Mixed`, which carries
+    /// the value distinctly — the accident that made the defect look image-specific.
+    ///
+    /// Writing `: string|false` was already correct; this makes the hint-less fold agree
+    /// with the declared spelling, exactly as the `Void` arm above does for `?string`.
     pub(crate) fn wider_type(a: &PhpType, b: &PhpType) -> PhpType {
         match (a, b) {
             _ if a == b => a.clone(),
             (PhpType::Never, other) | (other, PhpType::Never) => other.clone(),
             (PhpType::Void, other) | (other, PhpType::Void) => nullable_return_type(other),
-            // A return is not a coercion: without a declared type the value leaves as it is.
-            // `string` absorbing `false` turned every hint-less `string|false` function --
-            // symfony/polyfill-mbstring's `mb_detect_encoding()` among them -- into one that
-            // answered `""` for its failure, and callers testing `false === $x` then fed that
-            // empty string to `mb_strlen()` as an encoding.
-            (PhpType::Str, PhpType::False | PhpType::Bool)
-            | (PhpType::False | PhpType::Bool, PhpType::Str) => {
-                let falsy = if matches!(a, PhpType::Str) { b } else { a };
-                PhpType::Union(vec![PhpType::Str, falsy.clone()])
+            // `false` is the literal subtype of `bool`, so together they are just `bool`.
+            (PhpType::Bool, PhpType::False) | (PhpType::False, PhpType::Bool) => PhpType::Bool,
+            (PhpType::False, other @ (PhpType::Str | PhpType::Float))
+            | (other @ (PhpType::Str | PhpType::Float), PhpType::False) => {
+                union_return_type(other, PhpType::False)
             }
-            (PhpType::Union(members), other) | (other, PhpType::Union(members))
-                if members.contains(other) =>
-            {
-                PhpType::Union(members.clone())
+            (PhpType::Bool, other @ (PhpType::Str | PhpType::Float))
+            | (other @ (PhpType::Str | PhpType::Float), PhpType::Bool) => {
+                union_return_type(other, PhpType::Bool)
+            }
+            // A union already carries its members distinctly, so `Str`/`Float` below must
+            // not absorb one back into a single scalar. Without this the fold only survived
+            // TWO returns: a third collapsed the union the first two had correctly built.
+            // That applied to the `Void` arm above as well — `null`, `"one"`, `"two"`
+            // inferred plain `Str`, and the null arm came back as `""`.
+            (PhpType::Mixed, _) | (_, PhpType::Mixed) => PhpType::Mixed,
+            (PhpType::Union(_), _) | (_, PhpType::Union(_)) => {
+                normalize_union_members(vec![a.clone(), b.clone()])
             }
             // `string`/`float` absorb only the SCALARS they can stand for. An array, object,
             // callable, `mixed` or union is not a string: `if (is_array($x)) { return [1]; }
@@ -746,6 +800,13 @@ impl Checker {
                 if crate::codegen::sentinels::null_repr_is_tagged() =>
             {
                 PhpType::Union(vec![PhpType::Int, PhpType::Void])
+            }
+            // A `callable` slot has no null representation a call can pass through: the argument
+            // is normalized to a descriptor, and null fatals ("mixed value is not callable").
+            // Laravel's `Arr::sort($array, $callback = null)` forwards its null to
+            // `Collection::sortBy($callback)`, whose other callers pass closures.
+            (PhpType::Void, PhpType::Callable) | (PhpType::Callable, PhpType::Void) => {
+                PhpType::Union(vec![PhpType::Callable, PhpType::Void])
             }
             (PhpType::Void | PhpType::Never, other) | (other, PhpType::Void | PhpType::Never) => {
                 other.clone()

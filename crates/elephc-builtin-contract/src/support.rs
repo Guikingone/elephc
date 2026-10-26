@@ -33,6 +33,8 @@ pub enum BackendImplementation {
     LanguageConstruct,
     /// Dedicated syntax node rather than an ordinary function call.
     DedicatedSyntax,
+    /// Compiler pass that rewrites a call using its enclosing lexical function frame.
+    CompilerTransform,
     /// Injected elephc-PHP prelude backed by internal compiler builtins.
     Prelude,
     /// Synthetic declaration the type checker injects and runtime metadata materializes
@@ -54,8 +56,6 @@ pub enum UnsupportedReason {
     InternalCompilerSurface,
     /// PHP-visible AOT implementation whose Magician implementation has not landed.
     EvalImplementationPending,
-    /// Reflection behavior currently exists only for eval-declared/runtime objects.
-    EvalOnlyReflection,
     /// PHP-visible Magician implementation whose AOT counterpart has not landed.
     ///
     /// The mirror of `EvalImplementationPending`. The interpreter can grow a surface the compiler
@@ -134,8 +134,8 @@ pub fn backend_support(contract: &BuiltinContract, backend: BuiltinBackend) -> B
 
 /// Returns the expected compiler route for one shared contract.
 pub fn aot_support(contract: &BuiltinContract) -> BackendSupport {
-    if is_eval_only_reflection(contract.id) {
-        return BackendSupport::Unsupported(UnsupportedReason::EvalOnlyReflection);
+    if matches!(contract.name, "func_get_arg" | "func_get_args" | "func_num_args") {
+        return BackendSupport::Implemented(BackendImplementation::CompilerTransform);
     }
     if is_aot_implementation_pending(contract.id) {
         return BackendSupport::Unsupported(UnsupportedReason::AotImplementationPending);
@@ -152,6 +152,9 @@ pub fn aot_support(contract: &BuiltinContract) -> BackendSupport {
 
 /// Returns the expected Magician route for one shared contract.
 pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
+    if runtime_builtin_id(contract.id) == Some(RuntimeBuiltinId::SharedIni) {
+        return BackendSupport::Implemented(BackendImplementation::Registry);
+    }
     if contract.internal {
         return BackendSupport::Unsupported(UnsupportedReason::InternalCompilerSurface);
     }
@@ -184,8 +187,7 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
 /// it. Each therefore has a real interpreter implementation rather than a forward:
 /// `interpreter::builtins::core::var_export` (Symfony's routing dumper is interpreted and calls
 /// it), `interpreter::builtins::string::levenshtein`, and
-/// `interpreter::builtins::filesystem::file`. `get_class_vars` is the same: the compiled side
-/// builds it from the program's classes, the interpreter answers for its own. The four
+/// `interpreter::builtins::filesystem::file`. The four
 /// `sodium_crypto_box_*` entries are the
 /// same case: Symfony's `SodiumVault` is interpreted in an eval-heavy build, so
 /// `interpreter::builtins::string::sodium_box` calls `elephc_crypto::sodium` directly.
@@ -206,7 +208,6 @@ const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
     "array_uintersect_assoc",
     "array_uintersect_uassoc",
     "file",
-    "get_class_vars",
     "hash_copy",
     "hash_final",
     "hash_init",
@@ -221,12 +222,19 @@ const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
     "password_verify",
     "preg_filter",
     "preg_replace_callback_array",
+    "proc_close",
+    "proc_get_status",
+    "proc_nice",
+    "proc_open",
+    "proc_terminate",
     "sodium_crypto_box_keypair",
     "sodium_crypto_box_publickey",
     "sodium_crypto_box_seal",
     "sodium_crypto_box_seal_open",
+    "strtok",
     "var_export",
     "version_compare",
+    "zend_version",
 ];
 
 /// Returns the documented execution route for an eval-supported contract.
@@ -374,14 +382,6 @@ fn is_aot_implementation_pending(id: BuiltinId) -> bool {
 const AOT_IMPLEMENTATION_PENDING: &[&str] =
     &["register_tick_function", "unregister_tick_function"];
 
-fn is_eval_only_reflection(id: BuiltinId) -> bool {
-    [
-        "get_called_class",
-    ]
-    .into_iter()
-    .any(|name| id == BuiltinId::from_canonical_name(name))
-}
-
 /// PHP-visible AOT contracts that do not yet have a Magician implementation binding.
 ///
 /// EVERY NAME HERE IS A LATENT WORKER-KILLER, not a cosmetic gap. A call that compiles and runs
@@ -438,8 +438,7 @@ mod tests {
                     aot_registry += 1;
                 }
                 BackendSupport::Implemented(_) => aot_external += 1,
-                BackendSupport::Unsupported(UnsupportedReason::EvalOnlyReflection)
-                | BackendSupport::Unsupported(UnsupportedReason::AotImplementationPending) => {
+                BackendSupport::Unsupported(UnsupportedReason::AotImplementationPending) => {
                     aot_unsupported += 1;
                 }
                 other => panic!("unexpected AOT support for {}: {other:?}", contract.name),
@@ -449,66 +448,43 @@ mod tests {
         // The thirty-four prelude-provided `curl_*` contracts are published only
         // with the `curl` feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
+        // The shared INI helper is internal but participates in both runtime registries.
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
         // through forwarding homes (see `eval_support`).
-        // These counts had drifted before the sodium surface landed: the catalog grew and eval
-        // homes landed (the thirteen names taken out of `EVAL_IMPLEMENTATION_PENDING`, among
-        // them) without the numbers moving. Only the sodium share is named per count below.
-        // Sodium: the four `sodium_crypto_box_*` eval homes. mbstring case mapping: the
-        // `mb_strtoupper` / `mb_strtolower` homes. Regex: the four new contracts' eval homes plus
-        // `preg_grep`, out of `EVAL_IMPLEMENTATION_PENDING`. Array builtins: `array_first` /
-        // `array_last`, the eight user-comparator set functions, and `array_diff_assoc`,
-        // `array_intersect_assoc`, `array_udiff`, `array_uintersect` out of the pending list.
-        // Response headers: `headers_list` (new) and `header_remove` (out of the pending list).
-        // Eval homes for `version_compare`, `hash_pbkdf2`, `array_change_key_case` and the
-        // `password_*` family, which the prelude declares for compiled code.
-        assert_eq!(eval_registry, 670 + curl_surface);
-        // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
-        // image prelude declares for its own use. Sodium: `__elephc_sodium_box` and
-        // `__elephc_sodium_status`. Reflection: `__elephc_reflection_materialize` and
-        // `__elephc_reflection_fill_members`.
-        assert_eq!(eval_internal, 104);
-        // Registry builtins awaiting eval homes, plus the PHP-visible prelude-provided and
-        // name-resolver-rewritten functions eval does not reach (see `eval_support`). `preg_grep`
-        // left it when its eval home landed. The five `password_*` prelude contracts joined it,
-        // and `array_diff_assoc`, `array_intersect_assoc`, `array_udiff`, `array_uintersect` left.
-        // Measured when the Laravel branch merged: its own counts here had drifted by five.
-        // `header_remove` left too.
-        assert_eq!(eval_pending, 338);
-        // Main's BCMath registry adds fourteen AOT contracts; this branch also
-        // promotes get_object_vars from an external surface into the registry and
-        // adds the ten iconv contracts, thirty-five PCNTL contracts, forty-three
-        // internal `__elephc_curl_*` entry points, and the ten `ext/xml` registry
-        // builtins (`xml_parse_into_struct` plus the nine handler setters).
-        // Twenty of this branch's 23 added contracts are registry-backed here.
-        // Sodium: `__elephc_sodium_box` and `__elephc_sodium_status`. mbstring case mapping:
-        // `mb_strtoupper` and `mb_strtolower`. Regex: `preg_last_error` and `preg_last_error_msg`.
-        // `get_class_methods`, out of the eval-only reflection set. Reflection:
-        // `__elephc_reflection_materialize`, which builds a declaring class on demand, and
-        // `__elephc_reflection_fill_members`, which builds a reflector's members on first use.
-        // Response headers: `headers_list`.
-        assert_eq!(aot_registry, 665);
-        // Constructs, dedicated syntax and hash surfaces, the prelude-provided and
-        // name-resolver-rewritten contracts (54 of them the xml prelude, seven the `--web`
-        // handler stack this branch contracted), and the curl prelude when published.
+        // TODO(merge): every count in this test is main's value; re-measure once the merged tree
+        // builds. This branch's additions (the three response-header runtime builtins, the
+        // sodium/password/array/preg prelude surfaces, ...) are not yet added in.
+        assert_eq!(eval_registry, 682 + curl_surface);
+        // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
+        // image prelude declares for its own use, plus the ELEVEN
+        // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
         //
-        // One more than main: `parse_str` moved here from `AOT_IMPLEMENTATION_PENDING` when
-        // `crate::parse_str_prelude` started declaring it as an injected PHP function, where its
-        // out-parameter is an ordinary by-reference parameter rather than a by-reference the
-        // compiled side has no counterpart for. It is the same contract on the other side of the
-        // `aot_unsupported` count below, which drops by the same one.
-        // Sodium: the four `sodium_crypto_box_*` prelude declarations. Regex: `preg_filter` and
-        // `preg_replace_callback_array`, built by `crate::preg_array_prelude`.
-        // `get_class_vars`: built per program by `crate::class_vars_prelude`. Password: the
-        // five `password_*` functions of `crate::password_prelude`. Arrays: `array_first` /
-        // `array_last` (`crate::array_edge_prelude`) and the eight user-comparator set
-        // functions (`crate::array_ucompare_prelude`).
-        // `version_compare` and `hash_pbkdf2` (`crate::*_prelude`).
-        assert_eq!(aot_external, 444 + curl_surface);
-        // `get_called_class` from main, plus this branch's `register_tick_function` and
-        // `unregister_tick_function`. `get_class_methods` is compiled natively (per-class method
-        // rows filtered by the calling scope) and `get_class_vars` moved to `aot_external`.
-        assert_eq!(aot_unsupported, 3);
+        // Six REPORT on the cache: `_stat`, `_script_field` and `_script_path`, which the
+        // injected `opcache_get_status()` body reads; `_blacklist_entry`, which
+        // `opcache_get_configuration()` uses to list the resolved patterns; `_swap`, which
+        // `ini_set()` uses to install a directive on the live cache; and `_reset`, which
+        // `opcache_reset()` uses to schedule its restart.
+        //
+        // Five ACT on it, by path: `_is_cached`, `_discard`, `_soft_invalidate`, `_compile`
+        // and `_in_file_cache`. They are what let the natively compiled bodies answer about
+        // a dynamically included file, and about the on-disk cache, instead of only about
+        // the manifest. `opcache_invalidate` needs TWO of them because php-src's predicate
+        // differs by `$force` and the non-forced arm reads the cache's recorded mtime.
+        //
+        // None of the eleven is callable from eval'd code.
+        assert_eq!(eval_internal, 111);
+        // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
+        // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
+        assert_eq!(eval_pending, 353);
+        // The shared mbstring catalog adds sixty-four registry contracts, including
+        // its internal INI helper, to the prior compiler registry surface; the eleven
+        // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
+        assert_eq!(aot_registry, 737);
+        // Compiler transforms, constructs, dedicated syntax, preludes, and
+        // name-resolver rewrites remain outside the ordinary AOT registry.
+        assert_eq!(aot_external, 409 + curl_surface);
+        // The two tick registrars (`AOT_IMPLEMENTATION_PENDING`).
+        assert_eq!(aot_unsupported, 2);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -553,18 +529,13 @@ mod tests {
         }
 
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        // `headers_list` and `header_remove` read and edit the compiled side's header list.
-        assert_eq!(shared_runtime, 21);
-        assert_eq!(hybrid_adapter, 3);
-        // Moves in step with `eval_registry` above: every newly bound eval home is an adapter.
-        assert_eq!(interpreter_adapter, 646 + curl_surface);
-        // Drifted with the counts in `every_contract_has_a_backend_support_record`; sodium's
-        // share is its two internal builtins, which eval never exposes. `preg_grep` left it;
-        // the internal `__elephc_reflection_materialize` and `__elephc_reflection_fill_members`
-        // joined it. Password: five in; array builtins with new eval homes: four out.
-        // `header_remove` out. The eval homes of the prelude surfaces above left it, and so did
-        // `array_replace_recursive`, which now has an interpreter home.
-        assert_eq!(unsupported, 442);
+        // TODO(merge): re-measure (see the first TODO above).
+        assert_eq!(shared_runtime, 85);
+        assert_eq!(hybrid_adapter, 2);
+        assert_eq!(interpreter_adapter, 595 + curl_surface);
+        // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
+        // call from AOT code and have no eval execution route of their own.
+        assert_eq!(unsupported, 464);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

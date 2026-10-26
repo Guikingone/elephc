@@ -1,16 +1,16 @@
 ---
-title: "iterator_count() — internals"
+title: "iterator_count() - internals"
 description: "Compiler internals for iterator_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 773
+  order: 805
 ---
 
-## `iterator_count()` — internals
+## `iterator_count()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/iterator_count.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/iterator_count.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

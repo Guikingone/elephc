@@ -246,28 +246,18 @@ fn test_error_nullable_typed_local_rejects_invalid_reassignment() {
     );
 }
 
-/// Tests that `require` with a variable as the path produces a
-/// "compile-time-constant string" error.
+/// `require` with a variable path is resolved at run time, as in php (a failed include is a run-time
+/// warning), so the include resolver accepts it.
 #[test]
-fn test_include_path_with_variable_errors() {
-    let err = resolver_error("<?php $path = 'x'; require $path;");
-    assert!(
-        err.message.contains("compile-time-constant string"),
-        "message did not mention compile-time-constant: {}",
-        err.message
-    );
+fn test_include_path_with_variable_is_deferred_to_runtime() {
+    resolver_ok("<?php $path = 'x'; require $path;");
 }
 
-/// Tests that `require` with a function call as the path produces a
-/// "compile-time-constant string" error.
+/// `require` with a function-call path is resolved at run time, as in php (a failed include is a
+/// run-time warning), so the include resolver accepts it.
 #[test]
-fn test_include_path_with_function_call_errors() {
-    let err = resolver_error("<?php require getenv('PATH');");
-    assert!(
-        err.message.contains("compile-time-constant string"),
-        "message did not mention compile-time-constant: {}",
-        err.message
-    );
+fn test_include_path_with_function_call_is_deferred_to_runtime() {
+    resolver_ok("<?php require getenv('PATH');");
 }
 
 // --- Static closures ---

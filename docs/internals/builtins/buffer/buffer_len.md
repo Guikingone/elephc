@@ -1,16 +1,16 @@
 ---
-title: "buffer_len() — internals"
+title: "buffer_len() - internals"
 description: "Compiler internals for buffer_len(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 85
+  order: 86
 ---
 
-## `buffer_len()` — internals
+## `buffer_len()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/buffer_len.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/buffer_len.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

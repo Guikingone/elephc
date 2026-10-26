@@ -9,6 +9,21 @@
 
 use super::*;
 
+/// Rejects invalid arity and argument shapes for every public progressive regex operation.
+#[test]
+fn test_error_mbstring_regex_search_contracts() {
+    for (source, message) in [
+        ("<?php mb_ereg_search_init();", "mb_ereg_search_init() takes"),
+        ("<?php mb_ereg_search_init([]);", "mb_ereg_search_init() string argument must be string"),
+        ("<?php mb_ereg_search([]);", "mb_ereg_search() pattern argument must be string or null"),
+        ("<?php mb_ereg_search_pos([]);", "mb_ereg_search_pos() pattern argument must be string or null"),
+        ("<?php mb_ereg_search_regs(options: []);", "mb_ereg_search_regs() options argument must be string or null"),
+        ("<?php mb_ereg_search_getpos(1);", "mb_ereg_search_getpos() takes"),
+        ("<?php mb_ereg_search_getregs(1);", "mb_ereg_search_getregs() takes"),
+        ("<?php mb_ereg_search_setpos([]);", "mb_ereg_search_setpos() offset argument must be int"),
+    ] { expect_error(source, message); }
+}
+
 expect_builtin_arity_error!(
     test_error_substr_replace_wrong_args,
     "<?php substr_replace(\"abc\", \"x\");",
@@ -112,7 +127,7 @@ fn test_error_mb_strlen_string_type() {
 #[test]
 fn test_error_mb_strlen_encoding_type() {
     expect_error(
-        "<?php mb_strlen('abc', 123);",
+        "<?php declare(strict_types=1); mb_strlen('abc', 123);",
         "mb_strlen() encoding argument must be string or null",
     );
 }
@@ -139,7 +154,7 @@ fn test_error_mb_strtolower_encoding_type() {
 #[test]
 fn test_error_mb_ereg_match_pattern_type() {
     expect_error(
-        "<?php mb_ereg_match(123, 'abc');",
+        "<?php declare(strict_types=1); mb_ereg_match(123, 'abc');",
         "mb_ereg_match() pattern argument must be string",
     );
 }
@@ -148,7 +163,7 @@ fn test_error_mb_ereg_match_pattern_type() {
 #[test]
 fn test_error_mb_ereg_match_options_type() {
     expect_error(
-        "<?php mb_ereg_match('ab', 'abc', 1);",
+        "<?php declare(strict_types=1); mb_ereg_match('ab', 'abc', 1);",
         "mb_ereg_match() options argument must be string or null",
     );
 }
@@ -258,27 +273,26 @@ fn test_error_quoted_printable_encode_too_many_args() {
     );
 }
 
-/// Verifies that a function returning `int` that returns `strpos()` directly is rejected,
-/// because `strpos()` returns `Int|Bool` (false on miss), not `int`. This is a type
-/// incompatibility regression test.
+/// Returning `strpos()` (`int|false`) from a function declared `: int` is valid in php's weak mode
+/// (`false` coerces to `0`); elephc now accepts it and the program output matches php.
 #[test]
-fn test_error_strpos_false_return_rejects_int_return_type() {
-    expect_error(
+fn test_strpos_false_return_coerces_to_declared_int() {
+    expect_no_error(
         r#"<?php
 function pos(): int {
     return strpos("abc", "z");
 }
 "#,
-        "Function 'pos' return type expects Int, got Union([Int, False])",
     );
 }
 
-/// Verifies that `str_replace()` with only two arguments produces the correct arity error.
+/// Verifies that `str_replace()` with only two arguments produces the correct arity error
+/// (three, or four with the by-reference `$count`).
 #[test]
 fn test_error_str_replace_wrong_args() {
     expect_error(
         "<?php str_replace(\"a\", \"b\");",
-        "str_replace() takes exactly 3 arguments",
+        "str_replace() takes 3 or 4 arguments",
     );
 }
 
@@ -381,12 +395,12 @@ fn test_error_sha1_wrong_args() {
 
 /// Verifies that `htmlspecialchars()` with no arguments produces the correct arity error.
 /// htmlspecialchars() accepts optional `$flags` and `$encoding` arguments, so the message
-/// reports 1 to 3 args.
+/// reports 1 to 4 args.
 #[test]
 fn test_error_htmlspecialchars_wrong_args() {
     expect_error(
         "<?php htmlspecialchars();",
-        "htmlspecialchars() takes 1 to 3 arguments",
+        "htmlspecialchars() takes 1 to 4 arguments",
     );
 }
 
@@ -546,6 +560,24 @@ fn test_error_inet_ntop_wrong_args() {
 #[test]
 fn test_error_inet_pton_wrong_args() {
     expect_error("<?php inet_pton();", "inet_pton() takes exactly 1 argument");
+}
+
+/// Verifies the arity diagnostic fires from the other side too: one argument is also the
+/// MAXIMUM, so a second one is rejected rather than ignored.
+///
+/// Both builtins gained an address family, which is chosen from the argument's own text and
+/// length rather than from a second parameter. Accepting a stray second argument would be the
+/// natural way for that to go wrong.
+#[test]
+fn test_error_inet_helpers_reject_a_second_argument() {
+    expect_error(
+        "<?php inet_pton(\"1.2.3.4\", \"extra\");",
+        "inet_pton() takes exactly 1 argument",
+    );
+    expect_error(
+        "<?php inet_ntop(\"abcd\", \"extra\");",
+        "inet_ntop() takes exactly 1 argument",
+    );
 }
 
 /// Verifies the invalid-call diagnostic for error gzcompress wrong args.
@@ -780,4 +812,53 @@ fn test_error_iconv_mime_encode_options_type() {
         "<?php iconv_mime_encode('Subject', 'value', 'not-an-array');",
         "iconv_mime_encode() options argument must be array",
     );
+}
+
+/// Rejects invalid replacement arity and container arguments through both shared PHP contracts.
+#[test]
+fn test_error_mbstring_regex_replace_contracts() {
+    for name in ["mb_ereg_replace", "mb_eregi_replace"] {
+        for (arguments, message) in [
+            ("", "takes 3 or 4 arguments"), ("'a', 'X', 'a', null, 2", "takes 3 or 4 arguments"),
+            ("[], 'X', 'a'", "pattern argument must be string"),
+            ("'a', [], 'a'", "replacement argument must be string"),
+            ("'a', 'X', []", "string argument must be string"),
+            ("'a', 'X', 'a', []", "options argument must be string"),
+        ] { expect_error(&format!("<?php {name}({arguments});"), &format!("{name}() {message}")); }
+    }
+}
+
+/// Rejects invalid split arity and container arguments through the shared PHP contract.
+#[test]
+fn test_error_mbstring_regex_split_contracts() {
+    for (source, message) in [
+        ("<?php mb_split();", "mb_split() takes 2 or 3 arguments"),
+        ("<?php mb_split(',', 'a,b', 1, 2);", "mb_split() takes 2 or 3 arguments"),
+        ("<?php mb_split([], 'a,b');", "mb_split() pattern argument must be string"),
+        ("<?php mb_split(',', []);", "mb_split() string argument must be string"),
+        ("<?php mb_split(',', 'a,b', []);", "mb_split() limit argument must be int"),
+    ] { expect_error(source, message); }
+}
+
+/// Verifies each new mbstring text builtin uses its shared arity and scalar type contract.
+#[test]
+fn test_error_mbstring_text_contracts() {
+    for (source, message) in [
+        ("<?php mb_strwidth();", "mb_strwidth() takes 1 or 2 arguments"),
+        ("<?php mb_strtoupper();", "mb_strtoupper() takes 1 or 2 arguments"),
+        ("<?php mb_strtolower();", "mb_strtolower() takes 1 or 2 arguments"),
+        ("<?php mb_ucfirst();", "mb_ucfirst() takes 1 or 2 arguments"),
+        ("<?php mb_lcfirst();", "mb_lcfirst() takes 1 or 2 arguments"),
+        ("<?php mb_convert_case('a');", "mb_convert_case() takes 2 or 3 arguments"),
+        ("<?php mb_strimwidth('a', 0);", "mb_strimwidth() takes 3 to 5 arguments"),
+        ("<?php mb_strwidth([1]);", "mb_strwidth() string argument must be string"),
+        ("<?php declare(strict_types=1); mb_strtoupper('a', 123);", "mb_strtoupper() encoding argument must be string or null"),
+        ("<?php mb_strtolower([1]);", "mb_strtolower() string argument must be string"),
+        ("<?php mb_ucfirst([1]);", "mb_ucfirst() string argument must be string"),
+        ("<?php mb_lcfirst([1]);", "mb_lcfirst() string argument must be string"),
+        ("<?php mb_convert_case('a', []);", "mb_convert_case() mode argument must be int"),
+        ("<?php mb_strimwidth('a', 0, 1, []);", "mb_strimwidth() trim_marker argument must be string"),
+    ] {
+        expect_error(source, message);
+    }
 }

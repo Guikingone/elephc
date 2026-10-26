@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Runtime dispatch is declared here and implemented through the HTML entity hook.
+//! - `$flags` selects the escaped quotes and the single-quote entity exactly like the compiled
+//!   `__rt_htmlspecialchars` helper (#1464); `$encoding` is evaluated and not applied, as there.
 
 eval_builtin! {
     contract: "htmlspecialchars",
@@ -25,9 +27,21 @@ pub(in crate::interpreter) fn eval_builtin_htmlspecialchars(
     super::htmlspecialchars::eval_builtin_html_entity_named("htmlspecialchars", args, context, scope, values)
 }
 
+/// PHP's `ENT_HTML_QUOTE_SINGLE` bit: escape `'`.
+const ENT_HTML_QUOTE_SINGLE: i64 = 1;
+/// PHP's `ENT_COMPAT` bit: escape `"`.
+const ENT_COMPAT: i64 = 2;
+/// PHP's doctype bits; any of `ENT_XML1` (16), `ENT_XHTML` (32), or `ENT_HTML5` (48) spells
+/// the single quote `&apos;` instead of HTML 4.01's `&#039;`.
+const ENT_DOCTYPE_MASK: i64 = 48;
+/// PHP's default `$flags`: `ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401`.
+pub(in crate::interpreter) const ENT_DEFAULT_FLAGS: i64 = 11;
+
 /// Evaluates a named HTML entity encode/decode builtin over one string expression.
-/// All three accept the optional flags/encoding arguments; like the static
-/// runtime they are evaluated but have no effect (ENT_QUOTES behaviour).
+///
+/// All three accept the optional `$flags` and `$encoding` arguments, and every argument is
+/// evaluated in source order. `$flags` selects the quote handling of the encoders and `$encoding`
+/// has no effect, exactly as in the compiled helper.
 ///
 /// `html_entity_decode` used to be excluded here, which made the ordinary php call
 /// `html_entity_decode($s, ENT_QUOTES, 'UTF-8')` an UNCATCHABLE
@@ -61,13 +75,13 @@ pub(in crate::interpreter) fn eval_builtin_html_entity_named(
     }
     let flags = match extras.first() {
         Some(flags) => eval_int_value(*flags, values)?,
-        None => EVAL_ENT_DEFAULT_FLAGS,
+        None => ENT_DEFAULT_FLAGS,
     };
     eval_html_entity_named_result_with_flags(name, value, flags, values)
 }
 
 /// `htmlspecialchars($value, $flags, $encoding, false)`: encodes like
-/// [`eval_htmlspecialchars_result`] but leaves every character reference the doctype considers
+/// [`eval_htmlspecialchars_with_flags`] but leaves every character reference the doctype considers
 /// valid untouched, per `elephc_builtin_contract::html_entities::html_entity_is_kept` — the rule
 /// the compiled program's prelude transcribes.
 pub(in crate::interpreter) fn eval_htmlspecialchars_keeping_entities(
@@ -96,11 +110,10 @@ pub(in crate::interpreter) fn eval_htmlspecialchars_keeping_entities(
         match byte {
             b'<' => output.extend_from_slice(b"&lt;"),
             b'>' => output.extend_from_slice(b"&gt;"),
-            b'"' if flags & 2 != 0 => output.extend_from_slice(b"&quot;"),
-            b'\'' => match eval_html_single_quote_entity(flags) {
-                Some(entity) => output.extend_from_slice(entity),
-                None => output.push(byte),
-            },
+            b'"' if flags & ENT_COMPAT != 0 => output.extend_from_slice(b"&quot;"),
+            b'\'' if flags & ENT_HTML_QUOTE_SINGLE != 0 => {
+                output.extend_from_slice(eval_html_single_quote_entity(flags))
+            }
             _ => output.push(byte),
         }
         index += 1;
@@ -109,16 +122,7 @@ pub(in crate::interpreter) fn eval_htmlspecialchars_keeping_entities(
 }
 
 /// php's default `$flags` for the HTML escapers: `ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401`.
-pub(in crate::interpreter) const EVAL_ENT_DEFAULT_FLAGS: i64 = 3 | 8;
-
-/// Applies the eval-supported HTML entity transform for one PHP string value.
-pub(in crate::interpreter) fn eval_html_entity_named_result(
-    name: &str,
-    value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_html_entity_named_result_with_flags(name, value, EVAL_ENT_DEFAULT_FLAGS, values)
-}
+pub(in crate::interpreter) const EVAL_ENT_DEFAULT_FLAGS: i64 = ENT_DEFAULT_FLAGS;
 
 /// Applies the HTML entity transform with an explicit `$flags` bit set.
 pub(in crate::interpreter) fn eval_html_entity_named_result_with_flags(
@@ -134,25 +138,15 @@ pub(in crate::interpreter) fn eval_html_entity_named_result_with_flags(
     }
 }
 
-/// Encodes the HTML-special byte characters with php's default flags.
-pub(in crate::interpreter) fn eval_htmlspecialchars_result(
-    value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_htmlspecialchars_with_flags(value, EVAL_ENT_DEFAULT_FLAGS, values)
-}
-
-/// The entity spelled for a single quote, or `None` when `$flags` leaves it alone.
+/// The entity spelled for a single quote under `$flags`' doctype bits.
 ///
-/// Bit 1 (`ENT_HTML_QUOTE_SINGLE`, set by `ENT_QUOTES`) asks for it; the doctype bits
-/// (`ENT_XML1` 16, `ENT_XHTML` 32, `ENT_HTML5` 48) spell it `&apos;`, plain HTML 4.01 `&#039;`.
-fn eval_html_single_quote_entity(flags: i64) -> Option<&'static [u8]> {
-    if flags & 1 == 0 {
-        None
-    } else if flags & 48 != 0 {
-        Some(b"&apos;")
+/// The doctype bits (`ENT_XML1` 16, `ENT_XHTML` 32, `ENT_HTML5` 48) spell it `&apos;`, plain HTML
+/// 4.01 `&#039;`. Callers check `ENT_HTML_QUOTE_SINGLE` before asking for it.
+fn eval_html_single_quote_entity(flags: i64) -> &'static [u8] {
+    if flags & ENT_DOCTYPE_MASK == 0 {
+        b"&#039;"
     } else {
-        Some(b"&#039;")
+        b"&apos;"
     }
 }
 
@@ -167,17 +161,15 @@ pub(in crate::interpreter) fn eval_htmlspecialchars_with_flags(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let bytes = values.string_bytes(value)?;
+    let single_quote: &[u8] = if flags & ENT_DOCTYPE_MASK == 0 { b"&#039;" } else { b"&apos;" };
     let mut output = Vec::with_capacity(bytes.len());
     for byte in bytes {
         match byte {
             b'&' => output.extend_from_slice(b"&amp;"),
             b'<' => output.extend_from_slice(b"&lt;"),
             b'>' => output.extend_from_slice(b"&gt;"),
-            b'"' if flags & 2 != 0 => output.extend_from_slice(b"&quot;"),
-            b'\'' => match eval_html_single_quote_entity(flags) {
-                Some(entity) => output.extend_from_slice(entity),
-                None => output.push(byte),
-            },
+            b'"' if flags & ENT_COMPAT != 0 => output.extend_from_slice(b"&quot;"),
+            b'\'' if flags & ENT_HTML_QUOTE_SINGLE != 0 => output.extend_from_slice(single_quote),
             _ => output.push(byte),
         }
     }

@@ -60,6 +60,87 @@ pub fn bind_conditional_declarations(program: Program, target: Target) -> Progra
     prefix
 }
 
+/// Binds, at program start, the functions an `spl_autoload_register` callback's `require` declares.
+///
+/// The resolver expands `require __DIR__.'/Ext.php'` inside the callback: the class is declared
+/// up front (class tables are static), but a function declared in that file becomes a
+/// `FunctionVariantMark` that stays INSIDE the callback. The compiled program never has to run the
+/// callback for the class, because it is already declared, so the mark never executed and the
+/// function was undefined for every caller (`Call to undefined function`) — Symfony's
+/// `FormExtension.php` declares `twig_is_root_form()` after its class this way.
+///
+/// Copying the mark to the program prefix gives the function the same lifetime the class has.
+/// Only a name with exactly ONE variant is hoisted: with several, which include branch ran decides
+/// the live one and that decision cannot be made without running the callback.
+pub fn hoist_autoload_callback_function_marks(mut program: Program) -> Program {
+    fn count_variants(stmts: &[Stmt], counts: &mut std::collections::HashMap<String, usize>) {
+        for stmt in stmts {
+            match &stmt.kind {
+                StmtKind::FunctionVariantGroup { name, variants } => {
+                    *counts.entry(php_symbol_key(name)).or_default() += variants.len();
+                }
+                _ => {
+                    for (body, _) in child_bodies(&stmt.kind, false) {
+                        count_variants(body, counts);
+                    }
+                }
+            }
+        }
+    }
+    fn callback_marks(stmts: &[Stmt], out: &mut Vec<(String, String, crate::span::Span)>) {
+        for stmt in stmts {
+            if let StmtKind::ExprStmt(expr) = &stmt.kind {
+                if let crate::parser::ast::ExprKind::FunctionCall { name, args } = &expr.kind {
+                    let called = name.as_str().trim_start_matches('\\').to_ascii_lowercase();
+                    if called == "spl_autoload_register" {
+                        for arg in args {
+                            if let crate::parser::ast::ExprKind::Closure { body, .. } = &arg.kind {
+                                closure_marks(body, out);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            for (body, _) in child_bodies(&stmt.kind, false) {
+                callback_marks(body, out);
+            }
+        }
+    }
+    fn closure_marks(stmts: &[Stmt], out: &mut Vec<(String, String, crate::span::Span)>) {
+        for stmt in stmts {
+            if let StmtKind::FunctionVariantMark { name, variant } = &stmt.kind {
+                out.push((name.clone(), variant.clone(), stmt.span));
+                continue;
+            }
+            for (body, _) in child_bodies(&stmt.kind, true) {
+                closure_marks(body, out);
+            }
+        }
+    }
+
+    let mut found = Vec::new();
+    callback_marks(&program, &mut found);
+    if found.is_empty() {
+        return program;
+    }
+    let mut counts = std::collections::HashMap::new();
+    count_variants(&program, &mut counts);
+    let mut seen = HashSet::new();
+    let mut prefix: Vec<Stmt> = Vec::new();
+    for (name, variant, span) in found {
+        let key = php_symbol_key(&name);
+        if counts.get(&key).copied() == Some(1) && seen.insert(key) {
+            prefix.push(Stmt::new(StmtKind::FunctionVariantMark { name, variant }, span));
+        }
+    }
+    if prefix.is_empty() {
+        return program;
+    }
+    prefix.append(&mut program);
+    prefix
+}
+
 /// Collects the PHP symbol keys already bound at compile time, so this pass never competes with one.
 ///
 /// An unconditional top-level declaration and an existing include-variant group both already own
@@ -211,8 +292,9 @@ impl Rewriter {
                 name,
                 body: self.rewrite_stmts(body, conditional),
             },
-            StmtKind::IncludeOnceGuard { source_path, body } => StmtKind::IncludeOnceGuard {
+            StmtKind::IncludeOnceGuard { source_path, required, body } => StmtKind::IncludeOnceGuard {
                 source_path,
+                required,
                 body: self.rewrite_stmts(body, conditional),
             },
             StmtKind::If {

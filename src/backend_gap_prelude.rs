@@ -17,11 +17,7 @@ pub(crate) const LEVENSHTEIN_TWO_ARG_NAME: &str = "__elephc_levenshtein_two_arg"
 /// Reserved helper used for one-argument `strip_tags()` calls.
 pub(crate) const STRIP_TAGS_ONE_ARG_NAME: &str = "__elephc_strip_tags_one_arg";
 
-/// Reserved helper used for `is_countable()` calls.
-pub(crate) const IS_COUNTABLE_NAME: &str = "__elephc_is_countable";
 
-/// Reserved helper used for ordinary positional `array_slice()` calls.
-pub(crate) const ARRAY_SLICE_NAME: &str = "__elephc_array_slice";
 
 /// Reserved helper used when `array_splice()` receives a gradual replacement value.
 pub(crate) const ARRAY_SPLICE_MIXED_REPLACEMENT_NAME: &str =
@@ -81,6 +77,96 @@ pub(crate) const ARRAY_SEARCH_MIXED_NAME: &str = "__elephc_array_search_mixed";
 /// Reserved helper used for `http_build_query()` calls; built by `crate::http_build_query_prelude`.
 pub(crate) const HTTP_BUILD_QUERY_NAME: &str = "__elephc_http_build_query";
 
+/// Reserved helpers of the closed-world autoload chain (`--closed-world`): `spl_autoload_register()`
+/// and its siblings run on a plain PHP list, because the interpreter that normally owns the chain
+/// is not linked. See `AUTOLOAD_CHAIN_SRC`.
+pub(crate) const AUTOLOAD_REGISTER_NAME: &str = "__elephc_autoload_register";
+pub(crate) const AUTOLOAD_UNREGISTER_NAME: &str = "__elephc_autoload_unregister";
+pub(crate) const AUTOLOAD_FUNCTIONS_NAME: &str = "__elephc_autoload_functions";
+pub(crate) const AUTOLOAD_CALL_NAME: &str = "__elephc_autoload_call";
+/// Retry helper for `class_exists()` and its siblings: runs the chain, then asks again.
+pub(crate) const AUTOLOAD_RETRY_NAME: &str = "__elephc_autoload_retry";
+
+/// The native autoload chain.
+///
+/// php keeps the registered loaders in a list the engine walks on a class miss; this is that list
+/// and that walk, written once in PHP over a static property. `register` skips a loader already
+/// present and honours `prepend`; `unregister` removes the first identical entry; `call` runs the
+/// loaders in order until one makes the class exist and refuses to re-enter for a class whose load
+/// is already in progress. Identity (`===`) is the comparison: it is exact for closures and
+/// `[object, method]` pairs, which is what php's own duplicate check means by "same callable".
+const AUTOLOAD_CHAIN_SRC: &str = r#"<?php
+final class __ElephcAutoloadChain {
+    public static array $loaders = [];
+    public static array $loading = [];
+}
+function __elephc_autoload_register(mixed $callback = null, bool $throw = true, bool $prepend = false): bool {
+    // `$throw` is accepted and ignored, as php 8 does.
+    $prepend = $prepend && ($throw || true);
+    if ($callback === null) {
+        return true;
+    }
+    foreach (__ElephcAutoloadChain::$loaders as $loader) {
+        if ($loader === $callback) {
+            return true;
+        }
+    }
+    if ($prepend) {
+        array_unshift(__ElephcAutoloadChain::$loaders, $callback);
+    } else {
+        __ElephcAutoloadChain::$loaders[] = $callback;
+    }
+    return true;
+}
+function __elephc_autoload_unregister(mixed $callback): bool {
+    $kept = [];
+    $found = false;
+    foreach (__ElephcAutoloadChain::$loaders as $loader) {
+        if (!$found && $loader === $callback) {
+            $found = true;
+        } else {
+            $kept[] = $loader;
+        }
+    }
+    __ElephcAutoloadChain::$loaders = $kept;
+    return $found;
+}
+function __elephc_autoload_functions(): array {
+    return __ElephcAutoloadChain::$loaders;
+}
+function __elephc_autoload_call(string $class): void {
+    $key = strtolower(ltrim($class, '\\'));
+    if (isset(__ElephcAutoloadChain::$loading[$key])) {
+        return;
+    }
+    __ElephcAutoloadChain::$loading[$key] = true;
+    try {
+        foreach (__ElephcAutoloadChain::$loaders as $loader) {
+            $loader($class);
+            if (class_exists($class, false) || interface_exists($class, false)
+                || trait_exists($class, false) || enum_exists($class, false)) {
+                break;
+            }
+        }
+    } finally {
+        unset(__ElephcAutoloadChain::$loading[$key]);
+    }
+}
+function __elephc_autoload_retry(string $class, int $kind): bool {
+    __elephc_autoload_call($class);
+    if ($kind === 0) {
+        return class_exists($class);
+    }
+    if ($kind === 1) {
+        return interface_exists($class);
+    }
+    if ($kind === 2) {
+        return trait_exists($class);
+    }
+    return enum_exists($class);
+}
+"#;
+
 /// Reserved helper used for `escapeshellarg()` calls.
 pub(crate) const ESCAPESHELLARG_NAME: &str = "__elephc_escapeshellarg";
 
@@ -102,14 +188,11 @@ pub(crate) const UKSORT_MIXED_NAME: &str = "__elephc_uksort_mixed";
 /// Reserved helper used for ordinary ascending sorting while preserving keys.
 pub(crate) const ASORT_MIXED_NAME: &str = "__elephc_asort_mixed";
 
-/// Reserved helper used when `array_fill_keys()` receives a gradual array operand.
-pub(crate) const ARRAY_FILL_KEYS_MIXED_NAME: &str = "__elephc_array_fill_keys_mixed";
-
 /// Reserved helper used for `str_getcsv()` calls.
 pub(crate) const STR_GETCSV_NAME: &str = "__elephc_str_getcsv";
 
 /// Canonical name of PHP's randomizer class supplied by the compatibility prelude.
-pub(crate) const RANDOMIZER_CLASS_NAME: &str = "Random\\Randomizer";
+pub(crate) use crate::randomizer_prelude::RANDOMIZER_CLASS_NAME;
 
 /// Byte-oriented dynamic-programming implementation matching PHP's default edit costs.
 const LEVENSHTEIN_TWO_ARG_SRC: &str = r#"<?php
@@ -179,62 +262,7 @@ function __elephc_strip_tags_one_arg(string $input): string {
 }
 "#;
 
-/// PHP's countability predicate for arrays and objects implementing `Countable`.
-const IS_COUNTABLE_SRC: &str = r#"<?php
-function __elephc_is_countable(mixed $value): bool {
-    return is_array($value) || $value instanceof \Countable;
-}
-"#;
 
-/// Representation-neutral array slicing with PHP key-preservation rules.
-///
-/// The source stays `mixed` so a boxed associative array reaches `count()` and `foreach` through
-/// their runtime-tag-aware paths instead of being reinterpreted as an unboxed array pointer at the
-/// internal helper boundary.
-const ARRAY_SLICE_SRC: &str = r#"<?php
-function __elephc_array_slice(mixed $input, int $offset, ?int $length = null, bool $preserveKeys = false): array {
-    $count = count($input);
-    if ($offset < 0) {
-        $start = $count + $offset;
-        if ($start < 0) {
-            $start = 0;
-        }
-    } else {
-        $start = $offset;
-        if ($start > $count) {
-            $start = $count;
-        }
-    }
-    $end = $count;
-    if ($length !== null) {
-        $lengthValue = (int) $length;
-        if ($lengthValue >= 0) {
-            $end = $start + $lengthValue;
-            if ($end > $count) {
-                $end = $count;
-            }
-        } else {
-            $end = $count + $lengthValue;
-            if ($end < $start) {
-                $end = $start;
-            }
-        }
-    }
-    $result = [];
-    $position = 0;
-    foreach ($input as $key => $value) {
-        if ($position >= $start && $position < $end) {
-            if ($preserveKeys || is_string($key)) {
-                $result[$key] = $value;
-            } else {
-                $result[] = $value;
-            }
-        }
-        $position++;
-    }
-    return $result;
-}
-"#;
 
 /// Normalizes a gradual `array_splice()` replacement through PHP's ordinary array cast.
 const ARRAY_SPLICE_MIXED_REPLACEMENT_SRC: &str = r#"<?php
@@ -311,31 +339,6 @@ function __elephc_random_bytes(int $length): string {
 }
 "#;
 
-/// PHP-level implementation of the currently supported Randomizer surface.
-const RANDOMIZER_SRC: &str = r#"<?php
-namespace Random;
-final class Randomizer {
-    public function __construct(mixed $engine = null) {}
-
-    public function getBytesFromString(string $string, int $length): string {
-        if ($string === '') {
-            throw new \ValueError('Random\\Randomizer::getBytesFromString(): Argument #1 ($string) must not be empty');
-        }
-        if ($length < 1) {
-            throw new \ValueError('Random\\Randomizer::getBytesFromString(): Argument #2 ($length) must be greater than 0');
-        }
-        $result = '';
-        $maximum = strlen($string) - 1;
-        $position = 0;
-        while ($position < $length) {
-            $result .= $string[random_int(0, (int) $maximum)];
-            $position++;
-        }
-        return $result;
-    }
-}
-"#;
-
 /// Stable in-place value sort using PHP's ordinary comparison semantics.
 ///
 /// Scalar and null elements go to the native `sort()`/`rsort()` of a typed array, which orders
@@ -364,11 +367,7 @@ function __elephc_sort_mixed_direction(mixed &$array, bool $descending): bool {
         $inner = 0;
         while ($inner + 1 < $outer) {
             $next = $inner + 1;
-            $current = $array[$inner];
-            $candidate = $array[$next];
-            $comparison = is_string($current) && is_string($candidate)
-                ? strcmp($current, $candidate)
-                : ($current == $candidate ? 0 : ($current > $candidate ? 1 : -1));
+            $comparison = __elephc_sort_mixed_compare($array[$inner], $array[$next]);
             $swap = $descending ? $comparison < 0 : $comparison > 0;
             if ($swap) {
                 $temporary = $array[$inner];
@@ -380,6 +379,29 @@ function __elephc_sort_mixed_direction(mixed &$array, bool $descending): bool {
         $outer--;
     }
     return true;
+}
+function __elephc_sort_mixed_compare(mixed $current, mixed $candidate): int {
+    if (is_array($current) && is_array($candidate)) {
+        $currentCount = count($current);
+        $candidateCount = count($candidate);
+        if ($currentCount !== $candidateCount) {
+            return $currentCount < $candidateCount ? -1 : 1;
+        }
+        foreach ($current as $key => $value) {
+            if (!array_key_exists($key, $candidate)) {
+                return 1;
+            }
+            $nested = __elephc_sort_mixed_compare($value, $candidate[$key]);
+            if ($nested !== 0) {
+                return $nested;
+            }
+        }
+        return 0;
+    }
+    if (is_string($current) && is_string($candidate)) {
+        return strcmp($current, $candidate);
+    }
+    return $current == $candidate ? 0 : ($current > $candidate ? 1 : -1);
 }
 function __elephc_sort_scalar_values(array $values, bool $descending): array {
     if ($descending) {
@@ -870,18 +892,6 @@ function __elephc_asort_mixed(array &$values): bool {
 }
 "#;
 
-/// Builds an associative result from string-or-integer keys held behind a gradual array value.
-const ARRAY_FILL_KEYS_MIXED_SRC: &str = r#"<?php
-function __elephc_array_fill_keys_mixed(mixed $keys, mixed $value) {
-    $result = ["__elephc_seed" => null];
-    unset($result["__elephc_seed"]);
-    foreach ($keys as $key) {
-        $result[$key] = $value;
-    }
-    return $result;
-}
-"#;
-
 /// Parses one CSV record while preserving separators and doubled enclosures inside quoted fields.
 const STR_GETCSV_SRC: &str = r#"<?php
 function __elephc_str_getcsv(string $string, string $separator = ',', string $enclosure = '"', string $escape = "\\"): array {
@@ -944,10 +954,6 @@ function strip_tags(string $string, $allowed = null): string {
 }
 "#;
 
-/// PHP-visible wrapper for `is_countable()`.
-const IS_COUNTABLE_WRAPPER_SRC: &str = r#"<?php
-function is_countable(mixed $value): bool { return __elephc_is_countable($value); }
-"#;
 
 /// PHP-visible wrapper for `random_bytes()`.
 const RANDOM_BYTES_WRAPPER_SRC: &str = r#"<?php
@@ -999,13 +1005,6 @@ pub fn inject_if_used(
         sources.push(STRIP_TAGS_ALLOWED_SRC);
         sources.push(STRIP_TAGS_WRAPPER_SRC);
     }
-    if usage.references("is_countable") {
-        sources.push(IS_COUNTABLE_SRC);
-        sources.push(IS_COUNTABLE_WRAPPER_SRC);
-    }
-    if usage.references("array_slice") {
-        sources.push(ARRAY_SLICE_SRC);
-    }
     if usage.references("array_splice") {
         sources.push(ARRAY_SPLICE_MIXED_REPLACEMENT_SRC);
     }
@@ -1050,6 +1049,13 @@ pub fn inject_if_used(
     if usage.references("array_search") {
         sources.push(ARRAY_SEARCH_MIXED_SRC);
     }
+    if crate::closed_world::is_enabled()
+        && ["spl_autoload_register", "spl_autoload_unregister", "spl_autoload_functions", "spl_autoload_call"]
+            .iter()
+            .any(|name| usage.references(name))
+    {
+        sources.push(AUTOLOAD_CHAIN_SRC);
+    }
     if usage.references("escapeshellarg") {
         sources.push(ESCAPESHELLARG_SRC);
         sources.push(ESCAPESHELLARG_WRAPPER_SRC);
@@ -1061,24 +1067,34 @@ pub fn inject_if_used(
     if usage.references("file_put_contents") {
         sources.push(FILE_PUT_CONTENTS_ARRAY_SRC);
     }
-    if usage.references("uasort") || usage.references("usort") || usage.references("uksort") || usage.references("asort") {
+    // `natsort()`/`natcasesort()` over a gradual array sort through `uasort()` in
+    // `crate::natsort_gradual_prelude`, so they need its gradual helper as well.
+    if usage.references("uasort") || usage.references("usort") || usage.references("uksort") || usage.references("asort")
+        || usage.references("natsort") || usage.references("natcasesort")
+    {
         sources.push(CALLBACK_SORT_MIXED_SRC);
     }
-    if usage.references("array_fill_keys") {
-        sources.push(ARRAY_FILL_KEYS_MIXED_SRC);
-    }
+    let needs_csv_long_forms = usage.references(crate::csv_prelude::FPUTCSV_FULL_NAME)
+        || usage.references(crate::csv_prelude::FGETCSV_FULL_NAME);
     if usage.references("str_getcsv") {
         sources.push(STR_GETCSV_SRC);
         sources.push(STR_GETCSV_WRAPPER_SRC);
+    } else if usage.references(crate::csv_prelude::FGETCSV_FULL_NAME) {
+        // The long `fgetcsv()` parses its record with the `str_getcsv()` helper.
+        sources.push(STR_GETCSV_SRC);
     }
     // Natural-order comparison is BUILT rather than parsed, so it never joins `sources`.
-    let needs_natural_order =
-        usage.references("strnatcmp") || usage.references("strnatcasecmp");
+    // `natsort()`/`natcasesort()` over a gradual array compare through them too.
+    let needs_natural_order = usage.references("strnatcmp")
+        || usage.references("strnatcasecmp")
+        || usage.references("natsort")
+        || usage.references("natcasesort");
     // So is the tokenizer surface.
     let needs_tokenizer =
         usage.references("token_get_all") || usage.references("token_name");
-    // So is `array_filter()`'s callback form.
-    let needs_array_filter_callback = usage.references("array_filter");
+    // `array_filter()` no longer needs a helper: the boxed predicate runtime acquires a
+    // descriptor from any callback value, a boxed one included, and tests null at run time.
+    let needs_array_filter_callback = false;
     // So is `array_map()`'s multi-array form.
     // `ast_usage` records the helper's name only for a call with two or more arrays: the helper
     // brings callable invokers of its own, and a program mapping one array must not carry them.
@@ -1104,38 +1120,68 @@ pub fn inject_if_used(
     let needs_preg_match_all_flags = usage.references("preg_match_all") || needs_preg_array;
     // And so are `is_callable()`'s second and third parameters: the backend predicate takes the
     // value alone, and `$syntax_only` asks a different question than "can this be called".
-    let needs_is_callable_ext = usage.references("is_callable");
+    let needs_is_callable_ext =
+        usage.references(crate::is_callable_prelude::IS_CALLABLE_EXT_NAME);
+    // And so is `Closure::fromCallable` named at run time (`['Closure', 'fromCallable']`): the
+    // run-time static-method table only lists compiled classes, and `Closure` is none.
+    let needs_closure_from_callable = crate::closure_from_callable_prelude::named_by(&program);
+    // And so is intl's `Locale` default, which Symfony reads once `class_exists(\Locale::class)`.
+    let needs_locale = crate::locale_prelude::needed_by(&program);
     // And so is `parse_str()`, which has no backend implementation of any kind: no runtime symbol
     // and no lowering, so a compiled call fell through to the eval bridge, whose array ABI cannot
     // bind the mandatory by-reference `$result`.
     let needs_parse_str = usage.references("parse_str");
-    // And so is `addcslashes()`, which has no backend implementation either.
-    let needs_addcslashes = usage.references("addcslashes");
-    // And so is `get_class_vars()`, whose answer is the program's own class declarations.
-    let needs_class_vars = usage.references("get_class_vars");
-    // And so is `implode()` over objects or floats, which the native joiners cannot render.
-    let needs_implode_values = usage.references("implode") || usage.references("join");
-    // And so are the mbstring functions without a native implementation, each only when the
-    // program calls it and does not declare its own (a polyfill keeps its definition).
-    let mut mbstring_functions: Vec<&str> = crate::mbstring_prelude::FUNCTIONS
+    // And so is `strtok()`, which has no backend implementation either; a program declaring its
+    // own `strtok` (a polyfill) keeps its definition.
+    let needs_strtok = usage.references("strtok")
+        && !crate::program_declares::program_declares_anywhere(&program, "strtok");
+    // And so is the `proc_open()` family, over the `elephc_proc` bridge. Each member a program
+    // declares itself (a polyfill) keeps its definition and is left out.
+    let proc_functions: Vec<&str> = crate::proc_prelude::FUNCTIONS
         .iter()
         .copied()
         .filter(|name| {
             usage.references(name)
-                && !crate::mbstring_prelude::program_declares_anywhere(&program, name)
+                && !crate::program_declares::program_declares_anywhere(&program, name)
         })
         .collect();
-    if mbstring_functions
+    let needs_proc = !proc_functions.is_empty();
+    // And so is `exec()`'s by-reference form, recorded under the helper's name by `ast_usage`.
+    let needs_exec_full = usage.references(crate::exec_prelude::EXEC_FULL_NAME);
+    // And so is `stream_select()`, whose native helper reads three non-null packed arrays.
+    let needs_stream_select = usage.references(crate::stream_select_prelude::STREAM_SELECT_NAME);
+    // And so is a one-argument `min()` / `max()` over a gradual operand.
+    let needs_min_max_mixed = usage.references(crate::min_max_prelude::MIN_MAX_MIXED_NAME);
+    // And so is `count($value, COUNT_RECURSIVE)` over a receiver that can nest.
+    let needs_count_recursive =
+        usage.references(crate::count_recursive_prelude::COUNT_RECURSIVE_NAME);
+    // And so is a `string` first argument of `abs()` / `ceil()` / `floor()` / `round()`.
+    let needs_numeric_string_arg =
+        usage.references(crate::numeric_string_arg_prelude::NUMERIC_STRING_ARG_NAME);
+    // And so is `array_fill_keys()` over gradual keys.
+    let needs_array_fill_keys_mixed =
+        usage.references(crate::array_fill_keys_prelude::ARRAY_FILL_KEYS_MIXED_NAME);
+    // And so is `addcslashes()`, which has no backend implementation either.
+    let needs_addcslashes = usage.references("addcslashes");
+    // And so are the ext/standard functions with no other implementation (`uniqid()`, ...).
+    let standard_gaps: Vec<&str> = crate::standard_gap_prelude::FUNCTIONS
         .iter()
-        .any(|name| matches!(*name, "mb_str_pad" | "mb_ucfirst" | "mb_lcfirst"))
-        && !mbstring_functions.contains(&"mb_substr")
-        && !crate::mbstring_prelude::program_declares_anywhere(&program, "mb_substr")
-    {
-        mbstring_functions.push("mb_substr");
-    }
+        .map(|(name, _)| *name)
+        .filter(|name| {
+            usage.references(name)
+                && !crate::program_declares::program_declares_anywhere(&program, name)
+        })
+        .collect();
+    let needs_standard_gaps = !standard_gaps.is_empty();
+    // And so is `str_replace()`'s by-reference `$count`, which the native helper does not keep.
+    let needs_str_replace_count = usage.references("str_replace");
+    // And so is `implode()` over objects or floats, which the native joiners cannot render.
+    let needs_implode_values = usage.references("implode") || usage.references("join");
     // And so is `array_sum()` / `array_product()` over anything but a list of ints or floats.
     let needs_array_sum_values =
         usage.references("array_sum") || usage.references("array_product");
+    // And so is `array_pad()` over a list the native helper cannot copy.
+    let needs_array_pad_values = usage.references("array_pad");
     // And so is a `define()` whose name is computed, which needs the run-time constant table.
     let needs_dynamic_define = usage.dynamic_define;
     // And so is `htmlspecialchars()`'s fourth parameter: the backend helper always
@@ -1155,14 +1201,29 @@ pub fn inject_if_used(
     let needs_version_compare = usage.references("version_compare");
     // And so is `hash_pbkdf2()`, built over the backend's raw `hash_hmac()`.
     let needs_hash_pbkdf2 = usage.references("hash_pbkdf2");
+    // And so is a method call on an unknown receiver whose class declares `__call()` but not the
+    // method: the dispatch ladder lists only the classes that declare it.
+    let needs_magic_call = crate::magic_call_prelude::program_declares_magic_call(&program);
     if sources.is_empty()
+        && !needs_csv_long_forms
         && !needs_array_find
         && !needs_array_splice
         && !needs_addcslashes
+        && !needs_standard_gaps
+        && !needs_strtok
+        && !needs_proc
+        && !needs_exec_full
+        && !needs_stream_select
+        && !needs_min_max_mixed
+        && !needs_count_recursive
+        && !needs_numeric_string_arg
+        && !needs_array_fill_keys_mixed
+        && !needs_str_replace_count
         && !needs_htmlspecialchars
         && !needs_http_build_query
         && !needs_version_compare
         && !needs_hash_pbkdf2
+        && !needs_magic_call
         && !inject_randomizer
         && !needs_natural_order
         && !needs_tokenizer
@@ -1175,20 +1236,16 @@ pub fn inject_if_used(
         && !needs_preg_match_all_flags
         && !needs_preg_array
         && !needs_is_callable_ext
-        && !needs_class_vars
+        && !needs_closure_from_callable
+        && !needs_locale
         && !needs_implode_values
         && !needs_array_sum_values
-        && mbstring_functions.is_empty()
+        && !needs_array_pad_values
         && !needs_dynamic_define
     {
         return program;
     }
     let mut combined = Vec::new();
-    if needs_class_vars {
-        let declarations = crate::class_vars_prelude::declarations(&program);
-        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
-        combined.extend(declarations);
-    }
     if needs_dynamic_define {
         let declarations = crate::dynamic_define_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
@@ -1204,8 +1261,13 @@ pub fn inject_if_used(
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }
-    if !mbstring_functions.is_empty() {
-        let declarations = crate::mbstring_prelude::declarations(&mbstring_functions);
+    if needs_array_pad_values {
+        let declarations = crate::array_pad_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_csv_long_forms {
+        let declarations = crate::csv_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }
@@ -1224,8 +1286,58 @@ pub fn inject_if_used(
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }
+    if needs_strtok {
+        let declarations = crate::strtok_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_proc {
+        let declarations = crate::proc_prelude::declarations(&proc_functions);
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_exec_full {
+        let declarations = crate::exec_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_stream_select {
+        let declarations = crate::stream_select_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_min_max_mixed {
+        let declarations = crate::min_max_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_count_recursive {
+        let declarations = crate::count_recursive_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_numeric_string_arg {
+        let declarations = crate::numeric_string_arg_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_array_fill_keys_mixed {
+        let declarations = crate::array_fill_keys_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
     if needs_addcslashes {
         let declarations = crate::addcslashes_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_standard_gaps {
+        let declarations = crate::standard_gap_prelude::declarations(&standard_gaps);
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_str_replace_count {
+        let declarations = crate::str_replace_count_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }
@@ -1236,6 +1348,11 @@ pub fn inject_if_used(
     }
     if needs_version_compare {
         let declarations = crate::version_compare_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_magic_call {
+        let declarations = crate::magic_call_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }
@@ -1294,20 +1411,23 @@ pub fn inject_if_used(
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }
+    if needs_closure_from_callable {
+        let declarations = crate::closure_from_callable_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_locale {
+        let declarations = crate::locale_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
     if needs_tokenizer {
         let declarations = crate::tokenizer_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }
     if inject_randomizer {
-        let tokens = crate::lexer::tokenize(RANDOMIZER_SRC)
-            .expect("Randomizer compatibility prelude must tokenize");
-        let parsed = crate::parser::parse(&tokens)
-            .expect("Randomizer compatibility prelude must parse");
-        combined.extend(
-            crate::name_resolver::resolve(parsed)
-                .expect("Randomizer compatibility prelude must name-resolve"),
-        );
+        combined.extend(crate::randomizer_prelude::declarations());
     }
     // Every helper here is named ONLY by the EIR lowering (a Rust constant), never by any PHP
     // source. `prune_unreachable_declarations` walks the PHP, finds no reference, and erases the
@@ -1320,6 +1440,12 @@ pub fn inject_if_used(
         inventory.record_program(BACKEND_GAP_GROUP, &parsed);
         combined.extend(parsed);
     }
+    // These helpers mirror PHP builtins that take arrays (`str_replace` with a count, `implode`
+    // over mixed values, `file_put_contents` over an array, ...), so their `foreach` loops never
+    // reach a user iterator. Declaring that lets reachability drop the by-name iterator-protocol
+    // roots those loops would otherwise add, which kept every live `getIterator` in the program.
+    // Done here, not in the pipeline, so every caller of this injector gets it.
+    inventory.record_array_iteration_only(BACKEND_GAP_GROUP);
     combined.extend(program);
     combined
 }

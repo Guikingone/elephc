@@ -1,16 +1,16 @@
 ---
-title: "gc_enable() — internals"
+title: "gc_enable() - internals"
 description: "Compiler internals for gc_enable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 626
+  order: 634
 ---
 
-## `gc_enable()` — internals
+## `gc_enable()` - internals
 
 ## Where it lives
 
-- **Signature**: [`src/builtins/system/gc.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/gc.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Signature**: [`src/builtins/system/gc_enable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/gc_enable.rs)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -25,9 +25,9 @@ sidebar:
 - **Validation**: `signature`
 - **Result type source**: `declared`
 - **Result ownership**: `non_heap`
-- **Effects**: `shared`
+- **Effects**: `static (1 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
@@ -46,7 +46,7 @@ function gc_enable(): void
 
 ## Eval interpreter (magician)
 
-- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/network_env/gc.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/gc.rs) (`eval_builtin!`)
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/gc_enable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/gc_enable.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
 - **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`

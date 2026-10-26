@@ -6,13 +6,162 @@
 //!
 //! Key details:
 //! - Fixtures inspect both supported ABIs so runtime calls never precede later argument saves.
+//! - Eval fixtures cover implicit process-superglobal ownership across all supported targets.
 
 use super::*;
 use crate::codegen::generate_user_asm_from_ir;
 use crate::codegen::platform::{Arch, Platform, Target};
 use crate::ir::{
-    Builder, FunctionParam, IrHeapKind, IrType, Module, Op, Ownership, Terminator,
+    Builder, FunctionParam, IrHeapKind, IrType, LocalKind, Module, Op, Ownership, Terminator,
 };
+use crate::types::FunctionSig;
+
+/// Plain programs skip the clock read, while timing metrics and eval keep it enabled.
+#[test]
+fn gc_request_timing_initialization_is_pay_for_use() {
+    let target = Target::new(Platform::Linux, Arch::X86_64);
+    let mut module = Module::new(target);
+    assert!(!module_uses_gc_timing(&module));
+
+    let mut function = Function::new("gc_timing".into(), IrType::Void, PhpType::Void);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.emit(
+            Op::GcControl,
+            Vec::new(),
+            Some(Immediate::I64(GcControlOp::ApplicationTime.as_i64())),
+            IrType::F64,
+            PhpType::Float,
+            crate::ir::Ownership::NonHeap,
+        );
+        builder.terminate(Terminator::Return { value: None });
+    }
+    module.add_function(function);
+    assert!(module_uses_gc_timing(&module));
+
+    module.functions.clear();
+    module.required_runtime_features.eval_bridge = true;
+    assert!(module_uses_gc_timing(&module));
+}
+
+/// Process-exit inventory cleanup is emitted only when a program can own an OS resource.
+#[test]
+fn resource_inventory_cleanup_is_pay_for_use() {
+    let target = Target::new(Platform::Linux, Arch::X86_64);
+    let mut module = Module::new(target);
+    assert!(!module_uses_resource_inventory_cleanup(&module));
+
+    let mut function = Function::new("opens_stream".into(), IrType::Void, PhpType::Void);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.emit(
+            Op::RuntimeCall,
+            Vec::new(),
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::Fopen,
+            ))),
+            IrType::I64,
+            PhpType::stream_resource(),
+            crate::ir::Ownership::NonHeap,
+        );
+        builder.terminate(Terminator::Return { value: None });
+    }
+    module.add_function(function);
+    assert!(module_uses_resource_inventory_cleanup(&module));
+
+    module.functions.clear();
+    module.required_runtime_features.eval_bridge = true;
+    assert!(module_uses_resource_inventory_cleanup(&module));
+}
+
+/// Descriptor-only backtrace reachability is carried by the frontend's hidden frame snapshot.
+#[test]
+fn hidden_argument_snapshot_enables_backtrace_activations_without_a_core_instruction() {
+    let target = Target::new(Platform::Linux, Arch::X86_64);
+    let mut module = Module::new(target);
+    let mut function = Function::new(
+        "dynamic_backtrace_frame".to_string(),
+        IrType::Void,
+        PhpType::Void,
+    );
+    function.params = vec![
+        FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        },
+        FunctionParam {
+            name: crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
+            ir_type: IrType::Heap(crate::ir::IrHeapKind::Array),
+            php_type: PhpType::Array(Box::new(PhpType::Mixed)),
+            by_ref: false,
+            variadic: true,
+        },
+    ];
+    // Public metadata may omit compiler-owned ABI parameters. Frame publication must use the
+    // physical EIR layout, which remains authoritative for the reader callback.
+    function.signature = Some(FunctionSig {
+        params: vec![("value".to_string(), PhpType::Int)],
+        param_type_exprs: vec![None],
+        param_attributes: vec![Vec::new()],
+        defaults: vec![None],
+        return_type: PhpType::Void,
+        declared_return: false,
+        by_ref_return: false,
+        ref_params: vec![false],
+        declared_params: vec![true],
+        variadic: None,
+        deprecation: None,
+        is_generator: false,
+    });
+    module.add_function(function);
+
+    let backtrace_enabled = module_uses_backtrace(&module);
+    assert!(backtrace_enabled);
+    let layout = layout_for_function(
+        &module.functions[0],
+        target,
+        false,
+        true,
+        backtrace_enabled,
+    );
+    assert!(layout.backtrace_activation);
+    assert!(layout.exception_activation_offset.is_some());
+}
+
+/// Both dynamic constructor opcodes reserve the hand-used receiver register on every target.
+#[test]
+fn dynamic_constructor_frames_preserve_the_nested_receiver_register() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        for op in [Op::DynamicObjectNew, Op::DynamicObjectNewMixed] {
+            let mut function = Function::new("dynamic_constructor_frame".into(), IrType::Void, PhpType::Void);
+            {
+                let mut builder = Builder::new(&mut function);
+                let entry = builder.create_named_block("entry", Vec::new());
+                builder.set_entry(entry);
+                builder.position_at_end(entry);
+                // Frame analysis needs only the opcode, not candidate metadata or emission.
+                builder.emit(op, Vec::new(), None, IrType::Void, PhpType::Void, crate::ir::Ownership::NonHeap);
+                builder.terminate(Terminator::Return { value: None });
+            }
+            for regalloc in [false, true] {
+                let layout = layout_for_function(&function, target, regalloc, false, false);
+                let register = nested_call_reg_name(target.arch);
+                assert_eq!(layout.callee_saved_offsets.iter().filter(|(saved, _)| *saved == register).count(),
+                    1, "{name}: {op:?}, register allocation {regalloc}");
+            }
+        }
+    }
+}
 
 /// Verifies AArch64 saves a later Mixed argument before retaining an earlier string.
 #[test]
@@ -21,10 +170,13 @@ fn aarch64_prologue_saves_all_parameters_before_runtime_calls() {
         Platform::Linux,
         Arch::AArch64,
     ));
+    // Shared helpers (`_eir_shared_static_throw`) print before the fixture and contain their own
+    // `__rt_str_persist` calls, so only the fixture's prologue is searched.
+    let body = asm.find("param $label").expect("the fixture's prologue");
     let later_param = asm
         .find("param $value from x2")
         .expect("AArch64 fixture should receive the later Mixed parameter in x2");
-    let persist = asm
+    let persist = body + asm[body..]
         .find("bl __rt_str_persist")
         .expect("owned string parameter should be persisted");
 
@@ -39,10 +191,13 @@ fn x86_64_prologue_saves_all_parameters_before_runtime_calls() {
         Platform::Linux,
         Arch::X86_64,
     ));
+    // Only the fixture's prologue is searched: shared helpers print first and call
+    // `__rt_str_persist` themselves.
+    let body = asm.find("param $label").expect("the fixture's prologue");
     let later_param = asm
         .find("param $value from rdx")
         .expect("x86_64 fixture should receive the later Mixed parameter in rdx");
-    let persist = asm
+    let persist = body + asm[body..]
         .find("call __rt_str_persist")
         .expect("owned string parameter should be persisted");
 
@@ -97,6 +252,7 @@ fn every_frame_reserves_the_nested_call_register() {
                 &function,
                 Target::new(Platform::Linux, arch),
                 regalloc_linear,
+                false,
                 false,
             );
             assert_eq!(
@@ -166,8 +322,103 @@ fn nominal_return_guard_transfers_only_forwarded_boxed_local() {
             builder.terminate(Terminator::Return { value: Some(result) });
             result
         };
-        assert_eq!(return_cleanup_skip_slot(&function, result), expected_transfer.then_some(slot));
+        let target = Target::new(Platform::Linux, Arch::X86_64);
+        let module = Module::new(target);
+        let layout = layout_for_function(&function, target, false, false, false);
+        let mut emitter = Emitter::new(target);
+        let mut data = crate::codegen_support::data_section::DataSection::new();
+        let mut shared = crate::codegen::shared_state::SharedCodegenState::for_module(&module);
+        let ctx = FunctionContext::new(
+            &module, &function, &mut emitter, &mut data, &mut shared, layout, false, false, false, None,
+        );
+        assert_eq!(return_cleanup_skip_slot(&ctx, result), expected_transfer.then_some(slot));
     }
+}
+
+/// Declared PHP-array unions use boxed local storage on every target.
+#[test]
+fn concrete_arrays_are_boxed_before_entering_php_array_union_storage() {
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let target = Target::parse(name).unwrap();
+        let mut module = Module::new(target);
+        module.add_function(union_array_store_fixture());
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut main);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        let asm = generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        // Shared helpers print first and box values themselves; count only the fixture's body.
+        let marker = "@fn name=store_local_array";
+        let start = asm.find(marker).unwrap_or_else(|| panic!("{name}: fixture function missing"));
+        let body = &asm[start..];
+        let end = body.find("@endfn name=store_local_array").unwrap_or(body.len());
+        // A concrete array is boxed by the kind-aware `__rt_mixed_from_array_kind` (it used to be
+        // the generic `__rt_mixed_from_value`); the rule is still exactly one boxing helper call.
+        assert_eq!(
+            body[..end].matches("__rt_mixed_from_value").count()
+                + body[..end].matches("__rt_mixed_from_array_kind").count(),
+            1,
+            "{name}: a raw php-array union store must box its concrete source\n{asm}"
+        );
+    }
+}
+
+/// Builds a raw local store of a concrete array into declared `array` union storage.
+fn union_array_store_fixture() -> Function {
+    let declared_array = PhpType::php_array();
+    let concrete_array = PhpType::Array(Box::new(PhpType::Int));
+    let mut function = Function::new(
+        "store_local_array".to_string(),
+        IrType::Void,
+        PhpType::Void,
+    );
+    let slot = function.add_local(
+        Some("array".to_string()),
+        IrType::from_php(&declared_array),
+        declared_array,
+        LocalKind::PhpLocal,
+    );
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let array = builder
+            .emit(
+                Op::ArrayNew,
+                Vec::new(),
+                Some(Immediate::Capacity(0)),
+                IrType::from_php(&concrete_array),
+                concrete_array,
+                Ownership::Owned,
+            )
+            .expect("array_new produces a value");
+        builder.emit(
+            Op::StoreLocal,
+            vec![array],
+            Some(Immediate::LocalSlot(slot)),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        builder.terminate(Terminator::Return { value: None });
+    }
+    function
 }
 
 /// Builds a callable with an owned string parameter followed by a borrowed Mixed parameter.
@@ -175,8 +426,8 @@ fn owned_string_then_mixed_prologue_asm(target: Target) -> String {
     let mut module = Module::new(target);
     let mut function = Function::new(
         "prologue_parameter_fixture".to_string(),
-        IrType::Void,
-        PhpType::Void,
+        IrType::Heap(crate::ir::IrHeapKind::Mixed),
+        PhpType::Mixed,
     );
     function.params.push(FunctionParam {
         name: "label".to_string(),
@@ -198,7 +449,7 @@ fn owned_string_then_mixed_prologue_asm(target: Target) -> String {
         PhpType::Str,
         LocalKind::PhpLocal,
     );
-    function.add_local(
+    let value_slot = function.add_local(
         Some("value".to_string()),
         IrType::Heap(crate::ir::IrHeapKind::Mixed),
         PhpType::Mixed,
@@ -211,7 +462,12 @@ fn owned_string_then_mixed_prologue_asm(target: Target) -> String {
         builder.position_at_end(entry);
         let label = builder.emit_load_local(label_slot, IrType::Str, PhpType::Str);
         builder.emit_store_local(label_slot, label);
-        builder.terminate(Terminator::Return { value: None });
+        let value = builder.emit_load_local(
+            value_slot,
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        builder.terminate(Terminator::Return { value: Some(value) });
     }
     module.add_function(function);
 

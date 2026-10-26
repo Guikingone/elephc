@@ -15,6 +15,7 @@
 //!   before scanning, because PHP source is bytes and this scanner consumes Rust `str`.
 
 mod binary;
+mod inline_html;
 mod scan;
 mod php_tags;
 mod strings;
@@ -23,6 +24,6 @@ mod tests;
 mod token;
 
 pub(crate) use binary::normalize_binary_source;
-pub(crate) use scan::tokenize;
+pub(crate) use scan::{tokenize, tokenize_at_line};
 pub(crate) use php_tags::{contains_php_open_tag, find_php_close_tag};
 pub(crate) use token::{Token, TokenKind};

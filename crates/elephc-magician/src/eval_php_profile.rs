@@ -297,6 +297,20 @@ pub(crate) fn eval_token_id(name: &str) -> Option<i64> {
         .map(|(_, values)| values[profile_index])
 }
 
+/// Returns the profile-specific PHP `E_ALL` and default error-reporting mask.
+pub(crate) fn eval_all_error_mask() -> i64 {
+    if eval_php_version_id() >= 80_500 {
+        30_719
+    } else {
+        32_767
+    }
+}
+
+/// Returns the Zend Engine profile corresponding to the active PHP minor version.
+pub(crate) fn eval_zend_version_string() -> String {
+    format!("4.{}.0", eval_php_minor_version())
+}
+
 /// RAII guard restoring the previous profile on drop.
 ///
 /// Test fixtures hold one of these instead of calling [`set_eval_php_version_id`]
@@ -380,6 +394,18 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), count);
         assert_eq!(eval_token_id("T_DOUBLE_COLON"), eval_token_id("T_PAAMAYIM_NEKUDOTAYIM"));
+    }
+
+    /// Verifies every supported PHP profile maps to its Zend Engine 4 minor.
+    #[test]
+    fn zend_version_tracks_the_php_profile_minor() {
+        for (id, _) in EVAL_PHP_PROFILES {
+            let _guard = scoped_profile(*id);
+            assert_eq!(
+                eval_zend_version_string(),
+                format!("4.{}.0", (id / 100) % 100)
+            );
+        }
     }
 
     /// An unsupported id leaves the active profile alone rather than inventing

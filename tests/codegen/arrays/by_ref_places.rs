@@ -226,6 +226,43 @@ echo implode(",", $b->items);
     assert_eq!(out, "1,2,3");
 }
 
+/// A sort through an untyped (Mixed) middle link of a property chain writes the sorted array
+/// back to a declared `array` property, instead of sorting a copy and dropping it.
+#[test]
+fn test_sort_through_mixed_link_of_typed_property_chain() {
+    let out = compile_and_run(
+        r#"<?php
+class TypedSortInner { public array $items = [3, 1, 2]; }
+class TypedSortOuter { public $inner; public function __construct() { $this->inner = new TypedSortInner(); } }
+$o = new TypedSortOuter();
+sort($o->inner->items);
+echo implode(",", $o->inner->items), "|";
+rsort($o->inner->items);
+echo implode(",", $o->inner->items);
+"#,
+    );
+    assert_eq!(out, "1,2,3|3,2,1");
+}
+
+/// A top-level variable that a function declares `global` lives in program-global storage, and
+/// a by-reference `mixed` parameter receives that storage, not a copy: `sort()` (lowered through
+/// a by-reference prelude helper) and a user function both write through.
+#[test]
+fn test_by_ref_mixed_argument_writes_through_global_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function append_nine(mixed &$x): void { $x[] = 9; }
+$reader = function () { global $a; return $a; };
+$a = [3, 1, 2];
+sort($a);
+echo implode(",", $a), "|";
+append_nine($a);
+echo implode(",", $reader()), "|", (int) in_array(9, $a);
+"#,
+    );
+    assert_eq!(out, "1,2,3|1,2,3,9|1");
+}
+
 /// A two-link property chain (`$outer->inner->items`), so the receiver resolution walks more
 /// than one property hop before it finds the array storage.
 #[test]

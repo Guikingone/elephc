@@ -26,6 +26,14 @@ pub(super) fn reflection_function_metadata(
         }
         return Ok(empty_reflection_metadata());
     };
+    reflection_function_owner_metadata(ctx, function)
+}
+
+/// Metadata of one compiled function or closure body, as `ReflectionFunction` shows it.
+pub(super) fn reflection_function_owner_metadata(
+    ctx: &FunctionContext<'_>,
+    function: &crate::ir::Function,
+) -> Result<ReflectionOwnerMetadata> {
     let Some(signature) = function.signature.as_ref() else {
         return Ok(empty_reflection_metadata());
     };
@@ -40,6 +48,7 @@ pub(super) fn reflection_function_metadata(
         type_metadata: type_metadata.clone(),
         is_deprecated: signature.deprecation.is_some(),
         is_generator: function.flags.is_generator,
+        returns_reference: signature.by_ref_return,
     };
     let mut metadata = empty_reflection_metadata();
     metadata.reflected_name = Some(reflected_name);
@@ -59,6 +68,7 @@ pub(super) fn reflection_function_metadata(
     metadata.type_metadata = type_metadata;
     metadata.is_deprecated = signature.deprecation.is_some();
     metadata.is_generator = function.flags.is_generator;
+    metadata.returns_reference = signature.by_ref_return;
     Ok(metadata)
 }
 
@@ -78,6 +88,7 @@ pub(super) fn reflection_builtin_function_metadata(
         type_metadata: type_metadata.clone(),
         is_deprecated: false,
         is_generator: false,
+        returns_reference: false,
     };
     let mut metadata = empty_reflection_metadata();
     metadata.reflected_name = Some(function_name.to_string());
@@ -148,7 +159,7 @@ pub(super) fn reflection_method_metadata_for_name(
         if let Some(member) =
             reflection_class_method_member(ctx, reflected_class, info, &method_key)?
         {
-            return Ok(reflection_method_owner_metadata(&method_name, member));
+            return Ok(reflection_method_owner_metadata(member));
         }
     }
     if let Some(interface_name) = resolve_reflection_interface(ctx, reflected_class) {
@@ -156,7 +167,7 @@ pub(super) fn reflection_method_metadata_for_name(
             if let Some(member) =
                 reflection_interface_method_member(ctx, info, interface_name, &method_key)?
             {
-                return Ok(reflection_method_owner_metadata(&method_name, member));
+                return Ok(reflection_method_owner_metadata(member));
             }
         }
     }
@@ -165,7 +176,7 @@ pub(super) fn reflection_method_metadata_for_name(
             if let Some(member) =
                 reflection_trait_method_member(ctx, methods, trait_name, &method_key)?
             {
-                return Ok(reflection_method_owner_metadata(&method_name, member));
+                return Ok(reflection_method_owner_metadata(member));
             }
         }
     }
@@ -173,19 +184,17 @@ pub(super) fn reflection_method_metadata_for_name(
 }
 
 /// Builds direct ReflectionMethod constructor metadata from one reflected method member.
+///
+/// The reflected name comes from the MEMBER, not from the constructor's argument. Lookup is
+/// case-insensitive, so `new ReflectionMethod(Box::class, "mAtCh")` finds a method declared
+/// `Match` — and used to report `mAtCh` back, the caller's own lookup text, where PHP reports
+/// the declaration (issue #571). The member carries the declared spelling, which is also what
+/// every listing path now reports, so the two agree by construction.
 pub(super) fn reflection_method_owner_metadata(
-    method_name: &str,
     member: ReflectionListedMember,
 ) -> ReflectionOwnerMetadata {
-    // php reports the name as DECLARED, whatever case the lookup used:
-    // `(new ReflectionMethod(C::class, 'camelcase'))->getName()` is `CamelCase`.
-    let reflected_name = if member.name.is_empty() {
-        method_name.to_string()
-    } else {
-        member.name.clone()
-    };
     ReflectionOwnerMetadata {
-        reflected_name: Some(reflected_name),
+        reflected_name: Some(member.name.clone()),
         doc_comment: None,
         attr_names: member.attr_names,
         attr_args: member.attr_args,
@@ -215,6 +224,7 @@ pub(super) fn reflection_method_owner_metadata(
         required_parameter_count: member.required_parameter_count,
         is_deprecated: member.is_deprecated,
         is_generator: member.is_generator,
+        returns_reference: member.returns_reference,
         prototype_member: member.prototype_member,
         is_final: false,
         is_abstract: false,

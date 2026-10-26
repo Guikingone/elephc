@@ -1,16 +1,16 @@
 ---
-title: "mb_strtolower() — internals"
+title: "mb_strtolower() - internals"
 description: "Compiler internals for mb_strtolower(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 839
+  order: 926
 ---
 
-## `mb_strtolower()` — internals
+## `mb_strtolower()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_strtolower.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_strtolower.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -26,9 +26,9 @@ sidebar:
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
 - **Result ownership**: `fresh`
-- **Effects**: `static (3 declared effects)`
-- **Requirements**: `static (2 requirements)`
-- **Callable policy**: `dynamic`
+- **Effects**: `static (17 declared effects)`
+- **Requirements**: `static (1 requirements)`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
@@ -49,9 +49,8 @@ function mb_strtolower(string $string, ?string $encoding = null): string
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/mb_strtolower.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_strtolower.rs) (`eval_builtin!`)
-- **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `capability-dependent`.
-- **Dispatch hooks**: `direct`, `values`
+- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(25)`).
+- **Dispatch hooks**: _none_ (shared runtime dispatch)
 
 ## Cross-references
 

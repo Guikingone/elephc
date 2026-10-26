@@ -17,7 +17,7 @@ use crate::codegen::{
 };
 use crate::intrinsics::{IntrinsicCall, IntrinsicCallKind};
 use crate::ir::{
-    BlockId, Builder, CmpPredicate, DataId, Function, FunctionParam, Immediate, InstId,
+    BlockId, Builder, CmpPredicate, Function, FunctionParam, Immediate, InstId,
     Instruction, IrType, LocalKind, LocalSlotId, NominalObjectBoundary, Op, Ownership,
     Terminator, ValueDef, ValueId,
 };
@@ -34,20 +34,27 @@ use super::{CodegenIrError, Result};
 mod arithmetic;
 mod arrays;
 mod buffers;
+mod call_argument_unpack;
 mod checked_int_to_int;
 mod checked_numeric_chain;
 mod runtime_functions;
 pub(crate) mod builtins;
-mod callables;
+pub(in crate::codegen) mod callables;
+mod callable_guards;
+mod callable_argument_normalizer;
 mod classlike_activation;
+pub(super) use callable_argument_normalizer::emit_callable_argument_normalizer;
+pub(super) use callable_argument_normalizer::CALLABLE_ARGUMENT_NORMALIZER;
 mod comparisons;
 mod conversions;
 mod enums;
-mod exceptions;
+pub(super) mod exceptions;
+pub(super) use exceptions::emit_error;
 mod mixed_narrowing;
 mod externs;
 mod floats;
 mod hashes;
+mod offset_unset;
 mod iterators;
 mod objects;
 mod ownership;
@@ -56,6 +63,7 @@ mod predicates;
 mod property_values;
 mod receiver_place;
 mod runtime_calls;
+mod runtime_class_messages;
 mod scoped_constants;
 mod static_locals;
 mod static_properties;
@@ -65,6 +73,7 @@ mod call_cleanup;
 mod call_operands;
 mod callable_descriptors;
 mod core_closures;
+mod core_builtins;
 mod core_includes;
 mod core_misc;
 mod descriptor_arguments;
@@ -72,7 +81,6 @@ mod descriptor_entries;
 mod descriptor_metadata;
 mod direct_calls;
 mod exception_instructions;
-pub(super) use exception_instructions::lower_mixed_throw_value;
 mod fiber_methods;
 mod generator_instructions;
 mod globals_constants;
@@ -81,11 +89,13 @@ pub(in crate::codegen) use globals_constants::{
 };
 mod instruction_helpers;
 mod local_loads;
-mod local_stores;
+pub(in crate::codegen) mod local_stores;
 mod method_call_types;
 mod method_dispatch;
 mod method_intrinsics;
 mod method_resolution;
+mod outlined_dynamic_new;
+mod outlined_method_call;
 mod mixed_array_runtime;
 mod mixed_property_runtime;
 mod output_values;
@@ -101,6 +111,7 @@ use classlike_activation::*;
 use callable_descriptors::*;
 pub(in crate::codegen) use callables::lower_mixed_callable_descriptor_invoke_inline;
 use core_closures::*;
+use core_builtins::*;
 use core_includes::*;
 use core_misc::*;
 use descriptor_arguments::*;
@@ -118,6 +129,8 @@ use method_call_types::*;
 use method_dispatch::*;
 use method_intrinsics::*;
 use method_resolution::*;
+pub(in crate::codegen) use outlined_method_call::emit_mixed_method_call_helper;
+use outlined_method_call::*;
 use mixed_array_runtime::*;
 use mixed_property_runtime::*;
 use output_values::*;
@@ -132,11 +145,16 @@ pub(super) use call_operands::{
     load_value_to_first_int_arg, resolve_int_operand_to_result,
 };
 pub(in crate::codegen) use builtins::emit_count_countable_guard_from_result;
+pub(in crate::codegen) use builtins::arrays::union_type_guard::emit_shared_type_error_given_body;
+pub(in crate::codegen) use objects::emit_pending_property_guard_helpers;
 pub(in crate::codegen) use builtins::eval::emit_shared_eval_registration_helper;
+pub(in crate::codegen) use objects::emit_reflection_class_table;
+pub(in crate::codegen) use builtins::eval::{emit_shared_eval_status_fail_body, emit_shared_eval_status_fail_cells_body};
 pub(in crate::codegen) use conversions::{
     emit_mixed_string_dispatch_from_result, MixedStringContextMode,
 };
 pub(super) use core_closures::function_signature_from_eir;
+pub(in crate::codegen::lower_inst) use core_closures::closure_php_source as core_closures_php_source;
 pub(super) use descriptor_entries::emit_static_method_descriptor_entry_wrapper;
 pub(super) use descriptor_metadata::{
     class_method_body_exists, emit_runtime_descriptor_with_receiver_capture,
@@ -145,13 +163,15 @@ pub(super) use direct_calls::{
     coerce_loaded_value_to_tagged_scalar, materialize_direct_call_args,
 };
 pub(super) use instruction_helpers::instruction_strict_php_profile;
+pub(super) use iterators::{
+    anchored_iterator_state_offsets, emit_clear_iterator_anchors, emit_release_iterator_anchors,
+};
 pub(super) use local_loads::coerce_loaded_local_to_result_type;
 pub(super) use runtime_wrappers::{
     emit_runtime_builtin_wrapper_inline, emit_runtime_extern_wrapper_inline,
     runtime_builtin_wrapper_sig,
 };
 
-const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
 const BORROWED_MIXED_ARG_CELL_BYTES: usize = 32;
 
 /// Lowers one EIR instruction by opcode.
@@ -167,285 +187,330 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
     let inst = function
         .instruction(inst_id)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst_id.as_raw()))?;
+    core_builtins::prepare_backtrace_call_site(ctx, &inst)?;
+    // A closure bound to a RUNTIME scope enforces it before its property accesses.
+    if matches!(
+        inst.op,
+        Op::PropGet
+            | Op::PropSet
+            | Op::PropUnset
+            | Op::PropGetForWrite
+            | Op::DynamicPropGet
+            | Op::DynamicPropSet
+            | Op::DynamicPropUnset
+    ) {
+        objects::emit_closure_scope_gate(ctx, &inst)?;
+    }
     match inst.op {
-        Op::ConstI64 => lower_const_i64(ctx, inst),
-        Op::ConstF64 => floats::lower_const_f64(ctx, inst),
-        Op::ConstBool => lower_const_bool(ctx, inst),
-        Op::ConstNull => lower_const_null(ctx, inst),
-        Op::ConstStr => strings::lower_const_str(ctx, inst),
-        Op::Warn => strings::lower_warn(ctx, inst),
-        Op::ConstClassName => strings::lower_const_class_name(ctx, inst),
-        Op::LoadCalledClassId => strings::lower_load_called_class_id(ctx, inst),
-        Op::ObjectClassId => objects::lower_object_class_id(ctx, inst),
-        Op::ClassNameToId => objects::lower_class_name_to_id(ctx, inst),
-        Op::LoadLocal => lower_load_local(ctx, inst),
-        Op::StoreLocal => lower_store_local(ctx, inst),
-        Op::UnsetLocal => lower_unset_local(ctx, inst),
-        Op::ZeroLocalSlot => lower_zero_local_slot(ctx, inst),
-        Op::LoadRefCell => lower_load_ref_cell(ctx, inst),
-        Op::StoreRefCell => lower_store_ref_cell(ctx, inst),
-        Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, inst),
-        Op::AliasLocalRefCell => lower_alias_local_ref_cell(ctx, inst),
-        Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, inst),
-        Op::ReleaseLocalSlot => lower_release_local_slot(ctx, inst_id, inst),
-        Op::LoadGlobal => lower_load_global(ctx, inst),
-        Op::StoreGlobal => lower_store_global(ctx, inst),
-        Op::GlobalRefCell => lower_global_ref_cell(ctx, inst),
-        Op::UnsetGlobal => lower_unset_global(ctx, inst),
-        Op::ExternGlobalLoad => lower_extern_global_load(ctx, inst),
-        Op::ExternGlobalStore => lower_extern_global_store(ctx, inst),
-        Op::IAdd => arithmetic::lower_int_binop(ctx, inst, "add", "add"),
-        Op::ISub => arithmetic::lower_int_binop(ctx, inst, "sub", "sub"),
-        Op::IMul => arithmetic::lower_int_binop(ctx, inst, "mul", "imul"),
-        Op::ICheckedAdd => arithmetic::lower_int_checked_binop(ctx, inst, "__rt_int_add_checked"),
-        Op::ICheckedSub => arithmetic::lower_int_checked_binop(ctx, inst, "__rt_int_sub_checked"),
-        Op::ICheckedMul => arithmetic::lower_int_checked_binop(ctx, inst, "__rt_int_mul_checked"),
+        Op::ConstI64 => lower_const_i64(ctx, &inst),
+        Op::ConstF64 => floats::lower_const_f64(ctx, &inst),
+        Op::ConstBool => lower_const_bool(ctx, &inst),
+        Op::ConstNull => lower_const_null(ctx, &inst),
+        Op::ConstStr => strings::lower_const_str(ctx, &inst),
+        Op::ConstClassName => strings::lower_const_class_name(ctx, &inst),
+        Op::ClosureScopeClassName => strings::lower_closure_scope_class_name(ctx, &inst),
+        Op::LoadCalledClassId => strings::lower_load_called_class_id(ctx, &inst),
+        Op::LoadLocal => lower_load_local(ctx, &inst),
+        Op::StoreLocal => lower_store_local(ctx, &inst),
+        Op::UnsetLocal => lower_unset_local(ctx, &inst),
+        Op::ZeroLocalSlot => lower_zero_local_slot(ctx, &inst),
+        Op::LoadRefCell => lower_load_ref_cell(ctx, &inst),
+        Op::StoreRefCell => lower_store_ref_cell(ctx, &inst),
+        Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, &inst),
+        Op::AliasLocalRefCell => lower_alias_local_ref_cell(ctx, &inst),
+        Op::RetainLocalRefCell => lower_retain_local_ref_cell(ctx, &inst),
+        Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
+        Op::ReleaseLocalSlot => lower_release_local_slot(ctx, inst_id, &inst),
+        Op::PushCallOperandOwner => ownership::lower_push_call_operand_owner(ctx, &inst),
+        Op::PopCallOperandOwner => ownership::lower_pop_call_operand_owner(ctx, &inst),
+        Op::LoadGlobal => lower_load_global(ctx, &inst),
+        Op::StoreGlobal => lower_store_global(ctx, &inst),
+        Op::ExternGlobalLoad => lower_extern_global_load(ctx, &inst),
+        Op::ExternGlobalStore => lower_extern_global_store(ctx, &inst),
+        Op::IAdd => arithmetic::lower_int_binop(ctx, &inst, "add", "add"),
+        Op::ISub => arithmetic::lower_int_binop(ctx, &inst, "sub", "sub"),
+        Op::IMul => arithmetic::lower_int_binop(ctx, &inst, "mul", "imul"),
+        Op::ICheckedAdd => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_add_checked"),
+        Op::ICheckedSub => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_sub_checked"),
+        Op::ICheckedMul => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_mul_checked"),
+        Op::Warn => strings::lower_warn(ctx, &inst),
+        Op::ObjectClassId => objects::lower_object_class_id(ctx, &inst),
+        Op::ClassNameToId => objects::lower_class_name_to_id(ctx, &inst),
+        Op::GlobalRefCell => lower_global_ref_cell(ctx, &inst),
+        Op::UnsetGlobal => lower_unset_global(ctx, &inst),
         Op::ICheckedAddToInt => checked_int_to_int::lower_checked_int_to_int(
             ctx,
-            inst,
+            &inst,
             checked_int_to_int::CheckedIntOp::Add,
         ),
         Op::ICheckedSubToInt => checked_int_to_int::lower_checked_int_to_int(
             ctx,
-            inst,
+            &inst,
             checked_int_to_int::CheckedIntOp::Sub,
         ),
         Op::ICheckedMulToInt => checked_int_to_int::lower_checked_int_to_int(
             ctx,
-            inst,
+            &inst,
             checked_int_to_int::CheckedIntOp::Mul,
         ),
         Op::ICheckedNumericChainToInt => {
-            checked_numeric_chain::lower_checked_numeric_chain_to_int(ctx, inst)
+            checked_numeric_chain::lower_checked_numeric_chain_to_int(ctx, &inst)
         }
-        Op::ICheckedPow => arithmetic::lower_int_checked_binop(ctx, inst, "__rt_int_pow_checked"),
-        Op::IDiv => arithmetic::lower_int_div_to_float(ctx, inst),
-        Op::ISMod => arithmetic::lower_int_mod(ctx, inst),
-        Op::INeg => arithmetic::lower_int_unary(ctx, inst, "neg", "neg"),
-        Op::IBitAnd => arithmetic::lower_int_binop(ctx, inst, "and", "and"),
-        Op::IBitOr => arithmetic::lower_int_binop(ctx, inst, "orr", "or"),
-        Op::IBitXor => arithmetic::lower_int_binop(ctx, inst, "eor", "xor"),
-        Op::IBitNot => arithmetic::lower_int_unary(ctx, inst, "mvn", "not"),
-        Op::IShl => arithmetic::lower_int_shift(ctx, inst, true),
-        Op::IShrA => arithmetic::lower_int_shift(ctx, inst, false),
-        Op::MixedNumericBinop => arithmetic::lower_mixed_numeric_binop(ctx, inst),
-        Op::StrIncDec => strings::lower_str_inc_dec(ctx, inst),
-        Op::FAdd => floats::lower_float_binop(ctx, inst, "fadd", "addsd"),
-        Op::FSub => floats::lower_float_binop(ctx, inst, "fsub", "subsd"),
-        Op::FMul => floats::lower_float_binop(ctx, inst, "fmul", "mulsd"),
-        Op::FDiv => arithmetic::lower_float_div(ctx, inst),
-        Op::FPow => floats::lower_float_pow(ctx, inst),
-        Op::FNeg => floats::lower_float_neg(ctx, inst),
-        Op::ICmp => lower_int_compare(ctx, inst),
-        Op::FCmp => floats::lower_float_compare(ctx, inst),
-        Op::PhpRelCmp => comparisons::lower_php_rel_cmp(ctx, inst),
-        Op::Spaceship => comparisons::lower_spaceship(ctx, inst),
-        Op::StrCmp => comparisons::lower_str_cmp(ctx, inst),
-        Op::StrictEq => comparisons::lower_strict_eq(ctx, inst, true),
-        Op::StrictNotEq => comparisons::lower_strict_eq(ctx, inst, false),
-        Op::LooseEq => comparisons::lower_loose_eq(ctx, inst, true),
-        Op::LooseNotEq => comparisons::lower_loose_eq(ctx, inst, false),
-        Op::IsNull => predicates::lower_is_null(ctx, inst),
-        Op::IsTruthy => predicates::lower_is_truthy(ctx, inst),
-        Op::TypePredicate => builtins::lower_type_predicate(ctx, inst),
-        Op::IToF => floats::lower_int_to_float(ctx, inst),
-        Op::FToI => floats::lower_float_to_int(ctx, inst),
-        Op::IToStr => strings::lower_int_like_to_string(ctx, inst),
-        Op::FToStr => strings::lower_float_to_string(ctx, inst),
-        Op::BoolToStr => strings::lower_int_like_to_string(ctx, inst),
-        Op::ResourceToStr => strings::lower_resource_to_string(ctx, inst),
-        Op::StrToI => conversions::lower_str_to_int(ctx, inst),
-        Op::StrToF => conversions::lower_str_to_float(ctx, inst),
-        Op::Cast => conversions::lower_cast(ctx, inst),
-        Op::MixedBox => lower_mixed_box(ctx, inst),
-        Op::MixedClone => lower_mixed_clone(ctx, inst),
-        Op::MixedUnbox => lower_mixed_unbox(ctx, inst),
-        Op::InvokerRefArg => lower_invoker_ref_arg(ctx, inst),
-        Op::ArrayLocalRefCell => lower_array_local_ref_cell(ctx, inst),
-        Op::ArrayToMixed => arrays::lower_array_to_mixed(ctx, inst),
-        Op::HashToMixed => hashes::lower_hash_to_mixed(ctx, inst),
-        Op::StrConcat => strings::lower_str_concat(ctx, inst),
+        Op::ICheckedPow => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_pow_checked"),
+        Op::IDiv => arithmetic::lower_int_div_to_float(ctx, &inst),
+        Op::ISMod => arithmetic::lower_int_mod(ctx, &inst),
+        Op::INeg => arithmetic::lower_int_unary(ctx, &inst, "neg", "neg"),
+        Op::IBitAnd => arithmetic::lower_int_binop(ctx, &inst, "and", "and"),
+        Op::IBitOr => arithmetic::lower_int_binop(ctx, &inst, "orr", "or"),
+        Op::IBitXor => arithmetic::lower_int_binop(ctx, &inst, "eor", "xor"),
+        Op::IBitNot => arithmetic::lower_int_unary(ctx, &inst, "mvn", "not"),
+        Op::IShl => arithmetic::lower_int_shift(ctx, &inst, true),
+        Op::IShrA => arithmetic::lower_int_shift(ctx, &inst, false),
+        Op::MixedNumericBinop => arithmetic::lower_mixed_numeric_binop(ctx, &inst),
+        Op::StrIncDec => strings::lower_str_inc_dec(ctx, &inst),
+        Op::FAdd => floats::lower_float_binop(ctx, &inst, "fadd", "addsd"),
+        Op::FSub => floats::lower_float_binop(ctx, &inst, "fsub", "subsd"),
+        Op::FMul => floats::lower_float_binop(ctx, &inst, "fmul", "mulsd"),
+        Op::FDiv => arithmetic::lower_float_div(ctx, &inst),
+        Op::FPow => floats::lower_float_pow(ctx, &inst),
+        Op::FNeg => floats::lower_float_neg(ctx, &inst),
+        Op::ICmp => lower_int_compare(ctx, &inst),
+        Op::FCmp => floats::lower_float_compare(ctx, &inst),
+        Op::PhpRelCmp => comparisons::lower_php_rel_cmp(ctx, &inst),
+        Op::Spaceship => comparisons::lower_spaceship(ctx, &inst),
+        Op::StrCmp => comparisons::lower_str_cmp(ctx, &inst),
+        Op::StrictEq => comparisons::lower_strict_eq(ctx, &inst, true),
+        Op::StrictNotEq => comparisons::lower_strict_eq(ctx, &inst, false),
+        Op::LooseEq => comparisons::lower_loose_eq(ctx, &inst, true),
+        Op::LooseNotEq => comparisons::lower_loose_eq(ctx, &inst, false),
+        Op::IsNull => predicates::lower_is_null(ctx, &inst),
+        Op::IsTruthy => predicates::lower_is_truthy(ctx, &inst),
+        Op::TypePredicate => builtins::lower_type_predicate(ctx, &inst),
+        Op::IToF => floats::lower_int_to_float(ctx, &inst),
+        Op::FToI => floats::lower_float_to_int(ctx, &inst),
+        Op::IToStr => strings::lower_int_like_to_string(ctx, &inst),
+        Op::FToStr => strings::lower_float_to_string(ctx, &inst),
+        Op::BoolToStr => strings::lower_int_like_to_string(ctx, &inst),
+        Op::ResourceToStr => strings::lower_resource_to_string(ctx, &inst),
+        Op::StrToI => conversions::lower_str_to_int(ctx, &inst),
+        Op::StrToF => conversions::lower_str_to_float(ctx, &inst),
+        Op::Cast => conversions::lower_cast(ctx, &inst),
+        Op::MixedBox => lower_mixed_box(ctx, &inst),
+        Op::MixedClone => lower_mixed_clone(ctx, &inst),
+        Op::MixedUnbox => lower_mixed_unbox(ctx, &inst),
+        Op::InvokerRefArg => lower_invoker_ref_arg(ctx, &inst),
+        Op::ArrayLocalRefCell => lower_array_local_ref_cell(ctx, &inst),
+        Op::ArrayToMixed => arrays::lower_array_to_mixed(ctx, &inst),
+        Op::HashToMixed => hashes::lower_hash_to_mixed(ctx, &inst),
+        Op::StrConcat => strings::lower_str_concat(ctx, &inst),
         Op::StrBitAnd | Op::StrBitOr | Op::StrBitXor => {
-            strings::lower_str_bitwise(ctx, inst)
+            strings::lower_str_bitwise(ctx, &inst)
         }
-        Op::StrSetOffset => strings::lower_str_set_offset(ctx, inst),
-        Op::StrLen => strings::lower_str_len(ctx, inst),
-        Op::StrCharAt => strings::lower_str_char_at(ctx, inst),
-        Op::StrPersist => strings::lower_str_persist(ctx, inst),
-        Op::ArrayNew => arrays::lower_array_new(ctx, inst),
-        Op::ArrayLen => arrays::lower_array_len(ctx, inst),
-        Op::ArrayGet => arrays::lower_array_get(ctx, inst, true),
-        Op::ArrayGetSilent => arrays::lower_array_get(ctx, inst, false),
-        Op::ArrayGetForWrite => arrays::lower_array_get_for_write(ctx, inst),
-        Op::ArrayIsset => builtins::lower_array_isset(ctx, inst),
-        Op::ArrayElemAddr => arrays::lower_array_elem_addr(ctx, inst),
-        Op::ArraySet => arrays::lower_array_set(ctx, inst),
-        Op::SlotDetach => arrays::lower_slot_detach(ctx, inst),
-        Op::ArraySetMixedKey => arrays::lower_array_set_mixed_key(ctx, inst),
-        Op::ArrayGetMixedKey => arrays::lower_array_get_mixed_key(ctx, inst, true),
-        Op::ArrayGetMixedKeySilent => arrays::lower_array_get_mixed_key(ctx, inst, false),
-        Op::ArrayGetMixedKeyForWrite => arrays::lower_array_get_mixed_key_for_write(ctx, inst),
-        Op::ArrayPush => arrays::lower_array_push(ctx, inst),
-        Op::MixedArrayAppend => arrays::lower_mixed_array_append(ctx, inst),
-        Op::ArrayUnion => arrays::lower_array_union(ctx, inst),
-        Op::ArrayHashUnion => arrays::lower_array_hash_union(ctx, inst),
-        Op::ArrayToHash => arrays::lower_array_to_hash(ctx, inst),
-        Op::MixedToHash => arrays::lower_mixed_to_hash(ctx, inst),
-        Op::HashNew => hashes::lower_hash_new(ctx, inst),
-        Op::HashLen => hashes::lower_hash_len(ctx, inst),
-        Op::HashGet => hashes::lower_hash_get(ctx, inst, true),
-        Op::HashGetForWrite => hashes::lower_hash_get_for_write(ctx, inst),
-        Op::HashGetSilent => hashes::lower_hash_get(ctx, inst, false),
-        Op::HashIsset => builtins::lower_hash_isset(ctx, inst),
-        Op::HashSet => hashes::lower_hash_set(ctx, inst),
-        Op::HashRefElement => hashes::lower_hash_ref_element(ctx, inst),
-        Op::ElemRefCell => hashes::lower_elem_ref_cell(ctx, inst),
-        Op::HashBindRefElement => hashes::lower_hash_bind_ref_element(ctx, inst),
-        Op::HashUnset => hashes::lower_hash_unset(ctx, inst),
-        Op::HashUnion => hashes::lower_hash_union(ctx, inst),
-        Op::HashArrayUnion => hashes::lower_hash_array_union(ctx, inst),
-        Op::HashSpread => hashes::lower_hash_spread(ctx, inst),
-        Op::IterStart => iterators::lower_iter_start(ctx, inst),
-        Op::IterNext => iterators::lower_iter_next(ctx, inst),
-        Op::IterCurrentKey => iterators::lower_iter_current_key(ctx, inst),
-        Op::IterCurrentValue => iterators::lower_iter_current_value(ctx, inst),
-        Op::IterCurrentValueRef => iterators::lower_iter_current_value_ref(ctx, inst),
-        Op::IterEnd => iterators::lower_iter_end(ctx, inst),
-        Op::PtrCast => pointers::lower_ptr_cast(ctx, inst),
-        Op::BufferNew => buffers::lower_buffer_new(ctx, inst),
-        Op::BufferGet => buffers::lower_buffer_get(ctx, inst),
-        Op::BufferSet => buffers::lower_buffer_set(ctx, inst),
-        Op::ObjectNew => objects::lower_object_new(ctx, inst),
-        Op::ObjectCloneShallow => objects::lower_object_clone_shallow(ctx, inst),
-        Op::DynamicObjectNew => objects::lower_dynamic_object_new(ctx, inst),
-        Op::DynamicObjectNewMixed => objects::lower_dynamic_object_new_mixed(ctx, inst),
+        Op::ArrayCloneShallow => arrays::lower_array_clone_shallow(ctx, &inst),
+        Op::StrLen => strings::lower_str_len(ctx, &inst),
+        Op::StrCharAt => strings::lower_str_char_at(ctx, &inst),
+        Op::StrPersist => strings::lower_str_persist(ctx, &inst),
+        Op::ArrayNew => arrays::lower_array_new(ctx, &inst),
+        Op::ArrayLen => arrays::lower_array_len(ctx, &inst),
+        Op::ArrayGet => arrays::lower_array_get(ctx, &inst, true),
+        Op::ArrayGetSilent => arrays::lower_array_get(ctx, &inst, false),
+        Op::ArrayGetForWrite => arrays::lower_array_get_for_write(ctx, &inst),
+        Op::ArrayIsset => builtins::lower_array_isset(ctx, &inst),
+        Op::ArrayElemAddr => arrays::lower_array_elem_addr(ctx, &inst),
+        Op::ArraySet => arrays::lower_array_set(ctx, &inst),
+        Op::SlotDetach => arrays::lower_slot_detach(ctx, &inst),
+        Op::ArraySetMixedKey => arrays::lower_array_set_mixed_key(ctx, &inst),
+        Op::ArrayGetMixedKey => arrays::lower_array_get_mixed_key(ctx, &inst, true),
+        Op::ArrayGetMixedKeySilent => arrays::lower_array_get_mixed_key(ctx, &inst, false),
+        Op::ArrayPush => arrays::lower_array_push(ctx, &inst),
+        Op::MixedArrayAppend => arrays::lower_mixed_array_append(ctx, &inst),
+        Op::ArrayUnion => arrays::lower_array_union(ctx, &inst),
+        Op::ArrayHashUnion => arrays::lower_array_hash_union(ctx, &inst),
+        Op::ArrayToHash => arrays::lower_array_to_hash(ctx, &inst),
+        Op::HashNew => hashes::lower_hash_new(ctx, &inst),
+        Op::HashLen => hashes::lower_hash_len(ctx, &inst),
+        Op::HashGet => hashes::lower_hash_get(ctx, &inst, true),
+        Op::HashGetForWrite => hashes::lower_hash_get_for_write(ctx, &inst),
+        Op::HashGetSilent => hashes::lower_hash_get(ctx, &inst, false),
+        Op::HashIsset => builtins::lower_hash_isset(ctx, &inst),
+        Op::HashSet => hashes::lower_hash_set(ctx, &inst),
+        Op::DescriptorArgSet => hashes::lower_descriptor_arg_set(ctx, &inst),
+        Op::DescriptorArgKeyExists => hashes::lower_descriptor_arg_key_exists(ctx, &inst),
+        Op::ThrowNamedParameterOverwrite => {
+            hashes::lower_throw_named_parameter_overwrite(ctx, &inst)
+        }
+        Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
+        Op::HashAppend => hashes::lower_hash_append(ctx, &inst),
+        Op::OffsetUnset => offset_unset::lower_offset_unset(ctx, &inst),
+        Op::HashUnion => hashes::lower_hash_union(ctx, &inst),
+        Op::HashArrayUnion => hashes::lower_hash_array_union(ctx, &inst),
+        Op::HashSpread => hashes::lower_hash_spread(ctx, &inst),
+        Op::IterStart => iterators::lower_iter_start(ctx, &inst),
+        Op::IterNext => iterators::lower_iter_next(ctx, &inst),
+        Op::IterCurrentKey => iterators::lower_iter_current_key(ctx, &inst),
+        Op::IterCurrentValue => iterators::lower_iter_current_value(ctx, &inst),
+        Op::IterCurrentValueRef => iterators::lower_iter_current_value_ref(ctx, &inst),
+        Op::IterEnd => iterators::lower_iter_end(ctx, &inst),
+        Op::PtrCast => pointers::lower_ptr_cast(ctx, &inst),
+        Op::BufferNew => buffers::lower_buffer_new(ctx, &inst),
+        Op::BufferGet => buffers::lower_buffer_get(ctx, &inst),
+        Op::BufferSet => buffers::lower_buffer_set(ctx, &inst),
+        Op::ObjectNew => objects::lower_object_new(ctx, &inst),
+        Op::ObjectCloneShallow => objects::lower_object_clone_shallow(ctx, &inst),
+        Op::DynamicObjectNew => objects::lower_dynamic_object_new(ctx, &inst),
+        Op::DynamicObjectNewMixed => objects::lower_dynamic_object_new_mixed(ctx, &inst),
+        Op::StrSetOffset => strings::lower_str_set_offset(ctx, &inst),
+        Op::ArrayGetMixedKeyForWrite => arrays::lower_array_get_mixed_key_for_write(ctx, &inst),
+        Op::MixedToHash => arrays::lower_mixed_to_hash(ctx, &inst),
+        Op::HashRefElement => hashes::lower_hash_ref_element(ctx, &inst),
+        Op::ElemRefCell => hashes::lower_elem_ref_cell(ctx, &inst),
+        Op::HashBindRefElement => hashes::lower_hash_bind_ref_element(ctx, &inst),
         Op::DynamicObjectNewWithoutConstructorMixed => {
-            objects::lower_dynamic_object_new_without_constructor_mixed(ctx, inst)
+            objects::lower_dynamic_object_new_without_constructor_mixed(ctx, &inst)
         }
-        Op::ReflectionMaterialize => objects::lower_reflection_materialize(ctx, inst),
-        Op::ReflectionFillMembers => objects::lower_reflection_fill_members(ctx, inst),
+        Op::ReflectionMaterialize => objects::lower_reflection_materialize(ctx, &inst),
+        Op::ReflectionFillMembers => objects::lower_reflection_fill_members(ctx, &inst),
+        Op::ReflRowLookup => objects::lower_refl_row_lookup(ctx, &inst),
+        Op::ReflWord => objects::lower_refl_word(ctx, &inst),
+        Op::ReflPoolStr => objects::lower_refl_pool_str(ctx, &inst),
+        Op::ReflCallableName => objects::lower_refl_callable_name(ctx, &inst),
+        Op::ReflAt => objects::lower_refl_at(ctx, &inst),
         Op::ObjectHandleReserve | Op::ObjectHandlePend | Op::ObjectHandleUnpend => {
-            objects::lower_object_handle_reservation(ctx, inst)
+            objects::lower_object_handle_reservation(ctx, &inst)
         }
-        Op::CallablePtr => builtins::pointers::lower_elephc_callable_ptr(ctx, inst),
-        Op::NormalizeCallable => builtins::pointers::lower_elephc_normalize_callable(ctx, inst),
-        Op::PdoAdapterAddr => builtins::pointers::lower_elephc_pdo_adapter_addr(ctx, inst),
+        Op::CallablePtr => builtins::pointers::lower_elephc_callable_ptr(ctx, &inst),
+        Op::NormalizeCallable => builtins::pointers::lower_elephc_normalize_callable(ctx, &inst),
+        Op::PdoAdapterAddr => builtins::pointers::lower_elephc_pdo_adapter_addr(ctx, &inst),
         Op::DynamicClassHasConstructor => {
-            builtins::system::lower_elephc_class_has_constructor(ctx, inst)
+            builtins::system::lower_elephc_class_has_constructor(ctx, &inst)
         }
         Op::DynamicPdoStatementClassStatus => {
-            builtins::system::lower_elephc_pdo_statement_class_status(ctx, inst)
+            builtins::system::lower_elephc_pdo_statement_class_status(ctx, &inst)
         }
         Op::DynamicPdoCalledClassStatus => {
-            builtins::system::lower_elephc_pdo_called_class_status(ctx, inst)
+            builtins::system::lower_elephc_pdo_called_class_status(ctx, &inst)
         }
         Op::DynamicPdoStatementConstructorCall => {
-            builtins::system::lower_elephc_invoke_pdo_statement_constructor(ctx, inst)
+            builtins::system::lower_elephc_invoke_pdo_statement_constructor(ctx, &inst)
         }
         Op::DynamicPdoStatementInitialize => {
-            builtins::system::lower_elephc_initialize_pdo_statement(ctx, inst)
+            builtins::system::lower_elephc_initialize_pdo_statement(ctx, &inst)
         }
-        Op::PropGet => objects::lower_prop_get(ctx, inst),
-        Op::PropGetForWrite => objects::lower_prop_get_for_write(ctx, inst),
-        Op::PropInitialized => objects::lower_prop_initialized(ctx, inst),
-        Op::LoadPropRefCell => objects::lower_load_prop_ref_cell(ctx, inst),
-        Op::LoadArrayElemRefCell => arrays::lower_load_array_elem_ref_cell(ctx, inst),
-        Op::BindRefCellPtr => lower_bind_ref_cell_ptr(ctx, inst),
-        Op::BindPropRefCell => objects::lower_bind_prop_ref_cell(ctx, inst),
-        Op::NullsafePropGet => objects::lower_nullsafe_prop_get(ctx, inst),
-        Op::DynamicPropGet => objects::lower_dynamic_prop_get(ctx, inst),
-        Op::DynamicPropRefCell => objects::lower_dynamic_prop_ref_cell(ctx, inst),
-        Op::DynamicPropUnset => objects::lower_dynamic_prop_unset(ctx, inst),
-        Op::PropSet => objects::lower_prop_set(ctx, inst),
-        Op::PropUnset => objects::lower_prop_unset(ctx, inst),
-        Op::DynamicPropSet => objects::lower_dynamic_prop_set(ctx, inst),
-        Op::InstanceOf => objects::lower_instanceof(ctx, inst),
-        Op::InstanceOfDynamic => objects::lower_instanceof_dynamic(ctx, inst),
-        Op::ScopedConstantGet => scoped_constants::lower_scoped_constant_get(ctx, inst),
-        Op::LoadStaticLocal => static_locals::lower_load_static_local(ctx, inst),
-        Op::StoreStaticLocal => static_locals::lower_store_static_local(ctx, inst),
-        Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, inst),
-        Op::LoadStaticProperty => static_properties::lower_load_static_property(ctx, inst),
+        Op::PropGet => objects::lower_prop_get(ctx, &inst),
+        Op::PropGetForWrite => objects::lower_prop_get_for_write(ctx, &inst),
+        Op::PropInitialized => objects::lower_prop_initialized(ctx, &inst),
+        Op::LoadPropRefCell => objects::lower_load_prop_ref_cell(ctx, &inst),
+        Op::LoadArrayElemRefCell => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
+        Op::BindPropRefCell => objects::lower_bind_prop_ref_cell(ctx, &inst),
+        Op::NullsafePropGet => objects::lower_nullsafe_prop_get(ctx, &inst),
+        Op::DynamicPropGet => objects::lower_dynamic_prop_get(ctx, &inst),
+        Op::DynamicPropRefCell => objects::lower_dynamic_prop_ref_cell(ctx, &inst),
+        Op::PropSet => objects::lower_prop_set(ctx, &inst),
+        Op::PropUnset => objects::lower_prop_unset(ctx, &inst),
+        Op::DynamicPropSet => objects::lower_dynamic_prop_set(ctx, &inst),
+        Op::InstanceOf => objects::lower_instanceof(ctx, &inst),
+        Op::InstanceOfDynamic => objects::lower_instanceof_dynamic(ctx, &inst),
+        Op::ScopedConstantGet => scoped_constants::lower_scoped_constant_get(ctx, &inst),
+        Op::LoadStaticLocal => static_locals::lower_load_static_local(ctx, &inst),
+        Op::StoreStaticLocal => static_locals::lower_store_static_local(ctx, &inst),
+        Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, &inst),
+        Op::LoadStaticProperty => static_properties::lower_load_static_property(ctx, &inst),
         Op::LoadDynamicStaticProperty => {
-            static_properties::lower_load_dynamic_static_property(ctx, inst)
+            static_properties::lower_load_dynamic_static_property(ctx, &inst)
         }
-        Op::StoreStaticProperty => static_properties::lower_store_static_property(ctx, inst),
+        Op::StoreStaticProperty => static_properties::lower_store_static_property(ctx, &inst),
         Op::StoreDynamicStaticProperty => {
-            static_properties::lower_store_dynamic_static_property(ctx, inst)
+            static_properties::lower_store_dynamic_static_property(ctx, &inst)
+        }
+        Op::LoadPropRefCellChecked => objects::lower_load_prop_ref_cell_checked(ctx, &inst),
+        Op::LoadArrayElemRefCellExisting => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
+        Op::BindRefCellPtr | Op::AdoptRefCellPtr => lower_bind_ref_cell_ptr(ctx, &inst),
+        Op::AcquireRefCell => lower_acquire_ref_cell(ctx, &inst),
+        Op::DynamicPropUnset => objects::lower_dynamic_prop_unset_runtime(ctx, &inst),
+        Op::StaticLocalUninitialized => {
+            static_locals::lower_static_local_uninitialized(ctx, &inst)
+        }
+        Op::LoadStaticPropertyRefCell => {
+            static_properties::lower_load_static_property_ref_cell(ctx, &inst)
         }
         Op::StaticPropInitialized => {
-            static_properties::lower_static_property_initialized(ctx, inst)
+            static_properties::lower_static_property_initialized(ctx, &inst)
         }
         Op::LoadReflectionStaticProperty => {
-            static_properties::lower_load_reflection_static_property(ctx, inst)
+            static_properties::lower_load_reflection_static_property(ctx, &inst)
         }
         Op::ReflectionStaticPropertyInitialized => {
-            static_properties::lower_reflection_static_property_initialized(ctx, inst)
+            static_properties::lower_reflection_static_property_initialized(ctx, &inst)
         }
         Op::StoreReflectionStaticProperty => {
-            static_properties::lower_store_reflection_static_property(ctx, inst)
+            static_properties::lower_store_reflection_static_property(ctx, &inst)
         }
-        Op::Call => lower_direct_call(ctx, inst),
-        Op::ClosureBind => builtins::lower_closure_bind(ctx, inst),
-        Op::ClosureCall => callables::lower_closure_call(ctx, inst),
-        Op::ExprCall => callables::lower_expr_call(ctx, inst),
-        Op::CallableDescriptorInvoke => callables::lower_callable_descriptor_invoke(ctx, inst),
-        Op::PipeCall => callables::lower_pipe_call(ctx, inst),
-        Op::MethodCall => lower_method_call(ctx, inst),
-        Op::NullsafeMethodCall => lower_nullsafe_method_call(ctx, inst),
-        Op::StaticMethodCall => lower_static_method_call(ctx, inst),
-        Op::EvalStaticMethodCall => lower_eval_static_method_call(ctx, inst),
-        Op::EnumBackingStringToInt => enums::lower_enum_backing_string_to_int(ctx, inst),
-        Op::EnumBackingMixedToInt => enums::lower_enum_backing_mixed_to_int(ctx, inst),
-        Op::PackedFieldMixedToInt => objects::lower_packed_field_mixed_to_int(ctx, inst),
+        Op::Call => lower_direct_call(ctx, &inst),
+        Op::ClosureBind => builtins::lower_closure_bind(ctx, &inst),
+        Op::ClosureCall => callables::lower_closure_call(ctx, &inst),
+        Op::ExprCall => callables::lower_expr_call(ctx, &inst),
+        Op::CallableDescriptorInvoke => callables::lower_callable_descriptor_invoke(ctx, &inst),
+        Op::PipeCall => callables::lower_pipe_call(ctx, &inst),
+        Op::MethodCall => lower_method_call(ctx, &inst),
+        Op::NullsafeMethodCall => lower_nullsafe_method_call(ctx, &inst),
+        Op::StaticMethodCall => lower_static_method_call(ctx, &inst),
+        Op::EvalStaticMethodCall => lower_eval_static_method_call(ctx, &inst),
+        Op::EnumBackingStringToInt => enums::lower_enum_backing_string_to_int(ctx, &inst),
+        Op::ArgumentStringToInt => enums::lower_argument_string_to_int(ctx, &inst),
+        Op::EnumBackingMixedToInt => enums::lower_enum_backing_mixed_to_int(ctx, &inst),
+        Op::PackedFieldMixedToInt => objects::lower_packed_field_mixed_to_int(ctx, &inst),
         Op::ReturnBoundaryMixedToInt => {
-            mixed_narrowing::lower_return_boundary_mixed_to_int(ctx, inst)
+            mixed_narrowing::lower_return_boundary_mixed_to_int(ctx, &inst)
         }
-        Op::ExternCall => externs::lower_extern_call(ctx, inst),
-        Op::LanguageConstructCall => builtins::lower_language_construct_call(ctx, inst),
-        Op::EvalLiteralCall => builtins::lower_eval_literal_call(ctx, inst),
-        Op::EvalScopeGet => builtins::lower_eval_scope_get(ctx, inst),
-        Op::EvalScopeSet => builtins::lower_eval_scope_set(ctx, inst),
-        Op::EvalFunctionCall => builtins::lower_eval_function_call(ctx, inst),
-        Op::EvalFunctionCallArray => builtins::lower_eval_function_call_array(ctx, inst),
-        Op::EvalObjectNew => builtins::lower_eval_object_new(ctx, inst),
-        Op::EvalFunctionExists => builtins::lower_eval_function_exists(ctx, inst),
-        Op::EvalClassExists => builtins::lower_eval_class_exists(ctx, inst),
-        Op::EvalConstantExists => builtins::lower_eval_constant_exists(ctx, inst),
-        Op::EvalConstantFetch => builtins::lower_eval_constant_fetch(ctx, inst),
-        Op::ClosureCapture => lower_closure_capture(ctx, inst),
-        Op::ClosureNew => lower_closure_new(ctx, inst),
-        Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, inst),
-        Op::Acquire => ownership::lower_acquire(ctx, inst),
-        Op::Release => ownership::lower_release(ctx, inst),
-        Op::ReleaseUnlessAliases => ownership::lower_release_unless_aliases(ctx, inst),
+        Op::ExternCall => externs::lower_extern_call(ctx, &inst),
+        Op::LanguageConstructCall => builtins::lower_language_construct_call(ctx, &inst),
+        Op::EvalLiteralCall => builtins::lower_eval_literal_call(ctx, &inst),
+        Op::EvalScopeGet => builtins::lower_eval_scope_get(ctx, &inst),
+        Op::EvalScopeSet => builtins::lower_eval_scope_set(ctx, &inst),
+        Op::EvalFunctionCall => builtins::lower_eval_function_call(ctx, &inst),
+        Op::EvalFunctionCallArray => builtins::lower_eval_function_call_array(ctx, &inst),
+        Op::EvalObjectNew => builtins::lower_eval_object_new(ctx, &inst),
+        Op::EvalFunctionExists => builtins::lower_eval_function_exists(ctx, &inst),
+        Op::EvalClassExists => builtins::lower_eval_class_exists(ctx, &inst),
+        Op::EvalConstantExists => builtins::lower_eval_constant_exists(ctx, &inst),
+        Op::EvalConstantFetch => builtins::lower_eval_constant_fetch(ctx, &inst),
+        Op::ClosureCapture => lower_closure_capture(ctx, &inst),
+        Op::ClosureNew => lower_closure_new(ctx, &inst),
+        Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, &inst),
+        Op::Acquire => ownership::lower_acquire(ctx, &inst),
+        Op::Release => ownership::lower_release(ctx, &inst),
+        Op::ReleaseUnlessAliases => ownership::lower_release_unless_aliases(ctx, &inst),
         Op::GcCollect => lower_gc_collect(ctx),
-        Op::Move | Op::Borrow => ownership::lower_forward(ctx, inst),
-        Op::EchoValue => lower_echo_value(ctx, inst),
-        Op::PrintValue => lower_print_value(ctx, inst),
-        Op::ThrowException => lower_throw_exception(ctx, inst),
-        Op::ThrowError => lower_throw_error(ctx, inst),
-        Op::ThrowErrorValue => lower_throw_error_value(ctx, inst),
-        Op::TryPushHandler => lower_try_push_handler(ctx, inst),
-        Op::TryPopHandler => lower_try_pop_handler(ctx, inst),
-        Op::CatchCurrent => lower_catch_current(ctx, inst),
-        Op::CatchBind => lower_catch_bind(ctx, inst),
+        Op::GcControl => lower_gc_control(ctx, &inst),
+        Op::CoreBuiltin => lower_core_builtin(ctx, &inst),
+        Op::Move | Op::Borrow => ownership::lower_forward(ctx, &inst),
+        Op::EchoValue => lower_echo_value(ctx, &inst),
+        Op::PrintValue => lower_print_value(ctx, &inst),
+        Op::ThrowException => lower_throw_exception(ctx, &inst),
+        Op::ThrowError => lower_throw_error(ctx, &inst),
+        Op::ThrowErrorValue => lower_throw_error_value(ctx, &inst),
+        Op::TryPushHandler => lower_try_push_handler(ctx, &inst),
+        Op::TryPopHandler => lower_try_pop_handler(ctx, &inst),
+        Op::CatchCurrent => lower_catch_current(ctx, &inst),
+        Op::CatchBind => lower_catch_bind(ctx, &inst),
         Op::ErrorSuppressBegin => lower_runtime_void_call(ctx, "__rt_diag_push_suppression"),
         Op::ErrorSuppressEnd => lower_runtime_void_call(ctx, "__rt_diag_pop_suppression"),
-        Op::IncludeOnceMark => lower_include_once_mark(ctx, inst),
-        Op::IncludeOnceGuard => lower_include_once_guard(ctx, inst),
-        Op::ClassLikeActivate => lower_classlike_activate(ctx, inst),
+        Op::IncludeOnceMark => lower_include_once_mark(ctx, &inst),
+        Op::IncludeOnceGuard => lower_include_once_guard(ctx, &inst),
+        Op::IncludeFrameEnter => lower_include_frame_enter(ctx, &inst),
+        Op::IncludeFrameExit => lower_include_frame_exit(ctx, &inst),
+        Op::ClassLikeActivate => lower_classlike_activate(ctx, &inst),
         Op::FunctionVariantDispatch => Ok(()),
-        Op::FunctionVariantMark => lower_function_variant_mark(ctx, inst),
-        Op::RuntimeCall => lower_runtime_call(ctx, inst),
-        Op::MixedArrayGetForWrite => lower_mixed_array_runtime_get(ctx, inst, true),
-        Op::GeneratorYield => lower_generator_yield(ctx, inst),
-        Op::GeneratorYieldFrom => lower_generator_yield_from(ctx, inst),
+        Op::FunctionVariantMark => lower_function_variant_mark(ctx, &inst),
+        Op::RuntimeCall => lower_runtime_call(ctx, &inst),
+        Op::MixedArrayGetForWrite => lower_mixed_array_runtime_get(ctx, &inst, true),
+        Op::GeneratorYield => lower_generator_yield(ctx, &inst),
+        Op::GeneratorYieldFrom => lower_generator_yield_from(ctx, &inst),
         Op::ConcatReset => lower_concat_reset(ctx),
-        Op::Nop => lower_nop(ctx, inst),
+        Op::Nop => lower_nop(ctx, &inst),
         _ => Err(CodegenIrError::unsupported(format!(
             "opcode {}",
-            inst.op.name()
+            &inst.op.name()
         ))),
     }
 }

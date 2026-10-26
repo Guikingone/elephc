@@ -21,11 +21,14 @@ use super::values::emit_load_int_immediate;
 /// On AArch64: allocates `frame_size` bytes, saves x29/x30 in the footer, and establishes x29 as the frame pointer.
 /// On x86_64: pushes rbp, establishes rsp as the frame base, and reserves `frame_size - 16` bytes for locals.
 pub fn emit_frame_prologue(emitter: &mut Emitter, frame_size: usize) {
-    debug_assert!(
+    assert!(
         frame_size >= 16,
         "frame_size must reserve the 16-byte frame footer (x29/x30), got {frame_size}"
     );
     emitter.comment("prologue");
+    // A new frame has no frame-base register until its owner establishes one, even when it is
+    // emitted in the middle of another function whose body keeps x28 as its base.
+    emitter.frame_slot_base = None;
     match emitter.target.arch {
         Arch::AArch64 => {
             emit_adjust_sp(emitter, frame_size, true);
@@ -68,7 +71,7 @@ pub fn emit_frame_prologue(emitter: &mut Emitter, frame_size: usize) {
 /// pointer corrects that drift instead of reproducing it into the caller; for an already
 /// balanced body it yields the identical sp/rsp as the old size-based arithmetic.
 pub fn emit_frame_restore(emitter: &mut Emitter, frame_size: usize) {
-    debug_assert!(
+    assert!(
         frame_size >= 16,
         "frame_size must reserve the 16-byte frame footer (x29/x30), got {frame_size}"
     );
@@ -157,10 +160,20 @@ pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize)
                     dest,
                     frame_pointer_reg(emitter),
                     offset
-                )); // materialize the local-slot address relative to rbp
+                ));                                                             // materialize the local-slot address relative to rbp
             }
         }
     }
+}
+
+/// The `x28`-relative offset of the slot `offset` bytes below `x29`, when the current function
+/// keeps a frame-base register (`Emitter::frame_slot_base`) and one scaled `ldr`/`str` reaches the
+/// slot: 64-bit registers only (`x`/`d`), 8-aligned, within the 32 760-byte immediate.
+fn based_slot_offset(emitter: &Emitter, reg: &str, offset: usize) -> Option<usize> {
+    let base = emitter.frame_slot_base?;
+    let wide = reg.starts_with('x') || reg.starts_with('d');
+    let distance = base.checked_sub(offset)?;
+    (wide && distance % 8 == 0 && distance <= 32_760).then_some(distance)
 }
 
 /// Stores `reg` into the local frame slot at `offset` from the frame pointer, using x9 as scratch.
@@ -177,6 +190,8 @@ pub fn store_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, 
         Arch::AArch64 => {
             if offset <= 255 {
                 emitter.instruction(&format!("stur {}, [x29, #-{}]", reg, offset)); // store via unscaled immediate offset
+            } else if let Some(base_offset) = based_slot_offset(emitter, reg, offset) {
+                emitter.instruction(&format!("str {}, [x28, #{}]", reg, base_offset)); // store through the frame-base register in one instruction
             } else {
                 emit_frame_slot_address(emitter, scratch, offset);
                 emitter.instruction(&format!("str {}, [{}]", reg, scratch));    // store via computed address
@@ -225,6 +240,8 @@ pub fn load_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, s
         Arch::AArch64 => {
             if offset <= 255 {
                 emitter.instruction(&format!("ldur {}, [x29, #-{}]", reg, offset)); // load via unscaled immediate offset
+            } else if let Some(base_offset) = based_slot_offset(emitter, reg, offset) {
+                emitter.instruction(&format!("ldr {}, [x28, #{}]", reg, base_offset)); // load through the frame-base register in one instruction
             } else {
                 emit_frame_slot_address(emitter, scratch, offset);
                 emitter.instruction(&format!("ldr {}, [{}]", reg, scratch));    // load via computed address
@@ -399,14 +416,104 @@ pub fn emit_store_zero_to_local_slot(emitter: &mut Emitter, offset: usize) {
                 emitter.instruction(&format!(
                     "mov QWORD PTR [{}], 0",
                     frame_pointer_reg(emitter)
-                )); // zero-initialize the frame-base slot directly through rbp
+                ));                                                             // zero-initialize the frame-base slot directly through rbp
             } else {
                 emitter.instruction(&format!(
                     "mov QWORD PTR [{} - {}], 0",
                     frame_pointer_reg(emitter),
                     offset
-                )); // zero-initialize the requested local slot relative to rbp
+                ));                                                             // zero-initialize the requested local slot relative to rbp
             }
+        }
+    }
+}
+
+/// Zero-initializes the 8-byte local frame words at the given offsets from the frame pointer.
+///
+/// On AArch64 adjacent words are cleared two at a time with `stp xzr, xzr`, and a run beyond the
+/// pair-store range reaches its words from one computed base instead of forming an address per
+/// word: a function with a dozen cleanup slots used to spend two instructions on each. x86_64
+/// keeps one `mov` per word. Offsets may arrive in any order and duplicates are cleared once.
+pub fn emit_zero_local_slot_words(emitter: &mut Emitter, offsets: &[usize]) {
+    let mut words: Vec<usize> = offsets.to_vec();
+    words.sort_unstable_by(|a, b| b.cmp(a));
+    words.dedup();
+    if !matches!(emitter.target.arch, Arch::AArch64) {
+        for offset in words {
+            emit_store_zero_to_local_slot(emitter, offset);
+        }
+        return;
+    }
+    // `words` is in ascending ADDRESS order (a larger offset sits lower in the frame).
+    let mut index = 0;
+    while index < words.len() {
+        let mut run_end = index + 1;
+        while run_end < words.len() && words[run_end - 1] == words[run_end] + 8 {
+            run_end += 1;
+        }
+        let run = &words[index..run_end];
+        index = run_end;
+        if run.len() == 1 {
+            emit_store_zero_to_local_slot(emitter, run[0]);
+            continue;
+        }
+        let lowest = run[0];
+        // `stp` takes a signed, 8-scaled immediate in -512..=504 from its base.
+        let (base, base_offset) = if lowest <= 512 {
+            ("x29", lowest as i64)
+        } else {
+            emit_frame_slot_address(emitter, "x9", lowest);
+            ("x9", 0)
+        };
+        let mut word = 0usize;
+        while word < run.len() {
+            let imm = if base == "x29" {
+                -base_offset + (word as i64) * 8
+            } else {
+                (word as i64) * 8
+            };
+            if imm > 504 {
+                // Past the pair-store range: re-base at this word.
+                emit_frame_slot_address(emitter, "x9", run[word]);
+                let rebased = &run[word..];
+                emit_zero_run_from_x9(emitter, rebased.len());
+                break;
+            }
+            if word + 1 < run.len() {
+                emitter.instruction(&format!("stp xzr, xzr, [{}, #{}]", base, imm)); // zero two adjacent frame words with one pair store
+                word += 2;
+            } else if base == "x29" {
+                // `str` takes only a positive scaled immediate from x29; `stur` reaches -256..255.
+                if imm >= -256 {
+                    emitter.instruction(&format!("stur xzr, [x29, #{}]", imm)); // zero the last frame word of the run
+                } else {
+                    emit_store_zero_to_local_slot(emitter, run[word]);
+                }
+                word += 1;
+            } else {
+                emitter.instruction(&format!("str xzr, [x9, #{}]", imm));       // zero the last frame word of the run
+                word += 1;
+            }
+        }
+    }
+}
+
+/// Clears `count` consecutive words upward from the address already in x9.
+fn emit_zero_run_from_x9(emitter: &mut Emitter, count: usize) {
+    let mut word = 0usize;
+    let mut imm = 0usize;
+    while word < count {
+        if imm > 504 {
+            emitter.instruction(&format!("add x9, x9, #{}", imm));              // advance the run base past the pair-store range
+            imm = 0;
+        }
+        if word + 1 < count {
+            emitter.instruction(&format!("stp xzr, xzr, [x9, #{}]", imm));      // zero two adjacent frame words with one pair store
+            word += 2;
+            imm += 16;
+        } else {
+            emitter.instruction(&format!("str xzr, [x9, #{}]", imm));           // zero the last frame word of the run
+            word += 1;
         }
     }
 }

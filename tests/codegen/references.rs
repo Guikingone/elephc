@@ -11,12 +11,110 @@
 //! - A reference property's slot holds a pointer to a 16-byte ref-cell; reads and writes
 //!   on either the local alias or the property dereference the shared cell, so a write
 //!   through one side is observed through the other.
-//! - By-reference returns hand the caller the cell pointer, which `$x = &call()` binds
-//!   non-owning. The cell pointer is one machine word for every element type — including
-//!   `string` (a `{ptr,len}` cell) and `float` (a `d`-register cell) — so it travels in the
-//!   integer result register, never split across the string/float result registers.
+//! - Resolved by-reference returns transfer a managed cell owner to `$x = &call()`;
+//!   borrowed cells remain non-owning. Ordinary value calls copy the referenced value.
+//! - Every raw cell pointer travels in the integer result register, including cells
+//!   containing a string pair or a float, without using string/float result registers.
 
 use crate::support::*;
+
+/// `$s = &$_SESSION` must alias the superglobal itself, in a function and at top level.
+///
+/// A superglobal has no frame slot, and the local-to-local alias used to bind the target to a
+/// stray, empty slot named `_SESSION`: reads through the alias saw null and writes never reached
+/// the superglobal (Symfony's session storage binds its bags this way). Expected output is
+/// `php -n` 8.5.10's.
+#[test]
+fn test_reference_alias_of_superglobal_writes_through() {
+    let out = compile_and_run(
+        r#"<?php
+function load(): void {
+    $session = &$_SESSION;
+    $r = &$session["a"];
+    echo $r["x"], "|";
+    $session["b"] = str_repeat("cd", 2);
+}
+$_SESSION = ["a" => ["x" => str_repeat("ab", 3)]];
+load();
+echo json_encode($_SESSION), "|";
+$s2 = &$_SESSION;
+$s2["c"] = 1;
+echo json_encode($_SESSION);
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"ababab|{"a":{"x":"ababab"},"b":"cdcd"}|{"a":{"x":"ababab"},"b":"cdcd","c":1}"#
+    );
+}
+
+/// A property and an array element can take a reference to a superglobal, and writes through
+/// either reach the superglobal itself, as in php.
+///
+/// `$this->serverData = &$_SERVER` (Monolog's `WebProcessor`) bound a stray frame slot named
+/// `_SERVER` and left the property a copy, and `['q' => &$_GET]` threw on the CLI and dropped a
+/// nested write (`$box['q']['hit'] = ...`) everywhere. The superglobal's shared cell now holds a
+/// boxed Mixed in every mode, which properties, elements and locals all share. Expected output
+/// is `php -n` 8.5.10's; the heap must end clean.
+#[test]
+fn test_property_and_element_references_to_superglobals_write_through() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class WebProcessor {
+    protected $serverData;
+    public function __construct() { $this->serverData = &$_SERVER; }
+    public function uri() { return $this->serverData['REQUEST_URI'] ?? 'none'; }
+    public function set($k, $v) { $this->serverData[$k] = $v; }
+}
+$_SERVER['REQUEST_URI'] = '/before';
+$p = new WebProcessor();
+echo $p->uri(), "|";
+$_SERVER['REQUEST_URI'] = '/after';
+echo $p->uri(), "|";
+$p->set('ADDED', 'yes');
+echo $_SERVER['ADDED'] ?? 'missing', "|";
+$_GET['seed'] = 's';
+$box = ['q' => &$_GET];
+$box['q']['hit'] = 'x';
+echo $_GET['hit'] ?? 'missing', ":", count($_GET), "|";
+function local_alias() { $s = &$_SERVER; $s['LOCAL'] = 'l'; }
+local_alias();
+echo $_SERVER['LOCAL'] ?? 'missing';
+unset($p, $box);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "/before|/after|yes|x:2|l");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A by-reference parameter forwarded to another by-reference parameter after an update keeps
+/// the caller's cell representation.
+///
+/// `$c = $c + 1` (or `++$c`) types `$c` gradual, and the forwarding call site then re-stored the
+/// PARAMETER's slot as boxed `Mixed`, while the cell is the caller's raw `int`: the body unboxed
+/// the integer as a pointer and segfaulted. Symfony's `FlattenException::flattenArgs(array
+/// $args, int $level = 0, int &$count = 0)` has this shape and killed every error page.
+/// Expected output is `php -n` 8.5.10's.
+#[test]
+fn test_updated_by_ref_param_forwarded_by_reference_keeps_caller_cell() {
+    let out = compile_and_run(
+        r#"<?php
+function h(int &$c): void { ++$c; }
+function g(int &$c): int { $c = $c + 1; h($c); return $c; }
+function flatten(array $args, int $level = 0, int &$count = 0): int {
+    foreach ($args as $value) {
+        ++$count;
+        if (is_array($value)) { flatten($value, $level + 1, $count); }
+    }
+    return $count;
+}
+$x = 5;
+echo g($x), "|", $x, "|", flatten([1, [2, [3, 4]], 5]);
+"#,
+    );
+    assert_eq!(out, "7|7|7");
+}
 
 /// A local bound to a newly appended nested slot must share writes with that slot.
 #[test]
@@ -32,6 +130,28 @@ echo $prior, "|", $items["event"][0];
 "#,
     );
     assert_eq!(out, "keep|ready");
+}
+
+/// A fresh by-reference foreach value must be canonical null when the source is empty.
+/// Capturing it by reference immediately afterwards exercises the raw-to-ref-cell path,
+/// which previously promoted an uninitialized frame word when the loop ran zero times.
+#[test]
+fn test_empty_foreach_initializes_fresh_by_ref_value_before_capture() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [1];
+array_pop($items);
+foreach ($items as &$value) {
+}
+$read = function () use (&$value): mixed {
+    return $value;
+};
+echo is_null($read()) ? "null" : "not-null";
+$value = "updated";
+echo "|", $read();
+"#,
+    );
+    assert_eq!(out, "null|updated");
 }
 
 /// `$x = &$obj->prop` aliases a scalar property: writing the local updates the property
@@ -685,6 +805,137 @@ fn test_nested_array_reference_append_outlives_source_frame() {
     assert_eq!(out, "12");
 }
 
+/// A loop back-edge can promote a local after the nested mutation was lowered. Its next
+/// iteration must not retire the referenced value twice when publishing the new container.
+#[test]
+fn test_nested_array_reference_loop_mutation_preserves_shared_paths() {
+    let out = compile_and_run(
+        r#"<?php
+function createPaths(array &$loops): void {
+    $path = ['a', []];
+    foreach (['b', 'c'] as $key) {
+        $path[1][$key] = true;
+        $loops[$key][] = &$path;
+    }
+}
+$loops = [];
+createPaths($loops);
+echo json_encode($loops);
+"#,
+    );
+    assert_eq!(out, r#"{"b":[["a",{"b":true,"c":true}]],"c":[["a",{"b":true,"c":true}]]}"#);
+}
+
+#[test]
+fn test_nested_array_reference_loop_mutation_has_single_owner_cleanup() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function createPaths(array &$loops): void {
+    $path = ['a', []];
+    foreach (['b', 'c'] as $key) {
+        $path[1][$key] = true;
+        $loops[$key][] = &$path;
+    }
+}
+$loops = [];
+createPaths($loops);
+echo json_encode($loops);
+unset($loops);
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, r#"{"b":[["a",{"b":true,"c":true}]],"c":[["a",{"b":true,"c":true}]]}"#);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+#[test]
+fn test_nested_array_reference_loop_mutation_handles_hash_and_dynamic_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function hashPaths(array &$out): void {
+    $items = ['slot' => []];
+    foreach (['a', 'b'] as $key) {
+        $items['slot'][$key] = true;
+        $out[] = &$items;
+    }
+}
+function dynamicPaths(array &$out, $index): void {
+    $items = ['seed', []];
+    foreach (['a', 'b'] as $key) {
+        $items[$index][$key] = true;
+        $out[] = &$items;
+    }
+}
+$hash = [];
+hashPaths($hash);
+echo json_encode($hash), "\n";
+$dynamic = [];
+dynamicPaths($dynamic, 1);
+echo json_encode($dynamic);
+"#,
+    );
+    assert_eq!(out, concat!(
+        "[{\"slot\":{\"a\":true,\"b\":true}},{\"slot\":{\"a\":true,\"b\":true}}]\n",
+        "[[\"seed\",{\"a\":true,\"b\":true}],[\"seed\",{\"a\":true,\"b\":true}]]",
+    ));
+}
+
+/// Escaping paths are mutated inside a recursive walk and destructured after their frame returns.
+#[test]
+fn test_nested_array_reference_loop_mutation_recursive_paths() {
+    let out = compile_and_run(
+        r#"<?php
+function visit(string $source, array $graph, array &$checked, array &$loops = [], array $path = []): void {
+    $path[$source] = true;
+    $checked[$source] = true;
+    foreach ($graph[$source] as $id) {
+        if (isset($path[$id])) {
+            $loop = null;
+            $pathInLoop = [$id, []];
+            foreach ($path as $key => $byConstructor) {
+                if (null !== $loop) {
+                    $loop[] = $key;
+                    $pathInLoop[1][$key] = $byConstructor;
+                    $loops[$key][] = &$pathInLoop;
+                } elseif ($key === $id) {
+                    $loop = [];
+                }
+            }
+        } elseif (!isset($checked[$id])) {
+            visit($id, $graph, $checked, $loops, $path);
+        } elseif (isset($loops[$id])) {
+            foreach ($loops[$id] as [$first, $loopPath]) {
+                if (!isset($path[$first])) { continue; }
+                $fillPath = null;
+                foreach ($loopPath as $key => $byConstructor) {
+                    if (null !== $fillPath) { $fillPath[$key] = $byConstructor; }
+                    elseif ($key === $id) { $fillPath = $path; $fillPath[$key] = $byConstructor; }
+                }
+                $loop = null;
+                foreach ($fillPath as $key => $byConstructor) {
+                    if (null !== $loop) { $loop[] = $key; }
+                    elseif ($key === $first) { $loop = []; }
+                }
+                echo 'reuse:', $first, ':', implode(',', $loop), "\n";
+                break;
+            }
+        }
+    }
+    unset($path[$source]);
+}
+$graph = ['a' => ['b', 'd'], 'b' => ['c'], 'c' => ['a'], 'd' => ['b']];
+$checked = [];
+$loops = [];
+visit('a', $graph, $checked, $loops);
+echo json_encode($loops);
+"#,
+    );
+    assert_eq!(out, concat!(
+        "reuse:a:d,b,c\n",
+        "{\"b\":[[\"a\",{\"b\":true,\"c\":true}]],\"c\":[[\"a\",{\"b\":true,\"c\":true}]]}",
+    ));
+}
+
 /// A local array element bound to a local variable shares one promoted cell in both directions;
 /// unsetting the local alias leaves the array-owned marker alive and writable.
 #[test]
@@ -1108,4 +1359,83 @@ echo json_encode($b), "\n";
         out,
         "{\"x\":{\"y\":1,\"z\":2}}\n{\"p\":{\"q\":3}}\n{\"k\":\"v\",\"m\":{\"n\":4}}\n"
     );
+}
+
+/// Keeps a captured reference and its originally typed array on the same boxed storage representation.
+#[test]
+fn test_ref_alias_array_element_capture_retyping() {
+    let out = compile_and_run(r#"<?php
+$a = [1, 2];
+$copy = $a;
+$b =& $a[0];
+$set = function (mixed $value) use (&$b): void { $b = $value; };
+$set(9);
+echo $a[0], ":", $b, "\n";
+$set("updated");
+echo $a[0], ":", $b, "\n";
+$set(null);
+echo is_null($a[0]) ? "null" : "wrong", ":", is_null($b) ? "null" : "wrong", "\n";
+echo $copy[0], ":", $copy[1], "\n";
+"#);
+    assert_eq!(out, "9:9\nupdated:updated\nnull:null\n1:2\n");
+}
+
+/// A by-value string parameter passed on to a `string &` parameter is overwritten by the inner
+/// callee, which releases the value it replaces. That value is the caller's argument, held by
+/// the frame only as a borrow, so the outer frame must own its parameter first. Without the
+/// prologue retain the replaced string was freed twice (Symfony's `ErrorHandler::handleError()`
+/// passing `$file` to `cleanTrace(..., string &$file, ...)` died under `lint:container`).
+#[test]
+fn test_by_value_parameter_passed_by_reference_is_owned_by_its_frame() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function rewrite(string &$file): void {
+    $file = strtoupper($file) . '!';
+}
+function handle(string $file, $cb): string {
+    rewrite($file);
+    $cb($file);
+    return $file;
+}
+$cb = static function ($f = null) {};
+for ($i = 0; $i < 3; $i++) {
+    echo handle("a$i.php", $cb), "|";
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "A0.PHP!|A1.PHP!|A2.PHP!|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A later `($this->cb)($file)` may bind `$file` by reference, so the checker authorizes boxing
+/// it, and that widens the slot to `Mixed` for the whole frame — including an EARLIER
+/// `$this->rewrite($file)` into a `string &` parameter, which then received the boxed slot as a
+/// raw string cell and printed empty strings. The earlier call must go through the gradual
+/// adapter (a temporary of the declared type, written back after the call).
+#[test]
+fn test_by_reference_argument_before_its_boxing_promotion_keeps_the_declared_cell() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class H {
+    public $cb;
+    public function __construct() { $this->cb = static function ($f = null) {}; }
+    private function rewrite(string &$file): void {
+        $file = strtoupper($file) . '!';
+    }
+    public function handle(string $file): string {
+        $this->rewrite($file);
+        ($this->cb)($file);
+        return $file;
+    }
+}
+$h = new H();
+for ($i = 0; $i < 3; $i++) {
+    echo $h->handle("a$i.php"), "|";
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "A0.PHP!|A1.PHP!|A2.PHP!|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

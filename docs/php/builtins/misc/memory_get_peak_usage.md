@@ -2,7 +2,7 @@
 title: "memory_get_peak_usage()"
 description: "Returns the high-water mark of the elephc heap in bytes."
 sidebar:
-  order: 638
+  order: 658
 ---
 
 ## memory_get_peak_usage()
@@ -21,9 +21,9 @@ Returns the high-water mark of the elephc heap in bytes.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/memory_usage.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/memory_usage.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/memory_usage.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/memory_usage.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

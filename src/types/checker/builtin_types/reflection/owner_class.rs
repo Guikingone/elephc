@@ -27,6 +27,8 @@ pub(super) fn builtin_reflection_function_abstract_class(
         .filter(|member| {
             let key = php_symbol_key(&member.name);
             method_names.contains(&key)
+                && !key.starts_with("__fill")
+                && key != "__type_from"
                 && !matches!(
                     key.as_str(),
                     "__construct" | "invoke" | "invokeargs" | "getclosure"
@@ -227,6 +229,12 @@ pub(super) fn builtin_reflection_owner_class(
             false_bool(),
         ));
         properties.push(builtin_property(
+            "__returns_reference",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
             "__type",
             Visibility::Private,
             Some(mixed_type()),
@@ -264,8 +272,12 @@ pub(super) fn builtin_reflection_owner_class(
             "isDeprecated",
             "__is_deprecated",
         ));
-        methods.push(builtin_reflection_constant_false_bool_method(
+        // Was a baked `false`, which is wrong for every `function &f()` and
+        // `public function &m()`: PHP answers `true` for those (#1231). Every sibling predicate
+        // that can vary is property-backed for exactly this reason.
+        methods.push(builtin_reflection_class_bool_method(
             "returnsReference",
+            "__returns_reference",
         ));
         methods.push(builtin_reflection_class_bool_method(
             "isGenerator",
@@ -295,7 +307,14 @@ pub(super) fn builtin_reflection_owner_class(
         for method in &mut methods {
             match method.name.as_str() {
                 "getParameters" | "isVariadic" => {
-                    method.body.insert(0, reflection_member_fill_preamble("__parameters"));
+                    method.body.insert(
+                        0,
+                        if matches!(name, "ReflectionMethod" | "ReflectionFunction") {
+                            reflection_member_fill_preamble_table("__parameters")
+                        } else {
+                            reflection_member_fill_preamble("__parameters")
+                        },
+                    );
                 }
                 "getNumberOfParameters" => {
                     method.body.insert(0, reflection_unfilled_parameter_count_return());
@@ -401,7 +420,13 @@ pub(super) fn builtin_reflection_owner_class(
         Some(array_type()),
         empty_array(),
     ));
-    methods.push(builtin_reflection_owner_get_attributes_method());
+    // PHP names the class that declares `getAttributes()` in its `$flags` ValueError.
+    let attributes_owner = match name {
+        "ReflectionFunction" | "ReflectionMethod" => "ReflectionFunctionAbstract",
+        "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase" => "ReflectionClassConstant",
+        other => other,
+    };
+    methods.push(builtin_reflection_owner_get_attributes_method(attributes_owner));
     FlattenedClass {
         name: name.to_string(),
         span: dummy(),

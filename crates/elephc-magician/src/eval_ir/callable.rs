@@ -10,7 +10,7 @@
 use super::*;
 
 /// One lexical variable captured by a runtime eval closure literal.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalClosureCapture {
     name: String,
     by_ref: bool,
@@ -37,7 +37,7 @@ impl EvalClosureCapture {
 }
 
 /// Runtime user function declared by an eval fragment.
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct EvalFunction {
     name: String,
     source_location: Option<EvalSourceLocation>,
@@ -240,7 +240,7 @@ impl EvalFunction {
 }
 
 /// One supported eval method parameter type atom.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum EvalParameterTypeVariant {
     Array,
     Bool,
@@ -265,14 +265,14 @@ pub enum EvalParameterTypeVariant {
 }
 
 /// How multiple eval parameter type atoms combine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalParameterTypeKind {
     Union,
     Intersection,
 }
 
 /// Type metadata retained for one eval method parameter.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct EvalParameterType {
     variants: Vec<EvalParameterTypeVariant>,
     allows_null: bool,

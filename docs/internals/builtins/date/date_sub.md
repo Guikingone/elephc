@@ -1,16 +1,16 @@
 ---
-title: "date_sub() — internals"
+title: "date_sub() - internals"
 description: "Compiler internals for date_sub(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 220
+  order: 221
 ---
 
-## `date_sub()` — internals
+## `date_sub()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:961](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L961) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:984](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L984) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

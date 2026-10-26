@@ -7,7 +7,8 @@
 //! that `is_object`, `get_class`, `instanceof`, and `var_dump` all agree about.
 //!
 //! Called from:
-//! - `crate::pipeline::compile()` and focused test harnesses via `inject_if_used`.
+//! - `crate::pipeline::compile()` and focused test harnesses via `inject_if_used`, and again
+//!   after autoload expansion via `inject_late_if_used`.
 //!
 //! Key details:
 //! - WHY A PRELUDE AND NOT A NATIVE CLASS. Every hash-context `RuntimeFnId` declares
@@ -181,7 +182,22 @@ pub(crate) fn hash_declarations() -> Program {
 /// `force` comes from an explicit opt-in (the codegen harness); otherwise the
 /// decision is `detect::program_uses_hash_context`. The prelude carries only
 /// declarations, so prepending it is order-independent — PHP hoists them.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_used(
+    program: crate::parser::ast::Program,
+    force: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> crate::parser::ast::Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_on_compiler_stack(program, force, inventory)
+    })
+}
+
+/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_on_compiler_stack(
     program: crate::parser::ast::Program,
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
@@ -193,6 +209,23 @@ pub fn inject_if_used(
     inventory.record_program("hash", &combined);
     combined.extend(program);
     combined
+}
+
+/// Injects the hash prelude after autoload expansion when only an autoloaded file uses it.
+///
+/// The early gate in the pipeline scans the program before Composer/PSR-4 class files are
+/// spliced in, so a `hash_init()` that only an autoloaded class calls saw no declarations: the
+/// call compiled as a runtime lookup and died with `Call to undefined function hash_init()`.
+/// This second gate reads the complete program and is a no-op whenever the early one fired.
+/// The declarations carry only global names, so no name resolution is needed this late.
+pub fn inject_late_if_used(
+    program: crate::parser::ast::Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> crate::parser::ast::Program {
+    if inventory.groups.contains_key("hash") {
+        return program;
+    }
+    inject_if_used(program, false, inventory)
 }
 
 #[cfg(test)]

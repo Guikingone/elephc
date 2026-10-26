@@ -1,8 +1,8 @@
 ---
 title: "getimagesize()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns an image file's size, type, and MIME type."
 sidebar:
-  order: 466
+  order: 467
 ---
 
 ## getimagesize()
@@ -11,7 +11,7 @@ sidebar:
 function getimagesize(string $filename): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns an image file's size, type, and MIME type.
 
 **Parameters**:
 - `$filename` (`string`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

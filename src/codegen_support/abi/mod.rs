@@ -10,8 +10,10 @@
 
 mod bootstrap;
 mod calls;
+mod call_operand_scope;
 mod frame;
 mod registers;
+mod strings;
 mod symbols;
 #[cfg(test)]
 mod tests;
@@ -31,11 +33,17 @@ pub use calls::{
     emit_store_to_sp, emit_temporary_stack_address, materialize_outgoing_args,
     materialize_outgoing_c_abi_args, outgoing_call_stack_pad_bytes,
 };
+pub(crate) use call_operand_scope::{
+    CALL_OPERAND_OWNER_RECORD_BYTES,
+    emit_link_call_operand_owner_at_stack, emit_pop_call_operand_owner,
+    emit_push_call_operand_owner, emit_unlink_call_operand_owner_at_stack,
+    emit_push_call_operand_owner_call, emit_pop_call_operand_owner_call,
+};
 pub use frame::{
     emit_frame_prologue, emit_frame_restore, emit_frame_slot_address, emit_load_from_address,
     emit_teardown_call_alignment,
     emit_reg_move, emit_return, emit_store_to_address, emit_store_zero_to_address,
-    emit_store_zero_to_local_slot, load_at_offset, load_at_offset_scratch, load_from_caller_stack,
+    emit_store_zero_to_local_slot, emit_zero_local_slot_words, load_at_offset, load_at_offset_scratch, load_from_caller_stack,
     store_at_offset, store_at_offset_scratch,
 };
 #[cfg(test)]
@@ -49,17 +57,23 @@ pub use registers::{
     nested_call_reg, process_argc_reg, process_argv_reg, temp_int_reg, IncomingArgCursor,
     OutgoingArgAssignment,
 };
+pub use strings::{emit_owned_mixed_string, emit_strip_leading_namespace_separator};
 pub use symbols::{
     emit_call_label_long_range, emit_cmp_reg_to_symbol, emit_dec_symbol, emit_extern_symbol_address,
     emit_load_extern_symbol_to_reg, emit_load_symbol_to_reg, emit_load_symbol_to_result,
-    emit_store_imm_to_symbol, emit_store_reg_to_extern_symbol, emit_store_reg_to_symbol,
-    emit_store_result_to_symbol, emit_store_zero_to_symbol, emit_symbol_address,
+    emit_local_symbol_address, emit_store_imm_to_symbol, emit_store_reg_to_extern_symbol,
+    emit_store_reg_to_symbol, emit_store_result_to_symbol, emit_store_zero_to_symbol,
+    emit_symbol_address,
 };
 #[cfg(test)]
 pub use symbols::{emit_load_symbol_to_local_slot, emit_store_local_slot_to_symbol};
 pub use values::{
-    emit_branch_if_int_result_nonzero, emit_branch_if_int_result_zero, emit_decref_if_refcounted,
+    emit_branch_if_equal_wide, emit_branch_if_int_result_nonzero, emit_branch_if_int_result_zero,
+    emit_decref_if_refcounted,
+    emit_decref_preserving_exception,
     emit_float_result_to_int_result, emit_incref_if_refcounted, emit_int_result_to_float_result,
     emit_jump, emit_load, emit_load_int_immediate, emit_php_float_to_int,
-    emit_release_local_ref_cell, emit_store, emit_write_stdout,
+    emit_release_local_ref_cell, emit_release_local_ref_cell_preserving_exception,
+    emit_store, emit_unary_cleanup_preserving_exception, emit_write_stdout,
 };
+pub(crate) use values::refcount_release_helper;

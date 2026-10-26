@@ -11,7 +11,9 @@
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
-use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
+use crate::parser::ast::{
+    ArrayEntry, BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind,
+};
 use crate::parser::stmt::{
     assignment_target_append_stmt,
     is_valid_reference_source,
@@ -241,7 +243,11 @@ fn parse_expr_bp_inner(
                     }
                     let dynamic_args = crate::parser::expr::parse_args(tokens, pos, span)?;
                     let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
-                    reject_named_args_in_dynamic_call(&dynamic_args, span)?;
+                    if has_named_args(&dynamic_args) {
+                        let target = Expr::new(ExprKind::ArrayLiteral(vec![lhs, member]), span);
+                        lhs = named_args_dynamic_call(target, &dynamic_args, span);
+                        continue;
+                    }
                     let mut call_args =
                         vec![Expr::new(ExprKind::ArrayLiteral(vec![lhs, member]), span)];
                     call_args.extend(dynamic_args);
@@ -295,6 +301,14 @@ fn parse_expr_bp_inner(
                             let dynamic_args =
                                 crate::parser::expr::parse_args(tokens, pos, arrow_span)?;
                             let arrow_span = crate::parser::expr::span_through_prev_token(tokens, *pos, arrow_span);
+                            if has_named_args(&dynamic_args) && !nullsafe {
+                                let target = Expr::new(
+                                    ExprKind::ArrayLiteral(vec![lhs, property]),
+                                    arrow_span,
+                                );
+                                lhs = named_args_dynamic_call(target, &dynamic_args, arrow_span);
+                                continue;
+                            }
                             reject_named_args_in_dynamic_call(&dynamic_args, arrow_span)?;
                             if nullsafe {
                                 lhs = Expr::new(
@@ -475,7 +489,11 @@ fn parse_expr_bp_inner(
             // increment node cannot name.
             Token::PlusPlus | Token::MinusMinus => {
                 let increment = tokens[*pos].0 == Token::PlusPlus;
-                if !is_non_local_assignment_target(&lhs) {
+                // An element target keeps the generic update desugaring: its write half is
+                // recognised as the same dimension its read converted, so a float key reports
+                // its deprecation once (`$a[1.9]++`, `$o->m[1.9]++`), as PHP does.
+                let element_target = matches!(&lhs.kind, ExprKind::ArrayAccess { .. });
+                if element_target || !is_non_local_assignment_target(&lhs) {
                     // Not a shape the stabilizing lowering can name. The generic desugaring
                     // takes what it can; when it declines (a call, say, which cannot be read
                     // twice) the operator is left unconsumed so the caller reports the error
@@ -657,6 +675,11 @@ fn parse_expr_bp_inner(
                     rhs
                 } else {
                     lowerer.bind_value(&target, rhs)
+                };
+                let target = if matches!(op, AssignmentOperator::Compound(_)) {
+                    lowerer.snapshot_update_dimension(target)
+                } else {
+                    target
                 };
                 let (value, result_target) = match op {
                     AssignmentOperator::Assign => (rhs.clone(), rhs),
@@ -866,6 +889,48 @@ enum AssignmentOperator {
     NullCoalesce,
 }
 
+/// Desugars a dynamic call that carries named arguments to
+/// `call_user_func_array($target, [positional..., ...spread, 'name' => value])`.
+///
+/// The callee's parameter names are unknown at compile time, so the names cannot be matched to
+/// positions here. `call_user_func_array` binds string keys to the parameters they name at run
+/// time -- exactly php's rule for `$obj->{$m}(...$args, boolean: $b)` -- so the call is rebuilt
+/// around one ordered array literal. Callers gate it on [`has_named_args`], leaving the
+/// positional `call_user_func` desugaring untouched for every other call.
+pub(in crate::parser) fn named_args_dynamic_call(
+    target: Expr,
+    args: &[Expr],
+    span: Span,
+) -> Expr {
+    let entries = args
+        .iter()
+        .map(|arg| match &arg.kind {
+            ExprKind::NamedArg { name, value } => ArrayEntry::Keyed(
+                Expr::new(ExprKind::StringLiteral(name.clone()), arg.span),
+                value.as_ref().clone(),
+            ),
+            ExprKind::Spread(inner) => ArrayEntry::Spread(inner.as_ref().clone()),
+            _ => ArrayEntry::Value(arg.clone()),
+        })
+        .collect();
+    Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("call_user_func_array"),
+            args: vec![
+                target,
+                Expr::new(ExprKind::ArrayLiteralMixed(entries), span),
+            ],
+        },
+        span,
+    )
+}
+
+/// Reports whether any argument of a call is a `name: value` named argument.
+pub(in crate::parser) fn has_named_args(args: &[Expr]) -> bool {
+    args.iter()
+        .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
+}
+
 /// Rejects named arguments in a dynamic call (`$obj->$m(...)`, `$cls::$m(...)`, `C::$m(...)`).
 ///
 /// The callee method name is a runtime value, so its parameter names are unknown at compile time
@@ -957,31 +1022,125 @@ fn parse_instanceof_target(
     pos: &mut usize,
     span: Span,
 ) -> Result<InstanceOfTarget, CompileError> {
-    match tokens.get(*pos).map(|(token, _)| token) {
-        Some(Token::Self_) => {
-            *pos += 1;
-            Ok(InstanceOfTarget::Name(Name::unqualified("self")))
+    // `self::$fallback` and `Config::$class` read a static property holding the class name.
+    let target = if names_static_property(tokens, *pos) {
+        let target = parse_expr_bp(tokens, pos, 36)?;
+        reject_called_instanceof_target(&target)?;
+        InstanceOfTarget::Expr(Box::new(target))
+    } else {
+        match tokens.get(*pos).map(|(token, _)| token) {
+            Some(Token::Self_) => {
+                *pos += 1;
+                InstanceOfTarget::Name(Name::unqualified("self"))
+            }
+            Some(Token::Parent) => {
+                *pos += 1;
+                InstanceOfTarget::Name(Name::unqualified("parent"))
+            }
+            Some(Token::Static) => {
+                *pos += 1;
+                InstanceOfTarget::Name(Name::unqualified("static"))
+            }
+            // A variable expression names the class at run time: `$name`, `$this->className`,
+            // `$config['type']`.
+            Some(Token::Variable(_)) | Some(Token::This) => {
+                let target = parse_expr_bp(tokens, pos, 36)?;
+                reject_called_instanceof_target(&target)?;
+                InstanceOfTarget::Expr(Box::new(target))
+            }
+            // `(expr)` is the one parenthesized form, and the group is the WHOLE target: PHP
+            // binds nothing after its `)`, so `($f)()` is not a call of the group here.
+            Some(Token::LParen) => {
+                let open_span = tokens[*pos].1.span;
+                *pos += 1;
+                let inner = parse_expr(tokens, pos)?;
+                if !matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::RParen)) {
+                    return Err(CompileError::new(open_span, "Expected closing ')'"));
+                }
+                *pos += 1;
+                InstanceOfTarget::Expr(Box::new(inner))
+            }
+            _ => InstanceOfTarget::Name(parse_name(
+                tokens,
+                pos,
+                span,
+                "Expected class or interface name after 'instanceof'",
+            )?),
         }
-        Some(Token::Parent) => {
-            *pos += 1;
-            Ok(InstanceOfTarget::Name(Name::unqualified("parent")))
-        }
-        Some(Token::Static) => {
-            *pos += 1;
-            Ok(InstanceOfTarget::Name(Name::unqualified("static")))
-        }
-        Some(Token::Variable(_)) | Some(Token::This) | Some(Token::LParen) => {
-            let target = parse_expr_bp(tokens, pos, 36)?;
-            Ok(InstanceOfTarget::Expr(Box::new(target)))
-        }
-        _ => parse_name(
-            tokens,
-            pos,
-            span,
-            "Expected class or interface name after 'instanceof'",
-        )
-        .map(InstanceOfTarget::Name),
+    };
+    // An argument list straight after the target is a call of it, which PHP's grammar has no
+    // place for (`$x instanceof self::$method()` is a syntax error).
+    if let Some((Token::LParen, metadata)) = tokens.get(*pos) {
+        return Err(called_instanceof_target_error(metadata.span));
     }
+    Ok(target)
+}
+
+/// Rejects an `instanceof` target whose variable chain contains a call (issue #1454).
+///
+/// PHP's `class_name_reference` is a class name, `(expr)`, or a variable chain of property
+/// fetches, array dimensions and static properties, never a call: `$x instanceof Foo::$method()`
+/// and `$x instanceof $this->cls()` are syntax errors. The chain parser shared with ordinary
+/// expressions consumes such a call eagerly (`Foo::$method()` even desugars to
+/// `call_user_func`), so the parsed chain is checked instead. Only the chain itself is examined:
+/// a call INSIDE a dimension or a braced property name (`$map[key()]`) is ordinary PHP.
+fn reject_called_instanceof_target(target: &Expr) -> Result<(), CompileError> {
+    match instanceof_target_chain_call(target) {
+        Some(call_span) => Err(called_instanceof_target_error(call_span)),
+        None => Ok(()),
+    }
+}
+
+/// Returns the span of the first call found along an `instanceof` target's variable chain.
+fn instanceof_target_chain_call(expr: &Expr) -> Option<Span> {
+    match &expr.kind {
+        ExprKind::FunctionCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. }
+        | ExprKind::StaticMethodCall { .. }
+        | ExprKind::FirstClassCallable(_) => Some(expr.span),
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::NullsafePropertyAccess { object, .. }
+        | ExprKind::DynamicPropertyAccess { object, .. }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, .. } => {
+            instanceof_target_chain_call(object)
+        }
+        ExprKind::ArrayAccess { array, .. } => instanceof_target_chain_call(array),
+        _ => None,
+    }
+}
+
+/// Builds the diagnostic for a call used as an `instanceof` target.
+fn called_instanceof_target_error(span: Span) -> CompileError {
+    CompileError::new(
+        span,
+        "Cannot use an unparenthesized call as an instanceof target",
+    )
+}
+
+/// Returns true when the tokens at `pos` are a class reference followed by `::$name`, the
+/// static-property form of an `instanceof` target.
+fn names_static_property(tokens: &[SpannedToken], pos: usize) -> bool {
+    let mut cursor = pos;
+    match tokens.get(cursor).map(|(token, _)| token) {
+        Some(Token::Self_ | Token::Parent | Token::Static) => cursor += 1,
+        _ => {
+            while matches!(
+                tokens.get(cursor).map(|(token, _)| token),
+                Some(Token::Identifier(_) | Token::Backslash)
+            ) {
+                cursor += 1;
+            }
+            if cursor == pos {
+                return false;
+            }
+        }
+    }
+    matches!(tokens.get(cursor).map(|(token, _)| token), Some(Token::DoubleColon))
+        && matches!(tokens.get(cursor + 1).map(|(token, _)| token), Some(Token::Variable(_)))
 }
 
 /// Looks up binary operator binding power for Pratt parsing.

@@ -17,7 +17,9 @@
 //!   6=object, 7=mixed-cell), so it handles every element type and nested
 //!   arrays without a per-type walker.
 //! - Hashes iterate with `__rt_hash_count` / `__rt_hash_iter_next` (same
-//!   primitives as the JSON and var_dump hash walkers).
+//!   primitives as the JSON and var_dump hash walkers). The entry lines live in
+//!   `__rt_print_r_hash_entries`, separate from the `(` / `)` frame, so the object
+//!   walker can append an instance's dynamic properties inside its own frame.
 //! - `__rt_print_r_value` renders one value; tags 4/5 recurse into the array
 //!   walkers (mutual recursion gives arbitrary nesting depth), tag 7 unboxes a
 //!   Mixed cell then redispatches. Its 4th argument is the *paren base indent*
@@ -515,6 +517,21 @@ pub fn emit_print_r_indexed(emitter: &mut Emitter) {
     emitter.comment("--- runtime: print_r_indexed ---");
     emitter.label_global("__rt_print_r_indexed");
 
+    // -- hand a run-time promoted array to the hash walker --
+    // A statically `Array(Mixed)` value can hold HASH storage at run time:
+    // `__rt_array_set_mixed_key` promotes the destination when a key does not fit the packed
+    // layout, and the static type does not move with it. Walking that as an indexed array
+    // reads hash internals. The probe is the uniform heap-kind byte, the same one
+    // `__rt_array_edge_key` dispatches on; the hash walker takes the array in x0 and the base
+    // indent in x1 exactly as this one does, so it is a tail jump. The conditional branch
+    // skips OVER an unconditional one because AArch64 cannot name an external label in one.
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
+    emitter.instruction("cmp x9, #3");                                          // kind 3 = associative hash storage
+    emitter.instruction("b.ne __rt_print_r_indexed_packed");                    // packed storage walks inline below
+    emitter.instruction("b __rt_print_r_hash");                                 // hash storage is the hash walker's job
+    emitter.label("__rt_print_r_indexed_packed");
+
     // Frame (64 bytes): [0]arr [8]base [16]entry_indent [24]count [32]index
     //   [40]stamp [48]x29 [56]x30.
     emitter.instruction("sub sp, sp, #64");                                     // allocate the indexed-walk frame
@@ -607,6 +624,16 @@ fn emit_print_r_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_indexed ---");
     emitter.label_global("__rt_print_r_indexed");
+
+    // -- hand a run-time promoted array to the hash walker --
+    // Same runtime-promotion probe as the AArch64 path; the hash walker takes the array in
+    // rdi and the base indent in rsi exactly as this one does.
+    emitter.instruction("mov rax, QWORD PTR [rdi - 8]");                        // load the uniform heap-kind header word
+    emitter.instruction("and rax, 0xff");                                       // isolate the low-byte heap kind
+    emitter.instruction("cmp rax, 3");                                          // kind 3 = associative hash storage
+    emitter.instruction("jne __rt_print_r_indexed_packed");                     // packed storage walks inline below
+    emitter.instruction("jmp __rt_print_r_hash");                               // hash storage is the hash walker's job
+    emitter.label("__rt_print_r_indexed_packed");
 
     // rbp-relative frame: [-8]arr [-16]base [-24]entry_indent [-32]count
     //   [-40]index [-48]stamp.
@@ -701,10 +728,13 @@ fn emit_print_r_indexed_linux_x86_64(emitter: &mut Emitter) {
 
 /// `__rt_print_r_hash`: render an associative-array body `<base>(\n ... <base>)\n`,
 /// iterating entries and rendering unquoted keys (int as `[N]`, string as `[KEY]`).
+/// The entry lines come from `__rt_print_r_hash_entries`, which `__rt_print_r_object`
+/// also calls to append an object's dynamic properties inside its own parens.
 /// Input: AArch64 x0=hash x1=base / x86_64 rdi=hash rsi=base.
 pub fn emit_print_r_hash(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_print_r_hash_linux_x86_64(emitter);
+        emit_print_r_hash_entries_linux_x86_64(emitter);
         return;
     }
 
@@ -712,24 +742,47 @@ pub fn emit_print_r_hash(emitter: &mut Emitter) {
     emitter.comment("--- runtime: print_r_hash ---");
     emitter.label_global("__rt_print_r_hash");
 
-    // Frame (112 bytes): [0]hash [8]base [16]entry_indent [24]count [32]cursor
+    // Frame (32 bytes): [0]hash [8]base [16]x29 [24]x30.
+    emitter.instruction("sub sp, sp, #32");                                     // allocate the hash-frame helper frame
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the hash pointer
+    emitter.instruction("str x1, [sp, #8]");                                    // save the paren base indent
+    emitter.instruction("mov x0, x1");                                          // base → open helper argument
+    emitter.instruction("bl __rt_print_r_open");                                // write `<base>(\n`
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the hash pointer
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the paren base indent
+    emitter.instruction("add x1, x1, #4");                                      // entry indent = base + 4
+    emitter.instruction("bl __rt_print_r_hash_entries");                        // write one `[key] => value` line per entry
+    emitter.instruction("ldr x0, [sp, #8]");                                    // base → close helper argument
+    emitter.instruction("bl __rt_print_r_close");                               // write `<base>)\n`
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the hash-frame helper frame
+    emitter.instruction("ret");                                                 // return to caller
+
+    emit_print_r_hash_entries_aarch64(emitter);
+}
+
+/// Emits AArch64 `__rt_print_r_hash_entries`: one `<indent>[KEY] => value\n` line
+/// per hash entry, in insertion order, with no surrounding parens.
+/// Input: x0=hash x1=entry indent.
+fn emit_print_r_hash_entries_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: print_r_hash_entries ---");
+    emitter.label_global("__rt_print_r_hash_entries");
+
+    // Frame (112 bytes): [0]hash [16]entry_indent [24]count [32]cursor
     //   [40]items [48]key_ptr [56]key_len [64]val_lo [72]val_hi [80]val_tag
     //   [96]x29 [104]x30.
     emitter.instruction("sub sp, sp, #112");                                    // allocate the hash-walk frame
     emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #96");                                    // establish the walk frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the hash pointer
-    emitter.instruction("str x1, [sp, #8]");                                    // save the paren base indent
-    emitter.instruction("add x9, x1, #4");                                      // entry indent = base + 4
-    emitter.instruction("str x9, [sp, #16]");                                   // save the entry indent
-    emitter.instruction("ldr x0, [sp, #0]");                                    // hash → count helper argument
+    emitter.instruction("str x1, [sp, #16]");                                   // save the entry indent
     emitter.instruction("bl __rt_hash_count");                                  // x0 = number of entries
     emitter.instruction("str x0, [sp, #24]");                                   // save the entry count
     emitter.instruction("str xzr, [sp, #32]");                                  // iterator cursor = 0
     emitter.instruction("str xzr, [sp, #40]");                                  // items emitted = 0
-
-    emitter.instruction("ldr x0, [sp, #8]");                                    // base → open helper argument
-    emitter.instruction("bl __rt_print_r_open");                                // write `<base>(\n`
 
     emitter.label("__rt_pr_hash_loop");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload items emitted
@@ -739,7 +792,7 @@ pub fn emit_print_r_hash(emitter: &mut Emitter) {
 
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the hash pointer
     emitter.instruction("ldr x1, [sp, #32]");                                   // reload the iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // x0=cursor, x1=key ptr, x2=key len, x3=val_lo, x4=val_hi, x5=val_tag
+    emitter.instruction("bl __rt_hash_iter_next_value");                        // x0=cursor, x1=key ptr, x2=key len, x3=val_lo, x4=val_hi, x5=val_tag
     emitter.instruction("str x0, [sp, #32]");                                   // save the next iterator cursor
     emitter.instruction("str x1, [sp, #48]");                                   // save the key ptr (or integer payload)
     emitter.instruction("str x2, [sp, #56]");                                   // save the key len (-1 for integer keys)
@@ -777,38 +830,56 @@ pub fn emit_print_r_hash(emitter: &mut Emitter) {
     emitter.instruction("b __rt_pr_hash_loop");                                 // continue with the next entry
 
     emitter.label("__rt_pr_hash_done");
-    emitter.instruction("ldr x0, [sp, #8]");                                    // base → close helper argument
-    emitter.instruction("bl __rt_print_r_close");                               // write `<base>)\n`
     emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #112");                                    // release the hash-walk frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
-/// Emits the Linux x86_64 associative-array print_r walker.
+/// Emits the Linux x86_64 associative-array print_r walker (parens around the entries).
 fn emit_print_r_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_hash ---");
     emitter.label_global("__rt_print_r_hash");
 
-    // rbp-relative frame: [-8]hash [-16]base [-24]entry_indent [-32]count
+    // rbp-relative frame: [-8]hash [-16]base.
+    emitter.instruction("push rbp");                                            // save caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
+    emitter.instruction("sub rsp, 16");                                         // allocate the hash-frame helper frame
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the paren base indent
+    emitter.instruction("mov rdi, rsi");                                        // base → open helper argument
+    emitter.instruction("call __rt_print_r_open");                              // write `<base>(\n`
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the hash pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the paren base indent
+    emitter.instruction("add rsi, 4");                                          // entry indent = base + 4
+    emitter.instruction("call __rt_print_r_hash_entries");                      // write one `[key] => value` line per entry
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // base → close helper argument
+    emitter.instruction("call __rt_print_r_close");                             // write `<base>)\n`
+    emitter.instruction("add rsp, 16");                                         // release the hash-frame helper frame
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return to caller
+}
+
+/// Emits Linux x86_64 `__rt_print_r_hash_entries`: one `<indent>[KEY] => value\n`
+/// line per hash entry, in insertion order, with no surrounding parens.
+/// Input: rdi=hash rsi=entry indent.
+fn emit_print_r_hash_entries_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: print_r_hash_entries ---");
+    emitter.label_global("__rt_print_r_hash_entries");
+
+    // rbp-relative frame: [-8]hash [-24]entry_indent [-32]count
     //   [-40]cursor [-48]items [-56]key_ptr [-64]key_len [-72]val_lo
     //   [-80]val_hi [-88]val_tag.
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the walk frame pointer
-    emitter.instruction("sub rsp, 112");                                        // allocate the hash-walk frame
+    emitter.instruction("sub rsp, 96");                                         // allocate the hash-walk frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash pointer
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the paren base indent
-    emitter.instruction("mov rax, rsi");                                        // copy the base indent
-    emitter.instruction("add rax, 4");                                          // entry indent = base + 4
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the entry indent
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // hash → count helper argument
-    emitter.instruction("call __rt_hash_count");                                // rax = number of entries
+    emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the entry indent
+    emitter.instruction("call __rt_hash_count");                                // rax = number of entries (hash ptr already in rdi)
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the entry count
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // iterator cursor = 0
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // items emitted = 0
-
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // base → open helper argument
-    emitter.instruction("call __rt_print_r_open");                              // write `<base>(\n`
 
     emitter.label("__rt_pr_hash_loop_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload items emitted
@@ -818,7 +889,7 @@ fn emit_print_r_hash_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // reload the iterator cursor
-    emitter.instruction("call __rt_hash_iter_next");                            // rax=cursor, rdi=key ptr, rdx=key len, rcx=val_lo, r8=val_hi, r9=val_tag
+    emitter.instruction("call __rt_hash_iter_next_value");                      // rax=cursor, rdi=key ptr, rdx=key len, rcx=val_lo, r8=val_hi, r9=val_tag
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the next iterator cursor
     emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                       // save the key ptr (or integer payload)
     emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // save the key len (-1 for integer keys)
@@ -856,9 +927,7 @@ fn emit_print_r_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_pr_hash_loop_x86");                           // continue with the next entry
 
     emitter.label("__rt_pr_hash_done_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // base → close helper argument
-    emitter.instruction("call __rt_print_r_close");                             // write `<base>)\n`
-    emitter.instruction("add rsp, 112");                                        // release the hash-walk frame
+    emitter.instruction("add rsp, 96");                                         // release the hash-walk frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
 }

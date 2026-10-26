@@ -6,27 +6,17 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
-//! - EVERY BY-REFERENCE ARGUMENT NEEDS AN ADDRESS, and there are four sources for one:
-//!   the caller local's own storage, an array element's slot, a caller-side stack cell that
-//!   is WRITTEN BACK into a scalar local afterwards (a scalar local passed to a `mixed`
-//!   by-reference parameter), and — for an argument with no caller variable at all, i.e. an
-//!   OMITTED optional by-reference argument — a caller-side stack cell that is simply
-//!   discarded. The last two share one pushed cell block, planned before any argument is
-//!   staged and released once after the call.
-//! - THE DISCARDED CELL USED TO BE A HEAP ALLOCATION THAT NOTHING FREED. `f($x)` against
-//!   `f($x, int &$out = null)` leaked 16 bytes PER CALL — unbounded in a loop, and PHP's
-//!   documented `while ($info = curl_multi_info_read($mh))` loop is exactly that shape.
-//!   Moving it into the existing cell block makes the release automatic.
-//! - THE HEAP PATH IS STILL LOAD-BEARING, not a leftover. A CONSTRUCTOR that promotes a
-//!   by-reference parameter binds a property which BORROWS the argument's cell for the whole
-//!   life of the object, so every constructor call is planned as
-//!   [`RefArgCellLifetime::MayOutliveCall`] and deliberately routed to
-//!   [`materialize_temporary_ref_arg_cell`]; a caller-stack cell there is a use-after-free.
-//!   See that function's own doc comment for both kinds of caller that reach it.
+//! - Method argument coercions use the shared cleanup plan; callers retire its block before
+//!   processing reference writebacks, whose addresses include the intervening cleanup bytes.
+//! - Reference arguments borrow caller locals or indexed element addresses. Managed hash-entry
+//!   cells and omitted defaults use scoped owner records; scalar-to-Mixed uses writeback cells.
+//! - Closures can retain default cells beyond the call. Normal return and exception unwinding
+//!   retire only the caller's lease, leaving any captured lease intact.
+//! - Constructor-promoted borrowed properties still use the separate persistent-cell fallback.
 
 use super::*;
 
-/// Loads method call arguments for lexical `self::`/`parent::` instance calls using local `this`.
+/// Loads lexical instance-call arguments using local `this`, tracking coercion owners for cleanup.
 pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
     ctx: &mut FunctionContext<'_>,
     receiver_slot: LocalSlotId,
@@ -52,6 +42,8 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
     }
     let visible_param_types = &param_types[1..];
     let visible_ref_params = &ref_params[1..];
+    let preleased_ref_cells =
+        plan_preleased_ref_arg_cells(ctx, operands, visible_ref_params)?;
     let mut ref_writebacks =
         plan_ref_arg_writebacks(ctx, operands, visible_param_types, visible_ref_params)?;
     let mut ref_temp_cells = plan_ref_arg_temp_cells(
@@ -62,15 +54,16 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
         &ref_writebacks,
         lifetime,
     )?;
-    emit_ref_arg_cell_block(ctx, &mut ref_writebacks, &mut ref_temp_cells)?;
-    // A boxed temporary staged for a by-value parameter is owned by this call and nothing else
-    // releases it, so the method-call paths plan the same temp cleanups the direct-call paths do.
-    let cleanup_slots =
-        plan_call_arg_temp_cleanups(ctx, operands, visible_param_types, visible_ref_params, &[])?;
-    let cleanup_bytes = cleanup_slots.len() * 16;
-    if cleanup_bytes > 0 {
-        abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
-    }
+    emit_ref_arg_cell_block(
+        ctx,
+        &mut ref_writebacks,
+        &mut ref_temp_cells,
+    )?;
+    let cleanup_slots = plan_call_arg_temp_cleanups(
+        ctx, operands, visible_param_types, visible_ref_params, &[],
+    )?;
+    let cleanup_bytes = cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
+    abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
@@ -87,19 +80,12 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
                 arg_temp_bytes,
                 &ref_writebacks,
                 &ref_temp_cells,
-                0,
+                cleanup_bytes,
             )?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
         } else {
-            ctx.load_value_to_result(*value)?;
-            let source_ty = ctx.raw_value_php_type(*value)?;
-            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
-            if let Some(cleanup) = cleanup_slots
-                .iter()
-                .find(|cleanup| cleanup.param_index == index)
-            {
-                save_call_arg_temp_cleanup(ctx, cleanup, arg_temp_bytes);
-            }
+            let cleanup = cleanup_slots.iter().find(|cleanup| cleanup.param_index == index);
+            let push_ty = materialize_plain_call_arg(ctx, *value, param_ty, cleanup, arg_temp_bytes)?;
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
         arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[index + 1]);
@@ -108,13 +94,15 @@ pub(super) fn materialize_method_call_args_with_receiver_local_and_refs(
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
         ref_temp_cells,
+        preleased_ref_cells,
         cleanup_slots,
         cleanup_bytes,
+        cleanup_guard_bytes: 0,
         borrowed_stack_arg_bytes: 0,
     })
 }
 
-/// Loads method call arguments with by-reference parameter support for local operands.
+/// Loads a register receiver and method arguments, tracking coercion owners and reference cells.
 pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
     ctx: &mut FunctionContext<'_>,
     receiver_reg: &str,
@@ -134,7 +122,22 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
         lifetime,
         &[],
         None,
+        None,
     )
+}
+
+/// Whether a call supplies every parameter but a trailing hidden `func_get_args()` collector.
+///
+/// An internal dispatcher (`__toString` for a string conversion, `offsetGet` for `$o[$k]`) calls
+/// with the source arity. The callee's physical signature may also carry the collector: the
+/// `func_args` pass adds it to every frame when backtraces need argument snapshots, and
+/// `func_args::method_families` spreads it over a whole interface family when one member reads
+/// its surplus arguments. The collector is then staged empty, exactly what a source call with
+/// no surplus arguments passes.
+pub(super) fn omits_only_hidden_collector(operand_count: usize, param_types: &[PhpType]) -> bool {
+    operand_count >= 1
+        && operand_count + 1 == param_types.len()
+        && param_types.last().map(PhpType::codegen_repr) == Some(PhpType::Array(Box::new(PhpType::Mixed)))
 }
 
 /// Whether an omitted argument's declared default can be staged without evaluating PHP code.
@@ -154,20 +157,38 @@ pub(super) fn omitted_default_is_materializable(
         return false;
     };
     match (&default.kind, param_ty.codegen_repr()) {
-        (ExprKind::Null, _) => true,
+        // Only the two null spellings the materializer below can stage: a boxed null and the
+        // tagged scalar null. A `?array` slot is a raw container pointer and has neither.
+        (ExprKind::Null, PhpType::Mixed | PhpType::TaggedScalar) => true,
         (ExprKind::BoolLiteral(_), PhpType::Bool) => true,
         (ExprKind::IntLiteral(_), PhpType::Int) => true,
         (ExprKind::StringLiteral(_), PhpType::Str) => true,
+        // A parameter widened to `mixed` by its call sites (`basePath($path = '')` called with a
+        // string and with an int elsewhere) still has the literal as its default; the call stages
+        // it boxed. Without these arms the candidate was dropped, a call with the argument
+        // omitted found no implementation, and php's `$this->basePath()` died as "Call to a
+        // member function basePath() on null".
+        (
+            ExprKind::BoolLiteral(_) | ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_),
+            PhpType::Mixed,
+        ) => true,
+        // `withCommands(array $commands = [])` with its parameter widened to `mixed` by its call
+        // sites: the empty array is staged boxed. Without this arm the candidate was dropped and
+        // Laravel's `Application::configure()` died on "Call to a member function withCommands()
+        // on null" -- every artisan command did.
+        (ExprKind::ArrayLiteral(items), PhpType::Array(_) | PhpType::Mixed) => items.is_empty(),
         _ => false,
     }
 }
 
 /// [`materialize_method_call_args_with_receiver_reg_and_refs`], staging each omitted
 /// argument from `defaults` (one entry per parameter after the receiver) when it is a literal.
-#[allow(clippy::too_many_arguments)]
 ///
 /// `variadic_tail`, when present, says the LAST parameter is a variadic tail: the call passes a
 /// fresh array holding those operands (boxed), empty when there are none, and releases it after.
+/// `tail_count_prefix` opens that array with the actual argument count, which a hidden
+/// `func_get_args()` collector behind optional parameters reads as its element 0.
+/// An omitted by-reference parameter gets a managed cell seeded with null; its write is discarded.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn materialize_method_call_args_with_receiver_reg_refs_defaults_and_tail(
     ctx: &mut FunctionContext<'_>,
@@ -179,8 +200,32 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_refs_defaults_and_t
     lifetime: RefArgCellLifetime,
     defaults: &[Option<crate::parser::ast::Expr>],
     variadic_tail: Option<&[ValueId]>,
+    tail_count_prefix: Option<usize>,
 ) -> Result<CallArgMaterialization> {
-    let tail_index = variadic_tail.map(|_| param_types.len().saturating_sub(1));
+    // The collector itself declares no default; earlier parameters may.
+    let omitted_collector = variadic_tail.is_none()
+        && omits_only_hidden_collector(operands.len(), param_types)
+        && defaults
+            .get(param_types.len().wrapping_sub(2))
+            .and_then(Option::as_ref)
+            .is_none();
+    let tail_index = (variadic_tail.is_some() || omitted_collector)
+        .then(|| param_types.len().saturating_sub(1));
+    // `function f(array $items = [])` called without `$items`: the omitted default is a fresh
+    // empty array, staged and released exactly as an empty variadic tail is.
+    let empty_array_default = |param_index: usize| {
+        Some(param_index) != tail_index
+            && matches!(
+                param_types[param_index].codegen_repr(),
+                PhpType::Array(_) | PhpType::Mixed
+            )
+            && defaults
+                .get(param_index.wrapping_sub(1))
+                .and_then(Option::as_ref)
+                .is_some_and(|default| {
+                    matches!(&default.kind, crate::parser::ast::ExprKind::ArrayLiteral(items) if items.is_empty())
+                })
+    };
     if operands.len() > param_types.len() {
         return Err(CodegenIrError::invalid_module(format!(
             "method call materialization received {} operands for {} params",
@@ -196,23 +241,33 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_refs_defaults_and_t
         )));
     }
     let ref_writebacks = plan_ref_arg_writebacks(ctx, operands, param_types, ref_params)?;
+    let preleased_ref_cells = plan_preleased_ref_arg_cells(ctx, operands, ref_params)?;
     if !ref_writebacks.is_empty() {
         return Err(CodegenIrError::unsupported(
             "receiver-register method call with scalar-to-mixed by-reference writebacks",
         ));
     }
-    // `lifetime` IS NOT ALWAYS `CallOnly` HERE. `new $cls(...)` with a runtime class string
-    // reaches a CONSTRUCTOR through this materializer
-    // (`objects::dynamic_mixed_candidates::emit_dynamic_new_mixed_constructor_call`), and a
-    // constructor may promote a by-reference parameter into a property that borrows the
-    // cell for the object's whole life — so that caller passes `MayOutliveCall` and gets the
-    // heap cell, exactly like the non-dynamic `new X()` path.
+    // Dynamic constructors use the same reference lifetime selection as fixed construction.
+    // Only classes with borrowed reference properties keep the persistent fallback.
     let mut ref_temp_cells =
         plan_ref_arg_temp_cells(ctx, operands, param_types, ref_params, &ref_writebacks, lifetime)?;
+    if lifetime == RefArgCellLifetime::CallOnly {
+        for param_index in operands.len().max(1)..param_types.len() {
+            if ref_params[param_index] {
+                ref_temp_cells.push(RefArgTempCell {
+                    param_index,
+                    source_value: None,
+                    cell_ty: param_types[param_index].codegen_repr(),
+                    cell_offset: 0,
+                    retain_existing: false,
+                });
+            }
+        }
+    }
     // THE RECEIVER IS ALREADY IN A REGISTER, AND THE CELL BLOCK IS ALLOWED TO DESTROY
     // CALLER-SAVED ONES: materializing a cell's value runs `load_value_to_result` and may
-    // call runtime helpers, so anything the caller left in a caller-saved register — or in
-    // the integer result register — is gone by the time the receiver is staged below.
+    // call runtime helpers, so anything the caller left in a caller-saved register, or in
+    // the integer result register, is gone by the time the receiver is staged below.
     //
     // Every caller that can reach a non-empty block therefore hands the receiver over in the
     // reserved CALLEE-SAVED nested-call register (`abi::nested_call_reg`, x19/r12), which
@@ -228,25 +283,22 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_refs_defaults_and_t
     }
     let mut no_writebacks: Vec<RefArgWriteback> = Vec::new();
     emit_ref_arg_cell_block(ctx, &mut no_writebacks, &mut ref_temp_cells)?;
-    let mut cleanup_slots =
-        plan_call_arg_temp_cleanups(ctx, operands, param_types, ref_params, &[])?;
+    let mut cleanup_slots = plan_call_arg_temp_cleanups(ctx, operands, param_types, ref_params, &[])?;
     // An omitted array parameter with no literal default is a variadic tail (see
-    // `mixed_method_candidates`): the call passes a fresh empty array and releases it afterwards.
+    // `mixed_method_candidates`): the call passes a fresh array and releases it afterwards.
     for param_index in operands.len().max(1)..param_types.len() {
         if !ref_params[param_index]
-            && Some(param_index) == tail_index
+            && (Some(param_index) == tail_index || empty_array_default(param_index))
         {
             cleanup_slots.push(CallArgTempCleanup {
                 param_index,
-                offset: cleanup_slots.len() * 16,
+                offset: cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES,
                 ty: param_types[param_index].codegen_repr(),
             });
         }
     }
-    let cleanup_bytes = cleanup_slots.len() * 16;
-    if cleanup_bytes > 0 {
-        abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
-    }
+    let cleanup_bytes = cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
+    abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
@@ -269,19 +321,12 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_refs_defaults_and_t
                 arg_temp_bytes,
                 &ref_writebacks,
                 &ref_temp_cells,
-                0,
+                cleanup_bytes,
             )?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
         } else {
-            ctx.load_value_to_result(*value)?;
-            let source_ty = ctx.raw_value_php_type(*value)?;
-            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
-            if let Some(cleanup) = cleanup_slots
-                .iter()
-                .find(|cleanup| cleanup.param_index == param_index)
-            {
-                save_call_arg_temp_cleanup(ctx, cleanup, arg_temp_bytes);
-            }
+            let cleanup = cleanup_slots.iter().find(|cleanup| cleanup.param_index == param_index);
+            let push_ty = materialize_plain_call_arg(ctx, *value, param_ty, cleanup, arg_temp_bytes)?;
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
         arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
@@ -293,7 +338,14 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_refs_defaults_and_t
             ));
         }
         if ref_params[param_index] {
-            materialize_omitted_ref_arg_address(ctx, param_index, &param_types[param_index], arg_temp_bytes, &ref_temp_cells)?;
+            materialize_omitted_ref_arg_address(
+                ctx,
+                param_index,
+                &param_types[param_index],
+                arg_temp_bytes,
+                &ref_temp_cells,
+                cleanup_bytes,
+            )?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
             arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
             continue;
@@ -331,16 +383,31 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_refs_defaults_and_t
             }
             _ => {}
         }
-        if Some(param_index) == tail_index {
-            let tail = variadic_tail.unwrap_or(&[]);
+        let is_empty_default = empty_array_default(param_index);
+        if Some(param_index) == tail_index || is_empty_default {
+            let tail = if is_empty_default { &[][..] } else { variadic_tail.unwrap_or(&[]) };
             let capacity = tail.len().max(4) as i64;
             abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), capacity);
             abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 8);
             abi::emit_call_label(ctx.emitter, "__rt_array_new");
             let result_reg = abi::int_result_reg(ctx.emitter).to_string();
-            crate::codegen::emit_array_value_type_stamp(ctx.emitter, &result_reg, &PhpType::Mixed);
+            let element_ty = match &param_ty {
+                PhpType::Array(element) if is_empty_default => element.codegen_repr(),
+                _ => PhpType::Mixed,
+            };
+            crate::codegen::emit_array_value_type_stamp(ctx.emitter, &result_reg, &element_ty);
+            if let Some(count) = tail_count_prefix.filter(|_| !is_empty_default) {
+                emit_push_int_onto_array(ctx, count as i64, &result_reg);
+            }
             for value in tail {
                 emit_push_boxed_onto_array(ctx, *value, &result_reg)?;
+            }
+            if is_empty_default && param_ty == PhpType::Mixed {
+                // The box takes the fresh array's reference; the cleanup slot releases the box.
+                crate::codegen::emit_box_current_owned_value_as_mixed(
+                    ctx.emitter,
+                    &PhpType::Array(Box::new(PhpType::Mixed)),
+                );
             }
             if let Some(cleanup) = cleanup_slots
                 .iter()
@@ -354,7 +421,30 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_refs_defaults_and_t
         }
         match param_ty {
             PhpType::Mixed => {
-                objects::emit_boxed_null(ctx);
+                // A literal default is staged as itself, boxed; only an omitted parameter with
+                // no literal default (or `null`) is the boxed null.
+                match literal_default {
+                    Some(crate::parser::ast::ExprKind::BoolLiteral(value)) => {
+                        abi::emit_load_int_immediate(
+                            ctx.emitter,
+                            abi::int_result_reg(ctx.emitter),
+                            i64::from(*value),
+                        );
+                        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+                    }
+                    Some(crate::parser::ast::ExprKind::IntLiteral(value)) => {
+                        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), *value);
+                        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+                    }
+                    Some(crate::parser::ast::ExprKind::StringLiteral(value)) => {
+                        let (label, len) = ctx.data.add_string(value.as_bytes());
+                        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+                        abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+                        abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+                        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+                    }
+                    _ => objects::emit_boxed_null(ctx),
+                }
                 abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
             }
             PhpType::TaggedScalar => {
@@ -363,23 +453,24 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_refs_defaults_and_t
             }
             _ => {
                 return Err(CodegenIrError::unsupported(format!(
-                    "receiver-register method call missing default for ABI type {:?}",
-                    param_ty
+                    "receiver-register method call missing default for ABI type {:?} (parameter {} of {} in {})",
+                    param_ty,
+                    param_index,
+                    param_types.len(),
+                    ctx.function.name,
                 )));
             }
         }
-        // THE CELL BLOCK SITS BELOW EVERY STAGED ARGUMENT, so a by-reference address staged
-        // after this point is `arg_temp_bytes + cell_offset`. The loop used to push without
-        // advancing the count because nothing read it afterwards; an omitted by-reference
-        // parameter does.
         arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
     }
     Ok(CallArgMaterialization {
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
         ref_temp_cells,
+        preleased_ref_cells,
         cleanup_slots,
         cleanup_bytes,
+        cleanup_guard_bytes: 0,
         borrowed_stack_arg_bytes: 0,
     })
 }
@@ -396,9 +487,27 @@ fn emit_push_boxed_onto_array(
 ) -> Result<()> {
     abi::emit_push_reg(ctx.emitter, array_reg);
     let ty = ctx.load_value_to_result(value)?.codegen_repr();
+    emit_push_current_value_onto_array(ctx, &ty, array_reg);
+    Ok(())
+}
+
+/// Appends a boxed integer literal to the array in `array_reg`.
+fn emit_push_int_onto_array(ctx: &mut FunctionContext<'_>, value: i64, array_reg: &str) {
+    abi::emit_push_reg(ctx.emitter, array_reg);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), value);
+    emit_push_current_value_onto_array(ctx, &PhpType::Int, array_reg);
+}
+
+/// Appends the value in the result registers, of type `ty`, to the array saved on the stack by
+/// the caller (`array_reg` pushed), leaving the possibly grown array in `array_reg`.
+pub(super) fn emit_push_current_value_onto_array(
+    ctx: &mut FunctionContext<'_>,
+    ty: &PhpType,
+    array_reg: &str,
+) {
     let fresh_box = !matches!(ty, PhpType::Mixed | PhpType::Union(_));
     if fresh_box {
-        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &ty);
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, ty);
     }
     let result_reg = abi::int_result_reg(ctx.emitter).to_string();
     let value_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
@@ -421,7 +530,6 @@ fn emit_push_boxed_onto_array(
     if result_reg != array_reg {
         abi::emit_reg_move(ctx.emitter, array_reg, &result_reg);
     }
-    Ok(())
 }
 
 /// Converts declared parameter types to the ABI-visible shape for by-reference args.
@@ -448,7 +556,7 @@ pub(super) fn call_arg_temp_slot_size(ty: &PhpType) -> usize {
     }
 }
 
-/// Plans temporary by-reference cells for caller/callee representation boundaries.
+/// Plans caller-side Mixed cells needed for scalar locals passed to by-reference Mixed params.
 pub(super) fn plan_ref_arg_writebacks(
     ctx: &FunctionContext<'_>,
     args: &[ValueId],
@@ -457,76 +565,77 @@ pub(super) fn plan_ref_arg_writebacks(
 ) -> Result<Vec<RefArgWriteback>> {
     let mut writebacks = Vec::new();
     for (param_index, value) in args.iter().enumerate() {
-        if !ref_params[param_index] {
+        if !ref_params[param_index] || param_types[param_index].codegen_repr() != PhpType::Mixed {
             continue;
         }
-        let source_ty = ctx.raw_value_php_type(*value)?.codegen_repr();
-        // A non-local by-reference argument has no caller variable to update. It is materialized
-        // as a throwaway ref cell below; only local sources participate in writeback planning.
-        let Ok(source) = local_ref_arg_source(ctx, *value) else {
+        // An acquired hash-entry cell already is the caller's writable Mixed storage. Looking
+        // through it to the entry's earlier concrete payload type would incorrectly schedule a
+        // scalar writeback against a value that has no local source slot.
+        if value_is_acquired_array_element_ref_cell(ctx, *value)? {
             continue;
-        };
-        let cell_ty = param_types[param_index].codegen_repr();
-        let kind = match (&source_ty, &cell_ty) {
-            (source_ty, PhpType::Mixed) if !matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) => {
-                reject_unsupported_mixed_ref_writeback_source(
-                    source_ty,
-                    &ctx.function.name,
-                    source.slot,
-                )?;
-                RefArgWritebackKind::ConcreteToMixed
+        }
+        let source_ty = if let Some(array) = array_element_address_source(ctx, *value)? {
+            match ctx.value_php_type(array)?.codegen_repr() {
+                PhpType::Array(element) => element.codegen_repr(),
+                PhpType::AssocArray { value, .. } => value.codegen_repr(),
+                _ => {
+                    return Err(CodegenIrError::invalid_module(
+                        "array element address requires an array receiver",
+                    ));
+                }
             }
-            (PhpType::Mixed, PhpType::Array(element))
-                if element.codegen_repr() == PhpType::Mixed =>
-            {
-                RefArgWritebackKind::MixedArrayToRawArray
-            }
-            _ => continue,
+        } else {
+            ctx.raw_value_php_type(*value)?.codegen_repr()
         };
+        if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+            continue;
+        }
+        if local_ref_arg_source(ctx, *value).ok()
+            .and_then(|source| ctx.local_php_type(source.slot).ok())
+            .is_some_and(|storage| storage.codegen_repr() == PhpType::Mixed)
+        {
+            continue;
+        }
+        if array_element_address_source(ctx, *value)?.is_none()
+            && local_ref_arg_source(ctx, *value).is_err()
+        {
+            // Omitted defaults have no caller location. The temporary-cell planner owns
+            // their conversion and disposal, so there is no scalar/container writeback.
+            continue;
+        }
+        reject_unsupported_mixed_ref_writeback_source(&source_ty)?;
+        let source = local_ref_arg_source(ctx, *value)?;
         writebacks.push(RefArgWriteback {
             param_index,
             source_value: *value,
             source_slot: source.slot,
             source_ty,
-            cell_ty,
-            kind,
             cell_offset: 0,
         });
     }
     Ok(writebacks)
 }
 
-/// Rejects Mixed ref-cell writebacks whose concrete caller slot cannot consume one word safely.
-pub(super) fn reject_unsupported_mixed_ref_writeback_source(
-    source_ty: &PhpType,
-    function_name: &str,
-    source_slot: LocalSlotId,
-) -> Result<()> {
+/// Rejects scalar-to-Mixed temporary ref cells whose writeback shape is not supported yet.
+pub(super) fn reject_unsupported_mixed_ref_writeback_source(source_ty: &PhpType) -> Result<()> {
     if matches!(
         source_ty.codegen_repr(),
-        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never
-    ) {
-        return Ok(());
-    }
-    if matches!(
-        source_ty.codegen_repr(),
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_)
     ) {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(
-        "by-reference Mixed parameter writeback to PHP type {:?} in {} for local slot {:?}",
-        source_ty, function_name, source_slot
+        "by-reference Mixed parameter writeback to PHP type {:?}",
+        source_ty
     )))
 }
 
-/// Plans caller-side stack cells for by-reference arguments that have NO caller variable
-/// behind them — the OMITTED optional by-reference argument, above all.
-///
-/// The predicates below mirror [`materialize_ref_arg_address`]'s own order exactly: an
-/// argument that already has a writeback cell, a local slot, or an array-element address
-/// needs no cell of its own. Everything else would otherwise reach the heap fallback, whose
-/// allocation nothing frees.
+/// Plans managed reference-cell leases and default cells required by call arguments.
+/// Writebacks, locals, and borrowed indexed element addresses need no additional cell.
 pub(super) fn plan_ref_arg_temp_cells(
     ctx: &FunctionContext<'_>,
     args: &[ValueId],
@@ -536,9 +645,8 @@ pub(super) fn plan_ref_arg_temp_cells(
     lifetime: RefArgCellLifetime,
 ) -> Result<Vec<RefArgTempCell>> {
     let mut cells = Vec::new();
-    // A callee that may KEEP the reference needs storage that outlives this frame, so it
-    // keeps the heap cell (see `RefArgCellLifetime`). Planning a stack cell there would hand
-    // a constructor-promoted property a pointer into a frame that is gone by its first use.
+    // Constructor-promoted properties borrow without retaining. Until their ownership
+    // model adopts managed cells, they must keep the separate persistent fallback.
     if lifetime == RefArgCellLifetime::MayOutliveCall {
         return Ok(cells);
     }
@@ -555,6 +663,19 @@ pub(super) fn plan_ref_arg_temp_cells(
         if local_ref_arg_source(ctx, *value).is_ok() {
             continue;
         }
+        if value_is_acquired_array_element_ref_cell(ctx, *value)? {
+            continue;
+        }
+        if value_is_managed_array_element_ref_cell(ctx, *value)? {
+            cells.push(RefArgTempCell {
+                param_index,
+                source_value: Some(*value),
+                cell_ty: param_types[param_index].codegen_repr(),
+                cell_offset: 0,
+                retain_existing: true,
+            });
+            continue;
+        }
         if value_is_array_element_address(ctx, *value)? {
             continue;
         }
@@ -563,147 +684,206 @@ pub(super) fn plan_ref_arg_temp_cells(
             source_value: Some(*value),
             cell_ty: param_types[param_index].codegen_repr(),
             cell_offset: 0,
-        });
-    }
-    // PARAMETERS THE CALLER NEVER WROTE. Every other materializer asserts one argument per
-    // parameter, so this range is empty for them; the receiver-register path is the one that
-    // can be short, because `lower_mixed_method_candidate` builds `param_types` from EACH
-    // CANDIDATE's own signature and one candidate's third parameter is another's second — no
-    // caller-side padding satisfies them all at once.
-    //
-    // The callee still writes through the pointer, so the omitted position gets a discarded
-    // cell exactly like an argument with no caller variable: seeded to null below, released
-    // with the rest of the block by `emit_ref_arg_writebacks`.
-    for param_index in args.len()..param_types.len() {
-        if !ref_params[param_index] {
-            continue;
-        }
-        cells.push(RefArgTempCell {
-            param_index,
-            source_value: None,
-            cell_ty: param_types[param_index].codegen_repr(),
-            cell_offset: 0,
+            retain_existing: false,
         });
     }
     Ok(cells)
 }
 
-/// Seeds a discarded cell that stands in for an OMITTED by-reference argument.
-///
-/// PHP's default for such a parameter is `null` in every case elephc can reach here: a
-/// by-reference parameter may not carry a non-null constant default and still be omitted by a
-/// caller that means to read the write back. The refusal is kept for representations with no
-/// null this runtime can spell, rather than pushing a zero that
-/// [`emit_ref_arg_writebacks`] would then hand to a refcount helper.
-fn emit_omitted_ref_cell_seed(ctx: &mut FunctionContext<'_>, cell_ty: &PhpType) -> Result<()> {
-    match cell_ty.codegen_repr() {
-        PhpType::Mixed => {
-            objects::emit_boxed_null(ctx);
-            Ok(())
+/// Returns whether EIR already acquired the managed array-element cell used by this operand.
+/// `Borrow` marks ledger cleanup and `Move` is a neutral forward, but both still name the same
+/// acquired writable cell and must bypass scalar writeback and backend fallback-cell planning.
+fn value_is_acquired_array_element_ref_cell(
+    ctx: &FunctionContext<'_>,
+    mut value: ValueId,
+) -> Result<bool> {
+    loop {
+        let Some(value_ref) = ctx.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(false);
+        };
+        let inst_ref = ctx
+            .function
+            .instruction(inst)
+            .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        match inst_ref.op {
+            Op::AcquireRefCell => return Ok(true),
+            Op::Borrow | Op::Move => value = expect_operand(inst_ref, 0)?,
+            _ => return Ok(false),
         }
-        PhpType::TaggedScalar => {
-            crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
-            Ok(())
-        }
-        PhpType::Int | PhpType::Bool | PhpType::False => {
-            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-            Ok(())
-        }
-        other => Err(CodegenIrError::unsupported(format!(
-            "omitted by-reference parameter cell for ABI type {other:?}"
-        ))),
     }
 }
 
-/// Loads the address of the discarded cell standing in for an OMITTED by-reference argument.
-fn materialize_omitted_ref_arg_address(
-    ctx: &mut FunctionContext<'_>,
-    param_index: usize,
-    param_ty: &PhpType,
-    arg_temp_bytes: usize,
-    temp_cells: &[RefArgTempCell],
-) -> Result<()> {
-    let Some(cell) = temp_cells
-        .iter()
-        .find(|cell| cell.param_index == param_index)
-    else {
-        // `plan_ref_arg_temp_cells` plans no cells at all for `MayOutliveCall`, where a
-        // caller-stack cell would be a use-after-free: the callee may keep the reference (a
-        // closure's `use (&$param)`), so the omitted position gets heap storage seeded the way
-        // the stack cell would have been.
-        let target_ty = param_ty.codegen_repr();
-        emit_omitted_ref_cell_seed(ctx, &target_ty)?;
-        emit_heap_ref_cell_from_result(ctx, &target_ty);
-        return Ok(());
-    };
-    abi::emit_temporary_stack_address(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        arg_temp_bytes + cell.cell_offset,
-    );
-    Ok(())
-}
-
-/// Moves the value in the result registers into a fresh 16-byte heap ref cell, leaving the
-/// cell's address in the integer result register.
-fn emit_heap_ref_cell_from_result(ctx: &mut FunctionContext<'_>, target_ty: &PhpType) {
-    abi::emit_push_result_value(ctx.emitter, target_ty);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    abi::emit_pop_reg(ctx.emitter, cell_reg);
-    store_pushed_value_to_ref_cell(ctx, cell_reg, target_ty);
-    move_reg_to_int_result(ctx, cell_reg);
-}
-
-/// Emits the caller-side by-reference cell block: the Mixed writeback cells first, then the
-/// discarded cells, as one contiguous run of 16-byte stack slots.
+/// Finds managed cell owners acquired during EIR argument evaluation without an EIR ledger.
 ///
-/// Offsets are assigned across the WHOLE block (the last cell pushed sits at the current
-/// stack pointer), which is what lets [`materialize_ref_arg_address`] address either kind
-/// the same way and [`emit_ref_arg_writebacks`] release them in one step.
+/// A ledger-protected operand carries an outer `Borrow`, while a bare `AcquireRefCell` delegates
+/// normal-path retirement to the shared ABI call cleanup. The IR peephole preserves that marker:
+/// searching the whole function for a later release would conflate mutually exclusive paths and
+/// owner-slot lifetimes, and could suppress the only normal-path cleanup for this call.
+pub(super) fn plan_preleased_ref_arg_cells(
+    ctx: &FunctionContext<'_>,
+    args: &[ValueId],
+    ref_params: &[bool],
+) -> Result<Vec<PreleasedRefArgCell>> {
+    let mut cells = Vec::new();
+    for (value, is_ref) in args.iter().zip(ref_params.iter()) {
+        if !is_ref {
+            continue;
+        }
+        let Some((owner_slot, publication_order)) = preleased_ref_cell_owner(ctx, *value)? else {
+            continue;
+        };
+        if !cells
+            .iter()
+            .any(|(_, cell): &(u32, PreleasedRefArgCell)| cell.owner_slot == owner_slot)
+        {
+            cells.push((
+                publication_order,
+                PreleasedRefArgCell {
+                    owner_slot,
+                    cell_ty: PhpType::Mixed,
+                },
+            ));
+        }
+    }
+    // Named arguments are stored in ABI parameter order, which can be the reverse of source
+    // evaluation and cleanup-record publication. Instruction order is the EIR source order and
+    // therefore the only valid basis for the later LIFO pop.
+    cells.sort_by_key(|(publication_order, _)| *publication_order);
+    Ok(cells.into_iter().map(|(_, cell)| cell).collect())
+}
+
+/// Traces neutral forwarding around a bare EIR-managed argument lease.
+/// `Borrow` is a deliberate stop marker: its enclosing EIR ledger owns cleanup.
+fn preleased_ref_cell_owner(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<(LocalSlotId, u32)>> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if inst_ref.op == Op::Borrow {
+        return Ok(None);
+    }
+    if inst_ref.op == Op::Move {
+        return preleased_ref_cell_owner(ctx, expect_operand(inst_ref, 0)?);
+    }
+    if inst_ref.op != Op::AcquireRefCell {
+        return Ok(None);
+    }
+    let Some(Immediate::LocalSlot(owner_slot)) = inst_ref.immediate else {
+        return Err(CodegenIrError::invalid_module(
+            "preleased reference-cell argument has no owner slot",
+        ));
+    };
+    Ok(Some((owner_slot, inst.as_raw())))
+}
+
+/// Keeps the persistent fallback only when the constructed hierarchy can borrow a property cell.
+/// Ordinary constructors use managed call leases, which escaping closures can retain themselves.
+pub(super) fn constructor_ref_cell_lifetime(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> RefArgCellLifetime {
+    let mut current = Some(class_name);
+    let mut seen = std::collections::HashSet::new();
+    while let Some(name) = current {
+        if !seen.insert(name) { return RefArgCellLifetime::MayOutliveCall; }
+        let Some(info) = ctx.module.class_infos.get(name) else {
+            return RefArgCellLifetime::MayOutliveCall;
+        };
+        if info.reference_properties.iter().any(|property| {
+            !info.owned_reference_properties.contains(property)
+        }) {
+            return RefArgCellLifetime::MayOutliveCall;
+        }
+        // Inspect ancestors as well, since private reference properties may be shadowed.
+        current = info.parent.as_deref();
+    }
+    RefArgCellLifetime::CallOnly
+}
+
+/// Reserves writeback slots and publishes a scoped managed owner for each default cell.
+/// Each managed owner has an adjacent unwind record, linked in argument order.
 pub(super) fn emit_ref_arg_cell_block(
     ctx: &mut FunctionContext<'_>,
     writebacks: &mut [RefArgWriteback],
     temp_cells: &mut [RefArgTempCell],
 ) -> Result<()> {
-    let total = writebacks.len() + temp_cells.len();
+    let writeback_bytes = writebacks.len() * 16;
+    let total_bytes = writeback_bytes + temp_cells.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
+    abi::emit_reserve_temporary_stack(ctx.emitter, total_bytes);
     for (index, writeback) in writebacks.iter_mut().enumerate() {
-        match writeback.kind {
-            RefArgWritebackKind::ConcreteToMixed => {
-                ctx.load_value_to_result(writeback.source_value)?;
-                emit_box_current_value_as_mixed(ctx.emitter, &writeback.source_ty);
-            }
-            RefArgWritebackKind::MixedArrayToRawArray => {
-                let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-                ctx.load_value_to_reg(writeback.source_value, arg_reg)?;
-                abi::emit_call_label(ctx.emitter, "__rt_mixed_to_owned_hash");
-            }
-        }
-        abi::emit_push_result_value(ctx.emitter, &writeback.cell_ty);
-        writeback.cell_offset = (total - index - 1) * 16;
+        ctx.load_value_to_result(writeback.source_value)?;
+        emit_box_current_value_as_mixed(ctx.emitter, &writeback.source_ty);
+        writeback.cell_offset = index * 16;
+        abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), writeback.cell_offset);
     }
-    let pushed = writebacks.len();
     for (index, cell) in temp_cells.iter_mut().enumerate() {
-        match cell.source_value {
-            Some(source_value) => {
-                let source_ty = ctx.load_value_to_result(source_value)?;
-                coerce_ref_cell_store_value(ctx, source_value, &source_ty, &cell.cell_ty)?;
+        cell.cell_offset = writeback_bytes + index * CALL_ARG_TEMP_CLEANUP_BYTES;
+        if cell.retain_existing {
+            let source = cell.source_value.ok_or_else(|| {
+                CodegenIrError::invalid_module("retained reference cell without an operand")
+            })?;
+            ctx.load_value_to_reg(source, abi::int_result_reg(ctx.emitter))?;
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            abi::emit_pop_reg(ctx.emitter, cell_reg);
+            abi::emit_store_to_sp(ctx.emitter, cell_reg, cell.cell_offset);
+            let owner_address = abi::tertiary_scratch_reg(ctx.emitter);
+            abi::emit_temporary_stack_address(ctx.emitter, owner_address, cell.cell_offset);
+            abi::emit_link_call_operand_owner_at_stack(
+                ctx.emitter,
+                owner_address,
+                false,
+                cell.cell_offset + 16,
+            );
+            continue;
+        }
+        let Some(source) = cell.source_value else {
+            // An OMITTED optional by-reference argument: no operand, a null of the cell's type.
+            emit_omitted_ref_cell_seed(ctx, &cell.cell_ty)?;
+            emit_new_ref_cell_from_pushed_seed(ctx, cell)?;
+            continue;
+        };
+        let source_ty = ctx.load_value_to_result(source)?;
+        coerce_ref_cell_store_value(ctx, source, &source_ty, &cell.cell_ty)?;
+        if source_ty.codegen_repr() == cell.cell_ty.codegen_repr() {
+            // EIR still owns the default operand. The mutable cell needs its own retain
+            // because the callee can replace it before EIR retires that original owner.
+            if cell.cell_ty.codegen_repr() == PhpType::Str {
+                abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            } else {
+                abi::emit_incref_if_refcounted(ctx.emitter, &cell.cell_ty);
             }
-            None => emit_omitted_ref_cell_seed(ctx, &cell.cell_ty)?,
         }
         abi::emit_push_result_value(ctx.emitter, &cell.cell_ty);
-        // A push writes ONE word for every representation except `Str`/`TaggedScalar`, so
-        // the cell's second word is whatever the stack happened to hold. The heap path this
-        // replaces zeroed it, and a callee that reads the cell as a two-word value (a
-        // string, a tagged scalar) must not see garbage there.
-        if !matches!(cell.cell_ty.codegen_repr(), PhpType::Str | PhpType::TaggedScalar) {
-            let scratch = abi::symbol_scratch_reg(ctx.emitter);
-            abi::emit_temporary_stack_address(ctx.emitter, scratch, 0);
-            abi::emit_store_zero_to_address(ctx.emitter, scratch, 8);
-        }
-        cell.cell_offset = (total - pushed - index - 1) * 16;
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            crate::codegen_support::runtime::reference_cells::payload_tag(&cell.cell_ty),
+        );
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
+        let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_pop_reg(ctx.emitter, cell_reg);
+        store_pushed_value_to_ref_cell(ctx, cell_reg, &cell.cell_ty);
+        abi::emit_store_to_sp(ctx.emitter, cell_reg, cell.cell_offset);
+        let owner_address = abi::tertiary_scratch_reg(ctx.emitter);
+        abi::emit_temporary_stack_address(ctx.emitter, owner_address, cell.cell_offset);
+        abi::emit_link_call_operand_owner_at_stack(
+            ctx.emitter, owner_address, false, cell.cell_offset + 16,
+        );
     }
     Ok(())
 }
@@ -734,39 +914,29 @@ pub(super) fn materialize_ref_arg_address(
     if local_ref_arg_source(ctx, value).is_ok() {
         return materialize_local_ref_arg_address(ctx, value);
     }
-    if value_is_array_element_address(ctx, value)? {
-        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
-        return Ok(());
-    }
     if let Some(cell) = temp_cells
         .iter()
         .find(|cell| cell.param_index == param_index)
     {
         let cell_offset = arg_temp_bytes + ref_cell_base_offset + cell.cell_offset;
-        abi::emit_temporary_stack_address(
+        abi::emit_load_temporary_stack_slot(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
             cell_offset,
         );
         return Ok(());
     }
+    if value_is_array_element_address(ctx, value)? {
+        ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+        return Ok(());
+    }
     materialize_temporary_ref_arg_cell(ctx, value, param_ty)
 }
 
-/// Allocates a heap ref-cell for a by-reference argument that is not a local variable.
-///
-/// LOAD-BEARING, NOT DEAD. Two kinds of caller reach it, and only one of them is a leftover:
-///
-/// - A call whose cells were planned as [`RefArgCellLifetime::MayOutliveCall`] — every
-///   CONSTRUCTOR call, static or dynamic. A constructor that promotes a by-reference
-///   parameter binds a property that BORROWS this cell for the whole life of the object, so
-///   it has to be heap storage that outlives the frame. Nothing frees it, which is a
-///   narrower pre-existing defect (one cell per constructed object) that only the object
-///   model can fix — but replacing this allocation with a stack cell is a use-after-free,
-///   and that is exactly what a "clean up the dead fallback" edit would do.
-/// - A call path that plans no cells at all. Those would leak one 16-byte block per call, so
-///   every path that stages by-reference arguments today plans them
-///   ([`plan_ref_arg_temp_cells`]).
+/// Allocates the persistent fallback cell required by borrowed constructor properties.
+/// Ordinary calls and non-promoting constructors use managed temporary cells instead.
+/// This legacy allocation must remain live until promoted properties retain their own cell
+/// owners; replacing it with stack storage or releasing it on return would dangle properties.
 pub(super) fn materialize_temporary_ref_arg_cell(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
@@ -775,14 +945,14 @@ pub(super) fn materialize_temporary_ref_arg_cell(
     let source_ty = ctx.load_value_to_result(value)?;
     let target_ty = param_ty.codegen_repr();
     coerce_ref_cell_store_value(ctx, value, &source_ty, &target_ty)?;
-    // The cell outlives the call, and the caller releases its operand right after it: without
-    // a reference of its own, the cell a closure captured (`use (&$inline)` on an omitted
-    // `array &$inline = []`) pointed at the freed array by the time the closure ran. A boxing
-    // coercion already produced a box of its own, so only the unconverted value is retained.
-    if source_ty.codegen_repr() == target_ty {
-        abi::emit_incref_if_refcounted(ctx.emitter, &target_ty);
-    }
-    emit_heap_ref_cell_from_result(ctx, &target_ty);
+    abi::emit_push_result_value(ctx.emitter, &target_ty);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_pop_reg(ctx.emitter, cell_reg);
+    store_pushed_value_to_ref_cell(ctx, cell_reg, &target_ty);
+    move_reg_to_int_result(ctx, cell_reg);
     Ok(())
 }
 
@@ -823,11 +993,8 @@ pub(super) fn store_pushed_value_to_ref_cell(ctx: &mut FunctionContext<'_>, cell
     }
 }
 
-/// Writes temporary Mixed by-reference cells back into the original caller locals, releases
-/// whatever a discarded cell ended up holding, and frees the whole cell block.
-///
-/// One function for both kinds because they share one pushed block: releasing them
-/// separately would need two stack adjustments and two chances to get the order wrong.
+/// Publishes scalar writebacks, retires default-cell leases in unwind order, and frees staging.
+/// Captured cells survive because closure creation retains a separate managed lease.
 pub(super) fn emit_ref_arg_writebacks(
     ctx: &mut FunctionContext<'_>,
     call_args: &CallArgMaterialization,
@@ -838,117 +1005,44 @@ pub(super) fn emit_ref_arg_writebacks(
             abi::int_result_reg(ctx.emitter),
             writeback.cell_offset,
         );
-        match writeback.kind {
-            RefArgWritebackKind::ConcreteToMixed => {
-                if ctx.local_php_type(writeback.source_slot)?.codegen_repr() == PhpType::Mixed {
-                    emit_mixed_ref_writeback_to_gradual_local(ctx, writeback)?;
-                    continue;
-                }
-                if matches!(writeback.source_ty.codegen_repr(), PhpType::AssocArray { .. }) {
-                    emit_hash_ref_writeback_from_mixed_cell(ctx, writeback)?;
-                    continue;
-                }
-                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-                abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-                move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
-                store_current_scalar_result_to_ref_source(ctx, writeback)?;
-                abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-                abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        match writeback.source_ty.codegen_repr() {
+            PhpType::AssocArray { .. } => {
+                emit_hash_ref_writeback_from_mixed_cell(ctx, writeback)?;
+                continue;
             }
-            RefArgWritebackKind::MixedArrayToRawArray => {
-                emit_box_current_owned_value_as_mixed(ctx.emitter, &writeback.cell_ty);
-                emit_mixed_ref_writeback_to_gradual_local(ctx, writeback)?;
+            container @ (PhpType::Array(_) | PhpType::Object(_)) => {
+                emit_owned_payload_ref_writeback_from_mixed_cell(ctx, writeback, &container)?;
+                continue;
             }
+            _ => {}
         }
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
+        store_current_scalar_result_to_ref_source(ctx, writeback)?;
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     }
-    for cell in &call_args.ref_temp_cells {
-        // A discarded cell has no caller variable to write back to, but a REFCOUNTED one
-        // still holds a value the caller owns — the default the caller materialized, or
-        // whatever the callee left in its place, which `store_ref_cell` retained on the way
-        // in. Releasing it is the same ownership rule the writeback loop above applies to
-        // its own cells. `emit_decref_if_refcounted` is the canonical dispatcher and is
-        // deliberately a no-op for scalars AND for `Str`, whose ownership is not refcounted
-        // in this runtime; a string left in a discarded cell therefore keeps whatever
-        // behaviour the surrounding string-return path already has.
-        let cell_ty = cell.cell_ty.codegen_repr();
-        if !matches!(
-            cell_ty,
-            PhpType::Mixed
-                | PhpType::Union(_)
-                | PhpType::Array(_)
-                | PhpType::AssocArray { .. }
-                | PhpType::Object(_)
-                | PhpType::Iterable
-                | PhpType::Callable
-        ) {
-            continue;
-        }
+    for cell in call_args.ref_temp_cells.iter().rev() {
+        abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, cell.cell_offset + 16);
         abi::emit_load_temporary_stack_slot(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
             cell.cell_offset,
         );
-        abi::emit_decref_if_refcounted(ctx.emitter, &cell_ty);
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
     }
-    let block_cells = call_args.ref_writebacks.len() + call_args.ref_temp_cells.len();
-    abi::emit_release_temporary_stack(ctx.emitter, block_cells * 16);
-    Ok(())
-}
-
-/// Publishes a by-reference `mixed` cell back into a caller slot held as a hash.
-///
-/// The callee may leave a packed list in the cell: `sort()` on an array of mixed values runs
-/// the gradual `__elephc_sort_mixed(mixed &$array)`, which assigns `array_values()` order back.
-/// Unboxing that payload stored an indexed array where the caller reads a hash, and the next
-/// hash walk (`rsort()` on the same `$object->items`) faulted. `__rt_mixed_to_owned_hash`
-/// hands back an owned hash for either array shape.
-fn emit_hash_ref_writeback_from_mixed_cell(
-    ctx: &mut FunctionContext<'_>,
-    writeback: &RefArgWriteback,
-) -> Result<()> {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    if arg_reg != result_reg {
-        abi::emit_reg_move(ctx.emitter, arg_reg, result_reg);
+    let block_bytes = call_args.ref_writebacks.len() * 16
+        + call_args.ref_temp_cells.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
+    abi::emit_release_temporary_stack(ctx.emitter, block_bytes);
+    for cell in call_args.preleased_ref_cells.iter().rev() {
+        abi::emit_pop_call_operand_owner(ctx.emitter);
+        super::local_stores::release_local_ref_cell_owner(
+            ctx,
+            cell.owner_slot,
+            &cell.cell_ty,
+        )?;
     }
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_to_owned_hash");
-    let slot_ty = ctx.local_php_type(writeback.source_slot)?.codegen_repr();
-    let offset = ctx.local_offset(writeback.source_slot)?;
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    super::super::frame::emit_owned_local_cleanup(ctx, writeback.source_slot, offset, &slot_ty);
-    abi::emit_pop_reg(ctx.emitter, result_reg);
-    ctx.store_current_result_to_local(writeback.source_slot)?;
-    abi::emit_pop_reg(ctx.emitter, result_reg);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    Ok(())
-}
-
-/// Publishes a mutated by-reference Mixed cell back into gradual caller storage.
-///
-/// The callee may replace the cell's runtime value with a different array kind or scalar, so
-/// unboxing it according to the caller's pre-call narrowed type would discard that runtime tag.
-/// The local takes its own cell reference instead; the temporary argument owner is then released.
-fn emit_mixed_ref_writeback_to_gradual_local(
-    ctx: &mut FunctionContext<'_>,
-    writeback: &RefArgWriteback,
-) -> Result<()> {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    let target_ty = ctx.local_php_type(writeback.source_slot)?.codegen_repr();
-    let offset = ctx.local_offset(writeback.source_slot)?;
-    super::super::frame::emit_owned_local_cleanup(
-        ctx,
-        writeback.source_slot,
-        offset,
-        &target_ty,
-    );
-    abi::emit_pop_reg(ctx.emitter, result_reg);
-    ctx.store_current_result_to_local(writeback.source_slot)?;
-    abi::emit_pop_reg(ctx.emitter, result_reg);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     Ok(())
 }
 
@@ -963,24 +1057,6 @@ pub(super) fn mixed_unbox_low_payload_reg(ctx: &FunctionContext<'_>) -> &'static
 /// Unboxes a boxed Mixed/Union payload and retains it for an owned concrete heap result.
 pub(super) fn emit_unbox_mixed_to_owned_refcounted_result(ctx: &mut FunctionContext<'_>, result_ty: &PhpType) {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    if matches!(result_ty.codegen_repr(), PhpType::Object(_)) {
-        // A boxed NULL read as an object must be the null pointer, not the box's payload word,
-        // which a null box does not zero. A parameter declared `Def $d` and later reassigned
-        // (`$d = $factory;`) keeps its object-typed reads while its slot holds boxes, and
-        // Symfony's `PhpDumper::getClasses()` loop `while ($definition instanceof Definition)`
-        // then saw a non-null "object" after `$definition = null` and called `getTag()` on null.
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction("cmp x0, #8");                             // runtime tag 8 means the boxed value is null
-                ctx.emitter.instruction("csel x1, xzr, x1, eq");                   // a null box reads as the null object pointer
-            }
-            Arch::X86_64 => {
-                ctx.emitter.instruction("xor r10d, r10d");                         // prepare the null object pointer
-                ctx.emitter.instruction("cmp rax, 8");                             // runtime tag 8 means the boxed value is null
-                ctx.emitter.instruction("cmove rdi, r10");                         // a null box reads as the null object pointer
-            }
-        }
-    }
     move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
     abi::emit_incref_if_refcounted(ctx.emitter, result_ty);
 }
@@ -994,6 +1070,10 @@ pub(super) fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let value = expect_operand(inst, 0)?;
     load_value_to_first_int_arg(ctx, value)?;
     let result_ty = inst.result_php_type.codegen_repr();
+    // The immediate asks for a runtime type guard on the way out of the box: `clone` of a gradual
+    // value (Bool), a nominal class or interface (Data), a callable (I64 10), a spread source
+    // (I64 4), or any `iterable` result. Without it a wrong runtime value was handed on unboxed
+    // instead of raising php's TypeError.
     match (&result_ty, &inst.immediate) {
         (PhpType::Object(_), Some(Immediate::Bool(true))) => {
             emit_mixed_tag_unbox_guard(ctx, 6, &|given| {
@@ -1006,6 +1086,15 @@ pub(super) fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instructio
         (PhpType::Object(_), Some(Immediate::Data(_))) => {
             emit_mixed_nominal_object_unbox_guard(ctx, inst)?;
         }
+        // A guarded callable unbox in an eval program must still accept a Closure the interpreter
+        // created (an object, converted to a bridge descriptor below), so it checks for the two
+        // closure representations rather than for the descriptor tag alone.
+        (PhpType::Callable, Some(Immediate::I64(10)))
+            if ctx.module.required_runtime_features.eval_bridge =>
+        {
+            emit_mixed_closure_unbox_guard(ctx);
+            return store_if_result(ctx, inst);
+        }
         (PhpType::Callable, Some(Immediate::I64(10))) => {
             emit_mixed_tag_unbox_guard(ctx, 10, &|given| {
                 format!("Value must be of type callable, {} given", given)
@@ -1015,7 +1104,18 @@ pub(super) fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instructio
             return lower_mixed_spread_source_unbox(ctx, inst, &result_ty);
         }
         (PhpType::Iterable, _) => emit_mixed_iterable_unbox_guard(ctx),
-        _ => abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox"),
+        // A `callable` parameter fed from a `mixed` slot (`function keep($cb) { return new
+        // CallbackFilterIterator($it, $cb); }`) may hold a Closure the interpreter created: an
+        // object, not a descriptor, which the callee jumped through (Twig's `|filter` arrow
+        // functions). The local-load conversion builds a bridge descriptor for it; so does this.
+        (PhpType::Callable, None) if ctx.module.required_runtime_features.eval_bridge => {
+            super::local_loads::emit_mixed_local_to_owned_callable_descriptor(ctx);
+            return store_if_result(ctx, inst);
+        }
+        _ => {
+            emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
+            return store_if_result(ctx, inst);
+        }
     }
     move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
     if matches!(
@@ -1031,6 +1131,318 @@ pub(super) fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instructio
         abi::emit_incref_if_refcounted(ctx.emitter, &result_ty);
     }
     store_if_result(ctx, inst)
+}
+
+/// Publishes a by-reference `mixed` cell back into a caller slot held as a hash.
+///
+/// The callee may leave a packed list in the cell: `sort()` on an array of mixed values runs
+/// the gradual `__elephc_sort_mixed(mixed &$array)`, which assigns `array_values()` order back.
+/// Unboxing that payload stored an indexed array where the caller reads a hash, and the next
+/// hash walk faulted. `__rt_mixed_to_owned_hash` hands back an owned hash for either array shape.
+fn emit_hash_ref_writeback_from_mixed_cell(
+    ctx: &mut FunctionContext<'_>,
+    writeback: &RefArgWriteback,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    if arg_reg != result_reg {
+        abi::emit_reg_move(ctx.emitter, arg_reg, result_reg);
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_to_owned_hash");
+    store_owned_result_over_ref_source(ctx, writeback)?;
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    Ok(())
+}
+
+/// Publishes a by-reference `mixed` cell back into a caller slot holding an array or object.
+///
+/// The cell's payload becomes the slot's new owner, so it is retained before the cell (which
+/// still holds its own reference) is released, and the slot's previous owner is retired.
+fn emit_owned_payload_ref_writeback_from_mixed_cell(
+    ctx: &mut FunctionContext<'_>,
+    writeback: &RefArgWriteback,
+    payload_ty: &PhpType,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
+    abi::emit_incref_if_refcounted(ctx.emitter, payload_ty);
+    store_owned_result_over_ref_source(ctx, writeback)?;
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    Ok(())
+}
+
+/// Stores the owned value in the result register into the caller slot, retiring its old owner.
+fn store_owned_result_over_ref_source(
+    ctx: &mut FunctionContext<'_>,
+    writeback: &RefArgWriteback,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let slot_ty = ctx.local_php_type(writeback.source_slot)?.codegen_repr();
+    let offset = ctx.local_offset(writeback.source_slot)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    super::super::frame::emit_owned_local_cleanup(ctx, writeback.source_slot, offset, &slot_ty);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    ctx.store_current_result_to_local(writeback.source_slot)
+}
+
+/// Stores an unboxed scalar Mixed payload back through the original by-reference source.
+pub(super) fn store_current_scalar_result_to_ref_source(
+    ctx: &mut FunctionContext<'_>,
+    writeback: &RefArgWriteback,
+) -> Result<()> {
+    ctx.store_current_result_to_local(writeback.source_slot)
+}
+
+/// Loads a local variable's address for a by-reference method-call argument.
+pub(super) fn materialize_local_ref_arg_address(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let source = local_ref_arg_source(ctx, value)?;
+    ctx.materialize_local_storage_address(source.slot, abi::int_result_reg(ctx.emitter))
+}
+
+/// Returns true when a value already holds a direct pointer to array element reference storage.
+pub(super) fn value_is_array_element_address(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    Ok(array_element_address_source(ctx, value)?.is_some())
+}
+
+/// Resolves an element-slot pointer to the array whose element type describes its pointee storage.
+fn array_element_address_source(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<ValueId>> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if matches!(inst_ref.op, Op::AcquireRefCell | Op::Borrow | Op::Move) {
+        return array_element_address_source(ctx, expect_operand(inst_ref, 0)?);
+    }
+    if !matches!(inst_ref.op, Op::ArrayElemAddr | Op::LoadArrayElemRefCell) {
+        return Ok(None);
+    }
+    Ok(Some(expect_operand(inst_ref, 0)?))
+}
+
+/// Returns whether an element-address operand names a managed hash reference cell.
+///
+/// `ArrayElemAddr` and a concrete indexed-array ref-cell load are borrowed interior addresses.
+/// Associative, boxed, and runtime-shaped `Array(Mixed)` sources normalize to hash storage, so
+/// their `LoadArrayElemRefCell` result needs a caller lease while the callee can replace its entry
+/// owner.
+fn value_is_managed_array_element_ref_cell(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<bool> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(false);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if inst_ref.op != Op::LoadArrayElemRefCell {
+        return Ok(false);
+    }
+    let source = expect_operand(inst_ref, 0)?;
+    Ok(match ctx.value_php_type(source)?.codegen_repr() {
+        PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+        PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_) => true,
+        _ => false,
+    })
+}
+
+/// Describes a local operand used as a by-reference call argument.
+struct LocalRefArgSource {
+    slot: LocalSlotId,
+}
+
+/// Resolves an EIR value back to a local slot and whether it already stores a ref-cell pointer.
+fn local_ref_arg_source(ctx: &FunctionContext<'_>, value: ValueId) -> Result<LocalRefArgSource> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Err(CodegenIrError::unsupported(
+            "by-reference method call argument from non-local value",
+        ));
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    match inst_ref.op {
+        Op::LoadLocal | Op::LoadRefCell => {}
+        _ => {
+            return Err(CodegenIrError::unsupported(format!(
+                "by-reference method call argument from opcode {}",
+                inst_ref.op.name()
+            )))
+        }
+    };
+    let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
+        return Err(CodegenIrError::invalid_module(
+            "by-reference load argument has no local slot",
+        ));
+    };
+    Ok(LocalRefArgSource { slot })
+}
+
+/// Resolves an EIR value back to a `load_local` source slot for by-reference calls.
+pub(super) fn local_slot_for_loaded_value(ctx: &FunctionContext<'_>, value: ValueId) -> Result<LocalSlotId> {
+    local_ref_arg_source(ctx, value).map(|source| source.slot)
+}
+
+/// Returns true when a local slot stores a ref-cell pointer instead of a raw value.
+pub(super) fn local_slot_stores_ref_cell_pointer(ctx: &FunctionContext<'_>, slot: LocalSlotId) -> bool {
+    ctx.local_stores_ref_cell_pointer(slot)
+}
+
+/// Moves a scratch integer register into the canonical integer result register.
+pub(super) fn move_reg_to_int_result(ctx: &mut FunctionContext<'_>, source_reg: &str) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    if source_reg == result_reg {
+        return;
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("mov {}, {}", result_reg, source_reg)); // move the unboxed receiver pointer into the normal argument staging register
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("mov {}, {}", result_reg, source_reg)); // move the unboxed receiver pointer into the normal argument staging register
+        }
+    }
+}
+
+/// Seeds a discarded cell that stands in for an OMITTED by-reference argument.
+///
+/// PHP's default for such a parameter is `null` in every case elephc can reach here: a
+/// by-reference parameter may not carry a non-null constant default and still be omitted by a
+/// caller that means to read the write back. The refusal is kept for representations with no
+/// null this runtime can spell, rather than pushing a zero that
+/// [`emit_ref_arg_writebacks`] would then hand to a refcount helper.
+fn emit_omitted_ref_cell_seed(ctx: &mut FunctionContext<'_>, cell_ty: &PhpType) -> Result<()> {
+    match cell_ty.codegen_repr() {
+        PhpType::Mixed => {
+            objects::emit_boxed_null(ctx);
+            Ok(())
+        }
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
+            Ok(())
+        }
+        PhpType::Int | PhpType::Bool | PhpType::False => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            Ok(())
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "omitted by-reference parameter cell for ABI type {other:?}"
+        ))),
+    }
+}
+
+/// Wraps the null seed already in the result registers into a managed reference cell.
+///
+/// The same allocation and unwind-owner linkage as a cell built from an operand; a null seed
+/// carries no reference, so there is nothing to retain first.
+fn emit_new_ref_cell_from_pushed_seed(ctx: &mut FunctionContext<'_>, cell: &RefArgTempCell) -> Result<()> {
+    abi::emit_push_result_value(ctx.emitter, &cell.cell_ty);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        crate::codegen_support::runtime::reference_cells::payload_tag(&cell.cell_ty),
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
+    let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_pop_reg(ctx.emitter, cell_reg);
+    store_pushed_value_to_ref_cell(ctx, cell_reg, &cell.cell_ty);
+    abi::emit_store_to_sp(ctx.emitter, cell_reg, cell.cell_offset);
+    let owner_address = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_temporary_stack_address(ctx.emitter, owner_address, cell.cell_offset);
+    abi::emit_link_call_operand_owner_at_stack(
+        ctx.emitter, owner_address, false, cell.cell_offset + 16,
+    );
+    Ok(())
+}
+
+/// Loads the cell standing in for an OMITTED by-reference argument.
+///
+/// `plan_ref_arg_temp_cells` plans no cells for `MayOutliveCall`, where the callee may keep the
+/// reference (a promoted constructor property), so that position gets the persistent fallback
+/// cell seeded the way the managed one would have been.
+fn materialize_omitted_ref_arg_address(
+    ctx: &mut FunctionContext<'_>,
+    param_index: usize,
+    param_ty: &PhpType,
+    arg_temp_bytes: usize,
+    temp_cells: &[RefArgTempCell],
+    ref_cell_base_offset: usize,
+) -> Result<()> {
+    let Some(cell) = temp_cells
+        .iter()
+        .find(|cell| cell.param_index == param_index)
+    else {
+        let target_ty = param_ty.codegen_repr();
+        emit_omitted_ref_cell_seed(ctx, &target_ty)?;
+        abi::emit_push_result_value(ctx.emitter, &target_ty);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+        abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+        let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_pop_reg(ctx.emitter, cell_reg);
+        store_pushed_value_to_ref_cell(ctx, cell_reg, &target_ty);
+        move_reg_to_int_result(ctx, cell_reg);
+        return Ok(());
+    };
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        arg_temp_bytes + ref_cell_base_offset + cell.cell_offset,
+    );
+    Ok(())
+}
+
+/// Resolves the PHP value type stored behind an indexed-array element address.
+pub(super) fn array_element_address_value_type(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<PhpType>> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if inst_ref.op != Op::ArrayElemAddr {
+        return Ok(None);
+    }
+    let array = inst_ref
+        .operands
+        .first()
+        .copied()
+        .ok_or_else(|| CodegenIrError::invalid_module("array_elem_addr missing array operand"))?;
+    let PhpType::Array(element) = ctx.value_php_type(array)?.codegen_repr() else {
+        return Err(CodegenIrError::invalid_module(
+            "array_elem_addr source does not use indexed-array storage",
+        ));
+    };
+    Ok(Some(element.codegen_repr()))
 }
 
 /// Unboxes the gradual source of a `...$spread` into array storage.
@@ -1103,7 +1515,7 @@ fn lower_mixed_spread_source_unbox(
 }
 
 /// Unboxes a gradual iterable after validating arrays or Traversable object payloads.
-fn emit_mixed_iterable_unbox_guard(ctx: &mut FunctionContext<'_>) {
+pub(super) fn emit_mixed_iterable_unbox_guard(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     let accepted_label = ctx.next_label("mixed_iterable_accepted");
     let object_label = ctx.next_label("mixed_iterable_object");
@@ -1202,6 +1614,43 @@ fn emit_mixed_tag_unbox_guard(
     ctx.emitter.label(&accepted_label);
 }
 
+/// Converts a boxed Closure to an owned descriptor, raising a TypeError for any other value.
+///
+/// Tag 10 is a compiled descriptor and tag 6 an object (an interpreter Closure); both go through
+/// the same conversion an unguarded `Mixed` callable load uses. The box stays in the result
+/// register for that conversion, so it is saved across the tag probe.
+fn emit_mixed_closure_unbox_guard(ctx: &mut FunctionContext<'_>) {
+    let accepted_label = ctx.next_label("mixed_closure_unbox_accepted");
+    let wrong_label = ctx.next_label("mixed_closure_unbox_wrong");
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    abi::emit_push_reg(ctx.emitter, &result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #10");                             // a compiled callable descriptor is a Closure
+            ctx.emitter.instruction(&format!("b.eq {}", accepted_label));       // accept it
+            ctx.emitter.instruction("cmp x0, #6");                              // an interpreter Closure arrives as an object
+            ctx.emitter.instruction(&format!("b.eq {}", accepted_label));       // accept it for bridge conversion
+            ctx.emitter.instruction(&format!("b {}", wrong_label));             // every other value is a TypeError
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 10");                             // a compiled callable descriptor is a Closure
+            ctx.emitter.instruction(&format!("je {}", accepted_label));         // accept it
+            ctx.emitter.instruction("cmp rax, 6");                              // an interpreter Closure arrives as an object
+            ctx.emitter.instruction(&format!("je {}", accepted_label));         // accept it for bridge conversion
+            ctx.emitter.instruction(&format!("jmp {}", wrong_label));           // every other value is a TypeError
+        }
+    }
+    builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &wrong_label,
+        &|given| format!("Value must be of type Closure, {} given", given),
+    );
+    ctx.emitter.label(&accepted_label);
+    abi::emit_pop_reg(ctx.emitter, &result_reg);
+    super::local_loads::emit_mixed_local_to_owned_callable_descriptor(ctx);
+}
+
 /// Validates a boxed object against a named class or interface before unboxing it.
 fn emit_mixed_nominal_object_unbox_guard(
     ctx: &mut FunctionContext<'_>,
@@ -1243,6 +1692,28 @@ fn emit_mixed_nominal_object_unbox_guard(
         }
     }
     ctx.emitter.label(&wrong_label);
+    // An object of a class the INTERPRETER declared has no compiled class id, so the matcher above
+    // says no for it whatever it implements. Ask the bridge before raising, as the gradual and
+    // generic boundaries already do: symfony/http-client's interpreted `NativeHttpClient` handed to
+    // a compiled `?HttpClientInterface $client` parameter was "Value must be of type
+    // HttpClientInterface, object given", and every importmap command died on it. The boxed cell is
+    // still on the stack, which is what the accepted path pops.
+    if ctx.module.required_runtime_features.eval_bridge {
+        let native_fallback_label = ctx.next_label("mixed_unbox_nominal_eval_native");
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction(&format!("ldr {}, [sp]", result_reg)), // reload the boxed source cell for the bridge probe
+            Arch::X86_64 => ctx.emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", result_reg)), // reload the boxed source cell for the bridge probe
+        }
+        builtins::emit_eval_object_is_a_named_fallback_from_result(
+            ctx,
+            &expected,
+            &accepted_label,
+            &native_fallback_label,
+            &native_fallback_label,
+        )?;
+        ctx.emitter.label(&native_fallback_label);
+    }
     abi::emit_pop_reg(ctx.emitter, source_reg);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     let type_error_label = ctx.next_label("mixed_unbox_nominal_type_error");
@@ -1255,201 +1726,4 @@ fn emit_mixed_nominal_object_unbox_guard(
     abi::emit_pop_reg(ctx.emitter, source_reg);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     Ok(())
-}
-
-/// Stores an unboxed scalar Mixed payload back through the original by-reference source.
-pub(super) fn store_current_scalar_result_to_ref_source(
-    ctx: &mut FunctionContext<'_>,
-    writeback: &RefArgWriteback,
-) -> Result<()> {
-    if matches!(
-        writeback.source_ty.codegen_repr(),
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
-    ) {
-        return emit_heap_ref_writeback_store(ctx, writeback);
-    }
-    ctx.store_current_result_to_local(writeback.source_slot)
-}
-
-/// Retains a heap payload before releasing the previous caller-slot owner, then stores it.
-///
-/// Retaining first is required for alias-safe replacement: the old container graph may already
-/// reach the incoming payload, so releasing it first could destroy the value being assigned.
-fn emit_heap_ref_writeback_store(
-    ctx: &mut FunctionContext<'_>,
-    writeback: &RefArgWriteback,
-) -> Result<()> {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    let slot_ty = ctx.local_php_type(writeback.source_slot)?.codegen_repr();
-    let offset = ctx.local_offset(writeback.source_slot)?;
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
-    super::super::frame::emit_owned_local_cleanup(
-        ctx,
-        writeback.source_slot,
-        offset,
-        &slot_ty,
-    );
-    abi::emit_pop_reg(ctx.emitter, result_reg);
-    ctx.store_current_result_to_local(writeback.source_slot)
-}
-
-/// Loads a local variable's address for a by-reference method-call argument.
-pub(super) fn materialize_local_ref_arg_address(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
-    let source = local_ref_arg_source(ctx, value)?;
-    ctx.materialize_local_storage_address(source.slot, abi::int_result_reg(ctx.emitter))?;
-    if ctx.local_php_type(source.slot)? == PhpType::Mixed {
-        emit_seed_unassigned_mixed_cell(ctx);
-    }
-    Ok(())
-}
-
-/// Gives a never-assigned boxed-Mixed local a boxed null before its address is passed by
-/// reference, keeping that address in the result register.
-///
-/// PHP creates the variable when it is passed by reference, and the callee may write THROUGH it:
-/// `addServices(?array &$services = null) { $services[$id] = …; }` vivifies the array inside the
-/// box it was handed. A slot that was never stored holds a zero word -- no box -- so the element
-/// write built its array in a box nobody kept, and the caller's `$services` stayed null
-/// (`PhpDumper::dump()` then passed it to `generateServiceFiles(array $services)`: "Value must be
-/// of type array, null given" on every `cache:clear`). Checked at run time, because a loop can
-/// reach the call with the slot already holding the previous iteration's value.
-fn emit_seed_unassigned_mixed_cell(ctx: &mut FunctionContext<'_>) {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    let assigned = ctx.next_label("ref_arg_mixed_cell_assigned");
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [x0]");                            // read the local's current boxed-Mixed pointer
-            ctx.emitter.instruction(&format!("cbnz x9, {}", assigned));         // an assigned local already owns a box to write through
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                // read the local's current boxed-Mixed pointer
-            ctx.emitter.instruction("test r10, r10");                           // is the local still unassigned?
-            ctx.emitter.instruction(&format!("jne {}", assigned));              // an assigned local already owns a box to write through
-        }
-    }
-    objects::emit_boxed_null(ctx);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [sp]");                            // reload the local's storage address
-            ctx.emitter.instruction("str x0, [x9]");                            // the local now holds a boxed null the callee can vivify
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                // reload the local's storage address
-            ctx.emitter.instruction("mov QWORD PTR [r11], rax");                // the local now holds a boxed null the callee can vivify
-        }
-    }
-    ctx.emitter.label(&assigned);
-    abi::emit_pop_reg(ctx.emitter, result_reg);
-}
-
-/// Returns true when a value already holds a direct pointer to an array element slot.
-pub(super) fn value_is_array_element_address(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
-    let Some(value_ref) = ctx.function.value(value) else {
-        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
-    };
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(false);
-    };
-    let inst_ref = ctx
-        .function
-        .instruction(inst)
-        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    Ok(inst_ref.op == Op::ArrayElemAddr)
-}
-
-/// Resolves the PHP value type stored behind an indexed-array element address.
-pub(super) fn array_element_address_value_type(
-    ctx: &FunctionContext<'_>,
-    value: ValueId,
-) -> Result<Option<PhpType>> {
-    let Some(value_ref) = ctx.function.value(value) else {
-        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
-    };
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(None);
-    };
-    let inst_ref = ctx
-        .function
-        .instruction(inst)
-        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if inst_ref.op != Op::ArrayElemAddr {
-        return Ok(None);
-    }
-    let array = inst_ref
-        .operands
-        .first()
-        .copied()
-        .ok_or_else(|| CodegenIrError::invalid_module("array_elem_addr missing array operand"))?;
-    let PhpType::Array(element) = ctx.value_php_type(array)?.codegen_repr() else {
-        return Err(CodegenIrError::invalid_module(
-            "array_elem_addr source does not use indexed-array storage",
-        ));
-    };
-    Ok(Some(element.codegen_repr()))
-}
-
-/// Describes a local operand used as a by-reference call argument.
-struct LocalRefArgSource {
-    slot: LocalSlotId,
-}
-
-/// Resolves an EIR value back to a local slot and whether it already stores a ref-cell pointer.
-fn local_ref_arg_source(ctx: &FunctionContext<'_>, value: ValueId) -> Result<LocalRefArgSource> {
-    let Some(value_ref) = ctx.function.value(value) else {
-        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
-    };
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Err(CodegenIrError::unsupported(
-            "by-reference method call argument from non-local value",
-        ));
-    };
-    let inst_ref = ctx
-        .function
-        .instruction(inst)
-        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    match inst_ref.op {
-        Op::LoadLocal | Op::LoadRefCell => {}
-        _ => {
-            return Err(CodegenIrError::unsupported(format!(
-                "by-reference method call argument from opcode {}",
-                inst_ref.op.name()
-            )))
-        }
-    };
-    let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
-        return Err(CodegenIrError::invalid_module(
-            "by-reference load argument has no local slot",
-        ));
-    };
-    Ok(LocalRefArgSource { slot })
-}
-
-/// Resolves an EIR value back to a `load_local` source slot for by-reference calls.
-pub(super) fn local_slot_for_loaded_value(ctx: &FunctionContext<'_>, value: ValueId) -> Result<LocalSlotId> {
-    local_ref_arg_source(ctx, value).map(|source| source.slot)
-}
-
-/// Returns true when a local slot stores a ref-cell pointer instead of a raw value.
-pub(super) fn local_slot_stores_ref_cell_pointer(ctx: &FunctionContext<'_>, slot: LocalSlotId) -> bool {
-    ctx.local_stores_ref_cell_pointer(slot)
-}
-
-/// Moves a scratch integer register into the canonical integer result register.
-pub(super) fn move_reg_to_int_result(ctx: &mut FunctionContext<'_>, source_reg: &str) {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    if source_reg == result_reg {
-        return;
-    }
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("mov {}, {}", result_reg, source_reg)); // move the unboxed receiver pointer into the normal argument staging register
-        }
-        Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("mov {}, {}", result_reg, source_reg)); // move the unboxed receiver pointer into the normal argument staging register
-        }
-    }
 }

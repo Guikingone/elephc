@@ -301,7 +301,7 @@ fn eval_debug_object_class_chain(
     identity: u64,
     class_name: &str,
     context: &ElephcEvalContext,
-) -> Vec<EvalClass> {
+) -> Vec<std::sync::Arc<EvalClass>> {
     match context.dynamic_object_declaring_class(identity) {
         Some((declaring, _)) => declaring.class_chain(class_name),
         None => context.class_chain(class_name),

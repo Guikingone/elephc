@@ -47,6 +47,7 @@ pub(super) fn default_method_members(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+        returns_reference: false,
             prototype_member: None,
             parameters: Vec::new(),
         })
@@ -92,6 +93,7 @@ pub(super) fn default_property_members(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+        returns_reference: false,
             prototype_member: None,
             parameters: Vec::new(),
         })
@@ -195,6 +197,12 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
 ) -> Result<Vec<ReflectionParameterMember>> {
     let mut parameters = Vec::new();
     for (index, (name, ty)) in sig.params.iter().enumerate() {
+        // The hidden `func_get_args` collector and actual-argument count are ABI slots, not
+        // parameters: with the eval bridge linked every function carries the collector, and
+        // `getNumberOfParameters()` of `read(): int` answered 1.
+        if name == crate::func_args::HIDDEN_ARGS_PARAM || name == crate::func_args::HIDDEN_ARGC_PARAM {
+            continue;
+        }
         let is_variadic = sig.variadic.as_deref() == Some(name.as_str());
         // `declared_params` doubles as the runtime invoker's boxed-ABI marker
         // (see `eir_runtime_metadata_signature`), which only ever raises the

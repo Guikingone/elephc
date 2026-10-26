@@ -31,12 +31,13 @@ pub use ffi::parse_extern_stmts;
 pub use blocks::{parse_block, parse_body};
 pub(crate) use blocks::parse_executable_block;
 pub(crate) use oop::parse_anonymous_class;
-pub(crate) use params::{looks_like_typed_param, parse_type_expr};
+pub(crate) use params::{implicitly_nullable_type, looks_like_typed_param, parse_type_expr};
 pub(crate) use assign::{
     assignment_target_append_stmt, assignment_target_store_stmt,
     can_replay_assignment_target,
     is_valid_reference_source,
     lower_postfix_incdec_assignment,
+    update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
 pub(crate) use blocks::{expect_semicolon, expect_token};
 pub(crate) use names::{name_part_from_token, name_starts_at, parse_name, parse_unqualified_name};
@@ -46,6 +47,7 @@ pub(crate) use assign::{
     starts_destructuring_pattern,
     try_parse_destructuring_assignment_expression_pattern,
 };
+pub(crate) use namespace_use::token_as_import_name;
 pub(crate) use recovery::recover_to_statement_boundary;
 pub(in crate::parser) use simple::try_parse_value_include;
 
@@ -79,6 +81,26 @@ pub(crate) fn classlike_doc_comment(span: crate::span::Span, name: &str) -> Opti
         .as_ref()?
         .get(&(span, short))
         .cloned()
+}
+
+/// Appends one parsed statement to a file- or namespace-scope statement list.
+///
+/// `const A = 1, B = 2;` parses to one `Synthetic` holding a `ConstDecl` per name (see
+/// `simple::parse_const_decl`). At the two scopes where PHP allows `const`, that group is spliced
+/// into the enclosing list, so every later pass sees exactly what separate `const` statements
+/// produce: the passes that collect top-level declarations, namespace symbol collection among
+/// them, only look at that level. Every other statement is appended unchanged.
+pub(crate) fn push_parsed_stmt(stmts: &mut Vec<Stmt>, stmt: Stmt) {
+    let is_const_list = matches!(
+        &stmt.kind,
+        StmtKind::Synthetic(body)
+            if !body.is_empty()
+                && body.iter().all(|inner| matches!(inner.kind, StmtKind::ConstDecl { .. }))
+    );
+    match stmt.kind {
+        StmtKind::Synthetic(body) if is_const_list => stmts.extend(body),
+        kind => stmts.push(Stmt { kind, ..stmt }),
+    }
 }
 
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.
@@ -156,6 +178,10 @@ fn stmt_kind_supports_attributes(kind: &StmtKind) -> bool {
             | StmtKind::EnumDecl { .. }
             | StmtKind::FunctionDecl { .. }
             | StmtKind::PackedClassDecl { .. }
+            // php 8.5 accepts attributes on global constants (`#[\Deprecated] const X = 1;`,
+            // symfony/polyfill-uuid's `bootstrap85.php`). They are kept on the statement; the
+            // deprecation such an attribute raises on read is not modelled yet.
+            | StmtKind::ConstDecl { .. }
     )
 }
 
@@ -172,6 +198,16 @@ fn parse_stmt_dispatch(
     match &tokens[*pos].0 {
         Token::Echo => simple::parse_echo(tokens, pos, span),
         Token::Print => simple::parse_expr_stmt(tokens, pos, span),
+        // `clone $o;` and PHP 8.5's `clone($o, $overrides);` are ordinary expression statements
+        // whose result is discarded. Without an arm here the leading keyword reached the
+        // catch-all below and a standalone clone was a parse error rather than a no-op copy.
+        Token::Clone => simple::parse_expr_stmt(tokens, pos, span),
+        // `!isset($x['port']) || throw new E(...);` -- a guard whose only effect is the `throw`
+        // on the right of a short-circuit operator. The leading unary operator is an ordinary
+        // expression start, exactly like the parenthesized spelling already accepted.
+        Token::Bang | Token::Tilde | Token::Minus | Token::Plus => {
+            simple::parse_expr_stmt(tokens, pos, span)
+        }
         Token::At => simple::parse_error_suppressed_stmt(tokens, pos, span),
         Token::Variable(_) => assign::parse_variable_stmt(tokens, pos, span),
         Token::This => simple::parse_this_stmt(tokens, pos, span),
@@ -190,7 +226,29 @@ fn parse_stmt_dispatch(
         Token::Trait => oop::parse_trait_decl(tokens, pos, span),
         Token::Abstract => oop::parse_abstract_decl(tokens, pos, span),
         Token::Final => oop::parse_final_decl(tokens, pos, span),
+        // A `function` with no NAME is a closure EXPRESSION, not a declaration, and PHP
+        // accepts one as an expression statement (the value is simply discarded). Routing it
+        // to the declaration parser reported "Expected function name" for valid PHP —
+        // reachable both as a bare statement and, since #476, as a `for` clause member.
+        // `function &() {}` is the by-reference closure spelling; `function &f()` is still a
+        // named declaration, so the `&` is only skipped when a `(` follows it.
+        Token::Function
+            if matches!(
+                tokens.get(*pos + 1).map(|(token, _)| token),
+                Some(Token::LParen)
+            ) || matches!(
+                (
+                    tokens.get(*pos + 1).map(|(token, _)| token),
+                    tokens.get(*pos + 2).map(|(token, _)| token),
+                ),
+                (Some(Token::Ampersand), Some(Token::LParen))
+            ) =>
+        {
+            simple::parse_expr_stmt(tokens, pos, span)
+        }
         Token::Function => params::parse_function_decl(tokens, pos, span),
+        // `fn (…) => …` is always an arrow-function expression; it has no declaration form.
+        Token::Fn => simple::parse_expr_stmt(tokens, pos, span),
         Token::Namespace => namespace_use::parse_namespace_stmt(tokens, pos, span),
         Token::Use => namespace_use::parse_use_stmt(tokens, pos, span),
         Token::Declare => declare::parse_declare(tokens, pos, span),
@@ -252,7 +310,9 @@ fn parse_stmt_dispatch(
                 assign::parse_static_var(tokens, pos, span)
             }
         }
-        Token::LBracket => assign::parse_list_unpack(tokens, pos, span),
+        Token::LBracket if starts_bracket_destructuring_assignment(tokens, *pos) => {
+            assign::parse_list_unpack(tokens, pos, span)
+        }
         Token::Identifier(_)
         | Token::Enum
         | Token::StringLiteral(_)
@@ -281,6 +341,7 @@ fn parse_stmt_dispatch(
         | Token::Question
         | Token::New
         | Token::LParen
+        | Token::LBracket
         | Token::Match => {
             if matches!(&tokens[*pos].0, Token::Identifier(name) if name.eq_ignore_ascii_case("list"))
                 && matches!(tokens.get(*pos + 1).map(|(token, _)| token), Some(Token::LParen))
@@ -328,11 +389,32 @@ fn parse_stmt_dispatch(
             expect_semicolon(tokens, pos)?;
             Ok(Stmt::new(StmtKind::Continue(levels), span))
         }
+        Token::Dollar => {
+            crate::parser::variable_variables::parse_assignment_statement(tokens, pos, span)
+        }
         other => Err(CompileError::new(
             span,
             &format!("Unexpected token at statement position: {:?}", other),
         )),
     }
+}
+
+/// Distinguishes bracket destructuring from array expressions by the matching closing bracket.
+fn starts_bracket_destructuring_assignment(tokens: &[SpannedToken], start: usize) -> bool {
+    let mut depth = 0usize;
+    for (index, (token, _)) in tokens.iter().enumerate().skip(start) {
+        match token {
+            Token::LBracket => depth += 1,
+            Token::RBracket => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return matches!(tokens.get(index + 1).map(|entry| &entry.0), Some(Token::Assign));
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Parses the exit level for `break` or `continue` statements.

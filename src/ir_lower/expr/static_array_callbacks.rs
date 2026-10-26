@@ -1,5 +1,5 @@
 //! Purpose:
-//! Static array callback lowering for map, reduce, and walk.
+//! Static array callback lowering for map and walk.
 //!
 //! Called from:
 //! - `crate::ir_lower::expr`.
@@ -32,17 +32,35 @@ pub(super) fn lower_static_array_map(
     let ExprKind::ArrayLiteral(items) = &args[1].kind else {
         return None;
     };
+    // This fast path calls the callback once per element, interleaved with that element's own
+    // expression. PHP evaluates the whole source array first, so only elements whose evaluation
+    // cannot be observed may be reordered around a call.
+    if !items.iter().all(static_callback_array_item_can_inline) {
+        return None;
+    }
+    // Decide directly-callable-ness before emitting anything: a refusal discovered between two
+    // elements would abandon a half-built result the caller's fallback cannot see.
+    if !static_callable_call_lowers_directly(ctx, &callback) {
+        return None;
+    }
     let elem_type = static_callable_return_type(ctx, &callback);
+    let array_type = PhpType::Array(Box::new(elem_type.clone()));
     let array = ctx.emit_value(
         Op::ArrayNew,
         Vec::new(),
         Some(Immediate::Capacity(items.len() as u32)),
-        PhpType::Array(Box::new(elem_type.clone())),
+        array_type.clone(),
         Op::ArrayNew.default_effects(),
         Some(expr.span),
     );
+    // The partially built result owns every mapped element already in it, and each callback can
+    // throw, so publish it for the whole construction and reload it after every push: a push may
+    // grow the payload and store a new pointer into the slot.
+    let owner = publish_constructed_container(ctx, array, expr.span);
     for item in items {
-        let value = lower_static_callable_call(ctx, callback.clone(), std::slice::from_ref(item), expr)?;
+        let value = lower_static_callable_call(ctx, callback.clone(), std::slice::from_ref(item), expr)
+            .expect("a directly callable static binding lowers each mapped element");
+        let array = load_published_container(ctx, owner, array_type.clone(), item.span);
         ctx.emit_void(
             Op::ArrayPush,
             vec![array.value, value.value],
@@ -52,51 +70,7 @@ pub(super) fn lower_static_array_map(
         );
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&elem_type), value, item.span);
     }
-    Some(array)
-}
-
-/// Lowers `array_reduce()` for a static callback and immediate indexed-array literal.
-pub(super) fn lower_static_array_reduce(
-    ctx: &mut LoweringContext<'_, '_>,
-    name: &str,
-    args: &[Expr],
-    expr: &Expr,
-) -> Option<LoweredValue> {
-    if php_symbol_key(name.trim_start_matches('\\')) != "array_reduce" || args.len() != 3 {
-        return None;
-    }
-    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
-        return None;
-    }
-    if matches!(args[1].kind, ExprKind::Variable(_)) {
-        return None;
-    }
-    let ExprKind::ArrayLiteral(items) = &args[0].kind else {
-        return None;
-    };
-    if !items.iter().all(static_callback_array_item_can_inline) {
-        return None;
-    }
-    let callback = static_call_user_func_callback(ctx, &args[1])?;
-    if !static_callback_takes_arg_count(ctx, &callback, 2) {
-        return None;
-    }
-    let result_type = fallback_expr_type(expr);
-    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
-    let initial = lower_expr(ctx, &args[2]);
-    store_value_into_temp(ctx, &temp_name, result_type.clone(), initial, expr.span);
-    for item in items {
-        let carry = ctx.load_local(&temp_name, Some(expr.span));
-        let item_value = lower_expr(ctx, item);
-        let reduced = lower_static_callable_value_call(
-            ctx,
-            callback.clone(),
-            vec![carry.value, item_value.value],
-            expr,
-        )?;
-        store_value_into_temp(ctx, &temp_name, result_type.clone(), reduced, expr.span);
-    }
-    Some(take_owned_temp(ctx, &temp_name, expr.span))
+    Some(take_published_container(ctx, owner, array_type, expr.span))
 }
 
 /// Lowers `array_walk()` for a static callback and immediate indexed-array literal.
@@ -125,9 +99,15 @@ pub(super) fn lower_static_array_walk(
     if !static_callback_takes_arg_count(ctx, &callback, 1) {
         return None;
     }
+    // A receiver-bound callable has no value-operand call form. Refuse it before the first
+    // element is lowered, rather than abandoning emitted instructions partway through.
+    if matches!(callback, StaticCallableBinding::InstanceMethod { .. }) {
+        return None;
+    }
     for item in items {
         let item_value = lower_expr(ctx, item);
-        lower_static_callable_value_call(ctx, callback.clone(), vec![item_value.value], expr)?;
+        lower_static_callable_value_call(ctx, callback.clone(), vec![item_value.value], expr)
+            .expect("a value-callable static binding lowers each walked element");
     }
     Some(lower_null(ctx, expr))
 }
@@ -151,6 +131,23 @@ fn static_callback_takes_arg_count(
         _ => return true,
     };
     sig.is_none_or(|sig| sig.variadic.is_some() || sig.params.len() >= count)
+}
+
+/// Returns whether a static callback's first parameter stores a boxed Mixed value as is.
+fn static_callback_first_param_is_mixed(
+    ctx: &LoweringContext<'_, '_>,
+    callback: &StaticCallableBinding,
+) -> bool {
+    let sig = match callback {
+        StaticCallableBinding::UserFunction(name) => ctx.functions.get(name),
+        StaticCallableBinding::StaticMethod { receiver, method } => {
+            static_method_implementation_signature(ctx, receiver, method)
+        }
+        StaticCallableBinding::Closure { signature, .. } => Some(signature),
+        _ => return false,
+    };
+    sig.and_then(|sig| sig.params.first())
+        .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed)
 }
 
 /// Returns whether a literal array element can be reordered around callback invocation safely.
@@ -199,15 +196,18 @@ pub(super) fn lower_static_callable_value_call(
     match target {
         StaticCallableBinding::UserFunction(function_name) => {
             let php_type = call_return_type(ctx, &function_name, &operands);
+            let sig = ctx.functions.get(&function_name).cloned();
             let data = ctx.intern_function_name(&function_name);
-            Some(ctx.emit_value(
+            let call = ctx.emit_value(
                 Op::Call,
-                operands,
+                operands.clone(),
                 Some(Immediate::Data(data)),
                 php_type,
                 effects_lookup::user_call_effects(&function_name),
                 Some(expr.span),
-            ))
+            );
+            ctx.invalidate_callable_user_function(&function_name, sig.as_ref(), &operands);
+            Some(call)
         }
         StaticCallableBinding::ExternFunction(function_name) => {
             let php_type = call_return_type(ctx, &function_name, &operands);
@@ -241,35 +241,43 @@ pub(super) fn lower_static_callable_value_call(
             name,
             signature,
             captures,
+            return_alias: _,
         } => {
-            let mut operands = operands;
-            append_closure_capture_operands(&mut operands, &captures);
+            let arguments = operands;
+            let mut call_operands = arguments.clone();
+            append_closure_capture_operands(&mut call_operands, &captures);
             let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
             let data = ctx.intern_function_name(&name);
-            Some(ctx.emit_value(
+            let call = ctx.emit_value(
                 Op::Call,
-                operands,
+                call_operands,
                 Some(Immediate::Data(data)),
                 php_type,
                 effects_lookup::user_call_effects(&name),
                 Some(expr.span),
-            ))
+            );
+            ctx.invalidate_callable_capture_locals(&captures);
+            ctx.invalidate_callable_ref_argument_locals(Some(&signature), &arguments);
+            Some(call)
         }
         StaticCallableBinding::StaticMethod { receiver, method } => {
-            let sig = static_method_implementation_signature(ctx, &receiver, &method);
+            let sig = static_method_implementation_signature(ctx, &receiver, &method).cloned();
             let result_type = sig
+                .as_ref()
                 .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
                 .unwrap_or_else(|| fallback_expr_type(expr));
             let name = format!("{}::{}", receiver_name(&receiver), method);
             let data = ctx.intern_string(&name);
-            Some(ctx.emit_value(
+            let call = ctx.emit_value(
                 Op::StaticMethodCall,
-                operands,
+                operands.clone(),
                 Some(Immediate::Data(data)),
                 result_type,
                 Op::StaticMethodCall.default_effects(),
                 Some(expr.span),
-            ))
+            );
+            ctx.invalidate_callable_ref_argument_locals(sig.as_ref(), &operands);
+            Some(call)
         }
         StaticCallableBinding::StaticMethodDescriptor { receiver, method } => {
             lower_static_method_descriptor_value_call(ctx, &receiver, &method, operands, expr)
@@ -325,4 +333,57 @@ pub(super) fn instance_callable_signature(target: &StaticCallableBinding) -> Opt
         StaticCallableBinding::InstanceMethod { signature, .. } => Some(signature),
         _ => None,
     }
+}
+
+/// Lowers `array_reduce()` for a static callback and immediate indexed-array literal.
+pub(super) fn lower_static_array_reduce(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\')) != "array_reduce" || args.len() != 3 {
+        return None;
+    }
+    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+        return None;
+    }
+    if matches!(args[1].kind, ExprKind::Variable(_)) {
+        return None;
+    }
+    let ExprKind::ArrayLiteral(items) = &args[0].kind else {
+        return None;
+    };
+    if !items.iter().all(static_callback_array_item_can_inline) {
+        return None;
+    }
+    let callback = static_call_user_func_callback(ctx, &args[1])?;
+    if !static_callback_takes_arg_count(ctx, &callback, 2) {
+        return None;
+    }
+    let result_type = fallback_expr_type(expr);
+    // The unrolled steps hand the boxed carry to the callee as is. A callee whose carry
+    // parameter is a concrete type (`function f(string $c, ...)`) needs it narrowed at the call,
+    // and the narrowed copy made there was never released: one string leaked per element. Such a
+    // callback takes the generic path, which binds through the descriptor invoker.
+    if result_type.codegen_repr() == PhpType::Mixed
+        && !static_callback_first_param_is_mixed(ctx, &callback)
+    {
+        return None;
+    }
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let initial = lower_expr(ctx, &args[2]);
+    store_value_into_temp(ctx, &temp_name, result_type.clone(), initial, expr.span);
+    for item in items {
+        let carry = ctx.load_local(&temp_name, Some(expr.span));
+        let item_value = lower_expr(ctx, item);
+        let reduced = lower_static_callable_value_call(
+            ctx,
+            callback.clone(),
+            vec![carry.value, item_value.value],
+            expr,
+        )?;
+        store_value_into_temp(ctx, &temp_name, result_type.clone(), reduced, expr.span);
+    }
+    Some(take_owned_temp(ctx, &temp_name, expr.span))
 }

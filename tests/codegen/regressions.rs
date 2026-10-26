@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for scalars and regex, arrays, syntax edges, closures and refs, string memory, symbol collisions, and related suites.
+//! - Submodules group focused fixtures for scalars and regex, arrays, syntax edges, closures and refs, string memory, symbol collisions, pinned fixes for issues main already resolves, and related suites.
 
 use crate::support::*;
 
@@ -19,6 +19,8 @@ mod syntax_edges;
 mod closures_and_refs;
 #[path = "regressions/string_memory.rs"]
 mod string_memory;
+#[path = "regressions/pinned_fixed_issues.rs"]
+mod pinned_fixed_issues;
 #[path = "regressions/builtins_misc.rs"]
 mod builtins_misc;
 #[path = "regressions/concat_buffer_args.rs"]
@@ -61,3 +63,23 @@ mod numeric_folds;
 mod mbstring_and_string_ownership;
 #[path = "regressions/laravel_merge_seams.rs"]
 mod laravel_merge_seams;
+#[path = "regressions/fixed_issue_behaviour.rs"]
+mod fixed_issue_behaviour;
+#[path = "regressions/fixed_issue_leaks.rs"]
+mod fixed_issue_leaks;
+#[path = "regressions/symfony_merge_deferrals.rs"]
+mod symfony_merge_deferrals;
+#[path = "regressions/agent_backend_deferrals.rs"]
+mod agent_backend_deferrals;
+#[path = "regressions/dyn_prop_tables.rs"]
+mod dyn_prop_tables;
+#[path = "regressions/frame_slot_base.rs"]
+mod frame_slot_base;
+#[path = "regressions/invoker_name_tables.rs"]
+mod invoker_name_tables;
+#[path = "regressions/agent_checker_deferrals.rs"]
+mod agent_checker_deferrals;
+#[path = "regressions/agent_probe_throwable.rs"]
+mod agent_probe_throwable;
+#[path = "regressions/demo_language_gaps.rs"]
+mod demo_language_gaps;

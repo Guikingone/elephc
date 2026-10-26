@@ -37,6 +37,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
             let mut contracts = Vec::with_capacity(
                 crate::catalog_data::CONTRACTS.len()
                     + crate::catalog_data_additional::CONTRACTS.len()
+                    + crate::catalog_mbstring::CONTRACTS.len()
                     + crate::catalog_pcntl::CONTRACTS.len()
                     + crate::catalog_xml::CONTRACTS.len()
                     + crate::catalog_surfaces::SURFACE_CONTRACTS.len()
@@ -44,6 +45,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
             );
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_data_additional::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_xml::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);
@@ -108,6 +110,12 @@ fn build_registry() -> Registry {
             "builtin contract ID does not match canonical name: {}",
             contract.name
         );
+        contract.returns.validate().unwrap_or_else(|error|
+            panic!("invalid return type for {}: {error}", contract.name));
+        for parameter in contract.params {
+            parameter.ty.validate().unwrap_or_else(|error|
+                panic!("invalid parameter type for {}::${}: {error}", contract.name, parameter.name));
+        }
         let mut callback_names = HashSet::new();
         for callback_name in contract.callback_parameter_names() {
             assert!(
@@ -150,33 +158,35 @@ mod tests {
         // The PHP-visible `curl_*` surface is published only with the `curl`
         // feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        // This branch's catalog carries 32 contracts main's does not: `extract`, `filter_var`,
-        // `flush`, the four `gc_*` functions, `get_cfg_var`, `get_debug_type`, `header_remove`,
-        // `headers_sent`, `levenshtein`, `parse_str`, `preg_grep`, `preg_quote`, `setlocale`,
-        // `strcspn`, `strpbrk`, `strrchr`, `strspn`, `unpack`, the two tick registrars, and the
-        // nine `--web` prelude declarations this branch contracted (`error_clear_last`,
-        // `error_get_last`, `error_reporting`, `get_error_handler`,
-        // `register_shutdown_function`, `restore_error_handler`, `restore_exception_handler`,
-        // `set_error_handler`, `set_exception_handler`). It also re-applies its own semantics
-        // to entries both catalogs share, so the per-backend splits below differ from main's
-        // by more than those 32 names alone.
-        //
-        //
-        // Since then: `addcslashes`, `gc_mem_caches`, the two `memory_get_*` functions and
-        // `__elephc_diag_suppressed` landed without moving this count, and the sodium surface adds
-        // six (the four `sodium_crypto_box_*` declarations and `__elephc_sodium_box` /
-        // `__elephc_sodium_status`). Two more have no catalog change since 1071 to name them.
-        // mbstring case mapping adds `mb_strtolower` and `mb_strtoupper`. The regex surface adds
-        // four: `preg_last_error`, `preg_last_error_msg`, `preg_filter` and
-        // `preg_replace_callback_array`. Reflection adds `__elephc_reflection_materialize` and
-        // `__elephc_reflection_fill_members`. The password API adds five (`password_*`), php 8.5
-        // adds `array_first` / `array_last`, `array_change_key_case` and `array_find_key` add
-        // one each, and the user-comparator set family adds eight (`array_udiff_assoc` and its
-        // siblings). `headers_list` adds one, and the prelude surfaces of `version_compare` and
-        // `hash_pbkdf2` add two.
-        assert_eq!(contracts().len(), 1112 + curl_surface);
+        // TODO(merge): estimated, re-measure. main's 1146 plus the contracts this branch
+        // carries that main does not (`extract`, `filter_var`, the `gc_*` family, the
+        // password/array/preg/sodium/response-header surfaces, the `--web` handler prelude
+        // declarations, ...), computed by union of contract names across the catalog files.
+        // Plus the two internal last-error readers (`__elephc_last_error_int` / `_str`).
+        assert_eq!(contracts().len(), 1209 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
+    }
+
+    /// Verifies the PHP 8.5 clone function keeps its object and override-array contract.
+    #[test]
+    fn clone_contract_matches_php_85() {
+        let contract = lookup("clone").expect("clone contract");
+        assert_eq!(contract.module, crate::PhpModule::Core);
+        assert_eq!(contract.since, Some(crate::PhpVersion::Php85));
+        assert_eq!(contract.kind, crate::BuiltinKind::Function);
+        assert_eq!(contract.params.len(), 2);
+        assert_eq!(contract.params[0].name, "object");
+        assert_eq!(contract.params[0].ty, crate::TypeSpec::Object);
+        assert_eq!(contract.params[1].name, "withProperties");
+        assert_eq!(contract.params[1].ty, crate::TypeSpec::Array);
+        assert_eq!(
+            contract.params[1].default,
+            Some(crate::DefaultSpec::EmptyArray)
+        );
+        assert_eq!(contract.returns, crate::TypeSpec::Object);
+        assert_eq!(contract.signature().required_param_count(), 1);
+        assert_eq!(contract.signature().params.len(), 2);
     }
 
     /// Verifies stable IDs resolve to the same contracts as PHP names.

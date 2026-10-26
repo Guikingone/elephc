@@ -138,6 +138,21 @@ echo $dog->run();
     assert_eq!(out, "dog");
 }
 
+/// Inferring a parent's method return must leave a child's overriding return ABI intact.
+#[test]
+fn test_inherited_return_inference_preserves_child_override() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseValue { public function value() { return 3; } }
+class ChildValue extends BaseValue { public function value() { return 'child'; } }
+$base = new BaseValue();
+$child = new ChildValue();
+echo $base->value() . ',' . $child->value();
+"#,
+    );
+    assert_eq!(out, "3,child");
+}
+
 /// Verifies private methods use lexical binding: `Base::reveal()` calls `Base::secret()`
 /// even when the object is a `Child` instance, returning "base". Private methods are
 /// not polymorphic and are resolved at the defining class at compile time.
@@ -1061,4 +1076,72 @@ echo Plain::viaStatic(), " ", (new Plain)->viaThis(), "\n";
 "#,
     );
     assert_eq!(out, "static:log:6 this:impl:5\nstatic:plain:'base' this:p:'base'\n");
+}
+
+/// A by-name allocation (`new $name`, `new` inside eval) of a class that hides a private
+/// ancestor property runs the ancestor's private-default thunk. That thunk must write the
+/// ancestor's own slots: it lacked a lexical class, so the private names counted as invisible,
+/// the defaults went to a dynamic-property hash the object never had, and the worker segfaulted
+/// (Symfony's `App\Kernel` under `--web`).
+#[test]
+fn test_by_name_allocation_initializes_hidden_private_ancestor_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class K {
+    private ?string $warmupDir = null;
+    private int $requestStackSize = 0;
+    private bool $resetServices = false;
+    public function info(): string {
+        return var_export($this->warmupDir, true) . ' ' . $this->requestStackSize . ' ' . var_export($this->resetServices, true);
+    }
+}
+class AppK extends K {
+    private $requestStackSize = 'mine';
+    public function mine(): string { return (string) $this->requestStackSize; }
+}
+$k = new AppK();
+echo $k->info(), ' ', $k->mine(), "\n";
+$name = 'AppK';
+$e = eval('return new ' . $name . '();');
+echo $e->info(), ' ', $e->mine(), "\n";
+$d = new $name();
+echo $d->info(), ' ', $d->mine(), "\n";
+"#,
+    );
+    assert_eq!(out, "NULL 0 false mine\nNULL 0 false mine\nNULL 0 false mine\n");
+}
+
+/// A builtin parent's return type is TENTATIVE: overriding `DateTime::createFromFormat()`
+/// (`DateTime|false`) with `?static`, as Carbon does, is a deprecation in php, not an error. The
+/// checker refused it and Carbon went to the interpreter. The inherited builtin static method is
+/// reached through `parent::` and through the static callable table, so its body must be lowered
+/// although no `DateTime::createFromFormat()` call names it.
+#[test]
+fn test_override_of_a_builtin_static_method_with_a_tentative_return_type() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class MyDate extends DateTime {
+    #[\ReturnTypeWillChange]
+    public static function createFromFormat($format, $time, $timezone = null): ?static
+    {
+        $parent = parent::createFromFormat($format, $time, $timezone);
+        if ($parent === false) {
+            return null;
+        }
+        return new static('@' . $parent->getTimestamp());
+    }
+    public function format($format): string { return 'my:' . parent::format($format); }
+}
+$d = MyDate::createFromFormat('Y-m-d H:i:s', '2024-02-03 04:05:06', new DateTimeZone('UTC'));
+echo get_class($d), " ", $d->format('Y-m-d'), "|";
+var_dump(MyDate::createFromFormat('Y-m-d', 'nope'));
+$fn = [MyDate::class, 'createFromFormat'];
+echo get_class($fn('Y', '2020')), "|";
+function via_parent(DateTime $x): string { return $x->format('Y'); }
+echo via_parent($d);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "MyDate my:2024-02-03|NULL\nMyDate|my:2024");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

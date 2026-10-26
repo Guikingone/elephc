@@ -50,14 +50,20 @@ pub(super) fn conditional_branch_relaxations(
     // The house hasher, not SipHash: this map takes one insert per label in a 1.4 GB listing
     // and is only ever probed by `get`, never iterated, so nothing depends on its order. A
     // sample of the late codegen window caught `sip::Hasher::write` here.
+    // Each label keeps both its source offset (the conservative proxy conditional branches use)
+    // and its instruction index (what unconditional `b`/`bl` reach is measured in).
     let mut labels = HashMap::default();
     let mut source_offset = 0usize;
-    for line in pieces.iter().flat_map(|piece| piece.split_inclusive('\n')) {
-        let trimmed = line.trim();
-        if let Some(label) = trimmed.strip_suffix(':') {
-            if is_symbol(label) {
-                labels.insert(label, source_offset);
+    let mut instruction_index = 0usize;
+    for line in pieces.iter().flat_map(|piece| lines_of(piece)) {
+        match classify(line) {
+            Line::Label(label) => {
+                if is_symbol(label) {
+                    labels.insert(label, (source_offset, instruction_index));
+                }
             }
+            Line::Instruction(_) => instruction_index += 1,
+            Line::Other => {}
         }
         source_offset += line.len();
     }
@@ -65,12 +71,29 @@ pub(super) fn conditional_branch_relaxations(
     // Only the relaxed branches differ from the text; each becomes one edit covering its line.
     let mut edits = Vec::new();
     source_offset = 0;
-    for line in pieces.iter().flat_map(|piece| piece.split_inclusive('\n')) {
-        let expansion = maybe_conditional_branch(line)
-            .then(|| parse_conditional_branch(line))
+    instruction_index = 0;
+    for line in pieces.iter().flat_map(|piece| lines_of(piece)) {
+        let Line::Instruction(trimmed) = classify(line) else {
+            source_offset += line.len();
+            continue;
+        };
+        if let Some(far) = far_unconditional_branch(trimmed, &labels, instruction_index) {
+            let mut replacement = String::new();
+            emit_far_unconditional_branch(&mut replacement, &far, target);
+            edits.push(super::user_assembly::TextEdit {
+                start: source_offset,
+                end: source_offset + line.len(),
+                replacement,
+            });
+            source_offset += line.len();
+            instruction_index += 1;
+            continue;
+        }
+        let expansion = maybe_conditional_branch(trimmed)
+            .then(|| parse_conditional_branch(trimmed))
             .flatten()
             .and_then(|branch| {
-                let target_offset = labels.get(branch.target).copied()?;
+                let (target_offset, _) = labels.get(branch.target).copied()?;
                 let distance = source_offset.abs_diff(target_offset);
                 (distance > branch.source_limit).then_some((branch, distance))
             });
@@ -85,8 +108,112 @@ pub(super) fn conditional_branch_relaxations(
             });
         }
         source_offset += line.len();
+        instruction_index += 1;
     }
     edits
+}
+
+/// One assembly line, classified without trimming lines that need no trimmed form.
+enum Line<'a> {
+    /// `name:` -- the label name.
+    Label(&'a str),
+    /// A line that assembles to code, trimmed.
+    Instruction(&'a str),
+    /// Blank, comment or directive.
+    Other,
+}
+
+/// Iterates the lines of `text`, each with its trailing `\n`, splitting on `memchr`.
+///
+/// `str::split_inclusive('\n')` runs a char searcher; on the 2.7 GB Symfony demo listing it and
+/// the per-line `trim` were 3.3 s of the 4.8 s these two passes took.
+fn lines_of(text: &str) -> impl Iterator<Item = &str> {
+    let bytes = text.as_bytes();
+    let mut start = 0usize;
+    std::iter::from_fn(move || {
+        if start >= bytes.len() {
+            return None;
+        }
+        let end = memchr::memchr(b'\n', &bytes[start..]).map_or(bytes.len(), |at| start + at + 1);
+        let line = &text[start..end];
+        start = end;
+        Some(line)
+    })
+}
+
+/// Classifies one line the way the two passes need it.
+fn classify(line: &str) -> Line<'_> {
+    let bytes = line.as_bytes();
+    let Some(first) = bytes.iter().position(|byte| !byte.is_ascii_whitespace()) else {
+        return Line::Other;
+    };
+    let last = bytes.iter().rposition(|byte| !byte.is_ascii_whitespace()).unwrap_or(first);
+    if bytes[last] == b':' {
+        return Line::Label(&line[first..last]);
+    }
+    match bytes[first] {
+        b';' | b'.' | b'#' => Line::Other,
+        b'/' if bytes.get(first + 1) == Some(&b'/') => Line::Other,
+        _ => Line::Instruction(&line[first..=last]),
+    }
+}
+
+/// Unconditional `b`/`bl` reach +/-128 MB. A program whose text is larger than that relies on
+/// the linker's branch islands, and Apple's `ld` stops placing them ("branch islands: maximum
+/// cluster count reached") once the text passes roughly 2 GB: the Symfony demo failed to link
+/// with a `bl` to a closure 224 MB away. Branches to a label of the same user text that sits
+/// more than this many bytes of CODE away are rewritten to an address-materializing jump, which
+/// reaches +/-4 GB. Code distance is measured in instruction lines, a slight UNDER-estimate of
+/// the real distance (a directive or literal inside text adds bytes), so the margin to 128 MB
+/// stays generous.
+const FAR_UNCONDITIONAL_CODE_DISTANCE: usize = 100 * 1024 * 1024;
+
+/// An unconditional branch whose target is too far for its 26-bit immediate.
+struct FarUnconditionalBranch<'a> {
+    /// `bl` keeps the return address (`blr`), `b` does not (`br`).
+    links: bool,
+    target: &'a str,
+}
+
+/// Returns the unconditional branch on `trimmed` when its user-text target is out of reach.
+///
+/// Targets outside the user text (runtime helpers, libc stubs) are not in `labels` and stay as
+/// they are: the linker still islands those, and a libc symbol would need a GOT load instead.
+fn far_unconditional_branch<'a>(
+    trimmed: &'a str,
+    labels: &HashMap<&str, (usize, usize)>,
+    instruction_index: usize,
+) -> Option<FarUnconditionalBranch<'a>> {
+    let (mnemonic, operand) = trimmed.split_once(char::is_whitespace)?;
+    let links = match mnemonic {
+        "b" => false,
+        "bl" => true,
+        _ => return None,
+    };
+    let target = operand.split(';').next()?.trim();
+    if !is_symbol(target) {
+        return None;
+    }
+    let (_, target_index) = labels.get(target).copied()?;
+    let distance = instruction_index.abs_diff(target_index).saturating_mul(4);
+    (distance > FAR_UNCONDITIONAL_CODE_DISTANCE).then_some(FarUnconditionalBranch { links, target })
+}
+
+/// Writes the +/-4 GB form of one far unconditional branch through the intra-procedure-call
+/// scratch register `x16`, which the AAPCS64 leaves to exactly this kind of veneer.
+fn emit_far_unconditional_branch(output: &mut String, branch: &FarUnconditionalBranch<'_>, target: Target) {
+    match target.platform {
+        Platform::MacOS => {
+            let _ = writeln!(output, "    adrp x16, {}@PAGE", branch.target);
+            let _ = writeln!(output, "    add x16, x16, {}@PAGEOFF", branch.target);
+        }
+        Platform::Linux => {
+            let _ = writeln!(output, "    adrp x16, {}", branch.target);
+            let _ = writeln!(output, "    add x16, x16, :lo12:{}", branch.target);
+        }
+        Platform::Windows => unreachable!("AArch64 Windows codegen is unsupported"),
+    }
+    let _ = writeln!(output, "    {} x16", if branch.links { "blr" } else { "br" });
 }
 
 /// Returns whether a line could possibly be one of the branches the parser accepts.
@@ -247,6 +374,23 @@ mod tests {
         assert!(relaxed.starts_with(
             "    tbz x4, #63, .L_elephc_relaxed_branch_0\n    b target\n.L_elephc_relaxed_branch_0:\n"
         ));
+    }
+
+    /// Verifies a `bl` to a user label more than 128 MB of code away becomes an `x16` call, and a
+    /// `b` an `x16` jump, while a nearby call and a call into the runtime keep their short form.
+    #[test]
+    fn distant_unconditional_branches_use_x16() {
+        let filler = FAR_UNCONDITIONAL_CODE_DISTANCE / 4 + 2;
+        let mut assembly = "    bl far_target\n    b far_target\n    bl near_target\n    bl __rt_heap_alloc\nnear_target:\n".to_string();
+        assembly.push_str(&"    nop\n".repeat(filler));
+        assembly.push_str("far_target:\n    ret\n");
+        let target = Target::new(Platform::MacOS, Arch::AArch64);
+        let relaxed = relax_conditional_branches(assembly, target);
+        assert!(relaxed.starts_with(
+            "    adrp x16, far_target@PAGE\n    add x16, x16, far_target@PAGEOFF\n    blr x16\n\
+             \x20   adrp x16, far_target@PAGE\n    add x16, x16, far_target@PAGEOFF\n    br x16\n\
+             \x20   bl near_target\n    bl __rt_heap_alloc\nnear_target:\n"
+        ), "{}", &relaxed[..300]);
     }
 
     /// Verifies non-AArch64 assembly is returned unchanged.

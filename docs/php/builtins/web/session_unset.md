@@ -1,8 +1,8 @@
 ---
 title: "session_unset()"
-description: "Implemented by the compiler-injected web prelude."
+description: "Removes every variable from the session without destroying it."
 sidebar:
-  order: 972
+  order: 1063
 ---
 
 ## session_unset()
@@ -11,7 +11,7 @@ sidebar:
 function session_unset(): bool
 ```
 
-Implemented by the compiler-injected web prelude.
+Removes every variable from the session without destroying it.
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected web prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -1,8 +1,8 @@
 ---
 title: "cairo_arc()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Adds a clockwise arc of the given radius and angle span to the current path."
 sidebar:
-  order: 413
+  order: 414
 ---
 
 ## cairo_arc()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_arc(mixed $context, float $xc, float $yc, float $radius, float $angle1, float $angle2): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Adds a clockwise arc of the given radius and angle span to the current path.
 
 **Parameters**:
 - `$context` (`mixed`)
@@ -28,7 +28,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

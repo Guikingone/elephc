@@ -18,6 +18,7 @@ use crate::types::{
     PhpType, TypeEnv,
 };
 
+use super::super::super::scope_dynamic_storage;
 use super::super::super::Checker;
 use super::properties_null_coalesce::null_coalesce_property_keeps_non_null;
 
@@ -47,6 +48,26 @@ pub(super) fn check_property_assign(
         check_object_property_write(checker, object, &class_name, property, value, &val_ty, span)?;
         refine_object_property_type(checker, &class_name, property, &storage_ty);
     }
+    // A boxed `Mixed` receiver names no class, so the reservation is recorded for every class
+    // whose layout carries THIS name as a strict ancestor's private slot. Without it the Mixed
+    // write ladder had no arm for such a class and the store fell through to the stdClass-only
+    // miss helper, which dropped it with no diagnostic anywhere.
+    if matches!(obj_ty.codegen_repr(), PhpType::Mixed) {
+        scope_dynamic_storage::record_scope_dynamic_mixed_receiver_mutation(checker, property);
+    }
+    // A runtime-shaped value written through a receiver whose class the checker cannot name may
+    // land in ANY class's untyped slot of this name; a refined raw slot cannot take the box (the
+    // backend refuses it at run time), so those slots widen exactly as for an `unset()`.
+    if crate::types::checker::single_object_class_name(&obj_ty).is_none()
+        && matches!(obj_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_))
+        && matches!(storage_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    {
+        crate::types::checker::clone_override_storage::record_property_unset_destination(
+            checker,
+            &obj_ty,
+            Some(property),
+        );
+    }
     if let PhpType::Pointer(Some(class_name)) = &obj_ty {
         check_pointer_property_write(checker, class_name, property, &val_ty, span)?;
     }
@@ -75,6 +96,7 @@ pub(super) fn check_property_ref_assign(
     } else {
         None
     };
+    let target_class_for_binding = target_class.clone();
     if let Some(class_name) = target_class {
         checker
             .reference_property_promotions
@@ -94,7 +116,16 @@ pub(super) fn check_property_ref_assign(
     if let Some(class_name) = crate::types::checker::single_object_class_name(&source_object_ty) {
         checker
             .reference_property_promotions
-            .insert((class_name, source_property.clone()));
+            .insert((class_name.clone(), source_property.clone()));
+        if let Some(target_class) = target_class_for_binding {
+            checker.reference_property_bindings.push((
+                target_class,
+                property.to_string(),
+                class_name,
+                source_property.clone(),
+                span,
+            ));
+        }
     }
     Ok(())
 }
@@ -155,7 +186,9 @@ pub(super) fn check_property_array_push(
     }
     match &obj_ty {
         PhpType::Object(class_name) => {
-            if class_name.trim_start_matches('\\').is_empty() {
+            if class_name.trim_start_matches('\\').is_empty()
+                || receiver_is_interface_only(checker, class_name)
+            {
                 check_generic_object_property_array_push(
                     checker, property, &val_ty, span,
                 )?;
@@ -164,6 +197,7 @@ pub(super) fn check_property_array_push(
             if object_property_write_is_dynamic(checker, class_name, property) {
                 return Ok(());
             }
+            refuse_scope_dynamic_element_write(checker, class_name, property, span)?;
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
             // `$this->lines[] = $line` on an `ArrayAccess` property is `offsetSet(null, $line)`
@@ -211,6 +245,73 @@ pub(super) fn check_property_array_push(
     }
 }
 
+/// Returns whether the class, or an ancestor, declares one magic accessor.
+///
+/// `ClassInfo::methods` is already flattened over the ancestry, so an inherited accessor counts,
+/// which is the same reading the rest of this check and `magic_set_receiver_has_method` use.
+fn class_declares_method(checker: &Checker, class_name: &str, method: &str) -> bool {
+    checker
+        .classes
+        .get(class_name.trim_start_matches('\\'))
+        .is_some_and(|class_info| class_info.methods.contains_key(method))
+}
+
+/// Refuses creating a dynamic property on a `readonly` class, which php forbids outright.
+///
+/// A `readonly` class carries php's no-dynamic-properties flag, so a name php resolves to a
+/// dynamic property there is not stored at all: php raises `Cannot create dynamic property
+/// C::$p`. The scope-dynamic arm above answers before the whole visibility and readonly ladder
+/// runs, so without this the arm would have created on a class that may not hold anything, and
+/// `scope_dynamic_storage` would have reserved a hash no legal write can ever fill.
+fn refuse_dynamic_property_on_readonly_class(
+    checker: &Checker,
+    class_name: &str,
+    property: &str,
+    span: Span,
+) -> Result<(), CompileError> {
+    let readonly = checker
+        .classes
+        .get(class_name.trim_start_matches('\\'))
+        .is_some_and(|class_info| class_info.is_readonly_class);
+    if !readonly {
+        return Ok(());
+    }
+    Err(CompileError::new(
+        span,
+        &format!(
+            "Cannot create dynamic property {}::${}",
+            class_name.trim_start_matches('\\'),
+            property
+        ),
+    ))
+}
+
+/// Refuses an element write through a name php does NOT resolve to a declared slot here.
+///
+/// `$obj->p[] = v` and `$obj->p[$k] = v` read the property's container, mutate it and publish it
+/// back, which needs storage the element write can address for the whole operation. For a name php
+/// resolves to a dynamic property, or one it refuses outright, the container is not a slot at all,
+/// and resolving one anyway would select a strict ancestor's private storage and then refine its
+/// inferred type from a write that never reaches it. Refusing keeps both from happening.
+fn refuse_scope_dynamic_element_write(
+    checker: &Checker,
+    class_name: &str,
+    property: &str,
+    span: Span,
+) -> Result<(), CompileError> {
+    if !scope_dynamic_storage::mutation_targets_scope_dynamic_name(checker, class_name, property) {
+        return Ok(());
+    }
+    Err(CompileError::new(
+        span,
+        &format!(
+            "Cannot write an array element through {}::{} from this scope: PHP resolves that \
+             name to a dynamic property here",
+            class_name, property
+        ),
+    ))
+}
+
 /// Type-checks an indexed property array assignment (`$obj->prop[$index] = value`).
 ///
 /// Infers object, index, and value types. Validates array key types and property mutability.
@@ -236,9 +337,32 @@ pub(super) fn check_property_array_assign(
         }
         return Ok(());
     }
+    // A nullable object receiver (`protected ResultSetMapping|null $rsm`) writes through its
+    // object member; a null one is php's run-time "Attempt to assign property on null".
+    // doctrine/orm's `AbstractHydrator::gatherRowData()` writes `$this->rsm->newObject[$i]`, and
+    // the refusal interpreted AbstractHydrator and the six hydrators extending it.
+    let obj_ty = match &obj_ty {
+        PhpType::Union(members) => {
+            let objects: Vec<&PhpType> = members
+                .iter()
+                .filter(|member| !matches!(member, PhpType::Void))
+                .collect();
+            match objects.as_slice() {
+                [only @ PhpType::Object(_)] if objects.len() + 1 == members.len() => (*only).clone(),
+                _ => obj_ty.clone(),
+            }
+        }
+        _ => obj_ty.clone(),
+    };
     match &obj_ty {
         PhpType::Object(class_name) => {
-            if class_name.trim_start_matches('\\').is_empty() {
+            // An interface declares no property: the object behind it does, which php finds when
+            // the write runs (`$metadata->table['indexes'] = []` through Doctrine's
+            // `Persistence\Mapping\ClassMetadata` in the ORM's `XmlDriver`). It was "Undefined
+            // class", and the driver went to the interpreter.
+            if class_name.trim_start_matches('\\').is_empty()
+                || receiver_is_interface_only(checker, class_name)
+            {
                 if !is_php_array_key_type(&normalized_idx_ty) {
                     return Err(CompileError::new(span, "Array index must be integer"));
                 }
@@ -258,9 +382,19 @@ pub(super) fn check_property_array_assign(
                 }
                 return Ok(());
             }
+            refuse_scope_dynamic_element_write(checker, class_name, property, span)?;
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
             if type_satisfies_array_access(checker, &prop_ty) {
+                return Ok(());
+            }
+            // An untyped property holds `mixed`, and a `mixed` container may be an `ArrayAccess`
+            // object whose offsets are objects: Laravel's exception handler declares
+            // `protected $reportedExceptionMap;`, fills it with `new WeakMap` in the constructor,
+            // and writes `$this->reportedExceptionMap[$e] = true;`. Only an object index is
+            // admitted here; lowering dispatches an `ArrayAccess` receiver to `offsetSet()` and
+            // raises php's TypeError for anything else.
+            if matches!(prop_ty, PhpType::Mixed) && matches!(normalized_idx_ty, PhpType::Object(_)) {
                 return Ok(());
             }
             if !is_php_array_key_type(&normalized_idx_ty) {
@@ -432,9 +566,44 @@ fn check_object_property_write(
     if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
         return Ok(());
     }
+    // php 7.4 removed shadow properties. A strict ancestor's `private $p` lives under a mangled
+    // key and the child's by-name table does not contain it at all, so a write outside the
+    // declaring class CREATES a distinct dynamic property rather than being an access error.
+    // `visible_property` below still finds that slot under its plain name, which is why this
+    // arm has to answer first: without it the write was refused where php stores a value, and
+    // relaxing the refusal alone would have let the write land in the ANCESTOR'S slot.
+    if scope_dynamic_storage::mutation_targets_scope_dynamic_name(checker, class_name, property) {
+        // php consults `__set` BEFORE it decides anything else about a name it does not resolve
+        // to a visible slot, a `readonly` class included: the accessor answers and no dynamic
+        // property is created, so there is nothing for the no-dynamic-properties rule to refuse
+        // and nothing for the reservation to store. `record_scope_dynamic_mutation` skips such a
+        // class too, so the two agree, but the refusal has to be skipped here explicitly or a
+        // readonly class with `__set` would be rejected for a creation php never performs.
+        let same_pair_reentry = scope_dynamic_storage::record_magic_set_same_pair_reentry(
+            checker, object, class_name, property,
+        );
+        if same_pair_reentry || !class_declares_method(checker, class_name, "__set") {
+            refuse_dynamic_property_on_readonly_class(checker, class_name, property, span)?;
+        }
+        if !same_pair_reentry {
+            scope_dynamic_storage::record_scope_dynamic_mutation(
+                checker, class_name, property, "__set",
+            );
+        }
+        return Ok(());
+    }
     if let Some(class_info) = checker.classes.get(class_name) {
         if class_info.visible_property(property).is_none() {
             if class_info.methods.contains_key("__set") {
+                let same_pair_reentry =
+                    scope_dynamic_storage::record_magic_set_same_pair_reentry(
+                    checker, object, class_name, property,
+                );
+                if same_pair_reentry {
+                    refuse_dynamic_property_on_readonly_class(
+                        checker, class_name, property, span,
+                    )?;
+                }
                 return Ok(());
             }
             if class_info.allow_dynamic_properties {
@@ -539,7 +708,12 @@ fn check_object_property_write(
                 ),
             ));
         }
-        if class_info.visible_property_is_declared(property) {
+        // A `mixed` value carries no compile-time type to compare with the declared slot, and
+        // PHP checks exactly this assignment at run time under weak-mode property typing. The
+        // codegen guard raises the catchable `TypeError` there, so rejecting the write here
+        // would forbid a program PHP accepts whenever the runtime value happens to fit.
+        let defers_to_runtime_property_typing = matches!(val_ty, PhpType::Mixed);
+        if class_info.visible_property_is_declared(property) && !defers_to_runtime_property_typing {
             let accepts_stringable_object = !checker.strict_types
                 && param_accepts_weak_string_coercion(&expected_ty)
                 && matches!(val_ty.codegen_repr(), PhpType::Object(ref name) if checker.object_supports_weak_string_coercion(name));
@@ -564,9 +738,18 @@ fn check_object_property_write(
             ) && crate::ir_lower::gradual_coercions::boundary_coercion_narrows_gradual(
                 &expected_ty,
             );
+            // A float stored into an `int` property is php's weak-mode coercion: an integral
+            // value converts, a fractional one is a deprecation, and an out-of-range one a
+            // `TypeError` -- decided on the value, so it cannot be refused on the type alone.
+            // `$this->charCount += ($strlen - $ignoredL) / $this->fixedWidth` (symfony/mime
+            // `CharacterStream`) divides two ints.
+            let defers_weak_float_to_int = !checker.strict_types
+                && expected_ty.codegen_repr() == PhpType::Int
+                && matches!(val_ty.codegen_repr(), PhpType::Float);
             if !accepts_stringable_object
                 && !defers_nominal_object_check
                 && !defers_gradual_array_check
+                && !defers_weak_float_to_int
             {
                 checker.require_compatible_arg_type(
                     &expected_ty,
@@ -700,6 +883,17 @@ pub(super) fn refined_untyped_property_assignment_type(
         // build. Only the same scalar kind stays in place.
         PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float | PhpType::Str
             if !untyped_scalar_slot_holds(current, val_ty) =>
+        {
+            Some(PhpType::Mixed)
+        }
+        // A null-defaulted slot rebound to an object (or any other non-array pointer shape) by
+        // its first write holds whatever is written next: an `int` written by a method was kept
+        // as the object type, so the read of that slot was lowered as an object load with no way
+        // to answer "unset" or 17. A null write stays, since the pointer slot already encodes it.
+        _ if !current.is_php_array()
+            && !matches!(current, PhpType::Mixed)
+            && !matches!(val_ty, PhpType::Void | PhpType::Never)
+            && !checker.type_accepts(current, val_ty) =>
         {
             Some(PhpType::Mixed)
         }
@@ -840,6 +1034,12 @@ fn merge_untyped_property_array_storage(
     }
 }
 
+/// Returns whether `property` is one of the untyped builtin Throwable fields with a fixed raw slot.
+fn is_builtin_throwable_payload_property(declaring_class: &str, property: &str) -> bool {
+    matches!(declaring_class.trim_start_matches('\\'), "Exception" | "Error")
+        && matches!(property, "message" | "code")
+}
+
 /// Refines the inferred type of an object property after a write, for properties without declared types.
 ///
 /// Delegates the type decision to `refined_untyped_property_assignment_type`; see its
@@ -851,13 +1051,20 @@ pub(super) fn refine_object_property_type(
     property: &str,
     val_ty: &PhpType,
 ) {
+    // A name php resolves to a DYNAMIC property never reaches the physical slot
+    // `visible_property_index` finds for it, so widening that slot would restamp an ancestor's
+    // private storage from a write that only ever creates a distinct dynamic property. The
+    // ancestor keeps reading its own slot with its own type, so the stamp has to stay put.
+    if scope_dynamic_storage::mutation_targets_scope_dynamic_name(checker, class_name, property) {
+        return;
+    }
     // A write inside the written class's own constructor (or a subclass constructor)
     // definitely initializes the slot before any observable read.
     let definitely_initialized = checker.current_method.as_deref() == Some("__construct")
         && checker.current_class.as_deref().is_some_and(|current| {
             current == class_name || checker.is_subclass_of(current, class_name)
         });
-    let (declaring_class, refined_ty) = {
+    let refined_ty = {
         let Some(class_info) = checker.classes.get(class_name) else {
             return;
         };
@@ -880,9 +1087,112 @@ pub(super) fn refine_object_property_type(
             .get(property)
             .cloned()
             .unwrap_or_else(|| class_name.to_string());
-        (declaring_class, refined_ty)
+        // The builtin Throwable payload keeps `message` and `code` in a FIXED raw shape: the
+        // native constructor, `getMessage()` and the uncaught-exception printer read a string
+        // and an int there. Widening the slot made a subclass box its writes while the builtin
+        // half kept reading raw words, so `$this->message = $this->rawMessage` -- Twig's
+        // `Error::updateRepr()` -- left `getMessage()` answering "". The write is coerced to
+        // the slot's shape instead, as for any typed property.
+        if is_builtin_throwable_payload_property(&declaring_class, property) {
+            return;
+        }
+        refined_ty
     };
-    propagate_object_property_type(checker, &declaring_class, property, refined_ty);
+    // Constructor writes can establish an array after the declaration pass (for example a null
+    // default). Keep their layout identical to array-defaulted slots before any return reads it.
+    let storage_ty = crate::types::ClassInfo::untyped_array_property_storage(refined_ty);
+    update_inherited_property_slot_type(checker, class_name, property, storage_ty);
+}
+
+/// Keeps copies of one inherited property slot in the same storage shape.
+///
+/// Class layouts copy an ancestor's property metadata before method bodies are checked. A
+/// later write can refine the ancestor's `Array(Never)` to an associative array, and codegen
+/// must see that refinement on every subclass that inherited the same physical slot. A child
+/// with a private property of the same name still carries the parent's slot, even though its
+/// name lookup points at a separate slot. A non-private array redeclaration also shares the
+/// slot, even when its default has already given it a different element type. All views of an
+/// associative slot need one hash representation that can hold every redeclared default.
+fn update_inherited_property_slot_type(
+    checker: &mut Checker,
+    class_name: &str,
+    property: &str,
+    ty: PhpType,
+) {
+    let Some(class_info) = checker.classes.get(class_name) else {
+        return;
+    };
+    let Some(slot) = class_info.visible_property_index(property) else {
+        return;
+    };
+    let old_ty = class_info.properties[slot].1.clone();
+    if old_ty == ty && !matches!(ty, PhpType::AssocArray { .. }) {
+        return;
+    }
+    let declaring_class = class_info
+        .property_declaring_classes
+        .get(property)
+        .cloned()
+        .unwrap_or_else(|| class_name.to_string());
+    let inheritors: Vec<String> = checker
+        .classes
+        .iter()
+        .filter(|(name, info)| {
+            (name.as_str() == declaring_class || checker.is_subclass_of(name, &declaring_class))
+                && info.properties.get(slot).is_some_and(|(name, _)| name == property)
+                && (info.visible_property_index(property) != Some(slot)
+                    || info.property_declaring_classes.get(property) == Some(&declaring_class)
+                    || info.properties[slot].1 == old_ty
+                    || matches!(
+                        (&ty, &info.properties[slot].1),
+                        (PhpType::AssocArray { .. }, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    ))
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    let shared_ty = if matches!(ty, PhpType::AssocArray { .. }) {
+        inheritors.iter().fold(ty, |shared, name| {
+            checker
+                .classes
+                .get(name)
+                .map(|info| merge_associative_property_slot_type(checker, shared.clone(), &info.properties[slot].1))
+                .unwrap_or(shared)
+        })
+    } else {
+        ty
+    };
+    for name in inheritors {
+        if let Some(info) = checker.classes.get_mut(&name) {
+            info.properties[slot].1 = shared_ty.clone();
+        }
+    }
+}
+
+/// Joins a redeclared array default into the hash representation shared by one physical slot.
+fn merge_associative_property_slot_type(
+    checker: &Checker,
+    shared: PhpType,
+    candidate: &PhpType,
+) -> PhpType {
+    let PhpType::AssocArray { key, value } = shared else {
+        return shared;
+    };
+    let (candidate_key, candidate_value) = match candidate {
+        PhpType::Array(element) if matches!(element.as_ref(), PhpType::Never) => {
+            return PhpType::AssocArray { key, value };
+        }
+        PhpType::Array(element) => (PhpType::Int, element.as_ref()),
+        PhpType::AssocArray { key, value } => (*key.clone(), value.as_ref()),
+        _ => return PhpType::AssocArray { key, value },
+    };
+    PhpType::AssocArray {
+        key: Box::new(merge_array_key_types(*key, candidate_key)),
+        value: Box::new(
+            checker
+                .merge_array_element_type(&value, candidate_value)
+                .unwrap_or(PhpType::Mixed),
+        ),
+    }
 }
 
 /// Validates a write to a property of a typed pointer (extern or packed class).
@@ -968,6 +1278,13 @@ fn object_property_write_is_dynamic(checker: &Checker, class_name: &str, propert
 /// Looks up the property in `checker.classes`, validates existence and access, and returns
 /// the property type along with a flag indicating whether the property has a declared type.
 /// Returns an error if the class or property is undefined.
+/// Whether `class_name` names an interface (and no class): a property write through it is
+/// resolved on the run-time object, as for an untyped object.
+fn receiver_is_interface_only(checker: &Checker, class_name: &str) -> bool {
+    let name = class_name.trim_start_matches('\\');
+    !checker.classes.contains_key(name) && checker.interfaces.contains_key(name)
+}
+
 fn resolve_object_array_property(
     checker: &Checker,
     class_name: &str,
@@ -1014,6 +1331,9 @@ fn updated_array_property_push_type(
     val_ty: &PhpType,
     span: Span,
 ) -> Result<PhpType, CompileError> {
+    if prop_ty.is_php_array() {
+        return Ok(prop_ty.clone());
+    }
     match prop_ty {
         PhpType::Array(elem_ty) => {
             if property_has_declared_type {
@@ -1061,6 +1381,21 @@ fn updated_array_property_push_type(
         PhpType::Union(members) if array_family_bool_void_union_accepts_write(members) => {
             Ok(prop_ty.clone())
         }
+        // `protected array|string $sqlStatements` (Doctrine's SQL executors) holds an array where
+        // it is pushed to; the boxed writer appends to it, and php's `[] operator not supported
+        // for strings` Error stays the run-time answer for a string.
+        PhpType::Union(members)
+            if members.iter().any(|member| matches!(member, PhpType::Str))
+                && array_family_bool_void_union_accepts_write(
+                    &members
+                        .iter()
+                        .filter(|member| !matches!(member, PhpType::Str))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ) =>
+        {
+            Ok(prop_ty.clone())
+        }
         other => Err(CompileError::new(
             span,
             &format!("Array push requires an array property, got {}", other),
@@ -1089,6 +1424,9 @@ fn updated_array_property_assign_type(
     val_ty: &PhpType,
     span: Span,
 ) -> Result<PhpType, CompileError> {
+    if prop_ty.is_php_array() {
+        return Ok(prop_ty.clone());
+    }
     match prop_ty {
         PhpType::Array(elem_ty) => {
             if !matches!(normalized_idx_ty, PhpType::Int)
@@ -1154,7 +1492,24 @@ fn updated_array_property_assign_type(
             })
         }
         PhpType::Mixed => Ok(prop_ty.clone()),
+        // `$this->types[$param - 1] = 'i'` on a `string` property (Doctrine DBAL's mysqli
+        // `Statement`) is php's byte-offset write; the lowering writes the string back.
+        PhpType::Str if matches!(normalized_idx_ty, PhpType::Int | PhpType::Mixed) => {
+            Ok(PhpType::Str)
+        }
         PhpType::Union(members) if array_family_bool_void_union_accepts_write(members) => {
+            Ok(prop_ty.clone())
+        }
+        // A union holding an array among other shapes is a boxed cell, written through the same
+        // run-time dispatch as a `mixed` property: an array takes the element, an `ArrayAccess`
+        // object gets `offsetSet()`, anything else raises php's Error. symfony/http-kernel's
+        // `DataCollector::$data` is `array|Data`, and every collector writes `$this->data[...]`.
+        PhpType::Union(members)
+            if prop_ty.codegen_repr() == PhpType::Mixed
+                && members
+                    .iter()
+                    .any(|member| matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })) =>
+        {
             Ok(prop_ty.clone())
         }
         other => Err(CompileError::new(
@@ -1173,7 +1528,12 @@ pub(super) fn array_family_bool_void_union_accepts_write(members: &[PhpType]) ->
     let mut saw_array = false;
     for member in members {
         match member {
-            PhpType::Array(_) | PhpType::AssocArray { .. } => saw_array = true,
+            // An `iterable` member makes the union a boxed cell too (`string|iterable|null
+            // $body`, Symfony's `MockResponse`): the run-time writer appends to an array and
+            // raises php's Error for a `Traversable` that is not `ArrayAccess`.
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+                saw_array = true
+            }
             PhpType::Bool | PhpType::False | PhpType::Void => {}
             _ => return false,
         }
@@ -1275,22 +1635,13 @@ fn update_object_property_type(
     property_has_declared_type: bool,
     updated_prop_ty: PhpType,
 ) {
-    let Some((declaring_class, current_type)) = checker.classes.get(class_name).and_then(|info| {
-        let slot = info.visible_property_index(property)?;
-        let declaring_class = info
-            .property_declaring_classes
-            .get(property)
-            .cloned()
-            .unwrap_or_else(|| class_name.to_string());
-        Some((declaring_class, info.properties.get(slot)?.1.clone()))
-    }) else {
+    let Some(class_info) = checker.classes.get(class_name) else {
         return;
     };
-    if property_has_declared_type
-        && !declared_generic_array_can_use_assoc_storage(&current_type, &updated_prop_ty)
-    {
+    let Some((_, (_, current_type))) = class_info.visible_property(property) else {
         return;
-    }
+    };
+    let current_type = current_type.clone();
     // An INFERRED property's stored type may only widen. Overwriting it let one pass narrow what
     // an earlier pass had widened, and the method-pass fixpoint then alternated between the two
     // forever instead of settling. The join is also the honest answer: the slot has to hold every
@@ -1302,28 +1653,10 @@ fn update_object_property_type(
             .merged_assignment_type(&current_type, &updated_prop_ty)
             .unwrap_or(PhpType::Mixed)
     };
-    propagate_object_property_type(checker, &declaring_class, property, updated_prop_ty);
-}
-
-/// Applies one property storage representation to every class that inherits the same slot.
-fn propagate_object_property_type(
-    checker: &mut Checker,
-    declaring_class: &str,
-    property: &str,
-    updated_type: PhpType,
-) {
-    for class_info in checker.classes.values_mut() {
-        if class_info
-            .property_declaring_classes
-            .get(property)
-            .map(String::as_str)
-            != Some(declaring_class)
-        {
-            continue;
-        }
-        if let Some(slot) = class_info.visible_property_index(property) {
-            class_info.properties[slot].1 = updated_type.clone();
-        }
+    if !property_has_declared_type
+        || declared_generic_array_can_use_assoc_storage(&current_type, &updated_prop_ty)
+    {
+        update_inherited_property_slot_type(checker, class_name, property, updated_prop_ty);
     }
 }
 

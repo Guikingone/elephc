@@ -69,6 +69,9 @@ pub(super) fn push_builtin_spl_interface_metadata_methods(
 /// Returns methods needed even when user code does not call them directly.
 pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'static [&'static str] {
     match class_name {
+        // Every Throwable can be stringified through a dynamic `__toString()` dispatch (an
+        // `echo $e` on a boxed value), and those slots used to stay empty.
+        "Exception" | "Error" => &["__toString", "getTraceAsString"],
         "EmptyIterator" => &["current", "key", "next", "rewind", "valid"],
         "ArrayIterator" => &[
             "current",
@@ -83,6 +86,8 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
             "offsetUnset",
             "count",
         ],
+        // `$o[] = $v` reaches `append()` through the vtable; it was kept only while `offsetSet()`
+        // called it, and an emptied slot made the first push jump to address 0.
         "ArrayObject" => &[
             "getIterator",
             "count",
@@ -90,6 +95,11 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
             "offsetGet",
             "offsetSet",
             "offsetUnset",
+            "append",
+            "getArrayCopy",
+            "exchangeArray",
+            "__serialize",
+            "__unserialize",
         ],
         "SplFixedArray" => &[
             "getIterator",

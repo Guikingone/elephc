@@ -31,7 +31,7 @@
 use crate::parser::ast::{BinOp, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_binop, e_bool, e_call, e_const, e_index, e_int, e_neg, e_not, e_str, e_var, function,
-    internal_declarations, s_array_assign, s_array_push, s_assign, s_break, s_continue, s_if,
+    php_semantics_declarations, s_array_assign, s_array_push, s_assign, s_break, s_continue, s_if,
     s_return, s_while, t_array,
 };
 
@@ -352,7 +352,7 @@ const OPERATORS: &[(&str, &str)] = &[
 
 /// Returns the tokenizer declarations for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| {
+    php_semantics_declarations(|| {
         vec![
             decl_fn_is_space(),
             decl_fn_is_digit(),

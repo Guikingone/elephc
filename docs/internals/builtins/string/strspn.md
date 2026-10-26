@@ -1,16 +1,16 @@
 ---
-title: "strspn() — internals"
+title: "strspn() - internals"
 description: "Compiler internals for strspn(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 893
+  order: 986
 ---
 
-## `strspn()` — internals
+## `strspn()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strspn.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strspn.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

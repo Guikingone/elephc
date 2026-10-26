@@ -1,16 +1,16 @@
 ---
-title: "settype() — internals"
+title: "settype() - internals"
 description: "Compiler internals for settype(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 939
+  order: 1034
 ---
 
-## `settype()` — internals
+## `settype()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/settype.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/settype.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

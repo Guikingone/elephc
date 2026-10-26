@@ -6,11 +6,11 @@ description: "Twig calls a method no bundled class declares behind method_exists
 created: 2026-09-17
 sources:
   - path: src/types/checker/inference/objects/methods.rs
-    blob: 1777141c0ced202771f3f88cc509c47389cc8db1
+    blob: 41165febac884fb04decd20c4bc0e74b01afe31e
   - path: src/types/checker/stmt_check/narrowing.rs
-    blob: a594c4d91ee84d09c343d35fae865acb7f5110d1
+    blob: 340774e5f89d92493e806844a87aea0557bd577a
   - path: src/types/checker/mod.rs
-    blob: 67e0d0320905f345168ba4f28a6fe137d2218990
+    blob: eb476f7c71df0cd0c202ac9bd09bdbfdd04ed330
 ---
 
 # A method_exists test in the same body admits the call it guards

@@ -21,28 +21,23 @@ pub struct Cursor<'a> {
     pos: usize,
     line: usize,
     col: usize,
+    source_id: u32,
 }
 
 impl<'a> Cursor<'a> {
-    /// Constructs a new cursor over the given source string.
-    ///
-    /// The cursor starts at position 0, line 1, column 1 (one-based spans).
-    pub fn new(source: &'a str) -> Self {
-        Self::new_at_line(source, 1)
-    }
-
-    /// Constructs a cursor whose first byte sits on `line` of the physical file.
+    /// Constructs a cursor starting on `line` whose spans identify one physical source file.
     ///
     /// Bytes removed before scanning must not renumber what follows them: PHP's CLI drops a
     /// leading `#!` line but still reports a `throw` on physical line 3 as line 3. The scan gets
     /// the remainder and the line it starts on, so the two stay consistent.
-    pub fn new_at_line(source: &'a str, line: usize) -> Self {
+    pub(super) fn new_at_line_in_source(source: &'a str, line: usize, source_id: u32) -> Self {
         Self {
             bytes: source.as_bytes(),
             text: Some(source),
             pos: 0,
             line,
             col: 1,
+            source_id,
         }
     }
 
@@ -59,6 +54,7 @@ impl<'a> Cursor<'a> {
             pos: 0,
             line: 1,
             col: 1,
+            source_id: 0,
         }
     }
 
@@ -66,7 +62,7 @@ impl<'a> Cursor<'a> {
     ///
     /// Used to attach source locations to tokens for diagnostics.
     pub fn span(&self) -> Span {
-        Span::new(self.line as u32, self.col as u32)
+        Span::new_in_source(self.line as u32, self.col as u32, self.source_id)
     }
 
     /// Returns the next character without advancing the cursor.

@@ -308,6 +308,18 @@ pub(in crate::interpreter) fn eval_sprintf_apply_width(
         output.append(&mut bytes);
         return output;
     }
+    // The `0` flag on `%s` pads with zeros on whichever side the alignment says: php's
+    // `sprintf('%02s', 0)` is "00", which Carbon's `create()` relies on to build "12:00:00".
+    if spec.zero_pad && !numeric {
+        if spec.left_align {
+            bytes.extend(std::iter::repeat_n(b'0', pad_len));
+            return bytes;
+        }
+        let mut output = Vec::with_capacity(width);
+        output.extend(std::iter::repeat_n(b'0', pad_len));
+        output.append(&mut bytes);
+        return output;
+    }
     if spec.left_align {
         bytes.extend(std::iter::repeat_n(b' ', pad_len));
         return bytes;

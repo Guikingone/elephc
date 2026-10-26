@@ -1,8 +1,8 @@
 ---
 title: "opcache_jit_blacklist()"
-description: "Implemented by the compiler-injected OPcache prelude."
+description: "Excludes a function from JIT compilation."
 sidebar:
-  order: 646
+  order: 666
 ---
 
 ## opcache_jit_blacklist()
@@ -11,7 +11,7 @@ sidebar:
 function opcache_jit_blacklist(mixed $closure): void
 ```
 
-Implemented by the compiler-injected OPcache prelude.
+Excludes a function from JIT compilation.
 
 **Parameters**:
 - `$closure` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected OPcache prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -283,3 +283,34 @@ fn unserialize_is_visible_to_function_exists() {
     let result = execute_program(&program, &mut scope, &mut values).expect("execute fragment");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// `r:N;` and `R:N;` resolve against the values parsed so far, numbered as php numbers them:
+/// every value but an `R:` takes an index, an `r:` takes one, and keys take none. `r:` shares the
+/// object; `R:` onto a scalar yields an equal value (a copy here, php binds one reference).
+///
+/// `php -n` 8.5.6: `["x","x"]`, `bool(true)` twice, and `bool(false)` for `r:` onto a string.
+#[test]
+fn unserialize_resolves_back_references_by_php_numbering() {
+    assert_eq!(
+        out(br#"echo json_encode(unserialize('a:2:{i:0;s:1:"x";i:1;R:2;}')), "|";
+echo json_encode(unserialize('a:3:{i:0;i:7;i:1;R:2;i:2;s:1:"z";}')), "|";
+$o = unserialize('a:4:{i:0;O:8:"stdClass":0:{}i:1;r:2;i:2;O:8:"stdClass":0:{}i:3;r:4;}');
+var_dump($o[0] === $o[1], $o[2] === $o[3], $o[0] === $o[2]);"#),
+        "[\"x\",\"x\"]|[7,7,\"z\"]|bool(true)\nbool(true)\nbool(false)\n",
+    );
+}
+
+/// A serialize/unserialize round trip of a structure sharing objects reproduces the same wire
+/// bytes and the same object identities.
+#[test]
+fn unserialize_round_trips_shared_objects_to_the_same_wire_bytes() {
+    assert_eq!(
+        out(br#"class P { public $x = 1; public $y; }
+$p = new P; $q = new P;
+$s = serialize(["k" => $p, "again" => $p, 3 => $q, "z" => "s", "w" => $q]);
+$u = unserialize($s);
+echo $s === serialize($u) ? "same" : "different", "|";
+var_dump($u["k"] === $u["again"], $u[3] === $u["w"], $u["k"] === $u[3]);"#),
+        "same|bool(true)\nbool(true)\nbool(false)\n",
+    );
+}

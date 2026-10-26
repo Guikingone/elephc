@@ -50,8 +50,6 @@
     "src/curl_prelude.rs:143:php-text": "pub(crate) const CURL_PRELUDE_SRC: &str = r#\"<?php",
     "src/curl_prelude.rs:1978:parser-call": "let tokens = crate::lexer::tokenize(source.as_ref()).expect(\"curl prelude must tokenize\");",
     "src/curl_prelude.rs:1979:parser-call": "let mut combined = crate::parser::parse_internal(&tokens).expect(\"curl prelude must parse\");",
-    "src/dom_prelude.rs:105:parser-call": "let tokens = crate::lexer::tokenize(DOM_PRELUDE_SRC).expect(\"DOM prelude must tokenize\");",
-    "src/dom_prelude.rs:18:php-text": "pub const DOM_PRELUDE_SRC: &str = r#\"<?php",
     "src/eval_aot/planning.rs:14:php-text": "let source = format!(\"<?php {}\", fragment);",
     "src/eval_aot/planning.rs:15:parser-call": "let tokens = crate::lexer::tokenize(&source).ok()?;",
     "src/filter_var_prelude.rs:132:parser-call": "let tokens = crate::lexer::tokenize(FILTER_VAR_DYN_PRELUDE_SRC)",

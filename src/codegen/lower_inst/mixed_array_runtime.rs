@@ -112,6 +112,23 @@ fn lower_mixed_array_runtime_get_native(
     warn_on_missing: ValueId,
     for_write: bool,
 ) -> Result<()> {
+    if !for_write {
+        if let Some(kind) = object_key_kind(ctx, key)? {
+            return lower_mixed_array_object_key_get(ctx, inst, receiver, key, warn_on_missing, kind);
+        }
+    }
+    lower_mixed_array_runtime_get_plain(ctx, inst, receiver, key, warn_on_missing, for_write)
+}
+
+/// The hash-keyed `__rt_mixed_array_get` read, for every key that is not an object.
+fn lower_mixed_array_runtime_get_plain(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    receiver: ValueId,
+    key: ValueId,
+    warn_on_missing: ValueId,
+    for_write: bool,
+) -> Result<()> {
     if let Some(slot) = callable_array_slot(ctx, key, for_write)? {
         return lower_mixed_callable_slot_or_array_get(
             ctx,
@@ -144,6 +161,169 @@ fn lower_mixed_array_runtime_get_native(
     );
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
+}
+
+/// How a subscript key can reach `ArrayAccess::offset*()` with an OBJECT as the offset.
+#[derive(Clone)]
+enum ObjectKeyKind {
+    /// The key is statically an object (`Throwable $e`, `object $o`): never a valid array key, so
+    /// only an `ArrayAccess` receiver can accept it. Carries the class name php prints in its
+    /// TypeError.
+    Static(String),
+    /// The key is a boxed `mixed`: it is an object offset only when its runtime tag says so.
+    Dynamic,
+}
+
+/// Classifies a key for object-offset dispatch, or `None` when it can never be an object.
+///
+/// A `mixed` container may hold a `WeakMap`, `SplObjectStorage` or a user `ArrayAccess` indexed
+/// by objects. The hash-key path normalizes every key to an int or a string, so an object key was
+/// either refused at compile time (static object) or read back as null (boxed object): Laravel's
+/// exception handler writes `$this->reportedExceptionMap[$e] = true` and `?? false` over an
+/// untyped property holding a `WeakMap`.
+fn object_key_kind(ctx: &FunctionContext<'_>, key: ValueId) -> Result<Option<ObjectKeyKind>> {
+    Ok(match ctx.value_php_type(key)?.codegen_repr() {
+        PhpType::Object(name) => {
+            let name = name.trim_start_matches('\\');
+            Some(ObjectKeyKind::Static(if name.is_empty() {
+                "object".to_string()
+            } else {
+                name.to_string()
+            }))
+        }
+        PhpType::Mixed | PhpType::Union(_) => Some(ObjectKeyKind::Dynamic),
+        _ => None,
+    })
+}
+
+/// Branches to `label` unless `value` is a boxed Mixed cell whose runtime tag is `tag`.
+fn emit_branch_unless_mixed_tag(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    tag: i64,
+    label: &str,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(value, "x0")?;
+            ctx.emitter.instruction(&format!("cbz x0, {}", label));             // an absent cell is no object
+            ctx.emitter.instruction("ldr x9, [x0]");                            // inspect the boxed runtime payload tag
+            ctx.emitter.instruction(&format!("cmp x9, #{}", tag));              // compare against the wanted tag
+            ctx.emitter.instruction(&format!("b.ne {}", label));                // any other payload leaves the object path
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(value, "rax")?;
+            ctx.emitter.instruction("test rax, rax");                           // an absent cell is no object
+            ctx.emitter.instruction(&format!("je {}", label));
+            ctx.emitter.instruction(&format!("cmp QWORD PTR [rax], {}", tag));  // compare the boxed tag against the wanted tag
+            ctx.emitter.instruction(&format!("jne {}", label));                 // any other payload leaves the object path
+        }
+    }
+    Ok(())
+}
+
+/// Throws php's TypeError for an object offset used on something that is not `ArrayAccess`.
+fn emit_object_offset_type_error(ctx: &mut FunctionContext<'_>, class_name: &str, quiet: bool) {
+    let message = if quiet {
+        format!("Cannot access offset of type {} in isset or empty", class_name)
+    } else {
+        format!("Cannot access offset of type {} on array", class_name)
+    };
+    exceptions::emit_type_error(ctx, &message);
+}
+
+/// Reads `$mixed[$objectKey]`: an `ArrayAccess` receiver is asked through `offsetGet()`, a quiet
+/// read (`??`, `isset()`, `empty()`) through `offsetExists()` first.
+///
+/// The `offsetExists()` answer is boxed into the instruction's own result cell and read back
+/// from there, because the argument cleanups that follow the call overwrite the result registers.
+fn lower_mixed_array_object_key_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    receiver: ValueId,
+    key: ValueId,
+    warn_on_missing: ValueId,
+    kind: ObjectKeyKind,
+) -> Result<()> {
+    let result = inst.result;
+    let result_ty = inst.result_php_type.codegen_repr();
+    if !matches!(result_ty, PhpType::Mixed | PhpType::Union(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "object key read with result PHP type {:?}",
+            inst.result_php_type
+        )));
+    }
+    let quiet = value_is_const_int(ctx, warn_on_missing, 0)?;
+    let other_label = ctx.next_label("mixed_object_key_other");
+    let done_label = ctx.next_label("mixed_object_key_done");
+    emit_branch_unless_mixed_tag(ctx, receiver, 6, &other_label)?;
+    if matches!(kind, ObjectKeyKind::Dynamic) {
+        emit_branch_unless_mixed_tag(ctx, key, 6, &other_label)?;
+    }
+    let mut call = inst.clone();
+    call.operands = vec![receiver, key];
+    if quiet {
+        let absent_label = ctx.next_label("mixed_object_key_absent");
+        array_access_runtime::lower_boxed_array_access_interface_call(ctx, &call, "offsetExists")?;
+        if let Some(result) = result {
+            let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+            ctx.load_value_to_result(result)?;
+            abi::emit_push_reg(ctx.emitter, &result_reg);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            abi::emit_push_reg(ctx.emitter, mixed_unbox_low_payload_reg(ctx));
+            abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, 16);
+            abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+            abi::emit_pop_reg(ctx.emitter, &result_reg);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+        }
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &absent_label);
+        array_access_runtime::lower_boxed_array_access_interface_call(ctx, &call, "offsetGet")?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&absent_label);
+        objects::emit_boxed_null(ctx);
+        cast_loaded_mixed_pointer_to_result(ctx, &result_ty)?;
+        store_if_result(ctx, inst)?;
+    } else {
+        array_access_runtime::lower_boxed_array_access_interface_call(ctx, &call, "offsetGet")?;
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&other_label);
+    match &kind {
+        ObjectKeyKind::Dynamic => {
+            lower_mixed_array_runtime_get_plain(ctx, inst, receiver, key, warn_on_missing, false)?;
+        }
+        ObjectKeyKind::Static(class_name) => {
+            // A null receiver answers null, as php does for `null[$k]`; anything else cannot take
+            // an object offset.
+            let not_null_label = ctx.next_label("mixed_object_key_not_null");
+            let null_label = ctx.next_label("mixed_object_key_null");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.load_value_to_reg(receiver, "x0")?;
+                    ctx.emitter.instruction(&format!("cbz x0, {}", null_label)); // an absent cell reads as null
+                    ctx.emitter.instruction("ldr x9, [x0]");                    // inspect the boxed runtime payload tag
+                    ctx.emitter.instruction("cmp x9, #8");                      // tag 8 is php null
+                    ctx.emitter.instruction(&format!("b.ne {}", not_null_label)); // anything else is a type error
+                }
+                Arch::X86_64 => {
+                    ctx.load_value_to_reg(receiver, "rax")?;
+                    ctx.emitter.instruction("test rax, rax");                   // an absent cell reads as null
+                    ctx.emitter.instruction(&format!("je {}", null_label));
+                    ctx.emitter.instruction("cmp QWORD PTR [rax], 8");          // tag 8 is php null
+                    ctx.emitter.instruction(&format!("jne {}", not_null_label)); // anything else is a type error
+                }
+            }
+            ctx.emitter.label(&null_label);
+            objects::emit_boxed_null(ctx);
+            cast_loaded_mixed_pointer_to_result(ctx, &result_ty)?;
+            store_if_result(ctx, inst)?;
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&not_null_label);
+            emit_object_offset_type_error(ctx, class_name, quiet);
+        }
+    }
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Which slot of PHP's two-element callable array a constant index is asking for.
@@ -386,6 +566,9 @@ pub(super) fn lower_array_fetch_for_write_runtime_call(
 }
 
 /// Lowers `$mixed[$key] = $value` through the shared boxed Mixed array/hash/stdClass writer.
+///
+/// An `Immediate::Bool(true)` marks the write half of a compound update whose read already
+/// reported a float key's conversion, so the key is rebuilt without a second deprecation.
 pub(super) fn lower_mixed_array_runtime_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let receiver = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
@@ -399,15 +582,29 @@ pub(super) fn lower_mixed_array_runtime_set(ctx: &mut FunctionContext<'_>, inst:
             )))
         }
     }
+    let normalization = if matches!(inst.immediate, Some(Immediate::Bool(true))) {
+        hashes::HashKeyNormalization::PhpAlreadyDiagnosed
+    } else {
+        hashes::HashKeyNormalization::Php
+    };
     let object_label = ctx.next_label("mixed_array_set_array_access");
     let native_label = ctx.next_label("mixed_array_set_native");
     let done_label = ctx.next_label("mixed_array_set_done");
     emit_mixed_array_set_object_guard(ctx, receiver, &object_label, &native_label)?;
 
     ctx.emitter.label(&native_label);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_mixed_array_runtime_set_aarch64(ctx, receiver, key, value)?,
-        Arch::X86_64 => lower_mixed_array_runtime_set_x86_64(ctx, receiver, key, value)?,
+    if let Some(ObjectKeyKind::Static(class_name)) = object_key_kind(ctx, key)? {
+        // An object offset is never a valid array key: only the `ArrayAccess` arm below takes it.
+        emit_object_offset_type_error(ctx, &class_name, false);
+    } else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                lower_mixed_array_runtime_set_aarch64(ctx, receiver, key, value, normalization)?
+            }
+            Arch::X86_64 => {
+                lower_mixed_array_runtime_set_x86_64(ctx, receiver, key, value, normalization)?
+            }
+        }
     }
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -438,23 +635,47 @@ fn emit_mixed_array_set_object_guard(
     object_label: &str,
     native_label: &str,
 ) -> Result<()> {
+    // The runtime's own SPL containers have no compiled `offsetSet`: the interface dispatch wrote
+    // nowhere (`$fixed[0] = "x"` through a `Mixed` read back garbage, with a bad refcount), while
+    // `__rt_mixed_array_set` stores into their runtime storage. They take the native path.
+    const RUNTIME_SPL_CLASS_IDS: &[&str] = &[
+        "_spl_fixed_array_class_id",
+        "_spl_dll_class_id",
+        "_spl_stack_class_id",
+        "_spl_queue_class_id",
+    ];
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(receiver, "x0")?;
             ctx.emitter.instruction(&format!("cbz x0, {}", native_label));      // absent Mixed cells stay on the null-safe runtime path
             ctx.emitter.instruction("ldr x9, [x0]");                            // inspect the boxed runtime payload tag
             ctx.emitter.instruction("cmp x9, #6");                              // object payloads require module-aware interface dispatch
-            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // call the concrete ArrayAccess::offsetSet implementation
+            ctx.emitter.instruction(&format!("b.ne {}", native_label));         // arrays, hashes and scalars use the runtime writer
+            ctx.emitter.instruction("ldr x10, [x0, #8]");                       // the object payload
+            ctx.emitter.instruction("ldr x10, [x10]");                          // its class id
+            for symbol in RUNTIME_SPL_CLASS_IDS {
+                abi::emit_symbol_address(ctx.emitter, "x11", symbol);
+                ctx.emitter.instruction("ldr x11, [x11]");                      // a runtime SPL container class id
+                ctx.emitter.instruction("cmp x10, x11");                        // is the receiver that container?
+                ctx.emitter.instruction(&format!("b.eq {}", native_label));     // its runtime storage takes the write
+            }
+            abi::emit_jump(ctx.emitter, object_label);                          // call the concrete ArrayAccess::offsetSet implementation
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(receiver, "rax")?;
             ctx.emitter.instruction("test rax, rax");                           // absent Mixed cells stay on the null-safe runtime path
             ctx.emitter.instruction(&format!("je {}", native_label));
             ctx.emitter.instruction("cmp QWORD PTR [rax], 6");                  // object payloads require module-aware interface dispatch
-            ctx.emitter.instruction(&format!("je {}", object_label));           // call the concrete ArrayAccess::offsetSet implementation
+            ctx.emitter.instruction(&format!("jne {}", native_label));          // arrays, hashes and scalars use the runtime writer
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax + 8]");            // the object payload
+            ctx.emitter.instruction("mov r10, QWORD PTR [r10]");                // its class id
+            for symbol in RUNTIME_SPL_CLASS_IDS {
+                ctx.emitter.instruction(&format!("cmp r10, QWORD PTR [rip + {symbol}]")); // is the receiver that runtime SPL container?
+                ctx.emitter.instruction(&format!("je {}", native_label));       // its runtime storage takes the write
+            }
+            abi::emit_jump(ctx.emitter, object_label);                          // call the concrete ArrayAccess::offsetSet implementation
         }
     }
-    abi::emit_jump(ctx.emitter, native_label);
     Ok(())
 }
 
@@ -464,6 +685,7 @@ pub(super) fn lower_mixed_array_runtime_set_aarch64(
     receiver: ValueId,
     key: ValueId,
     value: ValueId,
+    normalization: hashes::HashKeyNormalization,
 ) -> Result<()> {
     let value_ty = ctx.load_value_to_result(value)?.codegen_repr();
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
@@ -474,7 +696,7 @@ pub(super) fn lower_mixed_array_runtime_set_aarch64(
         emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
     }
     abi::emit_push_reg(ctx.emitter, "x0");
-    hashes::materialize_hash_key_aarch64(ctx, key)?;
+    hashes::materialize_hash_key_aarch64_with(ctx, key, normalization)?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
     ctx.load_value_to_reg(receiver, "x0")?;
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
@@ -489,6 +711,7 @@ pub(super) fn lower_mixed_array_runtime_set_x86_64(
     receiver: ValueId,
     key: ValueId,
     value: ValueId,
+    normalization: hashes::HashKeyNormalization,
 ) -> Result<()> {
     let value_ty = ctx.load_value_to_result(value)?.codegen_repr();
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
@@ -499,7 +722,7 @@ pub(super) fn lower_mixed_array_runtime_set_x86_64(
         emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
     }
     abi::emit_push_reg(ctx.emitter, "rax");
-    hashes::materialize_hash_key_x86_64(ctx, key)?;
+    hashes::materialize_hash_key_x86_64_with(ctx, key, normalization)?;
     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
     ctx.load_value_to_reg(receiver, "rdi")?;
     abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");

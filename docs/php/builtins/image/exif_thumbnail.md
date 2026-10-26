@@ -1,8 +1,8 @@
 ---
 title: "exif_thumbnail()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the embedded thumbnail of an image, with its size and type."
 sidebar:
-  order: 464
+  order: 465
 ---
 
 ## exif_thumbnail()
@@ -11,7 +11,7 @@ sidebar:
 function exif_thumbnail(string $filename, mixed $width = 0, mixed $height = 0, mixed $image_type = 0): mixed
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the embedded thumbnail of an image, with its size and type.
 
 **Parameters**:
 - `$filename` (`string`)
@@ -26,7 +26,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -44,6 +44,9 @@
 /// through `raw_value_word()` and `i64::try_from`.
 pub(crate) const EVAL_RESOURCE_PAYLOAD_BASE: i64 = 1 << 62;
 
+/// Synthetic payload whose generated-runtime resource id is PHP's reserved default-context id 4.
+pub(crate) const EVAL_DEFAULT_CONTEXT_PAYLOAD: i64 = EVAL_RESOURCE_PAYLOAD_BASE - 1;
+
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::fs::{File, Metadata, OpenOptions};
@@ -58,10 +61,24 @@ use std::process::{Child, Command, Stdio};
 use crate::stream_wrappers;
 use crate::value::RuntimeCellHandle;
 
+/// Duplicates a standard descriptor without assuming that it is still open.
+/// The returned File owns only the duplicate, never the process's original handle.
+pub(crate) fn duplicate_standard_descriptor(fd: i32) -> io::Result<File> {
+    // SAFETY: fcntl accepts an integer descriptor and reports a closed one through errno.
+    // Preserve the close-on-exec behavior of OwnedFd::try_clone_to_owned used by fopen.
+    let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicate < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the successful duplication above gives this File a unique owned descriptor.
+    Ok(unsafe { File::from_raw_fd(duplicate) })
+}
+
 #[cfg(feature = "curl")]
 mod curl;
 mod file_process_opening;
 mod operations;
+mod process_handles;
 mod resource_registration;
 mod sockets;
 mod storage;
@@ -104,6 +121,9 @@ pub(crate) struct EvalStreamResources {
     #[cfg(feature = "curl")]
     curl_share_handles: HashMap<i64, EvalCurlShareHandle>,
     process_children: HashMap<i64, Child>,
+    // `proc_open()` handles, each with the ids of the pipe streams it opened.
+    process_handles: HashMap<i64, Vec<i64>>,
+    resource_types: HashMap<i64, &'static str>,
     socket_listeners: HashMap<i64, TcpListener>,
     socket_names: HashMap<i64, EvalSocketNames>,
     stream_contexts: HashMap<i64, EvalStreamContext>,

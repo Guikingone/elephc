@@ -42,8 +42,9 @@ pub(super) fn resolve_regular_stmt(
             name: name.clone(),
             variant: variant.clone(),
         },
-        StmtKind::IncludeOnceGuard { source_path, body } => StmtKind::IncludeOnceGuard {
+        StmtKind::IncludeOnceGuard { source_path, required, body } => StmtKind::IncludeOnceGuard {
             source_path: source_path.clone(),
+            required: *required,
             body: ctx.stmt_list(body)?,
         },
         StmtKind::If {

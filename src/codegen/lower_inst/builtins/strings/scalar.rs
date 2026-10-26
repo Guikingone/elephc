@@ -8,6 +8,7 @@
 //! - Numeric coercions and separator defaults remain PHP-compatible across targets.
 
 use super::*;
+use crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL;
 
 const FLOAT_TO_INT_BITS_OFFSET: usize = 0;
 const FLOAT_TO_INT_VALUE_OFFSET: usize = 8;
@@ -261,6 +262,57 @@ pub(crate) fn emit_weak_float_result_to_int(
     ctx.emitter.label(&done);
 }
 
+/// Diagnoses the float in the float-result register against PHP's implicit int-coercion rules.
+///
+/// Jumps to `not_representable` for `NaN`, the infinities, and anything outside the PHP int
+/// range, which php-src refuses rather than wrapping. Otherwise it emits PHP 8.5's
+/// `Implicit conversion from float ... to int loses precision` deprecation when truncation is
+/// lossy and falls through, leaving the conversion itself to the caller.
+///
+/// Split out of `emit_weak_float_result_to_int` so the typed-property guard raises its OWN
+/// `TypeError` wording for an unrepresentable float instead of a builtin-argument one, while
+/// the deprecation text, the exactness test, and the scratch frame stay defined once here.
+pub(crate) fn emit_float_result_int_coercion_diagnostics(
+    ctx: &mut FunctionContext<'_>,
+    not_representable: &str,
+) {
+    let invalid = ctx.next_label("float_to_int_diag_invalid");
+    let exact = ctx.next_label("float_to_int_diag_exact");
+    let done = ctx.next_label("float_to_int_diag_done");
+    abi::emit_reserve_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
+    save_float_result_bits(ctx);
+    super::super::super::mixed_narrowing::emit_float_result_fits_i64_or_jump(ctx, &invalid);
+    abi::emit_store_to_sp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        FLOAT_TO_INT_VALUE_OFFSET,
+    );
+    restore_float_result_bits(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", FLOAT_TO_INT_VALUE_OFFSET);
+            ctx.emitter.instruction("scvtf d1, x10");                           // reconstruct the truncated value for an exactness check
+            ctx.emitter.instruction("fcmp d0, d1");                             // detect fractional precision loss
+            ctx.emitter.instruction(&format!("b.eq {exact}"));                  // integral floats require no deprecation
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", FLOAT_TO_INT_VALUE_OFFSET);
+            ctx.emitter.instruction("cvtsi2sd xmm1, r11");                      // reconstruct the truncated value for an exactness check
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // detect fractional precision loss
+            ctx.emitter.instruction(&format!("jp {invalid}"));                  // keep unordered values out of the equality branch
+            ctx.emitter.instruction(&format!("je {exact}"));                    // integral floats require no deprecation
+        }
+    }
+    emit_float_precision_deprecation(ctx);
+    ctx.emitter.label(&exact);
+    abi::emit_release_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&invalid);
+    abi::emit_release_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
+    abi::emit_jump(ctx.emitter, not_representable);
+    ctx.emitter.label(&done);
+}
+
 /// Converts an explicit float cast while warning for values outside the PHP int range.
 pub(crate) fn emit_explicit_float_result_to_int(ctx: &mut FunctionContext<'_>) {
     emit_nonweak_float_result_to_int(ctx, false, false);
@@ -370,16 +422,16 @@ fn restore_float_result_bits(ctx: &mut FunctionContext<'_>) {
 
 /// Emits PHP's shortest-round-trip precision-loss deprecation for the saved float.
 fn emit_float_precision_deprecation(ctx: &mut FunctionContext<'_>) {
-    emit_static_int_coercion_diagnostic(ctx, "Deprecated: Implicit conversion from float ");
+    emit_static_int_coercion_diagnostic(ctx, "Deprecated: Implicit conversion from float ", false);
     emit_saved_float_diagnostic_value(ctx);
-    emit_static_int_coercion_diagnostic(ctx, " to int loses precision\n");
+    emit_static_int_coercion_diagnostic(ctx, " to int loses precision\n", true);
 }
 
 /// Emits PHP's warning for an explicit float value outside the integer range.
 fn emit_float_not_representable_warning(ctx: &mut FunctionContext<'_>) {
-    emit_static_int_coercion_diagnostic(ctx, "Warning: The float ");
+    emit_static_int_coercion_diagnostic(ctx, "Warning: The float ", false);
     emit_saved_float_diagnostic_value(ctx);
-    emit_static_int_coercion_diagnostic(ctx, " is not representable as an int, cast occurred\n");
+    emit_static_int_coercion_diagnostic(ctx, " is not representable as an int, cast occurred\n", true);
 }
 
 /// Formats the saved float with `__rt_ftoa_repr` and emits it as a diagnostic fragment.
@@ -390,7 +442,7 @@ fn emit_saved_float_diagnostic_value(ctx: &mut FunctionContext<'_>) {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the formatted float pointer to the diagnostic helper
         ctx.emitter.instruction("mov rsi, rdx");                                // pass the formatted float length to the diagnostic helper
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
 }
 
 /// Builds the exact weak builtin argument TypeError from the shared builtin contract.
@@ -410,12 +462,23 @@ fn weak_float_type_error_message(context: &str) -> String {
                     .enumerate()
                     .find(|(_, (_, ty))| php_type_accepts_int(ty))
             });
-        if let Some((index, (parameter_name, _))) = parameter {
+        if let Some((index, (parameter_name, parameter_ty))) = parameter {
+            // php names a nullable parameter's type `?int` (`array_slice()`'s `$length`). The
+            // contract spells some of them `mixed` with a `null` default, which is the same fact.
+            let nullable = matches!(
+                parameter_ty,
+                PhpType::Union(members) if members.iter().any(|member| matches!(member, PhpType::Void))
+            ) || def.defaults.get(index).is_some_and(|default| {
+                default
+                    .as_ref()
+                    .is_some_and(|expr| matches!(expr.kind, crate::parser::ast::ExprKind::Null))
+            });
             return format!(
-                "{}(): Argument #{} (${}) must be of type int, float given",
+                "{}(): Argument #{} (${}) must be of type {}int, float given",
                 def.name,
                 index + 1,
-                parameter_name
+                parameter_name,
+                if nullable { "?" } else { "" }
             );
         }
     }
@@ -431,13 +494,28 @@ fn php_type_accepts_int(ty: &PhpType) -> bool {
     }
 }
 
-/// Casts a boxed weak integer argument while preserving float precision diagnostics.
-fn emit_mixed_weak_int(
+/// Loads a boxed weak integer argument while mapping runtime null to `i64::MAX`.
+///
+/// The original cell pointer is staged on the aligned temporary stack across unboxing so
+/// non-null values can still use the ordinary weak-int conversion. The tagged-scalar tag
+/// register carries null status for runtime null and int status for every converted value.
+pub(super) fn load_mixed_weak_int_null_as_max(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     context: &str,
 ) -> Result<()> {
+    emit_mixed_weak_int(ctx, value, context, Some(i64::MAX))
+}
+
+/// Casts a boxed weak integer argument while preserving null policy and float diagnostics.
+fn emit_mixed_weak_int(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    context: &str,
+    null_result: Option<i64>,
+) -> Result<()> {
     let from_float = ctx.next_label("weak_mixed_to_int_float");
+    let from_null = null_result.map(|_| ctx.next_label("weak_mixed_to_int_null"));
     let done = ctx.next_label("weak_mixed_to_int_done");
     load_value_to_first_int_arg(ctx, value)?;
     abi::emit_reserve_temporary_stack(ctx.emitter, MIXED_TO_INT_FRAME_BYTES);
@@ -449,11 +527,19 @@ fn emit_mixed_weak_int(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            if let Some(from_null) = &from_null {
+                ctx.emitter.instruction(&format!("cmp x0, #{}", TAGGED_SCALAR_TAG_NULL)); // check whether the boxed optional integer is runtime null
+                ctx.emitter.instruction(&format!("b.eq {from_null}"));          // map runtime null through the caller-selected result
+            }
             ctx.emitter.instruction("cmp x0, #2");                              // tag 2 is the only scalar cast that can lose integer precision
             ctx.emitter.instruction(&format!("b.eq {from_float}"));             // route floats through the deprecating weak conversion
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", MIXED_TO_INT_CELL_OFFSET);
         }
         Arch::X86_64 => {
+            if let Some(from_null) = &from_null {
+                ctx.emitter.instruction(&format!("cmp rax, {}", TAGGED_SCALAR_TAG_NULL)); // check whether the boxed optional integer is runtime null
+                ctx.emitter.instruction(&format!("je {from_null}"));            // map runtime null through the caller-selected result
+            }
             ctx.emitter.instruction("cmp rax, 2");                              // tag 2 is the only scalar cast that can lose integer precision
             ctx.emitter.instruction(&format!("je {from_float}"));               // route floats through the deprecating weak conversion
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", MIXED_TO_INT_CELL_OFFSET);
@@ -461,6 +547,9 @@ fn emit_mixed_weak_int(
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
     abi::emit_release_temporary_stack(ctx.emitter, MIXED_TO_INT_FRAME_BYTES);
+    if null_result.is_some() {
+        crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
+    }
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&from_float);
     match ctx.emitter.target.arch {
@@ -469,12 +558,33 @@ fn emit_mixed_weak_int(
     }
     abi::emit_release_temporary_stack(ctx.emitter, MIXED_TO_INT_FRAME_BYTES);
     emit_weak_float_result_to_int(ctx, context);
+    if null_result.is_some() {
+        crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
+    }
+    if let (Some(from_null), Some(null_result)) = (from_null, null_result) {
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&from_null);
+        abi::emit_release_temporary_stack(ctx.emitter, MIXED_TO_INT_FRAME_BYTES);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            null_result,
+        );
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_NULL)); // retain runtime-null status beside the saturating length
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_NULL)); // retain runtime-null status beside the saturating length
+            }
+        }
+    }
     ctx.emitter.label(&done);
     Ok(())
 }
 
 /// Emits one suppressible static fragment of an implicit integer-coercion diagnostic.
-fn emit_static_int_coercion_diagnostic(ctx: &mut FunctionContext<'_>, message: &str) {
+fn emit_static_int_coercion_diagnostic(ctx: &mut FunctionContext<'_>, message: &str, complete: bool) {
     let (label, len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -486,7 +596,7 @@ fn emit_static_int_coercion_diagnostic(ctx: &mut FunctionContext<'_>, message: &
             abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    abi::emit_call_label(ctx.emitter, if complete { "__rt_diag_warning" } else { "__rt_diag_warning_fragment" });
 }
 
 /// Loads a concrete scalar value as an integer runtime argument.
@@ -513,7 +623,7 @@ pub(crate) fn load_as_int(
             abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
             Ok(())
         }
-        PhpType::Mixed | PhpType::Union(_) => emit_mixed_weak_int(ctx, value, name),
+        PhpType::Mixed | PhpType::Union(_) => emit_mixed_weak_int(ctx, value, name, None),
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name, other

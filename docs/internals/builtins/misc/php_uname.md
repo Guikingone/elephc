@@ -1,16 +1,16 @@
 ---
-title: "php_uname() — internals"
+title: "php_uname() - internals"
 description: "Compiler internals for php_uname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 682
+  order: 702
 ---
 
-## `php_uname()` — internals
+## `php_uname()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/php_uname.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/php_uname.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

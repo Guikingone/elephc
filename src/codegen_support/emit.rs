@@ -17,6 +17,35 @@ use std::fmt::Write;
 
 use super::platform::{Arch, Platform, Target};
 
+/// Replaces every occurrence of `label` in `text` that names `label` itself or a label spelled
+/// from it (`label` followed by `_` and a non-digit, or by a non-identifier byte). An occurrence
+/// followed by a digit, or by `_` and a digit, is another counter-numbered symbol that merely
+/// starts with the same text and is left alone.
+fn replace_label_tokens(text: &str, label: &str, with: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (at, _) in text.match_indices(label) {
+        if at < copied {
+            continue;
+        }
+        let after = at + label.len();
+        let keep = match bytes.get(after) {
+            Some(b) if b.is_ascii_digit() => true,
+            Some(b'_') => bytes.get(after + 1).is_some_and(u8::is_ascii_digit),
+            _ => false,
+        };
+        if keep {
+            continue;
+        }
+        out.push_str(&text[copied..at]);
+        out.push_str(with);
+        copied = after;
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
 /// Assembly emitter.
 pub struct Emitter {
     buf: String,
@@ -43,6 +72,13 @@ pub struct Emitter {
     /// Only set for the macOS executable runtime object; Linux uses per-section
     /// `--gc-sections` and cdylibs never dead-strip.
     pub dead_strip: bool,
+    /// AArch64 only: while a PHP function body is being emitted, `Some(k)` means `x28` holds
+    /// `x29 - k` (the frame's lowest address), so a local slot `offset` bytes below `x29` is
+    /// `[x28, #(k - offset)]`. `ldur`/`stur` reach only 255 bytes below `x29`; past that a slot
+    /// access was an address computation plus the access, two or three instructions, and that
+    /// pair was 15% of the compiled Symfony methods. `None` everywhere else: runtime routines,
+    /// and the cleanup callbacks that borrow another frame's `x29`.
+    pub frame_slot_base: Option<usize>,
     /// Names of internal (`label()`) labels recorded while `dead_strip` is set,
     /// used by `localize_internal_labels` to rewrite them `L`-prefixed.
     internal_labels: HashSet<String>,
@@ -53,6 +89,13 @@ pub struct Emitter {
     current_text_section: Option<String>,
     /// Where completed text goes once the buffer grows past `SPILL_THRESHOLD`, when enabled.
     spill: Option<Spill>,
+    /// Content-named bodies this emitter already holds (see [`Self::emit_content_shared`]).
+    content_bodies: HashSet<String>,
+    /// Where in `buf` each `content_bodies` entry was written, so `rollback_to` forgets a shared
+    /// body together with its text. A parallel codegen worker rolls a deferred body back; keeping
+    /// the entry made the next body of the chunk branch to a definition that was gone, and the
+    /// Symfony app failed to link on `_eir_cbody_*` symbols.
+    content_body_log: Vec<(usize, String)>,
 }
 
 /// Buffer size past which `spill_completed_text` moves the text to disk.
@@ -75,6 +118,26 @@ pub struct SpilledText {
     pub len: usize,
 }
 
+/// Whether the assembly is only going to be assembled, never read: set by the pipeline for an
+/// ordinary build, left off by `--emit-asm`, `--debug-info` and every in-process caller.
+static COMPACT_ASM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turns compact assembly on or off for the emissions that follow.
+///
+/// Compact assembly has no comment lines and names intra-function labels `L_<body hash>_<n>`
+/// instead of spelling the function and block in them (`L_eir_Symfony_Component_Mime_M_..._9`):
+/// on the Symfony `--web` build those names were 23% of the text and the comments 6%, all of it
+/// held in memory by codegen, written, mapped, split and lexed by `as`. The object differs only
+/// in assembler-local names, which never reach the symbol table.
+pub fn set_compact_asm(on: bool) {
+    COMPACT_ASM.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether compact assembly is on (see [`set_compact_asm`]).
+pub fn compact_asm() -> bool {
+    COMPACT_ASM.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 impl Emitter {
     /// Creates an emitter for the specified target platform.
     pub fn new(target: Target) -> Self {
@@ -85,9 +148,12 @@ impl Emitter {
             pic_data_refs: false,
             cdylib_boundary: false,
             dead_strip: false,
+            frame_slot_base: None,
             internal_labels: HashSet::default(),
             current_text_section: None,
             spill: None,
+            content_bodies: HashSet::default(),
+            content_body_log: Vec::new(),
         }
     }
 
@@ -116,6 +182,28 @@ impl Emitter {
         let mut emitter = Self::new(target);
         emitter.cdylib_boundary = true;
         emitter
+    }
+
+    /// The length of the buffered text, to measure what one piece of lowering emitted.
+    pub fn text_mark(&self) -> usize {
+        self.buf.len()
+    }
+
+    /// The instruction lines emitted since `mark` (labels, comments and directives excluded).
+    ///
+    /// Returns 0 when the buffer was spilled to disk in between, which only happens between
+    /// functions.
+    pub fn instructions_since(&self, mark: usize) -> usize {
+        let Some(text) = self.buf.get(mark..) else {
+            return 0;
+        };
+        text.lines()
+            .filter(|line| {
+                line.starts_with("    ")
+                    && !line.trim_start().is_empty()
+                    && !line.trim_start().starts_with(['.', ';', '@', '#'])
+            })
+            .count()
     }
 
     /// Emits a single assembly instruction with standard indentation.
@@ -215,6 +303,12 @@ impl Emitter {
 
     /// Emits a line comment using the target's comment prefix.
     pub fn comment(&mut self, text: &str) {
+        // `@helper` / `@endhelper` markers are not commentary: the shared-helper merge reads them.
+        // (`@src`, `@block` and `@fn` are read only by `--debug-info` and the source map, which
+        // keep the readable form.)
+        if compact_asm() && !text.starts_with("@helper") && !text.starts_with("@endhelper") {
+            return;
+        }
         let _ = writeln!(
             self.buf,
             "    {} {}",
@@ -266,9 +360,127 @@ impl Emitter {
             pic_data_refs: self.pic_data_refs,
             cdylib_boundary: self.cdylib_boundary,
             dead_strip: self.dead_strip,
+            frame_slot_base: None,
             internal_labels: HashSet::default(),
             current_text_section: None,
             spill: None,
+            content_bodies: HashSet::default(),
+            content_body_log: Vec::new(),
+        }
+    }
+
+    /// Emits a global entry `label` whose body is shared with every identical body.
+    ///
+    /// `emit` writes a complete body defining `label` (with `label_global`) and any local labels
+    /// spelled from it. Generated entries such as callable invokers are keyed by more than what
+    /// their code depends on, so thousands of differently named copies can carry one body: on the
+    /// Symfony demo, about 7 700 of 8 900 invokers repeated one of a few hundred bodies. The body
+    /// is emitted once under a name derived from its text with `label` blanked out, and `label`
+    /// becomes a one-instruction jump to it.
+    ///
+    /// The shared body is bracketed as a keyed helper, so the parallel merge keeps one copy across
+    /// workers, and this emitter remembers it so later bodies here only add their jump. A
+    /// reference to `label` from outside the text (a data word, a descriptor) still resolves: the
+    /// jump keeps that name. Dead-strip runtime emission records internal labels by name and is
+    /// emitted directly.
+    pub fn emit_content_shared(
+        &mut self,
+        label: &str,
+        marker_open: &str,
+        marker_close: &str,
+        emit: impl FnOnce(&mut Self),
+    ) {
+        self.emit_content_shared_with_entry(label, marker_open, marker_close, |_| {}, emit);
+    }
+
+    /// Emits a keyed helper region once per emitter (and, through the helper markers, once per
+    /// module after the parallel merge).
+    ///
+    /// Like a shared invoker body, the region is forgotten again by [`Self::rollback_to`] when
+    /// the text around it is rolled back, so a caller emits it OUTSIDE any body it may roll back.
+    pub fn emit_keyed_once(
+        &mut self,
+        key: &str,
+        marker_open: &str,
+        marker_close: &str,
+        emit: impl FnOnce(&mut Self),
+    ) {
+        if !self.content_bodies.insert(key.to_string()) {
+            return;
+        }
+        self.content_body_log.push((self.buf.len(), key.to_string()));
+        self.comment(&format!("{}{}", marker_open, key));
+        emit(self);
+        self.comment(marker_close);
+        if self.platform == Platform::Linux {
+            self.current_text_section = Some(key.to_string());
+        }
+    }
+
+    /// Records shared bodies another emitter (a parallel worker) already produced, by key.
+    ///
+    /// Their text was merged into this module's output without passing through this emitter, so
+    /// `emit_content_shared` and `emit_keyed_once` would emit them again on the next request.
+    pub fn mark_shared_bodies_emitted<'a>(&mut self, keys: impl IntoIterator<Item = &'a String>) {
+        for key in keys {
+            if key.starts_with("_eir_") {
+                self.content_bodies.insert(key.clone());
+            }
+        }
+    }
+
+    /// Whether [`Self::emit_content_shared`] currently shares bodies (and so jumps from a stub).
+    pub fn content_sharing_active(&self) -> bool {
+        !(self.dead_strip || std::env::var_os("ELEPHC_NO_SHARED_BODIES").is_some())
+    }
+
+    /// [`Self::emit_content_shared`] with code that runs in the per-label STUB, before the jump.
+    ///
+    /// `entry` lets a body that is identical across signatures still receive something signature
+    /// specific (a pointer to its parameter-name table) in a scratch register. It runs only when
+    /// bodies are shared; when they are not, the body itself must do the same work, which it
+    /// learns from [`Self::content_sharing_active`].
+    pub fn emit_content_shared_with_entry(
+        &mut self,
+        label: &str,
+        marker_open: &str,
+        marker_close: &str,
+        entry: impl FnOnce(&mut Self),
+        emit: impl FnOnce(&mut Self),
+    ) {
+        // `ELEPHC_NO_SHARED_BODIES=1` emits every body under its own name, for size and
+        // behaviour comparisons.
+        if !self.content_sharing_active() {
+            emit(self);
+            return;
+        }
+        let start = self.checkpoint();
+        let section_before = self.current_text_section.clone();
+        emit(self);
+        let body = self.text_from(start).to_string();
+        self.rollback_to(start);
+        self.current_text_section = section_before;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&replace_label_tokens(&body, label, "@"), &mut hasher);
+        let shared = format!(
+            "_eir_cbody_{:016x}_{:x}",
+            std::hash::Hasher::finish(&hasher),
+            body.len()
+        );
+        self.label_global(label);
+        entry(self);
+        match self.target.arch {
+            Arch::AArch64 => self.instruction(&format!("b {}", shared)),
+            Arch::X86_64 => self.instruction(&format!("jmp {}", shared)),
+        }
+        if self.content_bodies.insert(shared.clone()) {
+            self.content_body_log.push((self.buf.len(), shared.clone()));
+            self.comment(&format!("{}{}", marker_open, shared));
+            self.buf.push_str(&replace_label_tokens(&body, label, &shared));
+            self.comment(marker_close);
+            if self.platform == Platform::Linux {
+                self.current_text_section = Some(shared);
+            }
         }
     }
 
@@ -338,6 +550,8 @@ impl Emitter {
             Ok(()) => {
                 spill.bytes += self.buf.len();
                 self.buf.clear();
+                // No checkpoint survives a spill, so no rollback can reach these bodies.
+                self.content_body_log.clear();
             }
             Err(error) => spill.error = Some(error),
         }
@@ -377,6 +591,15 @@ impl Emitter {
     pub fn rollback_to(&mut self, checkpoint: usize) {
         if checkpoint <= self.buf.len() {
             self.buf.truncate(checkpoint);
+        }
+        while self
+            .content_body_log
+            .last()
+            .is_some_and(|(offset, _)| *offset >= checkpoint)
+        {
+            if let Some((_, name)) = self.content_body_log.pop() {
+                self.content_bodies.remove(&name);
+            }
         }
     }
 

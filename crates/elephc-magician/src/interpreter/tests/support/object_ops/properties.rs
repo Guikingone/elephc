@@ -91,6 +91,14 @@ impl FakeOps {
             FakeValue::Object(properties) => properties.clone(),
             _ => return Err(EvalStatus::UnsupportedConstruct),
         };
+        // The copy's slots OWN what they hold, as `property_set` models it: a shallow clone shares
+        // each value with the source and takes its own reference to it. Without the retain, the
+        // clone's first overwrite gave back the SOURCE's reference (`clone($o, ["p" => ...])`).
+        for (_, value) in &properties {
+            if !value.as_ptr().is_null() {
+                self.runtime_retain(*value)?;
+            }
+        }
         let clone = self.alloc(FakeValue::Object(properties));
         if let Some(class_name) = self.object_classes.get(&id).cloned() {
             self.object_classes

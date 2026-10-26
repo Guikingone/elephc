@@ -59,10 +59,5 @@ fn eval_strpbrk_empty_characters_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message = values.string("strpbrk(): Argument #2 ($characters) must be a non-empty string")?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("ValueError", "strpbrk(): Argument #2 ($characters) must be a non-empty string", 0, context, values)
 }

@@ -71,14 +71,9 @@ pub(super) fn lower_yield_from_array(
     expr: &Expr,
 ) -> LoweredValue {
     let span = expr.span;
-    let iterator = ctx.emit_value(
-        Op::IterStart,
-        vec![source.value],
-        None,
-        PhpType::Iterable,
-        Op::IterStart.default_effects(),
-        Some(span),
-    );
+    // An `IteratorAggregate` source needs an owning slot for the iterator `getIterator()`
+    // returns, exactly as a `foreach` over one does (`lower_foreach`).
+    let (iterator, iterator_owner, _iterator_state) = ctx.emit_iter_start(source, false, span);
     let header = ctx.builder.create_named_block("yieldfrom.next", Vec::new());
     let body = ctx.builder.create_named_block("yieldfrom.body", Vec::new());
     let exit = ctx.builder.create_named_block("yieldfrom.exit", Vec::new());
@@ -144,6 +139,9 @@ pub(super) fn lower_yield_from_array(
     }
 
     ctx.builder.position_at_end(exit);
+    if let Some(owner) = iterator_owner {
+        ctx.retire_iter_start_owner(owner, span);
+    }
     // The iterator borrows a freshly-created array (e.g. a literal): release it
     // once iteration ends, mirroring `lower_foreach`.
     if ctx.value_is_owning_temporary(source) {

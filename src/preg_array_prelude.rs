@@ -35,7 +35,7 @@
 use crate::parser::ast::{BinOp, CastType, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_binop, e_bool, e_call, e_cast, e_closure_call, e_index, e_int, e_new, e_not,
-    e_null, e_null_coalesce, e_str, e_ternary, e_var, function, internal_declarations,
+    e_null, e_null_coalesce, e_str, e_ternary, e_var, function, php_semantics_declarations,
     s_array_assign, s_assign, s_break, s_continue, s_foreach, s_if, s_return, s_throw, t_mixed,
 };
 
@@ -65,7 +65,7 @@ const PREG_UNMATCHED_AS_NULL: i64 = 512;
 
 /// Returns the declarations for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| {
+    php_semantics_declarations(|| {
         vec![
             replace_subject(),
             replace_full(),

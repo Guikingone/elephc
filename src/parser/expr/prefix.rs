@@ -11,7 +11,9 @@
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
-use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, MagicConstant, StaticReceiver};
+use crate::parser::ast::{
+    ArrayEntry, BinOp, CallableTarget, Expr, ExprKind, MagicConstant, StaticReceiver,
+};
 use crate::span::Span;
 
 use super::assignment_targets::{
@@ -19,8 +21,8 @@ use super::assignment_targets::{
 };
 use super::calls::{parse_first_class_callable_parens, parse_scoped_static_call, peek_cast};
 use super::prefix_complex::{
-    parse_arrow_closure, parse_attributed_closure, parse_closure, parse_match_expr,
-    parse_named_expr, parse_new_object,
+    parse_arrow_closure, parse_attributed_closure, parse_closure, parse_function_call_or_callable,
+    parse_match_expr, parse_named_expr, parse_new_object,
 };
 use super::pratt::parse_expr_bp;
 use super::{parse_args, parse_expr};
@@ -43,13 +45,43 @@ pub(super) fn parse_prefix(
 
     let span = tokens[*pos].1.span;
 
+    // Predefined tokens remain name segments before namespace or class access.
+    if crate::parser::stmt::token_as_import_name(&tokens[*pos].0, &tokens[*pos].1).is_some()
+        && matches!(tokens.get(*pos + 1), Some((Token::Backslash | Token::DoubleColon, _)))
+    {
+        return parse_named_expr(tokens, pos, span);
+    }
+
+    // `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`, `\true`...: the lexer turns these predefined
+    // constants into dedicated tokens, so the name parser never sees an identifier after the `\`
+    // (#1307). The fully qualified spelling names the same global constant, so it parses as the
+    // bare token. The few that stay constant references keep their fully qualified kind, so a
+    // namespace-local constant of the same name can never shadow them.
     if tokens[*pos].0 == Token::Backslash {
-        if let Some(kind) = tokens
-            .get(*pos + 1)
-            .and_then(|(token, _)| predefined_constant_kind(token))
-        {
-            *pos += 2;
-            return Ok(Expr::new(kind, span));
+        if let Some((next, metadata)) = tokens.get(*pos + 1) {
+            let literal_constant = matches!(next, Token::True | Token::False | Token::Null);
+            let continues_name = matches!(
+                tokens.get(*pos + 2),
+                Some((Token::Backslash | Token::DoubleColon | Token::LParen, _))
+            );
+            if literal_constant
+                || (crate::parser::stmt::token_as_import_name(next, metadata).is_some()
+                    && !continues_name)
+            {
+                *pos += 1;
+                let mut expr = parse_prefix(tokens, pos)?;
+                if let ExprKind::ConstRef(name) = &expr.kind {
+                    if name.kind == crate::names::NameKind::Unqualified {
+                        expr.kind = ExprKind::ConstRef(Name::from_parts(
+                            crate::names::NameKind::FullyQualified,
+                            name.parts.clone(),
+                        ));
+                    }
+                }
+                // The expression starts at the `\`, so diagnostics point at the whole name.
+                expr.span = Span::with_end_from(span, expr.span);
+                return Ok(expr);
+            }
         }
     }
 
@@ -61,7 +93,7 @@ pub(super) fn parse_prefix(
         Token::At => parse_unary(tokens, pos, span, ExprKind::ErrorSuppress, 35),
         Token::Print => parse_unary(tokens, pos, span, ExprKind::Print, 7),
         Token::Throw => parse_unary(tokens, pos, span, ExprKind::Throw, 0),
-        Token::Clone => parse_unary(tokens, pos, span, ExprKind::Clone, 35),
+        Token::Clone => parse_clone(tokens, pos, span),
         Token::True => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(true)),
         Token::False => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(false)),
         Token::Null => parse_simple(tokens, pos, span, ExprKind::Null),
@@ -260,42 +292,14 @@ pub(super) fn parse_prefix(
             Ok(crate::parser::stmt::try_parse_value_include(tokens, pos)?
                 .expect("include keyword guarantees a value-include expression"))
         }
-        Token::Dollar => Err(CompileError::new(
-            span,
-            "Variable variables (`$$name`) are not supported: variable names must be known at compile time",
-        )),
+        Token::Dollar => {
+            let name = crate::parser::variable_variables::parse_name_operand(tokens, pos, span)?;
+            Ok(crate::parser::variable_variables::read(name, span))
+        }
         other => Err(CompileError::new(
             span,
             &format!("Unexpected token: {:?}", other),
         )),
-    }
-}
-
-/// Returns the literal or constant-reference expression for a predefined PHP constant token.
-/// This lets an explicit global namespace prefix use the same semantics as the bare spelling.
-fn predefined_constant_kind(token: &Token) -> Option<ExprKind> {
-    match token {
-        Token::Inf => Some(ExprKind::FloatLiteral(f64::INFINITY)),
-        Token::Nan => Some(ExprKind::FloatLiteral(f64::NAN)),
-        Token::PhpIntMax => Some(ExprKind::IntLiteral(i64::MAX)),
-        Token::PhpIntMin => Some(ExprKind::IntLiteral(i64::MIN)),
-        Token::PhpFloatMax => Some(ExprKind::FloatLiteral(f64::MAX)),
-        Token::MPi => Some(ExprKind::FloatLiteral(std::f64::consts::PI)),
-        Token::ME => Some(ExprKind::FloatLiteral(std::f64::consts::E)),
-        Token::MSqrt2 => Some(ExprKind::FloatLiteral(std::f64::consts::SQRT_2)),
-        Token::MPi2 => Some(ExprKind::FloatLiteral(std::f64::consts::FRAC_PI_2)),
-        Token::MPi4 => Some(ExprKind::FloatLiteral(std::f64::consts::FRAC_PI_4)),
-        Token::MLog2e => Some(ExprKind::FloatLiteral(std::f64::consts::LOG2_E)),
-        Token::MLog10e => Some(ExprKind::FloatLiteral(std::f64::consts::LOG10_E)),
-        Token::PhpFloatMin => Some(ExprKind::FloatLiteral(f64::MIN_POSITIVE)),
-        Token::PhpFloatEpsilon => Some(ExprKind::FloatLiteral(f64::EPSILON)),
-        Token::Stdin => Some(ExprKind::ConstRef(Name::unqualified("STDIN"))),
-        Token::Stdout => Some(ExprKind::ConstRef(Name::unqualified("STDOUT"))),
-        Token::Stderr => Some(ExprKind::ConstRef(Name::unqualified("STDERR"))),
-        Token::PhpEol => Some(ExprKind::StringLiteral("\n".to_string())),
-        Token::PhpOs => Some(ExprKind::ConstRef(Name::unqualified("PHP_OS"))),
-        Token::DirectorySeparator => Some(ExprKind::StringLiteral("/".to_string())),
-        _ => None,
     }
 }
 
@@ -405,10 +409,34 @@ fn unary_plus(inner: Box<Expr>) -> ExprKind {
     }
 }
 
-/// Parses a prefix `++` or `--` increment/decrement operator. Consumes the operator,
-/// then accepts a local variable or a supported non-local l-value. Plain locals keep the compact
-/// `PreIncrement`/`PreDecrement` representation; property, static-property, and array targets are
-/// stabilized and lowered through the assignment-expression representation.
+/// Parses a `clone` expression. PHP 8.5 makes `clone` a regular function, so a `(` right
+/// after the keyword starts an ordinary call on the function named `clone` (`clone($o)`,
+/// `clone($o, [...])`) or its first-class callable form (`clone(...)`), sharing the general
+/// argument parser. Any other operand keeps the historical unary construct, its binding
+/// power, and its `ExprKind::Clone` AST shape.
+fn parse_clone(tokens: &[SpannedToken], pos: &mut usize, span: Span) -> Result<Expr, CompileError> {
+    if matches!(
+        tokens.get(*pos + 1).map(|(token, _)| token),
+        Some(Token::LParen)
+    ) {
+        *pos += 2;
+        return parse_function_call_or_callable(tokens, pos, span, Name::unqualified("clone"));
+    }
+    parse_unary(tokens, pos, span, ExprKind::Clone, 35)
+}
+
+/// Parses a prefix `++` or `--` increment/decrement operator.
+///
+/// A BARE variable takes the dedicated `PreIncrement`/`PreDecrement` node, which names the local
+/// directly and is what every checker and optimizer pass understands. Anything else — a property,
+/// an array element, a static property, and their nesting — is parsed as an l-value and desugared,
+/// because those nodes carry a `String` and have nowhere to put a place.
+///
+/// The variable has to be checked for a FOLLOWING place suffix, not just for being a variable.
+/// `++$o->n` starts with `Token::Variable("o")`, and taking the fast path on that alone consumed
+/// the name and left `->n` behind, so the increment landed on the object and the checker rejected
+/// it with `Cannot increment/decrement $o of type Object("C")` (issue #682). The same happened to
+/// `++$b[0]` and `++$m["k"]`. `++$this->n` escaped it only because `$this` is its own token.
 fn parse_prefix_inc_dec(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -418,11 +446,7 @@ fn parse_prefix_inc_dec(
     *pos += 1;
     if *pos < tokens.len() {
         if let Token::Variable(name) = &tokens[*pos].0 {
-            let is_plain_local = !matches!(
-                tokens.get(*pos + 1).map(|(token, _)| token),
-                Some(Token::Arrow | Token::QuestionArrow | Token::LBracket)
-            );
-            if !is_plain_local {
+            if place_suffix_follows(tokens, *pos + 1) {
                 return parse_complex_prefix_inc_dec(tokens, pos, span, increment);
             }
             let name = name.clone();
@@ -510,6 +534,17 @@ fn parse_complex_prefix_inc_dec(
         },
         span,
     ))
+}
+
+/// Reports whether the token at `index` continues a variable into a larger l-value.
+///
+/// `->`, `?->`, `::` and `[` are the four ways a place extends past its base variable. Seeing one
+/// means the prefix increment's real target is that larger place, not the variable itself.
+fn place_suffix_follows(tokens: &[SpannedToken], index: usize) -> bool {
+    matches!(
+        tokens.get(index).map(|token| &token.0),
+        Some(Token::Arrow | Token::QuestionArrow | Token::DoubleColon | Token::LBracket)
+    )
 }
 
 /// Parses a variable expression starting with a `Variable` token. Consumes the variable name,
@@ -688,6 +723,9 @@ fn parse_array_literal_with_terminator(
     *pos += 1;
     let mut elems = Vec::new();
     let mut assoc_elems = Vec::new();
+    // Non-empty only once a literal is found to mix a spread with an explicit key, which is the
+    // one shape neither `ArrayLiteral` nor `ArrayLiteralAssoc` can hold.
+    let mut mixed_elems: Vec<ArrayEntry> = Vec::new();
     let mut is_assoc = false;
     let mut first = true;
     let mut next_auto_key = 0i64;
@@ -709,8 +747,16 @@ fn parse_array_literal_with_terminator(
             let spread_span = tokens[*pos].1.span;
             *pos += 1;
             let inner = parse_expr(tokens, pos)?;
-            if !is_assoc {
-                elems.push(Expr::new(ExprKind::Spread(Box::new(inner)), spread_span));
+            let spread = Expr::new(ExprKind::Spread(Box::new(inner)), spread_span);
+            if is_assoc {
+                // The literal already has explicit keys, so it becomes an entry list. The pairs
+                // collected so far have to move across with it: leaving them behind is what made
+                // `["c" => 8, ...$v]` come out as just the spread. Dropping the spread instead
+                // is what made `[...$v, "c" => 8]` come out as just the key (issue #1049).
+                migrate_assoc_pairs_to_mixed(&mut assoc_elems, &mut mixed_elems);
+                mixed_elems.push(ArrayEntry::Spread(spread));
+            } else {
+                elems.push(spread);
             }
             first = false;
             continue;
@@ -725,7 +771,7 @@ fn parse_array_literal_with_terminator(
                 ));
             }
             if !is_assoc {
-                promote_indexed_array_items_to_assoc(&mut elems, &mut assoc_elems);
+                promote_indexed_array_items_to_assoc(&mut elems, &mut assoc_elems, &mut mixed_elems);
             }
             is_assoc = true;
             *pos += 1;
@@ -735,10 +781,20 @@ fn parse_array_literal_with_terminator(
                 &mut next_auto_key,
                 &mut auto_key_initialized,
             );
-            assoc_elems.push((expr, value));
+            if mixed_elems.is_empty() {
+                assoc_elems.push((expr, value));
+            } else {
+                mixed_elems.push(ArrayEntry::Keyed(expr, value));
+            }
         } else if is_assoc {
-            let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
-            assoc_elems.push((key, expr));
+            if mixed_elems.is_empty() {
+                let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
+                assoc_elems.push((key, expr));
+            } else {
+                // A bare element after a spread cannot be given a key here: the spread decides
+                // how many integer slots it consumed, and only the runtime knows that.
+                mixed_elems.push(ArrayEntry::Value(expr));
+            }
             next_auto_key += 1;
             auto_key_initialized = true;
         } else {
@@ -755,7 +811,9 @@ fn parse_array_literal_with_terminator(
         ));
     }
     *pos += 1;
-    if is_assoc {
+    if !mixed_elems.is_empty() {
+        Ok(Expr::new(ExprKind::ArrayLiteralMixed(mixed_elems), span))
+    } else if is_assoc {
         Ok(Expr::new(ExprKind::ArrayLiteralAssoc(assoc_elems), span))
     } else {
         Ok(Expr::new(ExprKind::ArrayLiteral(elems), span))
@@ -766,8 +824,8 @@ fn parse_array_literal_with_terminator(
 ///
 /// `[&$v]` and `[&$a[$k]]` store a reference element: a marker that owns a share of the
 /// variable's (or the element's) reference cell, so the array may outlive the declaring frame.
-/// A deeper place (`&$a[$i][$j]`, `&$o->p`) is not supported yet and is refused here rather than
-/// silently stored by value.
+/// `[&$o->p]` shares the property's cell. A deeper place (`&$a[$i][$j]`) is not supported yet and
+/// is refused here rather than silently stored by value.
 fn parse_array_literal_value(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -784,12 +842,15 @@ fn parse_array_literal_value(
             &array.kind,
             ExprKind::Variable(name) if !crate::superglobals::is_superglobal(name)
         ),
+        ExprKind::PropertyAccess { object, .. } => {
+            matches!(&object.kind, ExprKind::This | ExprKind::Variable(_))
+        }
         _ => false,
     };
     if !supported {
         return Err(CompileError::new(
             span,
-            "Reference elements in array literals currently require a variable or an element of a local array",
+            "Reference elements in array literals currently require a variable, an element of a local array or a property",
         ));
     }
     Ok(Expr::new(ExprKind::ArrayReference(Box::new(value)), span))
@@ -819,18 +880,48 @@ fn skip_to_array_literal_end(tokens: &[SpannedToken], pos: &mut usize, closing: 
 }
 
 /// Converts positional items parsed before a keyed array entry into integer-keyed pairs.
+/// Moves the already-collected `key => value` pairs into the ordered entry list.
+///
+/// Called the first time a spread appears in a literal that had already turned associative. The
+/// entry list is the only one the node is built from once it is non-empty, so anything left in
+/// `assoc_elems` at that point would be silently dropped.
+fn migrate_assoc_pairs_to_mixed(
+    assoc_elems: &mut Vec<(Expr, Expr)>,
+    mixed_elems: &mut Vec<ArrayEntry>,
+) {
+    for (key, value) in std::mem::take(assoc_elems) {
+        mixed_elems.push(ArrayEntry::Keyed(key, value));
+    }
+}
+
+/// Re-files the items collected so far once the literal turns out to have explicit keys.
+///
+/// Without a spread among them the pairs go to `assoc_elems` with their automatic keys, which is
+/// the common case and keeps the plain associative node. A spread cannot be given a key -- how
+/// many integer slots it consumes is a runtime fact -- so its presence moves EVERY item to the
+/// ordered entry list instead. Silently skipping it here is what dropped the elements of
+/// `[...$v, "c" => 8]` (issue #1049).
 fn promote_indexed_array_items_to_assoc(
     elems: &mut Vec<Expr>,
     assoc_elems: &mut Vec<(Expr, Expr)>,
+    mixed_elems: &mut Vec<ArrayEntry>,
 ) {
-    let mut auto_key = 0i64;
-    for elem in std::mem::take(elems) {
-        if matches!(elem.kind, ExprKind::Spread(_)) {
-            continue;
+    let taken = std::mem::take(elems);
+    if !taken.iter().any(|elem| matches!(elem.kind, ExprKind::Spread(_))) {
+        let mut auto_key = 0i64;
+        for elem in taken {
+            let key = Expr::new(ExprKind::IntLiteral(auto_key), elem.span);
+            assoc_elems.push((key, elem));
+            auto_key += 1;
         }
-        let key = Expr::new(ExprKind::IntLiteral(auto_key), elem.span);
-        assoc_elems.push((key, elem));
-        auto_key += 1;
+        return;
+    }
+    for elem in taken {
+        if matches!(elem.kind, ExprKind::Spread(_)) {
+            mixed_elems.push(ArrayEntry::Spread(elem));
+        } else {
+            mixed_elems.push(ArrayEntry::Value(elem));
+        }
     }
 }
 

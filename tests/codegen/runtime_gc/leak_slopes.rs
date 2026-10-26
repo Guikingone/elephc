@@ -575,3 +575,210 @@ echo $total, "\n";
         false,
     );
 }
+
+/// A callable array passed to a `callable` parameter is normalized into a fresh bound
+/// descriptor that retains its receiver, and the call boundary must release it. The normalized
+/// value was left `maybe_owned`, so nobody did: `apply([$obj, 'm'], 7)` leaked the 96-byte
+/// descriptor and one reference to `$obj` per call, for a function and a static method alike.
+#[test]
+fn test_callable_array_argument_descriptor_is_released_after_the_call() {
+    assert_no_leak_slope(
+        r#"<?php
+class LeakSlopeTwice { public function m($v) { return $v * 2; } }
+class LeakSlopeSvc { public static function apply(callable $c, $v) { return $c($v); } }
+function leak_slope_apply(callable $c, $v) { return $c($v); }
+$t = new LeakSlopeTwice();
+$total = 0;
+for ($i = 0; $i < __N__; $i++) {
+    $total += leak_slope_apply([$t, 'm'], 7) + LeakSlopeSvc::apply([$t, 'm'], 1);
+}
+echo $total, "\n";
+"#,
+        "16\n",
+        "640\n",
+        false,
+    );
+}
+
+/// A `string` parameter that a call to an unknown callable may bind by reference gets boxed
+/// frame storage, and a read of it lowered BEFORE that call was a borrowed load the IR never
+/// releases -- while codegen read the box through `__rt_mixed_cast_string`, which copies a string
+/// payload. Laravel Prompts' key handler leaked one string per keystroke on each of its paths:
+/// `$key[0]` before `$ignore($key)`, and `... . $key . ...` through the representation check.
+#[test]
+fn test_reads_of_a_promotable_string_parameter_do_not_copy_it() {
+    assert_no_leak_slope(
+        r#"<?php
+function leak_slope_key(string $key, ?Closure $ignore): int {
+    $first = $key[0];
+    if ($ignore !== null) {
+        return $ignore($key) ? 1 : 0;
+    }
+    return strlen($first . $key . $first);
+}
+$total = 0;
+for ($i = 0; $i < __N__; $i++) {
+    $total += leak_slope_key(str_repeat("k", 3), null);
+}
+echo $total, "\n";
+"#,
+        "5\n",
+        "200\n",
+        false,
+    );
+}
+
+/// `unset($trace[$i]['args'])` over a `debug_backtrace()` result rewrote the frame as a fresh
+/// boxed hash and stored it back with `array_set`, which RETAINS an already-boxed value; the
+/// nested-unset lowering still counted the box as consumed and never released it, so every call
+/// leaked the whole frame (its hash, strings and argument array). Symfony's
+/// `ErrorHandler::cleanTrace()` runs it for each deprecation.
+#[test]
+fn test_nested_unset_over_a_backtrace_frame_releases_the_rewritten_frame() {
+    assert_no_leak_slope(
+        r#"<?php
+function leak_slope_trace(int $n): int {
+    $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT);
+    for ($i = 0; isset($trace[$i]); ++$i) {
+        unset($trace[$i]['args'], $trace[$i]['object']);
+    }
+    return count($trace) + $n;
+}
+$total = 0;
+for ($i = 0; $i < __N__; $i++) {
+    $total += leak_slope_trace(0);
+}
+echo $total, "\n";
+"#,
+        "1\n",
+        "40\n",
+        false,
+    );
+}
+
+/// A Mixed value stored through a `string &` parameter (`$file = $trace[$i]['file']`) was cast
+/// with `__rt_mixed_cast_string`, which persists a string payload into a fresh copy, but the box
+/// the store consumes was never released: the box and its string leaked per assignment.
+#[test]
+fn test_mixed_value_stored_through_a_string_reference_releases_its_box() {
+    assert_no_leak_slope(
+        r#"<?php
+function leak_slope_set(array $t, string &$file): void { $file = $t[0]['file']; }
+function leak_slope_frame(string $file): int {
+    leak_slope_set([['file' => str_repeat('f', 3), 'line' => 3]], $file);
+    return strlen($file);
+}
+$total = 0;
+for ($i = 0; $i < __N__; $i++) {
+    $total += leak_slope_frame("in");
+}
+echo $total, "\n";
+"#,
+        "3\n",
+        "120\n",
+        false,
+    );
+}
+
+/// An exception subclass with its own constructor is allocated by the generic object path,
+/// which seeds `$previous` with a boxed null; the inlined `parent::__construct()` overwrote that
+/// slot without releasing it, one box per exception. A previous exception passed through the
+/// subclass must still be retained and released with its owner.
+#[test]
+fn test_exception_subclass_parent_constructor_releases_the_default_previous() {
+    assert_no_leak_slope(
+        r#"<?php
+class E extends Exception {
+    public function __construct(string $m, ?Throwable $p = null) { parent::__construct($m, 0, $p); }
+}
+class F extends Exception {
+    public function __construct() { parent::__construct("f"); }
+}
+$n = 0;
+for ($i = 0; $i < __N__; $i++) {
+    $e = new E("x$i");
+    $w = new E("w$i", new F());
+    $n += strlen($e->getMessage()) + ($w->getPrevious() instanceof F ? 1 : 0);
+}
+echo $n, "\n";
+"#,
+        r#"3
+"#,
+        r#"150
+"#,
+        false,
+    );
+}
+
+/// Carbon's shape: a trait's untyped `add($unit, ...)` overrides `DateTime::add(DateInterval)`
+/// and is called both directly with strings and through a `DateTime`-typed site. The override
+/// once adopted the builtin's `DateInterval` storage (refusing the string calls), the prelude
+/// body `parent::add()` reaches was never emitted, and `return parent::add(...)` through the
+/// `static` return guard leaked the object.
+#[test]
+fn test_untyped_override_of_a_builtin_datetime_method_compiles_and_releases() {
+    assert_no_leak_slope(
+        r#"<?php
+trait Units {
+    public function add($unit, $value = 1): static {
+        if ($unit instanceof DateInterval) {
+            return parent::add($unit);
+        }
+        return parent::add(new DateInterval('P' . $value . strtoupper(substr($unit, 0, 1))));
+    }
+}
+class C extends DateTime { use Units; }
+function viaBase(DateTime $d): int {
+    return (int) $d->add(new DateInterval('P2D'))->format('d');
+}
+$n = 0;
+for ($i = 0; $i < __N__; $i++) {
+    $c = new C('2024-01-01');
+    $c->add('day', 3);
+    $n += (int) $c->format('d') + viaBase($c);
+}
+echo $n, "\n";
+"#,
+        r#"10
+"#,
+        r#"400
+"#,
+        false,
+    );
+}
+
+/// `$this->tags[$name][] = $attributes` on a bare `array` property (Symfony's
+/// `Definition::addTag`). The property is stored as a boxed `mixed`, so the nested-append lowering
+/// falls back to the generic read/push/write-back desugar, but its key probe had already read the
+/// property: that owned box was never released, and with it the whole tag table it held. Under
+/// Symfony's container passes the extra share later let an unrelated teardown free a table that
+/// a live definition still pointed to, and `lint:container` crashed.
+#[test]
+fn test_nested_append_on_a_mixed_array_property_does_not_leak() {
+    assert_no_leak_slope(
+        r#"<?php
+class Def {
+    private array $tags = [];
+    public function setTags(array $tags): static { $this->tags = $tags; return $this; }
+    public function addTag(string $name, array $attributes = []): static { $this->tags[$name][] = $attributes; return $this; }
+    public function count(): int { return count($this->tags); }
+}
+function run(int $i): int {
+    $d = new Def();
+    $d->setTags(['k' => [['e' => 'x' . $i]]]);
+    $d->addTag('k', ['a' => 1]);
+    $d->addTag('p');
+    return $d->count();
+}
+$total = 0;
+for ($i = 0; $i < __N__; $i++) { $total += run($i); }
+echo $total, "\n";
+"#,
+        r#"2
+"#,
+        r#"80
+"#,
+        false,
+    );
+}
+

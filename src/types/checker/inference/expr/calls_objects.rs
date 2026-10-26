@@ -7,7 +7,8 @@
 //! Key details:
 //! - Retains constructor, visibility, eval-barrier, callable, and late-static-binding checks.
 
-use super::{body_must_not_use_this, merge_null_coalesce_checked_result_type, Checker};
+use super::null_coalesce::{null_coalesce_result_type, operand_is_never_null};
+use super::{body_must_not_use_this, Checker};
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::pcntl_constants::pcntl_int_constants;
@@ -119,19 +120,11 @@ impl Checker {
                 let probed =
                     crate::types::checker::null_probe::null_probe_env(self, value, env);
                 let probed_env = probed.clone();
-                let vt = self
-                    .infer_null_probe_operand(value, probed_env.as_ref().unwrap_or(env))?;
+                let operand_env = probed_env.as_ref().unwrap_or(env);
+                let vt = self.infer_null_probe_operand(value, operand_env)?;
+                let value_is_never_null = operand_is_never_null(self, value, &vt, operand_env);
                 let dt = self.infer_type(default, env)?;
-                let non_null_value = if Self::union_contains_void(&vt) {
-                    self.strip_void_from_union(&vt)
-                } else {
-                    vt
-                };
-                Ok(merge_null_coalesce_checked_result_type(
-                    self,
-                    non_null_value,
-                    dt,
-                ))
+                Ok(null_coalesce_result_type(self, value_is_never_null, vt, dt))
             }
             ExprKind::Pipe { value, callable } => {
                 self.infer_pipe_type(value, callable, expr, env)
@@ -191,10 +184,10 @@ impl Checker {
                 params,
                 variadic,
                 variadic_by_ref,
-                variadic_type: _,
+                variadic_type,
                 return_type,
                 body,
-                is_arrow: _,
+                is_arrow,
                 is_static,
                 captures,
                 capture_refs,
@@ -203,10 +196,14 @@ impl Checker {
                 if *is_static {
                     body_must_not_use_this(body, expr.span)?;
                 }
+                let captures = &crate::types::checker::callables::closure_captures_for_check(
+                    *is_arrow, captures, capture_refs, env,
+                );
                 self.infer_closure_type(
                     params,
                     variadic,
                     *variadic_by_ref,
+                    variadic_type,
                     return_type,
                     body,
                     captures,
@@ -216,23 +213,7 @@ impl Checker {
                 )
             }
             ExprKind::Spread(inner) => {
-                let ty = self.infer_type(inner, env)?;
-                match ty {
-                    PhpType::Array(elem_ty) => Ok(*elem_ty),
-                    PhpType::AssocArray { value, .. } => Ok(*value),
-                    PhpType::Iterable | PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
-                    // `callable` is a PREDICATE, not a storage shape: the value behind it may be
-                    // the two-element `[$object, 'method']` array PHP unpacks. EIR lowering
-                    // rebuilds both elements from the descriptor, so the element type is gradual.
-                    PhpType::Callable => Ok(PhpType::Mixed),
-                    PhpType::Object(name) if self.object_type_implements_iterable(&name) => {
-                        Ok(PhpType::Mixed)
-                    }
-                    _ => Err(CompileError::new(
-                        expr.span,
-                        "Spread operator requires an array",
-                    )),
-                }
+                self.infer_spread_element_type(inner, expr.span, env, false)
             }
             ExprKind::NamedArg { value, .. } => self.infer_type(value, env),
             ExprKind::ClosureCall { var, args } => {
@@ -251,25 +232,27 @@ impl Checker {
                 self.infer_new_object_type(class_name.as_str(), args, expr, env)
             }
             ExprKind::Clone(inner) => {
+                // A non-public `__clone` is php's RUNTIME Error ("Call to private method
+                // C::__clone() from global scope"), catchable like any other; the backend's clone
+                // hook dispatch raises it. Refusing the program here made that catch unwritable.
                 let ty = self.infer_type(inner, env)?;
                 match &ty {
-                    PhpType::Object(class_name) => {
-                        self.check_clone_visibility(class_name, expr.span)?;
-                        Ok(ty)
-                    }
-                    PhpType::Union(members)
+                    PhpType::Object(_) => Ok(ty),
+                    // A Closure value is a callable descriptor here; `clone $closure` is a
+                    // fresh Closure that keeps `$this`, scope and captures (lowered as a
+                    // null-receiver rebind).
+                    PhpType::Callable => Ok(PhpType::Callable),
+                    PhpType::Union(_)
                         if crate::types::checker::type_compat::type_is_gradual_object_family(
                             &ty,
                         ) =>
                     {
-                        for member in members {
-                            if let PhpType::Object(class_name) = member {
-                                self.check_clone_visibility(class_name, expr.span)?;
-                            }
-                        }
                         Ok(ty)
                     }
                     PhpType::Mixed => Ok(PhpType::Mixed),
+                    other if matches!(other.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) => {
+                        Ok(PhpType::Mixed)
+                    }
                     _ => Err(CompileError::new(expr.span, "clone requires an object value")),
                 }
             }
@@ -282,6 +265,13 @@ impl Checker {
                 // The unpack-after-named shape is syntactic in
                 // PHP, so it is still rejected without a known constructor.
                 self.require_no_spread_after_named_args(args, "Dynamic constructor")?;
+                // The runtime class is unknown, so an array-element argument binds by value, as php
+                // does for every constructor that does not take that position by reference.
+                // Refusing the whole file because SOME unrelated class of the closed world has a
+                // by-reference constructor parameter (Symfony's RedisTrait `new $sentinelClass(
+                // $host, $port, $params['timeout'])` meets `SessionBagProxy::__construct`) deferred
+                // it to the runtime autoloader. An element handed to a constructor that really
+                // takes a reference is the only shape that loses its alias.
                 // No constructor signature means no parameter binding modes either, so every
                 // argument is conservatively reference-aliased — see
                 // `Checker::record_unresolved_callee_argument_aliases`.
@@ -358,13 +348,17 @@ impl Checker {
             }
             ExprKind::ObjectClassName { object } => {
                 let object_type = self.infer_type(object, env)?;
+                // A closure is an object of class `Closure`: `$closure::class` is "Closure".
                 let object_only = match &object_type {
-                    PhpType::Object(_) | PhpType::Mixed => true,
+                    PhpType::Object(_) | PhpType::Mixed | PhpType::Callable => true,
                     PhpType::Union(members) => {
                         !members.is_empty()
-                            && members
-                                .iter()
-                                .any(|member| matches!(member, PhpType::Object(_) | PhpType::Mixed))
+                            && members.iter().any(|member| {
+                                matches!(
+                                    member,
+                                    PhpType::Object(_) | PhpType::Mixed | PhpType::Callable
+                                )
+                            })
                     }
                     _ => false,
                 };
@@ -434,11 +428,12 @@ impl Checker {
             }
             ExprKind::YieldFrom(inner) => {
                 let inner_ty = self.infer_type(inner, env)?;
-                // Arrays and non-Generator Traversables are re-yielded through the
-                // ordinary iterator protocol. A concrete Generator keeps its
-                // dedicated delegation path so sent values and its return value are
-                // forwarded exactly as PHP requires.
-                let supported = self.yield_from_source_supported(&inner_ty);
+                // Arrays, mixed-key literals and non-Generator Traversables are re-yielded through
+                // the ordinary iterator protocol. A concrete Generator keeps its dedicated
+                // delegation path so sent values and its return value are forwarded exactly as
+                // PHP requires.
+                let supported = matches!(inner.kind, ExprKind::ArrayLiteralMixed(_))
+                    || self.yield_from_source_supported(&inner_ty);
                 if !supported {
                     return Err(CompileError::new(
                         inner.span,
@@ -485,5 +480,91 @@ impl Checker {
                     || self.type_accepts(&PhpType::Object("Traversable".to_string()), ty)
             }
         }
+    }
+
+    /// Infers one argument on a callable-descriptor path.
+    ///
+    /// Descriptor invokers own a runtime iterator walk, so they can accept Traversable spread
+    /// sources. Generic user calls deliberately use ordinary `infer_type` and remain array-only
+    /// until their lowering gains the same walk.
+    pub(crate) fn infer_descriptor_call_arg_type(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        match &expr.kind {
+            ExprKind::Spread(inner) => {
+                self.infer_spread_element_type(inner, expr.span, env, true)
+            }
+            _ => self.infer_type(expr, env),
+        }
+    }
+
+    /// Returns the element type supplied by a spread source under the selected lowering policy.
+    fn infer_spread_element_type(
+        &mut self,
+        inner: &Expr,
+        span: crate::span::Span,
+        env: &TypeEnv,
+        allow_traversable: bool,
+    ) -> Result<PhpType, CompileError> {
+        let ty = self.infer_type(inner, env)?;
+        match ty {
+            PhpType::Array(elem_ty) => Ok(*elem_ty),
+            PhpType::AssocArray { value, .. } => Ok(*value),
+            PhpType::Mixed => Ok(PhpType::Mixed),
+            ty if ty.is_php_array() => Ok(PhpType::Mixed),
+            // Gradual and iterable sources are unpacked through the runtime iterator protocol.
+            PhpType::Iterable | PhpType::Union(_) => Ok(PhpType::Mixed),
+            // `callable` is a PREDICATE, not a storage shape: the value behind it may be the
+            // two-element `[$object, 'method']` array PHP unpacks. EIR lowering rebuilds both
+            // elements from the descriptor, so the element type is gradual.
+            PhpType::Callable => Ok(PhpType::Mixed),
+            PhpType::Object(name) if self.object_type_implements_iterable(&name) => {
+                Ok(PhpType::Mixed)
+            }
+            ty if allow_traversable && self.descriptor_spread_source_may_be_traversable(&ty) => {
+                Ok(PhpType::Mixed)
+            }
+            _ => Err(CompileError::new(span, "Spread operator requires an array")),
+        }
+    }
+
+    /// Returns whether descriptor runtime iteration can validate this non-array source type.
+    ///
+    /// Every object is a possible `Traversable` at runtime. Keeping acceptance tied to the
+    /// descriptor path is important: its iterator setup owns the runtime interface check, while
+    /// ordinary calls still only know how to unpack array storage. Known concrete classes and
+    /// interface hints therefore do not need a second, brittle nominal proof here.
+    pub(crate) fn descriptor_spread_source_may_be_traversable(&self, ty: &PhpType) -> bool {
+        match ty {
+            PhpType::Iterable => true,
+            PhpType::Object(_) => true,
+            PhpType::Union(members) => members
+                .iter()
+                .all(|member| match member {
+                    PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => true,
+                    other => self.descriptor_spread_source_may_be_traversable(other),
+                }),
+            _ => false,
+        }
+    }
+
+    /// Returns whether a descriptor call contains a runtime Traversable spread source.
+    pub(crate) fn descriptor_call_has_traversable_spread(
+        &mut self,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        for arg in args {
+            let ExprKind::Spread(inner) = &arg.kind else {
+                continue;
+            };
+            let ty = self.infer_type(inner, env)?;
+            if self.descriptor_spread_source_may_be_traversable(&ty) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }

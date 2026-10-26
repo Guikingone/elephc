@@ -141,21 +141,21 @@ pub(super) struct GlobalEvalClassRegistry {
     /// Bumped whenever the registry is emptied, so a context can tell "nothing new since I
     /// last looked" from "everything I saw is gone and the indices mean something else now".
     pub(super) generation: u64,
-    pub(super) classes: HashMap<String, Arc<EvalClass>>,
+    pub(super) classes: rustc_hash::FxHashMap<String, Arc<EvalClass>>,
     pub(super) class_source_files: HashMap<String, String>,
     pub(super) declared_class_names: Vec<String>,
-    pub(super) interfaces: HashMap<String, EvalInterface>,
+    pub(super) interfaces: rustc_hash::FxHashMap<String, Arc<EvalInterface>>,
     pub(super) declared_interface_names: Vec<String>,
-    pub(super) traits: HashMap<String, EvalTrait>,
+    pub(super) traits: rustc_hash::FxHashMap<String, Arc<EvalTrait>>,
     pub(super) declared_trait_names: Vec<String>,
-    pub(super) enums: HashMap<String, EvalEnum>,
+    pub(super) enums: rustc_hash::FxHashMap<String, Arc<EvalEnum>>,
     pub(super) declared_enum_names: Vec<String>,
     /// Each eval enum case's singleton and backing value (raw cell addresses), keyed by the
     /// normalized enum and case names. A context imports an enum's DECLARATION through the sync
     /// above, but the case objects are made once, in the declaring context; without this a
     /// second context could see the enum and still not answer `Enum::CASE`.
     pub(super) enum_cases: HashMap<(String, String), (usize, Option<usize>)>,
-    pub(super) aliases: HashMap<String, EvalClassAlias>,
+    pub(super) aliases: rustc_hash::FxHashMap<String, EvalClassAlias>,
 }
 
 /// Immutable AOT metadata shared with fallback contexts created without a generated frame.
@@ -189,6 +189,8 @@ pub(super) struct GlobalEvalAotMetadata {
     native_property_defaults: Arc<HashMap<(String, String), NativeCallableDefault>>,
     native_property_attributes: Arc<HashMap<(String, String), Vec<EvalAttribute>>>,
     native_class_constant_defaults: Arc<HashMap<(String, String), NativeClassConstantDefault>>,
+    native_global_constants: Arc<HashMap<String, EvalNativeGlobalConstant>>,
+    native_user_constants: Arc<HashMap<String, EvalNativeUserConstant>>,
 }
 
 /// Returns the process-local snapshot of generated AOT metadata.
@@ -224,6 +226,10 @@ pub(crate) fn publish_global_eval_aot_metadata(context: &ElephcEvalContext) {
             native_property_defaults: Arc::clone(&context.native_property_defaults),
             native_property_attributes: Arc::clone(&context.native_property_attributes),
             native_class_constant_defaults: Arc::clone(&context.native_class_constant_defaults),
+            // The module registration also seeds the constant inventories; a context that
+            // adopts this snapshot skips that registration, so they must travel with it.
+            native_global_constants: Arc::clone(&context.native_global_constants),
+            native_user_constants: Arc::clone(&context.native_user_constants),
     }));
 }
 
@@ -234,13 +240,19 @@ pub(crate) fn publish_global_eval_aot_metadata(context: &ElephcEvalContext) {
 /// the first context has published immutable module metadata.
 #[cfg(not(test))]
 pub(crate) fn sync_global_eval_aot_metadata(context: &mut ElephcEvalContext) -> bool {
-    let Some(metadata) = global_eval_aot_metadata()
-        .lock()
-        .ok()
-        .and_then(|metadata| metadata.clone())
+    let Some(metadata) = published_global_eval_aot_metadata()
+        .or_else(publish_global_eval_aot_metadata_from_module)
     else {
         return false;
     };
+    // Already holding this very snapshot: a recycled context, or the null-handle context on
+    // its second call. Re-installing it would also clear the `own_*` name lists below, which
+    // for such a context hold the names of classes still in its tables.
+    if Arc::ptr_eq(&context.native_functions, &metadata.native_functions)
+        && Arc::ptr_eq(&context.declared_class_names, &metadata.declared_class_names)
+    {
+        return true;
+    }
     context.declared_class_names = Arc::clone(&metadata.declared_class_names);
     context.own_declared_class_names.clear();
     context.native_global_sync = metadata.native_global_sync;
@@ -262,7 +274,47 @@ pub(crate) fn sync_global_eval_aot_metadata(context: &mut ElephcEvalContext) -> 
     context.native_property_defaults = Arc::clone(&metadata.native_property_defaults);
     context.native_property_attributes = Arc::clone(&metadata.native_property_attributes);
     context.native_class_constant_defaults = Arc::clone(&metadata.native_class_constant_defaults);
+    context.native_global_constants = Arc::clone(&metadata.native_global_constants);
+    context.native_user_constants = Arc::clone(&metadata.native_user_constants);
     true
+}
+
+/// Returns the AOT metadata snapshot, if the module's registration has published one.
+#[cfg(not(test))]
+fn published_global_eval_aot_metadata() -> Option<Arc<GlobalEvalAotMetadata>> {
+    global_eval_aot_metadata().lock().ok().and_then(|metadata| metadata.clone())
+}
+
+#[cfg(not(test))]
+unsafe extern "C" {
+    /// Runs the generated module registration on `ctx`, which publishes the AOT snapshot.
+    ///
+    /// The context is opaque to generated code, so it crosses as an untyped pointer.
+    fn __elephc_eval_register_module_metadata(ctx: *mut std::ffi::c_void);
+}
+
+/// Publishes the AOT snapshot by running the module registration on a scratch context.
+///
+/// Only that registration publishes, and generated code runs it when a body builds its own eval
+/// context. A bridge call reached with a null handle before any such body -- a compiled
+/// `new $class(...)` ahead of the first `eval()` -- found nothing to sync, so its context had no
+/// constructor signature and the bridge refused the call. Attempted once per process: a module
+/// with nothing to register stays without a snapshot, as it did before.
+#[cfg(not(test))]
+fn publish_global_eval_aot_metadata_from_module() -> Option<Arc<GlobalEvalAotMetadata>> {
+    static ATTEMPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if ATTEMPTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
+    let scratch = crate::ffi::context::__elephc_eval_context_new();
+    if scratch.is_null() {
+        return None;
+    }
+    unsafe {
+        __elephc_eval_register_module_metadata(scratch.cast());
+        crate::ffi::context::__elephc_eval_context_free(scratch);
+    }
+    published_global_eval_aot_metadata()
 }
 
 /// Imports the module's published AOT metadata into a context that has never received any.
@@ -733,7 +785,7 @@ pub(super) fn register_global_eval_class_source(class_name: &str, file: String) 
 
 /// Records one eval-declared interface so later eval contexts can see PHP-global metadata.
 #[cfg(not(test))]
-pub(super) fn register_global_eval_interface(interface: &EvalInterface) {
+pub(super) fn register_global_eval_interface(interface: &Arc<EvalInterface>) {
     let key = normalize_class_name(interface.name());
     if let Ok(mut registry) = global_eval_classes().lock() {
         if !registry.interfaces.contains_key(&key) {
@@ -741,13 +793,13 @@ pub(super) fn register_global_eval_interface(interface: &EvalInterface) {
                 .declared_interface_names
                 .push(interface.name().to_string());
         }
-        registry.interfaces.insert(key, interface.clone());
+        registry.interfaces.insert(key, Arc::clone(interface));
     }
 }
 
 /// Records one eval-declared trait so later eval contexts can see PHP-global metadata.
 #[cfg(not(test))]
-pub(super) fn register_global_eval_trait(trait_decl: &EvalTrait) {
+pub(super) fn register_global_eval_trait(trait_decl: &Arc<EvalTrait>) {
     let key = normalize_class_name(trait_decl.name());
     if let Ok(mut registry) = global_eval_classes().lock() {
         if !registry.traits.contains_key(&key) {
@@ -755,13 +807,13 @@ pub(super) fn register_global_eval_trait(trait_decl: &EvalTrait) {
                 .declared_trait_names
                 .push(trait_decl.name().to_string());
         }
-        registry.traits.insert(key, trait_decl.clone());
+        registry.traits.insert(key, Arc::clone(trait_decl));
     }
 }
 
 /// Records one eval-declared enum so later eval contexts can see PHP-global metadata.
 #[cfg(not(test))]
-pub(super) fn register_global_eval_enum(enum_decl: &EvalEnum) {
+pub(super) fn register_global_eval_enum(enum_decl: &Arc<EvalEnum>) {
     let key = normalize_class_name(enum_decl.name());
     if let Ok(mut registry) = global_eval_classes().lock() {
         if !registry.enums.contains_key(&key) {
@@ -769,7 +821,7 @@ pub(super) fn register_global_eval_enum(enum_decl: &EvalEnum) {
                 .declared_enum_names
                 .push(enum_decl.name().trim_start_matches('\\').to_string());
         }
-        registry.enums.insert(key, enum_decl.clone());
+        registry.enums.insert(key, Arc::clone(enum_decl));
     }
 }
 

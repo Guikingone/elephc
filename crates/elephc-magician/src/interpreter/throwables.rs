@@ -29,18 +29,57 @@ pub(in crate::interpreter) fn note_eval_runtime_failure(
     crate::errors::note_eval_runtime_failure(what, file, Some(line));
 }
 
+/// Constructs a builtin exception, releasing borrowed constructor operands before publishing its owner.
+pub(in crate::interpreter) fn eval_throw_builtin_exception<T>(
+    class_name: &str,
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_builtin_exception_with_code(class_name, message, 0, context, values)
+}
+
+/// [`eval_throw_builtin_exception`] with an explicit `$code` (JsonException carries the error).
+pub(in crate::interpreter) fn eval_throw_builtin_exception_with_code<T>(
+    class_name: &str,
+    message: &str,
+    code: i64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let exception = values.new_object(class_name)?;
+    // A throwable records its source at allocation, before any constructor runs; a user `new`
+    // does it through `initialize_native_throwable_source`. An error the interpreter raises
+    // itself ("Call to undefined method") skipped that, so it carried an empty file and line 0,
+    // and Symfony's console printed `In n/a line n/a:` where php names the failing statement.
+    if let Err(status) = initialize_native_throwable_source(exception, context, values) {
+        let _ = eval_release_value(context, values, exception);
+        return Err(status);
+    }
+    let constructed = (|| {
+        let message = values.string(message)?;
+        with_eval_value_lease(message, context, values, |message, context, values| {
+            let code = values.int(code)?;
+            with_eval_value_lease(code, context, values, |code, _, values| {
+                values.construct_object(exception, vec![message, code])
+            })
+        })
+    })();
+    if let Err(status) = constructed {
+        let _ = eval_release_value(context, values, exception);
+        return Err(status);
+    }
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
+}
+
 /// Creates and schedules an `Error` through eval's normal Throwable channel.
 pub(in crate::interpreter) fn eval_throw_error<T>(
     message: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("Error")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception("Error", message, context, values)
 }
 
 /// Creates and schedules a `FiberError` through eval's normal Throwable channel.
@@ -49,12 +88,7 @@ pub(in crate::interpreter) fn eval_throw_fiber_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("FiberError")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception("FiberError", message, context, values)
 }
 
 /// Rejects Fiber methods that would switch execution contexts inside a Magician handler.
@@ -105,16 +139,73 @@ pub(in crate::interpreter) fn eval_reject_fiber_object_switch_during_pcntl_dispa
     )
 }
 
+/// Names a value the way PHP's argument `TypeError` does (`zend_zval_value_name()`):
+/// `null`, `true` / `false`, the zend scalar names (`int`, `float`, `string`, `array`), a
+/// compiled closure's `Closure`, or an object's class — never `gettype()`'s `integer` /
+/// `double` / `boolean`. An eval-declared class is looked up in the dynamic-object registry
+/// first, since its backing runtime cell is a `stdClass`.
+pub(in crate::interpreter) fn eval_given_type_name(
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    if tag == EVAL_TAG_OBJECT {
+        let identity = values.object_identity(value)?;
+        if let Some(name) = context.dynamic_object_class_name(identity) {
+            return Ok(name);
+        }
+        let class_name = values.object_class_name(value)?;
+        let bytes = values.string_bytes(class_name)?;
+        return Ok(String::from_utf8_lossy(&bytes).into_owned());
+    }
+    let name = match tag {
+        EVAL_TAG_NULL => "null",
+        EVAL_TAG_BOOL if values.truthy(value)? => "true",
+        EVAL_TAG_BOOL => "false",
+        EVAL_TAG_INT => "int",
+        EVAL_TAG_FLOAT => "float",
+        EVAL_TAG_STRING => "string",
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array",
+        EVAL_TAG_RESOURCE => "resource",
+        EVAL_TAG_CALLABLE => "Closure",
+        _ => "mixed",
+    };
+    Ok(name.to_string())
+}
+
 /// Creates and schedules a `TypeError` through eval's normal Throwable channel.
 pub(in crate::interpreter) fn eval_throw_type_error<T>(
     message: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("TypeError")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
+    eval_throw_builtin_exception("TypeError", message, context, values)
+}
+
+/// Creates and schedules an `ArgumentCountError` through eval's normal Throwable channel.
+pub(in crate::interpreter) fn eval_throw_argument_count_error<T>(
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let exception = values.new_object("ArgumentCountError")?;
+    let mut owners = Vec::new();
+    let constructed = (|| {
+        let message = values.string(message)?;
+        owners.push(message);
+        let code = values.int(0)?;
+        owners.push(code);
+        values.construct_object(exception, vec![message, code])
+    })();
+    let mut cleanup = Ok(());
+    for owner in owners.into_iter().rev() {
+        if let Err(status) = values.release(owner) { cleanup = Err(status); }
+    }
+    if let Err(status) = constructed.and(cleanup) {
+        let _ = values.release(exception);
+        return Err(status);
+    }
     context.set_pending_throw(exception);
     Err(EvalStatus::UncaughtThrowable)
 }
@@ -125,26 +216,7 @@ pub(in crate::interpreter) fn eval_throw_builtin_value_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
-}
-
-/// Creates and schedules an `ArgumentCountError` through eval's normal Throwable channel.
-pub(in crate::interpreter) fn eval_throw_argument_count_error<T>(
-    message: &str,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<T, EvalStatus> {
-    let exception = values.new_object("ArgumentCountError")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception("ValueError", message, context, values)
 }
 
 /// Creates and schedules a `DivisionByZeroError` through eval's normal Throwable channel.
@@ -153,12 +225,7 @@ pub(in crate::interpreter) fn eval_throw_builtin_division_by_zero_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("DivisionByZeroError")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception("DivisionByZeroError", message, context, values)
 }
 
 /// Creates and schedules a `RuntimeException` through eval's normal Throwable channel.
@@ -174,10 +241,5 @@ pub(in crate::interpreter) fn eval_throw_runtime_exception<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let exception = values.new_object("RuntimeException")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception("RuntimeException", message, context, values)
 }

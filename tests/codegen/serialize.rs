@@ -1,6 +1,6 @@
 //! Purpose:
-//! Provides end-to-end codegen tests for the `serialize()` / `unserialize()` builtins.
-//! Exercises the runtime serialize/unserialize helpers through compiled PHP programs.
+//! Provides end-to-end codegen tests for `serialize()` / `unserialize()` and object-property
+//! projections, exercising their runtime helpers through compiled PHP programs.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests` through the serialize codegen test module.
@@ -9,9 +9,17 @@
 //! - Output must match PHP's serialize() wire format byte-for-byte for the scalar
 //!   subset (null/bool/int/float/string); array support is added in a later increment.
 //! - Round-trips go through both helpers so a regression in either is caught.
+//! - Object casts and `get_object_vars()` retain PHP visibility, key, and built-in property rules.
+//! - Classes PHP refuses to (un)serialize are covered by the `not_serializable` submodule.
 
 use crate::support::*;
 use elephc::codegen_support::platform::Target;
+
+#[path = "serialize/not_serializable.rs"]
+mod not_serializable;
+
+#[path = "serialize/hydration.rs"]
+mod hydration;
 
 /// Verifies `serialize()` formats each scalar type exactly like PHP's wire format.
 #[test]
@@ -296,6 +304,170 @@ echo serialize(unserialize("d:1.0E+20;")), "\n";
 "#,
     );
     assert_eq!(out, "bool(true)\nbool(true)\nd:1.0E+20;\n");
+}
+
+/// `serialize()` leaves out every typed property that was never initialized, whatever its
+/// visibility, and counts only the ones it writes, as PHP does. Reading such a slot used to print
+/// its uninitialized marker as a value, or crash on a string property. The round trip keeps the
+/// property uninitialized, so assigning it later serializes it normally. Measured on PHP 8.5.10.
+#[test]
+fn test_serialize_omits_uninitialized_typed_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class Account {
+    private int $id;
+    private int $version = 3;
+    protected string $owner;
+    protected string $label = 'main';
+    public ?int $limit = null;
+    public array $tags;
+    public float $rate;
+}
+$account = new Account();
+echo str_replace("\0", '~', serialize($account)), "\n";
+$copy = unserialize(serialize($account));
+echo get_class($copy), "\n";
+$copy->tags = ['a'];
+$copy->rate = 1.5;
+echo str_replace("\0", '~', serialize($copy)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "O:7:\"Account\":3:{s:16:\"~Account~version\";i:3;s:8:\"~*~label\";s:4:\"main\";",
+            "s:5:\"limit\";N;}\n",
+            "Account\n",
+            "O:7:\"Account\":5:{s:16:\"~Account~version\";i:3;s:8:\"~*~label\";s:4:\"main\";",
+            "s:5:\"limit\";N;s:4:\"tags\";a:1:{i:0;s:1:\"a\";}s:4:\"rate\";d:1.5;}\n",
+        )
+    );
+}
+
+/// The default walk counts the initialized properties before writing any of them and checks each
+/// slot again as it writes it, exactly like php-src's `php_var_serialize_intern`. So when writing
+/// an earlier property runs a hook that initializes or unsets a later one, the payload is PHP's own,
+/// count and all, even though PHP cannot unserialize it either. Measured on PHP 8.5.10.
+#[test]
+fn test_serialize_counts_properties_before_writing_them_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+class Outer { public ?Inner $in = null; public int $later; }
+class Inner {
+    public Outer $outer;
+    public function __sleep(): array { $this->outer->later = 5; return []; }
+}
+$o = new Outer(); $i = new Inner(); $i->outer = $o; $o->in = $i;
+echo serialize($o), "\n";
+class Outer2 { public ?Inner2 $in = null; public int $later = 3; }
+class Inner2 {
+    public Outer2 $outer;
+    public function __sleep(): array { $outer = $this->outer; unset($outer->later); return []; }
+}
+$o2 = new Outer2(); $i2 = new Inner2(); $i2->outer = $o2; $o2->in = $i2;
+echo serialize($o2), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "O:5:\"Outer\":1:{s:2:\"in\";O:5:\"Inner\":0:{}s:5:\"later\";i:5;}\n",
+            "O:6:\"Outer2\":2:{s:2:\"in\";O:6:\"Inner2\":0:{}}\n",
+        )
+    );
+}
+
+/// `__sleep()` writes only the named properties that hold a value, and the count in front of the
+/// body covers exactly those: an uninitialized typed property (a `Closure` one included, which
+/// must not trigger the Closure refusal) is left out, as in PHP. The count is only known once
+/// every name was looked up, so it is written after the body and moved in front of it; nested
+/// `__sleep()` objects, a back-reference and a two-digit count keep the payload byte-exact and
+/// round-trippable. Measured on PHP 8.5.10.
+#[test]
+fn test_serialize_sleep_counts_only_initialized_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class Inner {
+    public int $id;
+    public string $tag = 'in';
+    public function __sleep(): array { return ['id', 'tag']; }
+}
+class Wide {
+    public int $p0 = 0; public int $p1 = 1; public int $p2 = 2; public int $p3 = 3;
+    public int $p4 = 4; public int $p5 = 5; public int $p6 = 6; public int $p7 = 7;
+    public int $p8 = 8; public int $p9 = 9; public int $p10 = 10; public int $gap;
+    public Inner $inner;
+    public ?Inner $again = null;
+    public array $list = [];
+    public function __sleep(): array {
+        return ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'p9', 'p10', 'gap', 'inner', 'again', 'list'];
+    }
+}
+class Task {
+    public Closure $callback;
+    public int $n = 3;
+    public function __sleep(): array { return ['callback', 'n']; }
+}
+$wide = new Wide();
+$wide->inner = new Inner();
+$wide->again = $wide->inner;
+$wide->list = [new Inner(), 'x'];
+$wire = serialize($wide);
+echo $wire, "\n";
+$copy = unserialize($wire);
+echo $copy->p10, " ", $copy->inner->tag, " ", var_export($copy->again === $copy->inner, true), "\n";
+echo serialize(new Task()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "O:4:\"Wide\":14:{s:2:\"p0\";i:0;s:2:\"p1\";i:1;s:2:\"p2\";i:2;s:2:\"p3\";i:3;",
+            "s:2:\"p4\";i:4;s:2:\"p5\";i:5;s:2:\"p6\";i:6;s:2:\"p7\";i:7;s:2:\"p8\";i:8;",
+            "s:2:\"p9\";i:9;s:3:\"p10\";i:10;s:5:\"inner\";O:5:\"Inner\":1:{s:3:\"tag\";s:2:\"in\";}",
+            "s:5:\"again\";r:13;s:4:\"list\";a:2:{i:0;O:5:\"Inner\":1:{s:3:\"tag\";s:2:\"in\";}",
+            "i:1;s:1:\"x\";}}\n",
+            "10 in true\n",
+            "O:4:\"Task\":1:{s:1:\"n\";i:3;}\n",
+        )
+    );
+}
+
+/// `unserialize()` initializes the typed properties it restores, including ones declared without
+/// a default: reading them works afterwards, and serializing the copy again reproduces the
+/// payload (a still-uninitialized nested property stays left out). The restored slots used to
+/// keep their uninitialized marker, so reads failed and a second `serialize()` dropped them.
+/// Measured on PHP 8.5.10.
+#[test]
+fn test_unserialize_initializes_typed_properties_without_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+class Point {
+    public int $x;
+    public array $tags;
+    public Point $next;
+    public mixed $m;
+    public function __construct() { $this->x = 1; $this->tags = ['a']; $this->m = 'k'; }
+}
+$p = new Point();
+$p->next = new Point();
+$wire = serialize($p);
+echo $wire, "\n";
+$copy = unserialize($wire);
+echo $copy->next->x, " ", $copy->tags[0], " ", $copy->m, "\n";
+echo serialize($copy) === $wire ? "same\n" : "changed\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "O:5:\"Point\":4:{s:1:\"x\";i:1;s:4:\"tags\";a:1:{i:0;s:1:\"a\";}",
+            "s:4:\"next\";O:5:\"Point\":3:{s:1:\"x\";i:1;s:4:\"tags\";a:1:{i:0;s:1:\"a\";}",
+            "s:1:\"m\";s:1:\"k\";}s:1:\"m\";s:1:\"k\";}\n",
+            "1 a k\n",
+            "same\n",
+        )
+    );
 }
 
 /// Verifies object serialization (Stage A): public/protected/private mangled keys,
@@ -1182,6 +1354,134 @@ echo serialize((array) $object);
     );
 }
 
+/// User-defined object casts must continue to retain visibility-mangled private properties.
+#[test]
+fn test_user_object_array_cast_keeps_private_mangled_property() {
+    let out = compile_and_run(
+        r#"<?php
+class CastProperties {
+    private string $hidden = 'secret';
+    public string $name = 'public';
+}
+$cast = (array) new CastProperties();
+echo count($cast), '|';
+echo array_key_exists("\0CastProperties\0hidden", $cast) ? '1' : '0', '|';
+echo array_key_exists('name', $cast) ? '1' : '0';
+"#,
+    );
+    assert_eq!(out, "2|1|1");
+}
+
+/// Builtin Reflection objects expose PHP's public `ReflectionParameter::$name` in array casts
+/// and get_object_vars(), while their compiler-only `__*` backing slots stay invisible.
+#[test]
+fn test_reflection_parameter_array_cast_exposes_only_public_name() {
+    let out = compile_and_run(
+        r#"<?php
+$parameter = new ReflectionParameter("strlen", "string");
+$cast = (array) $parameter;
+$vars = get_object_vars($parameter);
+echo serialize($cast), "|", count($vars), "|", $vars["name"], "|", $parameter->name, "|";
+foreach ($cast as $value) {
+    if (is_object($value)) { echo get_class($value), ":", (string) $value, "|"; }
+}
+echo "end";
+"#,
+    );
+    assert_eq!(out, "a:1:{s:4:\"name\";s:6:\"string\";}|1|string|string|end");
+}
+
+/// Reflection objects deny serialization with a catchable Exception, as PHP does.
+#[test]
+fn test_serialize_reflection_parameter_throws_exception() {
+    let out = compile_and_run(
+        r#"<?php
+$parameter = new ReflectionParameter("strlen", "string");
+try {
+    serialize($parameter);
+    echo 'serialized';
+} catch (Exception $error) {
+    echo get_class($error), ':', $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Exception:Serialization of 'ReflectionParameter' is not allowed"
+    );
+}
+
+/// The denial holds wherever the serializer meets a Reflection object: behind `mixed`, nested at
+/// any depth in an array, and on a subclass that declares its own `__serialize()`, which PHP
+/// still refuses. A plain array is untouched. Expected output measured on PHP 8.5.10.
+#[test]
+fn test_serialize_denies_reflection_objects_wherever_they_sit() {
+    let out = compile_and_run(
+        r#"<?php
+class Mine extends ReflectionClass {
+    public function __serialize(): array { return ['x' => 1]; }
+}
+function attempt(string $label, mixed $value): void {
+    try {
+        echo $label, ": ", serialize($value), "\n";
+    } catch (Exception $e) {
+        echo $label, ": ", get_class($e), " ", $e->getMessage(), "\n";
+    }
+}
+function f(int $a) {}
+$param = (new ReflectionFunction('f'))->getParameters()[0];
+attempt("direct", $param);
+attempt("nested", [1, $param]);
+attempt("deep", ['k' => [new ReflectionFunction('f')]]);
+attempt("method", new ReflectionMethod('Mine', '__serialize'));
+attempt("subclass", new Mine('Mine'));
+attempt("plain", [1, 'a' => true]);
+try { echo serialize([$param]); } catch (Exception $e) { echo "typed-array: ", $e->getMessage(), "\n"; }
+echo "after\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "direct: direct: Exception Serialization of 'ReflectionParameter' is not allowed\n\
+         nested: nested: Exception Serialization of 'ReflectionParameter' is not allowed\n\
+         deep: deep: Exception Serialization of 'ReflectionFunction' is not allowed\n\
+         method: method: Exception Serialization of 'ReflectionMethod' is not allowed\n\
+         subclass: subclass: Exception Serialization of 'Mine' is not allowed\n\
+         plain: a:2:{i:0;i:1;s:1:\"a\";b:1;}\n\
+         typed-array: Serialization of 'ReflectionParameter' is not allowed\n\
+         after\n"
+    );
+}
+
+/// The same denial covers the other internal classes PHP marks not serializable that elephc
+/// models as objects: `Generator`, `Fiber`, and `SplFileInfo` with its subclasses. Expected
+/// output measured on PHP 8.5.10.
+#[test]
+fn test_serialize_denies_generators_fibers_and_file_info() {
+    let out = compile_and_run(
+        r#"<?php
+function gen() { yield 1; }
+$cases = [
+    'generator' => gen(),
+    'fiber' => new Fiber(fn() => 1),
+    'splfileinfo' => new SplFileInfo(__FILE__),
+    'splfileobject' => new SplFileObject(__FILE__),
+];
+foreach ($cases as $label => $value) {
+    try { echo $label, ": ", serialize($value), "\n"; }
+    catch (Exception $e) { echo get_class($e), " ", $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "generator: Exception Serialization of 'Generator' is not allowed\n\
+         fiber: Exception Serialization of 'Fiber' is not allowed\n\
+         splfileinfo: Exception Serialization of 'SplFileInfo' is not allowed\n\
+         splfileobject: Exception Serialization of 'SplFileObject' is not allowed\n"
+    );
+}
+
 /// Verifies an array cast of a runtime `mixed` value preserves PHP semantics
 /// for scalar, null, and already-array payload tags.
 #[test]
@@ -1259,6 +1559,30 @@ echo serialize($arr), "\n";
     assert_eq!(
         out,
         "77\nsame\na:2:{i:0;O:1:\"P\":1:{s:1:\"v\";i:7;}i:1;r:2;}\n",
+    );
+}
+
+/// An `r:` back-reference is itself a numbered value: php gives every value but an `R:` the
+/// next index, so the object AFTER an `r:` is one further on. Both sides skipped it -- a second
+/// shared object serialized as `r:4` for php's `r:5`, and php's own `r:5` resolved to the wrong
+/// value, which failed the whole unserialize() of a Symfony debug container.
+#[test]
+fn test_object_back_reference_consumes_its_own_index() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public $n; public function __construct($n = 0) { $this->n = $n; } }
+$a = new A(1); $b = new A(2);
+$s = serialize([$a, $a, $b, $b, [$a, $b], $b]);
+echo $s, "\n";
+$u = unserialize($s);
+echo ($u[1] === $u[0] ? "s" : "d"), ($u[3] === $u[2] ? "s" : "d"), ($u[4][1] === $u[2] ? "s" : "d"), "\n";
+$php = unserialize('a:4:{i:0;O:1:"A":1:{s:1:"n";i:1;}i:1;r:2;i:2;O:1:"A":1:{s:1:"n";i:2;}i:3;r:5;}');
+echo $php[3]->n, $php[3] === $php[2] ? " same" : " diff", "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "a:6:{i:0;O:1:\"A\":1:{s:1:\"n\";i:1;}i:1;r:2;i:2;O:1:\"A\":1:{s:1:\"n\";i:2;}i:3;r:5;i:4;a:2:{i:0;r:2;i:1;r:5;}i:5;r:5;}\nsss\n2 same\n",
     );
 }
 
@@ -1519,4 +1843,172 @@ echo "alive\n";
 "##,
     );
     assert_eq!(out, "x!\nx?\nalive\n");
+}
+
+/// `unserialize()` of a null into a boxed-Mixed property (untyped, `?string`, `?float`) stores the
+/// parsed null cell like any other value.
+///
+/// It stored the in-band `NULL_SENTINEL` word instead, which is not a Mixed cell pointer, so the
+/// first reader of the property — `=== null`, `var_dump`, `json_encode` — dereferenced it and the
+/// program segfaulted.
+#[test]
+fn test_unserialize_null_into_mixed_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public $n = 5; public ?string $m = "a"; public ?float $f = 1.5; }
+$p = new P();
+$p->n = $argc > 5 ? 1 : null;
+$p->m = $argc > 5 ? "z" : null;
+$p->f = $argc > 5 ? 2.5 : null;
+$u = unserialize(serialize($p));
+var_dump($u->n === null, $u->m === null, isset($u->f), $u->n ?? "dflt");
+echo json_encode($u), "\n";
+var_dump($u);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(false)\n",
+            "string(4) \"dflt\"\n",
+            "{\"n\":null,\"m\":null,\"f\":null}\n",
+            "object(P)#2 (3) {\n",
+            "  [\"n\"]=>\n",
+            "  NULL\n",
+            "  [\"m\"]=>\n",
+            "  NULL\n",
+            "  [\"f\"]=>\n",
+            "  NULL\n",
+            "}\n",
+        )
+    );
+}
+
+/// `unserialize()` into a tagged `?int` property stores an int and a null as themselves, and
+/// never exposes another value's payload word as an integer. PHP rejects a string, float, bool
+/// or array there with a `TypeError`, which elephc does not raise yet (#1629, `docs/php/types.md`);
+/// the slot holds null instead, rather than a string's heap pointer read as an int. The heap is
+/// not asserted clean: `unserialize()` of an object leaks on main whatever the property type
+/// (#1562).
+#[test]
+fn test_unserialize_mismatched_value_into_nullable_int_property_stores_null() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public ?int $n = null; }
+$out = "";
+for ($i = 0; $i < 20 + $argc; $i++) {
+    $out = "";
+    foreach (['i:7;', 'N;', 's:3:"abc";', 'd:1.5;', 'b:1;', 'a:0:{}'] as $payload) {
+        $o = unserialize('O:1:"C":1:{s:1:"n";' . $payload . '}');
+        $out .= json_encode($o->n) . " ";
+    }
+}
+echo $out, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "7 null null null null null \n");
+}
+
+/// An object `unserialize()` builds from a `stdClass` wire form keeps its properties and a
+/// real property hash: `__rt_new_by_name` used to hand back a declared-slot object with a null
+/// hash, so the properties were dropped and `json_encode()` dereferenced the null hash (exit 139).
+#[test]
+fn test_unserialize_stdclass_keeps_properties_and_json_encodes() {
+    let out = compile_and_run(
+        r#"<?php
+$u = unserialize('O:8:"stdClass":2:{s:1:"a";i:1;s:1:"b";s:1:"x";}');
+echo json_encode($u), "\n";
+echo $u->a, $u->b, "\n";
+$u->c = 3;
+echo json_encode($u), "\n";
+$w = unserialize('a:1:{i:0;O:8:"stdClass":0:{}}');
+echo json_encode($w), "\n";
+"#,
+    );
+    assert_eq!(out, "{\"a\":1,\"b\":\"x\"}\n1x\n{\"a\":1,\"b\":\"x\",\"c\":3}\n[{}]\n");
+}
+
+/// `R:N` naming a scalar resolves to an equal value instead of failing the whole `unserialize()`.
+/// php makes both slots one PHP reference; elephc cannot share a scalar slot, so the `R:` slot
+/// holds an equal copy (value semantics). The `R:` takes no index of its own, so the string after
+/// it still lands on php's next index, and lowercase `r:` still refuses a non-object target.
+#[test]
+fn test_unserialize_reference_back_reference_to_scalar() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([
+    'a:2:{i:0;s:1:"x";i:1;R:2;}',
+    'a:2:{i:0;i:7;i:1;R:2;}',
+    'a:3:{i:0;d:1.5;i:1;N;i:2;R:3;}',
+    'a:3:{i:0;b:1;i:1;R:2;i:2;s:1:"z";}',
+    'a:3:{i:0;i:1;i:1;R:2;i:2;R:2;}',
+    'a:2:{i:0;a:1:{i:0;s:2:"hi";}i:1;R:3;}',
+] as $wire) {
+    echo json_encode(unserialize($wire)), "\n";
+}
+var_dump(@unserialize('a:2:{i:0;s:1:"x";i:1;r:2;}'));
+"#,
+    );
+    assert_eq!(
+        out,
+        "[\"x\",\"x\"]\n[7,7]\n[1.5,null,null]\n[true,true,\"z\"]\n[1,1,1]\n[[\"hi\"],\"hi\"]\nbool(false)\n"
+    );
+}
+
+/// The eval interpreter's `serialize()`/`unserialize()` implement php's `r:`/`R:` numbering:
+/// a repeated object serializes as `r:<n>;`, a round trip reproduces the bytes and the object
+/// identities, and `R:` onto a scalar resolves to an equal value. (A back-reference to an
+/// enclosing object still under construction is not resolvable yet and is not covered.)
+#[test]
+fn test_eval_serialize_unserialize_back_references() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+$o = new stdClass;
+echo serialize([$o, $o]), "\n";
+$o->self = $o;
+echo serialize($o), "\n";
+class P { public $x = 1; public $y; }
+$p = new P; $q = new P;
+$s = serialize(["k" => $p, "again" => $p, 3 => $q, "z" => "s", "w" => $q]);
+echo $s, "\n";
+$u = unserialize($s);
+echo serialize($u) === $s ? "round trip ok" : "round trip DIFF", "\n";
+var_dump($u["k"] === $u["again"], $u[3] === $u["w"], $u["k"] === $u[3]);
+echo json_encode(unserialize(\'a:2:{i:0;s:1:"x";i:1;R:2;}\')), "\n";
+var_dump(@unserialize(\'a:2:{i:0;s:1:"x";i:1;r:2;}\'));
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "a:2:{i:0;O:8:\"stdClass\":0:{}i:1;r:2;}\n\
+         O:8:\"stdClass\":1:{s:4:\"self\";r:1;}\n\
+         a:5:{s:1:\"k\";O:1:\"P\":2:{s:1:\"x\";i:1;s:1:\"y\";N;}s:5:\"again\";r:2;i:3;O:1:\"P\":2:{s:1:\"x\";i:1;s:1:\"y\";N;}s:1:\"z\";s:1:\"s\";s:1:\"w\";r:6;}\n\
+         round trip ok\nbool(true)\nbool(true)\nbool(false)\n[\"x\",\"x\"]\nbool(false)\n"
+    );
+}
+
+/// `serialize()` writes a stdClass's dynamic properties. Its properties live in the per-instance
+/// hash, not in declared rows, and the row walk wrote `O:8:"stdClass":0:{}` for every one of them
+/// -- a casted array, a decoded JSON object and an empty stdClass included.
+#[test]
+fn test_serialize_writes_stdclass_dynamic_properties() {
+    let out = compile_and_run(
+        r#"<?php
+$o = new stdClass; $o->a = 1; $o->b = "x"; echo serialize($o), "\n";
+$p = (object)["k" => [1, 2]]; echo serialize($p), "\n";
+echo serialize(json_decode('{"q":1}')), "\n";
+echo serialize(new stdClass), "\n";
+$s = serialize([$o, $o]); echo $s, "\n";
+$u = unserialize($s); echo $u[0]->b, $u[0] === $u[1] ? " same" : " diff", "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "O:8:\"stdClass\":2:{s:1:\"a\";i:1;s:1:\"b\";s:1:\"x\";}\nO:8:\"stdClass\":1:{s:1:\"k\";a:2:{i:0;i:1;i:1;i:2;}}\nO:8:\"stdClass\":1:{s:1:\"q\";i:1;}\nO:8:\"stdClass\":0:{}\na:2:{i:0;O:8:\"stdClass\":2:{s:1:\"a\";i:1;s:1:\"b\";s:1:\"x\";}i:1;r:2;}\nx same\n"
+    );
 }

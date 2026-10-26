@@ -18,13 +18,45 @@ pub(in crate::interpreter) fn eval_builtin_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    let evaluated_args = bind_evaluated_builtin_args(name, evaluated_args, values)?;
-    let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? else {
-        note_eval_runtime_failure(format!("call to unsupported function {name}()"), context);
-        return Err(EvalStatus::UnsupportedConstruct);
+    // Direct count/strlen reads need no writable array-element target. Capture the value
+    // itself so its temporary key is released with source evaluation.
+    if matches!(name, "count" | "strlen") || eval_builtin_uses_owned_arguments(name) {
+        return eval_owned_builtin_call(name, args, false, context, scope, values);
+    }
+    with_eval_call_arguments(args, context, scope, values, |arguments, context, scope, values| {
+        eval_bound_builtin_call_from_scope(name, arguments, Some(scope), context, values)
+    })
+}
+
+/// Invokes borrowed source arguments and releases only defaults allocated during named binding.
+pub(in crate::interpreter) fn eval_bound_builtin_call(
+    name: &str,
+    arguments: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_bound_builtin_call_from_scope(name, arguments, None, context, values)
+}
+
+/// Retains the caller's lexical scope when a direct builtin consumes callback values.
+fn eval_bound_builtin_call_from_scope(
+    name: &str,
+    mut arguments: Vec<EvaluatedCallArg>,
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    for argument in &mut arguments { argument.value = argument.value.borrowed(); }
+    let bound = bind_evaluated_builtin_args(name, arguments, values)?;
+    let result = match eval_builtin_with_values_from_scope(name, &bound, lexical_scope, context, values) {
+        Ok(Some(result)) => Ok(result),
+        Ok(None) => {
+            note_eval_runtime_failure(format!("call to unsupported function {name}()"), context);
+            Err(EvalStatus::UnsupportedConstruct)
+        }
+        Err(status) => Err(status),
     };
-    Ok(result)
+    finish_eval_argument_values(result, bound, context, values)
 }
 
 /// Binds evaluated builtin arguments to PHP parameter order when names are used.
@@ -32,6 +64,14 @@ pub(in crate::interpreter) fn bind_evaluated_builtin_args(
     name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
     values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    bind_builtin_arguments(name, evaluated_args, values, None)
+}
+
+/// Applies the same builtin parameter planner while tracking defaults created for named gaps.
+pub(super) fn bind_builtin_arguments(
+    name: &str, evaluated_args: Vec<EvaluatedCallArg>, values: &mut impl RuntimeValueOps,
+    owners: Option<&mut Vec<RuntimeCellHandle>>,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     if evaluated_args.iter().all(|arg| arg.name.is_none()) {
         return Ok(evaluated_args.into_iter().map(|arg| arg.value).collect());
@@ -49,7 +89,7 @@ pub(in crate::interpreter) fn bind_evaluated_builtin_args(
         }
     }
 
-    collect_bound_builtin_args(name, bound_args, values)
+    collect_builtin_arguments(name, bound_args, values, owners)
 }
 
 /// Binds one named builtin-call value to the matching PHP parameter slot.
@@ -69,11 +109,10 @@ pub(in crate::interpreter) fn bind_builtin_named_arg(
     Ok(())
 }
 
-/// Collects ordered builtin arguments, applying PHP defaults for named-call gaps.
-pub(in crate::interpreter) fn collect_bound_builtin_args(
-    name: &str,
-    bound_args: Vec<Option<RuntimeCellHandle>>,
-    values: &mut impl RuntimeValueOps,
+/// Materializes named-call gaps and optionally transfers each new default to call-boundary cleanup.
+fn collect_builtin_arguments(
+    name: &str, bound_args: Vec<Option<RuntimeCellHandle>>, values: &mut impl RuntimeValueOps,
+    owners: Option<&mut Vec<RuntimeCellHandle>>,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     if !bound_args.iter().any(Option::is_some) {
         return Ok(Vec::new());
@@ -85,16 +124,28 @@ pub(in crate::interpreter) fn collect_bound_builtin_args(
         .rposition(Option::is_some)
         .expect("non-empty bound args has a last supplied arg");
     let mut args = Vec::with_capacity(last_index + 1);
+    let mut defaults = Vec::new();
 
-    for (index, arg) in bound_args.into_iter().take(last_index + 1).enumerate() {
-        if let Some(value) = arg {
-            args.push(value);
-        } else if index >= shape.required_param_count {
-            args.push(eval_builtin_default_arg(name, index, values)?);
-        } else {
-            return Err(EvalStatus::RuntimeFatal);
+    let result = (|| {
+        for (index, arg) in bound_args.into_iter().take(last_index + 1).enumerate() {
+            if let Some(value) = arg {
+                args.push(value);
+            } else if index >= shape.required_param_count {
+                let value = eval_builtin_default_arg(name, index, values)?;
+                defaults.push(value);
+                args.push(value);
+            } else {
+                return Err(EvalStatus::RuntimeFatal);
+            }
         }
+        Ok(())
+    })();
+    if let Err(status) = result {
+        for value in defaults { let _ = values.release(value); }
+        return Err(status);
     }
+
+    if let Some(owners) = owners { owners.extend(defaults); }
 
     Ok(args)
 }
@@ -127,4 +178,12 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
     }
 
     None
+}
+
+/// Selects shared runtime builtins and callback wrappers that own their argument values through invocation.
+pub(in crate::interpreter) fn eval_builtin_uses_owned_arguments(name: &str) -> bool {
+    eval_declared_builtin_spec(name).is_some_and(|spec|
+        spec.runtime_builtin.is_some_and(|id| id.is_mbstring())
+            || matches!(spec.name, "call_user_func" | "call_user_func_array" | "var_dump"
+                | "bin2hex" | "header" | "ob_start"))
 }

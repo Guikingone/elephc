@@ -72,10 +72,14 @@ impl Checker {
                 }
                 return Ok(PhpType::Object(class_name));
             }
+            // php's `Class "X" not found` when the `new` runs, if no file supplies the class.
             return Err(CompileError::new(
                 expr.span,
                 &format!("Undefined class: {}", class_name),
-            ));
+            )
+            .with_runtime_fault(crate::errors::RuntimeFault::UnknownClass {
+                class: class_name.clone(),
+            }));
         }
         if crate::types::checker::builtin_types::RESERVED_FOR_INTERNAL_USE
             .iter()
@@ -124,12 +128,28 @@ impl Checker {
                         .map(|sig| (sig, owner_name, owner_info))
                 });
             if let Some((sig, owner_name, owner_info)) = constructor_owner {
+                // The class PHP NAMES for this constructor, which is where it is declared — not
+                // the class being instantiated. `new Child()` on a `private __construct` declared
+                // by `Owner` reports `Owner::__construct()` in php-src, for the visibility error
+                // and for the arity error alike (`Too few arguments to function
+                // Owner::__construct()`). #796 made the visibility half say so; the arity half
+                // still said `Child::__construct` (issue #870).
+                //
+                // This moves the name for EVERY INHERITED constructor, not only a private one.
+                // An inherited PUBLIC or PROTECTED constructor IS in the descendant's own method
+                // map, so the owner walk stops at the descendant — but `method_declaring_classes`
+                // still points at the ancestor that wrote it, and php-src names that ancestor
+                // too (`new Sub()` on `Base`'s constructor reports
+                // `Too few arguments to function Base::__construct()`, where elephc said
+                // `Sub::__construct`). Only a class that declares its OWN constructor is
+                // unchanged, because there the two names are the same class.
+                let declaring_class = owner_info
+                    .method_declaring_classes
+                    .get("__construct")
+                    .map(String::as_str)
+                    .unwrap_or(owner_name);
+                let constructor_label = format!("Constructor '{}::__construct'", declaring_class);
                 if let Some(visibility) = owner_info.method_visibilities.get("__construct") {
-                    let declaring_class = owner_info
-                        .method_declaring_classes
-                        .get("__construct")
-                        .map(String::as_str)
-                        .unwrap_or(owner_name);
                     if !self.can_access_member(declaring_class, visibility)
                         && !self.can_construct_internal_iterator_from_builtin_get_iterator(&class_name)
                         && !self.can_construct_pdo_row_from_prelude_fetch(&class_name)
@@ -152,7 +172,7 @@ impl Checker {
                     &effective_sig,
                     args,
                     expr.span,
-                    &format!("Constructor '{}::__construct'", class_name),
+                    &constructor_label,
                     env,
                 )?;
                 let effective_sig = if matches!(
@@ -167,12 +187,36 @@ impl Checker {
                 } else {
                     effective_sig
                 };
+                for (i, arg) in normalized_args.iter().enumerate() {
+                    let persistent_reference = param_to_prop
+                        .get(i)
+                        .is_some_and(|mapped| mapped.is_some())
+                        && effective_sig.ref_params.get(i).copied().unwrap_or(false);
+                    let unstable_reference_source = matches!(arg.kind, ExprKind::ArrayAccess { .. })
+                        || matches!(&arg.kind, ExprKind::Variable(name)
+                            if self.active_ref_params.contains(name)
+                                || self.ref_aliased_locals.contains(name));
+                    if persistent_reference && unstable_reference_source {
+                        let param_name = effective_sig
+                            .params
+                            .get(i)
+                            .map(|(name, _)| name.as_str())
+                            .unwrap_or("arg");
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!(
+                                "{} parameter ${} cannot retain managed or already-reference-bound storage in a promoted property",
+                                constructor_label, param_name
+                            ),
+                        ));
+                    }
+                }
                 self.check_user_declared_call(
                     &effective_sig,
-                    &normalized_args,
+                    args,
                     expr.span,
                     env,
-                    &format!("Constructor '{}::__construct'", class_name),
+                    &constructor_label,
                     class_name.as_str(),
                 )?;
                 for (i, arg) in normalized_args.iter().enumerate() {
@@ -182,16 +226,10 @@ impl Checker {
                     }
                 }
                 return Ok(PhpType::Object(class_name));
-            } else if !args.is_empty() {
-                return Err(CompileError::new(
-                    expr.span,
-                    &format!(
-                        "Constructor '{}::__construct' expects 0 arguments, got {}",
-                        class_name,
-                        args.len()
-                    ),
-                ));
             }
+            // A class with no constructor at all still accepts arguments: php evaluates them for
+            // their effects and discards them (`new A(f())` calls `f()`). Symfony's container
+            // writes `new ReflectionTypeResolver($factory)` for a class that declares none.
         }
         let param_to_prop = self
             .classes
@@ -291,7 +329,7 @@ impl Checker {
         }
         self.check_user_declared_call(
             &sig,
-            &normalized_args,
+            args,
             expr.span,
             env,
             &format!("Constructor '{}::__construct'", class_name),

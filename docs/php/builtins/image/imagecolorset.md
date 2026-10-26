@@ -1,8 +1,8 @@
 ---
 title: "imagecolorset()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Changes the color a palette index stands for."
 sidebar:
-  order: 490
+  order: 491
 ---
 
 ## imagecolorset()
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorset(mixed $image, int $color, int $red, int $green, int $blue, int $alpha = 0): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Changes the color a palette index stands for.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -28,7 +28,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

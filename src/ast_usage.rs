@@ -153,13 +153,6 @@ pub(crate) fn array_reference_sources(statements: &[Stmt]) -> HashSet<String> {
     usage.array_reference_sources
 }
 
-/// Returns whether a statement list needs the runtime called-class identity.
-pub(crate) fn uses_late_static(statements: &[Stmt]) -> bool {
-    let mut usage = Usage::default();
-    scan_program(statements, &mut usage);
-    usage.uses_late_static
-}
-
 /// Records a variable name when it is a `$GLOBALS['…']` alias.
 ///
 /// Called for every position that names a variable with a bare `String` rather
@@ -196,6 +189,17 @@ fn record_place_construction(usage: &mut Usage, class_name: &str, args: &[Expr])
                 ExprKind::NamedArg { name, value } => (value.as_ref(), Some(name.clone())),
                 _ => (arg, None),
             };
+            // A declared property, or an element rooted at one, is bound natively: the callee gets
+            // the property's reference cell (`Checker::promote_by_ref_property_args`). Symfony's
+            // `OrderedHashMap::getIterator()` -- `new OrderedHashMapIterator($this->elements,
+            // $this->orderedKeys, $this->managedCursors)` -- runs compiled, php's output and all.
+            let mut root = value;
+            while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+                root = array.as_ref();
+            }
+            if matches!(root.kind, ExprKind::PropertyAccess { .. }) {
+                return None;
+            }
             matches!(
                 value.kind,
                 ExprKind::PropertyAccess { .. }
@@ -569,6 +573,11 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
 /// Scans every child and callable position of one expression.
 fn scan_expr(expr: &Expr, usage: &mut Usage) {
     match &expr.kind {
+        // `['Closure', 'fromCallable']` called at run time resolves to the injected helper, which
+        // nothing else names: the string is its only reference.
+        ExprKind::StringLiteral(text) if crate::closure_from_callable_prelude::names_it(text) => {
+            record_class_name(usage, crate::closure_from_callable_prelude::CLOSURE_FACTORY_CLASS);
+        }
         ExprKind::IncludeValue { path, .. } => {
             usage.dynamic_code_load = true;
             usage.value_include = true;
@@ -592,6 +601,50 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             // Only the multi-array form of `array_map()` is lowered to its prelude helper, so
             // only that form pulls the helper (and its callable invokers) into the program.
             let bare = name.rsplit('\\').next().unwrap_or(&name);
+            // Every `exec()` call is lowered to
+            // its prelude helper, which strips trailing whitespace and fills the by-reference outputs.
+            if bare == "exec" {
+                record_name(usage, crate::exec_prelude::EXEC_FULL_NAME);
+            }
+            // The long forms of `fputcsv()` (`$escape`, `$eol`) and `fgetcsv()` (`$enclosure`,
+            // `$escape`) are lowered to their prelude helpers; the native runtimes know only the
+            // default dialect.
+            if bare == "fputcsv" {
+                record_name(usage, crate::csv_prelude::FPUTCSV_FULL_NAME);
+            }
+            if bare == "fgetcsv" && args.len() >= 4 {
+                record_name(usage, crate::csv_prelude::FGETCSV_FULL_NAME);
+            }
+            // Every `stream_select()` call is lowered to its prelude helper, which accepts null,
+            // hash and boxed arrays and keeps the ready entries' keys.
+            if bare == "stream_select" {
+                record_name(usage, crate::stream_select_prelude::STREAM_SELECT_NAME);
+            }
+            // A two-argument `count()` / `sizeof()` (an explicit `$mode`) may be routed to its
+            // nested-array helper; the decision needs the receiver's type.
+            if (bare == "count" || bare == "sizeof") && args.len() == 2 {
+                record_name(usage, crate::count_recursive_prelude::COUNT_RECURSIVE_NAME);
+            }
+            // A one-argument `min()` / `max()` may be routed to its gradual-operand helper; the
+            // decision needs the operand's type, so the helper is declared for every such call.
+            if (bare == "min" || bare == "max") && args.len() == 1 {
+                record_name(usage, crate::min_max_prelude::MIN_MAX_MIXED_NAME);
+            }
+            // A math builtin's `string` first argument may be routed through its conversion
+            // helper; the decision needs the operand's type.
+            if crate::numeric_string_arg_prelude::NUMERIC_ARG_BUILTINS.contains(&bare)
+                && !args.is_empty()
+            {
+                record_name(
+                    usage,
+                    crate::numeric_string_arg_prelude::NUMERIC_STRING_ARG_NAME,
+                );
+            }
+            // `array_fill_keys()` over gradual keys may be routed to its helper; the decision needs
+            // the keys' type.
+            if bare == "array_fill_keys" {
+                record_name(usage, crate::array_fill_keys_prelude::ARRAY_FILL_KEYS_MIXED_NAME);
+            }
             if bare == "array_map" && args.len() > 2 {
                 record_name(usage, crate::array_map_prelude::ARRAY_MAP_MULTI_NAME);
             }
@@ -609,9 +662,25 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             {
                 record_name(usage, crate::array_map_prelude::ARRAY_MAP_GRADUAL_NAME);
             }
+            // Only the `$syntax_only` / `$callable_name` forms are lowered to the extended helper
+            // (`compat_preludes::lower_is_callable_with_options`); the one-argument form stays on
+            // the backend predicate. Naming the helper for every `is_callable()` pulled it, and
+            // the dynamic-callable hazard in its body, into any program that merely
+            // contained one -- PDO's own prelude calls it -- so the forced backend-gap group kept
+            // every declaration alive.
+            if bare == "is_callable" && matches!(args.len(), 2 | 3) {
+                record_name(usage, crate::is_callable_prelude::IS_CALLABLE_EXT_NAME);
+            }
             if bare == "array_keys" && args.len() > 1 {
                 record_name(usage, crate::array_keys_prelude::ARRAY_KEYS_SEARCH_NAME);
             }
+            // The array builtins whose operands or flags php settles at run time lower to
+            // `crate::array_gradual_prelude`'s helpers, for these call shapes only.
+            crate::array_gradual_prelude::record_call_shape(
+                &mut |helper| record_name(usage, helper),
+                bare,
+                args,
+            );
             match name.as_str() {
                 "function_exists" | "is_callable" => {
                     if matches!(args.first().map(|arg| &arg.kind), Some(ExprKind::StringLiteral(_))) {
@@ -723,6 +792,13 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             for (key, value) in items {
                 scan_expr(key, usage);
                 scan_expr(value, usage);
+            }
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries {
+                for expr in entry.exprs() {
+                    scan_expr(expr, usage);
+                }
             }
         }
         ExprKind::Match {
@@ -838,8 +914,15 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         | ExprKind::PostIncrement(name)
         | ExprKind::PreDecrement(name)
         | ExprKind::PostDecrement(name) => record_variable_name(usage, name),
-        ExprKind::StringLiteral(_)
-        | ExprKind::IntLiteral(_)
+        // A variable holding the name (`$f = 'array_merge'; $f($a, $b)`) resolves to the builtin
+        // during lowering, which then routes keyed operands to this prelude's helpers; only the
+        // literal marks the program as needing them.
+        ExprKind::StringLiteral(value) => {
+            if value.eq_ignore_ascii_case("array_merge") {
+                record_name(usage, value);
+            }
+        }
+        ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null

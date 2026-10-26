@@ -132,7 +132,12 @@ fn lower_interface_static_method_call(
             ))
         })?
         .clone();
-    if inst.operands.len() != interface_signature.params.len() + 1 {
+    // The receiver operand plus the source arguments; a family member reading its surplus
+    // arguments gives the signature a hidden collector the call does not pass (see
+    // `materialize_static_method_call_args_with_refs`).
+    let omits_collector = inst.operands.len() == interface_signature.params.len()
+        && crate::func_args::sig_collects_surplus_args(&interface_signature);
+    if inst.operands.len() != interface_signature.params.len() + 1 && !omits_collector {
         return Err(CodegenIrError::unsupported(format!(
             "interface static method call to {}::{} with {} operands for {} ABI params",
             interface_name,
@@ -263,6 +268,14 @@ pub(super) fn resolve_interface_call_signature(
         })?
         .clone();
     let expected_args = callee_sig.params.len() + 1;
+    // An internal dispatcher (`__toString` for a string conversion) passes the source arity; the
+    // one missing parameter is the hidden collector `func_args::method_families` spreads over the
+    // family, which the argument materializer stages empty.
+    let omits_hidden_collector = operand_count + 1 == expected_args
+        && crate::func_args::sig_collects_surplus_args(&callee_sig);
+    if omits_hidden_collector {
+        return Ok((normalized.to_string(), method_key, callee_sig));
+    }
     let callee_sig = if operand_count == expected_args {
         callee_sig
     } else {
@@ -394,18 +407,11 @@ pub(super) fn lower_nullable_receiver_method_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    if let Some(slot) = target.dynamic_slot {
-        emit_dynamic_instance_method_call(ctx, slot);
-    } else {
-        abi::emit_call_label(
-            ctx.emitter,
-            &method_symbol(&target.impl_class, &target.method_key),
-        );
-    }
+    emit_resolved_method_call(ctx, &target)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &target)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -497,7 +503,7 @@ pub(super) fn lower_nullable_receiver_interface_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -510,7 +516,26 @@ pub(super) fn lower_nullable_receiver_interface_method_call(
 
 /// Emits PHP's fatal diagnostic for calling an instance method on null.
 pub(super) fn emit_method_call_on_null_fatal(ctx: &mut FunctionContext<'_>, method_name: &str) {
-    emit_aot_null_method_receiver_trace(ctx, method_name);
+    emit_method_call_on_null_error(ctx, method_name, true);
+}
+
+/// The null-method-call error, with the bridge trace optional so a caller that already traced
+/// (through the shared helper's combined raw-and-plain form) does not trace twice.
+pub(super) fn emit_method_call_on_null_error(
+    ctx: &mut FunctionContext<'_>,
+    method_name: &str,
+    trace: bool,
+) {
+    if trace
+        && !crate::codegen::shared_null_method_trace::emit_shared_null_method_trace(
+            ctx,
+            method_name,
+            None,
+        )
+        .unwrap_or(false)
+    {
+        emit_aot_null_method_receiver_trace(ctx, method_name);
+    }
     exceptions::emit_error(
         ctx,
         &format!("Call to a member function {}() on null", method_name),
@@ -535,7 +560,7 @@ fn emit_aot_null_method_receiver_trace(ctx: &mut FunctionContext<'_>, method_nam
     let line_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
     let line = ctx
         .current_instruction_span()
-        .map(|span| span.line as i64)
+        .map(|span| span.source_line() as i64)
         .unwrap_or_default();
     abi::emit_load_int_immediate(ctx.emitter, line_arg, line);
     let symbol = ctx

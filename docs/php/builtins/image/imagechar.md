@@ -1,8 +1,8 @@
 ---
 title: "imagechar()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Draws one character horizontally with a built-in font."
 sidebar:
-  order: 476
+  order: 477
 ---
 
 ## imagechar()
@@ -11,7 +11,7 @@ sidebar:
 function imagechar(mixed $image, int $font, int $x, int $y, string $char, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Draws one character horizontally with a built-in font.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -28,7 +28,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

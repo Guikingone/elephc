@@ -91,7 +91,22 @@ fn t_datetimezone() -> TypeExpr {
 /// `force` (set by `--with-tz`) bypasses the usage scan so the timezone surface
 /// is always injected, making it available even when auto-detection would not see
 /// the usage.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
+/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
+/// budget.
 pub fn inject_if_used(
+    program: Program,
+    force: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_on_compiler_stack(program, force, inventory)
+    })
+}
+
+/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_on_compiler_stack(
     program: Program,
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
@@ -103,6 +118,34 @@ pub fn inject_if_used(
     inventory.record_program("tz", &combined);
     combined.extend(program);
     combined
+}
+
+/// Injects the prelude AFTER `autoload::run` when only an autoloaded class file uses it.
+///
+/// The early injection sees the entry program and its includes, not the PSR-4 class files the
+/// autoloader splices later: Carbon's `CarbonTimeZone` calls `$this->listAbbreviations()`, the
+/// method was never declared on `DateTimeZone`, and the whole class went to the interpreter. The
+/// declarations are name-resolved on the way in, as `autoload::run` resolves the files it adds.
+pub fn inject_late_if_used(
+    program: Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Result<Program, crate::errors::CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        let already = program.iter().any(|stmt| {
+            matches!(
+                &stmt.kind,
+                crate::parser::ast::StmtKind::FunctionDecl { name, .. }
+                    if name.eq_ignore_ascii_case("timezone_location_get")
+            )
+        });
+        if already || !detect::program_uses_tz_introspection(&program) {
+            return Ok(program);
+        }
+        let mut combined = crate::name_resolver::resolve(tz_declarations())?;
+        inventory.record_program("tz", &combined);
+        combined.extend(program);
+        Ok(combined)
+    })
 }
 
 #[cfg(test)]

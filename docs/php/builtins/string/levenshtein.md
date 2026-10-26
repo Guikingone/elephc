@@ -2,7 +2,7 @@
 title: "levenshtein()"
 description: "Computes the Levenshtein edit distance between two strings."
 sidebar:
-  order: 835
+  order: 867
 ---
 
 ## levenshtein()
@@ -25,9 +25,9 @@ Computes the Levenshtein edit distance between two strings.
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected backend_gap prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/levenshtein.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/levenshtein.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/levenshtein.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/levenshtein.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

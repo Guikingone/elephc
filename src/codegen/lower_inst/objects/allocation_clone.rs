@@ -16,7 +16,7 @@ pub(super) fn emit_object_allocation(
     property_count: usize,
     allow_dynamic_properties: bool,
     uninitialized_marker_offsets: &[usize],
-    owned_reference_property_offsets: &[usize],
+    owned_reference_property_offsets: &[(usize, PhpType, bool)],
 ) -> Result<()> {
     let dynamic_properties_offset = dynamic_property_hash_offset(property_count);
     let dynamic_properties_bytes = if allow_dynamic_properties { 8 } else { 0 };
@@ -36,10 +36,10 @@ pub(super) fn emit_object_allocation(
             ctx.emitter
                 .instruction(&format!("mov rax, {}", payload_size)); // request object payload storage for the class id and property slots
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!(
+            ctx.emitter.instruction(&format!(                                   // materialize the x86_64 object heap kind word
                 "mov r10, 0x{:x}",
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-            ));                                                                 // materialize the x86_64 object heap kind word
+            ));
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the object payload
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the compile-time class id
@@ -63,13 +63,195 @@ pub(super) fn emit_object_allocation(
             abi::emit_store_to_address(ctx.emitter, marker_reg, object_reg, *offset);
         }
     }
-    for offset in owned_reference_property_offsets {
-        emit_owned_reference_property_cell(ctx, object_reg, *offset);
+    for (offset, php_type, starts_uninitialized) in owned_reference_property_offsets {
+        emit_owned_reference_property_cell(
+            ctx,
+            object_reg,
+            *offset,
+            php_type,
+            *starts_uninitialized,
+        );
     }
     if allow_dynamic_properties {
         emit_dynamic_property_hash_init(ctx, object_reg, dynamic_properties_offset);
     }
     Ok(())
+}
+
+/// The two image words a literal default writes into its slot, when the default needs no
+/// allocation and can therefore live in the class's static allocation template.
+fn template_slot_words(
+    ctx: &mut FunctionContext<'_>,
+    value: &LiteralDefaultValue,
+) -> Option<[crate::codegen_support::data_section::DataWord; 2]> {
+    use crate::codegen_support::data_section::DataWord;
+    Some(match value {
+        LiteralDefaultValue::Int(v) | LiteralDefaultValue::TaggedInt(v) => [DataWord::U64(*v as u64), DataWord::U64(0)],
+        LiteralDefaultValue::Bool(v) => [DataWord::U64(u64::from(*v)), DataWord::U64(0)],
+        LiteralDefaultValue::Float(v) => [DataWord::U64(v.to_bits()), DataWord::U64(0)],
+        LiteralDefaultValue::Null => [DataWord::U64(0), DataWord::U64(0)],
+        LiteralDefaultValue::NullSentinel => [DataWord::U64(RUNTIME_NULL_SENTINEL as u64), DataWord::U64(0)],
+        LiteralDefaultValue::TaggedNull => [
+            DataWord::U64(crate::codegen_support::sentinels::NULL_SENTINEL as u64),
+            DataWord::U64(crate::codegen_support::sentinels::TAGGED_SCALAR_TAG_NULL as u64),
+        ],
+        LiteralDefaultValue::Str(text) => {
+            let (label, len) = ctx.data.add_string(&crate::string_bytes::literal_bytes(text));
+            [DataWord::Symbol(label), DataWord::U64(len as u64)]
+        }
+        _ => return None,
+    })
+}
+
+/// Splits a class's literal defaults into the ones its allocation template carries and the rest.
+///
+/// The rest (arrays, enum cases, boxed values, the property-init thunk marker) allocate or run
+/// code, so they are assigned by the class's `_class_propinit_<id>` thunk instead.
+pub(super) fn partition_template_defaults(
+    ctx: &mut FunctionContext<'_>,
+    defaults: &[PropertyDefault],
+) -> (
+    Vec<(usize, [crate::codegen_support::data_section::DataWord; 2])>,
+    Vec<PropertyDefault>,
+) {
+    let mut folded = Vec::new();
+    let mut rest = Vec::new();
+    for default in defaults {
+        match template_slot_words(ctx, &default.value) {
+            Some(words) if !default.is_reference => folded.push((default.offset, words)),
+            _ => rest.push(default.clone()),
+        }
+    }
+    (folded, rest)
+}
+
+/// Allocates one instance of `class_name` and returns the property defaults still to assign.
+///
+/// A class with no per-object cells and no hidden ancestor slots is built from its static
+/// template by one shared routine (`__rt_object_new_template`), and whatever the template cannot
+/// hold is left to the class's `_class_propinit_<id>` thunk; the rest keep the inline sequence.
+/// Shared by the fixed-class `new` and every arm of the dynamic-new ladders: those arms used the
+/// inline sequence -- one store per slot and default, about 40 instructions per class per ladder
+/// -- in each of the dynamic-new helpers of a Symfony build.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn emit_class_instance_allocation(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    class_id: u64,
+    property_count: usize,
+    allow_dynamic_properties: bool,
+    uninitialized_marker_offsets: &[usize],
+    owned_reference_property_offsets: &[(usize, PhpType, bool)],
+    property_defaults: Vec<PropertyDefault>,
+) -> Result<Vec<PropertyDefault>> {
+    let has_hidden_slot = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .is_some_and(|info| (0..info.properties.len()).any(|index| info.property_slot_is_hidden(index)));
+    // A Throwable's payload slots (message, previous, trace) are initialized and released by the
+    // exception machinery in an order the inline sequence pins, so those classes keep it.
+    let throwable_like = super::super::is_throwable_like_class(ctx, class_name);
+    let from_template = owned_reference_property_offsets.is_empty()
+        && !has_hidden_slot
+        && std::env::var_os("ELEPHC_NO_OBJECT_TEMPLATE").is_none();
+    if std::env::var_os("ELEPHC_OP_STATS").is_some() && !from_template {
+        eprintln!(
+            "NEWFALLBACK {} owned_refs={} hidden={}",
+            class_name,
+            !owned_reference_property_offsets.is_empty(),
+            has_hidden_slot
+        );
+    }
+    if !from_template {
+        emit_object_allocation(
+            ctx,
+            class_id,
+            property_count,
+            allow_dynamic_properties,
+            uninitialized_marker_offsets,
+            owned_reference_property_offsets,
+        )?;
+        return Ok(property_defaults);
+    }
+    let (folded, rest) = partition_template_defaults(ctx, &property_defaults);
+    emit_object_allocation_from_template(
+        ctx,
+        class_id,
+        property_count,
+        allow_dynamic_properties,
+        uninitialized_marker_offsets,
+        &folded,
+    );
+    Ok(if rest.is_empty() {
+        Vec::new()
+    } else if throwable_like {
+        // A Throwable's payload defaults (the empty trace, the boxed null `previous`) are
+        // released by the exception machinery in the order the inline stores pin, so they
+        // stay inline; every other class hands its allocating defaults to the init thunk.
+        rest
+    } else {
+        vec![PropertyDefault {
+            offset: 0,
+            value: LiteralDefaultValue::InitThunk { class_id },
+            is_reference: false,
+        }]
+    })
+}
+
+/// Allocates and initializes an object with ONE call into `__rt_object_new_template`.
+///
+/// The template is the class's static image: class id, zeroed slots, typed-uninitialized markers
+/// and the literal defaults that need no allocation. The caller handles everything else.
+pub(super) fn emit_object_allocation_from_template(
+    ctx: &mut FunctionContext<'_>,
+    class_id: u64,
+    property_count: usize,
+    allow_dynamic_properties: bool,
+    uninitialized_marker_offsets: &[usize],
+    folded_defaults: &[(usize, [crate::codegen_support::data_section::DataWord; 2])],
+) {
+    let template = object_template_label(
+        ctx,
+        class_id,
+        property_count,
+        allow_dynamic_properties,
+        uninitialized_marker_offsets,
+        folded_defaults,
+    );
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), &template);
+    abi::emit_call_label(ctx.emitter, "__rt_object_new_template");
+    if allow_dynamic_properties {
+        let object_reg = abi::int_result_reg(ctx.emitter);
+        emit_dynamic_property_hash_init(ctx, object_reg, dynamic_property_hash_offset(property_count));
+    }
+}
+
+/// Builds (or finds) the static allocation template of a class and returns its data label.
+pub(super) fn object_template_label(
+    ctx: &mut FunctionContext<'_>,
+    class_id: u64,
+    property_count: usize,
+    allow_dynamic_properties: bool,
+    uninitialized_marker_offsets: &[usize],
+    folded_defaults: &[(usize, [crate::codegen_support::data_section::DataWord; 2])],
+) -> String {
+    use crate::codegen_support::data_section::DataWord;
+    // A class with a property hash keeps one more word after the slots; the template zeroes it
+    // and the site creates the hash.
+    let hash_bytes = if allow_dynamic_properties { 8 } else { 0 };
+    let payload_size = dynamic_property_hash_offset(property_count) + hash_bytes;
+    let mut words = vec![DataWord::U64(payload_size as u64), DataWord::U64(class_id)];
+    words.extend((0..(payload_size - 8) / 8).map(|_| DataWord::U64(0)));
+    // `words[1 + n]` is the payload word at byte offset `8 * n`.
+    for offset in uninitialized_marker_offsets {
+        words[1 + offset / 8] = DataWord::U64(UNINITIALIZED_TYPED_PROPERTY_SENTINEL as u64);
+    }
+    for (offset, pair) in folded_defaults {
+        words[1 + offset / 8] = pair[0].clone();
+        words[1 + offset / 8 + 1] = pair[1].clone();
+    }
+    ctx.data.add_words(words)
 }
 
 /// Allocates a zero-initialized 16-byte reference cell for an object-owned reference
@@ -80,13 +262,30 @@ pub(super) fn emit_owned_reference_property_cell(
     ctx: &mut FunctionContext<'_>,
     object_reg: &str,
     offset: usize,
+    php_type: &PhpType,
+    starts_uninitialized: bool,
 ) {
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let cell_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let cell_reg = if object_reg == abi::secondary_scratch_reg(ctx.emitter) {
+        abi::tertiary_scratch_reg(ctx.emitter)
+    } else {
+        abi::secondary_scratch_reg(ctx.emitter)
+    };
     abi::emit_push_reg(ctx.emitter, object_reg);
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, 16);                  // 16-byte ref cell: value at +0, tag/len at +8
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    abi::emit_store_zero_to_address(ctx.emitter, result_reg, 0);                // zero the cell value word
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0),
+        crate::codegen_support::runtime::reference_cells::payload_tag(php_type));
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
+    if starts_uninitialized {
+        let marker_reg = abi::tertiary_scratch_reg(ctx.emitter);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            marker_reg,
+            UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+        );
+        abi::emit_store_to_address(ctx.emitter, marker_reg, result_reg, 0);     // mark the owned reference payload as typed-uninitialized
+    } else {
+        abi::emit_store_zero_to_address(ctx.emitter, result_reg, 0);            // zero the cell value word
+    }
     abi::emit_store_zero_to_address(ctx.emitter, result_reg, 8);               // zero the cell tag/length word
     abi::emit_reg_move(ctx.emitter, cell_reg, result_reg);                      // preserve the cell pointer across the object restore
     abi::emit_pop_reg(ctx.emitter, object_reg);
@@ -139,8 +338,14 @@ pub(super) fn cloned_property_persist_offsets(class_info: &ClassInfo) -> Vec<usi
 }
 
 /// Returns true when a property slot's low word owns heap storage after a shallow copy.
+///
+/// A `callable` / `Closure` slot holds a refcounted descriptor too: object teardown releases it
+/// (`__rt_callable_descriptor_release`), so the clone needs its own share. Without one, Symfony's
+/// `ServiceLocator::withContext()` (`clone $this`) left the clone pointing at the factory closure
+/// the discarded original then freed, and every later `get()` jumped into freed memory.
 pub(super) fn property_clone_needs_retain(php_type: &PhpType) -> bool {
-    php_type.codegen_repr().is_refcounted()
+    let repr = php_type.codegen_repr();
+    repr.is_refcounted() || repr == PhpType::Callable || php_type.is_closure_object()
 }
 
 /// Copies declared 16-byte property slots and gives the clone its own heap-backed payloads.
@@ -151,11 +356,24 @@ pub(super) fn emit_clone_declared_property_slots(
     property_count: usize,
     retained_offsets: &[usize],
     persisted_offsets: &[usize],
+    owned_references: &[(usize, PhpType, bool)],
 ) {
     for index in 0..property_count {
         let offset = 8 + index * 16;
         emit_copy_property_slot(ctx, source_reg, dest_reg, offset);
-        if retained_offsets.contains(&offset) {
+        if owned_references
+            .iter()
+            .any(|(owned_offset, _, _)| *owned_offset == offset)
+        {
+            let result = abi::int_result_reg(ctx.emitter);
+            abi::emit_push_reg(ctx.emitter, source_reg);
+            abi::emit_push_reg(ctx.emitter, dest_reg);
+            abi::emit_load_from_address(ctx.emitter, result, dest_reg, offset);
+            abi::emit_call_label(ctx.emitter, "__rt_reference_cell_clone");
+            abi::emit_pop_reg(ctx.emitter, dest_reg);
+            abi::emit_pop_reg(ctx.emitter, source_reg);
+            abi::emit_store_to_address(ctx.emitter, result, dest_reg, offset);
+        } else if retained_offsets.contains(&offset) {
             emit_retain_cloned_property_pointer(ctx, source_reg, dest_reg, offset);
         }
         if persisted_offsets.contains(&offset) {

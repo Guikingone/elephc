@@ -1,8 +1,8 @@
 ---
 title: "mysqli_init()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Creates an unconnected mysqli object for mysqli_real_connect()."
 sidebar:
-  order: 149
+  order: 150
 ---
 
 ## mysqli_init()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_init(): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Creates an unconnected mysqli object for mysqli_real_connect().
 
 **Parameters**: none.
 
@@ -22,7 +22,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

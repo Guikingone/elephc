@@ -1,8 +1,8 @@
 ---
 title: "mysqli_stmt_close()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Closes a prepared statement and frees its resources."
 sidebar:
-  order: 174
+  order: 175
 ---
 
 ## mysqli_stmt_close()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stmt_close(mixed $statement): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Closes a prepared statement and frees its resources.
 
 **Parameters**:
 - `$statement` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

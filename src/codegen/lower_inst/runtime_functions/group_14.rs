@@ -113,6 +113,9 @@ pub(super) fn lower(
         RuntimeFnId::CurlOptionKind => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_option_kind(ctx, inst)
         }),
+        RuntimeFnId::ElephcInternalWarning => Some({
+            crate::codegen::lower_inst::builtins::internal_warning::lower_elephc_internal_warning(ctx, inst)
+        }),
         RuntimeFnId::CurlSetoptUnsupportedWarning => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_setopt_unsupported_warning(
                 ctx, inst,

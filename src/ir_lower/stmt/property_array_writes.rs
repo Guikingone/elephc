@@ -9,6 +9,35 @@
 
 use super::*;
 
+/// Returns the one owner of a property container the write below mutates and stores back.
+///
+/// A Mixed property read is already an owning temporary (codegen retains the box it returns),
+/// and acquiring it again gave the write TWO owners while the cleanup after the store releases
+/// one: `$this->data[$k] = $v` on an untyped property left the box one reference high per write,
+/// so the whole array outlived its object. A borrowed read (a typed container slot) is acquired.
+fn own_property_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    property_value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if ctx.value_is_owning_temporary(property_value) {
+        return property_value;
+    }
+    crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span))
+}
+
+/// Releases the receiver of a property element write once the write is done.
+///
+/// A chained receiver (`$ast->selectClause->selectExpressions[$k] = $v`) is a property read the
+/// lowering acquired, and none of the write paths gave that reference back: the intermediate
+/// object -- and everything it held -- outlived its owner by one per write. A borrowed receiver
+/// (`$this`, a local) is not an owning temporary and is left alone.
+fn release_property_write_receiver(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, span: Span) {
+    if ctx.value_is_owning_temporary(object) {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+    }
+}
+
 /// Lowers `$object->prop[] = value`.
 pub(super) fn lower_property_array_push(
     ctx: &mut LoweringContext<'_, '_>,
@@ -18,6 +47,48 @@ pub(super) fn lower_property_array_push(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    let object = interface_receiver_as_generic_object(ctx, object, span);
+    lower_property_array_push_on(ctx, object, property, value, span);
+    release_property_write_receiver(ctx, object, span);
+}
+
+/// Retypes a receiver known only by an interface as a plain object: an interface declares no
+/// property, so a write through it (`$metadata->table['indexes'] = []` over Doctrine's
+/// `Persistence\Mapping\ClassMetadata`) takes the run-time resolved path an untyped object takes.
+fn interface_receiver_as_generic_object(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object.value) else {
+        return object;
+    };
+    let name = class_name.trim_start_matches('\\');
+    if name.is_empty() || ctx.classes.contains_key(name) || !ctx.interfaces.contains_key(name) {
+        return object;
+    }
+    ctx.emit_value(
+        Op::Move,
+        vec![object.value],
+        None,
+        PhpType::Object(String::new()),
+        Op::Move.default_effects(),
+        Some(span),
+    )
+}
+
+/// Lowers `$object->prop[] = value` on an already lowered receiver.
+fn lower_property_array_push_on(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    value: &Expr,
+    span: Span,
+) {
+    if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
+        lower_php_array_property_write(ctx, object, property, None, value, span, false);
+        return;
+    }
     let initialize_uninitialized = is_concrete_object_receiver(ctx, object.value);
     if let Some(property_ty) = generic_object_array_property_type(ctx, object.value, property) {
         initialize_uninitialized_array_property_for_write(
@@ -42,6 +113,9 @@ pub(super) fn lower_property_array_push(
         // mode is on -- `unset($this->p[$id])` and `$this->p[$id] = true` on the same property
         // as the `empty()` above are what still stopped the Symfony request once the operand
         // form was fixed.
+        // The value is evaluated BEFORE the container is fetched (PHP's delayed dim fetch), so
+        // a right-hand side that writes this same property is not lost to a stale copy.
+        let value = lower_expr(ctx, value);
         crate::ir_lower::expr::emit_quiet_property_fetch(ctx, true, span);
         let property_value = ctx.emit_value(
             Op::PropGet,
@@ -53,8 +127,7 @@ pub(super) fn lower_property_array_push(
         );
         crate::ir_lower::expr::emit_quiet_property_fetch(ctx, false, span);
         let property_value =
-            crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
-        let value = lower_expr(ctx, value);
+            own_property_container(ctx, property_value, span);
         ctx.emit_void(
             Op::ArrayPush,
             vec![property_value.value, value.value],
@@ -91,6 +164,9 @@ pub(super) fn lower_property_array_push(
         // mode is on -- `unset($this->p[$id])` and `$this->p[$id] = true` on the same property
         // as the `empty()` above are what still stopped the Symfony request once the operand
         // form was fixed.
+        // The value is evaluated BEFORE the container is fetched (PHP's delayed dim fetch), so
+        // a right-hand side that writes this same property is not lost to a stale copy.
+        let value = lower_expr(ctx, value);
         crate::ir_lower::expr::emit_quiet_property_fetch(ctx, true, span);
         let property_value = ctx.emit_value(
             Op::PropGet,
@@ -102,8 +178,7 @@ pub(super) fn lower_property_array_push(
         );
         crate::ir_lower::expr::emit_quiet_property_fetch(ctx, false, span);
         let property_value =
-            crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
-        let value = lower_expr(ctx, value);
+            own_property_container(ctx, property_value, span);
         ctx.emit_void(
             Op::RuntimeCall,
             vec![property_value.value, value.value],
@@ -129,7 +204,12 @@ pub(super) fn lower_property_array_push(
     }
 
     if let Some(property_ty) = generic_object_array_property_type(ctx, object.value, property)
-        .filter(|ty| property_type_uses_mixed_array_storage(ty))
+        .filter(|ty| {
+            // A nullable ArrayAccess object (`?ArrayObject`, `?WeakMap`) boxes like a Mixed
+            // property, but appending to it is `offsetSet(null, $v)` on the OBJECT; the Mixed
+            // array append wrote into a detached copy and the push vanished.
+            property_type_uses_mixed_array_storage(ty) && !type_satisfies_array_access_for_ir(ctx, ty)
+        })
     {
         let data = ctx.intern_string(property);
         // The CONTAINER of an indexed write or unset is fetched quietly, the same as the
@@ -140,6 +220,7 @@ pub(super) fn lower_property_array_push(
         // mode is on -- `unset($this->p[$id])` and `$this->p[$id] = true` on the same property
         // as the `empty()` above are what still stopped the Symfony request once the operand
         // form was fixed.
+        let value = lower_expr(ctx, value);
         crate::ir_lower::expr::emit_quiet_property_fetch(ctx, true, span);
         let property_value = ctx.emit_value(
             Op::PropGet,
@@ -150,7 +231,6 @@ pub(super) fn lower_property_array_push(
             Some(span),
         );
         crate::ir_lower::expr::emit_quiet_property_fetch(ctx, false, span);
-        let value = lower_expr(ctx, value);
         ctx.emit_void(
             Op::MixedArrayAppend,
             vec![property_value.value, value.value],
@@ -172,6 +252,11 @@ pub(super) fn lower_property_array_push(
                 property_value,
                 span,
             );
+        } else if ctx.value_is_owning_temporary(property_value) {
+            // The append mutated the property's own box through this read, which owns one
+            // reference to it (a Mixed property read retains); without the release every
+            // `$this->items[] = $v` left the array one reference high and it outlived its object.
+            crate::ir_lower::ownership::release_if_owned(ctx, property_value, Some(span));
         }
         return;
     }
@@ -180,6 +265,7 @@ pub(super) fn lower_property_array_push(
         .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
     {
         let data = ctx.intern_string(property);
+        let value = lower_expr(ctx, value);
         let property_value = ctx.emit_value(
             Op::PropGet,
             vec![object.value],
@@ -188,15 +274,34 @@ pub(super) fn lower_property_array_push(
             Op::PropGet.default_effects(),
             Some(span),
         );
-        let value = lower_expr(ctx, value);
+        // A nullable receiver is a boxed `?Class`; the push dispatch keys on the class itself.
         let receiver_ty = ctx.builder.value_php_type(property_value.value);
-        let operands = super::array_write_storage::object_push_operands(
-            ctx,
-            &receiver_ty,
-            property_value,
-            value,
-            span,
-        );
+        let operands = if matches!(receiver_ty, PhpType::Union(_) | PhpType::Mixed) {
+            // The class is only known at run time, so the native `append()` shortcut the typed
+            // form takes is unavailable: dispatch the generic `offsetSet(null, $v)`.
+            let null_key = ctx
+                .builder
+                .emit_with_effects(
+                    Op::ConstNull,
+                    Vec::new(),
+                    None,
+                    IrType::I64,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                    Op::ConstNull.default_effects(),
+                    Some(span),
+                )
+                .expect("const_null produces a value");
+            vec![property_value.value, null_key, value.value]
+        } else {
+            super::array_write_storage::object_push_operands(
+                ctx,
+                &receiver_ty,
+                property_value,
+                value,
+                span,
+            )
+        };
         ctx.emit_void(
             Op::RuntimeCall,
             operands,
@@ -204,6 +309,11 @@ pub(super) fn lower_property_array_push(
             effects_lookup::runtime_effects(),
             Some(span),
         );
+        // `offsetSet()`/`append()` borrow the receiver and the value, as in the indexed write.
+        if ctx.value_is_owning_temporary(property_value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, property_value, Some(span));
+        }
+        super::array_write_core::release_object_offset_set_operand(ctx, value, span);
         return;
     }
 
@@ -245,6 +355,9 @@ fn property_type_uses_mixed_array_storage(property_ty: &PhpType) -> bool {
 }
 
 /// Lowers `$object->prop[index] = value`.
+///
+/// A desugared `??=` becomes a probe plus a conditional insert, and a desugared compound update
+/// writes with the key its own read already converted (see `ElementUpdate`).
 pub(super) fn lower_property_array_assign(
     ctx: &mut LoweringContext<'_, '_>,
     object: &Expr,
@@ -253,7 +366,140 @@ pub(super) fn lower_property_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    let update = desugared_element_update(value, span, |read| {
+        reads_property_array_element(read, object, property, index)
+    });
+    if let Some(ElementUpdate::NullCoalesce { read, default }) = update {
+        crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
+        return;
+    }
+    if lower_string_property_offset_write(ctx, object, property, index, value, span) {
+        return;
+    }
+    lower_property_array_assign_with_diagnosed_key(
+        ctx,
+        object,
+        property,
+        index,
+        value,
+        span,
+        update.is_some(),
+    );
+}
+
+/// Lowers `$this->types[$i] = 'i'` on a `string` property as php's byte-offset write: the string
+/// is read into a hidden local, written through the local string-offset path, and stored back.
+///
+/// Only a receiver that is evaluated without effects (`$this`, a variable) is replayed; returns
+/// `false`, leaving the generic lowering, for any other shape or property type.
+fn lower_string_property_offset_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+) -> bool {
+    if !matches!(object.kind, ExprKind::This | ExprKind::Variable(_)) {
+        return false;
+    }
+    let property_ty =
+        crate::ir_lower::expr::property_access_expr_type_for_ir(ctx, object, property);
+    if property_ty.map(|ty| ty.codegen_repr()) != Some(PhpType::Str) {
+        return false;
+    }
+    let temp = ctx.declare_synthetic_php_local(PhpType::Str);
+    let property_read = Expr::new(
+        ExprKind::PropertyAccess { object: Box::new(object.clone()), property: property.to_string() },
+        span,
+    );
+    let statements = [
+        StmtKind::Assign { name: temp.clone(), value: property_read },
+        StmtKind::ArrayAssign { array: temp.clone(), index: index.clone(), value: value.clone() },
+        StmtKind::PropertyAssign {
+            object: Box::new(object.clone()),
+            property: property.to_string(),
+            value: Expr::new(ExprKind::Variable(temp), span),
+        },
+    ];
+    for kind in statements {
+        crate::ir_lower::stmt::lower_stmt(ctx, &crate::parser::ast::Stmt::new(kind, span));
+        if ctx.builder.insertion_block_is_terminated() {
+            break;
+        }
+    }
+    true
+}
+
+/// Returns whether `read` is the element `$object->property[index]` a statement writes.
+fn reads_property_array_element(read: &Expr, object: &Expr, property: &str, index: &Expr) -> bool {
+    matches!(
+        &read.kind,
+        ExprKind::ArrayAccess { array, index: read_index }
+            if read_index.as_ref() == index
+                && matches!(
+                    &array.kind,
+                    ExprKind::PropertyAccess { object: read_object, property: read_property }
+                        if read_object.as_ref() == object && read_property == property
+                )
+    )
+}
+
+/// Lowers `$object->prop[index] = value`, optionally reusing a float-key diagnosis.
+///
+/// `key_already_diagnosed` marks the write half of a compound update: its read of the same
+/// element already reported the float key's conversion, as PHP does once per update. An
+/// `ArrayAccess` property receives the key unconverted, and a runtime-typed receiver keeps its
+/// own conversion, so neither consults the flag.
+pub(crate) fn lower_property_array_assign_with_diagnosed_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
     let object = lower_expr(ctx, object);
+    let object = interface_receiver_as_generic_object(ctx, object, span);
+    if lower_nullable_receiver_property_array_assign(
+        ctx,
+        object,
+        property,
+        index,
+        value,
+        span,
+        key_already_diagnosed,
+    ) {
+        // That path releases the boxed receiver on both of its edges.
+        return;
+    }
+    lower_property_array_assign_on(ctx, object, property, index, value, span, key_already_diagnosed);
+    release_property_write_receiver(ctx, object, span);
+}
+
+/// Lowers `$object->prop[index] = value` on an already lowered, non-nullable receiver.
+fn lower_property_array_assign_on(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
+    if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
+        lower_php_array_property_write(
+            ctx,
+            object,
+            property,
+            Some(index),
+            value,
+            span,
+            key_already_diagnosed,
+        );
+        return;
+    }
     let initialize_uninitialized = is_concrete_object_receiver(ctx, object.value);
     if let Some(property_ty) = generic_object_array_property_type(ctx, object.value, property) {
         initialize_uninitialized_array_property_for_write(
@@ -278,6 +524,14 @@ pub(super) fn lower_property_array_assign(
         // mode is on -- `unset($this->p[$id])` and `$this->p[$id] = true` on the same property
         // as the `empty()` above are what still stopped the Symfony request once the operand
         // form was fixed.
+        // PHP reads a plain-variable index at STORE time, after the right-hand side, so
+        // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
+        // rule; sharing the helper is what keeps the two from answering differently for
+        // the same source line.
+        // Key and value are evaluated BEFORE the container is fetched (PHP's delayed dim
+        // fetch), so a right-hand side that writes this same property keeps its writes.
+        let (index, value) =
+            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
         crate::ir_lower::expr::emit_quiet_property_fetch(ctx, true, span);
         let property_value = ctx.emit_value(
             Op::PropGet,
@@ -289,13 +543,9 @@ pub(super) fn lower_property_array_assign(
         );
         crate::ir_lower::expr::emit_quiet_property_fetch(ctx, false, span);
         let property_value =
-            crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
-        // PHP reads a plain-variable index at STORE time, after the right-hand side, so
-        // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
-        // rule; sharing the helper is what keeps the two from answering differently for
-        // the same source line.
-        let (index, value) =
-            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
+            own_property_container(ctx, property_value, span);
+        let index =
+            coerce_array_key_to_int_at_span(ctx, index, Some(span), key_already_diagnosed);
         let value = coerce_indexed_array_set_value(ctx, &property_ty, value, Some(span));
         if index.ir_type == IrType::Str {
             let assoc_ty = promoted_assoc_array_type(
@@ -415,6 +665,14 @@ pub(super) fn lower_property_array_assign(
         // mode is on -- `unset($this->p[$id])` and `$this->p[$id] = true` on the same property
         // as the `empty()` above are what still stopped the Symfony request once the operand
         // form was fixed.
+        // PHP reads a plain-variable index at STORE time, after the right-hand side, so
+        // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
+        // rule; sharing the helper is what keeps the two from answering differently for
+        // the same source line.
+        // Key and value are evaluated BEFORE the container is fetched (PHP's delayed dim
+        // fetch), so a right-hand side that writes this same property keeps its writes.
+        let (index, value) =
+            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
         crate::ir_lower::expr::emit_quiet_property_fetch(ctx, true, span);
         let property_value = ctx.emit_value(
             Op::PropGet,
@@ -426,17 +684,11 @@ pub(super) fn lower_property_array_assign(
         );
         crate::ir_lower::expr::emit_quiet_property_fetch(ctx, false, span);
         let property_value =
-            crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
-        // PHP reads a plain-variable index at STORE time, after the right-hand side, so
-        // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
-        // rule; sharing the helper is what keeps the two from answering differently for
-        // the same source line.
-        let (index, value) =
-            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
+            own_property_container(ctx, property_value, span);
         ctx.emit_void(
             Op::HashSet,
             vec![property_value.value, index.value, value.value],
-            None,
+            key_already_diagnosed.then_some(Immediate::Bool(true)),
             Op::HashSet.default_effects(),
             Some(span),
         );
@@ -473,6 +725,12 @@ pub(super) fn lower_property_array_assign(
         .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
     {
         let data = ctx.intern_string(property);
+        // PHP reads a plain-variable index at STORE time, after the right-hand side, so
+        // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
+        // rule; sharing the helper is what keeps the two from answering differently for
+        // the same source line.
+        let (index, value) =
+            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
         let property_value = ctx.emit_value(
             Op::PropGet,
             vec![object.value],
@@ -481,12 +739,6 @@ pub(super) fn lower_property_array_assign(
             Op::PropGet.default_effects(),
             Some(span),
         );
-        // PHP reads a plain-variable index at STORE time, after the right-hand side, so
-        // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
-        // rule; sharing the helper is what keeps the two from answering differently for
-        // the same source line.
-        let (index, value) =
-            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
         ctx.emit_void(
             Op::RuntimeCall,
             vec![property_value.value, index.value, value.value],
@@ -494,6 +746,19 @@ pub(super) fn lower_property_array_assign(
             effects_lookup::runtime_effects(),
             Some(span),
         );
+        // `offsetSet()` borrows every operand: the receiver read (an OWNED unbox for a nullable
+        // or union-typed property such as `?WeakMap`), a non-string key and the value are all
+        // this write's to drop. Only the declared-object receiver was a plain borrow, so the
+        // others leaked the WeakMap's cell on every `$this->map[$k] = v`.
+        if ctx.value_is_owning_temporary(property_value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, property_value, Some(span));
+        }
+        if matches!(ctx.builder.value_php_type(index.value).codegen_repr(), PhpType::Str) {
+            release_persisted_string_operand(ctx, index, span);
+        } else {
+            super::array_write_core::release_object_offset_set_operand(ctx, index, span);
+        }
+        super::array_write_core::release_object_offset_set_operand(ctx, value, span);
         return;
     }
 
@@ -509,6 +774,12 @@ pub(super) fn lower_property_array_assign(
         // mode is on -- `unset($this->p[$id])` and `$this->p[$id] = true` on the same property
         // as the `empty()` above are what still stopped the Symfony request once the operand
         // form was fixed.
+        // Same store-time index rule as every other element write: share the helper so this
+        // path cannot answer differently for the same source line.
+        // Key and value are evaluated BEFORE the container is fetched (PHP's delayed dim
+        // fetch), so a right-hand side that writes this same property keeps its writes.
+        let (index, value) =
+            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
         crate::ir_lower::expr::emit_quiet_property_fetch(ctx, true, span);
         let property_value = ctx.emit_value(
             Op::PropGet,
@@ -520,11 +791,7 @@ pub(super) fn lower_property_array_assign(
         );
         crate::ir_lower::expr::emit_quiet_property_fetch(ctx, false, span);
         let property_value =
-            crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
-        // Same store-time index rule as every other element write: share the helper so this
-        // path cannot answer differently for the same source line.
-        let (index, value) =
-            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
+            own_property_container(ctx, property_value, span);
         ctx.emit_void(
             Op::RuntimeCall,
             vec![property_value.value, index.value, value.value],
@@ -577,6 +844,100 @@ pub(super) fn lower_property_array_assign(
 }
 
 /// Mutates one runtime-typed property through generic-object class-id dispatch and republishes it.
+/// Lowers `$o->p[$k] = $v` over a `?C` receiver: a null one throws php's `Attempt to modify
+/// property "p" on null`, any other is unboxed to `C` and written through the typed path.
+///
+/// doctrine/orm's `AbstractHydrator` writes `$this->rsm->newObject[$i]` through its
+/// `ResultSetMapping|null $rsm`. The boxed receiver otherwise took the generic Mixed write, which
+/// releases neither the receiver read nor the key and value (26 blocks per three writes).
+/// Returns false, emitting nothing, for any other receiver type.
+fn lower_nullable_receiver_property_array_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) -> bool {
+    let object_ty = ctx.builder.value_php_type(object.value);
+    let PhpType::Union(members) = &object_ty else {
+        return false;
+    };
+    let class_name = match members.as_slice() {
+        [PhpType::Object(name), PhpType::Void] | [PhpType::Void, PhpType::Object(name)] => {
+            name.clone()
+        }
+        _ => return false,
+    };
+    let narrowed_ty = PhpType::Object(class_name);
+    let null_block = ctx.builder.create_named_block("propwrite.null", Vec::new());
+    let write_block = ctx.builder.create_named_block("propwrite.non_null", Vec::new());
+    let merge = ctx.builder.create_named_block("propwrite.merge", Vec::new());
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![object.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: write_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+    crate::ir_lower::stmt::lower_throw_access_error_expr(
+        ctx,
+        &format!("Attempt to modify property \"{}\" on null", property),
+        span,
+    );
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(write_block);
+    // The unbox takes its own reference; parking it in a PHP local hands that reference to the
+    // slot, and the write below then sees an ordinary typed local receiver.
+    let narrowed = ctx.emit_value(
+        Op::MixedUnbox,
+        vec![object.value],
+        None,
+        narrowed_ty.clone(),
+        Op::MixedUnbox.default_effects(),
+        Some(span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+    let receiver_temp = ctx.declare_synthetic_php_local(narrowed_ty.clone());
+    ctx.store_local(&receiver_temp, narrowed, narrowed_ty.clone(), Some(span));
+    let receiver = Expr::new(ExprKind::Variable(receiver_temp.clone()), span);
+    lower_property_array_assign_with_diagnosed_key(
+        ctx,
+        &receiver,
+        property,
+        index,
+        value,
+        span,
+        key_already_diagnosed,
+    );
+    let slot = ctx.declare_local(&receiver_temp, narrowed_ty);
+    ctx.release_stored_local_value(&receiver_temp, slot, Some(span));
+    ctx.emit_void(
+        Op::UnsetLocal,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        Op::UnsetLocal.default_effects(),
+        Some(span),
+    );
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    true
+}
+
 fn lower_generic_object_mixed_property_array_write(
     ctx: &mut LoweringContext<'_, '_>,
     object: &LoweredValue,
@@ -585,6 +946,10 @@ fn lower_generic_object_mixed_property_array_write(
     value: &Expr,
     span: Span,
 ) {
+    // Key and value first, then the container: PHP's dim fetch for write is delayed past the
+    // right-hand side, so a call there that writes this same property keeps its writes.
+    let index = index.map(|index| lower_expr(ctx, index));
+    let value = lower_expr(ctx, value);
     let data = ctx.intern_string(property);
     let property_ty = PhpType::Mixed;
     let property_value = ctx.emit_value(
@@ -596,9 +961,7 @@ fn lower_generic_object_mixed_property_array_write(
         Some(span),
     );
     let property_value =
-        crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
-    let index = index.map(|index| lower_expr(ctx, index));
-    let value = lower_expr(ctx, value);
+        own_property_container(ctx, property_value, span);
     if let Some(index) = index {
         ctx.emit_void(
             Op::RuntimeCall,
@@ -668,7 +1031,7 @@ fn property_array_write_mutates_in_place(
 /// dim fetch for write is a delayed opline emitted after the right-hand side -- and what makes
 /// the borrowed read safe: `$this->services[$id] = $this->create($id)` may itself write
 /// `$this->services`, relocating the table, and a container read first would be left dangling.
-/// The `HashSet` carries `Immediate::Bool(true)`: its receiver is the property, the property's
+/// The `HashSet` carries `Immediate::InPlacePropertyWrite`: its receiver is the property, the property's
 /// own reference is the one the write consumes, and codegen publishes the result into the slot
 /// (`hashes::lower_hash_set`). No `PropSet` follows.
 fn lower_in_place_property_hash_set(
@@ -698,7 +1061,7 @@ fn lower_in_place_property_hash_set(
     ctx.emit_void(
         Op::HashSet,
         vec![property_value.value, index.value, value.value],
-        Some(Immediate::Bool(true)),
+        Some(Immediate::InPlacePropertyWrite),
         Op::HashSet.default_effects(),
         Some(span),
     );
@@ -730,7 +1093,12 @@ pub(super) fn initialize_uninitialized_array_property_for_write(
     // initializes — measured against `php -n` 8.5.6, which treats `array` and `?array`
     // identically here. The DECLARED type says which container to make; the representation
     // says whether it has to be boxed on the way into the slot.
-    let Some(container_ty) = auto_initialized_container_type(property_ty) else {
+    // The lowering type of `?array` is already `Mixed`; the declared union still names the
+    // array member to create.
+    let Some(container_ty) = auto_initialized_container_type(property_ty).or_else(|| {
+        declared_object_property_type(ctx, object, property)
+            .and_then(|declared| auto_initialized_container_type(&declared))
+    }) else {
         return;
     };
     let op = match container_ty.codegen_repr() {
@@ -879,8 +1247,91 @@ pub(super) fn is_concrete_object_receiver(
     )
 }
 
+/// Separates a declared PHP array property before mutating its packed-or-hash boxed payload.
+/// `PropGetForWrite` publishes the detached cell and returns a borrow owned by the property.
+/// `key_already_diagnosed` lets the boxed writer rebuild a float key its read already reported.
+fn lower_php_array_property_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    index: Option<&Expr>,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
+    // php evaluates the key and the assigned value BEFORE it fetches the property for write
+    // (`zend_delayed_compile_dim` delays the container fetch past the right-hand side). A
+    // right-hand side that writes the same property -- `$this->types[$n] = $this->resolve($n)`
+    // where `resolve()` recursively fills `$this->types`, as Symfony's
+    // `FormRegistry::getType()` does -- must see its writes kept: fetching the container first
+    // wrote the outer element into a stale, separated copy and lost the inner ones.
+    let (key, value) = match index {
+        Some(index) => {
+            let (index, value) = array_write_core::lower_write_key_and_value(ctx, index, value);
+            (Some(index), value)
+        }
+        None => (None, lower_expr(ctx, value)),
+    };
+    // php auto-initializes an UNINITIALIZED typed `array` property on an element write or
+    // append (`public array $a; $o->a['k'] = 1;`, `$this->items[$k] ??= ...`). Fetching it for
+    // write first raised "must not be accessed before initialization" instead.
+    if is_concrete_object_receiver(ctx, object.value) {
+        if let Some(property_ty) = object_property_type(ctx, object.value, property) {
+            initialize_uninitialized_array_property_for_write(
+                ctx,
+                object.value,
+                property,
+                &property_ty,
+                true,
+                span,
+            );
+        }
+    }
+    let data = ctx.intern_string(property);
+    let array = ctx.emit_value(
+        Op::PropGetForWrite,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        PhpType::php_array(),
+        Op::PropGetForWrite.default_effects(),
+        Some(span),
+    );
+    ctx.builder.set_value_ownership(array.value, Ownership::Borrowed);
+    let value = if let Some(index) = key {
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![array.value, index.value, value.value],
+            key_already_diagnosed.then_some(Immediate::Bool(true)),
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        release_persisted_string_operand(ctx, index, span);
+        value
+    } else {
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![array.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
+        // The append boxes a call's string by TAKING it over (`box_value_for_mixed_container`),
+        // so releasing it here freed what the array now holds: `$this->paths[] =
+        // rtrim($path, '/\\')` in Twig's `FilesystemLoader::addPath()` stored freed bytes, and
+        // no template was ever found. Only a string the box copied is still this write's.
+        if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Str {
+            release_string_copied_into_box(ctx, value, span);
+            return;
+        }
+        value
+    };
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+}
+
 /// Releases a temporary assigned into an object property after `PropSet` retains or boxes it.
-pub(super) fn release_property_assignment_source_after_retaining_store(
+pub(in crate::ir_lower) fn release_property_assignment_source_after_retaining_store(
     ctx: &mut LoweringContext<'_, '_>,
     property_ty: &PhpType,
     value: LoweredValue,
@@ -903,15 +1354,47 @@ pub(super) fn release_property_array_insert_value_after_retain(
     value: LoweredValue,
     span: Span,
 ) {
-    let Some(elem_ty) = indexed_property_array_element_type(property_ty) else {
-        return;
-    };
-    if matches!(elem_ty.codegen_repr(), PhpType::Mixed | PhpType::Callable) {
+    if !property_array_insert_retains_value(ctx, property_ty, value) {
         return;
     }
     if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
+}
+
+/// Returns true when the backend insert helper takes its own reference to the element value.
+///
+/// Three disciplines meet here, and only the first needs a release:
+///
+/// - **Indexed storage** (`__rt_array_set_*`, `__rt_array_push_*`): the value is incref'd into
+///   the slot unconditionally, so an owning temporary keeps a reference nobody consumes.
+/// - **Mixed-element indexed storage from a concrete value**: codegen boxes the value first,
+///   and the boxing path releases the box it made, so releasing here would double-free.
+/// - **Assoc storage** (`__rt_hash_set`): the value is only incref'd when it cannot hand over
+///   its own reference (`value_can_own_mixed_box_source`), so an owning temporary is moved in
+///   and the store consumes it.
+///
+/// A Mixed-element *indexed* array fed an already-boxed Mixed value therefore falls in the
+/// first group, not the second: nothing boxes, the incref still fires, and without the release
+/// every `$o->items[0] += 1` / `$o->items[] = f()` leaks one Mixed cell (issue #1041).
+fn property_array_insert_retains_value(
+    ctx: &LoweringContext<'_, '_>,
+    property_ty: &PhpType,
+    value: LoweredValue,
+) -> bool {
+    let Some(elem_ty) = indexed_property_array_element_type(property_ty) else {
+        return false;
+    };
+    if !matches!(elem_ty.codegen_repr(), PhpType::Mixed | PhpType::Callable) {
+        return true;
+    }
+    if !matches!(property_ty.codegen_repr(), PhpType::Array(_)) {
+        return false;
+    }
+    matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    )
 }
 
 /// Releases the loaded property value after rewriting it through a retaining `PropSet`.
@@ -938,7 +1421,8 @@ pub(super) fn property_store_keeps_independent_ref(property_ty: &PhpType, value_
     {
         return true;
     }
-    if matches!(property_ty, PhpType::Str) {
+    // Callable slots retain through the descriptor ABI, outside is_refcounted().
+    if matches!(property_ty, PhpType::Str | PhpType::Callable) {
         return true;
     }
     property_ty.is_refcounted()

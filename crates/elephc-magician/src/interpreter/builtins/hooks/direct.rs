@@ -50,6 +50,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Bcmath,
     /// Dispatches `base64_decode(...)`.
     Base64Decode,
+    /// Dispatches `highlight_string(...)` and `highlight_file(...)`.
+    Highlight,
     /// Dispatches `base64_encode(...)`.
     Base64Encode,
     /// Dispatches `bin2hex(...)`.
@@ -64,10 +66,6 @@ pub(in crate::interpreter) enum EvalDirectHook {
     SubstrCompare,
     /// Dispatches `substr_count(...)`.
     SubstrCount,
-    /// Dispatches `strncmp(...)`.
-    StringCompareN,
-    /// Dispatches `strncasecmp(...)`.
-    StringCompareNCase,
     /// Dispatches `get_debug_type(...)`.
     GetDebugType,
     /// Dispatches `parse_str(...)`.
@@ -78,6 +76,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     AddCSlashes,
     /// Dispatches `version_compare(...)`.
     VersionCompare,
+    /// Dispatches `strtok(...)`.
+    Strtok,
     /// Dispatches `hash_pbkdf2(...)`.
     HashPbkdf2,
     /// Dispatches the `password_*` API.
@@ -86,7 +86,7 @@ pub(in crate::interpreter) enum EvalDirectHook {
     ArrayChangeKeyCase,
     /// Dispatches `clamp(...)`.
     Clamp,
-    /// Dispatches `count(...)`.
+    /// Dispatches `count(...)` and `sizeof(...)`.
     Count,
     /// Dispatches core callable, constant, process-control, and debug-output builtins.
     Core,
@@ -141,6 +141,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Intval,
     /// Dispatches `is_bool(...)`.
     IsBool,
+    /// Dispatches `is_countable(...)`.
+    IsCountable,
     /// Dispatches `is_double(...)`.
     IsDouble,
     /// Dispatches `is_finite(...)`.
@@ -245,8 +247,6 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Round,
     /// Dispatches `range(...)`.
     Range,
-    /// Dispatches `mb_ereg_match(...)`.
-    MbEregMatch,
     /// Dispatches `preg_filter(...)`.
     PregFilter,
     /// Dispatches `preg_grep(...)`.
@@ -311,7 +311,7 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Sinh,
     /// Dispatches string ASCII case-conversion builtins.
     StringCase,
-    /// Dispatches string comparison builtins.
+    /// Dispatches byte-string comparisons with and without a length limit.
     StringCompare,
     /// Dispatches string position builtins.
     StringPosition,
@@ -409,6 +409,11 @@ impl EvalDirectHook {
             Self::Setlocale => eval_builtin_setlocale(args, context, scope, values),
             Self::Bcmath => eval_builtin_bcmath_call(name, args, context, scope, values),
             Self::Base64Decode => eval_builtin_base64_decode(args, context, scope, values),
+            Self::Highlight => match name {
+                "highlight_file" => eval_builtin_highlight_file(args, context, scope, values),
+                "highlight_string" => eval_builtin_highlight_string(args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Base64Encode => eval_builtin_base64_encode(args, context, scope, values),
             Self::Bin2Hex => eval_builtin_bin2hex(args, context, scope, values),
             Self::Unpack => eval_builtin_unpack(args, context, scope, values),
@@ -416,13 +421,12 @@ impl EvalDirectHook {
             Self::ChunkSplit => eval_builtin_chunk_split(args, context, scope, values),
             Self::SubstrCompare => eval_builtin_substr_compare(args, context, scope, values),
             Self::SubstrCount => eval_builtin_substr_count(args, context, scope, values),
-            Self::StringCompareN => eval_builtin_strncmp(args, context, scope, values),
-            Self::StringCompareNCase => eval_builtin_strncasecmp(args, context, scope, values),
             Self::GetDebugType => eval_builtin_get_debug_type(args, context, scope, values),
             Self::ParseStr => eval_builtin_parse_str_direct(args, context, scope, values),
             Self::Levenshtein => eval_builtin_levenshtein(args, context, scope, values),
             Self::AddCSlashes => eval_builtin_addcslashes(args, context, scope, values),
             Self::VersionCompare => eval_builtin_version_compare(args, context, scope, values),
+            Self::Strtok => eval_builtin_strtok(args, context, scope, values),
             Self::HashPbkdf2 => eval_builtin_hash_pbkdf2(args, context, scope, values),
             Self::PasswordApi => eval_builtin_password_api(name, args, context, scope, values),
             Self::ArrayChangeKeyCase => {
@@ -452,6 +456,7 @@ impl EvalDirectHook {
             Self::Hypot => eval_builtin_hypot(args, context, scope, values),
             Self::Intval => eval_builtin_intval(args, context, scope, values),
             Self::IsBool => eval_builtin_is_bool(args, context, scope, values),
+            Self::IsCountable => eval_builtin_is_countable(args, context, scope, values),
             Self::IsDouble => eval_builtin_is_double(args, context, scope, values),
             Self::IsFinite => eval_builtin_is_finite(args, context, scope, values),
             Self::IsFloat => eval_builtin_is_float(args, context, scope, values),
@@ -534,7 +539,6 @@ impl EvalDirectHook {
             Self::Rand => eval_builtin_rand(args, context, scope, values),
             Self::RandomInt => eval_builtin_random_int(args, context, scope, values),
             Self::Round => eval_builtin_round(args, context, scope, values),
-            Self::MbEregMatch => eval_builtin_mb_ereg_match(args, context, scope, values),
             Self::PregFilter => eval_builtin_preg_filter(args, context, scope, values),
             Self::PregGrep => eval_builtin_preg_grep(args, context, scope, values),
             Self::PregReplaceCallbackArray => {
@@ -586,6 +590,8 @@ impl EvalDirectHook {
             Self::StringCompare => match name {
                 "strcasecmp" => eval_builtin_strcasecmp(args, context, scope, values),
                 "strcmp" => eval_builtin_strcmp(args, context, scope, values),
+                "strncasecmp" => eval_builtin_strncasecmp(args, context, scope, values),
+                "strncmp" => eval_builtin_strncmp(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::StringPosition => match name {
@@ -634,7 +640,6 @@ impl EvalDirectHook {
             Self::StrWordCount => eval_builtin_str_word_count(args, context, scope, values),
             Self::Iconv => eval_builtin_iconv_call(name, args, context, scope, values),
             Self::Strlen => match name {
-                "mb_strlen" => eval_builtin_mb_strlen(args, context, scope, values),
                 "strlen" => eval_builtin_strlen(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },

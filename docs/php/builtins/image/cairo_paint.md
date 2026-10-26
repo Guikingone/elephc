@@ -1,8 +1,8 @@
 ---
 title: "cairo_paint()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Paints the current source over the whole clip region."
 sidebar:
-  order: 436
+  order: 437
 ---
 
 ## cairo_paint()
@@ -11,7 +11,7 @@ sidebar:
 function cairo_paint(mixed $context): void
 ```
 
-Implemented by the compiler-injected image prelude.
+Paints the current source over the whole clip region.
 
 **Parameters**:
 - `$context` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

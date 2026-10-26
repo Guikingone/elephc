@@ -58,10 +58,36 @@ pub(super) fn emit_shared_helper(
     comment: &str,
     body: impl FnOnce(&mut FunctionContext<'_>) -> Result<()>,
 ) -> Result<()> {
-    let function = helper_function(label, return_php_type);
+    emit_shared_helper_in_scope(
+        module, emitter, data, shared, regalloc_linear, label, return_php_type, None, comment, body,
+    )
+}
+
+/// [`emit_shared_helper`] for a body that resolves php visibility from `lexical_class`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn emit_shared_helper_in_scope(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    shared: &mut SharedCodegenState,
+    regalloc_linear: bool,
+    label: &str,
+    return_php_type: PhpType,
+    lexical_class: Option<&str>,
+    comment: &str,
+    body: impl FnOnce(&mut FunctionContext<'_>) -> Result<()>,
+) -> Result<()> {
+    let mut function = helper_function(label, return_php_type);
+    function.lexical_class = lexical_class.map(str::to_string);
     // Shared helpers own no cleanup-tracked locals, so an exception can skip
     // their synthetic frame and unwind through the caller's activation record.
-    let layout = frame::layout_for_function(&function, emitter.target, regalloc_linear, false);
+    let layout = frame::layout_for_function(
+        &function,
+        emitter.target,
+        regalloc_linear,
+        false,
+        false,
+    );
     let mut ctx = FunctionContext::new(
         module, &function, emitter, data, shared, layout, false, false, false, None,
     );
@@ -93,7 +119,7 @@ pub(super) fn emit_shared_object_helper(
     let function = object_helper_function(label, owner_class);
     // Shared helpers own no cleanup-tracked locals, so an exception can skip
     // their synthetic frame and unwind through the caller's activation record.
-    let layout = frame::layout_for_function(&function, emitter.target, false, false);
+    let layout = frame::layout_for_function(&function, emitter.target, false, false, false);
     let mut ctx = FunctionContext::new(
         module, &function, emitter, data, shared, layout, false, false, false, None,
     );
@@ -125,9 +151,10 @@ fn object_helper_function(label: &str, owner_class: &str) -> Function {
 }
 
 /// Builds the minimal EIR function a `FunctionContext` needs to exist.
-fn helper_function(label: &str, return_php_type: PhpType) -> Function {
+pub(super) fn helper_function(label: &str, return_php_type: PhpType) -> Function {
     let return_ir_type = match return_php_type {
         PhpType::Str => IrType::Str,
+        PhpType::Callable => IrType::I64,
         _ => IrType::Void,
     };
     let mut function = Function::new(label.to_string(), return_ir_type, return_php_type);

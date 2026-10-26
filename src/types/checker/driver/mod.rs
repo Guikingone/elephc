@@ -18,7 +18,7 @@ use crate::types::{traits::flatten_classes, TypeEnv};
 
 use super::builtin_class_gate::{
     program_may_reference_fiber, program_may_reference_generator, program_may_reference_user_filter,
-    throwables_to_register,
+    program_may_register_user_filter, throwables_to_register,
 };
 use super::builtin_types::{
     inject_builtin_date_period, inject_builtin_datetime, inject_builtin_reflection,
@@ -89,7 +89,7 @@ pub(super) fn check_types_impl(
     let trace = std::env::var("ELEPHC_TYPECHECK_TIMES").is_ok();
     let start = std::time::Instant::now();
     let mut mark = std::time::Instant::now();
-    let mut lap = |label: &str, mark: &mut std::time::Instant| {
+    let lap = |label: &str, mark: &mut std::time::Instant| {
         if trace {
             eprintln!(
                 "[elephc-typecheck] {label}={:.2}s",
@@ -99,6 +99,7 @@ pub(super) fn check_types_impl(
         *mark = std::time::Instant::now();
     };
     let mut checker = Checker::new(target);
+    checker.lint_warnings = options.lint;
     checker.strict_locals = options.strict_locals;
     // Program-wide and computed once, BEFORE any body is walked: the top-level `unset` that has to
     // consult it can sit textually above the `function w() { global $a; }` that makes the name
@@ -126,8 +127,10 @@ pub(super) fn check_types_impl(
         // is still an autoloader as far as the runtime is concerned: it reaches the interpreter's
         // SPL callback chain instead of the compile-time rule list. Both forms have to count.
         || program_usage.references("spl_autoload_register");
+    // A transparent literal fragment reaches builtins only and cannot call back into the
+    // program, so it does not widen anything; every other eval still does.
     checker.program_has_interpreted_callers =
-        checker.program_defers_unknown_classes || program_usage.references("eval");
+        checker.program_defers_unknown_classes || program_usage.opaque_eval;
     let mut errors = Vec::new();
 
     errors.extend(validate_yield_contexts(program));
@@ -136,6 +139,16 @@ pub(super) fn check_types_impl(
 
     let (mut flattened_classes, mut flattened_enums, flatten_errors) = flatten_classes(program);
     errors.extend(flatten_errors);
+    // A prelude parsed from PHP text gives its classes real spans, so the statement's source
+    // mode is what tells them apart from the program's own classes (`ClassInfo::is_internal`).
+    checker.internal_class_decls = program
+        .iter()
+        .filter(|stmt| stmt.source_mode == crate::source::SourceMode::Internal)
+        .filter_map(|stmt| match &stmt.kind {
+            StmtKind::ClassDecl { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
     // Resolve the relative class types `self`/`static`/`parent` in every member type annotation
     // now that inheritance and trait flattening have settled the concrete enclosing class. This
     // single pass feeds the schema signatures, the body-check pass, and codegen (which all read
@@ -283,6 +296,7 @@ pub(super) fn check_types_impl(
     }
     // PHP's only way to write a stream filter is a class extending this one, which spells the
     // name; `stream_filter_register` is consulted as well.
+    checker.user_filters_reachable = program_may_register_user_filter(program);
     if let Err(error) =
         inject_builtin_user_filter(&mut class_map, program_may_reference_user_filter(program))
     {
@@ -406,7 +420,9 @@ pub(super) fn check_types_impl(
                 constants,
                 enum_used_traits,
                 enum_trait_aliases,
+                &stmt.attributes,
                 stmt.span,
+                stmt.source_mode == crate::source::SourceMode::Internal,
                 &mut checker,
                 &mut next_class_id,
             ) {
@@ -414,6 +430,7 @@ pub(super) fn check_types_impl(
             }
         }
     }
+    checker.box_untyped_interface_method_params();
     report_class_id_inventory(&checker);
     errors.extend(validate_deferred_declaration_defaults(
         &mut checker,
@@ -441,6 +458,12 @@ pub(super) fn check_types_impl(
     patch_builtin_spl_storage_signatures(&mut checker);
     patch_magic_method_signatures(&mut checker);
 
+    // Property layout is an input to inferred returns, not a late EIR-only adjustment. Do this
+    // before the first free-function body is resolved so its callers see the same array ABI.
+    for class_info in checker.classes.values_mut() {
+        class_info.normalize_untyped_array_property_storage();
+    }
+
     checker.prescan_extern_decls(program, &mut errors);
 
     // Runs before ANY body is walked, and has to: a declared by-reference parameter the callee
@@ -457,6 +480,15 @@ pub(super) fn check_types_impl(
 
     checker.resolve_unchecked_functions(&mut errors);
     lap("unchecked_functions", &mut mark);
+    if checker.eval_native_callables_reachable {
+        if let Err(error) = checker.promote_eval_native_variadic_containers() {
+            errors.extend(error.flatten());
+        }
+    }
+    // After every function has a signature and every direct call has been seen, so the pass can
+    // tell a function the program only ever reaches dynamically from one a call site taught real
+    // parameter types to (issue #576).
+    checker.widen_dynamic_only_passthrough_returns();
     // Enum method bodies are not part of `flattened_classes` (enums are registered separately via
     // the enum schema pass), so they would otherwise skip body checking entirely. Flatten them
     // into method-checkable units here — their signatures already live in `checker.classes`.
@@ -464,10 +496,34 @@ pub(super) fn check_types_impl(
     methods_to_check.extend(flatten_enum_methods(program, &flattened_enums));
     lap("collect_method_units", &mut mark);
     checker.type_check_methods_until_stable(&methods_to_check, &mut errors)?;
+    // A free function is resolved at its first call, BEFORE any method body is checked, so a
+    // function returning a method's result (`function f(Fluent $f) { return $f->name; }` over
+    // `__get`) kept the method's placeholder `int` as its own return type and handed its caller
+    // a boxed pointer as an integer. Re-resolve those returns now that method types are settled,
+    // and recheck the methods when one moved.
+    // A map walk may visit every caller before its callee, so each round advances only one
+    // forwarding edge. Allow the full declaration chain instead of leaving longer chains on
+    // their scalar seeds after three rounds. Stable programs still exit as soon as nothing moves.
+    let return_round_limit = checker.fn_decls.len().saturating_add(1).max(3);
+    for _ in 0..return_round_limit {
+        if !checker.reinfer_undeclared_function_returns() {
+            break;
+        }
+        // Re-resolving narrows a return back to what its call-site parameter types imply, which
+        // undid the dynamic-only widening above: `function opt($b = null) { return $b; }` called
+        // as `opt()` and through `call_user_func('opt', "probe")` returned `Str`, and `opt()`
+        // printed `""` instead of `NULL`. Re-apply it before the methods see the new returns.
+        checker.widen_dynamic_only_passthrough_returns();
+        checker.type_check_methods_until_stable(&methods_to_check, &mut errors)?;
+    }
+    checker.recheck_foreach_warning_functions(&mut errors);
     lap("methods_until_stable", &mut mark);
     checker.publish_unspecialized_method_param_seeds();
     patch_builtin_spl_storage_signatures(&mut checker);
     apply_implicit_stringable_interfaces(&mut checker.classes);
+    // The implicit `Stringable` implementations just added change which classes satisfy an interface
+    // receiver, so no dispatch answer memoized before this point may be reused.
+    checker.subtype_dispatch_cache.borrow_mut().1.clear();
     lap("post_passes", &mut mark);
 
     let (final_global_env, final_top_level_errors) = checker.check_top_level_program(program);
@@ -528,6 +584,244 @@ fn report_class_id_inventory(checker: &Checker) {
 
 #[cfg(test)]
 mod tests {
+    fn foreach_warnings(source: &str) -> Vec<String> {
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        crate::types::checker::check_types(
+            &program,
+            crate::codegen_support::platform::Target::new(
+                crate::codegen_support::platform::Platform::MacOS,
+                crate::codegen_support::platform::Arch::AArch64,
+            ),
+        )
+        .expect("check")
+        .warnings
+        .into_iter()
+        .filter(|warning| warning.message.starts_with("foreach() argument"))
+        .map(|warning| warning.message)
+        .collect()
+    }
+
+    /// Declared void functions also need their loop diagnostics refreshed after methods settle.
+    #[test]
+    fn foreach_warning_uses_settled_forward_method_return() {
+        let warnings = foreach_warnings(r#"<?php
+class EntrySource {
+    private $entries = ['one', 'two'];
+    public function values() { return $this->entries; }
+}
+function walk(EntrySource $source): void {
+    $entries = $source->values();
+    foreach ($entries as $value) { echo $value; }
+}
+walk(new EntrySource());
+"#);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// Callable-array narrowing must not retain a diagnostic emitted against the method seed.
+    #[test]
+    fn foreach_warning_uses_settled_indirect_method_return() {
+        let warnings = foreach_warnings(r#"<?php
+class Registry {
+    private $entries = ['a' => ['one', 'two']];
+    public function getEntries() { return $this->entries; }
+    public function load($name) {}
+}
+function visit(array $callbacks): void {
+    foreach ($callbacks as $callback) {
+        if (is_array($callback) && $callback[0] instanceof Registry) {
+            foreach ($callback[0]->getEntries() as $prefix => $items) {
+                echo $prefix, ':', implode(',', $items);
+            }
+        }
+    }
+}
+visit([[new Registry(), 'load']]);
+"#);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// A nested closure has its own storage scope but must refresh with its enclosing function.
+    #[test]
+    fn foreach_warning_refreshes_nested_closure_subjects() {
+        let warnings = foreach_warnings(r#"<?php
+class EntrySource {
+    private $entries = ['one', 'two'];
+    public function values() { return $this->entries; }
+}
+function walk(EntrySource $source): void {
+    $visit = function () use ($source): void {
+        foreach ($source->values() as $value) { echo $value; }
+    };
+    $visit();
+}
+walk(new EntrySource());
+"#);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// The diagnostic refresh must follow free-function return reinference as well as methods.
+    #[test]
+    fn foreach_warning_uses_settled_free_function_wrapper() {
+        let warnings = foreach_warnings(r#"<?php
+class EntrySource {
+    private $entries = ['one', 'two'];
+    public function values() { return $this->entries; }
+}
+function entries(EntrySource $source) { return $source->values(); }
+function walk(EntrySource $source): void {
+    foreach (entries($source) as $value) { echo $value; }
+}
+walk(new EntrySource());
+"#);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// A long forwarding chain must settle even when the map walk visits callers first.
+    #[test]
+    fn foreach_warning_uses_settled_deep_function_chain() {
+        let mut source = String::from(r#"<?php
+class EntrySource {
+    private $entries = ['one', 'two'];
+    public function values() { return $this->entries; }
+}
+function entries0(EntrySource $source) { return $source->values(); }
+"#);
+        for index in 1..32 {
+            source.push_str(&format!(
+                "function entries{index}(EntrySource $source) {{ return entries{}($source); }}\n",
+                index - 1,
+            ));
+        }
+        source.push_str(r#"
+function walk(EntrySource $source): void {
+    foreach (entries31($source) as $value) { echo $value; }
+}
+walk(new EntrySource());
+"#);
+        let warnings = foreach_warnings(&source);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// Rewalking for diagnostics must not narrow a return widened for dynamic callers.
+    #[test]
+    fn foreach_warning_preserves_dynamic_return_widening() {
+        let tokens = crate::lexer::tokenize(r#"<?php
+class EntrySource {
+    private $entries = ['one', 'two'];
+    public function values() { return $this->entries; }
+}
+function opt($value = null) {
+    $source = new EntrySource();
+    foreach ($source->values() as $entry) { echo $entry; }
+    return $value;
+}
+opt();
+$callback = 'opt';
+call_user_func($callback, 'probe');
+"#).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        let result = crate::types::checker::check_types(
+            &program,
+            crate::codegen_support::platform::Target::new(
+                crate::codegen_support::platform::Platform::MacOS,
+                crate::codegen_support::platform::Arch::AArch64,
+            ),
+        ).expect("typecheck");
+        assert_eq!(result.functions["opt"].return_type, crate::types::PhpType::Mixed);
+        assert!(!result.warnings.iter().any(|warning| warning.message.starts_with("foreach() argument")));
+    }
+
+    /// Method rounds and both top-level walks replace their own provisional loop diagnostics.
+    #[test]
+    fn foreach_warning_uses_settled_method_and_top_level_subjects() {
+        let warnings = foreach_warnings(r#"<?php
+class Consumer {
+    public function walk(EntrySource $source): void {
+        foreach ($source->values() as $value) { echo $value; }
+    }
+}
+class EntrySource {
+    private $entries = ['one', 'two'];
+    public function values() { return $this->entries; }
+}
+$source = new EntrySource();
+foreach ($source->values() as $value) { echo $value; }
+(new Consumer())->walk($source);
+"#);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// Refreshing speculative diagnostics must keep real scalar loops, including uncalled bodies.
+    #[test]
+    fn foreach_warning_keeps_real_scalar_sites() {
+        let warnings = foreach_warnings(r#"<?php
+class ScalarSource { public function value() { return 42; } }
+function walk(ScalarSource $source): void {
+    foreach ($source->value() as $value) { echo $value; }
+}
+function uncalled(): void { foreach (false as $value) { echo $value; } }
+walk(new ScalarSource());
+foreach ('text' as $value) { echo $value; }
+"#);
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        for kind in ["int", "false", "string"] {
+            assert!(warnings.iter().any(|warning| warning.contains(&format!("{kind} given"))), "{warnings:?}");
+        }
+    }
+
+    /// Abstract enum method declarations retain their status in parallel class metadata.
+    #[test]
+    fn enum_metadata_records_abstract_instance_and_static_methods() {
+        use crate::codegen_support::platform::{Arch, Platform, Target};
+        use crate::parser::ast::{ClassMethod, Visibility};
+        use crate::span::Span;
+
+        let mut checker = super::Checker::new(Target::new(Platform::MacOS, Arch::AArch64));
+        let method = |name: &str, is_static: bool| ClassMethod {
+            name: name.to_string(),
+            visibility: Visibility::Public,
+            is_static,
+            is_abstract: true,
+            is_final: false,
+            has_body: false,
+            params: Vec::new(),
+            param_attributes: Vec::new(),
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            by_ref_return: false,
+            body: Vec::new(),
+            span: Span::dummy(),
+            attributes: Vec::new(),
+        };
+        let mut next_class_id = 1;
+        crate::types::checker::schema::insert_enum_metadata(
+            "State",
+            None,
+            Vec::new(),
+            &[],
+            &[method("instance", false), method("statik", true)],
+            &[],
+            &[],
+            &[],
+            Span::dummy(),
+            false,
+            &mut checker,
+            &mut next_class_id,
+        )
+        .expect("record enum metadata");
+        let class = checker.classes.get("State").expect("enum class metadata");
+        assert!(class.abstract_methods.contains("instance"));
+        assert!(class.abstract_static_methods.contains("statik"));
+        assert!(!class.method_impl_classes.contains_key("instance"));
+        assert!(!class.static_method_impl_classes.contains_key("statik"));
+        assert_eq!(class.method_declaring_classes.get("instance").map(String::as_str), Some("State"));
+        assert_eq!(class.static_method_declaring_classes.get("statik").map(String::as_str), Some("State"));
+    }
+
     /// Class ids must not depend on HashMap iteration order.
     ///
     /// THIS TEST CANNOT BE WRITTEN AS "check the same source twice and compare". Rust seeds its

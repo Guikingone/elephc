@@ -1,8 +1,8 @@
 ---
 title: "mysqli_set_opt()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Alias of mysqli_options()."
 sidebar:
-  order: 169
+  order: 170
 ---
 
 ## mysqli_set_opt()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_set_opt(mixed $mysql, int $option, mixed $value): bool
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Alias of mysqli_options().
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -25,7 +25,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

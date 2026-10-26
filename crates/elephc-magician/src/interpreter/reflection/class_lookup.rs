@@ -447,8 +447,12 @@ pub(super) fn eval_reflection_builtin_class_is_iterable(class_name: &str) -> boo
 /// which is the point of reusing it rather than growing a second one.
 pub(in crate::interpreter) fn eval_reflection_class_like_is_internal(class_name: &str) -> bool {
     let trimmed = class_name.trim_start_matches('\\');
-    elephc_builtin_contract::lookup_class(trimmed).is_some()
-        || trimmed.eq_ignore_ascii_case(UNCATALOGUED_INTERNAL_CLASS)
+    // A class php adds after the active profile (`SortDirection` is 8.6) is a user class here.
+    elephc_builtin_contract::lookup_class(trimmed).is_some_and(|class| {
+        class
+            .since
+            .is_none_or(|since| crate::eval_php_profile::eval_php_version_id() >= since.version_id())
+    }) || trimmed.eq_ignore_ascii_case(UNCATALOGUED_INTERNAL_CLASS)
 }
 
 /// The one compiler helper class reflection treats as internal without a catalog entry.
@@ -462,7 +466,7 @@ mod internal_class_tests {
     /// helper are internal, and the helper really has no catalog entry to fall back on.
     #[test]
     fn internal_predicate_follows_the_class_catalog() {
-        for name in ["Iterator", "\\Exception", "ReflectionClass", "Fiber", "SortDirection", "PDO"] {
+        for name in ["Iterator", "\\Exception", "ReflectionClass", "Fiber", "PDO"] {
             assert!(eval_reflection_class_like_is_internal(name), "{name}");
         }
         assert!(eval_reflection_class_like_is_internal(UNCATALOGUED_INTERNAL_CLASS));
@@ -754,12 +758,7 @@ pub(super) fn eval_throw_reflection_exception(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let exception = values.new_object("ReflectionException")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("ReflectionException", message, 0, context, values)
 }
 
 /// Creates a catchable `ValueError` and propagates it through eval throw state.
@@ -768,12 +767,7 @@ pub(super) fn eval_throw_value_error(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("ValueError", message, 0, context, values)
 }
 
 /// Creates a catchable `TypeError` and propagates it through eval throw state.
@@ -782,12 +776,7 @@ pub(super) fn eval_throw_type_error(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let exception = values.new_object("TypeError")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("TypeError", message, 0, context, values)
 }
 
 /// Returns PHP's type name spelling used in argument type error messages.

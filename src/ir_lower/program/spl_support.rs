@@ -12,6 +12,11 @@ use super::*;
 /// Returns true for builtin SPL methods intentionally lowered into EIR today.
 pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str) -> bool {
     match class_name {
+        // `__toString()` and `getTraceAsString()` have real bodies that call the
+        // `throwable_string_prelude` renderers; emitting them fills the vtable slots.
+        "Error" | "Exception" => {
+            matches!(method_key, "__construct" | "__tostring" | "gettraceasstring")
+        }
         "SplFileInfo" => matches!(
             method_key,
             "__construct"
@@ -147,6 +152,11 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "offsetunset"
                 | "append"
                 | "getarraycopy"
+                | "exchangearray"
+                | "getflags"
+                | "setflags"
+                | "__serialize"
+                | "__unserialize"
         ),
         "SplFixedArray" => matches!(
             method_key,
@@ -306,6 +316,7 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "getsignature"
                 | "setzippassword"
                 | "delete"
+                | "running"
         ),
         "PharFileInfo" => matches!(
             method_key,
@@ -351,7 +362,13 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
         "NoRewindIterator" => matches!(method_key, "__construct" | "rewind"),
         "InfiniteIterator" => matches!(method_key, "__construct" | "next"),
         "FilterIterator" => matches!(method_key, "__construct" | "rewind" | "next"),
-        "CallbackFilterIterator" => matches!(method_key, "accept" | "__elephcsetcallbackenv"),
+        // `new CallbackFilterIterator` in compiled code is built inline, but the interpreter
+        // constructs through the class's `__construct` bridge, which needs an emitted body:
+        // without it `new \CallbackFilterIterator(...)` in an included or eval'd file was a
+        // fatal (Twig's `filter` filter over a Traversable).
+        "CallbackFilterIterator" => {
+            matches!(method_key, "__construct" | "accept" | "__elephcsetcallbackenv")
+        }
         "CachingIterator" => matches!(
             method_key,
             "__construct"

@@ -1,16 +1,16 @@
 ---
-title: "stream_get_wrappers() — internals"
+title: "stream_get_wrappers() - internals"
 description: "Compiler internals for stream_get_wrappers(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 388
+  order: 389
 ---
 
-## `stream_get_wrappers()` — internals
+## `stream_get_wrappers()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_get_wrappers.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_get_wrappers.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

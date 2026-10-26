@@ -9,7 +9,6 @@
 //! - Inference must preserve PHP evaluation errors and avoid treating effectful expressions as pure type facts.
 
 use crate::errors::CompileError;
-use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{PhpType, TypeEnv};
@@ -18,6 +17,7 @@ mod basic;
 mod class_refs;
 pub(in crate::types::checker) mod effects;
 mod calls_objects;
+mod null_coalesce;
 mod static_closure;
 use super::super::Checker;
 use super::syntactic::null_coalesce_merge_type;
@@ -51,6 +51,7 @@ impl Checker {
             | ExprKind::PostIncrement(_)
             | ExprKind::PostDecrement(_)
             | ExprKind::ArrayLiteralAssoc(_)
+            | ExprKind::ArrayLiteralMixed(_)
             | ExprKind::Match { .. }
             | ExprKind::ArrayLiteral(_)
             | ExprKind::ArrayAccess { .. }
@@ -132,22 +133,17 @@ impl Checker {
         Some(PhpType::Mixed)
     }
 
-    /// Returns the element type of an array literal that contains at least one
-    /// spread of an associative array.
-    ///
-    /// Iterates over `elems`, extracting the value type from each `Spread` that
-    /// wraps an `AssocArray`. All spread value types must agree, otherwise
-    /// `Mixed` is returned. Non-spread elements are ignored.
+    /// Merges ordinary elements and spread values for a literal that may carry string keys.
     fn assoc_spread_literal_value_type(&mut self, elems: &[Expr], env: &TypeEnv) -> PhpType {
         let mut value_ty = PhpType::Never;
         for elem in elems {
-            let ExprKind::Spread(inner) = &elem.kind else {
-                continue;
-            };
-            let next = match self.infer_type(inner, env) {
-                Ok(PhpType::Array(elem)) => *elem,
-                Ok(PhpType::AssocArray { value, .. }) => *value,
-                _ => PhpType::Mixed,
+            let next = match &elem.kind {
+                ExprKind::Spread(inner) => match self.infer_type(inner, env) {
+                    Ok(PhpType::Array(elem)) => *elem,
+                    Ok(PhpType::AssocArray { value, .. }) => *value,
+                    _ => PhpType::Mixed,
+                },
+                _ => self.infer_type(elem, env).unwrap_or(PhpType::Mixed),
             };
             if matches!(value_ty, PhpType::Never) {
                 value_ty = next;
@@ -199,45 +195,13 @@ impl Checker {
     }
 }
 
-impl Checker {
-    /// Checks whether the current scope may invoke a class's `__clone` hook.
-    ///
-    /// PHP permits `__clone` to be non-public, but the actual `clone $object`
-    /// expression must obey the hook's visibility when a hook exists.
-    fn check_clone_visibility(&self, class_name: &str, span: Span) -> Result<(), CompileError> {
-        let normalized = class_name.trim_start_matches('\\');
-        let Some(class_info) = self.classes.get(normalized) else {
-            return Ok(());
-        };
-        let key = php_symbol_key("__clone");
-        let Some(visibility) = class_info.method_visibilities.get(&key) else {
-            return Ok(());
-        };
-        let declaring_class = class_info
-            .method_declaring_classes
-            .get(&key)
-            .map(String::as_str)
-            .unwrap_or(normalized);
-        if self.can_access_member(declaring_class, visibility) {
-            return Ok(());
-        }
-        Err(CompileError::new(
-            span,
-            &format!(
-                "Cannot access {} method: {}::__clone",
-                Self::visibility_label(visibility),
-                normalized
-            ),
-        ))
-    }
-}
-
 /// Returns `true` if `index` is a valid string offset index for a string receiver.
 ///
-/// A valid index is an integer type, or a string literal whose value can be
-/// parsed as a PHP string offset (e.g. `"0"`, `"-1"`, `"10"`).
+/// A valid index is an integer or float type, or a string literal whose value
+/// can be parsed as a PHP string offset (e.g. `"0"`, `"-1"`, `"10"`).
 fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
     *idx_ty == PhpType::Int
+        || *idx_ty == PhpType::Float
         || *idx_ty == PhpType::Mixed
         || matches!(
             &index.kind,
@@ -341,27 +305,28 @@ fn merge_array_branch_types(acc: &PhpType, next: &PhpType) -> Option<PhpType> {
 /// so a hit was read back through a string representation. When the two arms have
 /// no common type, `Mixed` is the honest answer: it keeps the value boxed with its
 /// tag, and both arms survive.
-fn merge_null_coalesce_result_type(value: PhpType, default: PhpType) -> PhpType {
-    merge_array_branch_types(&value, &default)
-        .unwrap_or_else(|| null_coalesce_merge_type(&value, &default))
+///
+/// Object operands merge the way the two branches of a ternary do: `?Contract ?? new
+/// Implementation()` is a `Contract`, since one side already accepts the other, and two
+/// unrelated implementations stay a union of both rather than widening to `mixed` (#822).
+/// An arm that already mixes an object with a scalar keeps that union too, so
+/// `?(Contract|int) ?? new Implementation()` is `Contract|int` (#1463).
+fn merge_null_coalesce_result_type(checker: &Checker, value: PhpType, default: PhpType) -> PhpType {
+    if object_union_match_arm_type(&value) && object_union_match_arm_type(&default) {
+        return merge_object_union_match_arm_types(checker, value, default);
+    }
+    if let Some(merged) = null_coalesce::merge_object_scalar_union_types(checker, &value, &default)
+    {
+        return merged;
+    }
+    merge_null_coalesce_value_types(value, default)
 }
 
-/// Joins the non-null value and default types of `??` while retaining compatible objects.
-///
-/// Object arms use the same inheritance-aware join as ternaries and match expressions. This
-/// keeps a common class or interface contract available to a method call chained from the
-/// coalesce expression, while the lowering layer may still box distinct runtime classes in its
-/// merge slot. Non-object arms retain the ordinary null-coalesce join above.
-fn merge_null_coalesce_checked_result_type(
-    checker: &Checker,
-    value: PhpType,
-    default: PhpType,
-) -> PhpType {
-    if object_union_match_arm_type(&value) && object_union_match_arm_type(&default) {
-        merge_object_union_match_arm_types(checker, value, default)
-    } else {
-        merge_null_coalesce_result_type(value, default)
-    }
+/// Joins `??` operands that are not both objects: arrays elementwise, everything else through
+/// [`null_coalesce_merge_type`].
+fn merge_null_coalesce_value_types(value: PhpType, default: PhpType) -> PhpType {
+    merge_array_branch_types(&value, &default)
+        .unwrap_or_else(|| null_coalesce_merge_type(&value, &default))
 }
 
 /// Joins object/sentinel branch types at their existing compatible supertype
@@ -491,7 +456,7 @@ mod tests {
     /// left element type win through the syntactic fallback.
     #[test]
     fn test_merge_null_coalesce_result_type_widens_array_elements() {
-        let merged = merge_null_coalesce_result_type(
+        let merged = merge_null_coalesce_value_types(
             PhpType::Array(Box::new(PhpType::Int)),
             PhpType::Array(Box::new(PhpType::Str)),
         );

@@ -90,6 +90,23 @@ fn phar_properties() -> Vec<ClassProperty> {
 /// Builds the supported constructor, metadata/stub helpers, write helpers, and ArrayAccess methods.
 fn phar_methods() -> Vec<ClassMethod> {
     vec![
+        // The archive the running script was loaded from. A compiled program is never executed
+        // out of a phar, so the answer is php's "not in a phar" one, the empty string, with or
+        // without the `phar://` prefix. psysh's `info()` reports it.
+        class_method_with_body(
+            "running",
+            true,
+            vec![param_default(
+                "returnPhar",
+                TypeExpr::Bool,
+                Expr::new(ExprKind::BoolLiteral(true), crate::span::Span::dummy()),
+            )],
+            Some(TypeExpr::Str),
+            return_body(Expr::new(
+                ExprKind::StringLiteral(String::new()),
+                crate::span::Span::dummy(),
+            )),
+        ),
         method_with_body(
             "__construct",
             vec![param("filename", TypeExpr::Str)],

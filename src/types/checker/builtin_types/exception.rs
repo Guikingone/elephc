@@ -54,7 +54,7 @@ pub(super) fn builtin_exception_constructor_method() -> ClassMethod {
         params: vec![
             (
                 "message".to_string(),
-                None,
+                Some(TypeExpr::Str),
                 Some(Expr::new(
                     ExprKind::StringLiteral(String::new()),
                     crate::span::Span::dummy(),
@@ -63,7 +63,7 @@ pub(super) fn builtin_exception_constructor_method() -> ClassMethod {
             ),
             (
                 "code".to_string(),
-                None,
+                Some(TypeExpr::Int),
                 Some(Expr::new(
                     ExprKind::IntLiteral(0),
                     crate::span::Span::dummy(),
@@ -349,14 +349,17 @@ pub(super) fn builtin_exception_get_trace_method() -> ClassMethod {
 }
 
 /// Returns a synthetic `ClassMethod` for `Exception::getTraceAsString()`.
-/// Body returns a dummy empty string; the real trace string is built at runtime by the compiler.
+///
+/// A real body: it renders `$this->getTrace()` through `crate::throwable_string_prelude`, which
+/// the pipeline always injects. Emitting it fills the vtable slot, so a boxed, interface-typed or
+/// subclass receiver reaches php's listing instead of the `""` the old intrinsic answered.
 pub(super) fn builtin_exception_get_trace_as_string_method() -> ClassMethod {
     concrete_throwable_method(
         "getTraceAsString",
         TypeExpr::Str,
-        Expr::new(
-            ExprKind::StringLiteral(String::new()),
-            crate::span::Span::dummy(),
+        crate::synthetic_class::e_call(
+            crate::throwable_string_prelude::TRACE_STRING_FN,
+            vec![Expr::new(ExprKind::This, crate::span::Span::dummy())],
         ),
     )
 }
@@ -372,17 +375,17 @@ pub(super) fn builtin_exception_get_previous_method() -> ClassMethod {
 }
 
 /// Returns a synthetic `ClassMethod` for `Exception::__toString()`.
-/// Body returns `$this->message` cast to `string`.
+///
+/// A real body rendering php's `Class: message in FILE:LINE`, the stack trace and the `Next`
+/// chain through `crate::throwable_string_prelude`. It used to answer the bare message, and with
+/// no emitted body an `echo $e` on a boxed Throwable jumped through an empty vtable slot.
 pub(super) fn builtin_exception_to_string_method() -> ClassMethod {
     concrete_throwable_method(
         "__toString",
         TypeExpr::Str,
-        Expr::new(
-            ExprKind::PropertyAccess {
-                object: Box::new(Expr::new(ExprKind::This, crate::span::Span::dummy())),
-                property: "message".to_string(),
-            },
-            crate::span::Span::dummy(),
+        crate::synthetic_class::e_call(
+            crate::throwable_string_prelude::TO_STRING_FN,
+            vec![Expr::new(ExprKind::This, crate::span::Span::dummy())],
         ),
     )
 }
@@ -409,7 +412,16 @@ fn concrete_throwable_method(name: &str, return_type: TypeExpr, value: Expr) -> 
         visibility: Visibility::Public,
         is_static: false,
         is_abstract: false,
-        is_final: false,
+        is_final: matches!(
+            name,
+            "getMessage"
+                | "getCode"
+                | "getFile"
+                | "getLine"
+                | "getTrace"
+                | "getTraceAsString"
+                | "getPrevious"
+        ),
         has_body: true,
         params: Vec::new(),
         param_attributes: Vec::new(),

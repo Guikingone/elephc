@@ -1,16 +1,16 @@
 ---
-title: "register_shutdown_function() — internals"
+title: "register_shutdown_function() - internals"
 description: "Compiler internals for register_shutdown_function(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 948
+  order: 1041
 ---
 
-## `register_shutdown_function()` — internals
+## `register_shutdown_function()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/error_handling_prelude.rs`:1032](https://github.com/illegalstudio/elephc/blob/main/src/error_handling_prelude.rs#L1032) (`register_shutdown_function`)
+- **Lowering**: [`src/error_handling_prelude.rs`:353](https://github.com/illegalstudio/elephc/blob/main/src/error_handling_prelude.rs#L353) (`register_shutdown_function`)
 - **Function symbol**: `register_shutdown_function()`
 
 
@@ -39,7 +39,7 @@ function register_shutdown_function(callable $callback, ...$args): void
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

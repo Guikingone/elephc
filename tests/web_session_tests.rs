@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+use elephc_builtin_contract::mbstring_abi::ini::{catalog as mbstring_ini, core as core_ini};
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -185,6 +186,29 @@ fn spawn_server_with_stderr(bin: &Path, addr: &str, stderr_path: &Path) -> Serve
         .arg("--workers")
         .arg("1")
         .stderr(stderr)
+        .spawn()
+        .expect("failed to spawn web server");
+    wait_until_ready(addr);
+    ServerHandle {
+        child,
+        addr: addr.to_string(),
+    }
+}
+
+/// Spawns a server with its STDOUT captured to a file.
+///
+/// The `--web` preload writes to the process's own stdout, which is the only place its
+/// execution is observable from outside — no response carries it, by design. A test that
+/// cannot read it cannot tell "the preload ran and its output went where it should" from
+/// "the preload never ran at all".
+fn spawn_server_with_stdout(bin: &Path, addr: &str, stdout_path: &Path) -> ServerHandle {
+    let stdout = fs::File::create(stdout_path).expect("failed to create server stdout capture");
+    let child = Command::new(bin)
+        .arg("--listen")
+        .arg(addr)
+        .arg("--workers")
+        .arg("1")
+        .stdout(stdout)
         .spawn()
         .expect("failed to spawn web server");
     wait_until_ready(addr);
@@ -372,6 +396,38 @@ fn extract_session_id(resp: &str, name: &str) -> Option<String> {
 /// Extracts the default `PHPSESSID=...` value from a raw response.
 fn extract_phpsessid(resp: &str) -> Option<String> {
     extract_session_id(resp, "PHPSESSID")
+}
+
+/// Verifies request reset preserves stderr when a prior request leaks a PHP stream alias.
+#[test]
+fn web_request_reset_preserves_standard_stream_aliases() {
+    let dir = make_test_dir("web_stdio_alias_reset");
+    let stderr_path = dir.join("server.stderr");
+    let source = r#"<?php
+$stream = fopen("php://stderr", "w");
+fwrite($stream, "stdio-alive\n");
+echo "response-alive";
+"#;
+    let bin = compile_web(&dir, source, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut server = spawn_server_with_stderr(&bin, &addr, &stderr_path);
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = server.kill();
+    let _ = server.wait();
+
+    assert!(first.ends_with("response-alive"), "first response: {first:?}");
+    assert!(
+        second.ends_with("response-alive"),
+        "second response: {second:?}"
+    );
+    let stderr = fs::read_to_string(&stderr_path).expect("failed to read server stderr");
+    assert_eq!(
+        stderr.matches("stdio-alive").count(),
+        2,
+        "stderr alias stopped working after request reset: {stderr:?}"
+    );
 }
 
 /// Verifies a session handler that cannot produce a non-empty identifier makes
@@ -734,6 +790,69 @@ fn session_counter_persists() {
         "second request counter should be 2: {:?}",
         r2
     );
+}
+
+/// Verifies `$session = &$_SESSION` aliases the superglobal itself, and that the session decode
+/// still grows `$_SESSION` correctly once that reference has moved it into a shared cell.
+///
+/// This is Symfony's `NativeSessionStorage::loadSession()`: `$session = &$_SESSION`, then every
+/// bag binds a property to `$session[$key]`. The alias used to bind a stray, empty frame slot
+/// named `_SESSION`, so the bags never saw the decoded session; and once the superglobal lived in
+/// a shared cell, a relocating `$_SESSION[$k] = ...` in the decode wrote the new hash over the
+/// CELL pointer, corrupting the hash header ("a hash whose insertion order left the table" under
+/// `--heap-debug`, a corrupted password string and a logged-out user without it). Every admin
+/// page of the demo app redirected to the login after signing in.
+/// Expected bodies measured against `php -S` 8.5.10.
+#[test]
+fn session_superglobal_reference_alias_reaches_decoded_session() {
+    let dir = make_test_dir("sess_superglobal_alias");
+    let save_path = dir.to_string_lossy().replace('\\', "/");
+    let src = format!(
+        "<?php\n\
+        final class Bag {{\n\
+            private array $data = [];\n\
+            public function initialize(array &$data): void {{ $this->data = &$data; }}\n\
+            public function set(string $k, string $v): void {{ $this->data[$k] = $v; }}\n\
+            public function all(): array {{ return $this->data; }}\n\
+        }}\n\
+        function load(array $bags): void {{\n\
+            $session = &$_SESSION;\n\
+            foreach ($bags as $key => $bag) {{\n\
+                $session[$key] = isset($session[$key]) && is_array($session[$key]) ? $session[$key] : [];\n\
+                $bag->initialize($session[$key]);\n\
+            }}\n\
+        }}\n\
+        session_start(['save_path' => '{save_path}']);\n\
+        $bags = ['attrs' => new Bag(), 'meta' => new Bag()];\n\
+        load($bags);\n\
+        $before = json_encode($_SESSION);\n\
+        if (!isset($_GET['read'])) {{\n\
+            for ($i = 0; $i < 12; $i++) {{ $bags['attrs']->set('k' . $i, str_repeat('v', $i + 1)); }}\n\
+            $bags['meta']->set('u', '$2y$13$' . str_repeat('s', 8));\n\
+        }}\n\
+        echo $before, ' ', count($bags['attrs']->all()), ' ', $_SESSION['meta']['u'] ?? '-';\n"
+    );
+    let bin = compile_web_with_flags(&dir, &src, "app", &["--heap-debug"]);
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/");
+    let cookie = extract_phpsessid(&r1).expect("first response should set a PHPSESSID cookie");
+    let cookie = format!("PHPSESSID={}", cookie);
+    let r2 = http_request(&addr, "GET", "/?read=1", &[("Cookie", &cookie)], "");
+    let r3 = http_request(&addr, "GET", "/?read=1", &[("Cookie", &cookie)], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    let stored = "{\"attrs\":{\"k0\":\"v\",\"k1\":\"vv\",\"k2\":\"vvv\",\"k3\":\"vvvv\",\"k4\":\"vvvvv\",\
+        \"k5\":\"vvvvvv\",\"k6\":\"vvvvvvv\",\"k7\":\"vvvvvvvv\",\"k8\":\"vvvvvvvvv\",\
+        \"k9\":\"vvvvvvvvvv\",\"k10\":\"vvvvvvvvvvv\",\"k11\":\"vvvvvvvvvvvv\"},\
+        \"meta\":{\"u\":\"$2y$13$ssssssss\"}} 12 $2y$13$ssssssss";
+    assert!(
+        r1.ends_with("{\"attrs\":[],\"meta\":[]} 12 $2y$13$ssssssss"),
+        "writes through the bags must reach $_SESSION: {r1:?}"
+    );
+    assert!(r2.ends_with(stored), "the decoded session must reach the bags: {r2:?}");
+    assert!(r3.ends_with(stored), "a re-saved session must decode again: {r3:?}");
 }
 
 /// Verifies file-backed sessions persist across the process boundary in both
@@ -1478,13 +1597,13 @@ fn error_log_type3_open_failure_returns_false() {
     );
 }
 
-/// Verifies `trigger_error("x", E_WARNING)` returns true and does not corrupt the
+/// Verifies `trigger_error("x", E_USER_WARNING)` returns true and does not corrupt the
 /// HTTP response body: text echoed after the call still lands in the body. Also
-/// proves the global `E_WARNING` constant resolves in compiled `--web` code.
+/// proves the public builtin accepts a PHP user-generated warning under `--web`.
 #[test]
 fn trigger_error_returns_true_and_preserves_body() {
     let dir = make_test_dir("trigerr");
-    let src = "<?php $r = trigger_error(\"custom warning\", E_WARNING); echo $r ? 'RET_TRUE' : 'RET_FALSE'; echo '|body-after';";
+    let src = "<?php $r = trigger_error(\"custom warning\", E_USER_WARNING); echo $r ? 'RET_TRUE' : 'RET_FALSE'; echo '|body-after';";
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
@@ -2167,19 +2286,17 @@ fn session_custom_handler_lazy_update_timestamp() {
 ///      `array|false`; the probe narrows with `is_array()` before counting,
 ///      and the return type HINT is deliberately omitted in the prelude so
 ///      ordinary union return inference handles the exits.
-///    - The default (`null`) extension yields BOTH blocks — 33 `session.*`
-///      followed by 54 `opcache.*` = 87 total on the 8.5 default — with the
-///      `session.*` entries byte-identical and appearing FIRST
-///      (`isset($all['session.gc_maxlifetime'])` stays true, first key is
-///      `session.name`). `'core'` maps to that same unfiltered surface,
-///      reproducing php-src's rule that Core's `module_number` is 0 so the
-///      per-module filter is skipped for it.
-///    - KEY ORDER: the `session.*` block keeps its REGISTRATION order
-///      (unchanged, byte for byte), and the `opcache.*` block is now SORTED
-///      ASCENDING, matching reference `ini_get_all`. The pin walks the
-///      opcache keys with `strcmp` (`S`) and pins the last key
-///      (`opcache.validate_timestamps`). `opcache_get_configuration()`
-///      keeps registration order and is unaffected.
+///    - The default (`null`) extension yields Core and mbstring catalog rows
+///      together with 33 `session.*` and 54 `opcache.*` rows. The expected
+///      count derives its shared contribution from the contract catalogs.
+///      `'core'` maps to that same unfiltered surface, reproducing php-src's
+///      rule that Core's `module_number` is 0 so the per-module filter is
+///      skipped for it. The explicit `mbstring` filter returns its catalog.
+///    - KEY ORDER: the combined result is sorted ascending across every
+///      catalog. The pin walks all keys with `strcmp` (`S`) and checks the
+///      catalog-derived first key plus the final session key. The filtered
+///      session and opcache surfaces retain their own established ordering.
+///      `opcache_get_configuration()` keeps registration order and is unaffected.
 ///    - Each detail entry is `['global_value' => v, 'local_value' => v,
 ///      'access' => n]` where `n` is `7` for a normal session directive
 ///      (`session.name`), `2` (PHP_INI_PERDIR) for an `upload_progress.*`
@@ -2219,8 +2336,9 @@ $sess = ini_get_all('session');
 $all = ini_get_all();
 $zend = ini_get_all('zend opcache');
 $cased = ini_get_all('Zend OPcache');
-if (is_array($json) && is_array($sess) && is_array($all) && is_array($zend)) {
-    $parts[] = ($foo === false ? 'F' : 'X') . ':' . count($json) . ':' . count($sess) . ':' . count($all) . ':' . (isset($all['session.gc_maxlifetime']) ? 'Y' : 'N');
+$mbstring = ini_get_all('mbstring');
+if (is_array($json) && is_array($sess) && is_array($all) && is_array($zend) && is_array($mbstring)) {
+    $parts[] = ($foo === false ? 'F' : 'X') . ':' . count($json) . ':' . count($sess) . ':' . count($all) . ':' . (isset($all['session.gc_maxlifetime']) ? 'Y' : 'N') . ':' . count($mbstring);
     $name_entry = $sess['session.name'];
     $parts[] = $name_entry['global_value'] . '|' . $name_entry['local_value'] . '|' . $name_entry['access'];
     $upload_entry = $sess['session.upload_progress.enabled'];
@@ -2246,12 +2364,248 @@ echo implode('#', $parts);"#;
     let _ = child.kill();
     let _ = child.wait();
 
-    let expected = "1440,PHPSESSID,,files,nocache,180,0,/,,,,1,,1,1,,1,100,32,4,,php,\
-#1440>9999#XF#F:0:33:87:Y#PHPSESSID|PHPSESSID|7#2\
-#54:F:session.name:opcache.validate_timestamps:S";
+    let shared_count = core_ini::DIRECTIVES.len() + mbstring_ini::DIRECTIVES.len();
+    let all_count = 33 + 54 + shared_count;
+    let first_shared_key = core_ini::DIRECTIVES.iter().chain(mbstring_ini::DIRECTIVES.iter())
+        .map(|directive| directive.name).min().expect("shared INI catalog");
+    let expected = format!("1440,PHPSESSID,,files,nocache,180,0,/,,,,1,,1,1,,1,100,32,4,,php,\
+#1440>9999#XF#F:0:33:{all_count}:Y:{}#PHPSESSID|PHPSESSID|7#2\
+#54:F:{first_shared_key}:session.use_trans_sid:S", mbstring_ini::DIRECTIVES.len());
     assert!(
-        response.ends_with(expected),
+        response.ends_with(expected.as_str()),
         "session ini surface pin mismatch (INI-dispatcher refactor changed \
          observable behavior): {response:?}\nexpected suffix: {expected:?}"
+    );
+}
+
+/// Verifies `ini_set()` moves the settable `opcache.*` directives under `--web` exactly as
+/// it does on CLI, without disturbing the session directives the web wrapper owns.
+///
+/// The `--web` `ini_set` is a SEPARATE declaration from the CLI one — the session-aware body
+/// owns that name here — and it refuses every `opcache.*` key before reaching the session
+/// logic. Running the shared opcache arms ahead of that refusal is what keeps the two
+/// surfaces from disagreeing about the same directive in the same program.
+///
+/// `opcache.memory_consumption` must still be refused: it is `PHP_INI_SYSTEM` in reference
+/// PHP, so `false` is exact there too.
+#[test]
+fn opcache_ini_set_works_under_web() {
+    let dir = make_test_dir("ini_opcache_web");
+    let src = "<?php \
+        $old = ini_set('opcache.revalidate_freq', '77'); \
+        $now = ini_get('opcache.revalidate_freq'); \
+        $cfg = opcache_get_configuration()['directives']['opcache.revalidate_freq']; \
+        $sys = ini_set('opcache.memory_consumption', '256'); \
+        $sess = ini_set('session.gc_maxlifetime', 999); \
+        echo $old . '|' . $now . '|' . $cfg . '|' . var_export($sys, true) . '|' . $sess;";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        resp.ends_with("2|77|77|false|1440"),
+        "opcache ini_set must move all three surfaces under --web, refuse the \
+         PHP_INI_SYSTEM key, and leave the session directives alone: {:?}",
+        resp
+    );
+}
+
+/// Verifies `opcache.preload` runs ONCE at startup under `--web`, not inside request 1.
+///
+/// The `--web` top-level body IS the request handler, so the preload's statements used to
+/// execute inside the first request of every worker, and again after each `--max-requests`
+/// recycle. MEASURED on reference `php -S`: the preload's output appears once on the
+/// SERVER's own stdout and in no response, while its declarations are usable from every
+/// request.
+///
+/// THE SERVER'S STDOUT IS THE ONLY EVIDENCE THE PRELOAD RAN, and an earlier version of this
+/// test did not read it. Its three assertions — declaration usable, no preload output in
+/// either response — ALL HOLD when the preload body never executes at all: the resolver
+/// strips declarations out of the include guard, so `from_preload` lives at the top level
+/// and is rooted independently of the wrapper. The test therefore could not fail on the
+/// failure mode it was written for, and the counterfactual that was supposed to prove
+/// otherwise actually failed with a connection refusal — the server had not started, for an
+/// unrelated reason. Asserting the stdout is what closes that.
+///
+/// `exactly once` is asserted rather than `at least once`: the whole point is that a hoist
+/// which ran per worker, or per request, would still put the output somewhere.
+///
+/// `--workers 1` is load-bearing: both requests must land in the same process.
+#[test]
+fn the_web_preload_runs_once_at_startup_not_in_the_first_request() {
+    let dir = make_test_dir("opcache_web_preload_hoist");
+    std::fs::write(
+        dir.join("preload.php"),
+        "<?php\necho \"PRELOAD-RAN\\n\";\nfunction from_preload(): string { return 'declared'; }\n",
+    )
+    .unwrap();
+    let bin = compile_web_with_flags(
+        &dir,
+        "<?php echo 'REQ:' . from_preload();",
+        "app",
+        &[
+            "--ini",
+            "opcache.enable_cli=1",
+            "--ini",
+            &format!("opcache.preload={}", dir.join("preload.php").display()),
+        ],
+    );
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let stdout_path = dir.join("server.out");
+    let mut child = spawn_server_with_stdout(&bin, &addr, &stdout_path);
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let captured = std::fs::read_to_string(&stdout_path).unwrap_or_default();
+    assert_eq!(
+        captured.matches("PRELOAD-RAN").count(),
+        1,
+        "the preload must run exactly once, on the server's own stdout: {captured:?}"
+    );
+    assert!(
+        first.ends_with("REQ:declared"),
+        "the preload's declarations must be usable from the request: {first:?}"
+    );
+    assert!(
+        !first.contains("PRELOAD-RAN"),
+        "response 1 carried the preload's output: {first:?}"
+    );
+    assert!(
+        second.ends_with("REQ:declared") && !second.contains("PRELOAD-RAN"),
+        "{second:?}"
+    );
+}
+
+/// Verifies `scripts[…]['revalidate']` is the entry's OWN deadline, not `last_used + freq`.
+///
+/// The two agree until the first warm hit and then part company: a hit moves `last_used`
+/// while `revalidate_at` stays where the fill put it. Deriving the field therefore reported
+/// a deadline that slid forward on every hit and could never arrive — a revalidation that
+/// looks permanently ten seconds away on a file being served constantly.
+///
+/// ONE REQUEST CANNOT SEE THIS, which is why it went unnoticed: php-src freezes `last_used`
+/// at request time, so within a single CLI run the derived and real values coincide exactly.
+/// Two requests against one worker separate them.
+///
+/// MEASURED on reference PHP 8.5.10 over `php -S` with `revalidate_freq=10`: the gap is 10
+/// on the first request and 6 on the second four seconds later, with the absolute
+/// `revalidate` unchanged. This asserts the SHAPE of that — gap shrinks, absolute holds —
+/// rather than the wall-clock numbers, which no test can pin.
+///
+/// `--workers 1` is load-bearing: both requests must land in the same process.
+#[test]
+fn the_revalidate_field_is_the_entrys_own_deadline() {
+    let dir = make_test_dir("opcache_revalidate_field");
+    std::fs::write(dir.join("lib.php"), "<?php $marker = 1;\n").unwrap();
+    let src = "<?php \
+        $p = __DIR__ . '/lib.php'; \
+        eval('include $p;'); \
+        $e = opcache_get_status(true)['scripts'][$p] ?? null; \
+        echo $e === null ? 'none' \
+            : ('lu=' . $e['last_used_timestamp'] . ' rv=' . $e['revalidate']);";
+    let bin = compile_web_with_flags(
+        &dir,
+        src,
+        "app",
+        &[
+            "--ini",
+            "opcache.enable_cli=1",
+            "--ini",
+            "opcache.revalidate_freq=10",
+            "--ini",
+            "opcache.file_update_protection=0",
+        ],
+    );
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let parse = |body: &str, what: &str| -> i64 {
+        body.rsplit_once(&format!("{what}="))
+            .and_then(|(_, rest)| rest.split_whitespace().next())
+            .unwrap_or_else(|| panic!("no {what} in {body:?}"))
+            .parse()
+            .unwrap_or_else(|_| panic!("unparsable {what} in {body:?}"))
+    };
+
+    let (lu1, rv1) = (parse(&first, "lu"), parse(&first, "rv"));
+    let (lu2, rv2) = (parse(&second, "lu"), parse(&second, "rv"));
+
+    assert_eq!(
+        rv1, rv2,
+        "the deadline must not move on a warm hit: {first:?} then {second:?}"
+    );
+    assert!(
+        lu2 > lu1,
+        "the second request must have moved last_used, or the test proves nothing: \
+         {first:?} then {second:?}"
+    );
+    assert!(
+        rv2 - lu2 < rv1 - lu1,
+        "the gap must shrink as the deadline approaches: {first:?} then {second:?}"
+    );
+}
+
+/// Verifies a scheduled `opcache_reset()` is performed at the NEXT REQUEST's boundary, the
+/// way php-src defers its restart, rather than flushing inside the request that asked.
+///
+/// Two requests against one persistent worker, and the counters tell the whole story:
+///
+/// - request 1 misses and fills (`h=0 m=1`), then schedules a restart (`r=0` — php-src
+///   counts the restart when it happens, not when it is scheduled);
+/// - request 2 starts AFTER the boundary performed it, and the restart did TWO things:
+///   it dropped the entry and it zeroed the counters, the way `zend_reset_cache_vars()`
+///   does. So the include misses against an empty cache and against a fresh accounting
+///   period — `h=0 m=1`, not a cumulative `m=2` — and the restart is counted (`r=1`).
+///
+/// `h` IS THE DISCRIMINATING FIELD, and `m` deliberately is not: without a reset, request 2
+/// hits the surviving entry and reports `h=1 m=1`, which differs from the asserted
+/// `h=0 m=1` in `h` alone. An earlier version of this test asserted the cumulative `m=2`
+/// and so pinned the bug where the restart left the counters running.
+///
+/// The reset is issued from NATIVE code, which is where ordinary programs call it and the
+/// path that reaches the cache through `__elephc_opcache_rt_reset`.
+///
+/// `--workers 1` is load-bearing: both requests must land in the same process.
+#[test]
+fn opcache_reset_is_performed_at_the_next_request_boundary() {
+    let dir = make_test_dir("opcache_deferred_reset");
+    std::fs::write(dir.join("lib.php"), "<?php $marker = 1;\n").unwrap();
+    let counters = "$s = opcache_get_status(); \
+        echo 'h=' . $s['opcache_statistics']['hits'] \
+           . ' m=' . $s['opcache_statistics']['misses'] \
+           . ' r=' . $s['opcache_statistics']['manual_restarts'];";
+    // The reset is NATIVE, not inside `eval()`: that is the path ordinary code takes, and
+    // the one that used to move only the reported latch.
+    let src = format!(
+        "<?php eval('include __DIR__ . \"/lib.php\";'); {counters} opcache_reset();"
+    );
+    let bin = compile_web(&dir, &src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        first.ends_with("h=0 m=1 r=0"),
+        "the scheduling request fills the cache and counts no restart yet: {first:?}"
+    );
+    assert!(
+        second.ends_with("h=0 m=1 r=1"),
+        "the next request must start with the restart already performed: {second:?}"
     );
 }

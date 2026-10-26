@@ -1,16 +1,16 @@
 ---
-title: "header_remove() — internals"
+title: "header_remove() - internals"
 description: "Compiler internals for header_remove(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 632
+  order: 652
 ---
 
-## `header_remove()` — internals
+## `header_remove()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/header_remove.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/header_remove.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,7 +49,7 @@ function header_remove(string $name = null): void
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/header_remove.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/header_remove.rs) (`eval_builtin!`)
-- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(24)`).
+- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(90)`).
 - **Dispatch hooks**: _none_ (shared runtime dispatch)
 
 ## Cross-references

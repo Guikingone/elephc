@@ -34,7 +34,7 @@
 
 use crate::parser::ast::{Program, Stmt};
 use crate::synthetic_class::{
-    e_bool, e_call, e_closure_call, e_var, function, internal_declarations, s_foreach_by_ref, s_if,
+    e_bool, e_call, e_closure_call, e_var, function, php_semantics_declarations, s_foreach_by_ref, s_if,
     s_return, t_array, t_mixed,
 };
 
@@ -46,7 +46,7 @@ pub(crate) const ARRAY_WALK_RECURSIVE_NAME: &str = "__elephc_array_walk_recursiv
 
 /// Returns the `array_walk()` family declarations for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| vec![array_walk(), array_walk_recursive()])
+    php_semantics_declarations(|| vec![array_walk(), array_walk_recursive()])
 }
 
 /// Builds `__elephc_array_walk(array &$array, $callback, bool $hasArg, mixed $arg): bool`.

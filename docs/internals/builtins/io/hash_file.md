@@ -1,16 +1,16 @@
 ---
-title: "hash_file() — internals"
+title: "hash_file() - internals"
 description: "Compiler internals for hash_file(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 353
+  order: 354
 ---
 
-## `hash_file()` — internals
+## `hash_file()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/hash_file.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/hash_file.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

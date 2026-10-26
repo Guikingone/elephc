@@ -12,13 +12,14 @@
 /// wrapper-dispatch scan starts its `://` search at.
 ///
 /// PHP requires `n > 1` in `php_stream_locate_url_wrapper`: a single-letter scheme
-/// is a Windows drive letter, never a wrapper. Measured against reference PHP —
+/// is a Windows drive letter, never a wrapper. Measured against reference PHP -
 /// `stream_wrapper_register("f", "W")` returns true and `f` appears in
 /// `stream_get_wrappers()`, but `f://x` never reaches the wrapper. Starting the scan
 /// here is what enforces it: a `://` at index 0 or 1 is simply never found.
 pub(crate) const MIN_WRAPPER_SCHEME_LEN: usize = 2;
 
 mod basename;
+mod backtrace_arg;
 mod cstr;
 mod disk_space;
 mod dirname;
@@ -28,6 +29,7 @@ mod fgetcsv;
 mod fgets;
 mod file;
 mod file_get_contents;
+mod file_get_contents_stdin;
 mod file_get_contents_range;
 mod file_get_contents_url;
 mod file_put_contents;
@@ -39,9 +41,13 @@ mod fread;
 mod fwrite;
 mod http_response;
 mod headers;
+mod response_metadata;
 mod php_input;
 mod stdout_write;
 mod ob_buffer;
+mod ob_pop;
+mod ob_process;
+mod ob_eval_handler;
 mod ob_handler;
 mod ob_status;
 mod phar_read;
@@ -141,6 +147,7 @@ mod var_dump_object;
 mod var_dump_walk;
 
 pub(crate) use basename::emit_basename;
+pub(crate) use backtrace_arg::{emit_backtrace_print_arg, emit_backtrace_print_frame};
 pub(crate) use cstr::emit_cstr;
 pub(crate) use disk_space::emit_disk_space;
 pub(crate) use dirname::emit_dirname;
@@ -150,6 +157,7 @@ pub(crate) use fgetcsv::emit_fgetcsv;
 pub(crate) use fgets::emit_fgets;
 pub(crate) use file::emit_file;
 pub(crate) use file_get_contents::emit_file_get_contents;
+pub(crate) use file_get_contents_stdin::emit_file_get_contents_stdin;
 pub(crate) use file_get_contents_range::{
     emit_file_get_contents_range, FILE_GET_CONTENTS_SEEK_MESSAGES,
 };

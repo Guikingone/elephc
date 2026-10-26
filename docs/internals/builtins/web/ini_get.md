@@ -1,16 +1,16 @@
 ---
-title: "ini_get() — internals"
+title: "ini_get() - internals"
 description: "Compiler internals for ini_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 945
+  order: 1038
 ---
 
-## `ini_get()` — internals
+## `ini_get()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:4301](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L4301) (`ini_get`)
+- **Lowering**: [`src/web_prelude/build.rs`:4478](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L4478) (`ini_get`)
 - **Function symbol**: `ini_get()`
 
 
@@ -38,7 +38,7 @@ function ini_get(string $option): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

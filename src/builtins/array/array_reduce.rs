@@ -5,11 +5,10 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
+//! - The initial value defaults to null and the carry may change PHP type at each step.
+//! - Callback inference receives a dynamic carry before an unannotated closure is checked.
+//! - The backend returns an independently owned Mixed result, including for an empty source.
 //! - The PHP signature accepts two or three arguments, with a `null` initial carry by default.
-//! - `check` validates the callback with the inferred initial and array-element types.
-//!   The return type is `mixed`: php returns whatever the last callback returned (or the initial
-//!   carry), and EIR routes every non-`int` carry to the boxed-carry prelude helper while the
-//!   native integer reducer boxes its result for a `mixed` call site.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -18,27 +17,18 @@ use crate::types::PhpType;
 builtin! {
     contract: "array_reduce",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArrayReduce,
+    lazy_check: true,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayReduce),
+        crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults,
     ),
 }
 
-/// Validates the callback for an `array_reduce` call and returns `mixed`.
-///
-/// Uses the initial-value and array-element types as the two callback parameter contexts. A
-/// missing initial value contributes PHP `null` (`Void`) to the callback carry contract.
-///
-/// The result used to be a fixed `int`, which is the native reducer's register, not php's type:
-/// a closure carry (`array_reduce($pipes, $this->carry(), $destination)` then `$pipeline($x)`)
-/// was refused as "not a callable (got Int)".
+/// Infers each operand and checks a callback whose carry is not restricted to the initial type.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    let initial_ty = match cx.args.get(2) {
-        Some(initial) => cx.checker.infer_type(initial, cx.env)?,
-        None => PhpType::Void,
-    };
     let callback_arg_types = [
-        initial_ty,
+        PhpType::Mixed,
         crate::types::checker::builtins::array_element_type(&arr_ty),
     ];
     crate::types::checker::builtins::check_array_callback_builtin_call(
@@ -49,5 +39,8 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.env,
         "array_reduce() callback",
     )?;
+    if let Some(initial) = cx.args.get(2) {
+        cx.checker.infer_type(initial, cx.env)?;
+    }
     Ok(PhpType::Mixed)
 }

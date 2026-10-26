@@ -58,8 +58,12 @@ pub(super) fn parse_file_with_source(
     let file = path.display().to_string();
 
     let mode = SourceMode::from_path(path);
-    let tokens =
-        lexer::tokenize_with_mode(&source, mode).map_err(|e| e.with_file(file.clone()))?;
+    let source_id = Span::fresh_source_id();
+    // php names a frame, a warning and a Throwable by the file its code came from, resolved.
+    let shown_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    Span::register_source_path(source_id, shown_path.display().to_string());
+    let tokens = lexer::tokenize_with_mode_and_source_id(&source, mode, source_id)
+        .map_err(|e| e.with_file(file.clone()))?;
 
     let parsed = parser::parse_with_mode(&tokens, mode).map_err(|e| e.with_file(file))?;
     let program = crate::source::finalize_physical_program(parsed, path, mode, defines)?;

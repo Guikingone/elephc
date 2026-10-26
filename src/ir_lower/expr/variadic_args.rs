@@ -31,7 +31,9 @@ pub(super) fn lower_named_variadic_tail_array(
         .first()
         .map(|arg| arg.expr().span)
         .unwrap_or_else(crate::span::Span::dummy);
-    let variadic_count = tail.iter().filter(|source| source.param_idx().is_none()).count();
+    let count_metadata = crate::func_args::sig_collects_optional_arg_count(sig);
+    let variadic_count = tail.iter().filter(|source| source.param_idx().is_none()).count()
+        + usize::from(count_metadata);
     let array_ty = variadic_array_type(sig);
     let array = ctx.emit_value(
         Op::ArrayNew,
@@ -43,6 +45,10 @@ pub(super) fn lower_named_variadic_tail_array(
     );
     let elem_ty = indexed_array_literal_element_type(&array_ty);
     let by_ref_variadic = variadic_param_is_by_ref(sig);
+    if count_metadata {
+        let actual_count = named_plan_actual_arg_count(tail);
+        push_func_args_count(ctx, array.value, &array_ty, &elem_ty, actual_count, span);
+    }
     for source in tail {
         if source.param_idx().is_some() {
             continue;
@@ -143,6 +149,7 @@ pub(super) fn lower_variadic_tail_array(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     tail: &[Expr],
+    actual_count: usize,
 ) -> LoweredValue {
     let span = tail
         .first()
@@ -163,10 +170,13 @@ pub(super) fn lower_variadic_tail_array(
         for item in tail {
             if let ExprKind::Spread(inner) = &item.kind {
                 let source = lower_expr(ctx, inner);
-                any_keyed |= matches!(
-                    ctx.builder.value_php_type(source.value).codegen_repr(),
-                    PhpType::AssocArray { .. } | PhpType::Iterable
-                );
+                // A bare `array` declaration (`array<mixed>`), a `mixed` and a union may hold a
+                // hash at run time as well, so they take the keyed builder like an iterable.
+                any_keyed |= match ctx.builder.value_php_type(source.value).codegen_repr() {
+                    PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Mixed | PhpType::Union(_) => true,
+                    PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+                    _ => false,
+                };
                 lowered.push(SpreadItem::Spread(source));
             } else {
                 let value = lower_array_reference_or_value(ctx, item);
@@ -181,13 +191,27 @@ pub(super) fn lower_variadic_tail_array(
     let array = ctx.emit_value(
         Op::ArrayNew,
         Vec::new(),
-        Some(Immediate::Capacity(tail.len() as u32)),
+        Some(Immediate::Capacity(
+            (tail.len()
+                + usize::from(crate::func_args::sig_collects_optional_arg_count(sig)))
+                as u32,
+        )),
         array_ty.clone(),
         Op::ArrayNew.default_effects(),
         Some(span),
     );
     let elem_ty = indexed_array_literal_element_type(&array_ty);
     let by_ref_variadic = variadic_param_is_by_ref(sig);
+    if crate::func_args::sig_collects_optional_arg_count(sig) {
+        push_func_args_count(
+            ctx,
+            array.value,
+            &array_ty,
+            &elem_ty,
+            actual_count,
+            span,
+        );
+    }
     for (index, item) in tail.iter().enumerate() {
         // `f($fixed, $extra, ...$rest)`: the spread's elements join the variadic after the plain
         // extras. The generic path handed every source argument over as one operand each, so the
@@ -225,6 +249,48 @@ pub(super) fn lower_variadic_tail_array(
     array
 }
 
+/// Computes the PHP positional count represented by a named call plan.
+pub(super) fn named_plan_actual_arg_count(
+    sources: &[crate::types::call_args::PlannedSourceValue],
+) -> usize {
+    let regular = sources
+        .iter()
+        .filter_map(|source| source.param_idx().map(|index| index + 1))
+        .max()
+        .unwrap_or(0);
+    let surplus = sources
+        .iter()
+        .filter(|source| source.param_idx().is_none() && source.key().is_none())
+        .count();
+    regular + surplus
+}
+
+/// Appends the actual argument count as the first boxed Mixed collector element.
+fn push_func_args_count(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: crate::ir::ValueId,
+    array_ty: &PhpType,
+    elem_ty: &Option<PhpType>,
+    actual_count: usize,
+    span: crate::span::Span,
+) {
+    let count = emit_i64_at_span(ctx, actual_count as i64, span);
+    let count = coerce_variadic_tail_value(ctx, count, array_ty, span);
+    ctx.emit_void(
+        Op::ArrayPush,
+        vec![array, count.value],
+        None,
+        Op::ArrayPush.default_effects(),
+        Some(span),
+    );
+    crate::ir_lower::stmt::release_indexed_array_write_operand(
+        ctx,
+        elem_ty.as_ref(),
+        count,
+        span,
+    );
+}
+
 /// Lowers one value stored into a variadic tail container.
 pub(super) fn lower_variadic_tail_source_value(
     ctx: &mut LoweringContext<'_, '_>,
@@ -234,8 +300,17 @@ pub(super) fn lower_variadic_tail_source_value(
     array_ty: &PhpType,
 ) -> LoweredValue {
     if by_ref_variadic {
+        if let Some(value) = prelowered {
+            return lowered_value_from_id(ctx, value);
+        }
         if let ExprKind::Variable(name) = &expr.kind {
-            return lower_unbridged_invoker_ref_arg_marker(ctx, name, expr.span);
+            if ctx.boxed_reference_promotion_is_authorized(name, expr.span)
+                && !ctx.is_ref_bound_local(name)
+                && ctx.local_is_promotable_to_ref_cell(name)
+            {
+                ctx.promote_local_mixed_ref_cell(name, Some(expr.span));
+            }
+            return lower_invoker_ref_variadic_arg_marker(ctx, name, expr.span);
         }
     }
     let value = prelowered

@@ -81,7 +81,9 @@ fn compile_lfc_eval_project_and_run(
         .expect("CLI should emit LFC eval assembly");
     let runtime_features = elephc::codegen::RuntimeFeatures {
         regex: true,
-        mb_strlen: false,
+        mbstring: false,
+        mbregex: false,
+        mbstring_mime: false,
         phar_archive: false,
         descriptor_invoker: true,
         const_introspection: false,
@@ -107,6 +109,7 @@ fn compile_lfc_eval_project_and_run(
         // compiled symbol by name, so a runtime built ahead of a program that does not declare it
         // fails to link, while the reverse merely leaves a declaration unused.
         diag_user_handler: false,
+        ..elephc::codegen::RuntimeFeatures::none()
     };
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(8_388_608, target(), runtime_features);

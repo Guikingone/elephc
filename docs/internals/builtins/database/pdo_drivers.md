@@ -1,16 +1,16 @@
 ---
-title: "pdo_drivers() — internals"
+title: "pdo_drivers() - internals"
 description: "Compiler internals for pdo_drivers(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 195
+  order: 196
 ---
 
-## `pdo_drivers()` — internals
+## `pdo_drivers()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/pdo_prelude/build.rs`:7675](https://github.com/illegalstudio/elephc/blob/main/src/pdo_prelude/build.rs#L7675) (`pdo_drivers`)
+- **Lowering**: [`src/pdo_prelude/build.rs`:7670](https://github.com/illegalstudio/elephc/blob/main/src/pdo_prelude/build.rs#L7670) (`pdo_drivers`)
 - **Function symbol**: `pdo_drivers()`
 
 
@@ -38,7 +38,7 @@ function pdo_drivers(): array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

@@ -9,37 +9,20 @@
 
 use super::*;
 
-/// Verifies the two-operand value-comparing array builtins still refuse BOXED elements rather
-/// than compare their addresses.
+/// Verifies the two-operand value-comparing array builtins compare BOXED elements by value.
 ///
-/// These helpers compare slots as raw 8-byte words — the value itself for an int or float, a
-/// POINTER for anything heap-backed. Boxed elements therefore compared cell addresses, and two
-/// separately boxed `3`s never matched:
-///
-/// - `array_diff([1,"b",3,4], [3,"z"])` answered `1,b,3,4`, PHP answers `1,b,4`
-/// - `array_intersect` of the same pair answered NOTHING, PHP answers `3`
-///
-/// Both silent. PHP compares these elements by their STRING rendering; until each takes the
-/// runtime comparator `array_unique` now uses, the calls are refused, exactly as `array<string>`
-/// already is — its 16-byte slots do not fit these helpers either.
+/// These helpers once compared slots as raw 8-byte words — the value itself for an int or float,
+/// a POINTER for anything heap-backed — so boxed elements compared cell addresses and two
+/// separately boxed `3`s never matched (`array_diff([1,"b",3,4], [3,"z"])` answered `1,b,3,4`,
+/// `array_intersect` of the same pair answered nothing). The calls were then refused. They now
+/// compare by PHP's string rendering and keep the source keys, which is php 8.5's answer:
+/// `1,b,4|3|0,1,3|2`. This test used to pin the refusal.
 #[test]
-fn test_value_comparing_builtins_refuse_boxed_elements() {
-    for (source, message) in [
-        (
-            r#"<?php $a = [1, "b", 3, 4]; $b = [3, "z"]; $r = array_diff($a, $b);"#,
-            "array_diff compares boxed elements by identity",
-        ),
-        (
-            r#"<?php $a = [1, "b", 3, 4]; $b = [3, "z"]; $r = array_intersect($a, $b);"#,
-            "array_intersect compares boxed elements by identity",
-        ),
-    ] {
-        let error = compile_source_expect_backend_error(source);
-        assert!(
-            error.contains(message),
-            "expected `{message}` for this source, got: {error}"
-        );
-    }
+fn test_value_comparing_builtins_compare_boxed_elements_by_value() {
+    let out = compile_and_run(
+        r#"<?php $a = [1, "b", 3, 4]; $b = [3, "z"]; echo implode(",", array_diff($a, $b)), "|", implode(",", array_intersect($a, $b)), "|", implode(",", array_keys(array_diff($a, $b))), "|", implode(",", array_keys(array_intersect($a, $b)));"#,
+    );
+    assert_eq!(out, "1,b,4|3|0,1,3|2");
 }
 
 /// Verifies `array_unique` compares BOXED elements by their PHP string rendering.

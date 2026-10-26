@@ -1,8 +1,8 @@
 ---
 title: "mysqli_stat()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns the server's current status line."
 sidebar:
-  order: 171
+  order: 172
 ---
 
 ## mysqli_stat()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_stat(mixed $mysql): mixed
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns the server's current status line.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -23,7 +23,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

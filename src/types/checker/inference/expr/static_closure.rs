@@ -125,7 +125,24 @@ fn stmt_uses_this(stmt: &Stmt) -> bool {
                 || catches.iter().any(|catch| body_uses_this(&catch.body))
                 || finally_body.as_deref().is_some_and(body_uses_this)
         }
-        StmtKind::NamespaceBlock { body, .. } => body_uses_this(body),
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::Synthetic(body)
+        | StmtKind::IncludeOnceGuard { body, .. } => body_uses_this(body),
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => body_uses_this(then_body) || else_body.as_deref().is_some_and(body_uses_this),
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            expr_uses_this(property)
+                || index.as_ref().is_some_and(expr_uses_this)
+                || expr_uses_this(value)
+        }
         StmtKind::FunctionDecl { .. }
         | StmtKind::ClassDecl { .. }
         | StmtKind::TraitDecl { .. }
@@ -172,6 +189,9 @@ fn expr_uses_this(expr: &Expr) -> bool {
         ExprKind::ArrayLiteral(items) => items.iter().any(expr_uses_this),
         ExprKind::ArrayLiteralAssoc(pairs) => {
             pairs.iter().any(|(k, v)| expr_uses_this(k) || expr_uses_this(v))
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            entries.iter().flat_map(|entry| entry.exprs()).any(expr_uses_this)
         }
         ExprKind::ArrayAccess { array, index } => expr_uses_this(array) || expr_uses_this(index),
         ExprKind::Ternary {
@@ -474,6 +494,14 @@ fn expr_must_not_use_this(expr: &Expr, span: Span) -> Result<(), CompileError> {
             for (k, v) in pairs {
                 expr_must_not_use_this(k, span)?;
                 expr_must_not_use_this(v, span)?;
+            }
+            Ok(())
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            for entry in entries {
+                for expr in entry.exprs() {
+                    expr_must_not_use_this(expr, span)?;
+                }
             }
             Ok(())
         }

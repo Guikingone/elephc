@@ -1,8 +1,8 @@
 ---
 title: "imagecolorat()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the color index or packed color of one pixel."
 sidebar:
-  order: 480
+  order: 481
 ---
 
 ## imagecolorat()
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorat(mixed $image, int $x, int $y): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the color index or packed color of one pixel.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -25,7 +25,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

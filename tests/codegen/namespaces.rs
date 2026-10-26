@@ -57,6 +57,33 @@ echo count((new Collection())->filtered());
     );
 }
 
+/// Namespaced constants ending in dedicated lexer tokens resolve by their qualified names.
+#[test]
+fn test_qualified_predefined_constant_names_read_local_values() {
+    let out = compile_and_run(r#"<?php
+namespace Demo\Math { const NAN = 'demo-nan'; const PHP_EOL = '<eol>'; }
+namespace Other {
+    use Demo\Math;
+    echo \Demo\Math\NAN, "\n";
+    echo Math\PHP_EOL, "\n";
+    echo is_nan(\NAN) ? 'global-nan' : 'wrong', "\n";
+}
+"#);
+    assert_eq!(out, "demo-nan\n<eol>\nglobal-nan\n");
+}
+
+/// Predefined lexer tokens can also name classes when PHP syntax selects a class context.
+#[test]
+fn test_qualified_predefined_class_names_use_class_metadata() {
+    let out = compile_and_run(r#"<?php
+class INF { public static function method(): string { return 'method'; } }
+$value = new \INF;
+echo \INF::class, "\n", \INF::method(), "\n";
+echo $value instanceof \INF ? 'instance' : 'wrong';
+"#);
+    assert_eq!(out, "INF\nmethod\ninstance");
+}
+
 /// Verifies `use function` aliasing and global builtin resolution inside a namespaced file.
 /// Uses a two-namespace fixture: `Demo\Util\render` aliased as `paint` and global `strlen`.
 /// Checks that the alias resolves correctly and global builtins are accessible without prefix.
@@ -833,4 +860,38 @@ echo \SHADOWED, "\n";
 "#,
     );
     assert_eq!(out, "namespaced\nglobal\n");
+}
+
+/// Fully qualified predefined constants parse wherever an expression can stand (#1307).
+///
+/// The lexer turns `PHP_EOL`, `PHP_INT_MAX`, `M_PI`, `STDOUT` and 18 other predefined constants
+/// into dedicated tokens, so `\PHP_EOL` reached the name parser as a backslash followed by a
+/// non-identifier and failed with "Expected name". Namespaced code writes them fully qualified
+/// routinely. Covers a namespace constant, a class constant, parameter defaults, a `match`
+/// subject and ordinary expressions. Expected output is PHP 8.5.10's.
+#[test]
+fn test_fully_qualified_predefined_constants_parse_in_every_position() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+const LIMIT = \PHP_INT_MAX;
+class K {
+    const PI = \M_PI;
+    public function f($x = \PHP_INT_MIN, $s = \DIRECTORY_SEPARATOR) { return [$x, $s]; }
+}
+echo \PHP_EOL === "\n" ? "eol" : "no", \PHP_EOL;
+echo LIMIT === \PHP_INT_MAX ? "max" : "no", \PHP_EOL;
+echo K::PI > 3.14 ? "pi" : "no", \PHP_EOL;
+echo (new K())->f()[0] === \PHP_INT_MIN ? "min" : "no", "|", (new K())->f()[1], \PHP_EOL;
+echo is_infinite(\INF) ? "inf" : "no", " ", is_nan(\NAN) ? "nan" : "no", \PHP_EOL;
+echo \M_E > 2.7 ? "e" : "no", " ", \M_SQRT2 > 1.41 ? "sqrt2" : "no", " ", \PHP_FLOAT_EPSILON > 0 ? "eps" : "no", \PHP_EOL;
+echo is_resource(\STDOUT) ? "stdout" : "no", " ", strlen(\PHP_OS) > 0 ? "os" : "no", \PHP_EOL;
+echo match (\PHP_INT_SIZE) { 8 => "eight", default => "other" }, \PHP_EOL;
+var_dump(\true, \false, \null, \TRUE);
+"#,
+    );
+    assert_eq!(
+        out,
+        "eol\nmax\npi\nmin|/\ninf nan\ne sqrt2 eps\nstdout os\neight\nbool(true)\nbool(false)\nNULL\nbool(true)\n"
+    );
 }

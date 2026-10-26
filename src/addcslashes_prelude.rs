@@ -15,13 +15,13 @@
 
 use crate::parser::ast::{BinOp, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_binop, e_bool, e_call, e_index, e_int, e_str, e_var, function, internal_declarations,
+    e_binop, e_bool, e_call, e_index, e_int, e_str, e_var, function, php_semantics_declarations,
     s_assign, s_array_assign, s_if, s_return, s_while,
 };
 
 /// Returns the `addcslashes()` declaration for injection.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| vec![decl_fn_addcslashes()])
+    php_semantics_declarations(|| vec![decl_fn_addcslashes()])
 }
 
 /// `ord($characters[$index])`.

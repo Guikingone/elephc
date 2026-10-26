@@ -107,27 +107,68 @@ struct LabelSpan {
     hi: usize,
 }
 
+/// Sources at least this large are indexed and scanned for boundary candidates by several threads.
+/// A test lowers it to exercise the parallel paths on a small fixture.
+#[cfg(not(test))]
+const PARALLEL_INDEX_BYTES: usize = 32 << 20;
+#[cfg(test)]
+const PARALLEL_INDEX_BYTES: usize = 1 << 10;
+
+/// Threads used by the whole-file passes.
+fn worker_threads() -> usize {
+    std::thread::available_parallelism().map(|count| count.get()).unwrap_or(1).clamp(1, 32)
+}
+
+/// How many threads the line index and the candidate scan use for a source of `bytes` bytes.
+fn index_chunks(bytes: usize) -> usize {
+    if bytes >= PARALLEL_INDEX_BYTES { worker_threads() } else { 1 }
+}
+
 /// The body's lines as byte offsets into the source.
 ///
-/// One `u32` per line instead of a `&str` (16 bytes) plus a separate `usize` offset table: the
+/// One `u64` per line instead of a `&str` (16 bytes) plus a separate `usize` offset table: the
 /// Symfony `--web` build has 44.7 million lines, and the two `Vec<&str>` copies and the offset
-/// table this replaces cost 1.8 GB of the assembly phase's peak. Sources of 4 GiB or more are
-/// not split (`split_assembly` returns them whole), which is what makes `u32` enough.
+/// table this replaces cost 1.8 GB of the assembly phase's peak. The offsets are 64-bit because
+/// the preload build's body passes 4 GiB, and assembling such a body whole puts `bl` targets
+/// out of their +-128 MB range ("fixup value out of range").
 struct Lines<'a> {
     source: &'a str,
     /// Start of every line, plus one final entry: the end of the last line.
-    starts: Vec<u32>,
+    starts: Vec<u64>,
 }
 
 impl<'a> Lines<'a> {
     /// Indexes every line of `source`, `\n` included.
     fn new(source: &'a str) -> Self {
-        let mut starts = Vec::with_capacity(source.len() / 32 + 2);
-        starts.push(0u32);
-        let newlines = memchr::memchr_iter(b'\n', source.as_bytes());
-        starts.extend(newlines.map(|index| (index + 1) as u32));
+        let bytes = source.as_bytes();
+        let chunks = index_chunks(bytes.len());
+        // Each worker indexes the newlines of one byte range; the ranges are joined in order, so
+        // the table is the one a single pass would build.
+        let per = bytes.len().div_ceil(chunks).max(1);
+        let parts: Vec<Vec<u64>> = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..chunks)
+                .map(|chunk| {
+                    let lo = (chunk * per).min(bytes.len());
+                    let hi = ((chunk + 1) * per).min(bytes.len());
+                    scope.spawn(move || {
+                        let mut found = Vec::with_capacity((hi - lo) / 32 + 1);
+                        found.extend(
+                            memchr::memchr_iter(b'\n', &bytes[lo..hi])
+                                .map(|index| (lo + index + 1) as u64),
+                        );
+                        found
+                    })
+                })
+                .collect();
+            workers.into_iter().map(|w| w.join().expect("line index panicked")).collect()
+        });
+        let mut starts = Vec::with_capacity(parts.iter().map(Vec::len).sum::<usize>() + 2);
+        starts.push(0u64);
+        for part in parts {
+            starts.extend(part);
+        }
         if *starts.last().expect("seeded above") as usize != source.len() {
-            starts.push(source.len() as u32);
+            starts.push(source.len() as u64);
         }
         Self { source, starts }
     }
@@ -285,8 +326,7 @@ pub(super) fn plan_split<'a>(
     local_prefix: &'a str,
     encode: bool,
 ) -> Option<SplitPlan<'a>> {
-    // `Lines` stores `u32` offsets; a larger text is assembled whole.
-    if jobs <= 1 || source.is_empty() || source.len() >= u32::MAX as usize {
+    if jobs <= 1 || source.is_empty() {
         return None;
     }
     let analysis = analyze(source, local_prefix);
@@ -371,6 +411,7 @@ pub(super) fn plan_split<'a>(
             promoted: promoted_names,
             published: published_count,
         },
+        compact: None,
     })
 }
 
@@ -391,12 +432,113 @@ pub(super) struct SplitPlan<'a> {
     /// Per slice, the names it defines that another slice references.
     published: Vec<Vec<&'a str>>,
     pub(super) summary: SplitSummary,
+    /// The target's full-line comment prefix when slices are written compact (see
+    /// [`SplitPlan::compact`]); `None` writes every line as the `.s` has it.
+    compact: Option<&'static str>,
 }
 
 impl SplitPlan<'_> {
+    /// Writes the slices COMPACT: no full-line comments, no indentation, and every assembler
+    /// temporary renamed to a short name built from its definition index.
+    ///
+    /// The slices exist only for `as`; the `.s` the build wrote, which `--emit-asm` users and the
+    /// tests read, keeps every byte. On the Symfony demo indentation was 12% of the text, comment
+    /// lines 6%, and temporaries such as `L_eir_Symfony_Component_Mime_M_array_push_done_<hash>_9`
+    /// another 28% between their definitions and their references -- all of it lexed, hashed and
+    /// stored by `as`. The index comes from the whole-file analysis every slice shares, so a
+    /// temporary gets the same short name in every slice, and two temporaries can never share one.
+    /// A promoted temporary keeps its promoted (exported) name.
+    pub(super) fn compact(&mut self, comment_prefix: &'static str) {
+        self.compact = Some(comment_prefix);
+    }
+
     /// Number of slices.
     pub(super) fn slices(&self) -> usize {
         self.cuts.len() + 1
+    }
+
+    /// Copies lines `start..end` as the `.s` has them, renaming promoted temporaries and writing
+    /// encodable AArch64 instructions as `.inst` words.
+    fn render_verbatim_body(
+        &self,
+        start: usize,
+        end: usize,
+        out: &mut SliceWriter<'_>,
+    ) -> std::io::Result<()> {
+        let analysis = &self.analysis;
+        let mut run = start;
+        let mut rewritten = String::new();
+        for index in start..end {
+            let line = analysis.lines.get(index);
+            let rename = !self.promoted.is_empty() && line.contains(self.local_prefix);
+            let word = if self.encode && !rename {
+                super::aarch64_encode::encode(line)
+            } else {
+                None
+            };
+            if !rename && word.is_none() {
+                continue;
+            }
+            if index > run {
+                out.put(&self.source[analysis.offset(run)..analysis.offset(index)])?;
+            }
+            rewritten.clear();
+            match word {
+                Some(word) => {
+                    use std::fmt::Write as _;
+                    let _ = writeln!(rewritten, "    .inst 0x{word:08x}");
+                }
+                None => push_renamed(&mut rewritten, line, &self.promoted, self.local_prefix),
+            }
+            out.put(&rewritten)?;
+            run = index + 1;
+        }
+        if end > run {
+            out.put(&self.source[analysis.offset(run)..analysis.offset(end)])?;
+        }
+        Ok(())
+    }
+
+    /// Writes lines `start..end` compact (see [`SplitPlan::compact`]).
+    fn render_compact_body(
+        &self,
+        start: usize,
+        end: usize,
+        comment_prefix: &str,
+        out: &mut SliceWriter<'_>,
+    ) -> std::io::Result<()> {
+        use std::fmt::Write as _;
+        let analysis = &self.analysis;
+        let mut buffer = String::with_capacity(1 << 20);
+        for index in start..end {
+            let line = analysis.lines.get(index);
+            let text = line.trim();
+            if text.is_empty() || text.starts_with(comment_prefix) {
+                continue;
+            }
+            let word = if self.encode && !text.contains(self.local_prefix) {
+                super::aarch64_encode::encode(line)
+            } else {
+                None
+            };
+            match word {
+                Some(word) => {
+                    let _ = writeln!(buffer, ".inst 0x{word:08x}");
+                }
+                None => {
+                    push_compacted(&mut buffer, text, &self.promoted, self.local_prefix, &analysis.ids);
+                    buffer.push('\n');
+                }
+            }
+            if buffer.len() >= 1 << 20 {
+                out.put(&buffer)?;
+                buffer.clear();
+            }
+        }
+        if !buffer.is_empty() {
+            out.put(&buffer)?;
+        }
+        Ok(())
     }
 
     fn slice_of(&self, line: usize) -> usize {
@@ -448,35 +590,10 @@ impl SplitPlan<'_> {
         // assembler already encoded. The encoded word is exactly what `as` would produce, so the
         // object does not change; the assembler only skips matching the instruction, which is
         // most of its time (see `aarch64_encode`).
-        let mut run = start;
-        let mut rewritten = String::new();
-        for index in start..end {
-            let line = analysis.lines.get(index);
-            let rename = !self.promoted.is_empty() && line.contains(self.local_prefix);
-            let word = if self.encode && !rename {
-                super::aarch64_encode::encode(line)
-            } else {
-                None
-            };
-            if !rename && word.is_none() {
-                continue;
-            }
-            if index > run {
-                out.put(&self.source[analysis.offset(run)..analysis.offset(index)])?;
-            }
-            rewritten.clear();
-            match word {
-                Some(word) => {
-                    use std::fmt::Write as _;
-                    let _ = writeln!(rewritten, "    .inst 0x{word:08x}");
-                }
-                None => push_renamed(&mut rewritten, line, &self.promoted, self.local_prefix),
-            }
-            out.put(&rewritten)?;
-            run = index + 1;
-        }
-        if end > run {
-            out.put(&self.source[analysis.offset(run)..analysis.offset(end)])?;
+        if let Some(comment_prefix) = self.compact {
+            self.render_compact_body(start, end, comment_prefix, &mut out)?;
+        } else {
+            self.render_verbatim_body(start, end, &mut out)?;
         }
         let footer = self.visibility_footer(part);
         if !footer.is_empty() {
@@ -750,13 +867,42 @@ fn scan_references(
                 continue;
             };
             if direction == b'f' {
-                if let Some(&next) = definitions.iter().find(|&&line| line >= index) {
+                if let Some(next) = nearest_definition(definitions, index, true, || {}) {
                     hard.push((index, next));
                 }
-            } else if let Some(&previous) = definitions.iter().rev().find(|&&line| line <= index) {
+            } else if let Some(previous) = nearest_definition(definitions, index, false, || {}) {
                 hard.push((previous, index));
             }
         }
+    }
+}
+
+/// The line of the definition a numeric reference on line `index` resolves to: the first
+/// definition at or after it for `1f`, the last at or before it for `1b`. `definitions` ascends.
+///
+/// A numeric label such as `1:` is defined hundreds of thousands of times in a large file, so a
+/// linear `find` per reference made the reference pass quadratic: the Symfony `--web` scan ran
+/// at 45 MB/s over its first blocks and 3 MB/s over its last, and the pass cost 100 CPU-seconds
+/// instead of 10. The nearest definition is found by bisection; `probe` is called once per
+/// comparison so a test can bound the work.
+fn nearest_definition(
+    definitions: &[usize],
+    index: usize,
+    forward: bool,
+    mut probe: impl FnMut(),
+) -> Option<usize> {
+    if forward {
+        let at = definitions.partition_point(|&line| {
+            probe();
+            line < index
+        });
+        definitions.get(at).copied()
+    } else {
+        let at = definitions.partition_point(|&line| {
+            probe();
+            line <= index
+        });
+        at.checked_sub(1).map(|at| definitions[at])
     }
 }
 
@@ -929,9 +1075,45 @@ fn boundary_candidates<'a>(
     local_prefix: &str,
     hard: &[(usize, usize)],
 ) -> (Vec<usize>, Vec<&'a str>) {
+    let total = lines.len();
+    let chunks = index_chunks(lines.offset(total));
+    let per = total.div_ceil(chunks).max(1);
+    // The decision for a line reads only earlier lines and `hard`, so ranges are independent;
+    // their results are joined in order and de-duplicated across the seams exactly as the single
+    // pass de-duplicates against the previous candidate.
+    let parts: Vec<(Vec<usize>, Vec<&'a str>)> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..chunks)
+            .map(|chunk| {
+                let range = (chunk * per).min(total)..((chunk + 1) * per).min(total);
+                scope.spawn(move || candidates_in(lines, local_prefix, hard, range))
+            })
+            .collect();
+        workers.into_iter().map(|w| w.join().expect("candidate scan panicked")).collect()
+    });
     let mut candidates: Vec<usize> = Vec::new();
     let mut candidate_names: Vec<&'a str> = Vec::new();
-    for (index, raw) in lines.iter().enumerate() {
+    for (starts, names) in parts {
+        for (start, name) in starts.into_iter().zip(names) {
+            if candidates.last() != Some(&start) {
+                candidates.push(start);
+                candidate_names.push(name);
+            }
+        }
+    }
+    (candidates, candidate_names)
+}
+
+/// The candidates opened by the labels on lines `range`.
+fn candidates_in<'a>(
+    lines: &Lines<'a>,
+    local_prefix: &str,
+    hard: &[(usize, usize)],
+    range: std::ops::Range<usize>,
+) -> (Vec<usize>, Vec<&'a str>) {
+    let mut candidates: Vec<usize> = Vec::new();
+    let mut candidate_names: Vec<&'a str> = Vec::new();
+    for index in range {
+        let raw = lines.get(index);
         if raw.starts_with(' ') || raw.starts_with('\t') {
             continue;
         }
@@ -1153,6 +1335,59 @@ fn section_in_effect<'a>(sections: &[(usize, &'a str)], line: usize) -> &'a str 
     }
 }
 
+/// [`push_renamed`] for compact slices: a promoted temporary takes its promoted name, any other
+/// temporary this file defines becomes `<prefix>z<index>`. The emitter only ever mints temporaries
+/// as `<prefix>_...`, so a `<prefix>z` name cannot meet one of its own.
+fn push_compacted(
+    out: &mut String,
+    line: &str,
+    promoted: &FastMap<&str, String>,
+    local_prefix: &str,
+    ids: &FastMap<&str, usize>,
+) {
+    let bytes = line.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'"' {
+            let start = index;
+            index += 1;
+            let mut escaped = false;
+            while index < bytes.len() {
+                let byte = bytes[index];
+                index += 1;
+                if byte == b'\n' || (!escaped && byte == b'"') {
+                    break;
+                }
+                escaped = !escaped && byte == b'\\';
+            }
+            out.push_str(&line[start..index]);
+        } else if is_identifier_start(byte) {
+            let start = index;
+            while index < bytes.len() && is_identifier_byte(bytes[index]) {
+                index += 1;
+            }
+            let token = &line[start..index];
+            if !token.starts_with(local_prefix) {
+                out.push_str(token);
+            } else if let Some(renamed) = promoted.get(token) {
+                out.push_str(renamed);
+            } else if let Some(&id) = ids.get(token) {
+                use std::fmt::Write as _;
+                let _ = write!(out, "{local_prefix}z{id:x}");
+            } else {
+                out.push_str(token);
+            }
+        } else {
+            let start = index;
+            while index < bytes.len() && bytes[index] != b'"' && !is_identifier_start(bytes[index]) {
+                index += 1;
+            }
+            out.push_str(&line[start..index]);
+        }
+    }
+}
+
 /// Copies one line, replacing every whole-token occurrence of a promoted name.
 ///
 /// Quoted runs are copied verbatim for the same reason `localize_internal_labels`
@@ -1222,6 +1457,29 @@ mod tests {
 
     /// The Mach-O assembler-local prefix, the one the splitter is written for.
     const MACOS_LOCAL: &str = "L";
+
+    // TEMPORARY PROBE (remove before commit): real cut analysis over ELEPHC_PROBE_ASM.
+    #[test]
+    #[ignore]
+    fn probe_region_cuts() {
+        let path = std::env::var("ELEPHC_PROBE_ASM").unwrap();
+        let source = std::fs::read_to_string(path).unwrap();
+        let analysis = analyze(&source, MACOS_LOCAL);
+        let hard_cov: usize = 0;
+        eprintln!("lines {} candidates {} hard_cov {}", analysis.lines.len(), analysis.candidates.len(), hard_cov);
+        let mut gaps: Vec<(usize, usize)> = Vec::new();
+        let mut prev = 0usize;
+        for &c in analysis.candidates.iter().chain(std::iter::once(&analysis.lines.len())) {
+            gaps.push((c - prev, prev));
+            prev = c;
+        }
+        gaps.sort_unstable_by(|a, b| b.cmp(a));
+        for (gap, at) in gaps.iter().take(5) {
+            eprintln!("gap {gap} lines from {at}: {}", analysis.lines.get(*at).trim());
+        }
+        let cuts = choose_cuts(&analysis, 18);
+        eprintln!("cuts {:?}", cuts);
+    }
 
     /// Returns every identifier token on a line, for the scanner tests.
     fn identifiers(line: &str) -> Vec<&str> {
@@ -1751,5 +2009,113 @@ mod tests {
             "a branch-only temporary was promoted: {:?}",
             outcome.promoted
         );
+    }
+    /// Compact slices drop comments and indentation and rename every assembler temporary to the
+    /// same short name in every slice, while promoted temporaries keep their exported names.
+    #[test]
+    fn compact_slices_rename_temporaries_consistently_and_drop_comments() {
+        let mut source = String::from("    ; a comment line\n");
+        source.push_str(&fixture());
+        let mut plan = plan_split(&source, 4, MACOS_LOCAL, false).expect("the fixture splits");
+        plan.compact(";");
+        let mut slices = Vec::new();
+        for part in 0..plan.slices() {
+            let mut out = String::new();
+            plan.render_slice(part, &mut |text| {
+                out.push_str(text);
+                Ok(())
+            })
+            .expect("render");
+            slices.push(out);
+        }
+        let all = slices.concat();
+        assert!(!all.contains("; a comment"), "{all}");
+        assert!(!all.contains("L_second_retry") || plan.promoted.contains_key("L_second_retry"), "{all}");
+        assert!(all.lines().all(|line| !line.starts_with("    ")), "{all}");
+        // Every temporary still has exactly one definition, and every reference names a definition.
+        let defined: Vec<&str> = all
+            .lines()
+            .filter_map(|line| line.strip_suffix(':'))
+            .filter(|name| name.starts_with('L'))
+            .collect();
+        let unique: std::collections::HashSet<&str> = defined.iter().copied().collect();
+        assert_eq!(defined.len(), unique.len(), "{all}");
+        for line in all.lines() {
+            for token in line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+                if token.starts_with("Lz") {
+                    assert!(unique.contains(token), "dangling {token} in {all}");
+                }
+            }
+        }
+    }
+
+    /// Resolving a numeric reference is a bisection: the comparisons per lookup stay logarithmic
+    /// in the number of definitions of that label (a linear scan made the whole pass quadratic),
+    /// and the answer is the same as a linear scan's.
+    #[test]
+    fn numeric_reference_lookup_is_logarithmic_and_agrees_with_a_scan() {
+        let definitions: Vec<usize> = (0..50_000).map(|n| n * 3 + 1).collect();
+        let lookups: Vec<usize> = (0..2_000).map(|n| n * 71).collect();
+        let mut probes = 0usize;
+        for &index in &lookups {
+            let forward = nearest_definition(&definitions, index, true, || probes += 1);
+            assert_eq!(forward, definitions.iter().copied().find(|&line| line >= index));
+            let backward = nearest_definition(&definitions, index, false, || probes += 1);
+            assert_eq!(backward, definitions.iter().rev().copied().find(|&line| line <= index));
+        }
+        // ceil(log2(50_000)) = 16 comparisons per lookup, 2 lookups per index.
+        let bound = lookups.len() * 2 * 17;
+        assert!(probes <= bound, "{probes} comparisons for {} lookups", lookups.len() * 2);
+        assert_eq!(nearest_definition(&[], 5, true, || {}), None);
+        assert_eq!(nearest_definition(&[10], 5, false, || {}), None);
+        assert_eq!(nearest_definition(&[10], 10, false, || {}), Some(10));
+    }
+
+    /// A body full of `1:`/`1f` pairs keeps each pair inside one slice and still splits.
+    #[test]
+    fn numeric_local_pairs_stay_in_one_slice_when_there_are_many() {
+        let mut source = String::from(".text\n");
+        for n in 0..400 {
+            source.push_str(&format!(
+                ".globl _fn_{n}\n_fn_{n}:\n    cbnz x0, 1f\n    mov x0, #{n}\n1:\n    ret\n"
+            ));
+        }
+        let outcome = split_assembly(&source, 4, MACOS_LOCAL);
+        assert!(outcome.is_split());
+        for slice in &outcome.slices {
+            let branches = slice.matches("cbnz x0, 1f").count();
+            let targets = slice.lines().filter(|line| line.trim() == "1:").count();
+            assert_eq!(branches, targets, "a `1f` was separated from its `1:`");
+        }
+    }
+
+    /// The parallel line index and candidate scan produce exactly what one pass over the whole
+    /// range does, seams included, and a source past the threshold really is split in chunks.
+    #[test]
+    fn parallel_index_and_candidates_equal_a_single_pass() {
+        let mut source = String::from(".text\n");
+        for n in 0..300 {
+            source.push_str(&format!(
+                ".globl _fn_{n}\n_fn_{n}:\n    cbnz x0, 1f\n    mov x0, #{n}\n1:\n    ret\n"
+            ));
+        }
+        assert!(source.len() >= PARALLEL_INDEX_BYTES);
+        if worker_threads() > 1 {
+            assert!(index_chunks(source.len()) > 1);
+            assert_eq!(index_chunks(PARALLEL_INDEX_BYTES - 1), 1);
+        }
+        let lines = Lines::new(&source);
+        let naive: Vec<usize> = std::iter::once(0)
+            .chain(source.match_indices('\n').map(|(at, _)| at + 1))
+            .collect();
+        assert_eq!(lines.len(), naive.len() - usize::from(source.ends_with('\n')));
+        for index in 0..lines.len() {
+            assert_eq!(lines.offset(index), naive[index]);
+        }
+        let (parallel, parallel_names) = boundary_candidates(&lines, MACOS_LOCAL, &[]);
+        let (single, single_names) = candidates_in(&lines, MACOS_LOCAL, &[], 0..lines.len());
+        assert_eq!(parallel, single);
+        assert_eq!(parallel_names, single_names);
+        assert!(parallel.len() > 100);
     }
 }

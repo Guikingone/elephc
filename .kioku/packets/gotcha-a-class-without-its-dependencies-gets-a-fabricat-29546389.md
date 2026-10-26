@@ -6,11 +6,11 @@ description: "Twig Compiler write typed null|bool, a twig-bridge array literal t
 created: 2026-09-17
 sources:
   - path: src/types/checker/inference/objects/methods.rs
-    blob: f0dee1b1323d3b8297bd6f7e4d6f41e0bfd32245
+    blob: 41165febac884fb04decd20c4bc0e74b01afe31e
   - path: src/ir_lower/expr/indexed_array_literals.rs
-    blob: c96ce5cb2e15170de0ddfa26983731b40305e7c6
+    blob: 5d691fed7c6d804db40c5776c7c0970434af7c43
   - path: src/autoload/walk.rs
-    blob: 8ca4ef359f83e4884406856bb037aeae6fb578ef
+    blob: 4c2970949a00632386f187b9b8030b1b927bd444
 ---
 
 # A class without its dependencies gets a fabricated type, not Mixed - three places, three refused programs

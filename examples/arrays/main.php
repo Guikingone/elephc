@@ -37,6 +37,17 @@ echo "Sum: " . sum($numbers) . "\n";
 echo "array_sum: " . array_sum($numbers) . "\n";
 echo "array_product([2,3,4]): " . array_product([2, 3, 4]) . "\n";
 
+// Turn aggregate conversion warnings into exceptions while retaining source ownership.
+set_error_handler(function(int $level, string $message): bool {
+    throw new RuntimeException($message);
+});
+try {
+    array_sum([str_repeat("invalid", 3)]);
+} catch (RuntimeException $error) {
+    echo "Rejected non-numeric total\n";
+}
+restore_error_handler();
+
 $numbers[2] += 8;
 $numbers[3] >>= 1;
 echo "Adjusted slots: " . $numbers[2] . ", " . $numbers[3] . "\n";
@@ -67,6 +78,18 @@ foreach ($slice as $value) {
 }
 echo "\n";
 
+// array_push() takes any number of values and returns the new element count, so a growing
+// list needs one call rather than one per element.
+$stack = [1];
+$size = array_push($stack, 2, 3, 4);
+echo "Pushed: " . implode(", ", $stack) . " (now " . $size . " elements)\n";
+// The same slice works on a string array, whose elements are wider than a scalar slot. The
+// result owns its own copy of every string, so writing into it leaves the source alone.
+$names = ["Ada", "Grace", "Linus", "Barbara"];
+$middle = array_slice($names, 1, 2);
+$middle[0] = "GRACE";
+echo "Sliced names: " . implode(", ", $middle) . " (source still " . implode(", ", $names) . ")\n";
+
 // array_splice() removes a window IN PLACE and returns what it removed; the optional
 // fourth argument is spliced in where the removed window was, so the array can grow.
 $queue = [10, 20, 30, 40, 50];
@@ -86,6 +109,13 @@ echo "Spliced words: " . implode(", ", $words) . " (removed " . implode(", ", $c
 $mixed = [1, 2, 3];
 array_splice($mixed, 1, 1, ["two", 2.5]);
 echo "Promoted: " . implode(", ", $mixed) . "\n";
+
+// The replacement may even be the receiver itself. PHP evaluates it into its own array
+// BEFORE the removal runs, so what gets spliced in is the array as it was on the way in --
+// not the shortened one the removal leaves behind.
+$self = [1, 2, 3];
+array_splice($self, 1, 1, $self);
+echo "Self-spliced: " . implode(", ", $self) . "\n";
 
 // A by-reference parameter is the caller's storage, so a builtin that relocates the array
 // while prepending still reaches the original variable.
@@ -173,6 +203,39 @@ foreach ($names as $name) {
     echo $name . " ";
 }
 echo "\n";
+
+// Key sorting updates a row inside a declared array property without changing its aliases.
+class ScoreReport {
+    public array $rows = ["scores" => ["Linus" => 12, "Ada" => 10]];
+}
+$report = new ScoreReport();
+$unsorted = $report->rows;
+ksort($report->rows["scores"]);
+echo "Sorted names: " . implode(", ", array_keys($report->rows["scores"])) . "\n";
+echo "Original order: " . implode(", ", array_keys($unsorted["scores"])) . "\n";
+$selectedScore = array_find(
+    $report->rows["scores"],
+    static fn(int $score, string $name): bool => $score >= 12 && $name === "Linus",
+);
+echo "Selected score: " . $selectedScore . "\n";
+
+// Filtering keeps names as keys, and the callback can be omitted to remove empty values.
+$highScores = array_filter($report->rows["scores"], static fn(int $score): bool => $score >= 12);
+echo "High scorers: " . implode(", ", array_keys($highScores)) . "\n";
+$details = array_filter(["name" => "Ada", "nickname" => "", "language" => "PHP"]);
+echo "Available details: " . implode(", ", array_keys($details)) . "\n";
+
+// Elephc currently supports the two-array form of comparator set operations.
+// Both functions cast the callback result to int and preserve keys from the first array.
+function compare_languages(string $left, string $right): int {
+    return strcmp(strtolower($left), strtolower($right));
+}
+$available = ["primary" => "PHP", 7 => "Rust", "target" => "ARM64"];
+$used = ["php", "arm64"];
+$unused = array_udiff($available, $used, "compare_languages");
+$matched = array_uintersect($available, $used, compare_languages(...));
+echo "Unused language keys: " . implode(", ", array_keys($unused)) . "\n";
+echo "Matched language keys: " . implode(", ", array_keys($matched)) . "\n";
 
 // String array
 $langs = ["PHP", "Rust", "ARM64"];

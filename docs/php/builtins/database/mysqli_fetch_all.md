@@ -1,8 +1,8 @@
 ---
 title: "mysqli_fetch_all()"
-description: "Implemented by the compiler-injected mysqli prelude."
+description: "Returns every remaining row of a result at once."
 sidebar:
-  order: 127
+  order: 128
 ---
 
 ## mysqli_fetch_all()
@@ -11,7 +11,7 @@ sidebar:
 function mysqli_fetch_all(mixed $result, int $mode = 2): array
 ```
 
-Implemented by the compiler-injected mysqli prelude.
+Returns every remaining row of a result at once.
 
 **Parameters**:
 - `$result` (`mixed`)
@@ -24,7 +24,7 @@ Implemented by the compiler-injected mysqli prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

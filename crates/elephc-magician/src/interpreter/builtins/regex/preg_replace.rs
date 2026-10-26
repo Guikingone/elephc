@@ -78,36 +78,37 @@ pub(in crate::interpreter) fn eval_bound_preg_replace_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    let (bound, _) = bind_evaluated_ref_builtin_args(
-        &["pattern", "replacement", "subject", "limit", "count"],
-        &evaluated_args,
-        false,
-    )?;
-    let pattern = required_evaluated_ref_arg(&bound, 0)?;
-    let replacement = required_evaluated_ref_arg(&bound, 1)?;
-    let subject = required_evaluated_ref_arg(&bound, 2)?;
-    let limit = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
-    let (result, replacement_count) = eval_preg_replace_full(
-        pattern.value,
-        replacement.value,
-        subject.value,
-        limit,
-        filter,
-        function,
-        context,
-        values,
-    )?;
-    let Some(count) = optional_evaluated_ref_arg(&bound, 4) else {
-        return Ok(result);
-    };
-    let target = count
-        .ref_target
-        .clone()
-        .ok_or(EvalStatus::RuntimeFatal)?;
-    let replacement_count = values.int(replacement_count)?;
-    eval_write_preg_matches_target(&target, replacement_count, context, values)?;
-    Ok(result)
+    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+        let (bound, _) = bind_evaluated_ref_builtin_args(
+            &["pattern", "replacement", "subject", "limit", "count"],
+            &evaluated_args,
+            false,
+        )?;
+        let pattern = required_evaluated_ref_arg(&bound, 0)?;
+        let replacement = required_evaluated_ref_arg(&bound, 1)?;
+        let subject = required_evaluated_ref_arg(&bound, 2)?;
+        let limit = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+        let (result, replacement_count) = eval_preg_replace_full(
+            pattern.value,
+            replacement.value,
+            subject.value,
+            limit,
+            filter,
+            function,
+            context,
+            values,
+        )?;
+        let Some(count) = optional_evaluated_ref_arg(&bound, 4) else {
+            return Ok(result);
+        };
+        let target = count
+            .ref_target
+            .clone()
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        let replacement_count = values.int(replacement_count)?;
+        eval_write_preg_matches_target(&target, replacement_count, context, values)?;
+        Ok(result)
+    })
 }
 
 /// Replaces regex matches up to the optional limit and returns the replacement count.

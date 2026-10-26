@@ -1,8 +1,8 @@
 ---
 title: "imagecolorresolve()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Returns the palette index of a color, allocating or approximating it."
 sidebar:
-  order: 488
+  order: 489
 ---
 
 ## imagecolorresolve()
@@ -11,7 +11,7 @@ sidebar:
 function imagecolorresolve(mixed $image, int $red, int $green, int $blue): int
 ```
 
-Implemented by the compiler-injected image prelude.
+Returns the palette index of a color, allocating or approximating it.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -26,7 +26,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

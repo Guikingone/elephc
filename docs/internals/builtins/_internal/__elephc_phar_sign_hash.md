@@ -1,16 +1,16 @@
 ---
-title: "__elephc_phar_sign_hash() — internals"
+title: "__elephc_phar_sign_hash() - internals"
 description: "Compiler internals for __elephc_phar_sign_hash(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1120
+  order: 1224
 ---
 
-## `__elephc_phar_sign_hash()` — internals
+## `__elephc_phar_sign_hash()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_sign_hash.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_sign_hash.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,8 +48,8 @@ function __elephc_phar_sign_hash(string $path, string $algo): bool
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- _No user-facing reference — this is a compiler internal helper._
+- _No user-facing reference - this is a compiler internal helper._

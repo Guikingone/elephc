@@ -100,6 +100,10 @@ fn emit_loaded_isset_missing_result(ctx: &mut FunctionContext<'_>, value: ValueI
             Ok(())
         }
         PhpType::Int | PhpType::Bool => emit_scalar_value_is_null_sentinel(ctx, value),
+        // An object-typed slot may still hold null (an untyped property declared `= null`).
+        PhpType::Object(_) | PhpType::Callable | PhpType::Iterable => {
+            super::super::comparisons::emit_object_null_compare(ctx, value, true)
+        }
         _ => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             Ok(())

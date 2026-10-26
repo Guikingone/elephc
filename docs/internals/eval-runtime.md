@@ -65,6 +65,18 @@ shapes, `try`/`throw`, unsupported control flow, and unsupported static calls.
 Eligibility is intentionally conservative: a fragment falls back rather than
 being partially compiled with different observable behavior.
 
+## Runtime-created throwables
+
+An `eval()` declaration can introduce a class that the compiler cannot resolve
+at compile time. A later AOT `throw` of an instance of that class therefore
+defers the `Throwable` check to runtime. The emitted path validates the boxed
+`Mixed` value against the runtime `Throwable` interface before unwinding. For
+a valid throwable it moves the object owner out of the `Mixed` box into the
+active exception slot and releases the box; for an invalid value it releases
+the box before raising the catchable `TypeError`. This ownership transfer is
+shared by statement-form and expression-form throws. A runnable program is
+`examples/eval-throw/`.
+
 `src/ir_lower/program.rs` repeats the final bridge-requirement check against the
 completed EIR module. This accounts for actual local-slot types and supported
 static function/method targets before setting `RuntimeFeatures::eval_bridge`.
@@ -166,6 +178,15 @@ and mutate the same `Mixed` cells used by native code. Array writes still pass
 through the normal copy-on-write helpers, and object/class operations reuse
 generated metadata when the bridge shape is supported.
 
+`RuntimeCellHandle` also carries Rust-only provenance. A handle returned from
+durable context, scope, constant, property, or class storage is borrowed; a
+handle created by a constructor, copy, retain, or ownership-transferring result
+API is owned. This marker never crosses the C ABI. Raw argument and mutable
+reference slots contain contiguous `RuntimeCell *` values, and FFI entrypoints
+reconstruct raw pointers with owned provenance by default. APIs that transfer
+one owner to Magician keep that default; FFI entrypoints receiving caller-owned
+inputs explicitly convert the reconstructed handle to borrowed provenance.
+
 Runtime string contexts that encounter an eval-declared object use
 `__elephc_eval_string_context`. The bridge returns the same `ElephcEvalResult`
 value-or-throwable shape as method calls: successful strings are persisted while
@@ -173,11 +194,34 @@ the formatter copies them, and escaped `__toString()` exceptions enter the nativ
 `__rt_throw_current` path so surrounding compiled `try`/`catch` blocks remain
 authoritative.
 
-Scope setters retain the value stored in the context; getters return values
-with the ownership expected by their EIR result. Normal returns, runtime
+Scope setters retain the value stored in the context; getters expose borrowed
+handles. An expression consumer that requires an owned PHP value copies that
+borrowed cell through the shared scope-copy helper. Arrays retain their cursor
+and alias side metadata while receiving an independent copy-on-write cell;
+objects and resources preserve their PHP identity. Normal returns, runtime
 fatals, thrown values, early fragment returns, and function cleanup must all
 balance those cells. Persistent declarations and metadata live in the eval
 context until its owning generated function or process scope is destroyed.
+
+Cycle collection uses `__elephc_eval_gc_collect_cycles_v2(Throwable **out)`:
+native exceptions are caught below the Rust activation and returned as an owned
+boxed Throwable. The destructor callback installed through
+`__elephc_eval_install_dynamic_object_destructor_hook_v2` likewise receives a
+Throwable output slot, returning zero for a missing target, one for success,
+or two for an escaping exception. Native code propagates that exception only
+after the callback returns from Rust. These versioned symbols have no legacy
+aliases, so incompatible prebuilt Magician archives fail at link time instead
+of calling a different argument ABI. The eval-context layout version is separate.
+
+The Rust-only `RuntimeCellHandle` records whether an expression borrows a stored
+cell or transfers an owner. Native C-ABI arguments and by-reference slots remain
+raw cell pointers, never the Rust handle structure. Core adapters and scalar
+expression consumers retain borrowed operands before evaluating later operands,
+then release their leases on success and failure. Conditions consume their
+temporary results; assignments transfer an owner and balance replacements even
+when the old and new cell pointers coincide. Class-default collection builders
+also acquire a lease for defaults borrowed from persistent class constants or
+enum cases before inserting and releasing their temporary operands.
 
 Builtin lookup is also shared at the contract boundary. Magician joins its
 implementation hooks to the same `BuiltinId` used by the compiler. For compatible
@@ -188,6 +232,17 @@ fail closed. The compiler emits target-aware wrappers for macOS ARM64, Linux ARM
 and Linux x86_64. By-reference/lvalue, callable, reflection, resource,
 eval-declaration, and partial-signature behavior remains on an explicit Magician
 adapter with a catalog-audited reason.
+
+Reflected AOT member names cross the same boundary as generated data tables, and
+those tables store the **declared** spelling, not the case-insensitive lookup
+key. `_eval_reflection_methods` is emitted from each class-like's `method_decls`
+(`src/codegen_support/runtime/data/user.rs`), so `__elephc_eval_reflection_method_names`
+hands the interpreter `Match` for a method written `Match`. Every reader of the
+table compares with `__rt_strcasecmp`, which is what makes that safe: the stored
+spelling decides only what is *reported*, never which row a lookup finds. The
+interpreter must therefore not re-normalize a name it took from the table — doing
+so is how `ReflectionMethod::getName()` inside `eval()` came to answer `match`
+while the same program's compiled reflection answered `Match` (issue #571).
 
 Eval array reads use a dedicated owned shared-cell mode. Unlike an ordinary
 PHP array read, which detaches a boxed zval to preserve value semantics, the
@@ -209,9 +264,138 @@ source bytes:
 - excluded data: scopes, cells, declarations, context, and call-site magic
   constant values.
 
-The same cache is used by the public eval FFI entry and nested eval/include
+The same cache is used by the public eval FFI entry and nested eval
 execution. Large one-off fragments bypass it instead of occupying global cache
-capacity.
+capacity. Included files have their own memo (`parse_script_cached`), with the
+same cap: a file starts in HTML mode and a fragment in PHP mode, so the same
+bytes parse to different programs and must never share a key.
+
+## Runtime script cache
+
+**Sources:** `crates/elephc-magician/src/script_cache/`, the
+`__elephc_eval_*opcache*` symbols in `crates/elephc-magician/src/ffi/context.rs`,
+and `src/opcache_prelude/`.
+
+A PHP file included at run time — a path only `eval()` can reach — is the one
+part of a binary that is not compiled at link time. The runtime script cache is
+OPcache's cache for those files; what OPcache reports about compiled code is
+emulated from the compile-time manifest instead. Every piece of it is inert
+unless the cache is enabled for the binary (`ScriptCacheConfig::enabled`, the
+same predicate as `opcache_cache_enabled`), so a default CLI binary caches
+nothing and behaves as it did before the cache existed. The user-facing rules
+are in [OPcache](../php/opcache.md); the invariants below are what the
+implementation must keep.
+
+### The unit and the load path
+
+The unit is the FILE, keyed by its canonical path. `segments::parse_script`
+parses a whole file as PHP compiles it: the tags cut it, inline HTML becomes
+`echo` of its exact bytes, and the pieces join into one token stream parsed
+once, so a block may span the tags and a parse error anywhere fails the whole
+file. An entry holds that one program (or the parse error).
+
+`store::load_script` serves a warm entry, or fills one in this order, which is
+php-src's and is pinned by tests:
+
+1. Open the file ONCE and take the bytes, the mtime and the size from that
+   handle, so a rewrite between a read and a `stat` cannot pair new metadata
+   with old bytes.
+2. Consult the on-disk cache first: its refusals decide what may be COMPILED
+   into the cache, not whether a stored entry may be served.
+3. Refuse, in order: the blacklist (`blacklist_misses`, stored nowhere), a
+   timestamp that cannot be recorded or is younger than
+   `opcache.file_update_protection` (`misses`), then `opcache.max_file_size`
+   (`blacklist_misses`). A refused script still RUNS.
+4. Never cache a file that did not parse, in memory or on disk: a fixed file
+   must not keep raising the old error.
+
+With the cache disabled, nothing is stored and the file memo above keeps a
+repeated include off the parser.
+
+### Freshness
+
+A fill records `revalidate_at = request_time + opcache.revalidate_freq`, and
+the file is `stat`ed again only once that has passed; `validate_timestamps=0`
+never re-`stat`s. Validation compares the TIMESTAMP ALONE, as php-src does. A
+failed revalidation marks the entry discarded BEFORE the fill decides on the
+replacement, so a refused replacement never leaves the old version live. The
+request time is fixed per request: `__elephc_eval_configure_opcache` stamps it,
+once in the CLI prologue and once per `--web` request.
+
+### Capacity
+
+The cache NEVER evicts. Once the `opcache.memory_consumption` byte budget (the
+sum of the entries' `memory_footprint`, their source length) or the entry
+ceiling (`opcache.max_accelerated_files` rounded to php-src's prime, less the
+scripts compiled into the binary) is reached, it refuses new entries and
+latches `cache_full`. A forced `opcache_invalidate()` marks an entry
+discarded rather than removing it, as php-src keeps the slot until a restart.
+
+### Restarts and request boundaries
+
+`opcache_reset()` only SCHEDULES a restart: within the request the cache keeps
+answering and every counter stays put. `__elephc_eval_opcache_apply_restart`,
+which generated code emits at the top of each `--web` request, performs it and
+drops the request's `ini_set()` overrides. A CLI program is one request and
+never flushes, which is what reference PHP does with no next request.
+Configuration is installed at startup by generated code
+(`__elephc_eval_configure_opcache`, then `__elephc_eval_opcache_swap_directive`),
+not when the first eval context is built, so every call in the program sees the
+same configuration. The blacklist is loaded once per process.
+
+### The on-disk cache
+
+`file_store` implements `opcache.file_cache`. Invariants:
+
+- An entry lives at
+  `<file_cache>/<crate version>-<FORMAT_VERSION>/<FNV-1a of the path bytes>.bin`.
+  Its header carries a magic, the format version, the canonical path's raw
+  bytes, the mtime, the size and the writer's `revalidate`. A read checks the
+  header on the raw bytes before decoding, bounds the decode by the file size,
+  and treats every failure as a miss.
+- Identity is unconditional (the path bytes must match); freshness is checked
+  only under `validate_timestamps`, and a stale entry is removed by the read
+  that rejects it.
+- A write goes to an `O_EXCL` temporary under a random name, then a rename.
+  `opcache.file_cache_read_only` writes nothing and deletes nothing.
+- **bincode is not self-describing**, so an entry written for another EvalIR
+  shape can decode into plausible garbage. `format_guard` fingerprints the
+  code lines of `eval_ir/*.rs`, `segments.rs` and `errors.rs`; when it fails,
+  bump `FORMAT_VERSION` and re-record the fingerprint. A change to the stored
+  header (`CacheFile`, in `file_store.rs`) is invisible to the guard and needs
+  a manual bump. Never reuse a version number that has been published.
+
+### The native bridges
+
+The natively compiled `opcache_*` functions reach this cache through the
+internal `__elephc_opcache_rt_*` builtins, backed by the FFI symbols above, so
+native code and `eval()` give the same answers. With no eval bridge linked,
+each call folds to `0` at lowering time; `opcache_compile_file()`, whose job is
+to create an entry, links the interpreter by itself.
+
+Configured binaries supply every OPcache declaration for interpreter-capable eval,
+including literal fragments with runtime-selected callable names. The shared AOT
+planner excludes native and scope-only literals from this broad injection, so those
+fragments do not acquire a dynamic cache or file-cache startup validation.
+
+Free-function registration carries the declaration's compiler-internal origin
+in bit 2 of the existing signature flags word. AST source mode sets the EIR
+function flag, and the target-aware registration preserves it for Magician.
+OPcache internal argument binding applies to generated preludes and fallback
+handlers; functions declared by the user keep their own signatures and reference
+semantics. Legacy registrations without the origin bit keep user semantics.
+
+Cached-script snapshots retain native `PathBuf` values. The borrowed-string FFI
+copies their encoded bytes into its thread-local buffer without a UTF-8
+conversion, so distinct Unix filenames remain distinct status keys and the
+reported paths can be passed back to invalidation.
+
+The integration suites are `tests/opcache_runtime_cache_tests.rs`,
+`opcache_file_cache_tests.rs`, `opcache_blacklist_tests.rs` and
+`opcache_strict_invalidate_tests.rs`; unit tests sit beside each module
+(`store_tests.rs`, `file_store.rs`, `segments.rs`). Each rule above was
+measured against reference PHP, and the comment at each site records the
+measurement.
 
 ## Linking and targets
 

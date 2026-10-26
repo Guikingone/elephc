@@ -1,8 +1,8 @@
 ---
 title: "imagesetpixel()"
-description: "Implemented by the compiler-injected image prelude."
+description: "Sets one pixel to a color."
 sidebar:
-  order: 543
+  order: 544
 ---
 
 ## imagesetpixel()
@@ -11,7 +11,7 @@ sidebar:
 function imagesetpixel(mixed $image, int $x, int $y, int $color): bool
 ```
 
-Implemented by the compiler-injected image prelude.
+Sets one pixel to a color.
 
 **Parameters**:
 - `$image` (`mixed`)
@@ -26,7 +26,7 @@ Implemented by the compiler-injected image prelude.
 - **Compiled (AOT)**: supported through the compiler-injected image prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

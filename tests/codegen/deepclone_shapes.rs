@@ -635,3 +635,96 @@ function f() { $o = (new ReflectionClass("stdClass"))->newInstanceWithoutConstru
 "#
     );
 }
+
+/// A closure rebound to a scope that is only a string at run time sees that scope's private
+/// members: `bindTo`, `Closure::bind` with a variable scope, a literal closure bound to a variable
+/// scope, and a scope passed through a parameter. A subclass scope cannot see its parent's private.
+/// This is DeepClone's `getHydrator()` shape (`$baseHydrator->bindTo(null, $class)`). Output only:
+/// a runtime-named property write leaks its key string independent of scope (pre-existing).
+#[test]
+fn test_closure_bound_to_a_runtime_class_name_scope_reaches_private_members() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class D { private bool $a = false; public function a() { return $this->a; } }
+class E extends D {}
+$h = static function ($props, $obj) { foreach ($props as $n => $v) { $obj->$n = $v; } };
+foreach (['D', 'E'] as $i => $cls) {
+    $b = $i === 0 ? $h->bindTo(null, $cls) : \Closure::bind($h, null, $cls);
+    $o = new D;
+    try { $b(['a' => true], $o); var_dump($o->a()); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+}
+$name = 'D'; $lit2 = \Closure::bind(static function ($o) { $o->a = true; }, null, $name); $o = new D; $lit2($o); var_dump($o->a());
+class Holder { public static function hydrator(string $cls) { $base = static function ($props, $o) { foreach ($props as $n => $v) { $o->$n = $v; } }; return $base->bindTo(null, $cls); } }
+$o = new D; (Holder::hydrator('D'))(['a' => true], $o); var_dump($o->a());
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\nCannot access private property D::$a\nbool(true)\nbool(true)\n"
+    );
+}
+
+/// The runtime scope decides private AND protected visibility exactly like a method of that class:
+/// an ancestor scope reaches a descendant object's protected and its own private members, a
+/// descendant scope reaches only the protected ones, an unrelated scope neither, and an object given
+/// as the scope names its class. A closure with no runtime scope keeps its lexical one.
+#[test]
+fn test_runtime_closure_scope_decides_protected_and_private_visibility() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class P { protected int $p = 1; private string $s = "ps"; public function g() { return $this->p . $this->s; } }
+class C extends P { private string $own = "o"; public function own() { return $this->own; } }
+class U {}
+$set = static function ($obj, $n, $v) { $obj->$n = $v; return $obj; };
+$get = static function ($obj, $n) { return $obj->$n; };
+foreach ([['P', 'C', ['p', 's']], ['C', 'C', ['p']], ['U', 'C', ['p']], ['P', 'P', ['p', 's']], ['C', 'P', ['p', 's']]] as [$scope, $cls, $names]) {
+    $s = \Closure::bind($set, null, $scope);
+    $g = \Closure::bind($get, null, $scope);
+    foreach ($names as $n) {
+        $o = new $cls;
+        try { $s($o, $n, $n === 'p' ? 7 : 'x'); $r = "ok " . $o->g(); } catch (Error $e) { $r = $e->getMessage(); }
+        echo "$scope/$cls set $n: $r\n";
+        try { $r = $g($o, $n); } catch (Error $e) { $r = $e->getMessage(); }
+        echo "$scope/$cls get $n: $r\n";
+    }
+}
+$s = $set->bindTo(null, new C);
+$o = new C;
+try { $s($o, 'own', 'q'); echo $o->own(), "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { $set(new C, 'own', 'q'); echo "unbound ok\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+class W { private $z = 3; public function mk() { return function ($o, $n) { return $o->$n; }; } }
+$f = (new W)->mk();
+echo $f(new W, 'z'), "\n";
+try { echo $f(new C, 'own'), "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+$rebound = $f->bindTo(null, 'C');
+echo $rebound(new C, 'own'), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        r#"P/C set p: ok 7ps
+P/C get p: 7
+P/C set s: ok 1x
+P/C get s: x
+C/C set p: ok 7ps
+C/C get p: 7
+U/C set p: Cannot access protected property C::$p
+U/C get p: Cannot access protected property C::$p
+P/P set p: ok 7ps
+P/P get p: 7
+P/P set s: ok 1x
+P/P get s: x
+C/P set p: ok 7ps
+C/P get p: 7
+C/P set s: Cannot access private property P::$s
+C/P get s: Cannot access private property P::$s
+q
+Cannot access private property C::$own
+3
+Cannot access private property C::$own
+o
+"#
+    );
+}

@@ -47,13 +47,16 @@ pub(super) fn lower_concat(ctx: &mut LoweringContext<'_, '_>, left: &Expr, right
 }
 
 /// Persists scratch-backed concat LHS values before a call-like RHS can reset concat storage.
-pub(super) fn persist_concat_lhs_if_rhs_can_reset(
+/// A heap-owned LHS already survives the call and remains the binary operand's cleanup owner.
+pub(crate) fn persist_concat_lhs_if_rhs_can_reset(
     ctx: &mut LoweringContext<'_, '_>,
     lhs: LoweredValue,
     rhs: &Expr,
     span: Span,
 ) -> LoweredValue {
-    if lhs.ir_type != IrType::Str {
+    if lhs.ir_type != IrType::Str
+        || ctx.builder.value_ownership(lhs.value) == Ownership::Owned
+    {
         return lhs;
     }
     let Some(op) = ctx.builder.value_defining_op(lhs.value) else {
@@ -224,6 +227,10 @@ pub(super) fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         ExprKind::ArrayLiteralAssoc(items) => items
             .iter()
             .any(|(key, value)| expr_can_reset_concat_storage(key) || expr_can_reset_concat_storage(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .flat_map(|entry| entry.exprs())
+            .any(expr_can_reset_concat_storage),
         ExprKind::Match {
             subject,
             arms,

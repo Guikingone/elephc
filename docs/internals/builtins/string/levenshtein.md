@@ -1,16 +1,16 @@
 ---
-title: "levenshtein() — internals"
+title: "levenshtein() - internals"
 description: "Compiler internals for levenshtein(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 835
+  order: 867
 ---
 
-## `levenshtein()` — internals
+## `levenshtein()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/backend_gap_prelude.rs`:930](https://github.com/illegalstudio/elephc/blob/main/src/backend_gap_prelude.rs#L930) (`levenshtein`)
+- **Lowering**: [`src/backend_gap_prelude.rs`:940](https://github.com/illegalstudio/elephc/blob/main/src/backend_gap_prelude.rs#L940) (`levenshtein`)
 - **Function symbol**: `levenshtein()`
 
 

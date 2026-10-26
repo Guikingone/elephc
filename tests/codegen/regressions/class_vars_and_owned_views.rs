@@ -346,3 +346,108 @@ run();
         out.stderr
     );
 }
+
+/// `dirname()` and `basename()` return a slice of their path. Over a `string|false` or untyped
+/// argument the path is the copy a cast made, which was released BEFORE the result was copied:
+/// `dirname()` handed back freed bytes (its first eight overwritten by the allocator), which is
+/// how Symfony's `getProjectDir()` lost its project directory. The result is now persisted first,
+/// and the cast's copy is still released, so the loop stays leak-free.
+#[test]
+fn test_dirname_and_basename_of_a_cast_path_are_copied_before_release() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function d($x) { return \dirname($x) . '|' . \basename($x); }
+function run(int $argc): void {
+    $out = "";
+    for ($i = 0; $i < 5; $i++) {
+        $p = $argc > 5 ? false : '/some/long/path/' . $i . '/file.php';
+        $w = $argc > 5 ? false : 'abcdefghijklmnop.php';
+        $out = \dirname($p) . ' ' . \dirname($p, 2) . ' ' . d($p) . ' '
+            . \basename($w) . ' ' . \basename($w, '.php') . ' ' . \dirname($w);
+    }
+    echo $out, "\n";
+}
+run($argc);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "/some/long/path/4 /some/long/path /some/long/path/4|file.php abcdefghijklmnop.php abcdefghijklmnop .\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A call's string appended to a declared `array` property is owned by the array afterwards.
+///
+/// The append boxes a call result by taking the string over, and the property path released it
+/// once more after the write: `$this->paths[] = rtrim($path, '/\\')` -- Twig's
+/// `FilesystemLoader::addPath()` -- stored freed bytes, so no template was ever found, and the
+/// heap debugger reported a double free at exit.
+#[test]
+fn test_call_string_appended_to_an_array_property_stays_owned_by_the_array() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class L {
+    private array $paths = [];
+    public function add(string $path): void { $this->paths[] = rtrim($path, '/\\'); }
+    public function add2(string $path): void { $this->paths[] = $path; }
+    public function paths(): array { return $this->paths; }
+}
+$a = new L();
+$a->add('/x/y/');
+$a->add2('/z');
+$a->add(str_repeat('ab', 3) . '/');
+echo count($a->paths()), ' ', json_encode($a->paths()), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "3 [\"\\/x\\/y\",\"\\/z\",\"ababab\"]\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The same append one level down, through an untyped property: `$this->paths[$ns][] =
+/// rtrim(...)` is Twig's exact `FilesystemLoader::addPath()`. It goes through a hidden Mixed
+/// local whose append also took the string over and then released it.
+#[test]
+fn test_call_string_appended_to_a_nested_untyped_property_element_survives() {
+    let out = compile_and_run(
+        r#"<?php
+class L {
+    protected $paths = [];
+    public function setPaths($paths, string $namespace = '__main__'): void {
+        if (!\is_array($paths)) { $paths = [$paths]; }
+        $this->paths[$namespace] = [];
+        foreach ($paths as $path) { $this->addPath($path, $namespace); }
+    }
+    public function addPath(string $path, string $namespace = '__main__'): void {
+        $this->paths[$namespace][] = rtrim($path, '/\\');
+    }
+    public function prependPath(string $path, string $namespace = '__main__'): void {
+        $path = rtrim($path, '/\\');
+        if (!isset($this->paths[$namespace])) {
+            $this->paths[$namespace][] = $path;
+        } else {
+            array_unshift($this->paths[$namespace], $path);
+        }
+    }
+    public function getPaths(string $namespace = '__main__'): array { return $this->paths[$namespace] ?? []; }
+}
+$a = new L();
+$a->addPath('/tpl/');
+$a->addPath(str_repeat('x', 3) . '/', 'ns');
+$a->prependPath('/first/');
+$a->setPaths(['/s1/', '/s2'], 'other');
+echo json_encode($a->getPaths()), ' ', json_encode($a->getPaths('ns')), ' ', json_encode($a->getPaths('other')), "\n";
+"#,
+    );
+    assert_eq!(out, "[\"\\/first\",\"\\/tpl\"] [\"xxx\"] [\"\\/s1\",\"\\/s2\"]\n");
+}

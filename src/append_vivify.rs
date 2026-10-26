@@ -118,6 +118,26 @@ impl Scan {
         }
     }
 
+    /// Walks bodies that are ALTERNATIVES of one another -- the arms of an `if`/`elseif`/`else`
+    /// chain, the cases of a `switch`.
+    ///
+    /// Only one of them runs, so a binding made in one arm does not exist when a sibling arm
+    /// starts: `if ($a) { $r = [1]; } else { $r[$k] = $v; }` CREATES `$r` in the `else`. Every
+    /// arm therefore starts from the names bound before the chain, and the names bound by any
+    /// arm are visible only afterwards. Walking the arms in plain source order made the
+    /// `else` look like a write to an existing array, so the name was never vivified and the
+    /// write hit an unbound slot.
+    fn alternatives(&mut self, bodies: &[&[Stmt]]) {
+        let before = self.bound.clone();
+        let mut after = before.clone();
+        for body in bodies {
+            self.bound = before.clone();
+            self.block(body);
+            after.extend(self.bound.drain());
+        }
+        self.bound = after;
+    }
+
     /// Walks one statement: its expressions first, then the names it binds.
     fn stmt(&mut self, statement: &Stmt) {
         match &statement.kind {
@@ -190,14 +210,15 @@ impl Scan {
                 else_body,
             } => {
                 self.expr(condition);
-                self.block(then_body);
-                for (condition, body) in elseif_clauses {
+                for (condition, _) in elseif_clauses {
                     self.expr(condition);
-                    self.block(body);
                 }
+                let mut arms: Vec<&[Stmt]> = vec![then_body.as_slice()];
+                arms.extend(elseif_clauses.iter().map(|(_, body)| body.as_slice()));
                 if let Some(body) = else_body {
-                    self.block(body);
+                    arms.push(body.as_slice());
                 }
+                self.alternatives(&arms);
             }
             StmtKind::IfDef {
                 then_body,
@@ -254,15 +275,16 @@ impl Scan {
                 default,
             } => {
                 self.expr(subject);
-                for (conditions, body) in cases {
+                for (conditions, _) in cases {
                     for condition in conditions {
                         self.expr(condition);
                     }
-                    self.block(body);
                 }
+                let mut arms: Vec<&[Stmt]> = cases.iter().map(|(_, body)| body.as_slice()).collect();
                 if let Some(body) = default {
-                    self.block(body);
+                    arms.push(body.as_slice());
                 }
+                self.alternatives(&arms);
             }
             StmtKind::Try {
                 try_body,

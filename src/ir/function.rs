@@ -13,7 +13,6 @@ use crate::ir::block::{BasicBlock, BlockId};
 use crate::ir::instr::{InstId, Instruction};
 use crate::ir::types::IrType;
 use crate::ir::value::{Value, ValueId};
-use crate::parser::ast::Stmt;
 use crate::types::{AttrArgEntry, FunctionSig, PhpType};
 
 /// Module-local identifier for an EIR function.
@@ -80,6 +79,26 @@ pub struct Function {
     /// it did not own. A read-only `array` parameter called in a loop therefore died with
     /// `heap debug detected bad refcount` under `-O`, while `-O0` was clean.
     pub no_epilogue_cleanup_slots: std::collections::HashSet<LocalSlotId>,
+    /// By-value parameter slots whose address this body hands to a by-reference parameter.
+    ///
+    /// The callee can overwrite the slot through that reference and releases what it replaces,
+    /// but a by-value parameter holds a +0 borrow of the caller's argument. The frame must
+    /// therefore own its parameter (retain it in the prologue) exactly as it would for a slot an
+    /// ordinary `StoreLocal` overwrites; no EIR store names the slot, so the lowering records it.
+    pub by_ref_argument_param_slots: std::collections::HashSet<LocalSlotId>,
+    /// Where a closure literal sits, for php's `{closure:SCOPE:LINE}` name and its reflected
+    /// line range. `None` for every non-closure body and for synthesized closures.
+    pub closure_origin: Option<ClosureOrigin>,
+}
+
+/// Source position of a closure literal: the body that declared it and its line range.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClosureOrigin {
+    /// EIR name of the enclosing body (`"main"`, a function, `"Class::method"`, or another
+    /// closure's `__eir_closure_*` name).
+    pub owner: String,
+    /// The literal's span: its start and end lines, and the source file identity.
+    pub span: crate::span::Span,
 }
 
 impl Function {
@@ -104,6 +123,8 @@ impl Function {
             generator_source: None,
             flags: FunctionFlags::default(),
             no_epilogue_cleanup_slots: std::collections::HashSet::new(),
+            by_ref_argument_param_slots: std::collections::HashSet::new(),
+            closure_origin: None,
         }
     }
 
@@ -157,13 +178,6 @@ impl Function {
     }
 }
 
-/// Source metadata retained for generator functions during the Phase 04 EIR backend bridge.
-#[derive(Debug, Clone)]
-pub struct GeneratorSource {
-    pub body: Vec<Stmt>,
-    pub visible_param_count: usize,
-}
-
 /// Caller-visible function parameter metadata.
 #[derive(Debug, Clone)]
 pub struct FunctionParam {
@@ -191,6 +205,8 @@ pub enum LocalKind {
     GlobalAlias,
     StaticLocal,
     RefCell,
+    /// A reference-return lease transferred on normal exit and retired if frame cleanup throws.
+    ReturnRefCell,
     HiddenTemp,
     /// Non-owning slot introduced by an EIR transform, excluded from epilogue cleanup.
     BorrowedTemp,
@@ -208,6 +224,8 @@ pub enum LocalKind {
 /// Function-level shape flags used by lowering and later codegen.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FunctionFlags {
+    /// Whether compiler-internal source declared this function rather than the user's program.
+    pub is_internal: bool,
     pub is_main: bool,
     pub is_method: bool,
     pub is_closure: bool,
@@ -222,4 +240,11 @@ pub struct FunctionFlags {
     /// property-default init thunks and builtin class methods (Reflection, SPL,
     /// DateTime) lowered into the module. Consumed by source-map emission.
     pub is_synthetic: bool,
+}
+
+/// Source metadata retained for generator functions during the Phase 04 EIR backend bridge.
+#[derive(Debug, Clone)]
+pub struct GeneratorSource {
+    pub body: Vec<crate::parser::ast::Stmt>,
+    pub visible_param_count: usize,
 }

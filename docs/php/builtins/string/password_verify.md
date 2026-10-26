@@ -2,7 +2,7 @@
 title: "password_verify()"
 description: "Verifies that a password matches a bcrypt hash."
 sidebar:
-  order: 855
+  order: 948
 ---
 
 ## password_verify()
@@ -22,9 +22,9 @@ Verifies that a password matches a bcrypt hash.
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected password prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/password_verify.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/password_verify.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/password_verify.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/password_verify.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

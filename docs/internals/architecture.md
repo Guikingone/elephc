@@ -155,12 +155,13 @@ PHP source (.php)
 │ EIR passes  │  src/ir_passes/
 │             │  Module-level fixed-point pipeline: a cross-function
 │             │  small-function inliner interleaved with the per-function
-│             │  pass driver (identity folding, peephole rewrites, constant
-│             │  folding, common-subexpression elimination, loop-invariant
-│             │  code motion, dead-instruction elimination, dead-store
-│             │  elimination, branch simplification) plus dominance and loop
-│             │  analysis and linear-scan register allocation (liveness,
-│             │  intervals, pools) before codegen.
+│             │  pass driver (identity folding, peephole rewrites, scalar
+│             │  local promotion, immutable local classification, checked-
+│             │  integer sinking, boxed numeric-chain fusion, constant folding,
+│             │  common-subexpression elimination, loop-invariant code motion,
+│             │  dead-instruction elimination, dead-store elimination, branch
+│             │  simplification) plus dominance and loop analysis and linear-
+│             │  scan register allocation (liveness, intervals, pools).
 └──────┬──────┘
        │
        ▼
@@ -191,6 +192,56 @@ dynamic fragments enable the optional `elephc-magician` interpreter staticlib
 at final linking. This is a lowering/linking decision, not a separate timed
 compiler phase. See [Eval Runtime Architecture](eval-runtime.md).
 
+### Generated-artifact write policy
+
+**Source:** `src/pipeline/artifact_io.rs`
+
+Every output path is derived from the **source filename** (`pipeline/output.rs`'s
+`output_paths`), so a checked-out tree someone else controls — an untrusted pull
+request, a shared build directory — chooses them. A symlink named `main.s`,
+`main.map`, `libmain.h` or `main.key` next to `main.php` used to make the
+compiler truncate and overwrite that symlink's target with the compiling user's
+permissions. One module now owns the policy for all of them.
+
+**Preflight, before any work runs.** `reject_unsafe_destinations` inspects each
+destination with `symlink_metadata` — which does not follow the final component,
+unlike `metadata`, whose answer would describe the *target* — and refuses a
+symbolic link or an existing non-regular file (a directory, a FIFO, a device
+node). An existing **regular** file is accepted: recompiling over yesterday's
+`main.s` is the normal case. Only `ErrorKind::NotFound` counts as absence; any
+other inspection failure is refused rather than assumed benign, because a path
+whose kind could not be read is exactly the one that cannot be vouched for.
+
+The check is **scoped to the run about to happen**. `ArtifactPlan::for_run`
+derives the destination set from the flags that decide where `compile()` returns:
+`--check` and `--emit-ir` return before the backend stage and produce none of
+these files, `--emit-asm` stops after the assembly, and the probe-key sidecar is
+a destination only under `--with-monitoring`. Validating a path the command will
+never write would turn an unrelated symlink at that name into a refusal of a
+valid command.
+
+**Staged replacement, for what this process writes.** `write_artifact` creates a
+private file in the destination's own directory with `O_CREAT | O_EXCL`, writes
+and syncs it, then renames it over the destination. `rename(2)` **replaces** a
+symlink rather than following it, so for the assembly, the source map, the
+generated header and the probe key the window between the preflight and the write
+is closed rather than merely narrowed. `write_private_artifact` is the same path
+with `mode(0o600)` applied at creation — used for the probe key, whose bytes are
+the monitoring HMAC credential and must never exist at their well-known `.key`
+name under a permissive umask, not even for the instant before a `chmod`.
+
+**What the preflight does *not* close.** The object file and the final binary are
+written by an external assembler and linker, which this process never opens
+itself — refusing before the tool runs is the only place to cover them, and it
+covers the threat above completely, because a symlink that arrives in a checkout
+is present before the compile starts. It does not cover an attacker running
+*concurrently* with write access to the build directory, who can plant one in the
+interval between the check and the invocation. Staging those two would close it,
+at the cost of reworking the debug-info path: the linker's debug map records the
+object path **as handed to it** (`keep_obj_for_debug` in `pipeline/backend.rs`
+deliberately keeps the object at that path for debuggers to follow), and
+`dsymutil` names its bundle after the binary it is given.
+
 ## Target Model
 
 The compiler now distinguishes the operating-system side of a target from the instruction set:
@@ -213,6 +264,8 @@ src/
 ├── main.rs                    CLI binary entry point
 ├── cli.rs                     Command-line option parsing
 ├── pipeline.rs                Frontend/backend compilation pipeline
+│   └── artifact_io.rs         Generated-artifact write policy: preflight destination
+│                              validation and O_EXCL-staged atomic replacement
 ├── exports.rs                 #[Export] collection and C-ABI signature validation for --emit cdylib
 ├── link_plan.rs               Ordered typed archives, libraries, paths, frameworks, and Linux link mode
 ├── link_planning.rs           Compile/runtime/user/managed inputs to one final ordered link plan
@@ -353,8 +406,8 @@ src/
 │   ├── runtime_callable_invoker.rs Runtime callable-descriptor invocation lowering
 │   ├── function_variants.rs   Include-loaded function-variant dispatcher emission
 │   ├── literal_defaults.rs    Literal property defaults → backend-native values
-│   ├── eval_*_helpers.rs      Eval-to-native bridge helpers: callables, class constants, constructors, methods, properties, ref args, reflection (+ owners), static properties (9 files)
-│   ├── shared_*.rs            Shared once-per-program helper frames: the count() TypeError guard, the boxed-mixed __toString ladder, their common helper-frame plumbing, and the module-wide state that dedupes callable descriptors and owns the label counter (4 files)
+│   ├── eval_*_helpers.rs      Eval-to-native bridge helpers: arguments, callables, class constants, constructors, error handlers, methods, properties, ref args, reflection (+ owners), static properties, and values (13 files)
+│   ├── shared_*.rs            Shared once-per-program helper frames: the count() TypeError guard, mbstring callable dispatch, the boxed-mixed __toString ladder, their common helper-frame plumbing, and the module-wide state that dedupes callable descriptors and owns the label counter (5 files)
 │   ├── fibers.rs              Fiber-aware EIR codegen integration
 │   └── web.rs                 `--web` program-entry lowering
 │
@@ -410,7 +463,7 @@ src/
 │   │
 │   └── runtime/               Runtime routines and target-specific emission helpers
 │       ├── mod.rs             Runtime module boundary; re-exports the emission entry points
-│       ├── data/              Fixed, user-program, and instanceof runtime data tables (4 files)
+│       ├── data/              Fixed, user-program, and instanceof runtime data tables (5 files)
 │       ├── diagnostics.rs     Suppressible runtime-warning channel used by `@`
 │       ├── eval_bridge.rs     C-ABI value, callable, class, and runtime hooks used by Magician
 │       ├── eval_scope.rs      Core materialized-scope helpers usable without the interpreter
@@ -420,22 +473,22 @@ src/
 │       ├── resource_ids.rs    Runtime resource-kind identifiers shared by cleanup paths
 │       ├── round_mode.rs      PHP rounding-mode constants used by runtime helpers
 │       ├── sysv_call_alignment.rs x86_64 SysV nested-call stack-alignment helpers
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, and conversion helpers (97 top-level files + iconv/ target-neutral bridge helpers, 4 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (175 files + hash_sort/ target split, 2 files)
-│       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (5 files)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (103 top-level files + 68 nested helpers)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (204 top-level files + 7 nested target/debug helpers)
+│       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (7 files)
 │       ├── compare/           Loose/strict comparison and truthiness helpers (5 files)
-│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (121 files)
+│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (126 top-level files + 1 nested response-metadata helper)
 │       ├── buffers/           Generation-safe handle resolution, allocation/free, length, bounds/size/use-after-free diagnostics (8 files incl. mod.rs)
 │       ├── bcmath/            Target-aware C-ABI marshalling for exact decimal bridge calls (3 files incl. target assembly)
 │       ├── curl/              Easy, multi, share, callback, multipart, error, and version bridge adapters (14 files)
-│       ├── eval_bridge/       Magician value, array, cast, reflection, clone, and builtin adapters (23 files)
+│       ├── eval_bridge/       Magician value, array, cast, reflection, clone, mbstring, output, and builtin adapters (36 top-level files + 1 nested output helper)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
-│       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (7 files)
+│       ├── exceptions/        cleanup frames, handler dispatch, dynamic instanceof, matching, throwing, and Throwable helpers (22 files)
 │       ├── pdo/               Target-aware PDO callable callback adapters (5 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (43 top-level files + 38 files under 6 subdirectories)
+│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (45 top-level files + 43 nested files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 top-level files) + `api/` (4 target-aware public API helper files)
-│       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (15 files)
+│       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (17 files)
 │       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers (3 files)
 │       ├── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
 │       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (11 files)
@@ -566,9 +619,10 @@ The runtime data emission in `src/codegen_support/runtime/data/` is split into `
 | CLI globals | `_global_argc`, `_global_argv` | Saved OS argument state used to build `$argv` |
 | Heap allocator | `_heap_buf`, `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_heap_max` | Heap storage plus general/small-bin allocator metadata and heap-debug toggle |
 | Buffer registry | `_buffer_registry`, `_buffer_registry_free`, `_buffer_registry_next` | Static generation-safe descriptors, recycled-slot free-list head, and next never-issued descriptor index |
-| Runtime diagnostics | `_rt_diag_suppression`, `_diag_*`, `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_uncaught_exc_msg`, `_instanceof_target_type_msg`, `_heap_dbg_*` | Suppressible warning state/text plus fatal error messages and heap-debug summary/failure strings |
-| GC statistics and cycle state | `_gc_allocs`, `_gc_frees`, `_gc_live`, `_gc_peak`, `_gc_collecting`, `_gc_release_suppressed` | Allocation/free/live-byte counters plus targeted-cycle-collector coordination flags |
-| Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_class_parent_ids` | Active handler stack, activation cleanup stack, current exception object, and parent links used for catch matching |
+| Runtime diagnostics | `_rt_diag_suppression`, `_rt_diag_pending_*`, `_php_diagnostic_*`, `_diag_*`, `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_uncaught_exc_msg`, `_instanceof_target_type_msg`, `_heap_dbg_*` | Suppressible and deferred warning state/text plus source locations, fatal messages, and heap-debug summary/failure strings |
+| GC statistics and cycle state | `_gc_allocs`, `_gc_frees`, `_gc_live`, `_gc_peak`, `_gc_enabled`, `_gc_collecting`, `_gc_freeing_unreachable`, `_gc_pin_head`, `_gc_pending_throw`, `_gc_release_suppressed`, `_gc_runs`, `_gc_collected`, `_gc_application_started`, `_gc_*_started`, `_gc_*_time`, `_gc_destructor_depth` | Allocation/free/live-byte counters, collector lifecycle and timing state, pinned roots, and deferred throws |
+| Exception and handler state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_magic_set_guard_head`, `_php_error_handler_*`, `_php_exception_handler_*`, `_class_parent_ids` | Active exception and cleanup stacks, current user handlers with heap-backed restore stacks, magic-set recursion guard, and parent links used for catch matching |
+| Reference and resource tracking | `_rt_unmanaged_ref_borrow_top`, `_resource_inventory_head`, `_resource_inventory_tail` | Active unmanaged array-element borrow plus the heap-backed resource-incarnation inventory used by `get_resources()` |
 | Include-once guards | `_include_once_<hash>` | Per-resolved-file loaded flags used by `include_once` / `require_once` runtime guards |
 | Include-loaded function variants | `_fn_variant_active_<function>` | Active hidden implementation pointer for a function loaded through an include point |
 | I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags`, `_principal_lookup_buf`, `_etc_passwd_path`, `_etc_group_path`, `_principal_lookup_read_mode` | Syscall-oriented C-string scratch buffers, EOF bookkeeping, and passwd/group lookup state for `chown()` / `chgrp()` name resolution |
@@ -579,7 +633,7 @@ The runtime data emission in `src/codegen_support/runtime/data/` is split into `
 
 ### Heap allocator
 
-8MB free-list + bump hybrid allocator in BSS (`_heap_buf`). Each allocation has a uniform 16-byte header: `[size:4][refcount:4][kind:8]` — a 32-bit block size, a 32-bit reference count, and an 8-byte heap-kind tag shared by arrays, hashes, objects, boxed mixed cells, persisted strings, and raw helper buffers. The allocator now keeps four segregated small-block bins (`<=8`, `<=16`, `<=32`, `<=64` bytes) in `_heap_small_bins` ahead of the general address-ordered free list, so tiny short-lived blocks can often be reused without walking the full first-fit chain. When memory is freed (via `__rt_heap_free`), tail blocks still fold directly back into `_heap_off`, small non-tail blocks are cached in their size class, and larger blocks remain in the ordered free list where adjacent neighbors are coalesced and any free chain that reaches the current bump tail is trimmed back into the bump pointer. New allocations consult the matching small-bin class first, then the general free list (splitting oversized free blocks when needed), and only bump allocate when neither path can satisfy the request. Reference counting (`__rt_incref`, `__rt_decref_array`, `__rt_decref_hash`, `__rt_decref_mixed`, `__rt_decref_object`) still handles the common acyclic case, while arrays and hashes now add copy-on-write splitting through `__rt_array_ensure_unique` / `__rt_hash_ensure_unique` plus shallow clone helpers before mutating shared containers. The low 16 bits of the kind word are now persistent container metadata: low byte = heap kind, bits 8-14 = indexed-array `value_type`, bit 15 = copy-on-write container flag, and higher bits remain reserved for transient cycle-collector state. Heap kind tags now use `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, giving the runtime a uniform discriminator regardless of payload layout. With `--heap-debug`, the runtime validates both the ordered free list and the segregated small-bin chains on allocator/free mutations, traps on double free or zero-refcount `incref`/`decref` paths, poisons freed payload bytes, and prints an end-of-process summary with alloc/free counts, live blocks, live bytes, and the peak live-byte watermark. With `--gc-stats`, generated programs also print allocation/free counters to stderr at exit without enabling the heavier heap-debug checks. Fiber execution state uses dedicated BSS slots (`_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame`) plus guarded per-fiber stacks allocated with `mmap`; Fiber objects release those stacks through `__rt_fiber_free_stack` during object deep-free. Codegen now records a local ownership lattice (`Owned`, `Borrowed`, `MaybeOwned`, `NonHeap`) plus an `epilogue_cleanup_safe` bit in `Context::variables` so it can distinguish between stack slots that truly own a heap value and slots that merely alias global/static/container-backed storage. Ownership transfer points currently include ordinary reassignments, by-value call arguments, borrowed heap returns, indexed array writes, associative-array/hash writes, object property writes, `static` slot writes, `global` loads, `foreach` targets, and `list(...)` targets, while container-copy builtins now dispatch to dedicated `_refcounted` runtime helpers for nested array/hash/object/string payloads (`array` literals with spreads, `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_unique`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, `array_fill_keys`). Mixed heap releases now funnel through `__rt_decref_any`, and object/container deep-free paths use richer runtime metadata plus per-class GC descriptor tables to discover nested heap-backed children. Function epilogues now clean up only locals that are both `Owned` and still marked safe; borrowed aliases such as `$this`, ref params, globals, and statics are explicitly excluded, and exhaustive `if` / `elseif` / `else` branches can now restore epilogue cleanup when every fallthrough branch directly stores the same heap-backed type into the same local. Loop-driven, switch-driven, and more dynamic alias-heavy joins remain conservative until more control-flow cases are proven. Configurable via `--heap-size=BYTES` (minimum 64KB), `--gc-stats`, and `--heap-debug` for runtime verification. Bounds-checked with fatal error on overflow.
+128MB (php's `memory_limit` default) free-list + bump hybrid allocator in BSS (`_heap_buf`). Each allocation has a uniform 16-byte header: `[size:4][refcount:4][kind:8]` — a 32-bit block size, a 32-bit reference count, and an 8-byte heap-kind tag shared by arrays, hashes, objects, boxed mixed cells, persisted strings, and raw helper buffers. The allocator now keeps four segregated small-block bins (`<=8`, `<=16`, `<=32`, `<=64` bytes) in `_heap_small_bins` ahead of the general address-ordered free list, so tiny short-lived blocks can often be reused without walking the full first-fit chain. When memory is freed (via `__rt_heap_free`), tail blocks still fold directly back into `_heap_off`, small non-tail blocks are cached in their size class, and larger blocks remain in the ordered free list where adjacent neighbors are coalesced and any free chain that reaches the current bump tail is trimmed back into the bump pointer. New allocations consult the matching small-bin class first, then the general free list (splitting oversized free blocks when needed), and only bump allocate when neither path can satisfy the request. Reference counting (`__rt_incref`, `__rt_decref_array`, `__rt_decref_hash`, `__rt_decref_mixed`, `__rt_decref_object`) still handles the common acyclic case, while arrays and hashes now add copy-on-write splitting through `__rt_array_ensure_unique` / `__rt_hash_ensure_unique` plus shallow clone helpers before mutating shared containers. The low 16 bits of the kind word are now persistent container metadata: low byte = heap kind, bits 8-14 = indexed-array `value_type`, bit 15 = copy-on-write container flag, and higher bits remain reserved for transient cycle-collector state. Heap kind tags now use `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, giving the runtime a uniform discriminator regardless of payload layout. With `--heap-debug`, the runtime validates both the ordered free list and the segregated small-bin chains on allocator/free mutations, traps on double free or zero-refcount `incref`/`decref` paths, poisons freed payload bytes, and prints an end-of-process summary with alloc/free counts, live blocks, live bytes, and the peak live-byte watermark. With `--gc-stats`, generated programs also print allocation/free counters to stderr at exit without enabling the heavier heap-debug checks. Fiber execution state uses dedicated BSS slots (`_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame`) plus guarded per-fiber stacks allocated with `mmap`; Fiber objects release those stacks through `__rt_fiber_free_stack` during object deep-free. Codegen now records a local ownership lattice (`Owned`, `Borrowed`, `MaybeOwned`, `NonHeap`) plus an `epilogue_cleanup_safe` bit in `Context::variables` so it can distinguish between stack slots that truly own a heap value and slots that merely alias global/static/container-backed storage. Ownership transfer points currently include ordinary reassignments, by-value call arguments, borrowed heap returns, indexed array writes, associative-array/hash writes, object property writes, `static` slot writes, `global` loads, `foreach` targets, and `list(...)` targets, while container-copy builtins now dispatch to dedicated `_refcounted` runtime helpers for nested array/hash/object/string payloads (`array` literals with spreads, `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_unique`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, `array_fill_keys`). Mixed heap releases now funnel through `__rt_decref_any`, and object/container deep-free paths use richer runtime metadata plus per-class GC descriptor tables to discover nested heap-backed children. Function epilogues now clean up only locals that are both `Owned` and still marked safe; borrowed aliases such as `$this`, ref params, globals, and statics are explicitly excluded, and exhaustive `if` / `elseif` / `else` branches can now restore epilogue cleanup when every fallthrough branch directly stores the same heap-backed type into the same local. Loop-driven, switch-driven, and more dynamic alias-heavy joins remain conservative until more control-flow cases are proven. Configurable via `--heap-size=BYTES` (minimum 64KB), `--gc-stats`, and `--heap-debug` for runtime verification. Bounds-checked with fatal error on overflow.
 
 ### Hash table header (heap-allocated, for associative arrays)
 
@@ -590,7 +644,8 @@ Offset  Size  Field
  16      8    value_type  (coarse summary: 0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object, 7=mixed, 8=null)
  24      8    head        (slot index of first inserted entry, or -1)
  32      8    tail        (slot index of last inserted entry, or -1)
- 40      ...  entries     (each entry is 64 bytes)
+ 40      8    entries     (owned pointer to separate storage, each entry is 64 bytes)
+ 48      8    pins        (physical lifetime roots excluded from PHP copy-on-write ownership)
 ```
 
 Each hash table entry:

@@ -1,16 +1,16 @@
 ---
-title: "date_interval_create_from_date_string() — internals"
+title: "date_interval_create_from_date_string() - internals"
 description: "Compiler internals for date_interval_create_from_date_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 213
+  order: 214
 ---
 
-## `date_interval_create_from_date_string()` — internals
+## `date_interval_create_from_date_string()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:954](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L954) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:977](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L977) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

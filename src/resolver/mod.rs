@@ -175,6 +175,12 @@ pub struct IncludedDeclarationSources {
 }
 
 /// Resolves includes while applying the invocation's conditional symbols to every loaded file.
+///
+/// Wrapped in `with_compiler_stack` like every other recursive phase. This is the entry all
+/// three public spellings funnel through, and the walk starts immediately: `has_includes`
+/// descends the whole tree before the early return, so even a program with no includes at all
+/// needs the budget at `MAX_COMPILER_NESTING`. Without it an embedder calling the resolver
+/// from its own worker thread aborted with `has overflowed its stack` (issues #686, #1150).
 pub fn resolve_collecting_includes_with_defines(
     program: Program,
     base_dir: &Path,
@@ -191,6 +197,21 @@ pub fn resolve_collecting_includes_with_defines_and_sources(
     base_dir: &Path,
     defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>, IncludedDeclarationSources), CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        resolve_collecting_includes_with_defines_and_sources_inner(program, base_dir, defines)
+    })
+}
+
+/// The resolver body, run on a stack `with_compiler_stack` has already sized.
+fn resolve_collecting_includes_with_defines_and_sources_inner(
+    program: Program,
+    base_dir: &Path,
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>, IncludedDeclarationSources), CompileError> {
+    // Source identities are NOT reset here: the autoloader resolves every class file through this
+    // function, so a reset per call numbered each file's includes from 1 again and two files'
+    // spans collided. `pipeline::compile` resets once per compile instead, which is also what
+    // keeps the identity-to-path map (`Span::register_source_path`) whole for codegen.
     if !has_includes(&program) {
         return Ok((program, Vec::new(), IncludedDeclarationSources::default()));
     }
@@ -208,9 +229,18 @@ pub fn resolve_collecting_includes_with_defines_and_sources(
         &discovery.function_variants,
     )?;
 
+    // What resolution expanded wins; discovery adds the files only it reached.
+    let mut class_likes = std::mem::take(&mut state.declared_class_files);
+    for (name, file) in discovery.class_files {
+        class_likes.entry(name).or_insert(file);
+    }
+    let mut functions = std::mem::take(&mut state.declared_function_files);
+    for (name, file) in discovery.function_files {
+        functions.entry(name).or_insert(file);
+    }
     let mut sources = IncludedDeclarationSources {
-        class_likes: std::mem::take(&mut state.declared_class_files),
-        functions: std::mem::take(&mut state.declared_function_files),
+        class_likes,
+        functions,
         source_units: state.source_units.snapshot(),
         unbound_conditional_declaration_sources: state
             .unbound_conditional_declaration_sources

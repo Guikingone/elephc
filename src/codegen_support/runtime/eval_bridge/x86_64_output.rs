@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Output state and final-object ownership remain shared with native code.
+//! - String-byte views borrow string payloads while Rust copies them, avoiding allocating casts.
 
 use super::*;
 
@@ -91,6 +92,8 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_install_ob_handler_hook");
     crate::codegen::abi::emit_symbol_address(emitter, "r9", "_elephc_eval_ob_handler_fn"); // materialize the eval handler hook slot
     emitter.instruction("mov QWORD PTR [r9], rdi");                             // install the magician ob-handler callback
+    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_elephc_eval_ob_release_fn"); // locate the buffer-retirement callback slot
+    emitter.instruction("mov QWORD PTR [r9], rsi");                             // install callback-owner retirement alongside invocation support
     emitter.instruction("ret");                                                 // return to Rust
 
     label_c_global(emitter, "__elephc_eval_ob_get_clean_pop");
@@ -190,18 +193,21 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_string_bytes");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across string casting
     emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
-    emitter.instruction("sub rsp, 16");                                         // reserve slots for the caller's output pointers
+    emitter.instruction("sub rsp, 32");                                         // reserve slots for output pointers and the borrowed source cell
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the caller's out_ptr storage address
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the caller's out_len storage address
-    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into the internal unbox input register
-    emitter.instruction("call __rt_mixed_unbox");                               // expose the concrete tag and payload through any nested Mixed cells
-    emitter.instruction("cmp rax, 1");                                          // an existing string already has stable bytes owned by the input cell
-    emitter.instruction("jne __elephc_eval_value_string_bytes_cast_x86");      // render non-string values through the shared PHP conversion helper
-    emitter.instruction("mov rax, rdi");                                        // borrow the string payload in the ABI result register
-    emitter.instruction("jmp __elephc_eval_value_string_bytes_store_x86");     // Rust copies these bytes before releasing or mutating the input
-    emitter.label("__elephc_eval_value_string_bytes_cast_x86");
-    emitter.instruction("call __rt_value_cast_string");                         // preserve the ordinary non-string conversion semantics
-    emitter.label("__elephc_eval_value_string_bytes_store_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // preserve the source cell for non-string conversion
+    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into mixed_cast_string input
+    emitter.instruction("call __rt_mixed_unbox");                               // inspect the final tag and borrow any existing string payload
+    emitter.instruction("cmp rax, 1");                                          // string payloads are already stable while Rust copies their bytes
+    emitter.instruction("jne __elephc_eval_value_string_bytes_convert");        // non-string scalar casts use borrowed formatting storage
+    emitter.instruction("mov rax, rdi");                                        // return the existing string pointer without allocating a copy
+    // mixed_unbox already returns the string length in rdx; rsi still holds out_ptr.
+    emitter.instruction("jmp __elephc_eval_value_string_bytes_store");          // skip the allocating string cast for existing strings
+    emitter.label("__elephc_eval_value_string_bytes_convert");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // restore the original non-string cell for conversion
+    emitter.instruction("call __rt_mixed_cast_string");                         // cast the boxed eval value to a PHP string pair
+    emitter.label("__elephc_eval_value_string_bytes_store");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the optional out_ptr storage address
     emitter.instruction("test r10, r10");                                       // did the caller request the string pointer?
     emitter.instruction("jz __elephc_eval_value_string_bytes_len");             // skip pointer storage when the caller passed null
@@ -213,17 +219,13 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10], rdx");                            // store the string byte length for Rust
     emitter.label("__elephc_eval_value_string_bytes_done");
     emitter.instruction("mov rax, 1");                                          // report successful string conversion to Rust
-    emitter.instruction("add rsp, 16");                                         // release the string-bytes wrapper slots
+    emitter.instruction("add rsp, 32");                                         // release the string-bytes wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the success flag to Rust
 
     label_c_global(emitter, "__elephc_eval_value_truthy");
     emitter.instruction("mov rax, rdi");                                        // move the C boxed value argument into mixed truthiness input
     emitter.instruction("jmp __rt_mixed_cast_bool");                            // cast one boxed mixed value to PHP truthiness for eval
-
-    label_c_global(emitter, "__elephc_eval_value_copy");
-    emitter.instruction("mov rax, rdi");                                        // move the C boxed value argument into the internal Mixed clone register
-    emitter.instruction("jmp __rt_mixed_clone");                                // detach a PHP by-value assignment cell while retaining its payload ownership
 
     label_c_global(emitter, "__elephc_eval_value_retain");
     emitter.instruction("mov rax, rdi");                                        // move the C boxed Mixed argument into the internal retain register
@@ -285,7 +287,7 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return zero to Rust
 
     label_c_global(emitter, "__elephc_eval_warning");
-    emitter.instruction("jmp __rt_diag_message");                               // one WHOLE interpreted diagnostic: it carries no trailing newline
+    emitter.instruction("jmp __rt_diag_warning");                               // one WHOLE interpreted diagnostic: it carries no trailing newline
 
     label_c_global(emitter, "__elephc_eval_fatal");
     emitter.instruction("mov rdx, rsi");                                        // move fatal length into the stderr write-length register
@@ -299,6 +301,11 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_dispatching");
     emitter.instruction("mov QWORD PTR [r9], rdi");                             // publish Magician handler execution to the Fiber guard
     emitter.instruction("ret");                                                 // return to the Rust interpreter
+    label_c_global(emitter, "__elephc_eval_warning_raw");
+    emitter.instruction("jmp __rt_diag_write");                                 // do not redispatch already-filtered trigger_error output
+
+    label_c_global(emitter, "__elephc_eval_record_last_error");
+    emitter.instruction("jmp __rt_last_error_record");                          // the C arguments already match the record writer
 
     label_c_global(emitter, "__elephc_eval_diag_suppression");
     emitter.instruction("test rdi, rdi");                                      // zero leaves one interpreted @ scope
@@ -315,8 +322,4 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r9", "__rt_eval_invoker_bounded");
     emitter.instruction("mov QWORD PTR [r9], 1");                               // ask the next descriptor invoker for its exception boundary
     emitter.instruction("ret");                                                 // return to the Rust interpreter
-
-    label_c_global(emitter, "__elephc_eval_value_release");
-    emitter.instruction("mov rax, rdi");                                        // move the C boxed Mixed argument into the internal release register
-    emitter.instruction("jmp __rt_decref_mixed");                               // release one eval-owned boxed Mixed cell
 }

@@ -206,6 +206,101 @@ pub fn canonical_name_for_decl(namespace: Option<&str>, local_name: &str) -> Str
     local_name.to_string()
 }
 
+/// The `#`-separated tag that marks a compiler-generated frame or parser temporary.
+///
+/// Kept apart from [`GENERATED_LOCAL_MARKER`] so the predicate below can recognise the tag in
+/// any `#` segment, not only the last one.
+const GENERATED_LOCAL_TAG: &str = "gen";
+
+/// Suffix appended to every local name the compiler synthesizes for its own bookkeeping.
+///
+/// A PHP variable name is `[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*`, so `#` cannot appear in
+/// any name a program can write: the marker is unforgeable from source. That is the whole point.
+/// A prefix convention such as `__elephc_` is NOT unforgeable, and hiding on it would make a
+/// perfectly legal user variable such as `$__elephc_func_arg_value` disappear from
+/// `get_defined_vars()` and from eval scope synchronization.
+///
+/// The same `#` discipline already backs the `name#cow` parameter shadows that
+/// `LoweringContext::privatize_container_param` mints, so a generated local that is later
+/// privatized reads `stem#gen#cow`. [`is_generated_local_name`] therefore looks for the tag in
+/// every `#` segment rather than only at the end.
+///
+/// Marking the NAME leaves `LocalKind` alone: a generated temporary stays a `PhpLocal` and keeps
+/// exactly the ownership, initialization and store behaviour it has today.
+pub const GENERATED_LOCAL_MARKER: &str = "#gen";
+
+/// Returns the storage name of a compiler-generated frame or parser temporary.
+pub fn generated_local_name(stem: &str) -> String {
+    format!("{stem}{GENERATED_LOCAL_MARKER}")
+}
+
+/// Returns whether a local's storage name was synthesized by the compiler.
+///
+/// This is the ONE predicate every PHP-visible variable enumeration consults, so AOT
+/// `get_defined_vars()` and eval scope flush/reload cannot drift apart about which locals exist.
+pub fn is_generated_local_name(name: &str) -> bool {
+    name.split('#')
+        .skip(1)
+        .any(|segment| segment == GENERATED_LOCAL_TAG)
+}
+
+/// Storage name of the hidden late-static-binding argument every static method receives.
+///
+/// The slot holds the id of the class the call was made THROUGH, which is what `static::`,
+/// `get_called_class()` and a late-static callback read. It is an ABI slot, not a PHP variable:
+/// `get_defined_vars()` inside a static method must not report it, and an eval fragment must not
+/// be able to name it and overwrite the frame's late-static-binding state. Marking the name is
+/// enough for both, because the one shared predicate above is what every PHP-visible enumeration
+/// consults; the parameter keeps its position, its `Int` type and its calling convention.
+///
+/// Spelled as a literal because a `const` cannot call [`generated_local_name`]. The unit tests at
+/// the bottom of this module pin the two spellings in step, and this is the single definition
+/// every EIR producer and every backend exact-name lookup shares, so they cannot drift apart.
+pub const CALLED_CLASS_ID_LOCAL: &str = "__elephc_called_class_id#gen";
+
+/// Storage name of the hidden capture that carries a closure's RUNTIME-bound scope.
+///
+/// `Closure::bind()` / `bindTo()` accept a scope that is only a string or object at run time, and
+/// the compiled body cannot be cloned per class. A closure whose body addresses properties by a
+/// runtime name therefore captures one extra `Int`: `0` means "no runtime scope was bound, use the
+/// lexical one", any other value is the bound class id plus one. `__rt_closure_set_scope` writes it
+/// into a freshly bound descriptor and the property-access gate in
+/// `crate::codegen::lower_inst::objects::closure_scope_gate` reads it. Always the LAST capture, and
+/// marked generated so `get_defined_vars()` and eval scope synchronization never see it.
+///
+/// Spelled as a literal like [`CALLED_CLASS_ID_LOCAL`]; the unit test below pins the spelling, and
+/// `__rt_closure_set_scope` matches the name's bytes, so the two must change together.
+pub const CLOSURE_SCOPE_LOCAL: &str = "__elephc_closure_scope#gen";
+
+/// Storage name of the eval scope handle threaded into a scope-aware AOT eval fragment.
+///
+/// A literal `eval()` whose fragment writes a caller variable is lowered as its own EIR function
+/// that receives the caller's scope handle by value and reads and writes selected names through
+/// it. The handle is a pointer-sized bookkeeping argument, so it carries the marker and stays out
+/// of `get_defined_vars()` inside the fragment.
+///
+/// The marker also removes an accidental collision: the unmarked spelling was byte-identical to
+/// the `LocalKind::EvalScope` barrier local that `crate::ir_lower::context` declares for a
+/// function that CONTAINS an eval. Those are two different things with two different kinds, and
+/// only this one is a by-value parameter.
+pub const EVAL_AOT_SCOPE_LOCAL: &str = "__eir_eval_scope#gen";
+
+/// Readable stem shared by every synthetic place temporary minted during lowering.
+///
+/// Kept public so the lowering that recognises such a temporary by prefix and the lowering that
+/// mints one agree on a single spelling.
+pub const SYNTHETIC_PLACE_LOCAL_STEM: &str = "__eir_place";
+
+/// Returns the storage name of the `index`-th synthetic place temporary.
+///
+/// A place rewrite desugars `f($obj->items, ...)` into `$tmp = <place>; f($tmp, ...);
+/// <place> = $tmp;`, where `$tmp` is an ordinary `LocalKind::PhpLocal` so the store retains and
+/// function-exit cleanup releases. Only the NAME is marked: the ownership, initialization and
+/// store behaviour of the slot are exactly those of the user-written assignment it stands in for.
+pub fn synthetic_place_local_name(index: usize) -> String {
+    generated_local_name(&format!("{SYNTHETIC_PLACE_LOCAL_STEM}{index}"))
+}
+
 /// Returns the lowercase ASCII key used for PHP symbol lookup.
 ///
 /// PHP symbol lookups are case-insensitive; this produces the normalized key
@@ -293,6 +388,93 @@ pub fn join_symbol_fragments(prefix: &str, fragments: &[&str]) -> String {
     symbol
 }
 
+/// Returns the byte length of the `mangle_fqn()` escape at the start of `bytes`, if any.
+///
+/// The escapes are `_u_`, `_N_` and `_xNN_` with two lowercase hex digits; their second byte
+/// is never `_`, which is what separates them from a `join_symbol_fragments()` boundary.
+fn mangled_escape_len(bytes: &[u8]) -> Option<usize> {
+    match bytes {
+        [b'_', b'u' | b'N', b'_', ..] => Some(3),
+        [b'_', b'x', high, low, b'_', ..]
+            if is_lower_hex_digit(*high) && is_lower_hex_digit(*low) =>
+        {
+            Some(5)
+        }
+        _ => None,
+    }
+}
+
+/// Returns `true` for the digits `mangle_fqn()` spells a byte with (`{:02x}`).
+fn is_lower_hex_digit(byte: u8) -> bool {
+    byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+}
+
+/// Returns the PHP name a `mangle_fqn()` result spells, or `None` when `mangled` is not one.
+///
+/// The exact inverse of `mangle_fqn()`: `_u_` → `_`, `_N_` → `\`, and each `_xNN_` group
+/// back to the UTF-8 byte it escapes.
+pub fn demangle_fqn(mangled: &str) -> Option<String> {
+    let bytes = mangled.as_bytes();
+    let mut name = Vec::with_capacity(bytes.len());
+    let mut position = 0;
+    while position < bytes.len() {
+        let byte = bytes[position];
+        if byte.is_ascii_alphanumeric() {
+            name.push(byte);
+            position += 1;
+            continue;
+        }
+        let length = mangled_escape_len(&bytes[position..])?;
+        name.push(match bytes[position + 1] {
+            b'u' => b'_',
+            b'N' => b'\\',
+            _ => u8::from_str_radix(&mangled[position + 2..position + 4], 16).ok()?,
+        });
+        position += length;
+    }
+    String::from_utf8(name).ok()
+}
+
+/// Splits the text that follows a symbol prefix back into the fragments
+/// `join_symbol_fragments()` joined, or `None` when `tail` is not such a join.
+///
+/// A tail opening with `___` is the escaped regime: each fragment is read token by token
+/// (alphanumerics and `mangle_fqn()` escapes), and a `_` that cannot open an escape ends the
+/// fragment, where exactly `___` must follow. Otherwise the tail is the compact regime, one
+/// `_` before each alphanumeric fragment.
+pub fn split_symbol_fragments(tail: &str) -> Option<Vec<&str>> {
+    if !tail.starts_with(ESCAPED_FRAGMENT_SEPARATOR) {
+        let fragments: Vec<&str> = tail.strip_prefix(COMPACT_FRAGMENT_SEPARATOR)?.split('_').collect();
+        return fragments.iter().all(|fragment| is_compact_fragment(fragment)).then_some(fragments);
+    }
+    let bytes = tail.as_bytes();
+    let mut fragments = Vec::new();
+    let mut position = ESCAPED_FRAGMENT_SEPARATOR.len();
+    loop {
+        let start = position;
+        while position < bytes.len() {
+            if bytes[position].is_ascii_alphanumeric() {
+                position += 1;
+            } else if let Some(length) = mangled_escape_len(&bytes[position..]) {
+                position += length;
+            } else {
+                break;
+            }
+        }
+        if position == start {
+            return None;
+        }
+        fragments.push(&tail[start..position]);
+        if position == bytes.len() {
+            return Some(fragments);
+        }
+        if !tail[position..].starts_with(ESCAPED_FRAGMENT_SEPARATOR) {
+            return None;
+        }
+        position += ESCAPED_FRAGMENT_SEPARATOR.len();
+    }
+}
+
 /// Mangles each raw PHP name and joins them onto `prefix` with `join_symbol_fragments()`.
 ///
 /// This is the only supported way to build a symbol or label out of more than one PHP name.
@@ -338,6 +520,48 @@ mod mangle_tests {
             mangled.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
             "mangled name must be an assembler-safe label, got {mangled}"
         );
+    }
+
+    /// Verifies `demangle_fqn()` inverts `mangle_fqn()` for every escape kind, and refuses
+    /// text no `mangle_fqn()` call produces.
+    #[test]
+    fn demangle_fqn_inverts_mangle_fqn() {
+        for name in [
+            "", "foo", "foo_bar", "A\\B", "App\\My_Class", "__construct", "_", "___", "价格",
+            "App\\Éngine", "a_\\_b", "_x5f_", "_u_", "12",
+        ] {
+            assert_eq!(demangle_fqn(&mangle_fqn(name)).as_deref(), Some(name), "{name:?}");
+        }
+        for text in ["_", "a_b", "_u", "_x5F_", "_xg0_", "a-b", "__", "_N"] {
+            assert_eq!(demangle_fqn(text), None, "{text:?}");
+        }
+    }
+
+    /// Verifies `split_symbol_fragments()` recovers the joined fragments in both separator
+    /// regimes, over the same adversarial names the injectivity tests use.
+    #[test]
+    fn split_symbol_fragments_inverts_the_joiner() {
+        let names = [
+            "a", "b", "a_", "_a", "a_b", "a__b", "a_u", "u_b", "_", "__", "___", "_S_", "_u_",
+            "_N_", "A\\b", "a\\b", "aéb", "a_é", "é", "x_init", "init", "prop", "local", "1",
+            "12", "价格", "a价", "_x5f_", "\\_",
+        ];
+        for left in names {
+            for right in names {
+                let mangled = [mangle_fqn(left), mangle_fqn(right)];
+                let fragments = [mangled[0].as_str(), mangled[1].as_str()];
+                let symbol = join_symbol_fragments("_k", &fragments);
+                let tail = symbol.strip_prefix("_k").expect("the joiner keeps the prefix");
+                assert_eq!(
+                    split_symbol_fragments(tail),
+                    Some(fragments.to_vec()),
+                    "{symbol:?}"
+                );
+            }
+        }
+        for tail in ["", "_", "__a", "___", "___a__b", "___a____", "_a__b", "_a_", "___a___"] {
+            assert_eq!(split_symbol_fragments(tail), None, "{tail:?}");
+        }
     }
 
     /// Verifies distinct names mangle to distinct labels, so escaping does not collapse
@@ -536,6 +760,30 @@ mod mangle_tests {
     }
 }
 
+/// Separator that makes a compiler-generated EIR function name unreachable from PHP source.
+///
+/// A PHP identifier is `[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*`, so `@` can never occur in a
+/// user function name. Building a generated name out of `@`-separated fragments therefore makes
+/// the name collision-free by construction instead of by an allocation loop that would have to
+/// know every name the program can still declare.
+pub const INTERNAL_SYMBOL_SEPARATOR: char = '@';
+
+/// Returns the reserved EIR function name for one compiler-generated helper.
+///
+/// `kind` names the generator (`clone_apply`, `clone_set`, ...) and `parts` are the dense ids
+/// that make the helper unique within that generator. The result is deterministic, so two
+/// compilations of the same program produce the same symbol, and it can never be shadowed by a
+/// PHP `function` declaration: see [`INTERNAL_SYMBOL_SEPARATOR`].
+pub fn internal_generated_function_name(kind: &str, parts: &[u64]) -> String {
+    let mut name = String::from(INTERNAL_SYMBOL_SEPARATOR);
+    name.push_str(kind);
+    for part in parts {
+        name.push(INTERNAL_SYMBOL_SEPARATOR);
+        name.push_str(&part.to_string());
+    }
+    name
+}
+
 /// Returns the global function symbol label for a given PHP function name.
 ///
 /// Format: `_fn_<mangled_fqn>`. Used for user-defined function entry points.
@@ -707,4 +955,83 @@ pub fn classlike_activation_symbol(
     };
     let name = php_symbol_key(name.trim_start_matches('\\'));
     join_php_symbol("_classlike_active", &[kind, &name])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        generated_local_name, is_generated_local_name, synthetic_place_local_name,
+        CALLED_CLASS_ID_LOCAL, CLOSURE_SCOPE_LOCAL, EVAL_AOT_SCOPE_LOCAL, GENERATED_LOCAL_MARKER,
+        SYNTHETIC_PLACE_LOCAL_STEM,
+    };
+
+    /// Only names carrying the unforgeable marker segment count as compiler-generated.
+    #[test]
+    fn generated_local_marker_is_not_forgeable_from_php_source() {
+        assert!(is_generated_local_name(&generated_local_name("__elephc_func_args")));
+        assert!(is_generated_local_name(&generated_local_name("__elephc_foreach_3_9")));
+        // A PHP variable name cannot contain `#`, so every legal source spelling stays visible.
+        for visible in [
+            "__elephc_func_args",
+            "__elephc_func_arg_value",
+            "__elephc_napp_1_2_0",
+            "gen",
+            "items",
+        ] {
+            assert!(!is_generated_local_name(visible), "{visible}");
+        }
+    }
+
+    /// A privatized generated temporary keeps its marker behind the `#cow` shadow suffix.
+    #[test]
+    fn generated_local_marker_survives_the_cow_parameter_shadow() {
+        let shadow = format!("{}#cow", generated_local_name("__elephc_func_argc"));
+        assert!(is_generated_local_name(&shadow), "{shadow}");
+        assert!(!is_generated_local_name("items#cow"));
+        assert!(GENERATED_LOCAL_MARKER.starts_with('#'));
+    }
+
+    /// Every centrally spelled generated local carries the marker and its readable stem.
+    ///
+    /// The two constants are literals because a `const` cannot call `generated_local_name`, so
+    /// this test is what keeps the hand-written spelling and the helper from drifting apart.
+    #[test]
+    fn centrally_spelled_generated_locals_match_the_helper() {
+        assert_eq!(
+            CALLED_CLASS_ID_LOCAL,
+            generated_local_name("__elephc_called_class_id")
+        );
+        assert_eq!(EVAL_AOT_SCOPE_LOCAL, generated_local_name("__eir_eval_scope"));
+        assert_eq!(
+            CLOSURE_SCOPE_LOCAL,
+            generated_local_name("__elephc_closure_scope")
+        );
+        // `__rt_closure_set_scope` matches this exact 26-byte spelling.
+        assert_eq!(CLOSURE_SCOPE_LOCAL.len(), 26);
+        for name in [CALLED_CLASS_ID_LOCAL, EVAL_AOT_SCOPE_LOCAL, CLOSURE_SCOPE_LOCAL] {
+            assert!(is_generated_local_name(name), "{name}");
+        }
+        // The unmarked spellings are what PHP source could write, and they stay visible.
+        assert!(!is_generated_local_name("__elephc_called_class_id"));
+        assert!(!is_generated_local_name("__eir_eval_scope"));
+    }
+
+    /// A synthetic place temporary is marked hidden while keeping its prefix recognisable.
+    ///
+    /// `crate::ir_lower::expr` still classifies these temporaries by their readable stem, so the
+    /// marker has to be a SUFFIX: a name that lost the prefix would silently re-enable the
+    /// `array_splice()` receiver widening the prefix check exists to refuse.
+    #[test]
+    fn synthetic_place_locals_are_marked_and_keep_their_prefix() {
+        for index in [0usize, 1, 42] {
+            let name = synthetic_place_local_name(index);
+            assert!(is_generated_local_name(&name), "{name}");
+            assert!(name.starts_with(SYNTHETIC_PLACE_LOCAL_STEM), "{name}");
+            assert_eq!(name, format!("__eir_place{index}{GENERATED_LOCAL_MARKER}"));
+        }
+        // Distinct counters keep distinct storage: the marker is not part of the identity.
+        assert_ne!(synthetic_place_local_name(1), synthetic_place_local_name(2));
+        // A user variable that merely spells the stem is not a generated temporary.
+        assert!(!is_generated_local_name(SYNTHETIC_PLACE_LOCAL_STEM));
+    }
 }

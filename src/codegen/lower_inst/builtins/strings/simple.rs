@@ -10,39 +10,38 @@
 use super::*;
 
 
+/// PHP's default `htmlspecialchars()` flags: `ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401`.
+const HTML_ESCAPE_DEFAULT_FLAGS: i64 = 3 | 8;
+
 /// Lowers `htmlspecialchars()` / `htmlentities()` — escapes the subject string (operand 0).
-/// `name` is the calling builtin's PHP name, used in argument-coercion diagnostics. The
-/// optional `flags` and `encoding` arguments are accepted (so the common `htmlspecialchars($s,
-/// ENT_QUOTES)` call form compiles) but not applied: `__rt_htmlspecialchars` implements the
-/// ENT_QUOTES behaviour, which matches PHP's default flag set and the overwhelmingly-common
-/// ENT_QUOTES call. (A flag-aware runtime — doctype-dependent `&apos;` vs `&#039;` — is a follow-up.)
+/// `name` is the calling builtin's PHP name, used in argument-coercion diagnostics.
+///
+/// The `flags` argument (operand 1) reaches `__rt_htmlspecialchars` in the third argument
+/// register: its quote bits choose which quotes are escaped, and its doctype bits choose
+/// `&apos;` over `&#039;` (#645). Omitted, it is PHP's default. `encoding` and `double_encode`
+/// are accepted but not applied.
 pub(crate) fn lower_html_escape(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
 ) -> Result<()> {
+    // The flags are loaded first and parked on the stack: materializing the subject string can
+    // call helpers that clobber the argument registers.
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    if let Some(flags) = inst.operands.get(1).copied() {
+        super::scalar::load_as_int(ctx, flags, name)?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, result_reg, HTML_ESCAPE_DEFAULT_FLAGS);
+    }
+    abi::emit_push_reg(ctx.emitter, result_reg);
     let ptr_reg = string_ptr_reg(ctx);
     let len_reg = string_len_reg(ctx);
     load_string_arg_to_regs(ctx, inst, 0, name, ptr_reg, len_reg)?;
-    // The `$flags` bit set rides in a spare argument register: php's default (`ENT_QUOTES |
-    // ENT_SUBSTITUTE | ENT_HTML401`) when absent, the operand's value when it is statically an
-    // int. Symfony's error renderer escapes with `ENT_COMPAT`, which must leave `'` alone, and
-    // `ENT_HTML5` wants `&apos;`.
     let flags_reg = match ctx.emitter.target.arch {
         Arch::AArch64 => "x3",
         Arch::X86_64 => "rdi",
     };
-    let flags_operand = inst
-        .operands
-        .get(1)
-        .copied()
-        .filter(|operand| matches!(ctx.value_php_type(*operand), Ok(PhpType::Int)));
-    match flags_operand {
-        Some(operand) => {
-            ctx.load_value_to_reg(operand, flags_reg)?;
-        }
-        None => abi::emit_load_int_immediate(ctx.emitter, flags_reg, 3),
-    }
+    abi::emit_pop_reg(ctx.emitter, flags_reg);
     abi::emit_call_label(ctx.emitter, "__rt_htmlspecialchars");
     store_if_result(ctx, inst)
 }

@@ -1,16 +1,16 @@
 ---
-title: "preg_replace() — internals"
+title: "preg_replace() - internals"
 description: "Compiler internals for preg_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 769
+  order: 801
 ---
 
-## `preg_replace()` — internals
+## `preg_replace()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_replace.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:676](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L676) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:717](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L717) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -28,7 +28,7 @@ sidebar:
 - **Result ownership**: `independent`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary

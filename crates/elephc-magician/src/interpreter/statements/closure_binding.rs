@@ -51,8 +51,8 @@ pub(super) fn eval_closure_from_callable(
         return values.copy_value(callback);
     }
     let callable = match lexical_scope {
-        Some(scope) => eval_callable_from_scope(callback, context, scope, values),
-        None => eval_callable(callback, context, values),
+        Some(scope) => eval_callable_from_scope(callback.borrowed(), context, scope, values),
+        None => eval_callable(callback.borrowed(), context, values),
     };
     let callable = match callable {
         Ok(callable) => callable,
@@ -84,13 +84,25 @@ pub(super) fn eval_closure_from_callable(
     if let Some(scope) = &stand_in_scope {
         context.push_class_scope(scope.clone());
     }
-    let validation = eval_validate_closure_from_callable_callback(&callable, context, values);
+    let valid = eval_validate_closure_from_callable_callback(&callable, context, values);
     if stand_in_scope.is_some() {
         context.pop_class_scope();
     }
-    validation?;
-    let target = eval_closure_object_target_from_callable(callable);
-    eval_closure_object_from_target(target, context, values)
+    let mut target = eval_closure_object_target_from_callable(callable);
+    let receiver = target.receiver_mut().copied();
+    let result = valid.and_then(|()| eval_closure_object_from_target(target, context, values));
+    let cleanup = match receiver {
+        Some(receiver) => release_expr_result(receiver, context, values),
+        None => Ok(()),
+    };
+    match (result, cleanup) {
+        (Err(status), _) => Err(status),
+        (Ok(object), Err(status)) => {
+            let _ = eval_release_value(context, values, object);
+            Err(status)
+        }
+        (Ok(object), Ok(())) => Ok(object),
+    }
 }
 
 /// Converts a normalized callable target into the storage used by eval Closure objects.
@@ -291,6 +303,23 @@ pub(super) fn eval_closure_target_arg(
         .closure_object_target(identity)
         .cloned()
         .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Rebinds `$this` on an eval `Closure` object for the generated `Closure::bind` runtime.
+///
+/// The generated code knows the closure only as a callback-adapter descriptor, so it hands the
+/// boxed `Closure` object back here. The scope stays the closure's own: the runtime has no
+/// class-scope operand to forward yet, which is the same limit its native `$this`-only rebinding
+/// has. The receiver is an OWNED boxed object the bound closure takes over.
+pub(in crate::interpreter) fn eval_closure_bind_this_for_ffi(
+    closure: RuntimeCellHandle,
+    new_this: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let target = eval_closure_target_arg(closure, context, values)?;
+    let bound_this = eval_closure_bind_receiver_arg(new_this, values)?;
+    eval_closure_bind_target(target, bound_this, None, false, context, values)
 }
 
 /// Converts the `newThis` binding argument to an optional object receiver.

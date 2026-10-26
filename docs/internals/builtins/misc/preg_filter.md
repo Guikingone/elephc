@@ -1,11 +1,11 @@
 ---
-title: "preg_filter() — internals"
+title: "preg_filter() - internals"
 description: "Compiler internals for preg_filter(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 686
+  order: 707
 ---
 
-## `preg_filter()` — internals
+## `preg_filter()` - internals
 
 ## Where it lives
 

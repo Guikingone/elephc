@@ -84,6 +84,20 @@ fn member_rows(module: &Module) -> Vec<MemberRow> {
             }
         })
         .collect::<Vec<_>>();
+    // A callable value is a `Closure` object, which no program declares: `method_exists($cb,
+    // '__invoke')` over a boxed closure queries this row (twig-bridge's `DebugCommand`).
+    if !rows.iter().any(|row| row.sort_key == "closure") {
+        let methods: Vec<String> = ["__invoke", "bind", "bindto", "call", "fromcallable"]
+            .iter()
+            .map(|method| method.to_string())
+            .collect();
+        rows.push(MemberRow {
+            sort_key: "closure".to_string(),
+            class_methods: methods.clone(),
+            object_methods: methods,
+            properties: Vec::new(),
+        });
+    }
     rows.sort_by(|left, right| left.sort_key.as_bytes().cmp(right.sort_key.as_bytes()));
     rows
 }
@@ -376,6 +390,7 @@ mod tests {
             declared_params: Vec::new(),
             variadic: None,
             deprecation: None,
+            is_generator: false,
         }
     }
 
@@ -394,6 +409,10 @@ mod tests {
             is_final: false,
             is_readonly_class: false,
             allow_dynamic_properties: false,
+            eval_property_storage: false,
+            clone_override_property_storage: false,
+            scope_dynamic_property_storage: false,
+            is_internal: false,
             constants: HashMap::new(),
             constant_order: Vec::new(),
             constant_deprecations: HashMap::new(),
@@ -429,6 +448,7 @@ mod tests {
             property_owned_reference_slots: Vec::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
+            property_hooks: HashMap::new(),
             reflection_properties: Vec::new(),
             reflection_methods: Vec::new(),
             static_properties: Vec::new(),

@@ -6,7 +6,10 @@
 use std::fmt::Write;
 use std::path::Path;
 mod bridge;
+mod closed_include;
 pub(super) use bridge::{deferred_class_symbol, emit_state_helpers, emit_state_install, PRIMED};
+pub(in crate::codegen) use bridge::{emit_lookup, OnMatch};
+pub(in crate::codegen) use closed_include::{CLOSED_INCLUDE, FLAG_DISCARDED, FLAG_ONCE, FLAG_REQUIRED};
 pub(in crate::codegen) use bridge::{
     INCLUDE_UNIT_CANDIDATE, INCLUDE_UNIT_FUNCTION_OFFSET, INCLUDE_UNIT_GUARD_OFFSET,
     INCLUDE_UNIT_LOOKUP,

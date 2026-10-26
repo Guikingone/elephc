@@ -1,16 +1,16 @@
 ---
-title: "cal_info() — internals"
+title: "cal_info() - internals"
 description: "Compiler internals for cal_info(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 198
+  order: 199
 ---
 
-## `cal_info()` — internals
+## `cal_info()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:812](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L812) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:835](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L835) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 
