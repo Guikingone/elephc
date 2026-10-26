@@ -8,7 +8,9 @@
 //! - Objects exclusively own native handles; finfo_close is a PHP 8 no-op.
 //! - Query overrides are temporary. Streams use existing PHP stream wrappers.
 
-use crate::parser::ast::{BinOp, CastType, CType, Expr, Program, Stmt, TypeExpr};
+use crate::parser::ast::{BinOp, CastType, CType, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr};
+use crate::php_version::PhpVersion;
+use crate::span::Span;
 use crate::synthetic_class::*;
 
 /// Returns a comparison with strict identity semantics.
@@ -139,7 +141,7 @@ fn handle_owner() -> Stmt {
 }
 
 /// Builds procedural wrappers with the shared contract's PHP parameter names.
-fn functions() -> Program {
+fn functions(php_version: PhpVersion) -> Program {
     let mut out = vec![
         function("finfo_open").param_default("flags", TypeExpr::Int, e_int(0))
             .param_default("magic_database", t_nullable(TypeExpr::Str), e_null())
@@ -175,6 +177,19 @@ fn functions() -> Program {
         reject(e_binop(e_call("strpos", vec![e_var("filename"), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)), "TypeError", "mime_content_type(): Argument #1 ($filename) must not contain any null bytes"),
         s_return(e_method_call(e_var("_finfo"), "__elephc_file", vec![e_str("mime_content_type"), e_var("filename")])),
     ]).build());
+    if php_version >= PhpVersion::Php85 {
+        for statement in &mut out {
+            if let StmtKind::FunctionDecl { name, attributes, .. } = &mut statement.kind {
+                if name.as_str() == "finfo_close" {
+                    let args = [("since", "8.5"), ("message", "as finfo objects are freed automatically")]
+                        .into_iter().map(|(name, value)| Expr::new(ExprKind::NamedArg {
+                            name: name.to_string(), value: Box::new(e_str(value)),
+                        }, Span::dummy())).collect();
+                    attributes.push(attr("\\Deprecated", args));
+                }
+            }
+        }
+    }
     out
 }
 
@@ -184,7 +199,7 @@ fn stream_query() -> Vec<Stmt> {
 }
 
 /// Builds externs first, followed by the class and six PHP functions.
-pub(super) fn declarations() -> Program {
+pub(super) fn declarations(php_version: PhpVersion) -> Program {
     internal_declarations(|| {
         let mut out = vec![
             extern_fn("elephc_fileinfo_open", "elephc_fileinfo").param("flags", CType::Int).param("path", CType::Str).returns(CType::Int).build(),
@@ -217,7 +232,7 @@ pub(super) fn declarations() -> Program {
             handle_owner(),
             finfo_class(),
         ];
-        out.extend(functions());
+        out.extend(functions(php_version));
         out
     })
 }

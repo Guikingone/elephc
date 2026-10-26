@@ -449,9 +449,10 @@ echo $f->buffer("hello", 0, null), "|";
 echo finfo_buffer($f, "hello", 0, null), "|";
 echo finfo_close($f) ? "closed" : "bad";
 restore_error_handler();
+echo "|", (new ReflectionFunction("finfo_close"))->isDeprecated() ? "deprecated" : "current";
 "#;
     assert_eq!(compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php85),
-        "text/plain|text/plain|8192|text/plain|8192|text/plain|8192|closed");
+        "text/plain|text/plain|8192|text/plain|8192|text/plain|8192|closed|deprecated");
     assert_eq!(compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php84),
-        "text/plain|text/plain|text/plain|text/plain|closed");
+        "text/plain|text/plain|text/plain|text/plain|closed|current");
 }

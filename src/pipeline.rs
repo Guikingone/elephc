@@ -563,7 +563,12 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     );
     timings.record_since("xml-prelude", phase_started);
     let phase_started = Instant::now();
-    let ast = crate::fileinfo_prelude::inject_if_used(ast, with_crates.contains("fileinfo"), &mut prelude_inventory);
+    let ast = crate::fileinfo_prelude::inject_if_used_for_version(
+        ast,
+        with_crates.contains("fileinfo") || autoloaded("fileinfo"),
+        php_version,
+        &mut prelude_inventory,
+    );
     timings.record_since("fileinfo-prelude", phase_started);
     // Inject the Termwind-facing DOM HTML subset only when the program names a
     // DOM class, so other binaries never carry the HTML walker. This is an

@@ -1,6 +1,6 @@
 ---
 title: "finfo_close()"
-description: "Returns true; PHP 8 finfo instances are freed automatically."
+description: "Returns true; PHP 8 finfo instances are freed automatically. Deprecated since PHP 8.5."
 sidebar:
   order: 322
 ---
@@ -11,7 +11,7 @@ sidebar:
 function finfo_close(finfo $finfo): bool
 ```
 
-Returns true; PHP 8 finfo instances are freed automatically.
+Returns true; PHP 8 finfo instances are freed automatically. Deprecated since PHP 8.5.
 
 **Parameters**:
 - `$finfo` (`finfo`)

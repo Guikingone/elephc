@@ -49183,7 +49183,7 @@
       "checker_line": null,
       "codegen_file": "src/fileinfo_prelude/build.rs",
       "codegen_function": "finfo_buffer",
-      "codegen_line": 161,
+      "codegen_line": 163,
       "notes": [
         "Implemented by the compiler-injected fileinfo prelude."
       ],
@@ -49252,7 +49252,7 @@
     },
     "area": "IO",
     "canonical_name": "finfo_close",
-    "description": "Returns true; PHP 8 finfo instances are freed automatically.",
+    "description": "Returns true; PHP 8 finfo instances are freed automatically. Deprecated since PHP 8.5.",
     "eval": {
       "adapter_reason": "dynamic-language-surface",
       "area": "filesystem",
@@ -49288,7 +49288,7 @@
       "checker_line": null,
       "codegen_file": "src/fileinfo_prelude/build.rs",
       "codegen_function": "finfo_close",
-      "codegen_line": 154,
+      "codegen_line": 156,
       "notes": [
         "Implemented by the compiler-injected fileinfo prelude."
       ],
@@ -49414,7 +49414,7 @@
       "checker_line": null,
       "codegen_file": "src/fileinfo_prelude/build.rs",
       "codegen_function": "finfo_file",
-      "codegen_line": 167,
+      "codegen_line": 169,
       "notes": [
         "Implemented by the compiler-injected fileinfo prelude."
       ],
@@ -49533,7 +49533,7 @@
       "checker_line": null,
       "codegen_file": "src/fileinfo_prelude/build.rs",
       "codegen_function": "finfo_open",
-      "codegen_line": 144,
+      "codegen_line": 146,
       "notes": [
         "Implemented by the compiler-injected fileinfo prelude."
       ],
@@ -49638,7 +49638,7 @@
       "checker_line": null,
       "codegen_file": "src/fileinfo_prelude/build.rs",
       "codegen_function": "finfo_set_flags",
-      "codegen_line": 158,
+      "codegen_line": 160,
       "notes": [
         "Implemented by the compiler-injected fileinfo prelude."
       ],
@@ -94985,7 +94985,7 @@
       "checker_line": null,
       "codegen_file": "src/fileinfo_prelude/build.rs",
       "codegen_function": "mime_content_type",
-      "codegen_line": 170,
+      "codegen_line": 172,
       "notes": [
         "Implemented by the compiler-injected fileinfo prelude."
       ],

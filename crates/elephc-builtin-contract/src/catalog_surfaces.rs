@@ -92,7 +92,8 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         ],
         variadic: None, variadic_by_ref: false, min_args: None, max_args: None,
         arity_error: None, returns: TypeSpec::Bool, by_ref_return: false,
-        summary: "Returns true; PHP 8 finfo instances are freed automatically.", examples: &[], php_manual: None, deprecation: None,
+        summary: "Returns true; PHP 8 finfo instances are freed automatically. Deprecated since PHP 8.5.", examples: &[], php_manual: None,
+        deprecation: Some("Deprecated since PHP 8.5, as finfo objects are freed automatically."),
         extension: false, internal: false, requirements: &[],
     },
     BuiltinContract {

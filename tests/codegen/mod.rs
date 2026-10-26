@@ -130,6 +130,7 @@ mod stack_guard;
 mod zval;
 
 mod fileinfo;
+mod fileinfo_autoload;
 mod fileinfo_validation;
 mod fileinfo_stream_diagnostics;
 mod fileinfo_wrapper_stat;
