@@ -2,7 +2,7 @@
 title: "ptr_sizeof()"
 description: "Returns the byte size of the named pointer target type."
 sidebar:
-  order: 749
+  order: 754
 ---
 
 ## ptr_sizeof()

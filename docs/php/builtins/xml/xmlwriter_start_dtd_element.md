@@ -2,7 +2,7 @@
 title: "xmlwriter_start_dtd_element()"
 description: "Starts a DTD element declaration."
 sidebar:
-  order: 1065
+  order: 1070
 ---
 
 ## xmlwriter_start_dtd_element()

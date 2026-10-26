@@ -2,7 +2,7 @@
 title: "curl_copy_handle()"
 description: "Copies a cURL handle along with all of its preferences."
 sidebar:
-  order: 703
+  order: 708
 ---
 
 ## curl_copy_handle()

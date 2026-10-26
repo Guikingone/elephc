@@ -2,7 +2,7 @@
 title: "_imagick_hexval() - internals"
 description: "Compiler internals for _imagick_hexval(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1208
+  order: 1213
 ---
 
 ## `_imagick_hexval()` - internals

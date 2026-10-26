@@ -2,7 +2,7 @@
 title: "mb_strrpos()"
 description: "Finds the last character position of an encoded substring, or returns false."
 sidebar:
-  order: 894
+  order: 899
 ---
 
 ## mb_strrpos()
