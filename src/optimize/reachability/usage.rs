@@ -710,6 +710,20 @@ impl Scanner<'_> {
     fn scan_parameter_attributes(&mut self, parameter_attributes: &[Vec<AttributeGroup>]) {
         for groups in parameter_attributes {
             self.scan_attributes(groups);
+            // Every user function materializes backtrace frames (uncaught reports, getTrace()),
+            // and a `#[SensitiveParameter]` argument is wrapped in SensitiveParameterValue there,
+            // so the marker keeps that class even when no `debug_backtrace` call names it.
+            let sensitive = groups.iter().flat_map(|group| &group.attributes).any(|attribute| {
+                attribute
+                    .name
+                    .as_str()
+                    .trim_start_matches('\\')
+                    .eq_ignore_ascii_case("SensitiveParameter")
+            });
+            if sensitive {
+                let class = self.record_class("SensitiveParameterValue");
+                self.usage.instantiated_classes.insert(class);
+            }
         }
     }
 

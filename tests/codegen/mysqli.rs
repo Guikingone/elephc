@@ -151,6 +151,20 @@ echo class_exists('PDO') ? '1' : '0';
     assert_eq!(out, "01");
 }
 
+/// A `#[SensitiveParameter]` parameter keeps `SensitiveParameterValue` reachable on its own:
+/// the function's backtrace frame wraps that argument even when no `debug_backtrace()` call
+/// names the class (PDO's constructor failed to compile with "missing metadata").
+#[test]
+fn test_sensitive_parameter_keeps_its_wrapper_class_without_debug_backtrace() {
+    let out = compile_and_run(
+        r#"<?php
+function login(string $user, #[\SensitiveParameter] string $password) { return strlen($password); }
+echo login("ada", "secret"), "\n";
+"#,
+    );
+    assert_eq!(out, "6\n");
+}
+
 /// A failed constructor connect under `MYSQLI_REPORT_OFF` leaves a usable
 /// object with `connect_errno` / `connect_error` populated (no exception, no
 /// PDO types). Port 1 on localhost refuses immediately, so this needs no
