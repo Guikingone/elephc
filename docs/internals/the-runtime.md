@@ -863,6 +863,8 @@ Common copy-producing array/hash routines now also have dedicated `_refcounted` 
 
 The fusions are lowering-time only: they emit ordinary EIR `RuntimeCall` instructions, so the optimizer, ownership analysis, and every supported target see the same typed operation. Each matcher refuses anything outside its exact shape — a declared non-`bool` return type, captures, a non-int index, a shadowed builtin, or a non-packed receiver — and leaves the generic path in place. The fused map and filter kernels preserve PHP's left-to-right additions, int-to-float promotion, and division-by-zero behavior; the predicate kernel keeps the generic warning path for missing keys.
 
+`__rt_array_map_sum_add` takes a NEON/SSE2 path when the literal offset is non-negative and below `2^31`, the count is at most `2^30 - 1`, and every element's high dword is zero. The gate proves every mapped value and the total stay below `2^63`, so the vector adds cannot promote; any failed gate restarts the exact scalar map-then-sum sequence from element 0. `__rt_array_filter_count_mod` vectorizes the power-of-two divisibility masks (including negative divisors after sign normalization) and falls back to the scalar truncated-remainder loop for every other divisor.
+
 ### Hash table (for associative arrays)
 
 | Routine | What it does | Input | Output |

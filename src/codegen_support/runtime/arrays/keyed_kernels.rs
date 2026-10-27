@@ -36,6 +36,11 @@ fn emit_map_sum_add_aarch64(emitter: &mut Emitter) {
     let add_float = "__rt_array_map_sum_add_add_float";
     let done = "__rt_array_map_sum_add_done";
     let box_float = "__rt_array_map_sum_add_box_float";
+    let vector_loop = "__rt_array_map_sum_add_vector_loop";
+    let vector_pair = "__rt_array_map_sum_add_vector_pair";
+    let vector_tail = "__rt_array_map_sum_add_vector_tail";
+    let vector_box = "__rt_array_map_sum_add_vector_box";
+    let vector_restart = "__rt_array_map_sum_add_vector_restart";
 
     emitter.blank();
     emitter.comment("--- runtime: array_map_sum_add (fused int kernel) ---");
@@ -44,6 +49,68 @@ fn emit_map_sum_add_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x10, x0, #24");                                    // skip the indexed-array header to the payload base
     emitter.instruction("mov x11, xzr");                                        // start the integer accumulator at zero
     emitter.instruction("mov x12, xzr");                                        // integer mode: promote to double on the first overflow
+
+    // -- SIMD gate: non-negative bounded offset, a bounded count, and 32-bit elements --
+    emitter.instruction("cmp x9, #8");                                          // tiny arrays keep the scalar loop and its small fixed cost
+    emitter.instruction(&format!("b.lo {loop_label}"));                         // below eight elements the scalar loop wins
+    emitter.instruction(&format!("tbnz x1, #63, {loop_label}"));                // negative offsets can promote individual map results
+    emitter.instruction("lsr x13, x1, #31");                                    // move the offset's bit 31 into the low bit
+    emitter.instruction(&format!("cbnz x13, {loop_label}"));                    // offsets at or above 2^31 need the scalar promotion sequence
+    emitter.instruction("mov x13, #0x3fffffff");                                // bound the count so count * (2^32 + 2^31) stays below 2^63
+    emitter.instruction("cmp x9, x13");                                         // does the element count fit the vector total bound?
+    emitter.instruction(&format!("b.hi {loop_label}"));                         // larger ranges restart with the exact scalar sequence
+    emitter.instruction("movi v0.2d, #0");                                      // zero the two-lane 64-bit accumulator
+    emitter.instruction("movi v1.2d, #0");                                      // zero the OR-accumulated high-dword guard
+    emitter.instruction("dup v2.2d, x1");                                       // broadcast the literal map offset into both lanes
+
+    emitter.label(vector_loop);
+    emitter.instruction("cmp x9, #4");                                          // can two full vectors be consumed together?
+    emitter.instruction(&format!("b.lo {vector_pair}"));                        // fall back to a single vector for two or three elements
+    emitter.instruction("ldp q3, q4, [x10], #32");                              // load four consecutive source elements
+    emitter.instruction("ushr v5.2d, v3.2d, #32");                              // isolate the first pair's high dwords
+    emitter.instruction("ushr v6.2d, v4.2d, #32");                              // isolate the second pair's high dwords
+    emitter.instruction("orr v1.16b, v1.16b, v5.16b");                          // record any element at or above 2^32 in the guard
+    emitter.instruction("orr v1.16b, v1.16b, v6.16b");                          // record the second pair's high dwords too
+    emitter.instruction("add v3.2d, v3.2d, v2.2d");                             // map the first pair with the literal offset
+    emitter.instruction("add v4.2d, v4.2d, v2.2d");                             // map the second pair with the literal offset
+    emitter.instruction("add v0.2d, v0.2d, v3.2d");                             // accumulate the first mapped pair
+    emitter.instruction("add v0.2d, v0.2d, v4.2d");                             // accumulate the second mapped pair
+    emitter.instruction("sub x9, x9, #4");                                      // account for the four consumed elements
+    emitter.instruction(&format!("b {vector_loop}"));                           // continue consuming four elements at a time
+
+    emitter.label(vector_pair);
+    emitter.instruction("cmp x9, #2");                                          // is one full 64-bit pair still available?
+    emitter.instruction(&format!("b.lo {vector_tail}"));                        // an odd tail element stays scalar
+    emitter.instruction("ldr q3, [x10], #16");                                  // load the final complete element pair
+    emitter.instruction("ushr v5.2d, v3.2d, #32");                              // isolate the pair's high dwords
+    emitter.instruction("orr v1.16b, v1.16b, v5.16b");                          // record elements at or above 2^32 in the guard
+    emitter.instruction("add v3.2d, v3.2d, v2.2d");                             // map the final pair with the literal offset
+    emitter.instruction("add v0.2d, v0.2d, v3.2d");                             // accumulate the final mapped pair
+    emitter.instruction("sub x9, x9, #2");                                      // account for the two consumed elements
+
+    emitter.label(vector_tail);
+    emitter.instruction("fmov x13, d1");                                        // move the guard's low 64-bit lane to an integer register
+    emitter.instruction("mov x14, v1.d[1]");                                    // move the guard's high 64-bit lane to an integer register
+    emitter.instruction("orr x13, x13, x14");                                   // combine both halves of the high-dword guard
+    emitter.instruction(&format!("cbnz x13, {vector_restart}"));                // any wide element restarts the exact scalar sequence
+    emitter.instruction("fmov x13, d0");                                        // move the accumulator's low 64-bit lane to an integer register
+    emitter.instruction("mov x14, v0.d[1]");                                    // move the accumulator's high 64-bit lane to an integer register
+    emitter.instruction("add x13, x13, x14");                                   // fold both accumulated lanes into the result
+    emitter.instruction(&format!("cbz x9, {vector_box}"));                      // stop when the range had an even element count
+    emitter.instruction("ldr x14, [x10]");                                      // load the single remaining tail element
+    emitter.instruction("add x13, x13, x14");                                   // the gate proves this addition stays in range
+
+    emitter.label(vector_box);
+    emitter.instruction("mov x0, #0");                                          // int Mixed tag for the vector sum
+    emitter.instruction("mov x1, x13");                                         // int payload for the vector sum
+    emitter.instruction("mov x2, xzr");                                         // the high payload word is unused for scalars
+    emitter.instruction("b __rt_mixed_from_value");                             // box the integer sum and return
+
+    emitter.label(vector_restart);
+    emitter.instruction("add x10, x0, #24");                                    // rebuild the element cursor from the original array base
+    emitter.instruction("ldr x9, [x0]");                                        // rebuild the exact element count after the failed gate
+    emitter.instruction("mov x11, xzr");                                        // restart the integer accumulator at zero
+    emitter.instruction("mov x12, xzr");                                        // restart in integer mode
 
     emitter.label(loop_label);
     emitter.instruction(&format!("cbz x9, {done}"));                            // stop when every element has been mapped and summed
@@ -107,6 +174,11 @@ fn emit_map_sum_add_x86_64(emitter: &mut Emitter) {
     let add_float = "__rt_array_map_sum_add_add_float_x86";
     let done = "__rt_array_map_sum_add_done_x86";
     let box_float = "__rt_array_map_sum_add_box_float_x86";
+    let vector_loop = "__rt_array_map_sum_add_vector_loop_x86";
+    let vector_pair = "__rt_array_map_sum_add_vector_pair_x86";
+    let vector_tail = "__rt_array_map_sum_add_vector_tail_x86";
+    let vector_box = "__rt_array_map_sum_add_vector_box_x86";
+    let vector_restart = "__rt_array_map_sum_add_vector_restart_x86";
 
     emitter.blank();
     emitter.comment("--- runtime: array_map_sum_add (fused int kernel) ---");
@@ -115,6 +187,79 @@ fn emit_map_sum_add_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r9, [rdi + 24]");                                  // skip the indexed-array header to the payload base
     emitter.instruction("xor r8d, r8d");                                        // start the integer accumulator at zero
     emitter.instruction("xor r11d, r11d");                                      // integer mode: promote to double on the first overflow
+
+    // -- SIMD gate: non-negative bounded offset, a bounded count, and 32-bit elements --
+    emitter.instruction("cmp r10, 8");                                          // tiny arrays keep the scalar loop and its small fixed cost
+    emitter.instruction(&format!("jl {loop_label}"));                           // below eight elements the scalar loop wins
+    emitter.instruction("test rsi, rsi");                                       // negative offsets can promote individual map results
+    emitter.instruction(&format!("js {loop_label}"));                           // negative offsets need the scalar promotion sequence
+    emitter.instruction("mov rax, rsi");                                        // copy the offset before isolating its bit 31
+    emitter.instruction("shr rax, 31");                                         // do offsets at or above 2^31 need the scalar path?
+    emitter.instruction(&format!("jnz {loop_label}"));                          // large offsets cannot use the vector total bound
+    emitter.instruction("mov eax, 0x3fffffff");                                 // bound the count so count * (2^32 + 2^31) stays below 2^63
+    emitter.instruction("cmp r10, rax");                                        // does the element count fit the vector total bound?
+    emitter.instruction(&format!("ja {loop_label}"));                           // larger ranges restart with the exact scalar sequence
+    emitter.instruction("pxor xmm0, xmm0");                                     // zero the two-lane 64-bit accumulator
+    emitter.instruction("pxor xmm1, xmm1");                                     // zero the OR-accumulated high-dword guard
+    emitter.instruction("movq xmm2, rsi");                                      // seed the offset broadcast with the low 64-bit lane
+    emitter.instruction("punpcklqdq xmm2, xmm2");                               // broadcast the literal map offset into both lanes
+
+    emitter.label(vector_loop);
+    emitter.instruction("cmp r10, 4");                                          // can two full vectors be consumed together?
+    emitter.instruction(&format!("jl {vector_pair}"));                          // fall back to a single vector for two or three elements
+    emitter.instruction("movdqu xmm3, XMMWORD PTR [r9]");                       // load the first two source elements
+    emitter.instruction("movdqu xmm4, XMMWORD PTR [r9 + 16]");                  // load the next two source elements
+    emitter.instruction("add r9, 32");                                          // advance past the four consumed elements
+    emitter.instruction("movdqa xmm5, xmm3");                                   // copy the first pair before isolating high dwords
+    emitter.instruction("psrlq xmm5, 32");                                      // move the first pair's high dwords into their low lanes
+    emitter.instruction("movdqa xmm6, xmm4");                                   // copy the second pair before isolating high dwords
+    emitter.instruction("psrlq xmm6, 32");                                      // move the second pair's high dwords into their low lanes
+    emitter.instruction("por xmm1, xmm5");                                      // record any element at or above 2^32 in the guard
+    emitter.instruction("por xmm1, xmm6");                                      // record the second pair's high dwords too
+    emitter.instruction("paddq xmm3, xmm2");                                    // map the first pair with the literal offset
+    emitter.instruction("paddq xmm4, xmm2");                                    // map the second pair with the literal offset
+    emitter.instruction("paddq xmm0, xmm3");                                    // accumulate the first mapped pair
+    emitter.instruction("paddq xmm0, xmm4");                                    // accumulate the second mapped pair
+    emitter.instruction("sub r10, 4");                                          // account for the four consumed elements
+    emitter.instruction(&format!("jmp {vector_loop}"));                         // continue consuming four elements at a time
+
+    emitter.label(vector_pair);
+    emitter.instruction("cmp r10, 2");                                          // is one full 64-bit pair still available?
+    emitter.instruction(&format!("jl {vector_tail}"));                          // an odd tail element stays scalar
+    emitter.instruction("movdqu xmm3, XMMWORD PTR [r9]");                       // load the final complete element pair
+    emitter.instruction("add r9, 16");                                          // advance past the two consumed elements
+    emitter.instruction("movdqa xmm5, xmm3");                                   // copy the pair before isolating high dwords
+    emitter.instruction("psrlq xmm5, 32");                                      // isolate the pair's high dwords
+    emitter.instruction("por xmm1, xmm5");                                      // record elements at or above 2^32 in the guard
+    emitter.instruction("paddq xmm3, xmm2");                                    // map the final pair with the literal offset
+    emitter.instruction("paddq xmm0, xmm3");                                    // accumulate the final mapped pair
+    emitter.instruction("sub r10, 2");                                          // account for the two consumed elements
+
+    emitter.label(vector_tail);
+    emitter.instruction("movq rax, xmm1");                                      // move the guard's low 64-bit lane to an integer register
+    emitter.instruction("psrldq xmm5, 8");                                      // move the guard's high 64-bit lane into the low lane
+    emitter.instruction("movq r11, xmm5");                                      // copy the high guard lane into an integer register
+    emitter.instruction("or rax, r11");                                         // combine both halves of the high-dword guard
+    emitter.instruction(&format!("jnz {vector_restart}"));                      // any wide element restarts the exact scalar sequence
+    emitter.instruction("movq rax, xmm0");                                      // move the accumulator's low 64-bit lane to an integer register
+    emitter.instruction("psrldq xmm5, 8");                                      // move the accumulator's high 64-bit lane into the low lane
+    emitter.instruction("movq r11, xmm5");                                      // copy the high accumulator lane into an integer register
+    emitter.instruction("add rax, r11");                                        // fold both accumulated lanes into the result
+    emitter.instruction("test r10, r10");                                       // stop when the range had an even element count
+    emitter.instruction(&format!("jz {vector_box}"));                           // box the completed vector sum
+    emitter.instruction("add rax, QWORD PTR [r9]");                             // the gate proves the tail addition stays in range
+
+    emitter.label(vector_box);
+    emitter.instruction("mov rdi, rax");                                        // int payload for the vector sum
+    emitter.instruction("xor eax, eax");                                        // int Mixed tag for the vector sum
+    emitter.instruction("xor esi, esi");                                        // the high payload word is unused for scalars
+    emitter.instruction("jmp __rt_mixed_from_value");                           // box the integer sum and return
+
+    emitter.label(vector_restart);
+    emitter.instruction("lea r9, [rdi + 24]");                                  // rebuild the element cursor from the original array base
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // rebuild the exact element count after the failed gate
+    emitter.instruction("xor r8d, r8d");                                        // restart the integer accumulator at zero
+    emitter.instruction("xor r11d, r11d");                                      // restart in integer mode
 
     emitter.label(loop_label);
     emitter.instruction("test r10, r10");                                       // stop when every element has been mapped and summed
@@ -185,6 +330,9 @@ fn emit_filter_count_mod_aarch64(emitter: &mut Emitter) {
     let mod_loop = "__rt_array_filter_count_mod_loop";
     let mod_skip = "__rt_array_filter_count_mod_skip";
     let done = "__rt_array_filter_count_mod_done";
+    let vector_loop = "__rt_array_filter_count_mod_vector_loop";
+    let vector_pair = "__rt_array_filter_count_mod_vector_pair";
+    let vector_tail = "__rt_array_filter_count_mod_vector_tail";
 
     emitter.blank();
     emitter.comment("--- runtime: array_filter_count_mod (fused int kernel) ---");
@@ -200,6 +348,43 @@ fn emit_filter_count_mod_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub x14, x12, #1");                                    // mask for divisibility by a power of two
     emitter.instruction("tst x14, x12");                                        // is the normalized divisor a power of two?
     emitter.instruction(&format!("b.ne {mod_loop}"));                           // non-powers of two need a real remainder
+
+    // -- SIMD mask count for power-of-two divisors --
+    emitter.instruction("cmp x9, #8");                                          // tiny arrays keep the scalar mask loop
+    emitter.instruction(&format!("b.lo {mask_loop}"));                          // below eight elements the scalar loop wins
+    emitter.instruction("movi v0.2d, #0");                                      // zero the two-lane 64-bit match counter
+    emitter.instruction("dup v2.2d, x14");                                      // broadcast the divisibility mask into both lanes
+
+    emitter.label(vector_loop);
+    emitter.instruction("cmp x9, #4");                                          // can two full vectors be consumed together?
+    emitter.instruction(&format!("b.lo {vector_pair}"));                        // fall back to a single vector for two or three elements
+    emitter.instruction("ldp q3, q4, [x10], #32");                              // load four consecutive source elements
+    emitter.instruction("and v3.16b, v3.16b, v2.16b");                          // keep only the divisibility bits of the first pair
+    emitter.instruction("and v4.16b, v4.16b, v2.16b");                          // keep only the divisibility bits of the second pair
+    emitter.instruction("cmeq v3.2d, v3.2d, #0");                               // all-ones lanes mark divisible elements
+    emitter.instruction("cmeq v4.2d, v4.2d, #0");                               // all-ones lanes mark the second pair's matches
+    emitter.instruction("sub v0.2d, v0.2d, v3.2d");                             // add one per matching 64-bit lane
+    emitter.instruction("sub v0.2d, v0.2d, v4.2d");                             // add one per second-pair match
+    emitter.instruction("sub x9, x9, #4");                                      // account for the four consumed elements
+    emitter.instruction(&format!("b {vector_loop}"));                           // continue consuming four elements at a time
+
+    emitter.label(vector_pair);
+    emitter.instruction("cmp x9, #2");                                          // is one full 64-bit pair still available?
+    emitter.instruction(&format!("b.lo {vector_tail}"));                        // an odd tail element stays scalar
+    emitter.instruction("ldr q3, [x10], #16");                                  // load the final complete element pair
+    emitter.instruction("and v3.16b, v3.16b, v2.16b");                          // keep only the pair's divisibility bits
+    emitter.instruction("cmeq v3.2d, v3.2d, #0");                               // all-ones lanes mark divisible elements
+    emitter.instruction("sub v0.2d, v0.2d, v3.2d");                             // add one per matching lane
+    emitter.instruction("sub x9, x9, #2");                                      // account for the two consumed elements
+
+    emitter.label(vector_tail);
+    emitter.instruction("fmov x13, d0");                                        // move the counter's low 64-bit lane to an integer register
+    emitter.instruction("mov x15, v0.d[1]");                                    // move the counter's high 64-bit lane to an integer register
+    emitter.instruction("add x13, x13, x15");                                   // fold both counted lanes into the result
+    emitter.instruction("add x11, x11, x13");                                   // add the vector matches to the scalar count
+    emitter.instruction(&format!("cbz x9, {done}"));                            // stop when the range had an even element count
+    emitter.instruction("sub x14, x12, #1");                                    // restore the scalar divisibility mask for the tail
+    emitter.instruction(&format!("b {mask_loop}"));                             // consume the single remaining element scalar
 
     emitter.label(mask_loop);
     emitter.instruction("ldr x13, [x10], #8");                                  // load the next source element
@@ -237,6 +422,9 @@ fn emit_filter_count_mod_x86_64(emitter: &mut Emitter) {
     let mod_loop = "__rt_array_filter_count_mod_loop_x86";
     let mod_skip = "__rt_array_filter_count_mod_skip_x86";
     let done = "__rt_array_filter_count_mod_done_x86";
+    let vector_loop = "__rt_array_filter_count_mod_vector_loop_x86";
+    let vector_pair = "__rt_array_filter_count_mod_vector_pair_x86";
+    let vector_tail = "__rt_array_filter_count_mod_vector_tail_x86";
 
     emitter.blank();
     emitter.comment("--- runtime: array_filter_count_mod (fused int kernel) ---");
@@ -254,6 +442,55 @@ fn emit_filter_count_mod_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rcx, [r11 - 1]");                                  // mask for divisibility by a power of two
     emitter.instruction("test rcx, r11");                                       // is the normalized divisor a power of two?
     emitter.instruction(&format!("jnz {mod_loop}"));                            // non-powers of two need a real remainder
+
+    // -- SIMD mask count for power-of-two divisors --
+    emitter.instruction("cmp r10, 8");                                          // tiny arrays keep the scalar mask loop
+    emitter.instruction(&format!("jl {mask_loop}"));                            // below eight elements the scalar loop wins
+    emitter.instruction("movq xmm2, rcx");                                      // seed the mask broadcast with the low 64-bit lane
+    emitter.instruction("punpcklqdq xmm2, xmm2");                               // broadcast the divisibility mask into both lanes
+    emitter.instruction("pxor xmm0, xmm0");                                     // zero the two-lane 64-bit match counter
+    emitter.instruction("pxor xmm7, xmm7");                                     // zero the comparison vector
+
+    emitter.label(vector_loop);
+    emitter.instruction("cmp r10, 4");                                          // can two full vectors be consumed together?
+    emitter.instruction(&format!("jl {vector_pair}"));                          // fall back to a single vector for two or three elements
+    emitter.instruction("movdqu xmm3, XMMWORD PTR [r9]");                       // load the first two source elements
+    emitter.instruction("movdqu xmm4, XMMWORD PTR [r9 + 16]");                  // load the next two source elements
+    emitter.instruction("add r9, 32");                                          // advance past the four consumed elements
+    emitter.instruction("pand xmm3, xmm2");                                     // keep only the divisibility bits of the first pair
+    emitter.instruction("pand xmm4, xmm2");                                     // keep only the divisibility bits of the second pair
+    emitter.instruction("pcmpeqd xmm3, xmm7");                                  // all-ones dwords mark zero divisibility bits
+    emitter.instruction("pcmpeqd xmm4, xmm7");                                  // all-ones dwords mark the second pair's matches
+    emitter.instruction("pshufd xmm5, xmm3, 0xb1");                             // swap adjacent dwords to combine both halves
+    emitter.instruction("pshufd xmm6, xmm4, 0xb1");                             // swap the second pair's adjacent dwords
+    emitter.instruction("pand xmm3, xmm5");                                     // both dwords now mark a fully divisible element
+    emitter.instruction("pand xmm4, xmm6");                                     // both dwords now mark the second pair's matches
+    emitter.instruction("psubq xmm0, xmm3");                                    // add one per matching 64-bit lane
+    emitter.instruction("psubq xmm0, xmm4");                                    // add one per second-pair match
+    emitter.instruction("sub r10, 4");                                          // account for the four consumed elements
+    emitter.instruction(&format!("jmp {vector_loop}"));                         // continue consuming four elements at a time
+
+    emitter.label(vector_pair);
+    emitter.instruction("cmp r10, 2");                                          // is one full 64-bit pair still available?
+    emitter.instruction(&format!("jl {vector_tail}"));                          // an odd tail element stays scalar
+    emitter.instruction("movdqu xmm3, XMMWORD PTR [r9]");                       // load the final complete element pair
+    emitter.instruction("add r9, 16");                                          // advance past the two consumed elements
+    emitter.instruction("pand xmm3, xmm2");                                     // keep only the pair's divisibility bits
+    emitter.instruction("pcmpeqd xmm3, xmm7");                                  // all-ones dwords mark zero divisibility bits
+    emitter.instruction("pshufd xmm5, xmm3, 0xb1");                             // swap adjacent dwords to combine both halves
+    emitter.instruction("pand xmm3, xmm5");                                     // both dwords now mark a fully divisible element
+    emitter.instruction("psubq xmm0, xmm3");                                    // add one per matching 64-bit lane
+    emitter.instruction("sub r10, 2");                                          // account for the two consumed elements
+
+    emitter.label(vector_tail);
+    emitter.instruction("movq rax, xmm0");                                      // move the counter's low 64-bit lane to an integer register
+    emitter.instruction("psrldq xmm5, 8");                                      // move the counter's high 64-bit lane into the low lane
+    emitter.instruction("movq r11, xmm5");                                      // copy the high counted lane into an integer register
+    emitter.instruction("add rax, r11");                                        // fold both counted lanes into the result
+    emitter.instruction("add r8, rax");                                         // add the vector matches to the scalar count
+    emitter.instruction("test r10, r10");                                       // stop when the range had an even element count
+    emitter.instruction(&format!("jz {done}"));                                 // return the completed count
+    emitter.instruction(&format!("jmp {mask_loop}"));                           // consume the single remaining element scalar
 
     emitter.label(mask_loop);
     emitter.instruction("mov rax, QWORD PTR [r9]");                             // load the next source element

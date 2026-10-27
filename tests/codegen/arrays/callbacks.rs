@@ -2447,3 +2447,36 @@ echo (int)is_int($a[1 + 1]), "\n";
 W[Undefined array key 7]0W[Undefined array key 7]0W[Undefined array key 7]1|W[Undefined array key -1]1|0\n"
     );
 }
+
+/// SIMD gates in the fused kernels keep the scalar fallback for wide, negative and
+/// overflowing elements, and handle odd tails and power-of-two/non-power divisors.
+#[test]
+fn test_keyed_array_kernels_simd_boundaries_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+$odd = [];
+for ($i = 0; $i < 101; $i++) { $odd[] = $i + 1; }
+echo array_sum(array_map(fn($x) => $x + 1, $odd)), '|';
+$eight = [1, 2, 3, 4, 5, 6, 7, 8];
+echo array_sum(array_map(fn($x) => $x + 0, $eight)), '|';
+$wide = [4294967296];
+for ($i = 0; $i < 99; $i++) { $wide[] = 1; }
+echo array_sum(array_map(fn($x) => $x + 1, $wide)), '|';
+$neg = [];
+for ($i = 0; $i < 100; $i++) { $neg[] = $i - 50; }
+echo array_sum(array_map(fn($x) => $x + 3, $neg)), '|';
+$ov = [PHP_INT_MAX, 1, 2, 3, 4, 5, 6, 7, 8];
+echo gettype(array_sum(array_map(fn($x) => $x + 1, $ov))), ':', array_sum(array_map(fn($x) => $x + 1, $ov)), '|';
+echo count(array_filter($odd, fn($x) => $x % 2 === 0)), '|';
+echo count(array_filter($odd, fn($x) => $x % 4 === 0)), '|';
+echo count(array_filter($odd, fn($x) => $x % 8 === 0)), '|';
+echo count(array_filter($odd, fn($x) => $x % 3 === 0)), '|';
+echo count(array_filter($neg, fn($x) => $x % -2 === 0)), '|';
+echo count(array_filter($odd, fn($x) => $x % 1 === 0)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "5252|36|4294967495|250|double:9.2233720368548E+18|50|25|12|33|50|101\n"
+    );
+}
