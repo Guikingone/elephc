@@ -50,6 +50,7 @@ fn compile_raw(
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     cmd.args(extra_args);
     cmd.arg(&php);

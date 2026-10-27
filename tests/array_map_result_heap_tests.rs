@@ -135,6 +135,7 @@ fn assert_program_output_and_clean_heap(prefix: &str, source: &str, expected_std
 
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(&dir);
     cmd.arg("--heap-debug");
     cmd.arg(&php);

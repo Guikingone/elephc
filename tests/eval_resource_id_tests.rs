@@ -119,6 +119,7 @@ fn compile(dir: &Path, source: &str, stem: &str) -> PathBuf {
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     managed_pcre2_support::configure_host_managed_pcre2(&mut cmd, dir);
     cmd.current_dir(dir);
     cmd.arg(&php);

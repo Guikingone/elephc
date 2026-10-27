@@ -57,6 +57,7 @@ fn compile(prefix: &str, source: &str, extra: &[&str]) -> PathBuf {
     fs::write(dir.join("main.php"), source).unwrap();
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .current_dir(&dir)
         .arg(dir.join("main.php"))
         .args(["--php-version", "8.5"])
