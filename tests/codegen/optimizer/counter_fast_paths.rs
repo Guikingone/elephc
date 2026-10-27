@@ -17,7 +17,7 @@ impl Drop for Fixture {
 }
 
 /// Runs one fixture in both IR modes, checking heap cleanup and optional PHP equivalence.
-fn equivalent(source: &str) {
+pub(super) fn equivalent(source: &str) {
     let fixture = Fixture(make_cli_test_dir("elephc_counter_fast_paths"));
     let path = fixture.0.join("main.php");
     fs::write(&path, source).unwrap();

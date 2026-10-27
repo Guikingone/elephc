@@ -29,11 +29,12 @@ single lowering of each AST node. Part D follows reaching writers and can remove
 a fast copy's numeric store while preserving generic boxed storage. Part E adds
 bounded EIR copies with integer entry guards and final-value synchronization.
 
-Validation: warning-free `cargo build`; six numeric-region tests; six counter,
-seed and index EIR tests; five codegen tests with PHP 8.5.12, both IR modes and
-strict heap checking; assembly emission for all five supported targets; existing
-counter-binding/static-proof regressions and the Fiber frame-budget regression.
-The combined counter/index allocation fixture has eight allocations and eight
+Validation after main integration: warning-free `cargo build`; 35 focused library
+tests and 29 codegen tests, including PHP 8.5.12 checks in both IR modes with strict
+heaps, assembly emission and representation checks for all five supported targets,
+integer-destination and scalar-load ownership integration, existing counter-binding
+and static-proof regressions, and the Fiber frame-budget regression.
+The combined counter/index allocation fixture has six allocations and six
 frees at both 10 and 1000 iterations. `git diff --check` passes.
 
 A separate existing returned-string concat leak, also present with EIR

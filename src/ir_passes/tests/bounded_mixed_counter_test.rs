@@ -16,7 +16,7 @@ use crate::ir_passes::driver::IrPass;
 use crate::types::PhpType;
 
 /// Builds a boxed counter with the same increment ownership scaffold as closure loops.
-fn counter(predicate: CmpPredicate, delta: i64, seed: i64, escape: bool) -> Function {
+pub(super) fn counter(predicate: CmpPredicate, delta: i64, seed: i64, escape: bool) -> Function {
     let mut function = Function::new("counter".into(), IrType::I64, PhpType::Int);
     function.params.push(FunctionParam {
         name: "n".into(),

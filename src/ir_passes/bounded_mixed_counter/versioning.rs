@@ -204,29 +204,8 @@ fn committed_consumer(function: &Function, inst: &Instruction, scalar_values: &H
         Op::Cast => matches!(inst.immediate,
             Some(Immediate::CastTarget(IrType::I64 | IrType::F64 | IrType::Str)
                 | Immediate::StringOffsetCast)),
-        // Raw integer comparisons with bool/null use a different coercion from boxed PHP
-        // ordering. Numeric partners and boxed/tagged partners retain their original rules.
-        Op::Spaceship => inst.operands.iter().all(|value| {
-            scalar_values.contains(value) || function.value(*value).is_some_and(|metadata| {
-                matches!(metadata.php_type.codegen_repr(), PhpType::Int | PhpType::Float
-                    | PhpType::Mixed | PhpType::TaggedScalar)
-            })
-        }),
-        // Mixed boxing represents raw address-like values as integers, while typed strict
-        // comparison distinguishes their PHP types. Keep that boundary on the generic path.
-        Op::StrictEq | Op::StrictNotEq => inst.operands.iter().all(|value| {
-            scalar_values.contains(value) || function.value(*value).is_some_and(|metadata| {
-                !matches!(metadata.php_type.codegen_repr(), PhpType::Pointer(_)
-                    | PhpType::Buffer(_) | PhpType::Packed(_))
-            })
-        }),
-        // Int/Mixed loose comparison has a numeric-only dispatch, unlike Mixed/Mixed's
-        // complete object comparison. An external box may hold an object at runtime.
-        Op::LooseEq | Op::LooseNotEq => inst.operands.iter().all(|value| {
-            scalar_values.contains(value) || function.value(*value).is_some_and(|metadata| {
-                metadata.php_type.codegen_repr() != PhpType::Mixed
-            })
-        }),
+        Op::Spaceship | Op::StrictEq | Op::StrictNotEq | Op::LooseEq | Op::LooseNotEq =>
+            super::consumers::comparison_preserves_integer(function, inst, scalar_values),
         op => matches!(op,
             Op::Acquire | Op::Move | Op::Borrow | Op::MixedClone | Op::Release
             | Op::StoreLocal | Op::StrIncDec | Op::PhpRelCmp | Op::MixedNumericBinop

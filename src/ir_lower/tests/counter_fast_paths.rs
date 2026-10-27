@@ -344,6 +344,8 @@ function looseObjectBound(mixed $end, mixed $other): int {
     }
     return $hits;
 }
+
+
 function looseObjectSeed(int $n, ?stdClass $other): int {
     $hits = 0;
     for ($box = $n - 1; $box >= 0; $box--) {
@@ -364,6 +366,51 @@ echo looseObjectBound($argc + 2, new stdClass), looseObjectSeed($argc + 2, new s
             for comparison in comparisons {
                 assert_eq!(function.values[comparison.operands[0].as_raw() as usize].ir_type,
                     crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed), "{target}: {text}");
+            }
+        }
+    }
+}
+
+/// Numeric-region replay retains boxed inputs for every representation-sensitive comparison family.
+#[test]
+fn counter_fast_path_region_comparison_partners_keep_boxed_inputs() {
+    let source = r#"<?php
+function regionObject(int $n, mixed $other): int {
+    $hits = 0;
+    for ($outer = 0; $outer < $n; $outer++) {
+        for ($i = $n - 1; $i >= 0; $i--) {}
+        for ($i = 0; $i < $n; $i++) { if ($i == $other) { $hits++; } if ($i != $other) { $hits++; } }
+    }
+    return $hits;
+}
+function regionOrdering(int $n): int {
+    $hits = 0;
+    for ($outer = 0; $outer < $n; $outer++) {
+        for ($i = $n - 1; $i >= 0; $i--) {}
+        for ($i = -2; $i < $n; $i++) { $hits += ($i <=> true); $hits += ($i <=> null); }
+    }
+    return $hits;
+}
+function regionPointer(int $n): int {
+    $p = ptr_null(); $hits = 0;
+    for ($outer = 0; $outer < $n; $outer++) {
+        for ($i = $n - 1; $i >= 0; $i--) {}
+        for ($i = 0; $i < $n; $i++) { if ($i === $p) { $hits++; } if ($i !== $p) { $hits++; } }
+    }
+    return $hits;
+}
+echo regionObject($argc + 2, new stdClass), regionOrdering($argc + 2), regionPointer($argc + 2);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for (name, ops) in [("regionObject", vec![Op::LooseEq, Op::LooseNotEq]),
+            ("regionOrdering", vec![Op::Spaceship]), ("regionPointer", vec![Op::StrictEq, Op::StrictNotEq])] {
+            let function = optimized(source, name, target);
+            let text = crate::ir::print_function(&function);
+            let comparisons: Vec<_> = function.instructions.iter().filter(|inst| ops.contains(&inst.op)).collect();
+            assert!(comparisons.len() >= 2, "{target}: {name}: {text}");
+            for comparison in comparisons {
+                assert_eq!(function.values[comparison.operands[0].as_raw() as usize].ir_type,
+                    crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed), "{target}: {name}: {text}");
             }
         }
     }

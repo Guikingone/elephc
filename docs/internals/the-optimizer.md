@@ -612,6 +612,8 @@ are a separate storage optimization and do not require this pass to run.
 
 Lowering also uses a discarded trial to decide whether a potentially promoting
 local can retain scalar storage when the body is lowered again. A counter whose
+comparison partners require boxed PHP coercion or identity remains boxed in that
+replay, using the same partner rules as guarded loop copies. A counter whose
 seed is checked arithmetic on another counter (`$j = $i + 1`) is retried jointly
 with that counter when it fails alone, and a proven seeded counter is replayed
 with its seed recorded as an `int` (`LoweringContext::int_seed_bindings`), so its

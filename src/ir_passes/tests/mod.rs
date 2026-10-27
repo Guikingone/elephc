@@ -12,6 +12,7 @@ mod branch_simplify_test;
 mod borrowed_receiver_roots_test;
 mod boxed_narrowing_test;
 mod bounded_mixed_counter_test;
+mod bounded_mixed_counter_consumers_test;
 mod bounded_mixed_counter_seed_test;
 mod buffer_access_test;
 mod buffer_property_reuse_test;

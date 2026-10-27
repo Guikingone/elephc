@@ -1668,6 +1668,8 @@ Loose equality with external Mixed-representation partners keeps a boxed counter
 so objects still use PHP's complete comparison rules.
 The broader value-only inventory remains available to discarded storage trials,
 whose later AST lowering rebuilds representation conversions.
+Comparison partner rules also constrain those trials: relowering a numeric binding
+can otherwise change PHP coercion or identity dispatch before IR optimization runs.
 
 A preceding seed guard can skip a dead-at-exit loop when a checked directional
 seed overflow makes its first comparison false. This also requires an innermost

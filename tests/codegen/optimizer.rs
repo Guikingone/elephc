@@ -50,6 +50,7 @@ mod method_loop_counters;
 mod checked_numeric_chain;
 mod integer_destinations;
 mod counter_fast_paths;
+mod counter_region_comparisons;
 #[path = "optimizer/concat_reset.rs"]
 mod concat_reset;
 #[path = "optimizer/eir_common_subexpression.rs"]
