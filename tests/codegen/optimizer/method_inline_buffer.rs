@@ -136,3 +136,30 @@ replaceLocalOwner();
 "#;
     assert_both_modes(source, true, "drop1|1|2|drop2|");
 }
+
+/// Packed getters observe a field mutation between two inlined reads of the same record.
+#[test]
+fn test_checked_managed_buffer_packed_reads_observe_writes() {
+    let source = r#"<?php
+packed class Cell { public int $v; }
+final class Grid {
+    private buffer<Cell> $cells;
+    public function __construct(int $n) {
+        $this->cells = buffer_new<Cell>($n);
+        $this->cells[0]->v = 1;
+    }
+    public function __destruct() { $cells = $this->cells; buffer_free($cells); }
+    public function get(int $i): int { return $this->cells[$i]->v; }
+    public function put(int $i, int $v): void { $this->cells[$i]->v = $v; }
+}
+function probeField(Grid $g, int $x): int {
+    $before = $g->get(0);
+    $g->put(0, $x);
+    $after = $g->get(0);
+    return $before * 100 + $after;
+}
+$g = new Grid(1);
+echo probeField($g, $argc + 6);
+"#;
+    assert_both_modes(source, false, "107");
+}

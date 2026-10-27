@@ -681,9 +681,10 @@ fn is_plain_property_read(inst: &Instruction) -> bool {
         && inst.effects.difference(Effects::READS_HEAP | Effects::MAY_THROW).is_empty()
 }
 
-/// An inlined `$this` read retains its explicit receiver guard and cannot invoke an accessor.
+/// An inlined object-property read retains its receiver guard; packed fields remain mutable.
 pub(super) fn is_inlined_scalar_property_read(function: &Function, inst: &Instruction) -> bool {
     inst.op == Op::PropGet && is_plain_property_read(inst)
+        && !function.is_packed_field_access(inst)
         && inst.result_ownership == crate::ir::Ownership::NonHeap
         && matches!(inst.result_php_type, PhpType::Int | PhpType::Float | PhpType::Bool)
         && inst.result.and_then(|value| function.value(value))

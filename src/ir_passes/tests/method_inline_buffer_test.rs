@@ -34,3 +34,36 @@ fn checked_managed_buffer_accessors_inline_on_every_target() {
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }
 }
+
+/// Inlined packed getters keep fresh reads after a field write to the same record.
+#[test]
+fn checked_managed_buffer_packed_reads_survive_writes_on_every_target() {
+    let source = r#"<?php
+packed class Cell { public int $v; }
+final class Grid {
+    private buffer<Cell> $cells;
+    public function __construct(int $n) { $this->cells = buffer_new<Cell>($n); }
+    public function get(int $i): int { return $this->cells[$i]->v; }
+    public function put(int $i, int $v): void { $this->cells[$i]->v = $v; }
+}
+function probeField(Grid $g, int $x): int {
+    $before = $g->get(0);
+    $g->put(0, $x);
+    $after = $g->get(0);
+    return $before * 100 + $after;
+}
+echo probeField(new Grid(1), $argc);
+"#;
+    for target in TARGETS {
+        let module = optimized(source, target);
+        let probe = function(&module, "probeField");
+        assert!(called_methods(&module, probe).is_empty(), "{target}: accessors survived");
+        let reads = placed(probe).filter(|inst| {
+            inst.op == Op::PropGet && probe.is_packed_field_access(inst)
+        }).count();
+        assert_eq!(reads, 2, "{target}: must reload the mutated record\n{}",
+            crate::ir::print_function(probe));
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
