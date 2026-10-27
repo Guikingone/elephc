@@ -12,8 +12,10 @@ mod compound;
 mod list;
 mod locals;
 mod postfix;
+mod ref_store;
 mod simple;
 
+pub(super) use ref_store::{parse_reference_store, reference_store_assign_index};
 pub(crate) use list::{
     parse_destructuring_pattern_unpack,
     starts_destructuring_pattern,

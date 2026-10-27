@@ -452,3 +452,47 @@ echo $copy[0], ":", $copy[1], "\n";
 "#);
     assert_eq!(out, "9:9\nupdated:updated\nnull:null\n1:2\n");
 }
+
+/// A reference stored INTO a pushed element, a keyed element or a property (`$a[] =& $y`,
+/// `$a['k'] = &$v`, `$o->p =& $x`) shares the slot with the variable both ways, inside a
+/// function as at top level (output measured with php 8.5).
+#[test]
+fn test_reference_stored_into_element_and_property() {
+    let out = compile_and_run(r#"<?php
+function push() {
+    $a = [];
+    $y = 1;
+    $a[] =& $y;
+    $y = 2;
+    var_dump($a[0]);
+    $a[0] = 3;
+    var_dump($y);
+}
+function keyed() {
+    $a = ['k' => 'old'];
+    $v = 'new';
+    $a['k'] = &$v;
+    $v = 'set';
+    var_dump($a['k']);
+}
+class Holder { public $p = 0; }
+function prop() {
+    $o = new Holder;
+    $x = 5;
+    $o->p =& $x;
+    $x = 6;
+    var_dump($o->p);
+    $o->p = 7;
+    var_dump($x);
+}
+push(); keyed(); prop();
+"#);
+    assert_eq!(out, "int(2)\nint(3)\nstring(3) \"set\"\nint(6)\nint(7)\n");
+}
+
+/// A statement may start with any expression: unary `+`/`-`/`!`/`~` or a literal.
+#[test]
+fn test_operator_and_literal_led_expression_statements() {
+    let out = compile_and_run("<?php $a = 2; +$a; -$a; !$a; ~$a; 1; 'x'; +($b = 3); echo $a + $b;");
+    assert_eq!(out, "5");
+}

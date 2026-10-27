@@ -171,6 +171,12 @@ fn parse_stmt_dispatch(
         // catch-all below and a standalone clone was a parse error rather than a no-op copy.
         Token::Clone => simple::parse_expr_stmt(tokens, pos, span),
         Token::At => simple::parse_error_suppressed_stmt(tokens, pos, span),
+        Token::Variable(_) | Token::This
+            if assign::reference_store_assign_index(tokens, *pos).is_some() =>
+        {
+            let assign = assign::reference_store_assign_index(tokens, *pos).unwrap_or(*pos);
+            assign::parse_reference_store(tokens, pos, span, assign)
+        }
         Token::Variable(_) => assign::parse_variable_stmt(tokens, pos, span),
         Token::This => simple::parse_this_stmt(tokens, pos, span),
         Token::PlusPlus | Token::MinusMinus => assign::parse_incdec_stmt(tokens, pos, span),
@@ -280,6 +286,17 @@ fn parse_stmt_dispatch(
         | Token::LParen
         | Token::LBracket
         | Token::Match => parse_expression_led_stmt(tokens, pos, span),
+        // Any other expression is a statement too (`+$a;`, `-f();`, `!$x;`, `1;`).
+        Token::Plus
+        | Token::Minus
+        | Token::Bang
+        | Token::Tilde
+        | Token::IntLiteral(_)
+        | Token::FloatLiteral(_)
+        | Token::StringLiteral(_)
+        | Token::True
+        | Token::False
+        | Token::Null => simple::parse_expr_stmt(tokens, pos, span),
         // Control flow — delegated to control.rs
         Token::Switch => control::parse_switch(tokens, pos, span),
         Token::If => control::parse_if(tokens, pos, span),
