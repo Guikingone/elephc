@@ -271,7 +271,9 @@ remaining suffix in order, and applies the normal float-to-int conversion once.
 
 Chain fusion can also cross private local storage, including the data local in
 a versioned integer loop. It follows each writer to every read before overwrite,
-requires dominance, and preserves suffix arithmetic through the final cast. For
+requires a dominating writer on every incoming path, and preserves suffix
+arithmetic through the final cast. Conditional overwrites and retirements that
+reach a shared read prevent the rewrite. For
 `$cell = $row * $columns + $column; (int)($cell + 1)`, the overflowed float must
 continue through `+ 1` before converting to an integer. Generic loop copies can
 keep their boxed storage while the fast copy eliminates its unobserved store.

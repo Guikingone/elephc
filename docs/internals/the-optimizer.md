@@ -654,8 +654,8 @@ arithmetic. Header effects and observable final seed values veto this rewrite.
 
 `checked_numeric_chain/locals.rs` extends integer-cast chain fusion through private
 local writers. It inventories every observation reached before an overwrite or
-retirement, requires the writer to dominate those reads, and accepts only graphs
-ending in explicit integer casts. The generic loop copy can retain boxed storage
+retirement, requires the writer to dominate those reads and be their unique reaching
+definition, and accepts only graphs ending in explicit integer casts. The generic loop copy can retain boxed storage
 while its fast copy eliminates an otherwise unobserved numeric store. A suffix such as `(int)($cell + 1)` stays in the same ordered
 float-promoting chain as `$cell = $row * $columns + $column`. Casting the local
 before that suffix would change PHP's answer after overflow, so the pass fuses the

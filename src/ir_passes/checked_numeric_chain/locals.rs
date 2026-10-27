@@ -5,7 +5,7 @@
 //! - CheckedNumericChain before its direct-expression phase.
 //!
 //! Key details:
-//! - Each selected store must dominate every observation it reaches before overwrite.
+//! - Each selected store must be the unique reaching definition at every rewritten read.
 //! - Each cast evaluates the original ordered float-promoting chain, including its suffix.
 
 use super::*;
@@ -144,7 +144,11 @@ fn expression(function: &Function, value: ValueId, region: &mut Region, visiting
             }
             let writer = writer?;
             let loads = reaching_reads(function, writer, slot)?;
-            if !loads.contains(&id) || loads.iter().any(|&load| !dominates_access(function, &dominance, writer, load)) {
+            let predecessors = crate::ir_passes::cfg::predecessors(function);
+            if !loads.contains(&id) || loads.iter().any(|&load| {
+                !dominates_access(function, &dominance, writer, load)
+                    || !unique_reaching_writer(function, &predecessors, writer, load, slot)
+            }) {
                 return None;
             }
             region.instructions.extend(loads);
@@ -215,6 +219,39 @@ fn reaching_reads(function: &Function, writer: InstId, slot: LocalSlotId) -> Opt
         }
     }
     Some(loads)
+}
+
+/// Rejects a read when any incoming path reaches a different store, retirement or uninitialized entry.
+fn unique_reaching_writer(
+    function: &Function, predecessors: &[Vec<BlockId>], writer: InstId, load: InstId, slot: LocalSlotId,
+) -> bool {
+    let Some(start) = instruction_block(function, load) else { return false; };
+    let Some(position) = function.blocks[start.as_raw() as usize].instructions.iter().position(|id| *id == load)
+    else { return false; };
+    let mut pending = vec![(start, position)];
+    let mut seen = HashSet::new();
+    while let Some((block, position)) = pending.pop() {
+        if !seen.insert((block, position)) { continue; }
+        let block = &function.blocks[block.as_raw() as usize];
+        let mut found = false;
+        for &id in block.instructions[..position].iter().rev() {
+            let inst = &function.instructions[id.as_raw() as usize];
+            if inst.immediate != Some(Immediate::LocalSlot(slot)) { continue; }
+            match inst.op {
+                Op::StoreLocal if id == writer => { found = true; break; }
+                Op::LoadLocal => {}
+                _ => return false,
+            }
+        }
+        if found { continue; }
+        if block.id == function.entry || predecessors[block.id.as_raw() as usize].is_empty() {
+            return false;
+        }
+        pending.extend(predecessors[block.id.as_raw() as usize].iter().map(|&previous| {
+            (previous, function.blocks[previous.as_raw() as usize].instructions.len())
+        }));
+    }
+    true
 }
 
 /// Requires PHP integer metadata as well as an integer-width payload.
