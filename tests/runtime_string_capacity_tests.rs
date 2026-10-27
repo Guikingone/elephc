@@ -11,6 +11,13 @@
 //!   `_concat_off` and the adjacent heap, which is exactly the bug these tests pin.
 //! - The encoder fixtures assert a controlled fatal (exit 255 + diagnostic), never SIGSEGV, which
 //!   is the security property: an oversized result may be rejected but must not corrupt memory.
+//! - The regex fixtures prepare a managed PCRE2 project, lock, receipt, and host provider
+//!   through `tests/support/managed_pcre2.rs`, then pass that cache as `ELEPHC_NATIVE_CACHE`.
+//!   They assert compilation and the PHP output. A host that cannot supply the provider prints
+//!   an explicit supported skip. A compile or link failure is never a pass.
+
+#[path = "support/managed_pcre2.rs"]
+mod managed_pcre2;
 
 use std::fs;
 use std::path::PathBuf;
@@ -53,6 +60,50 @@ fn compile(dir: &PathBuf, source: &str) -> std::process::Output {
         .arg(&php)
         .output()
         .expect("spawn elephc for string-capacity fixture")
+}
+
+/// Compiles one regex fixture with an isolated managed-PCRE2 project and cache.
+///
+/// The project manifest, lockfile, receipt, and target-aligned provider come from
+/// `managed_pcre2::configure_host_managed_pcre2`. The child receives that cache as
+/// `ELEPHC_NATIVE_CACHE` plus an isolated `XDG_CACHE_HOME`.
+fn compile_with_managed_pcre2(dir: &PathBuf, source: &str) -> std::process::Output {
+    let php = dir.join("main.php");
+    fs::write(&php, source).expect("write string-capacity fixture");
+    let mut command = Command::new(elephc_bin());
+    command
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .current_dir(dir)
+        .arg("-q")
+        .arg(&php);
+    managed_pcre2::configure_host_managed_pcre2(&mut command, dir);
+    command
+        .output()
+        .expect("spawn elephc for managed-PCRE2 string-capacity fixture")
+}
+
+/// Compiles and runs one regex capacity fixture, or prints an explicit supported skip.
+///
+/// Returns `None` only when `host_managed_pcre2_execution_skip_reason` reports that this
+/// host cannot provide the managed fixture. A prepared fixture must compile; stderr that
+/// mentions `pcre2` or `native project error` is still a failure.
+fn run_large_regex_capacity(name: &str, source: &str) -> Option<std::process::Output> {
+    if let Some(reason) = managed_pcre2::host_managed_pcre2_execution_skip_reason() {
+        eprintln!("skipping {name}: {reason}");
+        return None;
+    }
+    let dir = make_test_dir(name);
+    let compile = compile_with_managed_pcre2(&dir, source);
+    assert!(
+        compile.status.success(),
+        "{name} must compile with the managed PCRE2 fixture: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let output = Command::new(dir.join("main"))
+        .output()
+        .unwrap_or_else(|error| panic!("run {name}: {error}"));
+    let _ = fs::remove_dir_all(&dir);
+    Some(output)
 }
 
 /// Compiles one PHP source with heap-debug instrumentation enabled.
@@ -178,9 +229,8 @@ echo $before === md5($s) ? "src-ok" : "src-CORRUPT", "\n";
 /// expands the subject past the historical 64 KiB threshold.
 #[test]
 fn large_preg_replace_output_matches_php() {
-    let dir = make_test_dir("preg-replace-large");
-    let compile = compile(
-        &dir,
+    let Some(output) = run_large_regex_capacity(
+        "preg-replace-large",
         r#"<?php
 $s = str_repeat("a", 100000);
 $before = md5($s);
@@ -188,18 +238,9 @@ $r = preg_replace("/a/", "Z", $s);
 echo strlen($r), " ", $r === str_repeat("Z", 100000) ? "re-ok" : "re-BAD", "\n";
 echo $before === md5($s) ? "src-ok" : "src-CORRUPT", "\n";
 "#,
-    );
-    if !compile.status.success() {
-        let stderr = String::from_utf8_lossy(&compile.stderr);
-        if stderr.contains("pcre2") || stderr.contains("native project error") {
-            let _ = fs::remove_dir_all(&dir);
-            return;
-        }
-        panic!("preg_replace fixture must compile: {stderr}");
-    }
-    let output = Command::new(dir.join("main"))
-        .output()
-        .expect("run preg_replace fixture");
+    ) else {
+        return;
+    };
     assert!(
         output.status.success(),
         "large preg_replace must not fault: {}",
@@ -210,7 +251,6 @@ echo $before === md5($s) ? "src-ok" : "src-CORRUPT", "\n";
         "100000 re-ok\nsrc-ok\n",
         "preg_replace must preserve the subject and return the expanded result"
     );
-    let _ = fs::remove_dir_all(&dir);
 }
 
 /// `preg_replace_callback()` must keep its output in a dedicated growable buffer: the callback
@@ -218,9 +258,8 @@ echo $before === md5($s) ? "src-ok" : "src-CORRUPT", "\n";
 /// match until the heap was exhausted.
 #[test]
 fn large_preg_replace_callback_output_matches_php() {
-    let dir = make_test_dir("preg-replace-callback-large");
-    let compile = compile(
-        &dir,
+    let Some(output) = run_large_regex_capacity(
+        "preg-replace-callback-large",
         r#"<?php
 $s = str_repeat("a", 1000);
 $before = md5($s);
@@ -228,18 +267,9 @@ $r = preg_replace_callback("/a/", function ($m) { return str_repeat("b", 1000); 
 echo strlen($r), " ", $r === str_repeat("b", 1000000) ? "cb-ok" : "cb-BAD", "\n";
 echo $before === md5($s) ? "src-ok" : "src-CORRUPT", "\n";
 "#,
-    );
-    if !compile.status.success() {
-        let stderr = String::from_utf8_lossy(&compile.stderr);
-        if stderr.contains("pcre2") || stderr.contains("native project error") {
-            let _ = fs::remove_dir_all(&dir);
-            return;
-        }
-        panic!("preg_replace_callback fixture must compile: {stderr}");
-    }
-    let output = Command::new(dir.join("main"))
-        .output()
-        .expect("run preg_replace_callback fixture");
+    ) else {
+        return;
+    };
     assert!(
         output.status.success(),
         "large preg_replace_callback must not fault: {}",
@@ -250,7 +280,6 @@ echo $before === md5($s) ? "src-ok" : "src-CORRUPT", "\n";
         "1000000 cb-ok\nsrc-ok\n",
         "preg_replace_callback must accumulate the callback results without exhausting the heap"
     );
-    let _ = fs::remove_dir_all(&dir);
 }
 
 /// A result larger than the configured heap budget still fails closed through the shared

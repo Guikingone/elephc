@@ -11,6 +11,8 @@
 //! - System PCRE2 archives are admitted only inside this test provider; production resolution
 //!   remains fail-closed and never falls back to system libraries.
 //! - Process-wide provider and shim caches reject attempts to mix supported targets.
+//! - `managed_pcre2_execution_skip_reason` is the only supported skip. A later compile or
+//!   link failure must still fail the caller.
 
 #![allow(dead_code)]
 
@@ -149,62 +151,100 @@ fn test_c_compiler(target: Target) -> &'static str {
     }
 }
 
+/// Searches the target's static PCRE2 prefixes and returns the first complete one.
+fn find_test_pcre2_provider(target: Target) -> Option<TestPcre2Provider> {
+    let candidates: Vec<(PathBuf, PathBuf)> = match target.platform {
+        Platform::MacOS => {
+            let mut candidates = Vec::new();
+            if let Some(prefix) = std::env::var_os("HOMEBREW_PREFIX") {
+                let pcre2 = PathBuf::from(prefix).join("opt/pcre2");
+                candidates.push((pcre2.join("include"), pcre2.join("lib")));
+            }
+            candidates.extend([
+                (
+                    "/opt/homebrew/opt/pcre2/include".into(),
+                    "/opt/homebrew/opt/pcre2/lib".into(),
+                ),
+                (
+                    "/usr/local/opt/pcre2/include".into(),
+                    "/usr/local/opt/pcre2/lib".into(),
+                ),
+            ]);
+            candidates
+        }
+        Platform::Linux => {
+            let tuple = match target.arch {
+                Arch::AArch64 => "aarch64-linux-gnu",
+                Arch::X86_64 => "x86_64-linux-gnu",
+            };
+            vec![
+                ("/usr/include".into(), "/usr/lib".into()),
+                ("/usr/local/include".into(), "/usr/local/lib".into()),
+                ("/usr/include".into(), format!("/usr/lib/{tuple}").into()),
+                ("/usr/include".into(), format!("/lib/{tuple}").into()),
+            ]
+        }
+        Platform::Windows => return None,
+    };
+    for (include_dir, library_dir) in candidates {
+        let has_headers = include_dir.join("pcre2.h").is_file()
+            && include_dir.join("pcre2posix.h").is_file();
+        let has_posix = library_dir.join("libpcre2-posix.a").is_file();
+        let has_core = library_dir.join("libpcre2-8.a").is_file();
+        if has_headers && has_posix && has_core {
+            return Some(TestPcre2Provider {
+                target: target.as_str().to_string(),
+                include_dir,
+                library_dir,
+            });
+        }
+    }
+    None
+}
+
+/// Reports why `target` cannot execute a managed-PCRE2 CLI fixture.
+///
+/// `None` means the aligned static provider is present and the compiled program can
+/// run on this host. `Some` is an explicit supported skip for Windows, iOS (device
+/// or Simulator), or a host missing `pcre2.h`, `pcre2posix.h`, `libpcre2-posix.a`,
+/// and `libpcre2-8.a`. Callers must not use this to absorb a compile or link failure
+/// after the fixture has been prepared.
+pub(crate) fn managed_pcre2_execution_skip_reason(target: Target) -> Option<String> {
+    if target.platform == Platform::Windows || target.is_ios() {
+        return Some(format!(
+            "supported skip: managed PCRE2 capacity regressions execute on the host and do not run for {}",
+            target.as_str()
+        ));
+    }
+    if find_test_pcre2_provider(target).is_none() {
+        return Some(format!(
+            "supported skip: managed PCRE2 fixture is unavailable for {}: aligned pcre2.h, pcre2posix.h, libpcre2-posix.a, and libpcre2-8.a were not found",
+            target.as_str()
+        ));
+    }
+    None
+}
+
+/// Reports why the host under test cannot execute a managed-PCRE2 CLI fixture.
+pub(crate) fn host_managed_pcre2_execution_skip_reason() -> Option<String> {
+    managed_pcre2_execution_skip_reason(Target::detect_host())
+}
+
 /// Discovers one target-aligned system PCRE2 header/library prefix for integration tests.
 fn test_pcre2_provider(target: Target) -> &'static TestPcre2Provider {
     static PROVIDER: OnceLock<TestPcre2Provider> = OnceLock::new();
 
     let provider = PROVIDER.get_or_init(|| {
-        let candidates: Vec<(PathBuf, PathBuf)> = match target.platform {
-            Platform::MacOS => {
-                let mut candidates = Vec::new();
-                if let Some(prefix) = std::env::var_os("HOMEBREW_PREFIX") {
-                    let pcre2 = PathBuf::from(prefix).join("opt/pcre2");
-                    candidates.push((pcre2.join("include"), pcre2.join("lib")));
-                }
-                candidates.extend([
-                    (
-                        "/opt/homebrew/opt/pcre2/include".into(),
-                        "/opt/homebrew/opt/pcre2/lib".into(),
-                    ),
-                    (
-                        "/usr/local/opt/pcre2/include".into(),
-                        "/usr/local/opt/pcre2/lib".into(),
-                    ),
-                ]);
-                candidates
-            }
-            Platform::Linux => {
-                let tuple = match target.arch {
-                    Arch::AArch64 => "aarch64-linux-gnu",
-                    Arch::X86_64 => "x86_64-linux-gnu",
-                };
-                vec![
-                    ("/usr/include".into(), "/usr/lib".into()),
-                    ("/usr/local/include".into(), "/usr/local/lib".into()),
-                    ("/usr/include".into(), format!("/usr/lib/{tuple}").into()),
-                    ("/usr/include".into(), format!("/lib/{tuple}").into()),
-                ]
-            }
-            Platform::Windows => panic!("managed native fixtures do not support Windows"),
-        };
-        for (include_dir, library_dir) in candidates {
-            let has_headers = include_dir.join("pcre2.h").is_file()
-                && include_dir.join("pcre2posix.h").is_file();
-            let has_posix = library_dir.join("libpcre2-posix.a").is_file();
-            let has_core = library_dir.join("libpcre2-8.a").is_file();
-            if has_headers && has_posix && has_core {
-                return TestPcre2Provider {
-                    target: target.as_str().to_string(),
-                    include_dir,
-                    library_dir,
-                };
-            }
+        if target.platform == Platform::Windows {
+            panic!("managed native fixtures do not support Windows");
         }
-        panic!(
-            "integration regex tests require aligned pcre2.h, pcre2posix.h, \
-             libpcre2-posix.a and libpcre2-8.a for {}",
-            target.as_str()
-        );
+        find_test_pcre2_provider(target).unwrap_or_else(|| {
+            panic!(
+                "integration regex tests require aligned pcre2.h, pcre2posix.h, \
+                 libpcre2-posix.a and libpcre2-8.a for {}",
+                target.as_str()
+            )
+        })
     });
     assert_eq!(
         provider.target,
@@ -552,6 +592,32 @@ fn sha256_file(path: &Path) -> String {
 /// Computes a lowercase SHA-256 digest for an in-memory fingerprint payload.
 fn sha256_bytes(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+/// The host skip reason stays empty when the aligned static provider is installed.
+///
+/// A missing provider, Windows, or an iOS target must name that target in an explicit
+/// supported-skip message. This guards the capacity regressions against treating a
+/// missing cache as a pass.
+#[test]
+fn managed_pcre2_execution_skip_reason_follows_the_host_provider() {
+    let target = Target::detect_host();
+    let reason = managed_pcre2_execution_skip_reason(target);
+    let unavailable = target.platform == Platform::Windows
+        || target.is_ios()
+        || find_test_pcre2_provider(target).is_none();
+    if unavailable {
+        let reason = reason.expect("missing provider must be an explicit skip");
+        assert!(
+            reason.contains("supported skip") && reason.contains(target.as_str()),
+            "{reason}"
+        );
+    } else {
+        assert!(
+            reason.is_none(),
+            "host provider must run the capacity regressions: {reason:?}"
+        );
+    }
 }
 
 /// Keeps the CLI fixture's catalog identity aligned with its embedded project lock.
