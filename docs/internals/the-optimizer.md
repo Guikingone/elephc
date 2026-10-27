@@ -612,6 +612,8 @@ are a separate storage optimization and do not require this pass to run.
 
 Lowering also uses a discarded trial to decide whether a potentially promoting
 local can retain scalar storage when the body is lowered again. A counter whose
+comparison partners require boxed PHP coercion or identity remains boxed in that
+replay, using the same partner rules as guarded loop copies. A counter whose
 seed is checked arithmetic on another counter (`$j = $i + 1`) is retried jointly
 with that counter when it fails alone, and a proven seeded counter is replayed
 with its seed recorded as an `int` (`LoweringContext::int_seed_bindings`), so its
@@ -633,6 +635,33 @@ is discarded after every counter update is proven nonoverflowing; it authorizes
 ordinary lowering again, including with IR optimization disabled, rather than
 installing speculative trial instructions in the executable function. Integer
 storage and buffer bounds remain independent proofs.
+
+For a canonical counter that lacks a static overflow proof,
+`bounded_mixed_counter/versioning.rs` can retain the original loop and add a
+guarded integer copy. Both the seed and the invariant bound must have integer
+tags. Inclusive ascending bounds must differ from `PHP_INT_MAX`, and descending
+ones from `PHP_INT_MIN`. The copied counter uses private scalar storage, and each
+normal exit publishes its final integer into the original boxed slot. Float
+bounds, overflowing seeds and unsafe inclusive bounds follow the original loop.
+Mutable bounds, escaping SSA values, references, dynamic scopes, handlers and
+suspension are excluded. Only innermost loops of at most 256 instructions qualify,
+with at most four copies per function and conservative function-size limits.
+Copies preserve instruction source spans and lexical class scopes.
+
+A separate seed guard avoids a loop copy when overflow makes the first condition
+false and no code outside the loop reads the counter. For example, the overflowing
+seed of `for ($box = $n - 1; $box >= 0; $box--)` is negative and never enters the
+body. Its guard skips directly to the exit; the in-range path uses exact integer
+arithmetic. Header effects and observable final seed values veto this rewrite.
+
+`checked_numeric_chain/locals.rs` extends integer-cast chain fusion through private
+local writers. It inventories every observation reached before an overwrite or
+retirement, requires the writer to dominate those reads and be their unique reaching
+definition, and accepts only graphs ending in explicit integer casts. The generic loop copy can retain boxed storage
+while its fast copy eliminates an otherwise unobserved numeric store. A suffix such as `(int)($cell + 1)` stays in the same ordered
+float-promoting chain as `$cell = $row * $columns + $column`. Casting the local
+before that suffix would change PHP's answer after overflow, so the pass fuses the
+complete expression at each cast and removes the now-unobserved boxed storage.
 
 ## EIR buffer resolution hoisting
 

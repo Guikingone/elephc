@@ -33,6 +33,7 @@ mod callable_flow_safety;
 mod loop_closures;
 mod method_loop_counters;
 mod reused_loop_counters;
+mod counter_fast_paths;
 mod callable_property_owners;
 mod class_introspection_owners;
 mod closure_bind_owners;

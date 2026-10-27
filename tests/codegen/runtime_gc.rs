@@ -222,3 +222,5 @@ mod gc_incoming_cache;
 mod unshift_reference_cow;
 
 mod entity_slot_owners;
+#[path = "runtime_gc/counter_regions.rs"]
+mod counter_regions;

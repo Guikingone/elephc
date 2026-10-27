@@ -1650,11 +1650,48 @@ The analysis is capped at 16 candidate locals in functions of at most 4096
 instructions. It runs only with IR optimization enabled and uses the existing
 scalar and call-argument backends for every supported target.
 
+### Guarded Loop Counter Versions
+
+`loop_counter_versioning` follows the static bounded-counter proof. For a small
+innermost loop with an entry-tested counter and a stable integer or Mixed bound,
+it guards the seed and bound tags, plus inclusive integer extrema, before entering
+a private integer copy. The original boxed loop remains the fallback; each fast
+entry unboxes the guarded integer payloads without PHP cast effects, and each fast
+exit publishes the exact final counter to the original slot. Post-test loops and
+conditions computed outside the header cannot justify unchecked counter updates.
+Committed copies accept only consumers whose existing opcode handles raw integers;
+coercing stores and operations requiring a boxed input retain the generic loop.
+Cast targets must be scalar, and ordering partners must preserve PHP numeric or
+boxed comparison rules; boolean/null ordering partners retain the generic loop.
+Strict identity with raw pointer, buffer or packed partners also keeps its original
+boxed counter input, preserving the runtime boxing semantics.
+Loose equality with external Mixed-representation partners keeps a boxed counter
+so objects still use PHP's complete comparison rules.
+The broader value-only inventory remains available to discarded storage trials,
+whose later AST lowering rebuilds representation conversions.
+Comparison partner rules also constrain those trials: relowering a numeric binding
+can otherwise change PHP coercion or identity dispatch before IR optimization runs.
+
+A preceding seed guard can skip a dead-at-exit loop when a checked directional
+seed overflow makes its first comparison false. This also requires an innermost
+loop, so one header comparison cannot authorize repeated nested updates. All eligible
+seed guards are exhausted before the separate loop-copy budget is spent. Integer
+and boolean preheader constants and retired bookkeeping are accepted only when the resulting
+CFG still validates. Both
+rewrites operate on EIR and preserve the original AST binding decisions and
+source metadata. See [the optimizer](the-optimizer.md) for the complete eligibility
+and code-growth limits.
+
 ### Boxed Numeric Chain Fusion
 
 `src/ir_passes/checked_numeric_chain.rs` fuses compatible checked arithmetic
 chains that are consumed only as integers, avoiding intermediate Mixed boxes.
 It runs after checked integer sink specialization and before constant folding.
+Private index locals can connect a chain to its final integer casts when every
+rewritten read has the same unique reaching writer. An intervening store or
+retirement rejects that rewrite. Float promotion remains part of the complete
+chain through the final cast; a generic loop copy retains any boxed storage and
+cleanup that it still uses.
 
 ### Constant Folding
 
@@ -2404,9 +2441,13 @@ greatest fixed point, so a value written before a loop remains eligible when
 the back edge only reads it.
 
 Promotion requires ordinary integer, boolean, or float local storage with only
-plain load/store accesses. Address escapes, by-reference uses, global and static
-slots, refcounted values, nonstandard slot operations, eval scope access, and
-functions with implicit exception-handler edges stay slot-backed. This pass runs
+plain load/store accesses. Stored values and loads must match the slot's logical
+PHP type as well as its representation, with `false` values admitted into boolean
+storage. Resource payloads in integer storage cannot acquire integer semantics
+through SSA forwarding. Address escapes,
+by-reference uses, global and static slots, refcounted values, nonstandard slot
+operations, eval scope access, and functions with implicit exception-handler
+edges stay slot-backed. This pass runs
 in the fixed-point EIR optimizer before register allocation. Both `--ir-opt=off`
 and `--regalloc=stack` remain available for comparison.
 
