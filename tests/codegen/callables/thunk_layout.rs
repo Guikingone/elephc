@@ -90,14 +90,11 @@ echo layout_probe_caller(["ab", "cde"], $argc);
 /// conversion because, unlike the invoker sites, they never re-opened the caller's section — which
 /// also means they were already broken under `--debug-info` on Linux in `origin/main`. A reviewer
 /// found them; a pristine `origin/main` displaces 8 of this caller's blocks.
-///
-/// `preg_replace_callback()` is `string|null`. The `?? ""` keeps `clean()`'s
-/// declared string return on the successful replacement this layout probe runs.
 #[test]
 fn test_a_callback_wrapper_minted_mid_body_does_not_split_its_caller() {
     let source = r#"<?php
 function clean(string $s): string {
-    $out = preg_replace_callback('/a/', fn($m) => strtoupper($m[0]), $s) ?? "";
+    $out = preg_replace_callback('/a/', fn($m) => strtoupper($m[0]), $s);
     if (strlen($out) > 3) { $out .= "!"; } else { $out .= "?"; }
     return $out;
 }

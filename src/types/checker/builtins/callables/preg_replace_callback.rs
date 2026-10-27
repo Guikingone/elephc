@@ -154,13 +154,14 @@ fn contextual_closure_sig(
     }))
 }
 
-/// Returns the `string|null` result `preg_replace_callback()` produces.
+/// Returns the checker type of `preg_replace_callback()`.
 ///
-/// A successful replacement is a string, including the empty string. An invalid
-/// pattern or the removed `/e` modifier is real PHP null, so the checker type
-/// keeps that alternative instead of collapsing the call to `string`.
+/// The runtime value is a string, or PHP null when the pattern is invalid. The
+/// static type stays `mixed`, the same contract `preg_replace()` and `var_export()`
+/// use, so `function f(): string { return preg_replace_callback(...); }` still
+/// type-checks. A `string|null` return would reject those programs.
 fn result_type() -> PhpType {
-    PhpType::Union(vec![PhpType::Str, PhpType::Void])
+    PhpType::Mixed
 }
 
 /// Type-checks a call to PHP `preg_replace_callback(pattern, callback, subject)`.
@@ -168,7 +169,7 @@ fn result_type() -> PhpType {
 /// Validates exactly 3 arguments, infers types for the pattern and subject
 /// expressions, synthesizes an `array<string>` type for the `$matches` callback
 /// parameter, and delegates to `check_known_callable_call` to verify the closure
-/// signature. Returns `string|null` so failure stays distinct from a string.
+/// signature. Returns `mixed` so a declared string return can still accept the call.
 pub(crate) fn check(
     checker: &mut Checker,
     args: &[Expr],

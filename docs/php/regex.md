@@ -93,7 +93,7 @@ for a complete project.
 | `preg_match()` | `preg_match($pattern, $subject, &$matches = null): int` | Test regex match (1 or 0); optional `$matches` receives the full match and capture groups |
 | `preg_match_all()` | `preg_match_all($pattern, $subject, &$matches = [], $flags = 0): int` | Count all non-overlapping matches; optional `$matches` receives numbered groups |
 | `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string` | Replace all regex matches; `$0`..`$99` and `\0`..`\99` replacement backreferences expand captured groups |
-| `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): string\|null` | Replace all regex matches with the callback return value; callback receives `array<string>` matches. An invalid pattern or the removed `/e` modifier returns `null` |
+| `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): mixed` | Replace all regex matches with the callback return value; callback receives `array<string>` matches. The static return is `mixed`, so a `string` function may return the call. An invalid pattern, including an unknown modifier or a missing delimiter, returns `null` |
 | `preg_split()` | `preg_split($pattern, $subject, $limit = -1, $flags = 0): array` | Split string by regex; supports no-empty, delimiter-capture, offset-capture, and positive limits |
 | `mb_ereg_match()` | `mb_ereg_match($pattern, $string, $options = null): bool` | Test a bare multibyte regex at the start of the string through Oniguruma, using the current `mb_regex_encoding()` and `mb_regex_set_options()` settings. An explicit options argument overrides the current options for this call |
 
@@ -196,7 +196,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = null): int|false` | `int|false` | ✓ | ✓ |
 | [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, mixed $matches = null, int $flags = 0): int|false` | `int|false` | ✓ | ✓ |
 | [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): mixed` | `mixed` | ✓ | ✓ |
-| [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject): string|null` | `string|null` | ✓ | ✓ |
+| [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_split()`](./builtins/regex/preg_split.md) | `(string $pattern, string $subject, int $limit = -1, int $flags = 0): array|false` | `array|false` | ✓ | ✓ |
 
 Constants: `PREG_OFFSET_CAPTURE`, `PREG_PATTERN_ORDER`, `PREG_SET_ORDER`, `PREG_SPLIT_DELIM_CAPTURE`, `PREG_SPLIT_NO_EMPTY`, `PREG_SPLIT_OFFSET_CAPTURE`, `PREG_UNMATCHED_AS_NULL`.

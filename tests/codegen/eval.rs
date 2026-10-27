@@ -8094,6 +8094,66 @@ return ($invalid === null ? "1" : "0")
     assert_eq!(out, "101NULL:10NULL:emptys:x");
 }
 
+/// Verifies eval returns null for unknown modifiers and a missing delimiter.
+///
+/// A valid modifier this runtime does not implement (`x`) stays the explicit
+/// eval runtime error instead of null. A missing callback is a TypeError even
+/// when the pattern is also invalid, because the callback is checked first.
+#[test]
+fn test_eval_preg_replace_callback_invalid_patterns_and_callback_order() {
+    let invalid = compile_and_run_with_regex(
+        r#"<?php
+echo eval('function eval_order_repl($matches) { return "X"; }
+$unknown = preg_replace_callback("/a/z", "eval_order_repl", "a");
+$missing = preg_replace_callback("/abc", "eval_order_repl", "abc");
+$evalmod = preg_replace_callback("/a/e", "eval_order_repl", "a");
+return (is_null($unknown) ? "1" : "0")
+    . (is_string($unknown) ? "1" : "0")
+    . (is_null($missing) ? "1" : "0")
+    . (is_null($evalmod) ? "1" : "0");
+');
+"#,
+    );
+    assert_eq!(invalid, "1011");
+
+    let callback = compile_and_run_capture_with_regex(
+        r#"<?php
+echo eval('try {
+    preg_replace_callback("/[/", "missing_cb", "a");
+    return "bad";
+} catch (TypeError $e) {
+    return get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        callback.success,
+        "program failed: stdout={:?} stderr={}",
+        callback.stdout, callback.stderr
+    );
+    assert_eq!(
+        callback.stdout,
+        "TypeError:preg_replace_callback(): Argument #2 ($callback) must be a valid callback, function \"missing_cb\" not found or invalid function name"
+    );
+
+    let extended = compile_and_run_capture_with_regex(
+        r#"<?php
+echo eval('function eval_extended_repl($matches) { return "X"; }
+return preg_replace_callback("/a b/x", "eval_extended_repl", "a b");');
+"#,
+    );
+    assert!(
+        !extended.success,
+        "unmapped modifier returned instead of failing: stdout={:?} stderr={}",
+        extended.stdout, extended.stderr
+    );
+    assert!(
+        extended.stderr.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {}",
+        extended.stderr
+    );
+}
+
 /// Verifies dynamic eval preg callables write by-reference `$matches` arrays.
 #[test]
 fn test_eval_dynamic_preg_callables_write_matches_by_ref() {

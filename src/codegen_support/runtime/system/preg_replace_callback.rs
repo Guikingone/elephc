@@ -10,9 +10,39 @@
 //!   cannot clobber it. The epilogue copies that buffer into a Mixed string and
 //!   then releases it.
 //! - The helper returns one Mixed cell. A replacement string is tag 1. An invalid
-//!   pattern or the removed `/e` modifier is tag 8 null, never a null-sentinel string.
+//!   pattern is tag 8 null: unknown modifiers, a missing ending delimiter, a
+//!   compile failure, and the removed `/e` modifier. `/e` is bit 30 from
+//!   `__rt_preg_strip`. Valid modifiers this runtime does not map are not null.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+
+/// Branches to `next_label` when `reg` is a modifier the pre-scan must not reject.
+///
+/// Implemented modifiers and valid PHP modifiers this runtime leaves unmapped
+/// continue the scan. The removed `e` also continues: `__rt_preg_strip` sets
+/// bit 30, and the caller tests that bit immediately after the strip. Any other
+/// byte falls through so the caller can return null.
+fn emit_branch_if_callback_modifier_continues(
+    emitter: &mut Emitter,
+    reg: &str,
+    next_label: &str,
+) {
+    // i m s u U x A D S X J n, plus e (bit 30 after the strip).
+    for byte in [
+        105, 109, 115, 117, 85, 120, 65, 68, 83, 88, 74, 110, 101,
+    ] {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("cmp {reg}, #{byte}"));            // compare a modifier the pre-scan must not reject
+                emitter.instruction(&format!("b.eq {next_label}"));             // keep scanning a recognized modifier or /e
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("cmp {reg}, {byte}"));             // compare a modifier the pre-scan must not reject
+                emitter.instruction(&format!("je {next_label}"));               // keep scanning a recognized modifier or /e
+            }
+        }
+    }
+}
 
 /// Emits the target's in-band null string pair into the given pointer/length registers.
 fn emit_preg_replace_callback_null(emitter: &mut Emitter, ptr_reg: &str, len_reg: &str) {
@@ -88,24 +118,30 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x5, [sp, #{}]", subject_ptr_off));        // save subject pointer for fallback and C-string conversion
     emitter.instruction(&format!("str x6, [sp, #{}]", subject_len_off));        // save subject length for fallback and C-string conversion
 
-    // -- reject the removed /e modifier before compilation --
-    emitter.instruction("cmp x2, #2");                                          // a modifier suffix needs a delimited pattern of at least two bytes
-    emitter.instruction("b.lt __rt_preg_replace_callback_eval_done");           // let compilation report an undelimited or empty pattern
-    emitter.instruction("ldrb w9, [x1]");                                       // inspect the opening delimiter
-    emitter.instruction("cmp w9, #47");                                         // only slash-delimited patterns carry a trailing modifier suffix
-    emitter.instruction("b.ne __rt_preg_replace_callback_eval_done");           // other delimiters stay on the compile path
-    emitter.instruction("sub x10, x2, #1");                                     // start the modifier scan at the final pattern byte
-    emitter.label("__rt_preg_replace_callback_eval_scan");
-    emitter.instruction("cmp x10, #1");                                         // stop once the scan reaches the opening delimiter
-    emitter.instruction("b.lt __rt_preg_replace_callback_eval_done");           // no closing delimiter, so compilation decides
+    // -- reject patterns PHP rejects before compilation --
+    emitter.instruction("cbz x2, __rt_preg_replace_callback_pattern_ok");       // an empty pattern is decided by compilation
+    emitter.instruction("ldrb w9, [x1]");                                       // inspect the opening byte
+    emitter.instruction("cmp w9, #47");                                         // only slash-delimited patterns carry a modifier suffix
+    emitter.instruction("b.ne __rt_preg_replace_callback_pattern_ok");          // other delimiters stay on the compile path
+    emitter.instruction("cmp x2, #2");                                          // a closing delimiter needs a second byte
+    emitter.instruction("b.lt __rt_preg_replace_callback_fail");                // "/" has no ending delimiter
+    emitter.instruction("sub x10, x2, #1");                                     // start at the final pattern byte
+    emitter.label("__rt_preg_replace_callback_pattern_scan");
+    emitter.instruction("cmp x10, #1");                                         // stop before the opening delimiter
+    emitter.instruction("b.lt __rt_preg_replace_callback_fail");                // no closing delimiter, so PHP returns null
     emitter.instruction("ldrb w9, [x1, x10]");                                  // load the current trailing byte
     emitter.instruction("cmp w9, #47");                                         // a closing slash ends the modifier suffix
-    emitter.instruction("b.eq __rt_preg_replace_callback_eval_done");           // modifiers before the closing slash did not include e
-    emitter.instruction("cmp w9, #101");                                        // 'e' is the removed eval modifier
-    emitter.instruction("b.eq __rt_preg_replace_callback_fail");                // PHP 8 returns null for /e
+    emitter.instruction("b.eq __rt_preg_replace_callback_pattern_ok");          // every trailing byte was a modifier the scan accepts
+    emit_branch_if_callback_modifier_continues(
+        emitter,
+        "w9",
+        "__rt_preg_replace_callback_pattern_next",
+    );
+    emitter.instruction("b __rt_preg_replace_callback_fail");                   // PHP returns null for an unknown modifier
+    emitter.label("__rt_preg_replace_callback_pattern_next");
     emitter.instruction("sub x10, x10, #1");                                    // continue toward the closing delimiter
-    emitter.instruction("b __rt_preg_replace_callback_eval_scan");              // keep scanning the modifier suffix
-    emitter.label("__rt_preg_replace_callback_eval_done");
+    emitter.instruction("b __rt_preg_replace_callback_pattern_scan");           // keep scanning the modifier suffix
+    emitter.label("__rt_preg_replace_callback_pattern_ok");
 
     // -- strip delimiters and compile PCRE regex --
     emitter.instruction("bl __rt_preg_strip");                                  // strip slash delimiters and expose supported regex flags
@@ -452,25 +488,32 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r8", subject_ptr_off)); // preserve subject pointer for fallback and C-string conversion
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", subject_len_off)); // preserve subject length for fallback and C-string conversion
 
-    // -- reject the removed /e modifier before compilation --
-    emitter.instruction("cmp rsi, 2");                                          // a modifier suffix needs a delimited pattern of at least two bytes
-    emitter.instruction("jl __rt_preg_replace_callback_eval_done_linux_x86_64"); // let compilation report an undelimited or empty pattern
-    emitter.instruction("movzx r8d, BYTE PTR [rdi]");                           // inspect the opening delimiter
-    emitter.instruction("cmp r8d, 47");                                         // only slash-delimited patterns carry a trailing modifier suffix
-    emitter.instruction("jne __rt_preg_replace_callback_eval_done_linux_x86_64"); // other delimiters stay on the compile path
-    emitter.instruction("mov r9, rsi");                                         // copy the pattern length for the reverse modifier scan
-    emitter.instruction("sub r9, 1");                                           // start the modifier scan at the final pattern byte
-    emitter.label("__rt_preg_replace_callback_eval_scan_linux_x86_64");
-    emitter.instruction("cmp r9, 1");                                           // stop once the scan reaches the opening delimiter
-    emitter.instruction("jl __rt_preg_replace_callback_eval_done_linux_x86_64"); // no closing delimiter, so compilation decides
+    // -- reject patterns PHP rejects before compilation --
+    emitter.instruction("test rsi, rsi");                                       // skip the byte load when the pattern is empty
+    emitter.instruction("jz __rt_preg_replace_callback_pattern_ok_linux_x86_64"); // an empty pattern is decided by compilation
+    emitter.instruction("movzx r8d, BYTE PTR [rdi]");                           // inspect the opening byte
+    emitter.instruction("cmp r8d, 47");                                         // only slash-delimited patterns carry a modifier suffix
+    emitter.instruction("jne __rt_preg_replace_callback_pattern_ok_linux_x86_64"); // other delimiters stay on the compile path
+    emitter.instruction("cmp rsi, 2");                                          // a closing delimiter needs a second byte
+    emitter.instruction("jl __rt_preg_replace_callback_fail_linux_x86_64");     // "/" has no ending delimiter
+    emitter.instruction("mov r9, rsi");                                         // copy the pattern length for the reverse scan
+    emitter.instruction("sub r9, 1");                                           // start at the final pattern byte
+    emitter.label("__rt_preg_replace_callback_pattern_scan_linux_x86_64");
+    emitter.instruction("cmp r9, 1");                                           // stop before the opening delimiter
+    emitter.instruction("jl __rt_preg_replace_callback_fail_linux_x86_64");     // no closing delimiter, so PHP returns null
     emitter.instruction("movzx r8d, BYTE PTR [rdi + r9]");                      // load the current trailing byte
     emitter.instruction("cmp r8d, 47");                                         // a closing slash ends the modifier suffix
-    emitter.instruction("je __rt_preg_replace_callback_eval_done_linux_x86_64"); // modifiers before the closing slash did not include e
-    emitter.instruction("cmp r8d, 101");                                        // 'e' is the removed eval modifier
-    emitter.instruction("je __rt_preg_replace_callback_fail_linux_x86_64");     // PHP 8 returns null for /e
+    emitter.instruction("je __rt_preg_replace_callback_pattern_ok_linux_x86_64"); // every trailing byte was a modifier the scan accepts
+    emit_branch_if_callback_modifier_continues(
+        emitter,
+        "r8d",
+        "__rt_preg_replace_callback_pattern_next_linux_x86_64",
+    );
+    emitter.instruction("jmp __rt_preg_replace_callback_fail_linux_x86_64");    // PHP returns null for an unknown modifier
+    emitter.label("__rt_preg_replace_callback_pattern_next_linux_x86_64");
     emitter.instruction("sub r9, 1");                                           // continue toward the closing delimiter
-    emitter.instruction("jmp __rt_preg_replace_callback_eval_scan_linux_x86_64"); // keep scanning the modifier suffix
-    emitter.label("__rt_preg_replace_callback_eval_done_linux_x86_64");
+    emitter.instruction("jmp __rt_preg_replace_callback_pattern_scan_linux_x86_64"); // keep scanning the modifier suffix
+    emitter.label("__rt_preg_replace_callback_pattern_ok_linux_x86_64");
 
     // -- strip delimiters and compile PCRE regex --
     emitter.instruction("mov rax, rdi");                                        // move pattern pointer into the delimiter-strip helper input register

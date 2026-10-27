@@ -7,8 +7,10 @@
 //! Key details:
 //! - This file owns registry metadata, direct dispatch, by-value dispatch, and
 //!   callback invocation for `preg_replace_callback()`.
-//! - An invalid pattern or the removed `/e` modifier returns PHP null. A valid
-//!   replacement, including the empty string, stays a string.
+//! - An invalid pattern returns PHP null. A valid PHP modifier this runtime does
+//!   not implement stays an explicit error. The callback is validated before the
+//!   pattern, so a missing callback is a TypeError even when the pattern is bad.
+//!   A successful replacement, including the empty string, stays a string.
 
 use super::super::super::*;
 use super::super::*;
@@ -39,8 +41,10 @@ pub(in crate::interpreter) fn eval_builtin_preg_replace_callback(
 
 /// Replaces regex matches with optional lexical scope for callback names.
 ///
-/// Pattern compilation failure, including the removed `/e` modifier, returns
-/// PHP null and does not invoke the callback. A compiled pattern still returns
+/// The callback is validated first, matching PHP: a missing callback throws
+/// `TypeError` before pattern compilation. An invalid pattern then returns PHP
+/// null and does not invoke the callback. A valid modifier this runtime does
+/// not implement keeps the explicit runtime error. A compiled pattern returns
 /// the replacement string, which may be empty.
 fn eval_preg_replace_callback_result_from_scope(
     pattern: RuntimeCellHandle,
@@ -50,12 +54,16 @@ fn eval_preg_replace_callback_result_from_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let regex = match eval_preg_regex(pattern, values) {
-        Ok(regex) => regex,
-        Err(_) => return values.null(),
-    };
     let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
     callback.with_values(context, values, |callback, context, values| {
+        eval_validate_preg_replace_callback(callback, context, values)?;
+        let regex = match eval_preg_callback_pattern(pattern, values)? {
+            EvalPregCallbackPattern::Compiled(regex) => regex,
+            EvalPregCallbackPattern::Invalid => return values.null(),
+            EvalPregCallbackPattern::UnsupportedModifier => {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+        };
         let subject = values.string_bytes(subject)?;
         let mut result = Vec::with_capacity(subject.len());
         let mut cursor = 0;

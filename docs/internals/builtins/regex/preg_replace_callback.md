@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_replace_callback(string $pattern, callable $callback, string $subject): string|null
+function preg_replace_callback(string $pattern, callable $callback, string $subject): mixed
 ```
 
 ## What the type checker enforces

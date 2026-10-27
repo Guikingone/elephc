@@ -2225,6 +2225,52 @@ echo (is_null($through) ? "null" : "bad"), (is_string($through) ? "s" : "n"), ($
     );
 }
 
+/// Verifies a declared string return can return `preg_replace_callback()` directly.
+///
+/// The static type is `mixed`, matching `preg_replace()`. A `string|null` return
+/// would reject this program, which compiled before the null result was modeled.
+#[test]
+fn test_preg_replace_callback_string_function_returns_replacement() {
+    let out = compile_and_run(
+        r#"<?php
+function clean(string $s): string {
+    return preg_replace_callback('/a/', fn($m) => strtoupper($m[0]), $s);
+}
+echo clean("banana");
+"#,
+    );
+    assert_eq!(out, "bAnAnA");
+}
+
+/// Verifies every invalid pattern returns PHP null, and an unmapped valid modifier does not.
+///
+/// `/a/z` is an unknown modifier, `"/abc"` has no ending delimiter, and `/a/e`
+/// is the removed eval modifier. elephc does not emit PHP's preg warning text.
+/// `/a b/x` stays a replacement: `x` is a real modifier this runtime does not map,
+/// so the callback still runs on the literal pattern.
+#[test]
+fn test_preg_replace_callback_invalid_patterns_return_null() {
+    let out = compile_and_run(
+        r#"<?php
+$calls = 0;
+$callback = function (array $matches) use (&$calls): string {
+    $calls = $calls + 1;
+    return "X";
+};
+$unknown = @preg_replace_callback("/a/z", $callback, "a");
+$missing = @preg_replace_callback("/abc", $callback, "abc");
+$eval = @preg_replace_callback("/a/e", $callback, "a");
+$bare_e = @preg_replace_callback("/abce", $callback, "a");
+$extended = preg_replace_callback("/a b/x", $callback, "a b");
+echo (is_null($unknown) ? "n" : "s"), (is_string($unknown) ? "s" : "n"), "|";
+echo (is_null($missing) ? "n" : "s"), (is_string($missing) ? "s" : "n"), "|";
+echo (is_null($eval) ? "n" : "s"), (is_null($bare_e) ? "n" : "s"), "|";
+echo $extended, "|", $calls;
+"#,
+    );
+    assert_eq!(out, "nn|nn|nn|X|1");
+}
+
 /// Verifies a small callback replacement allocates its output block with the
 /// right size on x86_64 and that an empty subject returns an empty string.
 #[test]
