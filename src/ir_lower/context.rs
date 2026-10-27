@@ -316,6 +316,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls in this source module.
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
+    /// Checked property classes and write refusals before opaque calls erase flow facts.
+    pub array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     /// Checker-authorized argument sites that may widen an ordinary local to boxed Mixed.
     pub boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
     pub first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
@@ -492,6 +494,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         extern_classes: &'m HashMap<String, ExternClassInfo>,
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
+        array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
         first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
         generic_call_sites: &'m HashMap<(String, Span), String>,
@@ -558,6 +561,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             extern_classes,
             throw_access_sites,
             builtin_call_types,
+            array_push_property_plans,
             boxed_reference_promotion_sites,
             first_class_builtin_call_types,
             generic_call_sites,
@@ -973,17 +977,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.builder.widen_local_storage_type(slot, ty.clone());
         }
         if track_array_conversion {
-            if let Some(target) = array_storage_conversion(self.local_types.get(name), &ty) {
-                let joined = self
-                    .array_conversions
-                    .get(name)
-                    .map_or(target.clone(), |previous| {
-                        join_array_storage_conversion(previous, &target)
-                    });
-                self.array_conversions.insert(name.to_string(), joined);
-            }
+            self.record_array_storage_conversion(name, &ty);
         }
         self.local_types.insert(name.to_string(), ty);
+    }
+
+    /// Records a runtime layout change independently of the frame slot's storage metadata.
+    fn record_array_storage_conversion(&mut self, name: &str, ty: &PhpType) {
+        if let Some(target) = array_storage_conversion(self.local_types.get(name), ty) {
+            let joined = self.array_conversions.get(name).map_or(target.clone(), |previous| {
+                join_array_storage_conversion(previous, &target)
+            });
+            self.array_conversions.insert(name.to_string(), joined);
+        }
     }
 
     /// Returns the joined array representation conversion observed for a local.
@@ -2767,6 +2773,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         span: Option<Span>,
     ) -> LoweredValue {
+        self.record_array_storage_conversion(name, &php_type);
         self.store_mutated_local_impl(name, value, php_type, span, true, true, true)
     }
 

@@ -20060,7 +20060,7 @@
       "target_support_kind": "all",
       "validation": {
         "kind": "checker_hook",
-        "lazy": false
+        "lazy": true
       }
     },
     "sig": {
