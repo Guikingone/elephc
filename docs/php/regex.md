@@ -112,7 +112,7 @@ to PCRE2 wrapper flags:
 | `u` | UTF-8 and Unicode-property matching |
 | `U` | Ungreedy matching |
 
-Other trailing modifiers are currently not mapped to PCRE2 flags. `preg_match()` rejects the removed `/e` modifier before compilation and returns `false`.
+Other trailing modifiers are currently not mapped to PCRE2 flags. Every `preg_*` function rejects the removed `/e` modifier before compilation.
 
 ## Captures and replacements
 
