@@ -718,6 +718,12 @@ impl<'a> ConcatInertAnalysis<'a> {
         // concrete operand/slot specialization before the generic effect filter.
         match inst.op {
             Op::ConcatReset => return true,
+            // The reserved append writes one raw int into preallocated payload and length
+            // storage; it neither allocates nor observes the concat scratch cursor.
+            Op::ArrayPushReserved => return true,
+            // The reduction helper allocates only its Mixed result cell and never formats
+            // or observes concat scratch.
+            Op::ArraySumInt => return true,
             // A typed-array count lowers inline to a header length read: it allocates nothing,
             // cannot warn, and its only throwable is a location-less TypeError for a null
             // container, which a non-null `Array`/`AssocArray` value cannot produce.

@@ -568,6 +568,14 @@ echo fill_and_sum(), "\n";
         !body.contains("array_push v"),
         "no checked append may remain in the constant fill:\n{body}"
     );
+    let fill_body = body
+        .split("while.body")
+        .nth(1)
+        .expect("the fill loop body");
+    assert!(
+        !fill_body.contains("concat_reset"),
+        "the reserved fill keeps the loop concat-clean:\n{fill_body}"
+    );
 }
 
 /// A runtime bound keeps the checked append because capacity cannot be reserved.
