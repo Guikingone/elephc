@@ -30,6 +30,7 @@ mod basics;
 mod branch_conditions;
 #[path = "runtime_gc/receiver_parameter_owners.rs"]
 mod receiver_parameter_owners;
+mod guarded_interface_mutations;
 #[path = "runtime_gc/large_unary_string_results.rs"]
 mod large_unary_string_results;
 #[path = "runtime_gc/static_local_initializers.rs"]

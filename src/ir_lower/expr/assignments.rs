@@ -516,7 +516,7 @@ pub(super) fn lower_dynamic_property_assign(
         receiver.finish_operand_window(ctx, property_pins, span);
         (receiver, property, value)
     } else {
-        let object = lower_expr(ctx, object);
+        let object = lower_member_receiver_at_span(ctx, object, span);
         let receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);

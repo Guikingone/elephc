@@ -74,6 +74,7 @@ mod builtin_datetime_methods;
 mod eval_demand;
 mod instanceof_operand_owners;
 mod guarded_interface_receivers;
+mod guarded_interface_mutations;
 mod iter_start_origin;
 mod iterator_cleanup;
 mod iterator_aggregate_owners;
