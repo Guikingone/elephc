@@ -107,11 +107,22 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     let value = lower_expr(ctx, inner);
     let source_type = ctx.builder.value_php_type(value.value);
     let source_repr = source_type.codegen_repr();
-    // `(int)` over an integer or boolean is the identity: both are already I64 0/1 (PHP's
-    // bool representation), and the explicit cast cannot warn or fail. Returning the producer
-    // itself also keeps the EIR cast's broad diagnostic effects out of hot loops.
-    if matches!(target, CastType::Int) && matches!(source_repr, PhpType::Int | PhpType::Bool) {
+    // `(int)` over an integer is the identity: both are already I64 and the explicit cast
+    // cannot warn or fail. `(int)` over a boolean shares the storage word but NOT the PHP
+    // type: `echo (int)false` prints "0" while `echo false` prints nothing. Re-stamp the
+    // result as an int through a pure no-op cast so every later observation sees PHP's type.
+    if matches!(target, CastType::Int) && source_repr == PhpType::Int {
         return value;
+    }
+    if matches!(target, CastType::Int) && source_repr == PhpType::Bool {
+        return ctx.emit_value(
+            Op::Cast,
+            vec![value.value],
+            Some(Immediate::CastTarget(IrType::I64)),
+            PhpType::Int,
+            Op::Cast.default_effects(),
+            Some(expr.span),
+        );
     }
     // `(bool)` over a boolean is likewise the identity at the representation level.
     if matches!(target, CastType::Bool) && source_repr == PhpType::Bool {

@@ -440,3 +440,18 @@ echo "|", strlen($a) + strlen($b) + strlen($c);
     );
     assert_eq!(out, "[S][T][42][1.5][1][raw]|4");
 }
+
+/// Runtime boolean casts must re-stamp the result as an int: `echo (int)false` prints `0`
+/// while `echo false` prints nothing, even though both share one storage word.
+#[test]
+fn test_cast_int_from_runtime_false_prints_zero() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+$f = $x > 2;
+$t = $x < 2;
+echo (int)$f, '|', (int)$t, '|', (int)is_string($x), '|', (int)is_int($x), "\n";
+"#,
+    );
+    assert_eq!(out, "0|1|0|1\n");
+}
