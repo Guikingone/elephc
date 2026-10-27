@@ -940,6 +940,25 @@ fn merge_local_assignment_type(
     // Everything above still runs (the retype-site re-decision, and the callable/reflection
     // metadata updates `check_assign` performed before calling in), so only the type merge is
     // short-circuited.
+    // All stores of a region-split name must remain numeric. A later nonnumeric store
+    // retracts earlier region decisions as well, before any lowering can consume them.
+    let numeric_region_value = super::super::super::numeric_regions::numeric_assignment(
+        checker, value, ty, env);
+    if !numeric_region_value {
+        let mut pending = vec![name.to_owned()];
+        let mut rejected = std::collections::HashSet::new();
+        while let Some(name) = pending.pop() {
+            if !rejected.insert(name.clone()) { continue; }
+            pending.extend(checker.numeric_region_dependents.get(&name).into_iter().flatten().cloned());
+            for (site, names) in &mut checker.numeric_region_sites {
+                if names.remove(&name) {
+                    if let Some(names) = checker.local_retype_sites.get_mut(site) { names.remove(&name); }
+                }
+            }
+        }
+        checker.local_retype_sites.retain(|_, names| !names.is_empty());
+        checker.numeric_region_sites.retain(|_, names| !names.is_empty());
+    }
     if checker.mixed_storage_locals.contains(name)
         || checker.boxed_ref_aliased_locals.contains(name)
     {
@@ -1083,8 +1102,11 @@ fn merge_local_assignment_type(
             // the first slot of that name (`debug_backtrace()[0]["args"]`).
             if stmt_form
                 && span.identifies_a_node()
-                && splits_numeric_binding(existing, ty, value)
-                && checker.local_binding_is_killable(name)
+                && ((splits_numeric_binding(existing, ty, value)
+                    && checker.local_binding_is_killable(name))
+                    || (checker.numeric_region_sites.get(&span).is_some_and(|names| names.contains(name))
+                        && (matches!(existing, PhpType::Int | PhpType::Float | PhpType::Mixed) || existing.is_int_float_union())
+                        && numeric_region_value))
                 && !checker.local_parameter_names.contains(name)
                 && !checker.top_level_binding_is_program_global(name)
             {

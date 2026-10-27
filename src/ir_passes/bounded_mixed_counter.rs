@@ -23,6 +23,8 @@ use crate::ir::{
 use crate::types::PhpType;
 
 mod storage;
+mod versioning;
+pub(super) use versioning::LoopCounterVersioning;
 pub(crate) use storage::prove_integer_slots;
 
 /// Narrows only counters for which the existing range analysis proves all updates safe.

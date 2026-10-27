@@ -31,7 +31,7 @@ use crate::ir::{DataPool, Function, Module};
 
 use super::branch_simplify::BranchSimplify;
 use super::borrowed_receiver_roots::BorrowedReceiverRoots;
-use super::bounded_mixed_counter::BoundedMixedCounter;
+use super::bounded_mixed_counter::{BoundedMixedCounter, LoopCounterVersioning};
 use super::checked_int_sink::CheckedIntSink;
 use super::checked_numeric_chain::CheckedNumericChain;
 use super::concat_reset::ConcatResetElim;
@@ -133,6 +133,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(ImmutableLocalLoads),
         Box::new(CheckedIntSink),
         Box::new(BoundedMixedCounter::new(module)),
+        Box::new(LoopCounterVersioning::new(module)),
         Box::new(LoopOptimize),
         Box::new(IntegerRange),
         Box::new(CheckedNumericChain),

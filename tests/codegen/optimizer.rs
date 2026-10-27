@@ -49,6 +49,7 @@ mod method_loop_counters;
 #[path = "optimizer/checked_numeric_chain.rs"]
 mod checked_numeric_chain;
 mod integer_destinations;
+mod counter_fast_paths;
 #[path = "optimizer/concat_reset.rs"]
 mod concat_reset;
 #[path = "optimizer/eir_common_subexpression.rs"]

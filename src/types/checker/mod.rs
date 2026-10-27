@@ -38,6 +38,7 @@ mod inference;
 mod loop_storage;
 mod method_pass;
 mod mixed_storage_scan;
+mod numeric_regions;
 mod packed_counter;
 pub(crate) mod null_probe;
 mod schema;
@@ -546,6 +547,10 @@ pub(crate) struct Checker {
     pub local_parameter_names: HashSet<String>,
     /// Untyped formal bindings that still load through the callee's boxed incoming storage.
     pub boxed_parameter_locals: HashSet<String>,
+    /// Disjoint binding starts for names dead between syntactically closed regions.
+    pub numeric_region_sites: HashMap<Span, HashSet<String>>,
+    /// Assignment dependencies whose numeric region decisions must be invalidated together.
+    pub numeric_region_dependents: HashMap<String, HashSet<String>>,
     /// Names whose type was DECLARED in the current body by a `TypedAssign` local
     /// (`int $x = …`), and what each was declared AS. A declaration is a programmer contract
     /// and stays strict in both permissive and `--strict-locals` mode.
@@ -697,6 +702,8 @@ pub(crate) struct SavedLocalBindingScope {
     mixed_storage: HashSet<String>,
     guarded_unions: HashMap<String, PhpType>,
     contains_eval: bool,
+    numeric_regions: HashMap<Span, HashSet<String>>,
+    numeric_region_dependents: HashMap<String, HashSet<String>>,
 }
 
 /// What a flow guard did to one local: the type the binding held before it, and the view it
@@ -903,6 +910,8 @@ impl Checker {
             mixed_storage: std::mem::take(&mut self.mixed_storage_locals),
             guarded_unions: std::mem::take(&mut self.guarded_union_types),
             contains_eval: self.body_contains_eval,
+            numeric_regions: std::mem::take(&mut self.numeric_region_sites),
+            numeric_region_dependents: std::mem::take(&mut self.numeric_region_dependents),
         };
         self.local_conditional_depth = 0;
         self.local_parameter_names = param_names.iter().cloned().collect();
@@ -935,6 +944,8 @@ impl Checker {
         self.mixed_storage_locals = saved.mixed_storage;
         self.guarded_union_types = saved.guarded_unions;
         self.body_contains_eval = saved.contains_eval;
+        self.numeric_region_sites = saved.numeric_regions;
+        self.numeric_region_dependents = saved.numeric_region_dependents;
     }
 
     /// Opens a region in which `name` is viewed as `view` through a flow guard's narrowing,

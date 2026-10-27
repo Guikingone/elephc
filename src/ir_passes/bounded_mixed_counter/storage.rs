@@ -143,7 +143,7 @@ fn seed_dependencies(
 }
 
 /// Follows acquire, clone, move and borrow wrappers back to the instruction that made a value.
-fn owner_source(function: &Function, mut value: ValueId) -> Option<&Instruction> {
+pub(super) fn owner_source(function: &Function, mut value: ValueId) -> Option<&Instruction> {
     for _ in 0..8 {
         let inst = super::defining_instruction(function, value)?;
         match inst.op {

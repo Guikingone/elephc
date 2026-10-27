@@ -23,6 +23,8 @@ use crate::types::PhpType;
 use super::driver::IrPass;
 use super::rewrite::neutralize_to_nop;
 
+mod locals;
+
 /// Fuses a checked numeric region whose sole observable result is an integer cast.
 pub struct CheckedNumericChain;
 
@@ -40,13 +42,14 @@ impl IrPass for CheckedNumericChain {
                 && matches!(inst.immediate, Some(Immediate::CastTarget(IrType::I64)))
                 && inst.operands.first().is_some_and(|value| {
                     defining_instruction(function, *value)
-                        .is_some_and(|(_, definition)| definition.op == Op::MixedNumericBinop)
+                        .is_some_and(|(_, definition)| matches!(definition.op, Op::MixedNumericBinop | Op::LoadLocal))
                 })
         })
     }
 
     /// Finds and commits every independent checked numeric chain in the function.
     fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
+        let locals_changed = locals::run(function);
         let uses = instruction_uses(function);
         let terminator_uses = terminator_used_values(function);
         let candidates: Vec<InstId> = function
@@ -60,7 +63,7 @@ impl IrPass for CheckedNumericChain {
                 .then_some(InstId::from_raw(raw as u32))
             })
             .collect();
-        let mut changed = false;
+        let mut changed = locals_changed;
 
         for sink in candidates {
             let Some(rewrite) = analyze_candidate(function, sink, &uses, &terminator_uses) else {
