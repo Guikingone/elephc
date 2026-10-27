@@ -925,3 +925,32 @@ echo fill($argc + 9);
         fs::remove_dir_all(dir).unwrap();
     }
 }
+
+/// `array_sum` takes the packed int fast path and falls back for overflow, hash and float arrays.
+#[test]
+fn test_array_sum_typed_int_fast_path_matches_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = []; $a[] = 1; $a[] = 2; $a[] = 3;
+echo array_sum($a), '|';
+$b = []; $b[] = PHP_INT_MAX; $b[] = 1;
+echo gettype(array_sum($b)), ':', array_sum($b), '|';
+$c = []; $c[] = 1; $c['x'] = 5;
+echo array_sum($c), '|';
+$d = []; $d[] = 1.5; $d[] = 2.5;
+echo gettype(array_sum($d)), ':', array_sum($d), '|';
+$e = [];
+echo gettype(array_sum($e)), ':', array_sum($e), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "6|double:9.2233720368548E+18|6|double:4|integer:0\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}

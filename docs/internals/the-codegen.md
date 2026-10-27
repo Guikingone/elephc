@@ -353,6 +353,21 @@ later elements are added as doubles. The final int or float is boxed into a fres
 Mixed cell, while an empty range retains the seed cell. The helper runs no user
 code and does not warn.
 
+The `array_sum()` builtin keeps its generic boxed fold for associative, Mixed and
+float storage. Before installing its warning boundary it checks the source header:
+an indexed, 8-byte, int-valued packed array jumps to the raw-seed
+`__rt_array_sum_int_i64` entry and returns the boxed sum directly. Every other
+shape falls through to the iterator-based fold unchanged.
+
+### Leaf runtime calls
+
+A runtime call whose effect summary excludes throw, warn, fatal, output, refcount
+retirement and blocking/network I/O, and whose operands are neither callables nor
+objects, cannot re-enter PHP code. The block emitter therefore skips the
+diagnostic file/line publication and the backtrace frame setup for those calls.
+String search/transform helpers and typed array probes take this path; warning-
+or callback-capable helpers keep the existing publication.
+
 ### Reserved typed-array append
 
 `ArrayPushReserved` is emitted only after the fill-loop pass sizes the receiver's

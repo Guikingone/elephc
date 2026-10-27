@@ -89,6 +89,36 @@ pub(super) fn publish_diagnostic_site(ctx: &mut FunctionContext<'_>, inst: &Inst
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
 }
 
+/// Returns whether a runtime call cannot run PHP code, warn, throw or produce output.
+///
+/// Such a call needs neither a backtrace frame nor a diagnostic-site publication. The
+/// effect summary is the shared contract: user-code reaches are excluded by throw/warn/fatal,
+/// output, refcount retirement and blocking-I/O bits, and callable or object operands are
+/// rejected even when a target summary is incomplete.
+fn is_leaf_runtime_call(ctx: &FunctionContext<'_>, inst: &Instruction) -> bool {
+    if !matches!(inst.immediate, Some(Immediate::RuntimeCall(_))) {
+        return false;
+    }
+    const USER_CODE: crate::ir::Effects = crate::ir::Effects::MAY_THROW
+        .union(crate::ir::Effects::MAY_WARN)
+        .union(crate::ir::Effects::MAY_FATAL)
+        .union(crate::ir::Effects::OUTPUT)
+        .union(crate::ir::Effects::REFCOUNT_OP)
+        .union(crate::ir::Effects::BLOCKING_IO)
+        .union(crate::ir::Effects::NETWORK_IO);
+    if inst.effects.intersects(USER_CODE) {
+        return false;
+    }
+    !inst.operands.iter().any(|&operand| {
+        ctx.value_php_type(operand).is_ok_and(|ty| {
+            matches!(
+                ty.codegen_repr(),
+                PhpType::Callable | PhpType::Object(_)
+            )
+        })
+    })
+}
+
 /// Returns whether a cast maps a TaggedScalar `int|null` to the null-as-zero integer value.
 ///
 /// The lowering reads the tag/payload pair and maps the null tag to zero. It allocates
@@ -139,7 +169,7 @@ pub(super) fn prepare_call_site(
             Op::ReleaseLocalRefCell | Op::ReleaseLocalSlot | Op::ArrayGet
         )
         && !tagged_scalar_to_int_cast(ctx, inst);
-    let enters_php_frame = instruction_may_enter_php_frame(inst)
+    let enters_php_frame = instruction_may_enter_php_frame(ctx, inst)
         && !typed_array_count_call(ctx, inst);
     if enters_php_frame || warns_at_call_site {
         publish_diagnostic_site(ctx, inst);
@@ -180,7 +210,10 @@ pub(super) fn prepare_call_site(
 }
 
 /// Returns whether an instruction can synchronously enter another PHP-visible frame.
-fn instruction_may_enter_php_frame(inst: &Instruction) -> bool {
+fn instruction_may_enter_php_frame(ctx: &FunctionContext<'_>, inst: &Instruction) -> bool {
+    if is_leaf_runtime_call(ctx, inst) {
+        return false;
+    }
     matches!(
         inst.op,
         Op::Call

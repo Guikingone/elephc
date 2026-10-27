@@ -13,6 +13,8 @@ use crate::support::*;
 
 #[path = "optimizer/array_read_match.rs"]
 mod array_read_match;
+#[path = "optimizer/leaf_runtime_calls.rs"]
+mod leaf_runtime_calls;
 #[path = "optimizer/switch_fallthrough.rs"]
 mod switch_fallthrough;
 #[path = "optimizer/bcmath_number.rs"]
