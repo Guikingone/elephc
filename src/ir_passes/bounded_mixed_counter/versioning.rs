@@ -95,7 +95,7 @@ fn analyze(function: &Function, lp: &NaturalLoop, data: &DataPool, pass: &Bounde
     if !lp.contains(*then_target) || lp.contains(*else_target) || !then_args.is_empty() || !else_args.is_empty() { return None; }
     let comparison = defining_id(function, *cond)?;
     let compare = function.instruction(comparison)?;
-    if compare.op != Op::PhpRelCmp { return None; }
+    if compare.op != Op::PhpRelCmp || !header.instructions.contains(&comparison) { return None; }
     let Some(Immediate::CmpPredicate(mut predicate)) = compare.immediate else { return None; };
     let &[mut counter, mut bound] = compare.operands.as_slice() else { return None; };
     if counter_slot(function, counter).is_none() {
@@ -106,6 +106,7 @@ fn analyze(function: &Function, lp: &NaturalLoop, data: &DataPool, pass: &Bounde
         };
     }
     let slot = counter_slot(function, counter)?;
+    if !header.instructions.contains(&defining_id(function, counter)?) { return None; }
     let local = function.locals.get(slot.as_raw() as usize)?;
     if local.kind != LocalKind::PhpLocal || local.ir_type != IrType::Heap(IrHeapKind::Mixed)
         || (slot.as_raw() as usize) < function.params.len()
@@ -137,6 +138,8 @@ fn analyze(function: &Function, lp: &NaturalLoop, data: &DataPool, pass: &Bounde
             let inst = function.instruction(id)?;
             if inst.immediate != Some(Immediate::LocalSlot(slot)) { continue; }
             if lp.contains(block.id) && inst.op == Op::StoreLocal {
+                // A post-test update can overflow before its header comparison rejects it.
+                if block.id == lp.header { return None; }
                 stores += 1;
                 let update = storage::owner_source(function, *inst.operands.first()?)?;
                 if update.op != Op::StrIncDec || update.immediate != Some(Immediate::I64(step)) { return None; }

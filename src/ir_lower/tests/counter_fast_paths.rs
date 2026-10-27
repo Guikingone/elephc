@@ -120,3 +120,80 @@ echo guardedIndex($argc, 31, 7);
     assert!(function.instructions.iter().any(|i| i.op == Op::ICheckedNumericChainToInt), "{text}");
     assert!(function.instructions.iter().any(|i| i.op == Op::MixedNumericBinop), "{text}");
 }
+
+/// A post-test loop cannot use its later comparison to justify an earlier unchecked update.
+#[test]
+fn counter_fast_path_post_test_keeps_overflow_capable_update() {
+    let function = optimized(r#"<?php
+function postTest(int $start, int $end): mixed {
+    $i = $start;
+    do { $i++; } while ($i < $end);
+    return $i;
+}
+echo postTest($argc, 0);
+"#, "postTest", "linux-x86_64");
+    let text = crate::ir::print_function(&function);
+    assert!(!text.contains(".counter.fast"), "{text}");
+    assert!(function.instructions.iter().any(|i| i.op == Op::StrIncDec), "{text}");
+}
+
+/// A comparison evaluated before the loop does not constrain later counter updates.
+#[test]
+fn counter_fast_path_invariant_condition_keeps_generic_loop() {
+    let function = optimized(r#"<?php
+function invariantCondition(int $n, int $start): void {
+    $i = $start + 0 * $n;
+    $c = $i < $n;
+    $k = 0;
+    while ($c) { $i++; $k++; if ($k >= 3) { break; } }
+    echo $i;
+}
+invariantCondition(PHP_INT_MAX, $argc);
+"#, "invariantCondition", "linux-x86_64");
+    let text = crate::ir::print_function(&function);
+    assert!(!text.contains(".counter.fast"), "{text}");
+}
+
+/// Repeated inner updates cannot be justified by one outer-loop comparison.
+#[test]
+fn counter_fast_path_nested_update_keeps_checked_seed() {
+    let function = optimized(r#"<?php
+function nestedUpdates(int $n, int $lo): int {
+    $count = 0;
+    for ($i = $n - 1; $i > $lo; $count++) {
+        for ($k = 0; $k < 2; $k++) { $i--; }
+        if ($count > 2) { break; }
+    }
+    return $count;
+}
+echo nestedUpdates($argc, PHP_INT_MIN);
+"#, "nestedUpdates", "linux-x86_64");
+    let text = crate::ir::print_function(&function);
+    assert!(!text.contains("counter.seed.inrange"), "{text}");
+    assert!(function.instructions.iter().any(|i| i.op == Op::StrIncDec), "{text}");
+}
+
+/// A binding written only in an arm is retired safely at its later region on every target.
+#[test]
+fn counter_fast_path_conditional_region_retires_maybe_written_owner() {
+    let source = r#"<?php
+function conditionalRegion(int $n, bool $c): int {
+    $count = 0;
+    for ($r = 0; $r < $n; $r++) { $count += 1; }
+    if ($c) { for ($r = $n - 1; $r >= 0; $r--) { $count += 1; } }
+    for ($r = 0; $r < $n; $r++) { $count += 1; }
+    return $count;
+}
+echo conditionalRegion($argc + 2, true);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|f| f.name == "conditionalRegion").unwrap();
+        let merge = function.blocks.iter().find(|b| b.name == "if.merge").unwrap();
+        assert!(merge.instructions.iter().any(|id| function.instructions[id.as_raw() as usize].op == Op::ReleaseLocalSlot),
+            "{target}: {}", crate::ir::print_function(function));
+        assert!(!merge.instructions.iter().any(|id| function.instructions[id.as_raw() as usize].op == Op::ZeroLocalSlot),
+            "{target}: {}", crate::ir::print_function(function));
+    }
+}

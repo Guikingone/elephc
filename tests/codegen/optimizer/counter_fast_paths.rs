@@ -230,3 +230,34 @@ echo allocationCounter($argc * {trips}), ':', allocationIndex($argc * {trips}, 3
     }
     assert!(counts[0].abs_diff(counts[1]) <= 8, "allocation count grows with iterations: {counts:?}");
 }
+
+/// Pre-loop and post-update tests cannot prove every update safe, nor can an outer test bound inner updates.
+#[test]
+fn test_counter_fast_paths_noncanonical_overflow_matches_php() {
+    equivalent(r#"<?php
+function postTestOverflow(int $start, int $end): mixed {
+    $i = $start;
+    do { $i++; } while ($i < $end);
+    return $i;
+}
+$value = postTestOverflow(PHP_INT_MAX - 1 + $argc, PHP_INT_MIN);
+echo gettype($value), ':', $value, '|';
+function invariantOverflow(int $n, int $start): void {
+    $i = $start + 0 * $n;
+    $c = $i < $n;
+    $k = 0;
+    while ($c) { $i++; $k++; if ($k >= 3) { break; } }
+    echo gettype($i), ':', $i, '|';
+}
+invariantOverflow(PHP_INT_MAX, PHP_INT_MAX - 2 + $argc);
+function nestedUpdateOverflow(int $n, int $lo): int {
+    $count = 0;
+    for ($i = $n - 1; $i > $lo; $count++) {
+        for ($k = 0; $k < 2; $k++) { $i--; }
+        if ($count > 2) { break; }
+    }
+    return $count;
+}
+echo nestedUpdateOverflow(PHP_INT_MIN + 1 + $argc, PHP_INT_MIN), "\n";
+"#);
+}

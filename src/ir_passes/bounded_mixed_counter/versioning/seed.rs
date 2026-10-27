@@ -15,6 +15,7 @@ pub(super) fn run(function: &mut Function, data: &DataPool, pass: &BoundedMixedC
     let dominance = crate::ir_passes::compute_dominance(function);
     let loops = crate::ir_passes::loops::compute_loops(function, &dominance);
     for lp in loops.loops() {
+        if loops.loops().iter().any(|inner| inner.header != lp.header && lp.contains(inner.header)) { continue; }
         let Some(trial) = candidate(function, lp, data, pass) else { continue; };
         if crate::ir::validate_function(&trial).is_ok() { *function = trial; return true; }
     }
@@ -28,13 +29,15 @@ fn candidate(function: &Function, lp: &NaturalLoop, data: &DataPool, pass: &Boun
     let Terminator::CondBr { cond, then_target, else_target, .. } = header.terminator.as_ref()? else { return None; };
     if !lp.contains(*then_target) || lp.contains(*else_target) || !function.block(*else_target)?.params.is_empty() { return None; }
     let condition = defining_instruction(function, *cond)?;
-    if condition.op != Op::PhpRelCmp || header.instructions.iter().any(|id| {
+    if condition.op != Op::PhpRelCmp || !header.instructions.contains(&defining_id(function, *cond)?)
+        || header.instructions.iter().any(|id| {
         !matches!(function.instructions[id.as_raw() as usize].op,
             Op::LoadLocal | Op::ConstI64 | Op::PhpRelCmp | Op::Release | Op::Move | Op::Borrow)
     }) { return None; }
     let &[counter, bound] = condition.operands.as_slice() else { return None; };
     if !integer(function, bound) { return None; }
     let slot = counter_slot(function, counter)?;
+    if !header.instructions.contains(&defining_id(function, counter)?) { return None; }
     let local = function.locals.get(slot.as_raw() as usize)?;
     if local.kind != LocalKind::PhpLocal || (slot.as_raw() as usize) < function.params.len()
         || local.php_type != PhpType::Mixed || function.no_epilogue_cleanup_slots.contains(&slot) { return None; }
