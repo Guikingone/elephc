@@ -2268,3 +2268,83 @@ echo $list[0], "|", $a[0], "|", count($a), "|", $map["k"], "|", $b["k"], "|", im
     assert_eq!(out.stdout, "direct|changed|2|1|9|k,j|two", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A pure `(int) -> bool` predicate filters a packed int array through the direct helper:
+/// keys are preserved, values stay raw ints, and a capturing predicate falls back to the
+/// generic descriptor path with the same answers.
+#[test]
+fn test_array_filter_direct_int_predicate_preserves_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$a = range(1, 10);
+$b = array_filter($a, fn($x) => $x % 2 === 0);
+echo count($b), "|", implode(",", $b), "|";
+foreach ($b as $k => $v) { echo $k, ":", $v, ","; }
+$k = 3;
+$c = array_filter($a, fn($x) => $x % $k === 0);
+echo count($c), "|", implode(",", $c), "\n";
+"#,
+    );
+    assert_eq!(out, "5|2,4,6,8,10|1:2,3:4,5:6,7:8,9:10,3|3,6,9\n");
+}
+
+/// A typed `(int, int): int` reducer runs through the direct raw-accumulator helper, while an
+/// untyped reducer and an empty source keep the generic path and the initial value.
+#[test]
+fn test_array_reduce_direct_typed_int_and_generic_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+$a = range(1, 10);
+echo array_reduce($a, fn(int $c, int $x): int => $c + $x, 0), "|",
+     array_reduce($a, fn(int $c, int $x): int => $c + $x, 100), "|",
+     array_reduce([], fn(int $c, int $x): int => $c + $x, 7), "|",
+     array_reduce($a, fn($c, $x) => $c + $x, 0), "|",
+     array_reduce($a, fn(int $c, int $x): int => $c * $x, 1), "\n";
+"#,
+    );
+    assert_eq!(out, "55|155|7|55|3628800\n");
+}
+
+/// The specialized reducer's overflow path still throws PHP's catchable TypeError, and the
+/// thrown exception unwinds through the direct helper without leaking or swallowing it.
+#[test]
+fn test_array_reduce_typed_int_overflow_is_a_catchable_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+$f = fn(int $c, int $x): int => $c + $x;
+try {
+    $f(PHP_INT_MAX, 1);
+} catch (TypeError $e) {
+    echo str_contains($e->getMessage(), "float returned") ? "caught" : "wrong";
+}
+try {
+    array_reduce([PHP_INT_MAX, 1], fn(int $c, int $x): int => $c + $x, 0);
+} catch (TypeError $e) {
+    echo "|caught";
+}
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "caught|caught\n");
+}
+
+/// A typed int callback makes `array_map` call the closure and its plain int map helper
+/// directly, with no per-element descriptor invocation.
+#[test]
+fn test_array_map_typed_int_callback_uses_plain_runtime() {
+    let source = r#"<?php
+$a = [1, 2, 3];
+echo implode(",", array_map(fn(int $x): int => $x + 1, $a));
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "2,3,4");
+    let dir = make_cli_test_dir("elephc_array_map_typed_direct");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("__rt_array_map")
+            && !user_asm.contains("__rt_callable_invoke_owned_args"),
+        "typed int array_map callbacks should not use the descriptor invoker:\n{}",
+        user_asm
+    );
+}
