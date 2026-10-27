@@ -6,8 +6,10 @@
 //!
 //! Key details:
 //! - Exact PHP output, warning counts and clean heaps cover hits, misses and ownership.
+//! - A string cast of a stored missing typed-array entry is a real empty string.
+//!   The bare read stays null. Both shapes are checked with IR optimization on and off.
 
-use crate::support::compile_and_run_with_heap_debug;
+use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
 /// Checks each PHP observation together with warning scope and runtime ownership.
 fn assert_merge(source: &str, expected: &str, warnings: usize) {
@@ -279,6 +281,127 @@ function check(bool $choose, int $key): void {
 check(true, 8); check(true, 0); check(false, 8);
 "#, "string(0) \"\"\nstring(0) \"\"\nstring(1) \"a\"\nstring(1) \"a\"\nstring(7) \"default\"\nstring(7) \"default\"\n", 2);
 }
+
+/// Direct and stored missing string entries cast to an empty string and dump as null when unread.
+///
+/// PHP 8.2–8.5 prints `string(0) ""` for `(string)` of a missing typed-array entry whether the
+/// read is inline, stored, copied, or returned, and prints `NULL` for the bare read. A present
+/// empty string, a heap string that shares the array, a concatenation, and a real function
+/// result stay strings. `$argc` keeps the index runtime-unknown so neither cast is folded away.
+#[test]
+fn test_stored_missing_string_cast_is_empty() {
+    assert_stored_missing_string_cast();
+}
+
+/// The stored missing-entry string cast stays an empty string when EIR optimization is off.
+#[test]
+fn test_stored_missing_string_cast_is_empty_no_ir_opt() {
+    without_ir_opt(assert_stored_missing_string_cast);
+}
+
+/// Runs the stored missing-entry cast fixture and checks PHP's stdout, warnings, and heap.
+fn assert_stored_missing_string_cast() {
+    assert_merge(
+        STORED_MISSING_STRING_CAST,
+        STORED_MISSING_STRING_CAST_OUT,
+        6,
+    );
+}
+
+/// Fixture for direct, stored, copied, and returned casts of missing typed-array strings.
+const STORED_MISSING_STRING_CAST: &str = r#"<?php
+function label(): string { return "ok"; }
+function pass($value) { return $value; }
+function probe(int $key): void {
+    $values = [""];
+    $stored = $values[$key];
+    $again = $stored;
+    var_dump($values[$key]);
+    var_dump($stored);
+    var_dump($again);
+    var_dump((string)$values[$key]);
+    var_dump((string)$stored);
+    var_dump((string)$again);
+    var_dump(is_null($stored));
+    var_dump(is_null((string)$stored));
+    var_dump(is_null((string)$again));
+    var_dump((string)$stored === "");
+    $present = $values[0];
+    var_dump($present);
+    var_dump((string)$present);
+    var_dump(is_null($present));
+    var_dump(is_null((string)$present));
+    $hash = ["hit" => ""];
+    $name = "missing";
+    $hstored = $hash[$name];
+    var_dump($hash[$name]);
+    var_dump((string)$hstored);
+    var_dump($hash["hit"]);
+    var_dump((string)$hash["hit"]);
+    $bag = [str_repeat("z", 3)];
+    $miss = $bag[$key];
+    var_dump($miss);
+    var_dump((string)$miss);
+    var_dump((string)$bag[0]);
+    var_dump($bag[0]);
+    var_dump((string)("ab" . "cd"));
+    $nulls = [null, null];
+    $slot = $key == 10 ? 0 : 1;
+    $n = $nulls[$slot];
+    var_dump((string)$n);
+    var_dump(is_null((string)$n));
+    var_dump((string)($key == 9));
+    var_dump(is_null((string)($key == 9)));
+    var_dump((string)($key == 10));
+    var_dump((string)@$values[$key]);
+    var_dump(pass($stored));
+    var_dump((string)pass($stored));
+    var_dump(is_null((string)pass($stored)));
+    echo "[", (string)$stored, "]\n";
+    echo strlen((string)$stored), "\n";
+}
+probe($argc + 9);
+var_dump((string)label());
+"#;
+
+/// PHP 8.5 stdout for [`STORED_MISSING_STRING_CAST`], stable across PHP 8.2–8.5.
+const STORED_MISSING_STRING_CAST_OUT: &str = "\
+NULL
+NULL
+NULL
+string(0) \"\"
+string(0) \"\"
+string(0) \"\"
+bool(true)
+bool(false)
+bool(false)
+bool(true)
+string(0) \"\"
+string(0) \"\"
+bool(false)
+bool(false)
+NULL
+string(0) \"\"
+string(0) \"\"
+string(0) \"\"
+NULL
+string(0) \"\"
+string(3) \"zzz\"
+string(3) \"zzz\"
+string(4) \"abcd\"
+string(0) \"\"
+bool(false)
+string(0) \"\"
+bool(false)
+string(1) \"1\"
+string(0) \"\"
+NULL
+string(0) \"\"
+bool(false)
+[]
+0
+string(2) \"ok\"
+";
 
 /// Explicit casts still convert a missing value instead of preserving an implicit null.
 #[test]
