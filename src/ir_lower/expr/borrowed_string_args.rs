@@ -26,7 +26,17 @@ pub(super) fn try_lower(
     let target = match def.spec.semantics.lowering {
         BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)
             | RuntimeCallTarget::ProfiledFunction { target, .. })
-            if matches!(target, RuntimeFnId::Substr | RuntimeFnId::Strpos) => target,
+            if matches!(
+                target,
+                RuntimeFnId::Substr
+                    | RuntimeFnId::Strpos
+                    | RuntimeFnId::StrContains
+                    | RuntimeFnId::StrStartsWith
+                    | RuntimeFnId::StrEndsWith
+            ) =>
+        {
+            target
+        }
         _ => return None,
     };
     if args.iter().any(is_spread_arg) { return None; }
@@ -48,7 +58,14 @@ pub(super) fn try_lower(
         }
     }
     for (_, param_idx, expr) in &reads {
-        let string = *param_idx == 0 || (target == RuntimeFnId::Strpos && *param_idx == 1);
+        let string = *param_idx == 0
+            || (matches!(
+                target,
+                RuntimeFnId::Strpos
+                    | RuntimeFnId::StrContains
+                    | RuntimeFnId::StrStartsWith
+                    | RuntimeFnId::StrEndsWith
+            ) && *param_idx == 1);
         if !safe_read(ctx, expr, string, *param_idx == 0) { return None; }
     }
     for arg in &plan.regular_args {
