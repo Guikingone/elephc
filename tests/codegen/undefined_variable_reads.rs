@@ -171,3 +171,35 @@ echo g(true), " ", g(false), "\n";
     );
     assert!(run.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", run.stderr);
 }
+
+/// A read no write on any path can precede warns even when the scope writes the name later,
+/// while a write on some branch, an earlier loop iteration or the condition keeps it defined.
+#[test]
+fn test_read_before_any_write_warns() {
+    let run = compile_and_run_capture(r#"<?php
+function f() {
+    if (isset($abc)) { echo "no\n"; }
+    var_dump($abc);
+    $abc = 1;
+    var_dump($abc);
+}
+f();
+function g($c) {
+    if ($c) { $x = 1; }
+    var_dump($x);
+    for ($i = 0; $i < 2; $i++) { if ($i == 1) { echo $y, "\n"; } $y = "y"; }
+    if ($m = strlen("ab")) { echo $m, "\n"; }
+}
+g(true);
+echo $top, "|\n";
+$top = 1;
+echo $top, "\n";
+"#);
+    let (out, err) = (run.stdout, run.stderr);
+    assert!(err.contains("Undefined variable $abc"), "{err}");
+    assert!(err.contains("Undefined variable $top"), "{err}");
+    for name in ["$x", "$y", "$m"] {
+        assert!(!err.contains(&format!("Undefined variable {name}")), "{name}: {err}");
+    }
+    assert_eq!(out, "NULL\nint(1)\nint(1)\ny\n2\n|\n1\n");
+}

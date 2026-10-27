@@ -12,7 +12,9 @@
 //!   destructuring, increment, element/property write, `foreach`, `catch`, `global`, `static`,
 //!   reference binding, closure capture, parameter, and ANY direct call argument (a by-reference
 //!   parameter is invisible before type checking). Only a name with none of these anywhere in
-//!   its scope is treated as undefined, so flow-sensitive cases keep their existing diagnostics.
+//!   its scope is treated as undefined by the scope pass.
+//! - A second, flow-sensitive pass then rewrites reads that no write on any path can precede
+//!   (`var_dump($a); $a = 1;`): branches merge by union and loops count all their body's writes.
 //! - A scope that can create locals dynamically (`extract`, `compact`, `get_defined_vars`,
 //!   `parse_str`, `eval`, `include`/`require`, `$GLOBALS`) is never rewritten.
 //! - Reads under `isset`/`empty`/`unset` and on the left of `??` stay untouched, and under
@@ -62,8 +64,12 @@ pub fn rewrite(program: &mut Vec<Stmt>) {
     main_scope.written.extend(program_globals);
     main_scope.written.extend(["argv", "argc"].map(str::to_string));
     vivify_scope(program, &main_scope);
+    let mut maybe = main_scope.written.clone();
     collect_stmts(program, &mut main_scope);
     rewrite_scope_stmts(program, &main_scope);
+    if !main_scope.dynamic {
+        rewrite_reads_before_writes(program, &mut maybe);
+    }
     EXTERN_GLOBALS.with(|names| names.borrow_mut().clear());
 }
 
@@ -71,6 +77,8 @@ pub fn rewrite(program: &mut Vec<Stmt>) {
 struct ScopeFacts {
     written: HashSet<String>,
     dynamic: bool,
+    /// Set by the flow-sensitive pass, which leaves nested function scopes to the scope pass.
+    flow: bool,
 }
 
 impl ScopeFacts {
@@ -79,7 +87,7 @@ impl ScopeFacts {
         let mut written: HashSet<String> =
             ALWAYS_DEFINED.iter().map(|name| name.to_string()).collect();
         EXTERN_GLOBALS.with(|names| written.extend(names.borrow().iter().cloned()));
-        Self { written, dynamic: false }
+        Self { written, dynamic: false, flow: false }
     }
 
     /// Returns whether a read of `name` is certainly undefined in this scope.
@@ -602,13 +610,17 @@ fn rewrite_function_scope(
     facts.written.extend(params);
     facts.written.extend(variadic);
     vivify_scope(body, &facts);
+    let mut maybe = facts.written.clone();
     collect_stmts(body, &mut facts);
     rewrite_scope_stmts(body, &facts);
+    if !facts.dynamic {
+        rewrite_reads_before_writes(body, &mut maybe);
+    }
 }
 
 /// Runs array auto-vivification on one scope unless it can define names dynamically.
 fn vivify_scope(body: &mut Vec<Stmt>, initial: &ScopeFacts) {
-    let mut probe = ScopeFacts { written: HashSet::new(), dynamic: false };
+    let mut probe = ScopeFacts { written: HashSet::new(), dynamic: false, flow: false };
     collect_stmts(body, &mut probe);
     if probe.dynamic {
         return;
@@ -668,7 +680,7 @@ fn rewrite_expr(expr: &mut Expr, facts: &ScopeFacts) {
             }
         }
         ExprKind::Closure { params, variadic, body, is_arrow, captures, capture_refs, .. } => {
-            if !*is_arrow {
+            if !*is_arrow && !facts.flow {
                 // Captured names are defined inside the closure like parameters.
                 let names = params.iter().map(|(name, ..)| name.clone())
                     .chain(captures.iter().cloned())
@@ -955,7 +967,7 @@ fn empty_array_assign(name: &str, span: crate::span::Span) -> Stmt {
 
 /// Records every variable a statement mentions, read or written.
 fn mark_mentioned_names(stmt: &mut Stmt, seen: &mut HashSet<String>) {
-    let mut facts = ScopeFacts { written: HashSet::new(), dynamic: false };
+    let mut facts = ScopeFacts { written: HashSet::new(), dynamic: false, flow: false };
     collect_stmt(stmt, &mut facts);
     seen.extend(facts.written);
     crate::undefined_constants::walk_program_exprs_mut(std::slice::from_mut(stmt), &mut |expr| {
@@ -971,5 +983,149 @@ fn mark_expr_names(expr: &mut Expr, seen: &mut HashSet<String>) {
     mark_mentioned_names(&mut stmt, seen);
     if let StmtKind::ExprStmt(original) = stmt.kind {
         *expr = original;
+    }
+}
+
+/// Rewrites reads that no write can precede, statement by statement (php warns there even when
+/// the scope writes the name later, e.g. `if ($abc > 5) {...} $abc = 1;`).
+///
+/// `maybe` holds the names some path may have written before the current point: branches merge
+/// by union, a loop first adds every write of its body (a later write reaches the next
+/// iteration), and a statement's own writes count as already written for that statement, so
+/// `($a = 1) + $a` is never touched. Only names absent from `maybe` are rewritten, through the
+/// same probe-aware `rewrite_expr` the whole-scope pass uses.
+fn rewrite_reads_before_writes(stmts: &mut [Stmt], maybe: &mut HashSet<String>) {
+    for stmt in stmts.iter_mut() {
+        let mut own = ScopeFacts { written: HashSet::new(), dynamic: false, flow: false };
+        collect_stmt(stmt, &mut own);
+        match &mut stmt.kind {
+            StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
+                // A condition's writes (`if ($m = f())`, `preg_match(.., $m)`) count for the
+                // conditions themselves and precede every branch body.
+                let mut conditions = ScopeFacts { written: HashSet::new(), dynamic: false, flow: true };
+                collect_expr(condition, &mut conditions);
+                for (condition, _) in elseif_clauses.iter() {
+                    collect_expr(condition, &mut conditions);
+                }
+                maybe.extend(conditions.written);
+                rewrite_expr(condition, &facts_from(maybe));
+                let mut merged = maybe.clone();
+                let mut branch = maybe.clone();
+                rewrite_reads_before_writes(then_body, &mut branch);
+                merged.extend(branch);
+                for (condition, body) in elseif_clauses.iter_mut() {
+                    rewrite_expr(condition, &facts_from(maybe));
+                    let mut branch = maybe.clone();
+                    rewrite_reads_before_writes(body, &mut branch);
+                    merged.extend(branch);
+                }
+                if let Some(body) = else_body {
+                    let mut branch = maybe.clone();
+                    rewrite_reads_before_writes(body, &mut branch);
+                    merged.extend(branch);
+                }
+                *maybe = merged;
+            }
+            StmtKind::While { .. }
+            | StmtKind::DoWhile { .. }
+            | StmtKind::For { .. }
+            | StmtKind::Foreach { .. }
+            | StmtKind::Switch { .. }
+            | StmtKind::Try { .. } => {
+                // Every write inside may reach any read inside (loops repeat, catches follow any
+                // point of the try): add them first, then walk the bodies.
+                maybe.extend(own.written.iter().cloned());
+                for_each_child_body_mut(stmt, &mut |body| rewrite_reads_before_writes(body, maybe));
+                match &mut stmt.kind {
+                    StmtKind::While { condition, .. } | StmtKind::DoWhile { condition, .. } => {
+                        rewrite_expr(condition, &facts_from(maybe));
+                    }
+                    StmtKind::Foreach { array, .. } => rewrite_expr(array, &facts_from(maybe)),
+                    StmtKind::Switch { subject, .. } => rewrite_expr(subject, &facts_from(maybe)),
+                    _ => {}
+                }
+            }
+            StmtKind::FunctionDecl { .. }
+            | StmtKind::ClassDecl { .. }
+            | StmtKind::TraitDecl { .. }
+            | StmtKind::InterfaceDecl { .. }
+            | StmtKind::EnumDecl { .. }
+            | StmtKind::NamespaceBlock { .. }
+            | StmtKind::Synthetic(_)
+            | StmtKind::IncludeOnceGuard { .. } => {
+                if let StmtKind::NamespaceBlock { body, .. }
+                | StmtKind::Synthetic(body)
+                | StmtKind::IncludeOnceGuard { body, .. } = &mut stmt.kind
+                {
+                    rewrite_reads_before_writes(body, maybe);
+                }
+            }
+            _ => {
+                let mut facts = facts_from(maybe);
+                facts.written.extend(own.written.iter().cloned());
+                rewrite_stmt_reads_only(stmt, &facts);
+            }
+        }
+        maybe.extend(own.written);
+    }
+}
+
+/// Builds rewrite facts whose defined names are `names`.
+fn facts_from(names: &HashSet<String>) -> ScopeFacts {
+    ScopeFacts { written: names.clone(), dynamic: false, flow: true }
+}
+
+/// Rewrites the reads of one simple statement without re-entering nested function scopes.
+fn rewrite_stmt_reads_only(stmt: &mut Stmt, facts: &ScopeFacts) {
+    match &mut stmt.kind {
+        StmtKind::Assign { value, .. }
+        | StmtKind::TypedAssign { value, .. }
+        | StmtKind::ArrayPush { value, .. }
+        | StmtKind::Echo(value)
+        | StmtKind::Throw(value)
+        | StmtKind::ExprStmt(value)
+        | StmtKind::Return(Some(value)) => rewrite_expr(value, facts),
+        StmtKind::ArrayAssign { index, value, .. } => {
+            rewrite_expr(index, facts);
+            rewrite_expr(value, facts);
+        }
+        _ => {}
+    }
+}
+
+/// Mutable twin of `for_each_child_body`.
+fn for_each_child_body_mut(stmt: &mut Stmt, visit: &mut dyn FnMut(&mut [Stmt])) {
+    match &mut stmt.kind {
+        StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+            visit(then_body);
+            for (_, body) in elseif_clauses.iter_mut() {
+                visit(body);
+            }
+            if let Some(body) = else_body {
+                visit(body);
+            }
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::Foreach { body, .. }
+        | StmtKind::For { body, .. } => visit(body),
+        StmtKind::Switch { cases, default, .. } => {
+            for (_, body) in cases.iter_mut() {
+                visit(body);
+            }
+            if let Some(body) = default {
+                visit(body);
+            }
+        }
+        StmtKind::Try { try_body, catches, finally_body } => {
+            visit(try_body);
+            for catch in catches.iter_mut() {
+                visit(&mut catch.body);
+            }
+            if let Some(body) = finally_body {
+                visit(body);
+            }
+        }
+        _ => {}
     }
 }
