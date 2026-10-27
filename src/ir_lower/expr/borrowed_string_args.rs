@@ -29,6 +29,7 @@ pub(super) fn try_lower(
             if matches!(
                 target,
                 RuntimeFnId::Substr
+                    | RuntimeFnId::SubstrCount
                     | RuntimeFnId::Strpos
                     | RuntimeFnId::StrContains
                     | RuntimeFnId::StrStartsWith
@@ -61,7 +62,8 @@ pub(super) fn try_lower(
         let string = *param_idx == 0
             || (matches!(
                 target,
-                RuntimeFnId::Strpos
+                RuntimeFnId::SubstrCount
+                    | RuntimeFnId::Strpos
                     | RuntimeFnId::StrContains
                     | RuntimeFnId::StrStartsWith
                     | RuntimeFnId::StrEndsWith

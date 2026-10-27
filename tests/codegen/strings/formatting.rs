@@ -707,3 +707,41 @@ echo "[", sprintf($f, null), "]";
     );
     assert_eq!(out, "[][][0][0][]");
 }
+
+/// A literal single `%d`/`%s` conversion takes the direct scalar-string path, preserving PHP's
+/// signed 64-bit range, negative values, and scalar `%s` coercions.
+#[test]
+fn test_sprintf_single_conversion_shortcut_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+echo sprintf("%d", 0), "|",
+     sprintf("%d", 42), "|",
+     sprintf("%d", -7), "|",
+     sprintf("%d", 9223372036854775807), "|",
+     sprintf("%d", -9223372036854775807 - 1), "|",
+     sprintf("%s", "hi"), "|",
+     sprintf("%s", 12), "|",
+     sprintf("%s", 1.5), "|",
+     sprintf("%s", true), "|",
+     sprintf("%s", false), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "0|42|-7|9223372036854775807|-9223372036854775808|hi|12|1.5|1|\n"
+    );
+}
+
+/// Width, flags, escapes, and non-decimal conversions must keep the general formatter.
+#[test]
+fn test_sprintf_single_conversion_shortcut_leaves_other_formats_alone() {
+    let out = compile_and_run(
+        r#"<?php
+echo sprintf("%05d", 42), "|",
+     sprintf("%d%%", 3), "|",
+     sprintf("%x", 255), "|",
+     sprintf("%d", 3.9), "\n";
+"#,
+    );
+    assert_eq!(out, "00042|3%|ff|3\n");
+}

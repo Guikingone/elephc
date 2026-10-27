@@ -939,3 +939,33 @@ echo (int)$finite, ",";
         "0,0,0,0,0,9223372036854775807,"
     );
 }
+
+/// Case conversion crosses sixteen-byte vector and eight-byte word boundaries, preserves empty
+/// and already-correct strings, and leaves non-ASCII UTF-8 bytes untouched.
+#[test]
+fn test_case_conversion_vector_boundaries_and_high_bytes() {
+    let out = compile_and_run(
+        r#"<?php
+$a = str_repeat("AbC", 7);
+echo strtolower($a), "|", strtoupper("aBc"), "|",
+     strtolower(""), "|", strtoupper("ABC"), "|",
+     strtolower("a\xc3\xa9Z"), "|", strtoupper("z\xc3\xa9A"), "\n";
+"#,
+    );
+    assert_eq!(out, "abcabcabcabcabcabcabc|ABC||ABC|a\u{e9}z|Z\u{e9}A\n");
+}
+
+/// Reversal moves whole words then a byte tail, so lengths at and around the word boundary and
+/// repeated-copy growth both return the exact source bytes.
+#[test]
+fn test_strrev_and_str_repeat_word_boundaries() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "abcdefghijklmnopq";
+echo strrev($s), "|", strrev("a"), "|", strrev(""), "|",
+     strlen(str_repeat("ab", 32)), "|", str_repeat("x", 1), "|",
+     strlen(str_repeat("abc", 40)), "\n";
+"#,
+    );
+    assert_eq!(out, "qponmlkjihgfedcba|a||64|x|120\n");
+}

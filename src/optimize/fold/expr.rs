@@ -194,6 +194,9 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             if let Some(rebound) = namespace_fallbacks::resolve_call(&name, &args, span) {
                 return fold_expr(rebound);
             }
+            if let Some(folded) = try_fold_scalar_builtin(&name, &args) {
+                return fold_expr(Expr::new(folded, span));
+            }
             if name
                 .as_canonical()
                 .trim_start_matches('\\')
@@ -507,4 +510,27 @@ fn fold_callable_target(target: CallableTarget) -> CallableTarget {
             method,
         },
     }
+}
+
+/// Folds a one-argument `intval`/`floatval`/`strval` call over a scalar literal.
+///
+/// The cast-fold helpers already reproduce PHP's numeric-prefix, overflow and scalar coercion
+/// rules, so a literal argument takes exactly the result the runtime cast would produce. A user
+/// function shadowing the global name, a namespaced call, or an explicit base argument keeps the
+/// call for runtime evaluation.
+fn try_fold_scalar_builtin(name: &Name, args: &[Expr]) -> Option<ExprKind> {
+    if args.len() != 1 {
+        return None;
+    }
+    let canonical = crate::names::php_symbol_key(name.as_canonical().trim_start_matches('\\'));
+    if active_fold_user_function_exists(&canonical) {
+        return None;
+    }
+    let target = match canonical.as_str() {
+        "intval" => CastType::Int,
+        "floatval" => CastType::Float,
+        "strval" => CastType::String,
+        _ => return None,
+    };
+    super::casts::try_fold_cast(&target, &args[0])
 }

@@ -9,7 +9,8 @@
 
 use crate::ir::{
     validate_function, Builder, CmpPredicate, DataPool, Function, FunctionParam, Immediate,
-    IrHeapKind, IrType, LocalKind, MixedNumericOp, Op, Ownership, Terminator,
+    IrHeapKind, IrType, LocalKind, MixedNumericOp, Op, Ownership, RuntimeCallTarget, RuntimeFnId,
+    Terminator,
 };
 use crate::ir_passes::bounded_mixed_counter::BoundedMixedCounter;
 use crate::ir_passes::driver::IrPass;
@@ -509,4 +510,40 @@ fn bounded_mixed_counter_storage_ignores_unrelated_reference_slots() {
         &std::collections::HashMap::new()).slots;
     assert!(slots.contains(&crate::ir::LocalSlotId::from_raw(1)));
     assert!(!slots.contains(&unrelated));
+}
+
+/// A value-only typed arithmetic runtime call keeps its boxed operand by value, so a strict
+/// bounded counter feeding `intdiv()` still promotes to raw SSA instead of staying boxed.
+#[test]
+fn bounded_mixed_counter_promotes_across_value_only_runtime_call() {
+    let mut function = counter(CmpPredicate::Slt, 1, 0, false);
+    let body = function.blocks[2].id;
+    let terminator = function.blocks[2].terminator.take().unwrap();
+    {
+        let mut builder = Builder::new(&mut function);
+        builder.position_at_end(body);
+        let value = builder.emit_load_local(
+            crate::ir::LocalSlotId::from_raw(1),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        let divisor = builder.emit_const_i64(3);
+        builder
+            .emit(
+                Op::RuntimeCall,
+                vec![value, divisor],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::Intdiv,
+                ))),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            )
+            .unwrap();
+        builder.terminate(terminator);
+    }
+    validate_function(&function).unwrap();
+    assert!(BoundedMixedCounter::default().run(&mut function, &mut DataPool::default()));
+    assert_eq!(function.locals[1].ir_type, IrType::I64);
+    assert!(validate_function(&function).is_ok());
 }

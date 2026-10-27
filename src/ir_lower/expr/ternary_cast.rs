@@ -105,6 +105,18 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         return lower_array_cast(ctx, inner, expr);
     }
     let value = lower_expr(ctx, inner);
+    let source_type = ctx.builder.value_php_type(value.value);
+    let source_repr = source_type.codegen_repr();
+    // `(int)` over an integer or boolean is the identity: both are already I64 0/1 (PHP's
+    // bool representation), and the explicit cast cannot warn or fail. Returning the producer
+    // itself also keeps the EIR cast's broad diagnostic effects out of hot loops.
+    if matches!(target, CastType::Int) && matches!(source_repr, PhpType::Int | PhpType::Bool) {
+        return value;
+    }
+    // `(bool)` over a boolean is likewise the identity at the representation level.
+    if matches!(target, CastType::Bool) && source_repr == PhpType::Bool {
+        return value;
+    }
     if matches!(target, CastType::Bool) {
         if let Some(result) = object_operators::lower_object_truthy(ctx, value, Some(expr.span)) {
             release_binary_operand_temporary(ctx, value, expr.span);
@@ -122,7 +134,6 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     if matches!(target, CastType::String) && value.ir_type == IrType::Str && !missing_string_cast {
         return value;
     }
-    let source_type = ctx.builder.value_php_type(value.value);
     let php_type = cast_php_type(target, &source_type);
     let result = ctx.emit_value(
         Op::Cast,

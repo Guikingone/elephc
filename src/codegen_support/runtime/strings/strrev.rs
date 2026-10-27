@@ -44,10 +44,29 @@ pub fn emit_strrev(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #16]");                                   // save the result start for the published pointer
     emitter.instruction("mov x9, x0");                                          // destination cursor
 
-    // -- copy bytes in reverse order (last-to-first) --
+    // -- copy bytes in reverse order sixteen at a time --
     emitter.instruction("ldp x1, x2, [sp]");                                    // reload the source pointer and length
     emitter.instruction("add x11, x1, x2");                                     // x11 = pointer to end of source string
     emitter.instruction("mov x12, x2");                                         // copy length as loop counter
+    emitter.instruction("cmp x12, #16");                                        // can the reversal move a full vector pair?
+    emitter.instruction("b.lt __rt_strrev_tail");                               // short strings use the word and byte tails
+    emitter.label("__rt_strrev_loop16");
+    emitter.instruction("sub x11, x11, #16");                                   // address the next sixteen source bytes from the end
+    emitter.instruction("ldp x3, x4, [x11]");                                   // load the last two source words
+    emitter.instruction("rev x3, x3");                                          // reverse the first word's bytes
+    emitter.instruction("rev x4, x4");                                          // reverse the second word's bytes
+    emitter.instruction("stp x4, x3, [x9], #16");                               // store the reversed words in reverse order
+    emitter.instruction("sub x12, x12, #16");                                   // account for the sixteen copied bytes
+    emitter.instruction("cmp x12, #16");                                        // is another full vector pair available?
+    emitter.instruction("b.ge __rt_strrev_loop16");                             // continue reversing full vector pairs
+    emitter.label("__rt_strrev_tail");
+    emitter.instruction("cmp x12, #8");                                         // can the tail move a full word?
+    emitter.instruction("b.lt __rt_strrev_loop");                               // short tails use the byte loop
+    emitter.instruction("sub x11, x11, #8");                                    // address the next eight source bytes from the end
+    emitter.instruction("ldr x3, [x11]");                                       // load the next source word
+    emitter.instruction("rev x3, x3");                                          // reverse the word's bytes
+    emitter.instruction("str x3, [x9], #8");                                    // store the reversed word
+    emitter.instruction("sub x12, x12, #8");                                    // account for the eight copied bytes
     emitter.label("__rt_strrev_loop");
     emitter.instruction("cbz x12, __rt_strrev_done");                           // if no bytes remain, done reversing
     emitter.instruction("sub x11, x11, #1");                                    // move source pointer backward (from end)
@@ -93,6 +112,21 @@ fn emit_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the source string length
     emitter.instruction("lea r8, [rsi + rdx]");                                 // seed the reverse source cursor one byte past the end of the source string
     emitter.instruction("mov rcx, rdx");                                        // copy the source length into the remaining-byte counter
+    emitter.instruction("cmp rcx, 16");                                         // can the reversal move two full words?
+    emitter.instruction("jl __rt_strrev_loop_linux_x86_64");                    // short strings use the byte loop
+
+    emitter.label("__rt_strrev_loop16_linux_x86_64");
+    emitter.instruction("sub r8, 16");                                          // address the next sixteen source bytes from the end
+    emitter.instruction("mov rax, QWORD PTR [r8]");                             // load the first source word
+    emitter.instruction("mov rdx, QWORD PTR [r8 + 8]");                         // load the second source word
+    emitter.instruction("bswap rax");                                           // reverse the first word's bytes
+    emitter.instruction("bswap rdx");                                           // reverse the second word's bytes
+    emitter.instruction("mov QWORD PTR [r11], rdx");                            // store the reversed second word first
+    emitter.instruction("mov QWORD PTR [r11 + 8], rax");                        // store the reversed first word second
+    emitter.instruction("add r11, 16");                                         // advance the destination by two words
+    emitter.instruction("sub rcx, 16");                                         // account for the sixteen copied bytes
+    emitter.instruction("cmp rcx, 16");                                         // is another full pair available?
+    emitter.instruction("jge __rt_strrev_loop16_linux_x86_64");                 // continue reversing full word pairs
 
     emitter.label("__rt_strrev_loop_linux_x86_64");
     emitter.instruction("test rcx, rcx");                                       // have all source bytes been copied in reverse order?

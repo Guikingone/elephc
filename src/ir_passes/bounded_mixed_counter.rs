@@ -353,6 +353,10 @@ impl CounterProof {
                     // Lowering already fixed the physical call signature and any by-ref storage.
                     // Re-materialization boxes a proven integer for an unchanged Mixed parameter.
                     Op::Call if pass.safe_call_use(inst, value, data) => {}
+                    // These typed runtime operations accept a concrete integer operand and take
+                    // the same fast path the explicit-cast form already produces. Keeping the
+                    // counter scalar avoids boxing every loop iteration just to unbox it again.
+                    Op::RuntimeCall if runtime_call_accepts_integer_counter(inst, value) => {}
                     _ if readonly_calls.is_some_and(|calls| {
                         calls.get(&id).is_some_and(|positions| {
                             inst.operands.iter().enumerate()
@@ -876,6 +880,36 @@ fn int_constant(function: &Function, mut value: ValueId) -> Option<i64> {
         }
     }
     None
+}
+
+/// Returns whether a typed runtime call accepts `value` as a concrete integer operand.
+///
+/// Only arithmetic operations whose integer lowering already exists are listed. Everything else
+/// keeps the proven counter boxed, so an ABI that expects a `Mixed` cell is never handed raw
+/// integer bits.
+fn runtime_call_accepts_integer_counter(inst: &Instruction, value: ValueId) -> bool {
+    use crate::ir::RuntimeCallTarget;
+    let Some(Immediate::RuntimeCall(target)) = &inst.immediate else {
+        return false;
+    };
+    let target = match target {
+        RuntimeCallTarget::Function(target)
+        | RuntimeCallTarget::ProfiledFunction { target, .. } => *target,
+        _ => return false,
+    };
+    let allowed_position = match target {
+        crate::ir::RuntimeFnId::Intdiv => 2,
+        crate::ir::RuntimeFnId::Abs
+        | crate::ir::RuntimeFnId::Sqrt
+        | crate::ir::RuntimeFnId::Round => 1,
+        // `sprintf` keeps the literal format at position zero and packs every following value
+        // into a 16-byte record; the packing lowering handles a raw integer operand.
+        crate::ir::RuntimeFnId::Sprintf => usize::MAX,
+        _ => return false,
+    };
+    inst.operands.iter().enumerate().all(|(index, operand)| {
+        *operand != value || (index < allowed_position && (target != crate::ir::RuntimeFnId::Sprintf || index >= 1))
+    })
 }
 
 /// Maps a counter seed producer to the checked integer opcode its trial must prove unchecked.

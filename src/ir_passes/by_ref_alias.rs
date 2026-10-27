@@ -34,9 +34,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ir::{
-    Function, Immediate, LocalSlotId, Op, RuntimeCallTarget, RuntimeFnId, ValueId,
-};
+use crate::ir::{Function, Immediate, LocalSlotId, Op, ValueId};
+#[cfg(test)]
+use crate::ir::{RuntimeCallTarget, RuntimeFnId};
 
 /// Returns every local slot whose `load_local` result escapes to an instruction that may
 /// take its address, i.e. every slot a callee may be able to write through a
@@ -63,16 +63,9 @@ pub(crate) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId
         // it can never bind a promoted by-reference parameter, so the operand stays a value.
         // `buffer_len` and `buffer_ptr` likewise observe a buffer handle by value through their
         // typed runtime targets; keep every other runtime call on the default-deny path.
-        let observes_buffer_handle = inst.op == Op::RuntimeCall
-            && matches!(
-                inst.immediate,
-                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-                    RuntimeFnId::BufferLen | RuntimeFnId::BufferPtr
-                )))
-            );
         if op_is_value_only_consumer(inst.op)
             || function.is_packed_field_access(inst)
-            || observes_buffer_handle
+            || runtime_call_observes_scalar_by_value(inst)
         {
             continue;
         }
@@ -158,6 +151,31 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
             // element is a scalar copied into the payload, never an alias of a local slot.
             | BufferLen | BufferGet | BufferSet | BufferResolve | BufferGetResolved
             | BufferSetResolved
+    )
+}
+
+/// Returns whether a typed runtime call consumes every operand by value.
+///
+/// These arithmetic operations read a boxed or raw scalar and return a fresh result; none of them
+/// can bind an operand by reference or retain a pointer into a local slot. Keeping them on the
+/// value-only path lets `mem2reg` promote a proven integer loop counter that feeds the call.
+pub(crate) fn runtime_call_observes_scalar_by_value(inst: &crate::ir::Instruction) -> bool {
+    let Some(crate::ir::Immediate::RuntimeCall(
+        crate::ir::RuntimeCallTarget::Function(target)
+        | crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. },
+    )) = &inst.immediate
+    else {
+        return false;
+    };
+    matches!(
+        target,
+        crate::ir::RuntimeFnId::BufferLen
+            | crate::ir::RuntimeFnId::BufferPtr
+            | crate::ir::RuntimeFnId::Intdiv
+            | crate::ir::RuntimeFnId::Abs
+            | crate::ir::RuntimeFnId::Sqrt
+            | crate::ir::RuntimeFnId::Round
+            | crate::ir::RuntimeFnId::Sprintf
     )
 }
 

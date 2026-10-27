@@ -837,3 +837,48 @@ fn test_fold_assoc_array_access_without_spread_still_folds() {
     };
     assert_eq!(expr.kind, ExprKind::IntLiteral(1));
 }
+
+/// Literal `intval`/`floatval`/`strval` calls fold through the same PHP coercion helpers as an
+/// explicit cast, while a second base argument, a float-to-string conversion, and a user-shadowed
+/// name stay on the runtime path.
+#[test]
+fn test_fold_direct_scalar_builtin_calls_match_php() {
+    let fold_one = |name: &str, args: Vec<Expr>| {
+        let call = Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified(name),
+                args,
+            },
+            Span::dummy(),
+        );
+        let result = fold_constants(vec![Stmt::echo(call)]);
+        let StmtKind::Echo(expr) = &result[0].kind else {
+            panic!("expected echo");
+        };
+        expr.kind.clone()
+    };
+    assert_eq!(
+        fold_one("intval", vec![Expr::string_lit("12345")]),
+        ExprKind::IntLiteral(12345)
+    );
+    assert_eq!(
+        fold_one("intval", vec![Expr::string_lit("9223372036854775808")]),
+        ExprKind::IntLiteral(i64::MAX)
+    );
+    assert_eq!(
+        fold_one("floatval", vec![Expr::string_lit("1.5")]),
+        ExprKind::FloatLiteral(1.5)
+    );
+    assert_eq!(
+        fold_one("strval", vec![Expr::int_lit(42)]),
+        ExprKind::StringLiteral("42".to_string())
+    );
+    assert!(matches!(
+        fold_one("intval", vec![Expr::string_lit("42"), Expr::int_lit(10)]),
+        ExprKind::FunctionCall { .. }
+    ));
+    assert!(matches!(
+        fold_one("strval", vec![Expr::float_lit(1.5)]),
+        ExprKind::FunctionCall { .. }
+    ));
+}
