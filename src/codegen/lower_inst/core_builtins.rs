@@ -31,6 +31,11 @@ pub(super) fn prepare_backtrace_call_site(
     backtrace::prepare_call_site(ctx, inst)
 }
 
+/// Publishes the source file/line read by a warning emitted on this instruction's cold path.
+pub(super) fn publish_diagnostic_site(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    backtrace::publish_diagnostic_site(ctx, inst)
+}
+
 /// Lowers one selector-validated PHP Core operation.
 pub(super) fn lower_core_builtin(
     ctx: &mut FunctionContext<'_>,

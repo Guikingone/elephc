@@ -1846,12 +1846,12 @@ fn lower_array_get_aarch64(
 
     ctx.emitter.label(&null_label);
     if warn_on_missing {
-        emit_undefined_array_key_warning(ctx);
+        emit_undefined_array_key_warning(ctx, inst);
     }
     abi::emit_jump(ctx.emitter, &fallback_label);
     ctx.emitter.label(&null_receiver_label);
     if warn_on_missing {
-        emit_array_offset_on_null_warning(ctx);
+        emit_array_offset_on_null_warning_at(ctx, inst);
     }
     ctx.emitter.label(&fallback_label);
     emit_array_get_null_fallback(ctx, result_ty, !warn_on_missing);
@@ -1997,12 +1997,12 @@ fn lower_array_get_x86_64(
 
     ctx.emitter.label(&null_label);
     if warn_on_missing {
-        emit_undefined_array_key_warning(ctx);
+        emit_undefined_array_key_warning(ctx, inst);
     }
     abi::emit_jump(ctx.emitter, &fallback_label);
     ctx.emitter.label(&null_receiver_label);
     if warn_on_missing {
-        emit_array_offset_on_null_warning(ctx);
+        emit_array_offset_on_null_warning_at(ctx, inst);
     }
     ctx.emitter.label(&fallback_label);
     emit_array_get_null_fallback(ctx, result_ty, !warn_on_missing);
@@ -2574,13 +2574,31 @@ fn emit_branch_if_invoker_ref_cell_tag(
 }
 
 /// Emits PHP's undefined integer array-key warning for the key in the result register.
-fn emit_undefined_array_key_warning(ctx: &mut FunctionContext<'_>) {
+fn emit_undefined_array_key_warning(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    // The warning helper reads the offending key from the integer result register; publish
+    // the source line without clobbering it.
+    let key = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, key);
+    super::core_builtins::publish_diagnostic_site(ctx, inst);
+    abi::emit_pop_reg(ctx.emitter, key);
     abi::emit_call_label(ctx.emitter, "__rt_warn_undefined_array_key_int");
 }
 
 /// Emits PHP's warning for a direct array-offset read whose receiver is null.
 pub(super) fn emit_array_offset_on_null_warning(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_warn_array_offset_on_null");
+}
+
+/// Publishes the source line, then emits the null-receiver array-offset warning.
+///
+/// The indexed read's hot path skips the diagnostic-site publication; only this cold warning
+/// path reads the published file/line.
+pub(super) fn emit_array_offset_on_null_warning_at(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) {
+    super::core_builtins::publish_diagnostic_site(ctx, inst);
+    emit_array_offset_on_null_warning(ctx);
 }
 
 /// Emits the null/miss fallback in the result shape expected by the array element type.

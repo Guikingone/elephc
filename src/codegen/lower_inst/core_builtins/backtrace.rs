@@ -14,8 +14,9 @@ use crate::codegen::{
     abi, emit_array_value_type_stamp, emit_box_current_owned_value_as_mixed,
     emit_box_current_value_as_mixed, Result,
 };
-use crate::ir::Instruction;
-use crate::ir::Op;
+use crate::ir::{
+    Immediate, Instruction, IrType, Op, RuntimeCallTarget, RuntimeFnId,
+};
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
@@ -70,6 +71,58 @@ pub(super) fn lower_diagnostic_caller_line(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&done);
 }
 
+/// Publishes the source file and line read by a warning or a nested PHP frame.
+///
+/// Injected prelude code is an internal function's body: php-src reports its notices at the
+/// user's call site, so a synthetic span must not overwrite the location the entering call
+/// just published.
+pub(super) fn publish_diagnostic_site(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    if inst.span.is_some_and(|span| !span.is_from_source()) {
+        return;
+    }
+    let scratch = abi::int_result_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(inst.span.map_or(0, |span| span.line)));
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
+}
+
+/// Returns whether a cast maps a TaggedScalar `int|null` to the null-as-zero integer value.
+///
+/// The lowering reads the tag/payload pair and maps the null tag to zero. It allocates
+/// nothing and raises nothing, so the enclosing instruction never reads a published site.
+fn tagged_scalar_to_int_cast(ctx: &FunctionContext<'_>, inst: &Instruction) -> bool {
+    inst.op == Op::Cast
+        && inst.result_php_type == PhpType::Int
+        && matches!(inst.immediate, Some(Immediate::CastTarget(IrType::I64)))
+        && inst.operands.len() == 1
+        && ctx
+            .value_php_type(inst.operands[0])
+            .is_ok_and(|ty| ty.codegen_repr() == PhpType::TaggedScalar)
+}
+
+/// Returns whether a `count()` call reads a concrete array length without entering PHP code.
+fn typed_array_count_call(ctx: &FunctionContext<'_>, inst: &Instruction) -> bool {
+    inst.op == Op::RuntimeCall
+        && inst.operands.len() == 1
+        && matches!(
+            inst.immediate,
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                RuntimeFnId::Count
+            )))
+        )
+        && ctx
+            .value_php_type(inst.operands[0])
+            .is_ok_and(|ty| {
+                matches!(
+                    ty.codegen_repr(),
+                    PhpType::Array(_) | PhpType::AssocArray { .. }
+                )
+            })
+}
+
 /// Publishes the source line and a call-site-specific frame reader before a nested PHP call.
 pub(super) fn prepare_call_site(
     ctx: &mut FunctionContext<'_>,
@@ -78,22 +131,20 @@ pub(super) fn prepare_call_site(
     // Local retirement cannot emit its own PHP warning. A nested destructor publishes its
     // source location from its own frame, so eagerly updating diagnostics here only burdens
     // scalar Mixed rebinds whose fast path cannot invoke PHP code.
+    // A typed-array count is lowered inline and its only throw is a location-less TypeError,
+    // so it never reads the published diagnostic globals.
     let warns_at_call_site = inst.effects.contains(crate::ir::Effects::MAY_WARN)
-        && !matches!(inst.op, Op::ReleaseLocalRefCell | Op::ReleaseLocalSlot);
-    // Injected prelude code is an internal function's body: php-src reports its notices at
-    // the user's call site, so publishing the prelude's synthetic span here would overwrite
-    // the location the entering call just published.
-    let compiler_generated = inst.span.is_some_and(|span| !span.is_from_source());
-    if (instruction_may_enter_php_frame(inst) || warns_at_call_site) && !compiler_generated {
-        let scratch = abi::int_result_reg(ctx.emitter);
-        abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
-        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
-        abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(inst.span.map_or(0, |span| span.line)));
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
+        && !matches!(
+            inst.op,
+            Op::ReleaseLocalRefCell | Op::ReleaseLocalSlot | Op::ArrayGet
+        )
+        && !tagged_scalar_to_int_cast(ctx, inst);
+    let enters_php_frame = instruction_may_enter_php_frame(inst)
+        && !typed_array_count_call(ctx, inst);
+    if enters_php_frame || warns_at_call_site {
+        publish_diagnostic_site(ctx, inst);
     }
-    if !ctx.backtrace_enabled || !instruction_may_enter_php_frame(inst) {
+    if !ctx.backtrace_enabled || !enters_php_frame {
         return Ok(());
     }
     let line = i64::from(inst.span.map_or(0, |span| span.line));

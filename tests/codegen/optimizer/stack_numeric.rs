@@ -289,6 +289,16 @@ sum_tagged_rhs($argc + 9);
         !body.contains("__rt_mixed_from_value") && !body.contains("__rt_mixed_numeric_add"),
         "the narrowed element must stay out of the boxed numeric helper:\n{body}"
     );
+    let condition = function
+        .split("@block name=while.cond")
+        .find(|block| block.contains("op=runtime_call"))
+        .expect("count condition");
+    let count_at = condition.find("op=runtime_call").expect("count lowering");
+    let window_start = condition[..count_at].rfind("@src").unwrap_or(0);
+    assert!(
+        !condition[window_start..count_at].contains("_php_diagnostic_line"),
+        "a typed-array count must not publish a diagnostic site:\n{condition}"
+    );
     assert_eq!(run(source, true).0, "45|");
     fs::remove_dir_all(dir).unwrap();
 }
