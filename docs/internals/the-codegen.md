@@ -331,6 +331,18 @@ Packed indexed arrays apply the same float-key conversion before `ArrayGet`,
 including when a key becomes boxed `Mixed` or the array is promoted to hash
 storage at runtime. Integral float keys convert without a deprecation.
 
+### Append dispatch and raw-int fast path
+
+Every indexed append reads the receiver's low metadata byte inline to select
+promoted hash storage instead of calling `__rt_heap_kind`. For a raw-int value,
+the append lowering then emits the helper's unique/int-shaped/capacity fast path
+inline: one refcount check, the length/capacity pair, the value-type nibble and a
+direct slot store. Null receivers, shared arrays, the first append into an empty
+array, full arrays and non-int value types jump to `__rt_array_push_int`, which
+keeps the existing COW split, shape specialization and growth behavior. The
+result remains the container pointer, so the ordinary local/global writeback is
+unchanged.
+
 ### Unchecked typed-array reads
 
 `ArrayGetUnchecked` carries the array-bounds proof from

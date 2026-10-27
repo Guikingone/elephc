@@ -868,3 +868,60 @@ $d = [10]; pushViaRef($d); echo implode(",", $d), "\n";
         )
     );
 }
+
+/// A raw-int append emits the inline fast path and keeps the helper as the cold fallback.
+///
+/// The fast path only fires for a unique, int-shaped, capacity-available array; the slow label
+/// still covers the first append, COW splits, growth, null receivers and hash promotion. The
+/// storage-kind dispatch is inline, so the loop body must not call `__rt_heap_kind` either.
+#[test]
+fn test_array_push_int_inline_fast_path_on_all_supported_targets() {
+    let source = r#"<?php
+function fill(int $n): int {
+    $data = [];
+    $i = 0;
+    while ($i < $n) {
+        $data[] = $i & 63;
+        $i += 1;
+    }
+    return count($data);
+}
+echo fill($argc + 9);
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let dir = make_cli_test_dir("elephc_array_push_int_inline");
+        let path = dir.join("main.php");
+        fs::write(&path, source).unwrap();
+        let mut cmd = elephc_cli_command(&dir);
+        cmd.args(["--emit-asm", "--target", target]);
+        if target.starts_with("ios-") {
+            cmd.args(["--emit", "staticlib"]);
+        }
+        let output = cmd.arg(&path).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{target}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let asm = fs::read_to_string(path.with_extension("s")).unwrap();
+        let push_body = asm
+            .split("@block name=while.body")
+            .find(|body| body.contains("op=array_push"))
+            .unwrap_or_else(|| panic!("{target}: missing push loop body\n{asm}"));
+        assert!(
+            push_body.contains("array_push_int_slow"),
+            "{target}: the inline fast path and its slow label must be emitted\n{push_body}"
+        );
+        assert!(
+            !push_body.contains("__rt_heap_kind"),
+            "{target}: append dispatch must be inline\n{push_body}"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
