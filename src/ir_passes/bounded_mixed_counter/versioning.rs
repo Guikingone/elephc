@@ -259,8 +259,8 @@ fn apply(function: &mut Function, plan: &Plan) {
     builder.position_at_end(bound_guard);
     builder.terminate(Terminator::CondBr { cond: bound_ok, then_target: integer_entry, then_args: vec![], else_target: slow, else_args: vec![] });
     builder.position_at_end(integer_entry);
-    let seed_int = emit(&mut builder, Op::Cast, vec![seed], Some(Immediate::CastTarget(IrType::I64)), IrType::I64, PhpType::Int);
-    let bound_int = emit(&mut builder, Op::Cast, vec![bound], Some(Immediate::CastTarget(IrType::I64)), IrType::I64, PhpType::Int);
+    let seed_int = integer_payload(&mut builder, seed);
+    let bound_int = integer_payload(&mut builder, bound);
     builder.emit_store_local(fast_slot, seed_int);
     let fast_entry = builder.create_named_block("counter.integer.ready", vec![]);
     if matches!(plan.predicate, CmpPredicate::Sle | CmpPredicate::Sge) {
@@ -272,4 +272,12 @@ fn apply(function: &mut Function, plan: &Plan) {
     let header = clone::copy_loop(function, plan, fast_slot, bound_int);
     function.blocks[fast_entry.as_raw() as usize].terminator = Some(Terminator::Br { target: header, args: vec![] });
     function.blocks[plan.header.as_raw() as usize].name.push_str(".counter.slow");
+}
+
+/// Extracts a tag-guarded integer payload without introducing PHP cast warnings or scratch effects.
+fn integer_payload(builder: &mut Builder<'_>, value: ValueId) -> ValueId {
+    if builder.function().value(value).is_some_and(|v| v.ir_type == IrType::I64 && v.php_type == PhpType::Int) {
+        return value;
+    }
+    emit(builder, Op::MixedUnbox, vec![value], None, IrType::I64, PhpType::Int)
 }

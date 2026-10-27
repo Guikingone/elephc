@@ -49,8 +49,16 @@ function productCounter(int $a, int $b): int {
 }
 echo productCounter($argc, $argc + 4);
 "#;
-    let function = optimized(source, "productCounter", "linux-x86_64");
-    assert!(crate::ir::print_function(&function).contains(".counter.fast"), "{}", crate::ir::print_function(&function));
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let function = optimized(source, "productCounter", target);
+        let text = crate::ir::print_function(&function);
+        assert!(text.contains(".counter.fast"), "{target}: {text}");
+        let entry = function.blocks.iter().find(|b| b.name == "counter.integer.entry").unwrap();
+        assert!(entry.instructions.iter().any(|id| function.instruction(*id).unwrap().op == Op::MixedUnbox),
+            "{target}: guarded payloads use unboxing:\n{text}");
+        assert!(!entry.instructions.iter().any(|id| function.instruction(*id).unwrap().op == Op::Cast),
+            "{target}: guards must not add PHP cast effects:\n{text}");
+    }
 }
 
 /// A seed below PHP_INT_MIN is unobservable when a dead-at-exit descending loop never enters.

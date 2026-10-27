@@ -1656,6 +1656,7 @@ scalar and call-argument backends for every supported target.
 innermost loop with an entry-tested counter and a stable integer or Mixed bound,
 it guards the seed and bound tags, plus inclusive integer extrema, before entering
 a private integer copy. The original boxed loop remains the fallback; each fast
+entry unboxes the guarded integer payloads without PHP cast effects, and each fast
 exit publishes the exact final counter to the original slot. Post-test loops and
 conditions computed outside the header cannot justify unchecked counter updates.
 Committed copies accept only consumers whose existing opcode handles raw integers;
