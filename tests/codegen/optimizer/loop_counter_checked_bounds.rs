@@ -355,10 +355,8 @@ echo count_loop($argc + 9), "\n";
     }
 }
 
-/// A strict typed-array bound turns the body's element read into an unchecked int load.
-#[test]
-fn test_array_get_bounds_removes_missing_key_and_bounds_guards() {
-    let source = r#"<?php
+/// A dense int array summed by its strict induction value; the read cannot miss.
+const BOUNDED_SUM: &str = r#"<?php
 function sum_bounded(int $n): int {
     $data = [];
     $i = 0;
@@ -376,6 +374,11 @@ function sum_bounded(int $n): int {
 }
 echo sum_bounded($argc + 9), "\n";
 "#;
+
+/// A strict typed-array bound turns the body's element read into an unchecked int load.
+#[test]
+fn test_array_get_bounds_removes_missing_key_and_bounds_guards() {
+    let source = BOUNDED_SUM;
     let optimized = optimized_ir(source);
     let body = function_body(&optimized, "sum_bounded");
     assert!(
@@ -400,6 +403,52 @@ echo sum_bounded($argc + 9), "\n";
     );
     for optimized_mode in [false, true] {
         assert_eq!(run(source, optimized_mode, true), "45\n");
+    }
+}
+
+/// Every supported target emits the unchecked read as one direct payload load.
+#[test]
+fn test_array_get_bounds_emits_on_all_supported_targets() {
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let dir = make_cli_test_dir("elephc_array_get_bounds_target");
+        let path = dir.join("main.php");
+        fs::write(&path, BOUNDED_SUM).unwrap();
+        let mut command = elephc_cli_command(&dir);
+        command.args(["--emit-asm", "--target", target]);
+        if target.starts_with("ios-") {
+            command.args(["--emit", "staticlib"]);
+        }
+        let output = command.arg(&path).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{target}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let asm = fs::read_to_string(path.with_extension("s")).unwrap();
+        let body = asm
+            .split("@block name=while.body")
+            .find(|body| body.contains("op=array_get_unchecked"))
+            .unwrap_or_else(|| panic!("{target}: missing unchecked read body\n{asm}"));
+        assert!(
+            !body.contains("__rt_warn_undefined_array_key") && !body.contains("__rt_hash_get"),
+            "{target}: the bounded read kept a guard path\n{body}"
+        );
+        let direct_load = if target.contains("x86_64") {
+            "mov rax, QWORD PTR [r11 + rax*8 + 24]"
+        } else {
+            "ldr x0, [x10, x0, lsl #3]"
+        };
+        assert!(
+            body.contains(direct_load),
+            "{target}: missing the direct payload load\n{body}"
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 }
 
