@@ -173,7 +173,7 @@ fn analyze(function: &Function, lp: &NaturalLoop, data: &DataPool, pass: &Bounde
     let compare = &mut scalarized.instructions[comparison.as_raw() as usize];
     compare.operands = vec![counter, bound_placeholder];
     compare.immediate = Some(Immediate::CmpPredicate(predicate));
-    let proof = CounterProof::for_slots(&scalarized, &HashSet::from([slot]), pass, data, Some(&HashMap::new()))?;
+    let proof = committed_proof(&scalarized, slot, pass, data)?;
     if proof.updates.len() != 1 { return None; }
     proof.scalarize(&mut scalarized, slot);
     // The guard and header predicate prove that the only step-one writer cannot overflow.
@@ -183,6 +183,24 @@ fn analyze(function: &Function, lp: &NaturalLoop, data: &DataPool, pass: &Bounde
     }
     Some(Plan { blocks: lp.blocks.clone(), header: lp.header, preheader, slot, bound,
         predicate, scalarized, bound_placeholder })
+}
+
+/// Allows committed scalarization only for consumers that accept raw integer operands.
+fn committed_proof(function: &Function, slot: LocalSlotId, pass: &BoundedMixedCounter, data: &DataPool) -> Option<CounterProof> {
+    let proof = CounterProof::for_slots(function, &HashSet::from([slot]), pass, data, Some(&HashMap::new()))?;
+    // Storage trials can use the broader value-only inventory because ordinary AST lowering
+    // rebuilds their conversions. A committed copy keeps the old opcode, so fixed-box consumers
+    // and coercing stores must retain the original generic loop instead.
+    if function.instructions.iter().any(|inst| {
+        inst.operands.iter().any(|value| proof.scalar_values.contains(value))
+            && !matches!(inst.op,
+                Op::Acquire | Op::Move | Op::Borrow | Op::MixedClone | Op::Release
+                | Op::StoreLocal | Op::StrIncDec | Op::PhpRelCmp | Op::MixedNumericBinop
+                | Op::Call | Op::ArrayPush | Op::Cast | Op::MixedBox | Op::EchoValue
+                | Op::LooseEq | Op::LooseNotEq | Op::StrictEq | Op::StrictNotEq
+                | Op::Spaceship | Op::IsTruthy)
+    }) { return None; }
+    Some(proof)
 }
 
 /// Returns only direct reads of a boxed local; arbitrary aliases are not counter identities.

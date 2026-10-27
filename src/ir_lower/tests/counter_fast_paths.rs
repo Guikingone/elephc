@@ -197,3 +197,34 @@ echo conditionalRegion($argc + 2, true);
             "{target}: {}", crate::ir::print_function(function));
     }
 }
+
+/// Coercing property stores retain their boxed counter inputs in both candidate loop shapes.
+#[test]
+fn counter_fast_path_coercing_stores_preserve_boxed_inputs_on_all_targets() {
+    let source = r#"<?php
+class CounterDestination { public static float $last = 0.0; }
+function coercingBound(mixed $end): int {
+    $count = 0;
+    for ($i = 0; $i < $end; $i++) { CounterDestination::$last = $i; $count++; }
+    return $count;
+}
+function coercingSeed(int $n): int {
+    $count = 0;
+    for ($box = $n - 1; $box >= 0; $box--) { CounterDestination::$last = $box; $count++; }
+    return $count;
+}
+echo coercingBound($argc + 2), coercingSeed($argc + 3);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for name in ["coercingBound", "coercingSeed"] {
+            let function = optimized(source, name, target);
+            let text = crate::ir::print_function(&function);
+            let stores: Vec<_> = function.instructions.iter().filter(|inst| inst.op == Op::StoreStaticProperty).collect();
+            assert!(!stores.is_empty(), "{target}: {text}");
+            for store in stores {
+                assert!(store.operands.iter().all(|value| function.values[value.as_raw() as usize].ir_type
+                    == crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed)), "{target}: {text}");
+            }
+        }
+    }
+}

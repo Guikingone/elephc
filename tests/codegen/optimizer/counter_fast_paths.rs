@@ -298,3 +298,43 @@ function seedConsumers(int $n, mixed $m): int {
 echo seedConsumers($argc + 3, 2), '|', seedConsumers(PHP_INT_MIN, 0), "\n";
 "#);
 }
+
+/// Guarded scalarization must preserve conversions required by typed static-property stores.
+#[test]
+fn test_counter_fast_paths_coercing_static_stores_match_php() {
+    equivalent(r#"<?php
+class CounterStore {
+    public static float $number = 0.0;
+    public static string $text = '';
+    public static bool $flag = false;
+}
+function counterStoreBound(mixed $end): int {
+    $sum = 0;
+    for ($i = 0; $i < $end; $i++) {
+        CounterStore::$number = $i;
+        CounterStore::$text = $i;
+        CounterStore::$flag = $i;
+        $sum++;
+    }
+    return $sum;
+}
+function counterStoreSeed(int $n): int {
+    $sum = 0;
+    for ($box = $n - 1; $box >= 0; $box--) {
+        CounterStore::$number = $box;
+        CounterStore::$text = $box;
+        CounterStore::$flag = $box;
+        $sum++;
+    }
+    return $sum;
+}
+echo counterStoreBound($argc + 2), '|';
+var_dump(CounterStore::$number, CounterStore::$text, CounterStore::$flag);
+echo counterStoreBound(2.5), '|';
+var_dump(CounterStore::$number, CounterStore::$text, CounterStore::$flag);
+echo counterStoreSeed($argc + 3), '|';
+var_dump(CounterStore::$number, CounterStore::$text, CounterStore::$flag);
+echo counterStoreSeed(PHP_INT_MIN), '|';
+var_dump(CounterStore::$number, CounterStore::$text, CounterStore::$flag);
+"#);
+}

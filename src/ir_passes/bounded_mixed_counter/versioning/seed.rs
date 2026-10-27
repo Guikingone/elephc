@@ -77,7 +77,7 @@ fn candidate(function: &Function, lp: &NaturalLoop, data: &DataPool, pass: &Boun
         (Op::ICheckedAdd, CmpPredicate::Sle) if zero(function, bound) => (i64::MAX.checked_sub(offset)?, CmpPredicate::Sle, Op::IAdd, 1),
         _ => return None,
     };
-    let proof = CounterProof::for_slots(function, &HashSet::from([slot]), pass, data, Some(&HashMap::new()))?;
+    let proof = committed_proof(function, slot, pass, data)?;
     if proof.updates.len() != 1 || !proof.seeds.contains(&producer_id) { return None; }
     let update = function.instruction(*proof.updates.iter().next()?)?;
     if update.immediate != Some(Immediate::I64(step)) || updates.len() != 1

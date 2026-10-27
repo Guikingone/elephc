@@ -1658,6 +1658,10 @@ it guards the seed and bound tags, plus inclusive integer extrema, before enteri
 a private integer copy. The original boxed loop remains the fallback; each fast
 exit publishes the exact final counter to the original slot. Post-test loops and
 conditions computed outside the header cannot justify unchecked counter updates.
+Committed copies accept only consumers whose existing opcode handles raw integers;
+coercing stores and operations requiring a boxed input retain the generic loop.
+The broader value-only inventory remains available to discarded storage trials,
+whose later AST lowering rebuilds representation conversions.
 
 A preceding seed guard can skip a dead-at-exit loop when a checked directional
 seed overflow makes its first comparison false. This also requires an innermost
