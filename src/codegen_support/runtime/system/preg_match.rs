@@ -264,7 +264,6 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_array_new");                                   // allocate empty indexed string matches array
     emitter.instruction("mov x1, x0");                                          // return empty matches array in x1
     emitter.instruction("mov x0, #0");                                          // report no match
-    emitter.instruction("b __rt_preg_match_capture_ret");                       // skip the failure sentinel
 
     emitter.label("__rt_preg_match_capture_ret");
     emitter.instruction(&format!("add x9, sp, #{}", save_off));                 // compute save-slot address for epilogue restore
@@ -495,7 +494,6 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_new");                                 // allocate empty indexed string matches array
     emitter.instruction("mov rdx, rax");                                        // return empty matches array pointer in rdx
     emitter.instruction("xor eax, eax");                                        // report no match
-    emitter.instruction("jmp __rt_preg_match_capture_ret_linux_x86_64");        // skip the failure sentinel
 
     emitter.label("__rt_preg_match_capture_ret_linux_x86_64");
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release capture helper local storage
