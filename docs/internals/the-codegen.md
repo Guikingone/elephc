@@ -192,6 +192,11 @@ cleanup; neither the catch boundary nor the cleanup records are removed.
 Selected values use 24-byte `mixed` cells in the frame, without heap headers.
 `stack_numeric::placement` shares storage only between same-block temporaries
 whose payload observations do not overlap, following transparent retains/borrows.
+Retiring a proven numeric local compares the stored pointer with the selected
+frame cells: a frame-cell hit skips the heap refcount helper because the cell
+owns no child allocation, while a heap seed or any other pointer keeps the
+ordinary `__rt_decref_mixed` path. The comparison is bounded to four cells; a
+function with more numeric cells keeps the helper call.
 The last numeric consumer reads both inputs before writing, so its output may
 reuse an input cell at that boundary. Any value stored in a local, including a
 scoped operand owner, keeps dedicated storage. Groups never share across blocks.

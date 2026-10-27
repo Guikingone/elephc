@@ -289,6 +289,10 @@ sum_tagged_rhs($argc + 9);
         !body.contains("__rt_mixed_from_value") && !body.contains("__rt_mixed_numeric_add"),
         "the narrowed element must stay out of the boxed numeric helper:\n{body}"
     );
+    assert!(
+        body.contains("numeric_local_cleanup_done"),
+        "the numeric slot retirement must recognize its frame cell:\n{body}"
+    );
     let condition = function
         .split("@block name=while.cond")
         .find(|block| block.contains("op=runtime_call"))
