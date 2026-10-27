@@ -128,16 +128,22 @@ try {
     assert!(out.contains("Return value must be of type int, none returned"), "{out}");
 }
 
-/// Verifies a `: mixed` body that falls off the end is php-legal: mixed accepts null.
+/// Verifies a `: mixed` body that falls off the end compiles and raises php 8.5's catchable
+/// `none returned` TypeError when that path runs: `mixed` accepts an explicit null, not an
+/// implicit fall-through.
 #[test]
 fn test_mixed_return_coverage_accepts_implicit_null() {
     let out = compile_and_run(
         r#"<?php
-$f = function(): mixed { };
-var_dump($f());
 class C { public function pick(): mixed {} }
-var_dump((new C)->pick());
+try { (new C)->pick(); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+function f(): mixed { if (false) return 1; }
+try { f(); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 "#,
     );
-    assert_eq!(out, "NULL\nNULL\n");
+    assert_eq!(
+        out,
+        "C::pick(): Return value must be of type mixed, none returned\n\
+         f(): Return value must be of type mixed, none returned\n"
+    );
 }

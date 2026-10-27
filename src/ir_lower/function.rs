@@ -1725,6 +1725,10 @@ fn lower_body_into_function(
 ) -> Vec<Function> {
     let owner_name = function.name.clone();
     let function_by_ref_return = function.flags.by_ref_return;
+    // A generator's declared `Generator`/`iterable` type is checked when the call builds the
+    // object; its body is a coroutine whose completion is a normal return, never php's
+    // `none returned` TypeError.
+    let return_type_is_declared = return_type_is_declared && !function.flags.is_generator;
     let by_ref_params = function
         .params
         .iter()
