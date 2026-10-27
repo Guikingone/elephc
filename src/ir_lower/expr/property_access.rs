@@ -357,6 +357,7 @@ pub(super) fn lower_property_get_from_value(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    let object = refine_member_receiver(ctx, object, expr);
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
@@ -887,6 +888,7 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
     mode: PropertyFetchMode,
     expr: &Expr,
 ) -> LoweredValue {
+    let object = refine_member_receiver(ctx, object, expr);
     // A literal name on a C struct receiver is the named field read (`$r->{'y'}` is `$r->y`): it
     // keeps the width-aware load and the owned copy of a `char*` field the named read takes. That
     // holds in probe mode too: the checker only admits declared fields, which always exist, so
@@ -897,6 +899,8 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
         }
     }
     let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
+    // A silent fetch can answer null for a typed slot that has not been initialized.
+    let result_type = if mode.is_read() { result_type } else { nullable_result_type(result_type) };
     let property = lower_expr(ctx, property);
     let property = coerce_runtime_property_name(ctx, property, expr.span);
     lower_dynamic_property_fetch_from_operands(ctx, object, property, result_type, mode, expr)
@@ -935,6 +939,7 @@ pub(super) fn lower_property_probe_from_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
+    let object = refine_member_receiver(ctx, object, expr);
     // Runtime-name probes must suppress typed uninitialized reads just like coalesce.
     // In particular, isset() on the C|false receiver after a rejected readonly fallback
     // must answer false rather than take DynamicPropGet's ordinary typed-slot guard.
