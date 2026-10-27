@@ -968,8 +968,11 @@ mod tests {
     }
 
     /// Checks one target's helper: setjmp guards the callback, and the throw
-    /// label frees the subject, the live output block, and a pending result
-    /// before releasing the regex resources and rethrowing.
+    /// label releases each private stack slot before rethrowing.
+    ///
+    /// Slot numbers come from the emitted loads and clears. A frame-layout
+    /// change keeps this green as long as each release still retires the slot
+    /// it loaded.
     fn assert_throw_boundary(asm: &str, arch: Arch) {
         let setjmp_at = asm.find("_setjmp").unwrap_or_else(|| panic!("missing setjmp:\n{asm}"));
         let invoke = if arch == Arch::X86_64 { "call r10" } else { "blr x10" };
@@ -994,59 +997,94 @@ mod tests {
             .find(threw)
             .unwrap_or_else(|| panic!("missing {threw}:\n{asm}"));
         let region = &asm[region_at..];
-        let (subject, output, result) = if arch == Arch::X86_64 {
-            (
-                "mov rax, QWORD PTR [rsp + 88]",
-                "mov rax, QWORD PTR [rsp + 96]",
-                "mov rax, QWORD PTR [rsp + 168]",
-            )
-        } else {
-            (
-                "ldr x0, [sp, #88]",
-                "ldr x0, [sp, #96]",
-                "ldr x0, [sp, #168]",
-            )
-        };
-        for needle in [subject, output, result] {
-            assert!(
-                region.contains(needle),
-                "throw path missing {needle}:\n{region}"
-            );
-        }
-        let free_at = region
-            .find("__rt_heap_free_safe")
-            .expect("throw path frees heap buffers");
         let rethrow_at = region
             .find("__rt_throw_current")
             .expect("throw path rethrows");
-        assert!(free_at < rethrow_at, "free the buffers before rethrowing");
-        let decref_at = region
-            .find("__rt_decref_array")
-            .expect("throw path releases the matches array");
-        assert!(
-            decref_at < rethrow_at,
-            "decref the matches array before rethrowing"
+        let body = &region[..rethrow_at];
+        let matches = released_slots(body, arch, "__rt_decref_array");
+        let buffers = released_slots(body, arch, "__rt_heap_free_safe");
+        assert_eq!(
+            matches.len(),
+            1,
+            "throw path must release the matches array once:\n{body}"
         );
-        let matches_load = if arch == Arch::X86_64 {
-            "mov rax, QWORD PTR [rsp + 120]"
-        } else {
-            "ldr x0, [sp, #120]"
-        };
-        assert!(
-            region.contains(matches_load),
-            "throw path missing {matches_load}:\n{region}"
+        assert_eq!(
+            buffers.len(),
+            3,
+            "subject, output, and pending result must each be released:\n{body}"
         );
-        assert!(
-            region.matches("__rt_heap_free_safe").count() >= 3,
-            "subject, output, and pending result must each be released:\n{region}"
+        let mut slots = matches;
+        slots.extend(buffers);
+        let mut unique = slots.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            slots.len(),
+            "each throw-path release must retire a different slot: {slots:?}\n{body}"
         );
-        assert!(region.contains("elephc_pcre2_v1_free"), "{region}");
+        assert!(body.contains("elephc_pcre2_v1_free"), "{body}");
         assert!(
-            region.lines().any(|line| {
+            body.lines().any(|line| {
                 let trimmed = line.trim();
                 trimmed == "bl free" || trimmed == "bl _free" || trimmed == "call free"
             }),
-            "throw path must free the offset-pair vector:\n{region}"
+            "throw path must free the offset-pair vector:\n{body}"
         );
+        if arch == Arch::X86_64 {
+            let leave_at = region
+                .find("leave")
+                .expect("x86 rethrow restores entry alignment");
+            assert!(
+                leave_at < rethrow_at,
+                "leave before the tail jump into the unwinder"
+            );
+        }
+    }
+
+    /// Returns the stack slot each `helper` call loaded and then cleared.
+    ///
+    /// The helper call sits on the third instruction of the triple
+    /// load / clear / call. The slot text is the frame offset the emitter
+    /// chose, so the assertion follows the layout instead of naming it.
+    fn released_slots(body: &str, arch: Arch, helper: &str) -> Vec<String> {
+        let lines: Vec<&str> = body.lines().map(str::trim).collect();
+        let call = if arch == Arch::X86_64 {
+            format!("call {helper}")
+        } else {
+            format!("bl {helper}")
+        };
+        let mut slots = Vec::new();
+        let mut index = 0;
+        while index + 2 < lines.len() {
+            if instruction_mnemonic(&lines[index + 2]) != call {
+                index += 1;
+                continue;
+            }
+            let loaded = stack_slot_operand(&lines[index], arch);
+            let cleared = stack_slot_operand(&lines[index + 1], arch);
+            assert_eq!(
+                loaded, cleared,
+                "{helper} must clear the slot it loaded:\n{}\n{}\n{body}",
+                lines[index], lines[index + 1]
+            );
+            slots.push(loaded.expect("release loads a stack slot"));
+            index += 3;
+        }
+        slots
+    }
+
+    /// Returns the instruction text of an assembly line, without its comment.
+    fn instruction_mnemonic(line: &str) -> &str {
+        line.split("//").next().unwrap_or(line).trim()
+    }
+
+    /// Returns the stack-slot operand shared by a load and the clear that follows it.
+    fn stack_slot_operand(line: &str, arch: Arch) -> Option<String> {
+        let code = instruction_mnemonic(line);
+        let marker = if arch == Arch::X86_64 { "[rsp + " } else { "[sp, #" };
+        let start = code.find(marker)? + marker.len();
+        let end = start + code[start..].find(']')?;
+        Some(code[start..end].to_string())
     }
 }
