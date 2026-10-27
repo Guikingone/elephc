@@ -348,7 +348,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_str_replace` | Replace all occurrences | search + replace + subject | `x1`/`x2` |
 | `__rt_explode` | Split by delimiter | delimiter + string | `x0` (array ptr) |
 | `__rt_implode` | Join string array with glue | glue + array | `x1`/`x2` |
-| `__rt_implode_int` | Join integer array with glue | glue + array | `x1`/`x2` |
+| `__rt_implode_int` | Join integer array with glue; values 0-99 format directly into the destination, larger and negative values use `__rt_itoa_into` on a private stack window so the shared concat scratch cannot overwrite the result | glue + array | `x1`/`x2` |
 | `__rt_implode_float` | Join float array with glue, formatting each element through `__rt_ftoa` | glue + array | `x1`/`x2` |
 | `__rt_implode_bool` | Join bool array with glue (`true` as `1`, `false` as the empty string) | glue + array | `x1`/`x2` |
 | `__rt_strcmp` | Binary comparison | two strings | `x0` (-1, 0, 1) |

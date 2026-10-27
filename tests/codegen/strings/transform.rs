@@ -217,6 +217,23 @@ echo implode(" ", $arr);
     assert_eq!(out, "Hello World");
 }
 
+/// Integer implode formats large and negative values without overwriting its own output via
+/// the shared `_concat_buf` itoa scratch area.
+#[test]
+fn test_implode_int_content_with_large_and_negative_values() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", range(1, 100)), "\n";
+echo implode("::", [0, 9, 10, 99, 100, 101, -1, -9, -10, -99, -100, PHP_INT_MAX, PHP_INT_MIN]), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100\n\
+0::9::10::99::100::101::-1::-9::-10::-99::-100::9223372036854775807::-9223372036854775808\n"
+    );
+}
+
 /// Verifies `implode()` and `join()` accept an ASSOCIATIVE array, joining its values.
 ///
 /// PHP ignores the keys entirely, so this is ordinary code — but the renderers walk a dense
