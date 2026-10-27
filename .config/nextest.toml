@@ -6,13 +6,13 @@ slow-timeout = { period = "60s", terminate-after = 1 }
 # still executes every case under heap diagnostics, so the single test runs longer than any of
 # the fixtures it replaced. Six periods bound a hang while leaving the bundle its savings.
 # Nextest takes the FIRST matching override for a setting, so this block stays ahead of the
-# family-wide `binary(codegen_tests)` budgets below, which would otherwise win on Linux.
+# family-wide `binary(/^codegen_tests_/)` budgets below, which would otherwise win on Linux.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(/::test_[a-z0-9_]*_bundle$/)'
+filter = 'binary(/^codegen_tests_/) and test(/::test_[a-z0-9_]*_bundle$/)'
 slow-timeout = { period = "60s", terminate-after = 6 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(/::test_[a-z0-9_]*_bundle$/)'
+filter = 'binary(/^codegen_tests_/) and test(/::test_[a-z0-9_]*_bundle$/)'
 slow-timeout = { period = "60s", terminate-after = 6 }
 
 # The embedder stack tests run whole compiler phases on a deliberately small thread stack and
@@ -32,20 +32,20 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # These BCMath probes compile dynamic-eval hosts and exceeded 60s under local load.
 # Keep their assertions and use the same bounded budget as REPL eval hosts.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(bcmath) and test(eval)'
+filter = 'binary(/^codegen_tests_/) and test(bcmath) and test(eval)'
 slow-timeout = { period = "60s", terminate-after = 4 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(bcmath) and test(eval)'
+filter = 'binary(/^codegen_tests_/) and test(bcmath) and test(eval)'
 slow-timeout = { period = "60s", terminate-after = 4 }
 
 # REPL integration probes compile real dynamic-eval hosts, including multiple cache variants.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(~codegen::repl)'
+filter = 'binary(/^codegen_tests_/) and test(~codegen::repl)'
 slow-timeout = { period = "60s", terminate-after = 4 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(~codegen::repl)'
+filter = 'binary(/^codegen_tests_/) and test(~codegen::repl)'
 slow-timeout = { period = "60s", terminate-after = 4 }
 
 [profile.ci]
@@ -161,11 +161,11 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # These native-named nested-default probes actually run two opaque eval programs
 # through the core collection cleanup helper. Use that eval family's bounded budget.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::nested_property_defaults::test_core_.*owners_release$/)'
+filter = 'binary(/^codegen_tests_/) and test(/^codegen::runtime_gc::nested_property_defaults::test_core_.*owners_release$/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::nested_property_defaults::test_core_.*owners_release$/)'
+filter = 'binary(/^codegen_tests_/) and test(/^codegen::runtime_gc::nested_property_defaults::test_core_.*owners_release$/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # The `ir_backend_parity` first-class-callable case bundles 15 legacy-vs-EIR
@@ -226,11 +226,11 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # Give the whole named family the existing eval budget, not unrelated AOT/GC tests.
 # The compiled-program watchdog remains 60s independently of this outer budget.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::[^:]+::test_core_eval_/)'
+filter = 'binary(/^codegen_tests_/) and test(/^codegen::runtime_gc::[^:]+::test_core_eval_/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::[^:]+::test_core_eval_/)'
+filter = 'binary(/^codegen_tests_/) and test(/^codegen::runtime_gc::[^:]+::test_core_eval_/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # The `eval_*` integration suites (object handles, resource ids,
@@ -272,11 +272,11 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # `runtime_gc::mbstring` follow that pattern, so give the whole family the eval budget rather
 # than chasing it one test at a time.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/))'
+filter = 'binary(/^codegen_tests_/) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/))'
+filter = 'binary(/^codegen_tests_/) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # macOS already gives every codegen test three 60s periods (the override above, platform-
@@ -291,7 +291,7 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # 180s, and the compiled-program watchdog keeps its own 60s guard.
 [[profile.ci.overrides]]
 platform = 'cfg(target_os = "linux")'
-filter = 'binary(codegen_tests)'
+filter = 'binary(/^codegen_tests_/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.default.overrides]]
@@ -307,27 +307,27 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # controls passed only on retry at 59.687s and 58.843s respectively. The latter
 # controls compile three and two programs. Keep their guards scoped by exact name.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(=codegen::callables::core_reflection::test_core_get_class_methods_accepts_boxed_arguments)'
+filter = 'binary(/^codegen_tests_/) and test(=codegen::callables::core_reflection::test_core_get_class_methods_accepts_boxed_arguments)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(=codegen::callables::core_reflection::test_core_get_class_methods_accepts_boxed_arguments)'
+filter = 'binary(/^codegen_tests_/) and test(=codegen::callables::core_reflection::test_core_get_class_methods_accepts_boxed_arguments)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(=codegen::callables::core_hook_introspection::test_core_hook_defaults_initialize_backing_storage_without_setter)'
+filter = 'binary(/^codegen_tests_/) and test(=codegen::callables::core_hook_introspection::test_core_hook_defaults_initialize_backing_storage_without_setter)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(=codegen::callables::core_hook_introspection::test_core_hook_defaults_initialize_backing_storage_without_setter)'
+filter = 'binary(/^codegen_tests_/) and test(=codegen::callables::core_hook_introspection::test_core_hook_defaults_initialize_backing_storage_without_setter)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_post_eval_dynamic_class_name_target_balances_detached_strings)'
+filter = 'binary(/^codegen_tests_/) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_post_eval_dynamic_class_name_target_balances_detached_strings)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_post_eval_dynamic_class_name_target_balances_detached_strings)'
+filter = 'binary(/^codegen_tests_/) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_post_eval_dynamic_class_name_target_balances_detached_strings)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # This fixture compiles the web prelude together with native closures and opaque
@@ -583,12 +583,12 @@ slow-timeout = { period = "300s", terminate-after = 1 }
 # exceptions below, and a real hang still terminates at 180s on macOS.
 [[profile.default.overrides]]
 platform = 'cfg(target_os = "macos")'
-filter = 'binary(codegen_tests)'
+filter = 'binary(/^codegen_tests_/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
 platform = 'cfg(target_os = "macos")'
-filter = 'binary(codegen_tests)'
+filter = 'binary(/^codegen_tests_/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # These multi-compile mbstring, eval, and ownership families reached 60s on both
@@ -599,12 +599,12 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # Unrelated codegen tests and the compiled-program watchdog retain their 60s guards.
 [[profile.default.overrides]]
 platform = 'cfg(target_os = "linux")'
-filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
+filter = 'binary(/^codegen_tests_/) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
 platform = 'cfg(target_os = "linux")'
-filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
+filter = 'binary(/^codegen_tests_/) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # Two more Core eval GC fixtures outside the `test_core_eval_` naming family. Each compiles,
@@ -612,19 +612,19 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # 60s global guard on the shared macOS runners (60.01s, on both tries) in runs that were
 # otherwise green, and passed on the next attempt. Same budget as the named family.
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::nested_property_defaults::test_core_native_nested_default_owners_release)'
+filter = 'binary(/^codegen_tests_/) and test(=codegen::runtime_gc::nested_property_defaults::test_core_native_nested_default_owners_release)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::nested_property_defaults::test_core_native_nested_default_owners_release)'
+filter = 'binary(/^codegen_tests_/) and test(=codegen::runtime_gc::nested_property_defaults::test_core_native_nested_default_owners_release)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_throwing_target_retires_owned_and_detached_value_operands)'
+filter = 'binary(/^codegen_tests_/) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_throwing_target_retires_owned_and_detached_value_operands)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_throwing_target_retires_owned_and_detached_value_operands)'
+filter = 'binary(/^codegen_tests_/) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_throwing_target_retires_owned_and_detached_value_operands)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # This native-default ownership probe lowers/emits a deep program for all five targets.
