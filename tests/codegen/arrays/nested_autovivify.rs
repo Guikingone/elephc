@@ -481,3 +481,19 @@ fn test_autovivify_with_optimizer_on_and_off() {
         );
     }
 }
+
+/// A nested write at a key that is not the next position of an EMPTY list makes the list a hash,
+/// exactly like the direct `$a = []; $a[1] = v;` write: the indexed fetch used to pad the gap
+/// with nulls (`[0 => NULL, 1 => [...]]`).
+#[test]
+fn test_nested_write_at_sparse_key_of_empty_list_is_a_hash() {
+    let out = crate::support::compile_and_run(
+        r#"<?php
+$b = []; $b[1][2] = 3;
+$c = []; $c[5]['x'] = 1;
+$d = []; $d[0][] = 'z';
+echo json_encode([$b, $c, $d]), "\n";
+"#,
+    );
+    assert_eq!(out, "[{\"1\":{\"2\":3}},{\"5\":{\"x\":1}},[[\"z\"]]]\n");
+}

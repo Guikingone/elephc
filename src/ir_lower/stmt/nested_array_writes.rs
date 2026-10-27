@@ -706,7 +706,12 @@ fn lower_local_parent_fetch_for_write_inner(
                         key,
                         Some(index.span),
                     );
-                    if matches!(key.ir_type, IrType::Str
+                    // An empty list written at a key that is not its next position (`$a = [];
+                    // $a[1][2] = v`) is a hash in php, exactly as the direct write promotes it;
+                    // the indexed fetch would pad the gap with nulls.
+                    let empty_sparse_key = super::array_write_storage::is_empty_indexed_array_element(&elem_ty)
+                        && crate::types::empty_array_key_requires_hash_storage(index);
+                    if empty_sparse_key || matches!(key.ir_type, IrType::Str
                         | IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)) {
                         // Syntactic inference defaults variables/calls to integer keys. Their
                         // lowered values are authoritative, and must not be coerced to zero.
