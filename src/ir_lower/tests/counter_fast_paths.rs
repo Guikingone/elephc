@@ -331,3 +331,40 @@ fn counter_fast_path_multiple_seeds_use_guards_without_copies() {
         }
     }
 }
+
+/// Loose comparisons with potentially boxed objects keep the full PHP comparison on every target.
+#[test]
+fn counter_fast_path_loose_object_comparisons_keep_boxed_inputs() {
+    let source = r#"<?php
+function looseObjectBound(mixed $end, mixed $other): int {
+    $hits = 0;
+    for ($i = 0; $i < $end; $i++) {
+        if ($i == $other) { $hits++; }
+        if ($i != $other) { $hits += 10; }
+    }
+    return $hits;
+}
+function looseObjectSeed(int $n, ?stdClass $other): int {
+    $hits = 0;
+    for ($box = $n - 1; $box >= 0; $box--) {
+        if ($box == $other) { $hits++; }
+        if ($box != $other) { $hits += 10; }
+    }
+    return $hits;
+}
+echo looseObjectBound($argc + 2, new stdClass), looseObjectSeed($argc + 2, new stdClass);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for name in ["looseObjectBound", "looseObjectSeed"] {
+            let function = optimized(source, name, target);
+            let text = crate::ir::print_function(&function);
+            let comparisons: Vec<_> = function.instructions.iter()
+                .filter(|inst| matches!(inst.op, Op::LooseEq | Op::LooseNotEq)).collect();
+            assert!(comparisons.len() >= 2, "{target}: {text}");
+            for comparison in comparisons {
+                assert_eq!(function.values[comparison.operands[0].as_raw() as usize].ir_type,
+                    crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed), "{target}: {text}");
+            }
+        }
+    }
+}

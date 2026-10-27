@@ -266,7 +266,7 @@ echo nestedUpdateOverflow(PHP_INT_MIN + 1 + $argc, PHP_INT_MIN), "\n";
 #[test]
 fn test_counter_fast_paths_consumers_match_php() {
     equivalent(r#"<?php
-function consumers(int $s, mixed $e, mixed $m): string {
+function consumers(int $s, mixed $e, int $m): string {
     $out = '';
     $arr = [];
     $hits = 0; $steps = 0;
@@ -286,7 +286,7 @@ function consumers(int $s, mixed $e, mixed $m): string {
 echo consumers($argc, $argc + 3, $argc + 1), "\n";
 echo consumers($argc, 2.5, 2), "\n";
 echo consumers(PHP_INT_MAX - 1, PHP_INT_MAX, PHP_INT_MAX), "\n";
-function seedConsumers(int $n, mixed $m): int {
+function seedConsumers(int $n, int $m): int {
     $hits = 0;
     for ($box = $n - 1; $box >= 0; $box--) {
         echo $box, ':';
@@ -422,4 +422,32 @@ fn test_counter_fast_paths_multiple_seed_guards_match_php() {
         echo multipleSeedRuntime(PHP_INT_MIN), '|', multipleSeedRuntime(0), '|',
             multipleSeedRuntime(1), '|', multipleSeedRuntime($argc + 2);");
     equivalent(&source);
+}
+
+/// Boxed object partners retain PHP loose equality in bound and directional-seed loops.
+#[test]
+fn test_counter_fast_paths_loose_object_comparisons_match_php() {
+    equivalent(r#"<?php
+function looseObjectBound(mixed $end, mixed $other): void {
+    $equal = 0; $different = 0;
+    for ($i = 0; $i < $end; $i++) {
+        if ($i == $other) { $equal++; }
+        if ($i != $other) { $different++; }
+    }
+    echo $equal, ':', $different, '|';
+}
+function looseObjectSeed(int $n, ?stdClass $other): void {
+    $equal = 0; $different = 0;
+    for ($box = $n - 1; $box >= 0; $box--) {
+        if ($box == $other) { $equal++; }
+        if ($box != $other) { $different++; }
+    }
+    echo $equal, ':', $different, '|';
+}
+$object = new stdClass;
+looseObjectBound($argc + 2, $object); looseObjectBound(2.5, $object);
+looseObjectBound(0, $object); looseObjectBound($argc + 2, $argc);
+looseObjectSeed($argc + 2, $object); looseObjectSeed(PHP_INT_MIN, $object);
+looseObjectSeed($argc + 2, null); echo "\n";
+"#);
 }

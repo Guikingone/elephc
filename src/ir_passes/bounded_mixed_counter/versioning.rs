@@ -198,7 +198,7 @@ fn committed_proof(function: &Function, slot: LocalSlotId, pass: &BoundedMixedCo
     Some(proof)
 }
 
-/// Checks target-sensitive casts and ordering partners in addition to the consumer opcode.
+/// Checks representation-sensitive casts and comparison partners as well as the consumer opcode.
 fn committed_consumer(function: &Function, inst: &Instruction, scalar_values: &HashSet<ValueId>) -> bool {
     match inst.op {
         Op::Cast => matches!(inst.immediate,
@@ -220,11 +220,17 @@ fn committed_consumer(function: &Function, inst: &Instruction, scalar_values: &H
                     | PhpType::Buffer(_) | PhpType::Packed(_))
             })
         }),
+        // Int/Mixed loose comparison has a numeric-only dispatch, unlike Mixed/Mixed's
+        // complete object comparison. An external box may hold an object at runtime.
+        Op::LooseEq | Op::LooseNotEq => inst.operands.iter().all(|value| {
+            scalar_values.contains(value) || function.value(*value).is_some_and(|metadata| {
+                metadata.php_type.codegen_repr() != PhpType::Mixed
+            })
+        }),
         op => matches!(op,
             Op::Acquire | Op::Move | Op::Borrow | Op::MixedClone | Op::Release
             | Op::StoreLocal | Op::StrIncDec | Op::PhpRelCmp | Op::MixedNumericBinop
-            | Op::Call | Op::ArrayPush | Op::MixedBox | Op::EchoValue
-            | Op::LooseEq | Op::LooseNotEq | Op::IsTruthy),
+            | Op::Call | Op::ArrayPush | Op::MixedBox | Op::EchoValue | Op::IsTruthy),
     }
 }
 
