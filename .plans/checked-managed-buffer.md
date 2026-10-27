@@ -41,19 +41,34 @@ initial SSA operands, source spans, lexical scopes and owner records. Repeated
 SSA guards fold only after a dominating guard edge; backward entry edges do not
 establish a fact.
 
-Five focused library tests cover scalar versus object generic instantiations,
+Scalar object-property reuse excludes packed field values, which a packed write
+can change while preserving the record address and buffer descriptor. Fix commit
+`2279b63e5f8e90d631689c300c9bebfa930aa7b1` passes a warning-free build and the
+following focused validation.
+
+Six focused library tests cover scalar versus object generic instantiations,
 local receiver ownership, guard facts and checked-loop EIR/assembly on every
-supported target. Four existing library regressions cover receiver aliases,
-object-loop descriptor hoisting and generic variance. Six native regressions
+supported target. Seven native regressions
 cover checksums, bounds, aliases, close, zero-trip loops, PHP overflow, allocation
-counters and receiver rebinding. Behavioral cases run with IR optimization on
+counters, receiver rebinding and packed field writes. Behavioral cases run with IR optimization on
 and off under strict heap verification; the optimized allocation window is
 allocation-free. The late-index fixture also covers a negative initial index
-through the cloned cold path. Four existing codegen tests cover direct dispatch
-on all five targets, variance, destructor timing and throwing-loop scratch.
+through the cloned cold path. Packed read freshness is covered by
+`test_checked_managed_buffer_packed_reads_observe_writes` and
+`checked_managed_buffer_packed_reads_survive_writes_on_every_target`.
+
+The original acceptance at `c91474f99ceaea3c5a6a46244bba5f1439c0a786` also ran
+four existing library regressions covering receiver aliases, object-loop
+descriptor hoisting and generic variance, plus four existing codegen tests for
+direct dispatch on all five targets, variance, destructor timing and throwing-loop scratch.
 Local execution is Linux x86_64; the other targets have emitter coverage.
 
 ## Consumer measurements
+
+All consumer timing, EIR/assembly and allocation measurements in this section
+belong to `c91474f99ceaea3c5a6a46244bba5f1439c0a786`, before the packed-field
+exclusion in `2279b63e5f8e90d631689c300c9bebfa930aa7b1`. Post-fix evidence is the
+focused validation above.
 
 The final consumer sources match the baseline byte for byte:
 
