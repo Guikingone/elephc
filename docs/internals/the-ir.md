@@ -2442,8 +2442,9 @@ the back edge only reads it.
 
 Promotion requires ordinary integer, boolean, or float local storage with only
 plain load/store accesses. Stored values and loads must match the slot's logical
-PHP type as well as its representation, so resource payloads in integer storage
-cannot acquire integer semantics through SSA forwarding. Address escapes,
+PHP type as well as its representation, with `false` values admitted into boolean
+storage. Resource payloads in integer storage cannot acquire integer semantics
+through SSA forwarding. Address escapes,
 by-reference uses, global and static slots, refcounted values, nonstandard slot
 operations, eval scope access, and functions with implicit exception-handler
 edges stay slot-backed. This pass runs

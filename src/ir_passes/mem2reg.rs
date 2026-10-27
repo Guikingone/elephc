@@ -177,11 +177,12 @@ fn eligible_slots(function: &Function) -> Vec<LocalSlotId> {
     result
 }
 
-/// Checks that forwarding preserves both the local representation and logical PHP type.
+/// Checks representation and logical type compatibility, widening false only into Bool storage.
 fn value_matches_local(function: &Function, value: ValueId, ir_type: IrType, php_type: &PhpType) -> bool {
     function.value(value).is_some_and(|value| {
         value.ir_type == ir_type
-            && value.php_type == *php_type
+            && (value.php_type == *php_type
+                || (value.php_type == PhpType::False && *php_type == PhpType::Bool))
             && value.ownership == Ownership::NonHeap
     })
 }
