@@ -261,6 +261,52 @@ fn promotes_boolean_local() {
         Some(Terminator::Return { value: Some(constant) }));
 }
 
+/// Integer slot storage must not erase a resource's logical type during SSA forwarding.
+#[test]
+fn keeps_resource_type_mismatches_in_memory() {
+    let resource = PhpType::Resource(Some("stream".into()));
+    for (stored_type, loaded_type) in [
+        (resource.clone(), resource.clone()),
+        (resource.clone(), PhpType::Int),
+        (PhpType::Int, resource),
+    ] {
+        let mut function = Function::new("resource_storage".into(), IrType::Void, PhpType::Void);
+        let slot = function.add_local(
+            Some("context".into()), IrType::I64, PhpType::Int, LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut function);
+            let entry = b.create_named_block("entry", vec![]);
+            let left = b.create_named_block("left", vec![]);
+            let right = b.create_named_block("right", vec![]);
+            let join = b.create_named_block("join", vec![]);
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let stored = b.emit(Op::ConstI64, vec![], Some(Immediate::I64(4)), IrType::I64,
+                stored_type, Ownership::NonHeap).expect("resource payload has a value");
+            b.emit_store_local(slot, stored);
+            let condition = b.emit_const_bool(true);
+            b.terminate(Terminator::CondBr {
+                cond: condition, then_target: left, then_args: vec![],
+                else_target: right, else_args: vec![],
+            });
+            for block in [left, right] {
+                b.position_at_end(block);
+                b.terminate(Terminator::Br { target: join, args: vec![] });
+            }
+            b.position_at_end(join);
+            let loaded = b.emit_load_local(slot, IrType::I64, loaded_type);
+            b.emit(Op::TypePredicate, vec![loaded],
+                Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Resource)),
+                IrType::I64, PhpType::Bool, Ownership::NonHeap);
+            b.terminate(Terminator::Return { value: None });
+        }
+        validate_function(&function).expect("resource storage EIR is valid");
+        assert!(!promote(&mut function), "promotion must preserve logical PHP types");
+        assert_eq!(traffic(&function, slot), 2);
+    }
+}
+
 /// Global, static, and ref-cell slots do not represent ordinary PHP scalar locals.
 #[test]
 fn keeps_nonlocal_storage_kinds_in_memory() {
