@@ -39,6 +39,17 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
     );
 }
 
+/// The active sub-iterator, read exactly as the traversal reads it (the frame at the current
+/// slot) and typed `RecursiveIterator` through the assume hook. `getSubIterator()` is avoided: a
+/// subclass may override it, and the traversal must probe the frame it is advancing.
+fn current_sub_iterator_expr() -> crate::parser::ast::Expr {
+    method_call(
+        this_expr(),
+        "__elephcAssumeRecursiveIterator",
+        vec![recursive_iterator_iterator_current_iterator_expr()],
+    )
+}
+
 /// Builds the property list for recursive iterator iterator.
 fn recursive_iterator_iterator_properties() -> Vec<ClassProperty> {
     vec![
@@ -54,6 +65,9 @@ fn recursive_iterator_iterator_properties() -> Vec<ClassProperty> {
         // php guards `beginIteration()`/`endIteration()` with an `in_iteration` flag so a nested
         // rewind cannot re-fire the begin hook and an exhausted `valid()` fires the end hook once.
         storage_property("inIteration", TypeExpr::Bool),
+        // php's `max_depth`: -1 descends without limit, otherwise children are entered only
+        // while the current level is below it.
+        storage_property_with_default("maxDepth", TypeExpr::Int, Some(int_expr(-1))),
     ]
 }
 
@@ -97,6 +111,33 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
             // past it too. A `mixed` result defers the member lookup to runtime dispatch.
             Some(mixed_type()),
             recursive_iterator_iterator_get_sub_iterator_body(),
+        ),
+        method_with_body(
+            "setMaxDepth",
+            vec![param_default("maxDepth", TypeExpr::Int, int_expr(-1))],
+            Some(TypeExpr::Void),
+            recursive_iterator_iterator_set_max_depth_body(),
+        ),
+        method_with_body(
+            "getMaxDepth",
+            Vec::new(),
+            Some(mixed_type()),
+            recursive_iterator_iterator_get_max_depth_body(),
+        ),
+        // php's overridable child probes; the traversal asks through them. The active
+        // sub-iterator goes through the assume hook so the call stays a `RecursiveIterator`
+        // dispatch instead of a `mixed` one over every class declaring the method.
+        method_with_body(
+            "callHasChildren",
+            Vec::new(),
+            Some(TypeExpr::Bool),
+            return_body(method_call(current_sub_iterator_expr(), "hasChildren", Vec::new())),
+        ),
+        method_with_body(
+            "callGetChildren",
+            Vec::new(),
+            Some(mixed_type()),
+            return_body(method_call(current_sub_iterator_expr(), "getChildren", Vec::new())),
         ),
         method_with_body(
             "__elephcAdvance",

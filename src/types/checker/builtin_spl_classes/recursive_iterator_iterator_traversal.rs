@@ -89,7 +89,7 @@ fn recursive_iterator_iterator_depth_at_current_slot() -> Expr {
 }
 
 /// Builds the AST expression for recursive iterator iterator current iterator.
-fn recursive_iterator_iterator_current_iterator_expr() -> Expr {
+pub(super) fn recursive_iterator_iterator_current_iterator_expr() -> Expr {
     recursive_iterator_iterator_iterator_at_depth(recursive_iterator_iterator_slot_expr())
 }
 
@@ -411,12 +411,12 @@ fn recursive_iterator_iterator_advance_self_first_body() -> Vec<Stmt> {
         ),
         assign_stmt(
             "hasChildren",
-            method_call(var_expr("iterator"), "hasChildren", Vec::new()),
+            method_call(this_expr(), "callHasChildren", Vec::new()),
         ),
         if_stmt(
-            var_expr("hasChildren"),
+            recursive_iterator_iterator_may_descend_expr(),
             vec![
-                assign_stmt("child", method_call(var_expr("iterator"), "getChildren", Vec::new())),
+                assign_stmt("child", method_call(this_expr(), "callGetChildren", Vec::new())),
                 if_stmt(
                     not_expr(function_call("is_null", vec![var_expr("child")])),
                     recursive_iterator_iterator_descend_current_child_body(int_expr(2)),
@@ -446,12 +446,12 @@ fn recursive_iterator_iterator_advance_children_first_or_leaves_body() -> Vec<St
         ),
         assign_stmt(
             "hasChildren",
-            method_call(var_expr("iterator"), "hasChildren", Vec::new()),
+            method_call(this_expr(), "callHasChildren", Vec::new()),
         ),
         if_stmt(
-            var_expr("hasChildren"),
+            recursive_iterator_iterator_may_descend_expr(),
             vec![
-                assign_stmt("child", method_call(var_expr("iterator"), "getChildren", Vec::new())),
+                assign_stmt("child", method_call(this_expr(), "callGetChildren", Vec::new())),
                 if_stmt(
                     not_expr(function_call("is_null", vec![var_expr("child")])),
                     recursive_iterator_iterator_non_self_child_body(),
@@ -460,6 +460,7 @@ fn recursive_iterator_iterator_advance_children_first_or_leaves_body() -> Vec<St
             ],
             None,
         ),
+        recursive_iterator_iterator_skip_non_leaf_at_limit_stmt(),
         property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
         property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
         expr_stmt(method_call(this_expr(), "nextElement", Vec::new())),
@@ -532,4 +533,69 @@ fn recursive_iterator_iterator_descend_current_child_body(parent_state: Expr) ->
             None,
         ),
     ]
+}
+
+/// Builds `setMaxDepth()`: php refuses a limit below -1 with a `ValueError`.
+pub(super) fn recursive_iterator_iterator_set_max_depth_body() -> Vec<Stmt> {
+    vec![
+        if_stmt(
+            binary_expr(var_expr("maxDepth"), BinOp::Lt, int_expr(-1)),
+            vec![throw_stmt(new_object_expr(
+                "ValueError",
+                vec![string_expr(
+                    "RecursiveIteratorIterator::setMaxDepth(): Argument #1 ($maxDepth) must be greater than or equal to -1",
+                )],
+            ))],
+            None,
+        ),
+        property_assign_stmt(this_expr(), "maxDepth", var_expr("maxDepth")),
+    ]
+}
+
+/// Builds `getMaxDepth()`: `false` when no limit is set.
+pub(super) fn recursive_iterator_iterator_get_max_depth_body() -> Vec<Stmt> {
+    vec![
+        if_stmt(
+            binary_expr(property_access(this_expr(), "maxDepth"), BinOp::StrictEq, int_expr(-1)),
+            vec![return_stmt(bool_expr(false))],
+            None,
+        ),
+        return_stmt(property_access(this_expr(), "maxDepth")),
+    ]
+}
+
+/// php's descent test: the element has children (`$hasChildren`, from the overridable
+/// `callHasChildren()`, asked first) and the current level is below the depth limit.
+fn recursive_iterator_iterator_may_descend_expr() -> Expr {
+    binary_expr(
+        var_expr("hasChildren"),
+        BinOp::And,
+        recursive_iterator_iterator_below_max_depth_expr(),
+    )
+}
+
+/// `$this->maxDepth === -1 || $this->maxDepth > $this->depth`.
+fn recursive_iterator_iterator_below_max_depth_expr() -> Expr {
+    let max_depth = property_access(this_expr(), "maxDepth");
+    let unlimited = binary_expr(max_depth.clone(), BinOp::StrictEq, int_expr(-1));
+    let below = binary_expr(max_depth, BinOp::Gt, property_access(this_expr(), "depth"));
+    binary_expr(unlimited, BinOp::Or, below)
+}
+
+/// php's LEAVES_ONLY rule at the depth limit: an element with children is not a leaf, so it is
+/// skipped rather than yielded.
+fn recursive_iterator_iterator_skip_non_leaf_at_limit_stmt() -> Stmt {
+    if_stmt(
+        binary_expr(
+            var_expr("hasChildren"),
+            BinOp::And,
+            binary_expr(recursive_iterator_iterator_mode_expr(), BinOp::StrictEq, int_expr(0)),
+        ),
+        vec![
+            property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
+            expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new())),
+            return_void_stmt(),
+        ],
+        None,
+    )
 }

@@ -502,3 +502,35 @@ foreach ($parents as $key => $value) {
     );
     assert_eq!(out, "0:a=array;0:c=array;1:y=array;");
 }
+
+/// `setMaxDepth()`/`getMaxDepth()` and the overridable `callHasChildren()` probe follow php:
+/// the probe runs first, a self-first walk yields a child-bearing element at the limit as a
+/// leaf, leaves-only skips it, and a limit below -1 is a `ValueError`.
+#[test]
+fn test_recursive_iterator_iterator_max_depth_and_call_has_children() {
+    let out = compile_and_run(
+        r#"<?php
+$it = new RecursiveIteratorIterator(new RecursiveArrayIterator([1, [2, [3]]]), RecursiveIteratorIterator::SELF_FIRST);
+var_dump($it->getMaxDepth());
+$it->setMaxDepth(1);
+var_dump($it->getMaxDepth());
+foreach ($it as $v) echo $it->getDepth(), ":", is_array($v) ? "arr" : $v, "\n";
+try { $it->setMaxDepth(-5); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$leaves = new RecursiveIteratorIterator(new RecursiveArrayIterator([1, [2, [3, 4]], 5]));
+$leaves->setMaxDepth(0);
+foreach ($leaves as $v) echo $v, " ";
+echo "\n";
+class Probe extends RecursiveIteratorIterator {
+    public function callHasChildren(): bool { echo "[probe]"; return parent::callHasChildren(); }
+}
+foreach (new Probe(new RecursiveArrayIterator([1, [2]])) as $v) echo $v;
+echo "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nint(1)\n0:1\n0:arr\n1:2\n1:arr\n\
+         RecursiveIteratorIterator::setMaxDepth(): Argument #1 ($maxDepth) must be greater than or equal to -1\n\
+         1 5 \n[probe]1[probe][probe]2\n"
+    );
+}
