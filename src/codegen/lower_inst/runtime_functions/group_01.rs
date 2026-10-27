@@ -31,6 +31,9 @@ pub(super) fn lower(
         RuntimeFnId::ArraySum => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_sum(ctx, inst)
         }),
+        RuntimeFnId::ArraySumInt => Some({
+            crate::codegen::lower_inst::arrays::lower_array_sum_int_value(ctx, inst)
+        }),
         RuntimeFnId::ArrayMapSumAdd => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_map_sum_add(ctx, inst)
         }),

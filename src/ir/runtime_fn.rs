@@ -135,6 +135,8 @@ pub enum RuntimeFnId {
     ArraySlice,
     ArraySplice,
     ArraySum,
+    /// Allocation-free `array_sum()` observed only through an `(int)` cast.
+    ArraySumInt,
     ArrayUdiff,
     ArrayUintersect,
     ArrayUnique,
@@ -866,6 +868,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
             RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayFilterCountMod => Some((2, Some(2))),
             RuntimeFnId::ArrayElementTypeCheck => Some((3, Some(3))),
+            RuntimeFnId::ArraySumInt => Some((1, Some(1))),
             _ => None,
         }
     }
@@ -1683,6 +1686,11 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayElementTypeCheck => E::from_bits_retain(
                 E::READS_HEAP.bits() | E::ALLOC_HEAP.bits() | E::MAY_WARN.bits(),
             ),
+            // The unboxed sum reads a packed int payload and returns a raw integer; an
+            // overflow-promoted sum applies PHP's warned float-to-int cast warning.
+            RuntimeFnId::ArraySumInt => E::from_bits_retain(
+                E::READS_HEAP.bits() | E::MAY_WARN.bits(),
+            ),
             // Carry, predicate-result and snapshot cleanup can invoke destructors independently
             // of the selected callback's effect summary. Validation may also throw.
             RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayFind
@@ -2396,6 +2404,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayAll
                 | RuntimeFnId::ArrayFilterCountMod
                 | RuntimeFnId::ArrayElementTypeCheck
+                | RuntimeFnId::ArraySumInt
                 | RuntimeFnId::BcComp | RuntimeFnId::BcNumberComp
                 | RuntimeFnId::BcScale
                 // `iconv_set_encoding()` answers with a bare boolean.
@@ -2860,6 +2869,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArraySlice => "array_slice",
             RuntimeFnId::ArraySplice => "array_splice",
             RuntimeFnId::ArraySum => "array_sum",
+            RuntimeFnId::ArraySumInt => "array_sum_int_value",
             RuntimeFnId::ArrayUdiff => "array_udiff",
             RuntimeFnId::ArrayUintersect => "array_uintersect",
             RuntimeFnId::ArrayUnique => "array_unique",

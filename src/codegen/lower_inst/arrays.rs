@@ -424,6 +424,32 @@ pub(super) fn lower_array_sum_int(
     store_if_result(ctx, inst)
 }
 
+/// Lowers the allocation-free `array_sum()` value entry selected by the int sink.
+///
+/// The producer proved the packed receiver is `array<int>` and that the boxed result is
+/// observed only through an `(int)` cast, so the helper returns the raw sum (or PHP's warned
+/// float-to-int conversion when the running sum promoted to double).
+pub(super) fn lower_array_sum_int_value(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.emitter.instruction("ldr x2, [x0]");                            // pass the packed element count as the exclusive end
+            ctx.emitter.instruction("mov x1, xzr");                             // the whole array is summed from index zero
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rdi]");                // pass the packed element count as the exclusive end
+            ctx.emitter.instruction("xor esi, esi");                            // the whole array is summed from index zero
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_sum_int_value");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a proven in-bounds read of a private int-shaped indexed array.
 ///
 /// The producing pass proved the receiver cannot be null, hash-promoted, or widened, and that

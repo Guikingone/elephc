@@ -15,6 +15,7 @@
 mod allocation;
 mod array_fill_loop;
 mod array_get_bounds;
+mod array_sum_int_sink;
 mod array_sum_loop;
 mod boxed_narrowing;
 mod bounded_mixed_counter;

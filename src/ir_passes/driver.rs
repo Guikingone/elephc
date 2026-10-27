@@ -31,6 +31,7 @@ use crate::ir::{DataPool, Function, Module};
 
 use super::array_fill_loop::ArrayFillLoop;
 use super::array_get_bounds::ArrayGetBounds;
+use super::array_sum_int_sink::ArraySumIntSink;
 use super::array_sum_loop::ArraySumLoop;
 use super::branch_simplify::BranchSimplify;
 use super::borrowed_receiver_roots::BorrowedReceiverRoots;
@@ -136,6 +137,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(Mem2Reg),
         Box::new(ImmutableLocalLoads),
         Box::new(CheckedIntSink),
+        Box::new(ArraySumIntSink),
         Box::new(BoundedMixedCounter::new(module)),
         Box::new(LoopOptimize),
         Box::new(CountHoist),

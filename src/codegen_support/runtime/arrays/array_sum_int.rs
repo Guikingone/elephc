@@ -21,20 +21,30 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// Emits both `__rt_array_sum_int` reducer entries for the active target.
+/// Emits every `__rt_array_sum_int` reducer entry for the active target.
+///
+/// `__rt_array_sum_int_value` is the allocation-free entry the EIR int sink selects when the
+/// boxed `array_sum()` result is observed only through an `(int)` cast: it returns the raw sum,
+/// or PHP's warned float-to-int conversion when the running sum promoted to double.
 pub fn emit_array_sum_int(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_array_sum_int_x86_64(emitter, false);
-        emit_array_sum_int_x86_64(emitter, true);
+        emit_array_sum_int_x86_64(emitter, false, false);
+        emit_array_sum_int_x86_64(emitter, true, false);
+        emit_array_sum_int_x86_64(emitter, true, true);
         return;
     }
-    emit_array_sum_int_aarch64(emitter, false);
-    emit_array_sum_int_aarch64(emitter, true);
+    emit_array_sum_int_aarch64(emitter, false, false);
+    emit_array_sum_int_aarch64(emitter, true, false);
+    emit_array_sum_int_aarch64(emitter, true, true);
 }
 
-/// Emits one self-contained AArch64 reducer entry; `raw_seed` selects the integer entry.
-fn emit_array_sum_int_aarch64(emitter: &mut Emitter, raw_seed: bool) {
-    let prefix = if raw_seed {
+/// Emits one self-contained AArch64 reducer entry.
+///
+/// `raw_seed` selects the integer entry; `raw_result` selects the allocation-free value entry.
+fn emit_array_sum_int_aarch64(emitter: &mut Emitter, raw_seed: bool, raw_result: bool) {
+    let prefix = if raw_result {
+        "__rt_array_sum_int_value"
+    } else if raw_seed {
         "__rt_array_sum_int_i64"
     } else {
         "__rt_array_sum_int"
@@ -58,7 +68,11 @@ fn emit_array_sum_int_aarch64(emitter: &mut Emitter, raw_seed: bool) {
     emitter.instruction("subs x9, x2, x1");                                     // count = end - start and flag an empty range
     emitter.instruction(&format!("b.le {empty_label}"));                        // empty or reversed ranges keep the seed value
     if raw_seed {
-        emitter.instruction("mov x11, x3");                                     // seed the integer accumulator from the raw seed
+        if raw_result {
+            emitter.instruction("mov x11, xzr");                                // the allocation-free value entry always starts from zero
+        } else {
+            emitter.instruction("mov x11, x3");                                 // seed the integer accumulator from the raw seed
+        }
         emitter.instruction("mov x10, #0");                                     // the raw seed starts in integer mode
     } else {
         emitter.instruction("ldr x10, [x3]");                                   // load the seed Mixed tag
@@ -123,10 +137,15 @@ fn emit_array_sum_int_aarch64(emitter: &mut Emitter, raw_seed: bool) {
     emitter.instruction("add x11, x11, x13");                                   // the gate proves this addition stays in range
 
     emitter.label(&vector_box);
-    emitter.instruction("mov x0, #0");                                          // int Mixed tag for the vector sum
-    emitter.instruction("mov x1, x11");                                         // int payload for the vector sum
-    emitter.instruction("mov x2, xzr");                                         // the high payload word is unused for scalars
-    emitter.instruction("b __rt_mixed_from_value");                             // box the integer sum and return
+    if raw_result {
+        emitter.instruction("mov x0, x11");                                     // return the raw vector sum without a Mixed cell
+        emitter.instruction("ret");                                             // transfer the integer result to the caller
+    } else {
+        emitter.instruction("mov x0, #0");                                      // int Mixed tag for the vector sum
+        emitter.instruction("mov x1, x11");                                     // int payload for the vector sum
+        emitter.instruction("mov x2, xzr");                                     // the high payload word is unused for scalars
+        emitter.instruction("b __rt_mixed_from_value");                         // box the integer sum and return
+    }
 
     emitter.label(&vector_restart);
     emitter.instruction("add x12, x0, #24");                                    // rebuild the element cursor from the original array base
@@ -141,10 +160,15 @@ fn emit_array_sum_int_aarch64(emitter: &mut Emitter, raw_seed: bool) {
     emitter.instruction("mov x11, x14");                                        // commit the in-range integer sum
     emitter.instruction("subs x9, x9, #1");                                     // one fewer element remains
     emitter.instruction(&format!("b.ne {loop_label}"));                         // continue while the range is non-empty
-    emitter.instruction("mov x0, #0");                                          // int Mixed tag for the result
-    emitter.instruction("mov x1, x11");                                         // int payload for the result
-    emitter.instruction("mov x2, xzr");                                         // the high payload word is unused for scalars
-    emitter.instruction("b __rt_mixed_from_value");                             // box the integer sum and return
+    if raw_result {
+        emitter.instruction("mov x0, x11");                                     // return the raw integer sum without a Mixed cell
+        emitter.instruction("ret");                                             // transfer the integer result to the caller
+    } else {
+        emitter.instruction("mov x0, #0");                                      // int Mixed tag for the result
+        emitter.instruction("mov x1, x11");                                     // int payload for the result
+        emitter.instruction("mov x2, xzr");                                     // the high payload word is unused for scalars
+        emitter.instruction("b __rt_mixed_from_value");                         // box the integer sum and return
+    }
     // -- overflow promotion matches PHP's int-to-float conversion for this step --
     emitter.label(&promote_label);
     emitter.instruction("scvtf d0, x11");                                       // convert the pre-overflow sum to double
@@ -159,17 +183,24 @@ fn emit_array_sum_int_aarch64(emitter: &mut Emitter, raw_seed: bool) {
     emitter.instruction("subs x9, x9, #1");                                     // one fewer element remains
     emitter.instruction(&format!("b.ne {float_loop}"));                         // continue while the range is non-empty
     emitter.label(&box_float);
-    emitter.instruction("fmov x1, d0");                                         // float payload for the result
-    emitter.instruction("mov x0, #2");                                          // float Mixed tag for the result
-    emitter.instruction("mov x2, xzr");                                         // the high payload word is unused for scalars
-    emitter.instruction("b __rt_mixed_from_value");                             // box the float sum and return
+    if raw_result {
+        emitter.instruction("b __rt_float_key_to_int");                         // apply PHP's warned float-to-int conversion for the cast
+    } else {
+        emitter.instruction("fmov x1, d0");                                     // float payload for the result
+        emitter.instruction("mov x0, #2");                                      // float Mixed tag for the result
+        emitter.instruction("mov x2, xzr");                                     // the high payload word is unused for scalars
+        emitter.instruction("b __rt_mixed_from_value");                         // box the float sum and return
+    }
     // -- float seed: start the double accumulation from its payload bits --
     emitter.label(&float_init);
     emitter.instruction("fmov d0, x11");                                        // seed the double accumulator from the float payload
     emitter.instruction(&format!("b {float_loop}"));                            // reuse the double accumulation loop
     // -- empty range --
     emitter.label(&empty_label);
-    if raw_seed {
+    if raw_result {
+        emitter.instruction("mov x0, xzr");                                     // an empty range sums to the integer zero
+        emitter.instruction("ret");                                             // return the raw integer sum
+    } else if raw_seed {
         emitter.instruction("mov x0, #0");                                      // int Mixed tag for the empty sum
         emitter.instruction("mov x1, x3");                                      // the raw seed becomes the integer payload
         emitter.instruction("mov x2, xzr");                                     // the high payload word is unused for scalars
@@ -181,8 +212,10 @@ fn emit_array_sum_int_aarch64(emitter: &mut Emitter, raw_seed: bool) {
 }
 
 /// Emits one self-contained x86_64 reducer entry; `raw_seed` selects the integer entry.
-fn emit_array_sum_int_x86_64(emitter: &mut Emitter, raw_seed: bool) {
-    let prefix = if raw_seed {
+fn emit_array_sum_int_x86_64(emitter: &mut Emitter, raw_seed: bool, raw_result: bool) {
+    let prefix = if raw_result {
+        "__rt_array_sum_int_value"
+    } else if raw_seed {
         "__rt_array_sum_int_i64"
     } else {
         "__rt_array_sum_int"
@@ -208,7 +241,11 @@ fn emit_array_sum_int_x86_64(emitter: &mut Emitter, raw_seed: bool) {
     emitter.instruction("sub r10, rsi");                                        // count = end - start
     emitter.instruction(&format!("jle {empty_label}"));                         // empty or reversed ranges keep the seed value
     if raw_seed {
-        emitter.instruction("mov r8, rcx");                                     // seed the integer accumulator from the raw seed
+        if raw_result {
+            emitter.instruction("xor r8d, r8d");                                // the allocation-free value entry always starts from zero
+        } else {
+            emitter.instruction("mov r8, rcx");                                 // seed the integer accumulator from the raw seed
+        }
         emitter.instruction("xor r11d, r11d");                                  // the raw seed starts in integer mode
     } else {
         emitter.instruction("mov r11, QWORD PTR [rcx]");                        // load the seed Mixed tag
@@ -285,10 +322,15 @@ fn emit_array_sum_int_x86_64(emitter: &mut Emitter, raw_seed: bool) {
     emitter.instruction("add r8, rax");                                         // the gate proves this addition stays in range
 
     emitter.label(&vector_box);
-    emitter.instruction("xor eax, eax");                                        // int Mixed tag for the vector sum
-    emitter.instruction("mov rdi, r8");                                         // int payload for the vector sum
-    emitter.instruction("xor esi, esi");                                        // the high payload word is unused for scalars
-    emitter.instruction("jmp __rt_mixed_from_value");                           // box the integer sum and return
+    if raw_result {
+        emitter.instruction("mov rax, r8");                                     // return the raw vector sum without a Mixed cell
+        emitter.instruction("ret");                                             // transfer the integer result to the caller
+    } else {
+        emitter.instruction("xor eax, eax");                                    // int Mixed tag for the vector sum
+        emitter.instruction("mov rdi, r8");                                     // int payload for the vector sum
+        emitter.instruction("xor esi, esi");                                    // the high payload word is unused for scalars
+        emitter.instruction("jmp __rt_mixed_from_value");                       // box the integer sum and return
+    }
 
     emitter.label(&vector_restart);
     emitter.instruction("lea r9, [rdi + 24]");                                  // rebuild the element cursor from the original array base
@@ -305,10 +347,15 @@ fn emit_array_sum_int_x86_64(emitter: &mut Emitter, raw_seed: bool) {
     emitter.instruction(&format!("jo {promote_label}"));                        // overflow switches the running sum to a double
     emitter.instruction("dec r10");                                             // one fewer element remains
     emitter.instruction(&format!("jnz {loop_label}"));                          // continue while the range is non-empty
-    emitter.instruction("xor eax, eax");                                        // int Mixed tag for the result
-    emitter.instruction("mov rdi, r8");                                         // int payload for the result
-    emitter.instruction("xor esi, esi");                                        // the high payload word is unused for scalars
-    emitter.instruction("jmp __rt_mixed_from_value");                           // box the integer sum and return
+    if raw_result {
+        emitter.instruction("mov rax, r8");                                     // return the raw integer sum without a Mixed cell
+        emitter.instruction("ret");                                             // transfer the integer result to the caller
+    } else {
+        emitter.instruction("xor eax, eax");                                    // int Mixed tag for the result
+        emitter.instruction("mov rdi, r8");                                     // int payload for the result
+        emitter.instruction("xor esi, esi");                                    // the high payload word is unused for scalars
+        emitter.instruction("jmp __rt_mixed_from_value");                       // box the integer sum and return
+    }
     // -- overflow promotion matches PHP's int-to-float conversion for this step --
     emitter.label(&promote_label);
     emitter.instruction("cvtsi2sd xmm0, r11");                                  // convert the pre-overflow sum to double
@@ -324,17 +371,24 @@ fn emit_array_sum_int_x86_64(emitter: &mut Emitter, raw_seed: bool) {
     emitter.instruction("dec r10");                                             // one fewer element remains
     emitter.instruction(&format!("jnz {float_loop}"));                          // continue while the range is non-empty
     emitter.label(&box_float);
-    emitter.instruction("movq rdi, xmm0");                                      // float payload for the result
-    emitter.instruction("mov eax, 2");                                          // float Mixed tag for the result
-    emitter.instruction("xor esi, esi");                                        // the high payload word is unused for scalars
-    emitter.instruction("jmp __rt_mixed_from_value");                           // box the float sum and return
+    if raw_result {
+        emitter.instruction("jmp __rt_float_key_to_int");                       // apply PHP's warned float-to-int conversion for the cast
+    } else {
+        emitter.instruction("movq rdi, xmm0");                                  // float payload for the result
+        emitter.instruction("mov eax, 2");                                      // float Mixed tag for the result
+        emitter.instruction("xor esi, esi");                                    // the high payload word is unused for scalars
+        emitter.instruction("jmp __rt_mixed_from_value");                       // box the float sum and return
+    }
     // -- float seed: start the double accumulation from its payload bits --
     emitter.label(&float_init);
     emitter.instruction("movq xmm0, r8");                                       // seed the double accumulator from the float payload
     emitter.instruction(&format!("jmp {float_loop}"));                          // reuse the double accumulation loop
     // -- empty range --
     emitter.label(&empty_label);
-    if raw_seed {
+    if raw_result {
+        emitter.instruction("xor eax, eax");                                    // an empty range sums to the integer zero
+        emitter.instruction("ret");                                             // return the raw integer sum
+    } else if raw_seed {
         emitter.instruction("xor eax, eax");                                    // int Mixed tag for the empty sum
         emitter.instruction("mov rdi, rcx");                                    // the raw seed becomes the integer payload
         emitter.instruction("xor esi, esi");                                    // the high payload word is unused for scalars
