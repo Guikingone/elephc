@@ -15,8 +15,8 @@
 //! - Declared properties live outside the object layout: every property of an
 //!   object is an entry of its properties table (`default_properties_count`
 //!   stays 0, so `zend_object_alloc` reserves no slots), and the defaults
-//!   recorded here seed that table when the object is created. Visibility is
-//!   recorded but not enforced: hosted code is the extension itself.
+//!   recorded here seed that table when the object is created. Their
+//!   visibility, readonly flag and type are enforced by `crate::property`.
 
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CStr};

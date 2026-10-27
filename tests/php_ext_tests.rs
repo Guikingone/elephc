@@ -84,6 +84,21 @@ fn hosted_calls_match_real_php() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// A hosted object's declared properties keep their PHP contract (#2103), line for line with real
+/// PHP: private and protected ones are out of reach of the global scope but not of the class's
+/// own methods nor (protected) of a program subclass, a readonly one is set once and only from
+/// its class's lineage, and a typed one takes only values of its type, converted in weak mode.
+#[test]
+fn property_contracts_match_real_php() {
+    let dir = project("properties");
+    let program = fs::read_to_string(fixture_dir().join("property_contracts.php")).unwrap();
+    let expected = fs::read_to_string(fixture_dir().join("property_contracts.expected")).unwrap();
+    let run = compile_and_run(&dir, &program);
+    assert_success(&run, "compiled program");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    fs::remove_dir_all(dir).unwrap();
+}
+
 /// `add` reports the surface and names the function it cannot call yet;
 /// `list` shows the extension as built.
 #[test]
@@ -92,7 +107,7 @@ fn add_and_list_report_the_surface() {
     let list = Command::new(elephc()).current_dir(&dir).args(["extension", "list"]).output().unwrap();
     assert_success(&list, "extension list");
     let text = String::from_utf8_lossy(&list.stdout);
-    assert!(text.contains("elephc_demo 1.2.3 — 34 functions, 8 classes, 3 constants"), "{text}");
+    assert!(text.contains("elephc_demo 1.2.3 — 34 functions, 9 classes, 3 constants"), "{text}");
     assert!(text.contains("not callable yet: demo_inspect()"), "{text}");
     assert!(!text.contains("demo_apply()"), "callables are passed: {text}");
     let manifest = fs::read_to_string(dir.join("elephc.toml")).unwrap();

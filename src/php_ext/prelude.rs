@@ -181,6 +181,9 @@ pub(crate) const HANDLE_PROPERTY: &str = "__elephcHandle";
 /// instances take no PHP object handle, so `spl_object_id()` and `var_dump()`'s `#N` count
 /// only the objects PHP itself would have created.
 pub(crate) const OWNER_CLASS: &str = "__ElephcPhpExtOwner";
+/// The `__elephc_php_ext_property` op of a write the hosted class makes itself, in the engine
+/// object's own scope (`elephc_php_ext_property_invoke`'s 6).
+const PROPERTY_SEED_OP: i64 = 6;
 /// The protected wrapper property holding its `OWNER_CLASS` instance.
 pub(crate) const OWNER_PROPERTY: &str = "__elephcOwner";
 
@@ -341,6 +344,9 @@ fn abi_externs() -> Vec<Stmt> {
             .returns(ptr())
             .build(),
         extern_fn_unbound("elephc_php_ext_property_invoke").param("call", ptr()).param("op", CType::Int).returns(CType::Int).build(),
+        extern_fn_unbound("elephc_php_ext_property_as").param("call", ptr()).param("class", CType::Str).build(),
+        extern_fn_unbound("elephc_php_ext_take_scope").returns(CType::Str).build(),
+        extern_fn_unbound("elephc_php_ext_property_scope").param("call", ptr()).param("scope", CType::Str).build(),
         extern_fn_unbound("elephc_php_ext_iter_new").param("object", CType::Int).returns(CType::Int).build(),
         extern_fn_unbound("elephc_php_ext_iter_call").param("id", CType::Int).returns(ptr()).build(),
         extern_fn_unbound("elephc_php_ext_iter_step").param("id", CType::Int).param("op", CType::Int).returns(CType::Int).build(),
@@ -991,7 +997,7 @@ fn throwable_class(
         ] {
             create.push(s_expr(call(
                 "__elephc_php_ext_property",
-                vec![e_var("__elephc_object"), e_str(property), e_int(1), value],
+                vec![e_var("__elephc_object"), e_str(property), e_int(PROPERTY_SEED_OP), value, e_str(&class.name), e_str("")],
             )));
         }
         builder = builder.method(method(OBJECT_METHOD).returns(TypeExpr::Int).body(vec![
@@ -1110,17 +1116,40 @@ fn object_helpers(hosted: &HostedExtensions, wrapped: &BTreeSet<String>) -> Vec<
             e_str(", which Elephc cannot represent yet"),
         )],
     )));
-    // function __elephc_php_ext_property(int $object, string $name, int $op, mixed $value): mixed
+    // function __elephc_php_ext_property(int $object, string $name, int $op, mixed $value, string $class): mixed
     // A property access the engine object answers: 0 read, 1 write, 2 isset,
-    // 3 unset (`elephc_php_ext_property_invoke`).
+    // 3 unset (`elephc_php_ext_property_invoke`), on an object the program sees as `$class`.
     let call_var = || e_var("__elephc_call");
+    // The engine first runs the access without the caller's scope; one a protected rule leaves to
+    // the caller comes back as status 4, untouched, and runs again in the caller's scope (`$scope`,
+    // the class chain the call site published).
+    let in_callers_scope = s_if(
+        strict_eq(e_var("__elephc_status"), e_int(4)),
+        vec![
+            s_expr(call("elephc_php_ext_property_scope", vec![call_var(), e_var("__elephc_scope")])),
+            s_assign("__elephc_status", call("elephc_php_ext_property_invoke", vec![call_var(), e_var("__elephc_op")])),
+        ],
+        vec![],
+        None,
+    );
     let property = function("__elephc_php_ext_property")
         .param("__elephc_object", TypeExpr::Int)
         .param("__elephc_name", TypeExpr::Str)
         .param("__elephc_op", TypeExpr::Int)
         .param("__elephc_value", t_mixed())
+        .param("__elephc_class", TypeExpr::Str)
+        .param("__elephc_scope", TypeExpr::Str)
         .returns(t_mixed())
         .body(vec![
+            // A write (1), or one the hosted class makes itself (6), passes the value.
+            s_assign(
+                "__elephc_writes",
+                e_binop(
+                    strict_eq(e_var("__elephc_op"), e_int(1)),
+                    BinOp::Or,
+                    strict_eq(e_var("__elephc_op"), e_int(PROPERTY_SEED_OP)),
+                ),
+            ),
             s_assign(
                 "__elephc_call",
                 call(
@@ -1128,18 +1157,20 @@ fn object_helpers(hosted: &HostedExtensions, wrapped: &BTreeSet<String>) -> Vec<
                     vec![
                         e_var("__elephc_object"),
                         e_var("__elephc_name"),
-                        crate::synthetic_class::e_ternary(strict_eq(e_var("__elephc_op"), e_int(1)), e_int(1), e_int(0)),
+                        crate::synthetic_class::e_ternary(e_var("__elephc_writes"), e_int(1), e_int(0)),
                     ],
                 ),
             ),
             s_if(call("__elephc_ptr_is_null", vec![call_var()]), vec![s_expr(call("exit", vec![e_int(255)]))], vec![], None),
+            s_expr(call("elephc_php_ext_property_as", vec![call_var(), e_var("__elephc_class")])),
             s_if(
-                strict_eq(e_var("__elephc_op"), e_int(1)),
+                e_var("__elephc_writes"),
                 vec![s_expr(call("__elephc_php_ext_arg", vec![call_var(), e_int(0), e_var("__elephc_value"), e_int(0)]))],
                 vec![],
                 None,
             ),
             s_assign("__elephc_status", call("elephc_php_ext_property_invoke", vec![call_var(), e_var("__elephc_op")])),
+            in_callers_scope,
             s_if(
                 strict_eq(e_var("__elephc_status"), e_int(2)),
                 vec![s_expr(call("elephc_php_ext_call_free", vec![call_var()])), s_expr(call("exit", vec![e_int(255)]))],
@@ -2031,7 +2062,7 @@ fn wrapper_class(
                 CastType::Array,
                 call(
                     "__elephc_php_ext_property",
-                    vec![e_method_call(e_this(), OBJECT_METHOD, vec![]), e_str(""), e_int(4), e_null()],
+                    vec![e_method_call(e_this(), OBJECT_METHOD, vec![]), e_str(""), e_int(4), e_null(), e_str(""), e_str("")],
                 ),
             ))]));
     }
@@ -2061,21 +2092,34 @@ fn property_methods() -> Vec<crate::synthetic_class::MethodBuilder> {
     let access = |op: i64, value: Expr| {
         call(
             "__elephc_php_ext_property",
-            vec![e_method_call(e_this(), OBJECT_METHOD, vec![]), e_var("name"), e_int(op), value],
+            vec![
+                e_method_call(e_this(), OBJECT_METHOD, vec![]),
+                e_var("name"),
+                e_int(op),
+                value,
+                call("get_class", vec![e_this()]),
+                e_var("__elephc_scope"),
+            ],
         )
     };
+    // The class whose code names the property, which the call site published: taken first,
+    // before anything else this accessor runs could publish its own.
+    let take_scope = || s_assign("__elephc_scope", call("elephc_php_ext_take_scope", vec![]));
     vec![
-        method("__get").param("name", TypeExpr::Str).returns(t_mixed()).body(vec![s_return(access(0, e_null()))]),
+        method("__get").param("name", TypeExpr::Str).returns(t_mixed()).body(vec![take_scope(), s_return(access(0, e_null()))]),
         method("__set")
             .param("name", TypeExpr::Str)
             .param("value", t_mixed())
             .returns(TypeExpr::Void)
-            .body(vec![s_expr(access(1, e_var("value")))]),
+            .body(vec![take_scope(), s_expr(access(1, e_var("value")))]),
         method("__isset")
             .param("name", TypeExpr::Str)
             .returns(TypeExpr::Bool)
-            .body(vec![s_return(e_cast(CastType::Bool, access(2, e_null())))]),
-        method("__unset").param("name", TypeExpr::Str).returns(TypeExpr::Void).body(vec![s_expr(access(3, e_null()))]),
+            .body(vec![take_scope(), s_return(e_cast(CastType::Bool, access(2, e_null())))]),
+        method("__unset")
+            .param("name", TypeExpr::Str)
+            .returns(TypeExpr::Void)
+            .body(vec![take_scope(), s_expr(access(3, e_null()))]),
     ]
 }
 

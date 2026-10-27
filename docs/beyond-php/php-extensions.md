@@ -196,6 +196,13 @@ declared class. So:
   `foreach`, keys included, and passed to `iterator_to_array()`,
   `iterator_count()` and `iterator_apply()`. Breaking out of the loop
   releases the extension's iterator.
+- A declared property keeps its PHP contract: a private or protected one is
+  reachable only from the scope PHP allows (the class's own methods, and a
+  program subclass for a protected one), a readonly one is set once, and a
+  typed one takes only values of its type, converted as PHP's weak mode does.
+  The errors are PHP's. One difference remains: the value of an assignment
+  expression (`$x = $object->count = "12"`) is the assigned value, not the
+  converted one PHP gives.
 - An object is released when its last instance is; the extension's
   destructor and `free_obj` handler then run, as in PHP. That holds when a
   subclass overrides `__destruct()` without calling the parent, and when its

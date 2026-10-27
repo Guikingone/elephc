@@ -37,6 +37,9 @@ const CALL_OK: i64 = 0;
 const CALL_EXCEPTION: i64 = 1;
 const CALL_FATAL: i64 = 2;
 const CALL_UNSUPPORTED: i64 = 3;
+/// A property access probed without the caller's scope, which decides it: name the scope
+/// (`elephc_php_ext_property_scope`) and run it again.
+const CALL_NEEDS_SCOPE: i64 = 4;
 
 /// Kinds reported by `elephc_php_ext_value_kind`.
 const VALUE_PLAIN: i64 = 0;
@@ -56,6 +59,11 @@ struct Call {
     scope: *mut zend_class_entry,
     /// The property a property access names (NULL for a call).
     property: *mut zend_string,
+    /// The class the program sees a property access's object as, for messages.
+    access_class: Option<String>,
+    /// The scope a property access runs in, once named: the caller's nearest hosted class (or
+    /// null) and the caller's class name (`None` for the global scope). `None` probes.
+    access_scope: Option<(*mut zend_class_entry, Option<String>)>,
     /// The callback a dispatch to a program callable carries (NULL otherwise).
     callback: *mut Callback,
     argc: u32,
@@ -549,6 +557,8 @@ unsafe fn new_call(function: *mut zend_function, this: *mut zend_object, scope: 
         this,
         scope,
         property: ptr::null_mut(),
+        access_class: None,
+        access_scope: None,
         callback: ptr::null_mut(),
         argc,
         frame: new_frame(function, argc),
@@ -1296,12 +1306,46 @@ pub unsafe extern "C" fn elephc_php_ext_property_new(object: i64, name: *const c
     call.cast()
 }
 
+/// Names the class the program sees a property access's object as (its wrapper's), which PHP's
+/// messages about the access give.
+/// c: hidden
+#[no_mangle]
+pub unsafe extern "C" fn elephc_php_ext_property_as(handle: *mut c_void, class: *const c_char) {
+    (*handle.cast::<Call>()).access_class = Some(CStr::from_ptr(class).to_string_lossy().into_owned());
+}
+
+/// The caller scope compiled code published for the magic property accessor running, which the
+/// wrapper's accessor takes on entry: the caller's class name, "" for the global scope.
+/// c: hidden
+#[no_mangle]
+pub unsafe extern "C" fn elephc_php_ext_take_scope() -> *const c_char {
+    static TAKEN: Global<Option<CString>> = Global::new(None);
+    let name = crate::property::take_magic_scope();
+    TAKEN.get().insert(CString::new(name).unwrap_or_default()).as_ptr()
+}
+
+/// Names the scope of a property access a probe left to its caller (status 4): `scope` is what
+/// `elephc_php_ext_take_scope` gave, the caller's class followed by its ancestors, comma-separated
+/// ("" the global scope). The first of them the engine hosts is the class the scope stands for.
+/// c: hidden
+#[no_mangle]
+pub unsafe extern "C" fn elephc_php_ext_property_scope(handle: *mut c_void, scope: *const c_char) {
+    let chain = CStr::from_ptr(scope).to_bytes();
+    let mut classes = chain.split(|&byte| byte == b',').filter(|name| !name.is_empty());
+    let name = classes.clone().next().map(|name| String::from_utf8_lossy(name).into_owned());
+    let ancestor = classes.find_map(|name| Some(crate::class::lookup(name)).filter(|ce| !ce.is_null())).unwrap_or(ptr::null_mut());
+    (*handle.cast::<Call>()).access_scope = Some((ancestor, name));
+}
+
 const PROPERTY_READ: i64 = 0;
 const PROPERTY_WRITE: i64 = 1;
 const PROPERTY_ISSET: i64 = 2;
 const PROPERTY_UNSET: i64 = 3;
 const PROPERTY_DEBUG: i64 = 4;
 const PROPERTY_CLONE: i64 = 5;
+/// A write the hosted class makes itself (the wrapper seeding the state its C methods read), in
+/// the object's own scope.
+const PROPERTY_SEED: i64 = 6;
 
 /// Bailout-protected body of a property access: runs the read, write, isset or unset object handler
 /// selected by `*op` on the call's object and property, leaving a read or isset result in the call.
@@ -1370,12 +1414,32 @@ unsafe extern "C" fn property_trampoline(handle: *mut c_void, op: *mut c_void) {
 
 /// Runs a prepared property access: `op` 0 read (the result), 1 write, 2
 /// isset (a bool result), 3 unset, 4 the debug table (an array result), 5 a
-/// clone (an object result). Statuses as `elephc_php_ext_call_invoke`.
+/// clone (an object result), 6 a write in the object's own scope. Statuses as `elephc_php_ext_call_invoke`, plus 4: a read, write,
+/// isset or unset the caller's scope decides, which ran without effect (see
+/// `elephc_php_ext_property_scope`).
 /// c: hidden
 #[no_mangle]
 pub unsafe extern "C" fn elephc_php_ext_property_invoke(handle: *mut c_void, op: i64) -> i64 {
     let call = handle.cast::<Call>();
     set_null(&mut (*call).result);
+    let op = if op == PROPERTY_SEED {
+        let ce = (*(*call).this).ce;
+        (*call).access_scope = Some((ce, Some(string::text((*ce).name))));
+        PROPERTY_WRITE
+    } else {
+        op
+    };
+    // A read, write, isset or unset is the program's, checked in its scope (`crate::property`).
+    let access = matches!(op, PROPERTY_READ | PROPERTY_WRITE | PROPERTY_ISSET | PROPERTY_UNSET);
+    if access {
+        let object = (*call).this;
+        let class = (*call).access_class.clone().unwrap_or_else(|| crate::object::class_name(object));
+        let scope = (*call).access_scope.as_ref().map(|(ancestor, name)| crate::property::ProgramScope {
+            ancestor: *ancestor,
+            name: name.clone(),
+        });
+        crate::property::begin_program_access(object, class, scope);
+    }
     let mut op = op;
     let bailed = elephc_zend_protected_call(
         Some(property_trampoline),
@@ -1383,6 +1447,7 @@ pub unsafe extern "C" fn elephc_php_ext_property_invoke(handle: *mut c_void, op:
         (&mut op as *mut i64).cast(),
         &mut eg().bailout,
     );
+    let needs_scope = access && crate::property::end_program_access();
     if bailed != 0 {
         settle_without_exception();
         return CALL_FATAL;
@@ -1392,6 +1457,10 @@ pub unsafe extern "C" fn elephc_php_ext_property_invoke(handle: *mut c_void, op:
         return CALL_EXCEPTION;
     }
     settle_without_exception();
+    if needs_scope {
+        set_null(&mut (*call).result);
+        return CALL_NEEDS_SCOPE;
+    }
     CALL_OK
 }
 

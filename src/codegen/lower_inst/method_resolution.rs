@@ -164,11 +164,70 @@ pub(super) fn emit_resolved_method_call(
     ctx: &mut FunctionContext<'_>,
     target: &MethodCallTarget,
 ) -> Result<()> {
+    let publishes_scope = emit_magic_scope_publish(ctx, target);
     if let Some(slot) = target.dynamic_slot {
         emit_dynamic_instance_method_call_with_abi(ctx, slot, target.source_abi);
-        return Ok(());
+    } else {
+        emit_direct_resolved_method_call(ctx, target)?;
     }
-    emit_direct_resolved_method_call(ctx, target)
+    if publishes_scope {
+        emit_magic_scope_cell_store(ctx, None);
+    }
+    Ok(())
+}
+
+/// The engine cell a hosted extension's wrapper reads its magic accessor's caller scope from
+/// (`elephc_zend::property::elephc_php_ext_magic_scope`): the class name's address and length.
+const MAGIC_SCOPE_CELL: &str = "elephc_php_ext_magic_scope";
+
+/// Publishes the caller's lexical class before a `__get`, `__set`, `__isset` or `__unset` call
+/// in a program hosting PHP extensions. A hosted object's properties obey the visibility of the
+/// scope that names them, which only the call site knows: the wrapper's accessor takes it from
+/// the engine cell on entry. Returns whether the cell was written, so the caller clears it once
+/// the accessor returned and no later call made without a publication finds a stale scope.
+fn emit_magic_scope_publish(ctx: &mut FunctionContext<'_>, target: &MethodCallTarget) -> bool {
+    let magic = ["__get", "__set", "__isset", "__unset"]
+        .iter()
+        .any(|name| target.method_key.eq_ignore_ascii_case(name));
+    if !magic || !ctx.module.class_infos.contains_key(crate::php_ext::prelude::OWNER_CLASS) {
+        return false;
+    }
+    // The class and its ancestors, comma-separated (no class name holds a comma): the engine
+    // takes the first it hosts as the class the scope stands for.
+    let scope = ctx.lexical_class().map(|class| {
+        let mut chain = vec![class.to_string()];
+        while let Some(parent) = ctx.module.class_infos.get(chain.last().unwrap()).and_then(|info| info.parent.clone()) {
+            if chain.contains(&parent) {
+                break;
+            }
+            chain.push(parent);
+        }
+        chain.join(",")
+    });
+    emit_magic_scope_cell_store(ctx, scope.as_deref());
+    true
+}
+
+/// Writes `scope` (`None`: the global scope) into the engine's magic-scope cell. Uses only the
+/// symbol and secondary scratch registers, so the call's argument registers survive.
+fn emit_magic_scope_cell_store(ctx: &mut FunctionContext<'_>, scope: Option<&str>) {
+    let cell = abi::symbol_scratch_reg(ctx.emitter);
+    let value = abi::secondary_scratch_reg(ctx.emitter);
+    let symbol = ctx.emitter.target.extern_symbol(MAGIC_SCOPE_CELL);
+    abi::emit_extern_symbol_address(ctx.emitter, cell, &symbol);
+    match scope {
+        Some(class) => {
+            let (label, len) = ctx.data.add_string(class.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, value, &label);
+            abi::emit_store_to_address(ctx.emitter, value, cell, 0);
+            abi::emit_load_int_immediate(ctx.emitter, value, len as i64);
+            abi::emit_store_to_address(ctx.emitter, value, cell, 8);
+        }
+        None => {
+            abi::emit_store_zero_to_address(ctx.emitter, cell, 0);
+            abi::emit_store_zero_to_address(ctx.emitter, cell, 8);
+        }
+    }
 }
 
 /// Calls one statically selected implementation through its validated ABI entry.
