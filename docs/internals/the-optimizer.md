@@ -692,6 +692,16 @@ left-to-right addition: integer adds overflow into a double at the same step,
 the remaining elements stay double, and an empty range returns the retained
 seed cell. The old loop blocks are left for branch simplification to neutralize.
 
+`src/ir_passes/array_sum_int_sink.rs` handles the builtin form. When an
+`array_sum()` call over a statically packed `array<int>` result is observed only
+through one `(int)` cast (plus ordinary release scaffolding), the pass retargets
+the call to `ArraySumInt`, changes the result to a raw `I64`/`int`/`NonHeap`
+value, replaces the cast result with the call result, and neutralizes the cast
+and releases. The raw reducer keeps the same NEON/SSE2 positive-int gate and
+scalar promotion sequence; a promoted sum terminates in PHP's warned
+float-to-int conversion. Any other observer — echo, a store, a second cast, a
+call, or a terminator — keeps the boxed `array_sum()` call.
+
 `src/ir_passes/array_fill_loop.rs` recognizes a top-level constant-bound fill,
 `while (i < N) { $data[] = <pure int expr>; $i += 1; }`, over an array created
 immediately before it. The array must be the only owner, its only append must
