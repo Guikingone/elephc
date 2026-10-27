@@ -197,7 +197,9 @@ declared class. So:
   `iterator_count()` and `iterator_apply()`. Breaking out of the loop
   releases the extension's iterator.
 - An object is released when its last instance is; the extension's
-  destructor and `free_obj` handler then run, as in PHP.
+  destructor and `free_obj` handler then run, as in PHP. That holds when a
+  subclass overrides `__destruct()` without calling the parent, and when its
+  constructor throws after the extension's constructor ran.
 - `clone` goes through the class's `clone_obj` handler, so the copy carries
   the extension's own state; a class without one throws PHP's `Error`
   ("Trying to clone an uncloneable object").

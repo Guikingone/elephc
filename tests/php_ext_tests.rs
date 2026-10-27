@@ -286,6 +286,87 @@ echo $sum > 0 ? "ran" : "empty", " ", elephc_zend_live_blocks() - $blocks, " ", 
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// The engine object behind a wrapper is released when the wrapper is freed, whatever PHP
+/// destructor runs (#2101): a subclass overriding `__destruct()` without calling anything, and a
+/// subclass constructor that throws after `parent::__construct()` (PHP never destructs that
+/// object), both leave the engine's held objects and blocks at their warmed-up baseline, with the
+/// extension's `free_obj` run once per object. A wrapper its destructor resurrects keeps its
+/// engine object until it is really gone.
+#[test]
+fn engine_objects_are_released_whatever_the_destructor_does() {
+    let dir = project("owner");
+    let main = dir.join("main.php");
+    fs::write(
+        &main,
+        r#"<?php
+extern function elephc_php_ext_live_entries(int $kind): int;
+extern function elephc_zend_live_blocks(): int;
+class Silent extends DemoCounter {
+    public function __destruct() {}
+}
+class Failing extends DemoCounter {
+    public function __construct(int $n) {
+        parent::__construct($n);
+        throw new RuntimeException("refused");
+    }
+}
+class Back extends DemoCounter {
+    public static ?Back $kept = null;
+    public function __destruct() { self::$kept = $this; }
+}
+function silent(int $n): void {
+    for ($i = 0; $i < $n; $i++) {
+        $counter = new Silent($i);
+        $counter->add(1);
+        unset($counter);
+    }
+}
+function failing(int $n): int {
+    $caught = 0;
+    for ($i = 0; $i < $n; $i++) {
+        try {
+            new Failing($i);
+        } catch (RuntimeException $e) {
+            $caught++;
+        }
+    }
+    return $caught;
+}
+silent(5);
+failing(5);
+$freed = demo_counters_freed();
+$blocks = elephc_zend_live_blocks();
+$held = elephc_php_ext_live_entries(0);
+silent(100);
+echo demo_counters_freed() - $freed, " ";
+$caught = failing(100);
+echo demo_counters_freed() - $freed, " ", $caught, " ", elephc_zend_live_blocks() - $blocks, " ",
+    elephc_php_ext_live_entries(0) - $held, "\n";
+$freed = demo_counters_freed();
+$back = new Back(7);
+$back->add(1);
+unset($back);
+echo demo_counters_freed() - $freed, " ", Back::$kept->value(), "\n";
+Back::$kept = null;
+echo demo_counters_freed() - $freed, "\n";
+"#,
+    )
+    .unwrap();
+    let compile = Command::new(elephc()).current_dir(&dir).args(["--heap-debug"]).arg(&main).output().unwrap();
+    assert_success(&compile, "compile");
+    let run = Command::new(dir.join("main")).output().unwrap();
+    assert_success(&run, "compiled program");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "100 200 100 0 0\n0 8\n1\n",
+        "freed after the silent subclass, after the failing constructors, exceptions caught, engine \
+         blocks, held objects; then a resurrected wrapper keeps its object until it is dropped"
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
+    fs::remove_dir_all(dir).unwrap();
+}
+
 /// `var_dump()` and `print_r()` show an extension object's debug table, as PHP
 /// does, at the top level and inside an array, and never the wrapper's handle;
 /// the class has no `__debugInfo()` method of its own, as in PHP.

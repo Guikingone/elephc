@@ -3815,10 +3815,12 @@ fn var_dump_descriptor_rows(
 /// subclass of a Reflection class still hides the slots it inherits. `class_name` is only
 /// the fallback when the declaring class is unknown.
 ///
-/// A hosted extension object's wrapper keeps the engine handle in a protected property
-/// too; PHP's object has no such property, so no renderer shows it.
+/// A hosted extension object's wrapper keeps the engine handle and the object owning it in
+/// protected properties too; PHP's object has neither, so no renderer shows them.
 fn is_reflection_backing_slot(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> bool {
-    if prop_name == crate::php_ext::prelude::HANDLE_PROPERTY && is_hosted_extension_class(class_info) {
+    if (prop_name == crate::php_ext::prelude::HANDLE_PROPERTY || prop_name == crate::php_ext::prelude::OWNER_PROPERTY)
+        && is_hosted_extension_class(class_info)
+    {
         return true;
     }
     if !prop_name.starts_with("__")

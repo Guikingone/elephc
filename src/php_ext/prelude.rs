@@ -177,6 +177,12 @@ pub(crate) const DEBUG_INFO_METHOD: &str = "__elephcDebugInfo";
 /// (the table is keyed by object id, which a clone does not share), so
 /// `__clone` knows which engine object to clone.
 pub(crate) const HANDLE_PROPERTY: &str = "__elephcHandle";
+/// The hidden final class owning one engine object for its wrapper (see `owner_class`). Its
+/// instances take no PHP object handle, so `spl_object_id()` and `var_dump()`'s `#N` count
+/// only the objects PHP itself would have created.
+pub(crate) const OWNER_CLASS: &str = "__ElephcPhpExtOwner";
+/// The protected wrapper property holding its `OWNER_CLASS` instance.
+pub(crate) const OWNER_PROPERTY: &str = "__elephcOwner";
 
 thread_local! {
     /// The next wrapper call site number: each site caches what its first call
@@ -977,6 +983,7 @@ fn throwable_class(
         create.push(s_assign("__elephc_object", call("elephc_php_ext_object_new", vec![module, e_str(&class.name)])));
         create.push(s_if(strict_eq(e_var("__elephc_object"), e_int(0)), vec![s_expr(call("exit", vec![e_int(255)]))], vec![], None));
         create.push(set_table_slot(e_var("__elephc_object")));
+        create.push(set_owner(e_var("__elephc_object")));
         // The state a C method reads: the properties every exception has.
         for (property, value) in [
             ("message", e_method_call(e_this(), "getMessage", vec![])),
@@ -994,24 +1001,12 @@ fn throwable_class(
             s_return(e_var("__elephc_object")),
         ]));
     }
+    // The engine object is released by its owner (see `owner_class`), not by a `__destruct()` a
+    // program subclass could override.
     if !parent_holds {
         builder = builder
             .implements(&format!("\\{OBJECT_INTERFACE}"))
-            .method(method("__destruct").body(vec![
-                object_id(),
-                s_assign("__elephc_object", table_slot()),
-                s_if(
-                    e_binop(e_var("__elephc_object"), BinOp::StrictNotEq, e_int(0)),
-                    [
-                        vec![set_table_slot(e_int(0))],
-                        forget_wrapper(e_var("__elephc_object")),
-                        vec![s_expr(call("elephc_php_ext_object_release", vec![e_var("__elephc_object")]))],
-                    ]
-                    .concat(),
-                    vec![],
-                    None,
-                ),
-            ]));
+            .protected_prop(OWNER_PROPERTY, t_mixed(), Some(e_null()));
     }
     for function in forwarded_methods(class).filter(|function| !function.name.eq_ignore_ascii_case("__construct")) {
         builder = builder.method(wrapper_method(extension, class, all, function, wrapped));
@@ -1200,6 +1195,7 @@ fn object_helpers(hosted: &HostedExtensions, wrapped: &BTreeSet<String>) -> Vec<
         marker,
         omitted_marker,
         table,
+        owner_class(),
         compact_wrappers_helper(),
         property,
         clone,
@@ -1524,6 +1520,7 @@ fn adoption_branch() -> Stmt {
             object_id(),
             set_table_slot(adopting()),
             set_handle(adopting()),
+            set_owner(adopting()),
             register_wrapper(adopting()),
             set_adopting(e_int(0)),
             s_return_void(),
@@ -1610,45 +1607,59 @@ fn set_handle(value: Expr) -> Stmt {
     crate::synthetic_class::s_prop_assign(e_this(), HANDLE_PROPERTY, value)
 }
 
-/// Builds the statement that names this wrapper as the live one for engine object `handle`, by
-/// weak reference, so an extension returning the object again returns this wrapper.
-fn register_wrapper(handle: Expr) -> Stmt {
-    s_static_prop_array_assign(
-        &format!("\\{OBJECT_TABLE}"),
-        WRAPPERS,
-        handle,
-        crate::synthetic_class::e_static_call("\\WeakReference", "create", vec![e_this()]),
+/// Builds the statement that gives the wrapper (whose `spl_object_id` is in `__elephc_id`) the
+/// owner of engine object `handle`: releasing the object no longer depends on a PHP destructor.
+fn set_owner(handle: Expr) -> Stmt {
+    crate::synthetic_class::s_prop_assign(
+        e_this(),
+        OWNER_PROPERTY,
+        e_new(&format!("\\{OWNER_CLASS}"), vec![handle, e_var("__elephc_id")]),
     )
 }
 
-/// Builds the statements that clear the `wrappers` entry for engine object `handle` once its
-/// wrapper is destroyed, unless the entry already names another live wrapper. Engine handles are
-/// never reused, so cleared entries are counted and the table is rebuilt without them once they
-/// outnumber the others (see `compact_wrappers_helper`): it stays proportional to the live wrappers.
-fn forget_wrapper(handle: Expr) -> Vec<Stmt> {
+/// The hidden final class that owns one engine object for its wrapper (#2101).
+///
+/// A wrapper used to release its engine object in its own `__destruct()`, which a program
+/// subclass can override and which PHP never runs for an object whose constructor threw: either
+/// way the engine object stayed held and its `free_obj` never ran. The wrapper now keeps an
+/// instance of this class in a protected property instead. PHP frees the wrapper's properties
+/// whenever the wrapper itself is freed (whatever its destructor did, and after a failed
+/// construction too), so this class's destructor runs then: it clears the wrapper's table slot
+/// and identity entry and releases the engine object, exactly once (`release()` is idempotent and
+/// also called directly when the extension's constructor fails). A wrapper a destructor
+/// resurrects keeps its owner, and so its engine object.
+fn owner_class() -> Stmt {
     let table = format!("\\{OBJECT_TABLE}");
-    let entry = || e_index(e_static_prop(&table, WRAPPERS), handle.clone());
-    let live = || e_var("__elephc_live");
+    let handle = || crate::synthetic_class::e_this_prop("handle");
+    let id = || crate::synthetic_class::e_this_prop("id");
     let dead = || e_static_prop(&table, DEAD_WRAPPERS);
-    vec![
-        s_assign("__elephc_known", e_null_coalesce(entry(), e_null())),
+    let release = vec![
+        s_assign("__elephc_object", handle()),
         s_if(
-            e_binop(e_var("__elephc_known"), BinOp::StrictNotEq, e_null()),
+            e_binop(e_var("__elephc_object"), BinOp::StrictNotEq, e_int(0)),
             vec![
-                s_assign("__elephc_live", e_method_call(e_var("__elephc_known"), "get", vec![])),
+                crate::synthetic_class::s_prop_assign(e_this(), "handle", e_int(0)),
+                s_assign("__elephc_id", id()),
+                s_if(
+                    strict_eq(
+                        e_null_coalesce(e_index(e_static_prop(&table, "objects"), e_var("__elephc_id")), e_int(0)),
+                        e_var("__elephc_object"),
+                    ),
+                    vec![set_table_slot(e_int(0))],
+                    vec![],
+                    None,
+                ),
+                // The identity entry for this engine object can only name this owner's wrapper:
+                // a handle has one wrapper at a time, and a clone takes a new engine object.
                 s_if(
                     e_binop(
-                        e_binop(live(), BinOp::StrictEq, e_null()),
-                        BinOp::Or,
-                        e_binop(live(), BinOp::StrictEq, e_this()),
+                        e_null_coalesce(e_index(e_static_prop(&table, WRAPPERS), e_var("__elephc_object")), e_null()),
+                        BinOp::StrictNotEq,
+                        e_null(),
                     ),
                     vec![
-                        s_static_prop_array_assign(&table, WRAPPERS, handle.clone(), e_null()),
-                        crate::synthetic_class::s_static_prop_assign(
-                            &table,
-                            DEAD_WRAPPERS,
-                            e_binop(dead(), BinOp::Add, e_int(1)),
-                        ),
+                        s_static_prop_array_assign(&table, WRAPPERS, e_var("__elephc_object"), e_null()),
+                        crate::synthetic_class::s_static_prop_assign(&table, DEAD_WRAPPERS, e_binop(dead(), BinOp::Add, e_int(1))),
                         s_if(
                             e_binop(
                                 e_binop(dead(), BinOp::Gt, e_int(32)),
@@ -1667,11 +1678,55 @@ fn forget_wrapper(handle: Expr) -> Vec<Stmt> {
                     vec![],
                     None,
                 ),
+                s_expr(call("elephc_php_ext_object_release", vec![e_var("__elephc_object")])),
             ],
             vec![],
             None,
         ),
+    ];
+    crate::synthetic_class::class(OWNER_CLASS)
+        .final_()
+        .private_prop("handle", TypeExpr::Int, Some(e_int(0)))
+        .private_prop("id", TypeExpr::Int, Some(e_int(0)))
+        .method(
+            method("__construct").param("handle", TypeExpr::Int).param("id", TypeExpr::Int).body(vec![
+                crate::synthetic_class::s_prop_assign(e_this(), "handle", e_var("handle")),
+                crate::synthetic_class::s_prop_assign(e_this(), "id", e_var("id")),
+            ]),
+        )
+        .method(method("release").returns(TypeExpr::Void).body(release))
+        .method(method("__destruct").body(vec![s_expr(e_method_call(e_this(), "release", vec![]))]))
+        // One owner per engine object: a copy would release it twice.
+        .method(method("__clone").body(vec![
+            crate::synthetic_class::s_prop_assign(e_this(), "handle", e_int(0)),
+            s_throw(e_new("\\Error", vec![e_str("Trying to clone an uncloneable object of class __ElephcPhpExtOwner")])),
+        ]))
+        .build()
+}
+
+/// Builds the statements that release the wrapper's engine object now, through its owner (a
+/// failed construction: PHP frees the object, and the owner's later destructor finds nothing left).
+fn release_through_owner() -> Vec<Stmt> {
+    vec![
+        s_assign("__elephc_owner", crate::synthetic_class::e_this_prop(OWNER_PROPERTY)),
+        s_if(
+            e_binop(e_var("__elephc_owner"), BinOp::StrictNotEq, e_null()),
+            vec![s_expr(e_method_call(e_var("__elephc_owner"), "release", vec![]))],
+            vec![],
+            None,
+        ),
     ]
+}
+
+/// Builds the statement that names this wrapper as the live one for engine object `handle`, by
+/// weak reference, so an extension returning the object again returns this wrapper.
+fn register_wrapper(handle: Expr) -> Stmt {
+    s_static_prop_array_assign(
+        &format!("\\{OBJECT_TABLE}"),
+        WRAPPERS,
+        handle,
+        crate::synthetic_class::e_static_call("\\WeakReference", "create", vec![e_this()]),
+    )
 }
 
 /// `function __elephc_php_ext_compact_wrappers(): void`: rebuilds the `wrappers` table without the
@@ -1708,6 +1763,7 @@ fn clone_method() -> crate::synthetic_class::MethodBuilder {
     method("__clone").body(vec![
         s_assign("__elephc_source", crate::synthetic_class::e_this_prop(HANDLE_PROPERTY)),
         set_handle(e_int(0)),
+        crate::synthetic_class::s_prop_assign(e_this(), OWNER_PROPERTY, e_null()),
         s_if(
             e_binop(source(), BinOp::StrictNotEq, e_int(0)),
             vec![
@@ -1715,6 +1771,7 @@ fn clone_method() -> crate::synthetic_class::MethodBuilder {
                 object_id(),
                 set_table_slot(e_var("__elephc_object")),
                 set_handle(e_var("__elephc_object")),
+                set_owner(e_var("__elephc_object")),
                 register_wrapper(e_var("__elephc_object")),
             ],
             vec![],
@@ -1920,6 +1977,7 @@ fn wrapper_class(
     create.push(s_if(strict_eq(e_var("__elephc_object"), e_int(0)), vec![s_expr(call("exit", vec![e_int(255)]))], vec![], None));
     create.push(set_table_slot(e_var("__elephc_object")));
     create.push(set_handle(e_var("__elephc_object")));
+    create.push(set_owner(e_var("__elephc_object")));
     create.push(register_wrapper(e_var("__elephc_object")));
     builder = builder.method(
         method(OBJECT_METHOD)
@@ -1959,25 +2017,12 @@ fn wrapper_class(
                         object_id(),
                         set_table_slot(e_var("__elephc_object")),
                         set_handle(e_var("__elephc_object")),
+                        set_owner(e_var("__elephc_object")),
                         register_wrapper(e_var("__elephc_object")),
                     ]),
             )
-            .method(method("__destruct").body(vec![
-                object_id(),
-                s_assign("__elephc_object", table_slot()),
-                s_if(
-                    e_binop(e_var("__elephc_object"), BinOp::StrictNotEq, e_int(0)),
-                    [
-                        vec![set_table_slot(e_int(0)), set_handle(e_int(0))],
-                        forget_wrapper(e_var("__elephc_object")),
-                        vec![s_expr(call("elephc_php_ext_object_release", vec![e_var("__elephc_object")]))],
-                    ]
-                    .concat(),
-                    vec![],
-                    None,
-                ),
-            ]))
             .protected_prop(HANDLE_PROPERTY, TypeExpr::Int, Some(e_int(0)))
+            .protected_prop(OWNER_PROPERTY, t_mixed(), Some(e_null()))
             .methods(property_methods())
             .method(clone_method())
             // What `var_dump()` and `print_r()` show is the engine object's
@@ -2664,12 +2709,9 @@ fn plan_wrapper(
     }
     let mut failed = Vec::new();
     if on_object && function.name.eq_ignore_ascii_case("__construct") {
-        // PHP never destructs an object whose constructor threw, so the wrapper's __destruct will
-        // not release the engine object it created first: release it here.
-        failed.push(object_id());
-        failed.push(set_table_slot(e_int(0)));
-        failed.extend(forget_wrapper(e_var("__elephc_this")));
-        failed.push(s_expr(call("elephc_php_ext_object_release", vec![e_var("__elephc_this")])));
+        // The engine object the extension's constructor failed on goes now, through its owner,
+        // whose own destructor then finds nothing left when PHP frees the wrapper.
+        failed.extend(release_through_owner());
     }
     failed.push(s_expr(call("__elephc_php_ext_raise", vec![call_var()])));
     body.push(s_if(e_binop(e_var("__elephc_status"), BinOp::StrictNotEq, e_int(0)), failed, vec![], None));
@@ -2933,7 +2975,7 @@ mod tests {
             .collect();
         assert_eq!(
             classes,
-            vec![OMITTED_CLASS, OBJECT_TABLE, ITERATOR_CLASS, "DemoException", "DemoParseException", "DemoThing"],
+            vec![OMITTED_CLASS, OBJECT_TABLE, OWNER_CLASS, ITERATOR_CLASS, "DemoException", "DemoParseException", "DemoThing"],
             "exceptions plainly, DemoThing as a wrapper"
         );
         let throwables = declared_throwables(&hosted().extensions);
@@ -2975,11 +3017,18 @@ mod tests {
         assert_eq!(implements.len(), 1, "the hidden interface only");
         let names: Vec<&str> = methods.iter().map(|method| method.name.as_str()).collect();
         for expected in [
-            OBJECT_METHOD, "__construct", ADOPT_METHOD, "__destruct", "__get", "__set", "__isset", "__unset", "__clone",
+            OBJECT_METHOD, "__construct", ADOPT_METHOD, "__get", "__set", "__isset", "__unset", "__clone",
             DEBUG_INFO_METHOD, "go",
         ] {
             assert!(names.contains(&expected), "{expected} in {names:?}");
         }
+        // The engine object's release belongs to its owner, never to a destructor a subclass
+        // can override: a hosted class has no `__destruct()` in PHP.
+        assert!(!names.contains(&"__destruct"), "{names:?}");
+        assert!(
+            program.iter().any(|stmt| matches!(&stmt.kind, StmtKind::ClassDecl { name, .. } if name == OWNER_CLASS)),
+            "the owner class is declared"
+        );
         assert!(
             program.iter().any(|stmt| matches!(&stmt.kind, StmtKind::FunctionDecl { name, .. } if name == "__elephc_php_ext_adopt")),
             "results are adopted by class"
@@ -3014,7 +3063,7 @@ mod tests {
             })
             .expect("ChildThing is declared");
         let names: Vec<&str> = methods.iter().map(|method| method.name.as_str()).collect();
-        for inherited in ["__construct", ADOPT_METHOD, "__destruct"] {
+        for inherited in ["__construct", ADOPT_METHOD] {
             assert!(!names.contains(&inherited), "{inherited} is inherited, not redeclared: {names:?}");
         }
         assert!(names.contains(&"go") && names.contains(&WRAP_METHOD), "{names:?}");
