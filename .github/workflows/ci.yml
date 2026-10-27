@@ -2720,7 +2720,7 @@ jobs:
         run: |
           cargo test --locked --test codegen_tests test_tokenizer_
           cargo test --locked --test codegen_tests codegen::lfc::lfc_and_strict_php_eval_calls_do_not_leak_profiles -- --exact
-          cargo test --locked --test error_tests tokenizer_
+          cargo test --locked --test integration error_tests::tokenizer::tokenizer_
           cargo test --locked -p elephc --lib ir_lower::tests::corpus::lowers_tokenizer_example_on_every_target -- --exact
           cargo test --locked -p elephc --lib autoload::prelude_probe::tests::probe_detects_tokenizer_in_autoloaded_classes -- --exact
           cargo test --locked -p elephc --lib ir_lower::tests::string_offset_lifetime::string_offset_lifetime_stabilizes_views_on_all_targets -- --exact
