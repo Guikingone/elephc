@@ -90,7 +90,7 @@ for a complete project.
 
 | Function | Signature | Description |
 |---|---|---|
-| `preg_match()` | `preg_match($pattern, $subject, &$matches = null): int` | Test regex match (1 or 0); optional `$matches` receives the full match and capture groups |
+| `preg_match()` | `preg_match($pattern, $subject, &$matches = null): int\|false` | Test regex match (`1` or `0`). Returns `false` for an invalid pattern or the removed `/e` modifier, and then leaves a supplied `$matches` variable unchanged. A completed search writes the full match and capture groups |
 | `preg_match_all()` | `preg_match_all($pattern, $subject, &$matches = [], $flags = 0): int` | Count all non-overlapping matches; optional `$matches` receives numbered groups |
 | `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string` | Replace all regex matches; `$0`..`$99` and `\0`..`\99` replacement backreferences expand captured groups |
 | `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): string` | Replace all regex matches with the callback return value; callback receives `array<string>` matches |
@@ -112,14 +112,16 @@ to PCRE2 wrapper flags:
 | `u` | UTF-8 and Unicode-property matching |
 | `U` | Ungreedy matching |
 
-Other trailing modifiers are currently not mapped to PCRE2 flags.
+Other trailing modifiers are currently not mapped to PCRE2 flags. `preg_match()` rejects the removed `/e` modifier before compilation and returns `false`.
 
 ## Captures and replacements
 
 `preg_match()` supports the optional `$matches` output parameter. `$matches[0]`
 is the full match, and `$matches[1]` onward contain compiled numbered capture
 groups. Unmatched interior captures are empty strings; trailing unmatched groups
-are omitted.
+are omitted. A search that does not match replaces `$matches` with an empty
+array. An invalid pattern, or a pattern that uses the removed `/e` modifier,
+returns `false` and does not replace `$matches`.
 
 `preg_match_all()` supports the same by-reference `$matches` parameter and the
 PHP flags Termwind uses for width and trim styling:
