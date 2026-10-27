@@ -28,6 +28,7 @@ mod shared;
 mod site_scope;
 mod splice;
 pub mod variance;
+pub(crate) mod dispatch;
 
 pub use report::report as instantiation_report;
 pub use splice::{
