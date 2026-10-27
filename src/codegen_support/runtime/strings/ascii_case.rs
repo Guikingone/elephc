@@ -5,8 +5,8 @@
 //! - The strtolower and strtoupper runtime emitters on every supported target.
 //!
 //! Key details:
-//! - Without mbstring, one pass reserves the exact result length, copies and converts
-//!   sixteen bytes at a time, then publishes a fresh owned result.
+//! - Without mbstring, the helper allocates one owned heap result and converts directly
+//!   into it sixteen bytes at a time, so the bytes are written exactly once.
 //! - With mbstring, the logical origin of the source string must be detached before
 //!   mutating bytes, so the two-pass origin-preserving path is retained.
 //! - ASCII ranges only: bytes outside `A`-`Z` / `a`-`z` are preserved, including high bytes.
@@ -42,8 +42,8 @@ fn emit_single_pass_aarch64(emitter: &mut Emitter, uppercase: bool) {
     emitter.instruction("add x29, sp, #32");                                    // establish a stable frame base
     emitter.instruction("stp x1, x2, [sp, #0]");                                // save the source pointer and logical length
     emitter.instruction("mov x0, x2");                                          // the result has exactly the source length
-    emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or owned heap storage
-    emitter.instruction("str x0, [sp, #16]");                                   // remember the result start for publication
+    emitter.instruction("bl __rt_str_new_owned");                               // allocate the exact owned heap result up front
+    emitter.instruction("str x0, [sp, #16]");                                   // remember the result start for the epilogue
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the source pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the source length
     emitter.instruction("mov x9, x0");                                          // destination cursor
@@ -80,15 +80,11 @@ fn emit_single_pass_aarch64(emitter: &mut Emitter, uppercase: bool) {
     emitter.instruction(&format!("b {tail}"));                                  // continue converting trailing bytes
 
     emitter.label(&done);
-    emitter.instruction("ldr x1, [sp, #16]");                                   // return the fresh result pointer
+    emitter.instruction("ldr x1, [sp, #16]");                                   // return the owned result pointer without a second copy
     emitter.instruction("ldr x2, [sp, #8]");                                    // return the unchanged logical length
-    emitter.instruction("bl __rt_concat_publish");                              // publish scratch-backed results
-    emitter.instruction("ldr x1, [sp, #16]");                                   // reload the converted result pointer
-    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the converted result length
-    emitter.instruction("bl __rt_str_persist");                                 // copy scratch bytes into an owned heap string
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame and return address
     emitter.instruction("add sp, sp, #48");                                     // release the conversion frame
-    emitter.instruction("ret");                                                 // return the owned string
+    emitter.instruction("ret");                                                 // return the directly written owned string
 }
 
 /// Emits the allocating single-pass conversion for Linux x86_64.
@@ -111,8 +107,8 @@ fn emit_single_pass_x86_64(emitter: &mut Emitter, uppercase: bool) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source pointer and logical length
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the source length
     emitter.instruction("mov rax, rdx");                                        // the result has exactly the source length
-    emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or owned heap storage
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // remember the result start for publication
+    emitter.instruction("call __rt_str_new_owned");                             // allocate the exact owned heap result up front
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // remember the result start for the epilogue
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // source cursor
     emitter.instruction("mov r9, rax");                                         // destination cursor
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // remaining source byte count
@@ -162,14 +158,10 @@ fn emit_single_pass_x86_64(emitter: &mut Emitter, uppercase: bool) {
     emitter.instruction(&format!("jmp {tail}"));                                // continue converting trailing bytes
 
     emitter.label(&done);
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the fresh result pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the owned result pointer without a second copy
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // return the unchanged logical length
-    emitter.instruction("call __rt_concat_publish");                            // publish scratch-backed results
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the converted result pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the converted result length
-    emitter.instruction("call __rt_str_persist");                               // copy scratch bytes into an owned heap string
     emitter.instruction("leave");                                               // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the owned string
+    emitter.instruction("ret");                                                 // return the directly written owned string
 }
 
 /// Emits the origin-preserving two-pass conversion used when mbstring tracks literals.

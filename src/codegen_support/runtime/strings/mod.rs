@@ -27,6 +27,7 @@ mod atoi;
 mod grapheme_strrev;
 mod strcopy;
 mod str_inc_dec;
+mod str_new_owned;
 mod str_persist;
 mod strtolower;
 mod ascii_case;
@@ -145,6 +146,7 @@ pub use atoi::emit_atoi;
 pub use strcopy::emit_strcopy;
 /// Emit string copy helper.
 pub use concat_scratch::emit_concat_scratch;
+pub use str_new_owned::emit_str_new_owned;
 pub use str_persist::emit_str_persist;
 /// Emit string persistence helper.
 pub use str_inc_dec::{emit_mixed_inc_dec, emit_str_inc_dec};
