@@ -47,6 +47,12 @@ open, even if a focused subset matches.
 
 Run the adapter's checks with `python3 scripts/php_src/test_replay.py`.
 
+`scripts/php_src/analyze.py` reads that evidence: `diff OLD NEW` lists per-test status
+moves between two replays, `clusters REPLAY` groups compile failures by their first error,
+`lines REPLAY PATTERN` shows the source line each matching error points at, and
+`recheck ELEPHC LIST WORK_DIR` recompiles listed PHPTs with a newer compiler without a full
+replay.
+
 ## Tentative method return contracts
 
 After exporting the shared symbol registry, regenerate the neutral tentative
