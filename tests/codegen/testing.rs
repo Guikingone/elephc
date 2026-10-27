@@ -394,10 +394,11 @@ var_dump(class_exists('Elephc\\Testing\\TestCase'), class_exists('PHPUnit\\Frame
     assert_eq!(out, "bool(false)\nbool(false)\n");
 }
 
-/// A PHPUnit method outside the supported subset is a compile error, never a silent no-op.
+/// A PHPUnit method outside the supported subset fails like php's undefined method, never
+/// as a silent no-op.
 #[test]
-fn test_unsupported_assertion_is_a_compile_error() {
-    let error = compile_expect_type_error(
+fn test_unsupported_assertion_is_an_undefined_method_error() {
+    let out = run_allowing_failure(
         r#"<?php
 use Elephc\Testing\TestCase;
 final class T extends TestCase {
@@ -407,9 +408,11 @@ $t = new T();
 $t->testIt();
 "#,
     );
+    assert!(!out.success, "{}", out.stdout);
     assert!(
-        error.contains("Undefined method: T::assertInstanceOf"),
-        "unexpected diagnostic: {error}"
+        out.stdout.contains("Call to undefined method T::assertInstanceOf()"),
+        "unexpected output: {}",
+        out.stdout
     );
 }
 

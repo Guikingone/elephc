@@ -29,6 +29,19 @@ pub fn rewrite(program: &mut [Stmt], constants: &HashSet<Span>, method_calls: &H
     walk_program_exprs_mut(program, &mut |expr| rewrite_site(expr, constants, method_calls));
 }
 
+/// Applies the same rewrite to method bodies kept outside the program: lowering emits a class's
+/// methods from the checker's `method_decls` copies, not from the declaration statement.
+pub fn rewrite_methods(
+    methods: &mut [ClassMethod],
+    constants: &HashSet<Span>,
+    method_calls: &HashSet<Span>,
+) {
+    if constants.is_empty() && method_calls.is_empty() {
+        return;
+    }
+    walk_methods(methods, &mut |expr| rewrite_site(expr, constants, method_calls));
+}
+
 /// Applies the checker's decision to one recorded node.
 fn rewrite_site(expr: &mut Expr, constants: &HashSet<Span>, method_calls: &HashSet<Span>) {
     let span = expr.span;

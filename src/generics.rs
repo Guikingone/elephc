@@ -217,6 +217,13 @@ where
         &check_result.undefined_constant_reads,
         &check_result.dynamic_method_call_sites,
     );
+    for class_info in check_result.classes.values_mut() {
+        crate::undefined_constants::rewrite_methods(
+            &mut class_info.method_decls,
+            &check_result.undefined_constant_reads,
+            &check_result.dynamic_method_call_sites,
+        );
+    }
     Ok((program, check_result))
 }
 

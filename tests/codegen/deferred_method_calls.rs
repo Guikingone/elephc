@@ -87,3 +87,26 @@ try { echo render(new SpecialChoice, false), "\n"; } catch (Error $e) { echo $e-
     );
     assert!(run.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", run.stderr);
 }
+
+/// Deferred calls and undefined constants inside method bodies are rewritten too: lowering emits
+/// methods from the checker's stored declarations, not from the class statement.
+#[test]
+fn test_deferred_calls_inside_method_bodies() {
+    let run = compile_and_run_with_heap_debug(r#"<?php
+class T {
+    public function f() { return NOPE; }
+    public function g(T $other): void { $this->nope(); }
+    public function h(T $other): void { $other->missing(1); }
+}
+$t = new T();
+try { $t->f(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { $t->g($t); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { $t->h($t); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert!(run.success, "stdout: {}\nstderr: {}", run.stdout, run.stderr);
+    assert_eq!(
+        run.stdout,
+        "Undefined constant \"NOPE\"\nCall to undefined method T::nope()\nCall to undefined method T::missing()\n"
+    );
+    assert!(run.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", run.stderr);
+}
