@@ -360,6 +360,43 @@ enum ArrayGetMode {
     MixedForWrite,
 }
 
+/// Lowers a proven in-bounds read of a private int-shaped indexed array.
+///
+/// The producing pass proved the receiver cannot be null, hash-promoted, or widened, and that
+/// `0 <= index < length` holds on every path that reaches the read. The element is therefore one
+/// raw int word at the fixed payload offset: no null fallback, bounds check, storage-kind
+/// dispatch, or missing-key warning remains, and the result is a plain PHP int.
+pub(super) fn lower_array_get_unchecked(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let index = expect_operand(inst, 1)?;
+    let elem_ty = indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
+    if elem_ty.codegen_repr() != PhpType::Int
+        || inst.result_php_type.codegen_repr() != PhpType::Int
+    {
+        return Err(CodegenIrError::invalid_module(format!(
+            "array_get_unchecked requires an int element and int result, got {:?} -> {:?}",
+            elem_ty, inst.result_php_type
+        )));
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(index, "x0")?;
+            ctx.load_value_to_reg(array, "x9")?;
+            ctx.emitter.instruction("add x10, x9, #24");                        // skip the indexed-array header to the payload base
+            ctx.emitter.instruction("ldr x0, [x10, x0, lsl #3]");               // load the proven in-bounds int slot
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(index, "rax")?;
+            ctx.load_value_to_reg(array, "r11")?;
+            ctx.emitter.instruction("mov rax, QWORD PTR [r11 + rax*8 + 24]");   // load the proven in-bounds int slot
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers an indexed-array element read with PHP null-sentinel fallback on misses.
 pub(super) fn lower_array_get(
     ctx: &mut FunctionContext<'_>,

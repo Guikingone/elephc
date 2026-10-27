@@ -871,6 +871,28 @@ fn validate_opcode_rules(
         | ArrayGetMixedKeySilent => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
         }
+        // The producer pass proved the receiver is a private int-shaped packed array and the
+        // index is in `[0, length)`; the result is a raw PHP int, never PHP null.
+        ArrayGetUnchecked => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            let result = inst
+                .result
+                .ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+            if inst.result_type != IrType::I64 {
+                return Err(ValidationError::ResultTypeMismatch(result));
+            }
+            if function
+                .value(result)
+                .ok_or(ValidationError::UnknownValue(result))?
+                .php_type
+                != PhpType::Int
+            {
+                return Err(ValidationError::PhpTypeMismatch(result));
+            }
+            Ok(())
+        }
         // Typed fetch-for-write reads require an already integer-coerced key. Mixed-result
         // nested parents instead use the storage-aware runtime reader, which accepts string
         // and boxed keys on an indexed or runtime-promoted receiver.

@@ -654,6 +654,31 @@ reject it as well because evaluated code receives the frame. The count and its
 receiver are ordinary SSA values after the move, so the fixed-point driver can
 still fold or CSE them, and `--ir-opt=off` keeps the original in-loop shape.
 
+## EIR typed-array bounds proof
+
+`src/ir_passes/array_get_bounds.rs` runs immediately after the count hoist and
+reuses its loop-invariance proof. It recognizes a strict signed comparison in
+the loop header, `i < count($data)`, where `i` is the header block parameter and
+the count has already been hoisted to the preheader. The parameter must be
+seeded with a non-negative constant and advanced by one positive constant step
+on the loop's single latch.
+
+The receiver must be a non-parameter PHP local whose declared and read types are
+an indexed array of raw integers (or still empty), built only by `array_new` and
+int-valued appends. Every load of that slot may reach only `count`, an
+array length/read/isset/key-exists probe, or a raw-int append; calls, mixed
+boxing, references, element addresses, mutating helpers and runtime includes
+reject the proof. Under those facts a packed, non-null, int-shaped array cannot
+promote to a hash or widen its slots, and the header condition holds on every
+path to the body, so an `array_get` of the induction value cannot miss.
+
+The pass rewrites those reads to
+[`array_get_unchecked`](the-codegen.md#unchecked-typed-array-reads), retypes the result to a raw
+PHP `int`, and retires the now-redundant null-as-zero cast. Inclusive bounds,
+negative seeds or steps, escaping or mutable receivers, parameters and reads
+whose result has any consumer other than that narrowing cast keep the guarded
+`array_get` with its missing-key warning and null fallback.
+
 ## EIR buffer resolution hoisting
 
 `src/ir_passes/buffer_access.rs` runs once after the module fixed point (and

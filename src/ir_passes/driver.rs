@@ -29,6 +29,7 @@
 
 use crate::ir::{DataPool, Function, Module};
 
+use super::array_get_bounds::ArrayGetBounds;
 use super::branch_simplify::BranchSimplify;
 use super::borrowed_receiver_roots::BorrowedReceiverRoots;
 use super::bounded_mixed_counter::BoundedMixedCounter;
@@ -136,6 +137,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(BoundedMixedCounter::new(module)),
         Box::new(LoopOptimize),
         Box::new(CountHoist),
+        Box::new(ArrayGetBounds),
         Box::new(IntegerRange),
         Box::new(CheckedNumericChain),
         Box::new(ConstFold),

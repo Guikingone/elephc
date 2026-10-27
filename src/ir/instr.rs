@@ -66,6 +66,7 @@ const _: () = assert!(std::mem::size_of::<Instruction>() <= 112);
 /// Optimization pass recorded as an instruction's provenance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PassOrigin {
+    ArrayGetBounds,
     BufferAccess,
     ConstFold,
     CountHoist,
@@ -78,6 +79,7 @@ impl PassOrigin {
     /// Returns the lower-case spelling used by source maps and the EIR printer.
     pub fn name(self) -> &'static str {
         match self {
+            PassOrigin::ArrayGetBounds => "array_get_bounds",
             PassOrigin::BufferAccess => "buffer_access",
             PassOrigin::ConstFold => "const_fold",
             PassOrigin::CountHoist => "count_hoist",
@@ -952,6 +954,13 @@ pub enum Op {
     ArrayLen,
     HashLen,
     ArrayGet,
+    /// Reads one element of a private, int-shaped indexed array at a proven in-bounds index.
+    ///
+    /// Operands: array, index. No immediate. The producing pass proved the receiver is non-null,
+    /// not hash-promoted, not widened to boxed slots, and that `0 <= index < length` holds on
+    /// every path reaching the read. Codegen emits one direct payload load; unlike [`Op::ArrayGet`]
+    /// the op cannot warn, throw, allocate, or yield PHP null.
+    ArrayGetUnchecked,
     ArrayGetSilent,
     /// Prepares an indexed element for mutation: boxed Mixed reads retain the owning cell, while
     /// typed container reads copy-on-write separate and republish the child in its parent slot.
@@ -1404,9 +1413,12 @@ impl Op {
             // Scalar stores and whole POD record copies never replace refcounted elements.
             BufferSetResolved => E::READS_HEAP | E::WRITES_HEAP | E::MAY_FATAL,
             BufferSet => E::READS_HEAP | E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
-            ArrayGetSilent | HashGetSilent | ArrayIsset | HashIsset | DescriptorArgKeyExists => {
-                E::READS_HEAP
-            }
+            ArrayGetUnchecked
+            | ArrayGetSilent
+            | HashGetSilent
+            | ArrayIsset
+            | HashIsset
+            | DescriptorArgKeyExists => E::READS_HEAP,
             ArrayGet | HashGet => E::READS_HEAP | E::MAY_WARN,
             // Not a pure read despite the name: the copy-on-write split rewrites the receiver's
             // element slot (and the receiver's own local slot), so it must never be treated as
@@ -1788,6 +1800,7 @@ impl Op {
             ArrayLen => "array_len",
             HashLen => "hash_len",
             ArrayGet => "array_get",
+            ArrayGetUnchecked => "array_get_unchecked",
             ArrayGetSilent => "array_get_silent",
             ArrayGetForWrite => "array_get_for_write",
             HashGet => "hash_get",

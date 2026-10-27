@@ -118,7 +118,7 @@ fn find_count_moves(function: &Function, loop_ref: &NaturalLoop) -> Vec<(InstId,
 }
 
 /// Requires a one-argument `count()` call.
-fn is_single_argument_count(inst: &Instruction) -> bool {
+pub(super) fn is_single_argument_count(inst: &Instruction) -> bool {
     inst.op == Op::RuntimeCall
         && inst.operands.len() == 1
         && matches!(
@@ -130,7 +130,7 @@ fn is_single_argument_count(inst: &Instruction) -> bool {
 }
 
 /// Proves that every loop-block use of the slot reads an invariant container.
-fn slot_is_loop_invariant(
+pub(super) fn slot_is_loop_invariant(
     function: &Function,
     loop_ref: &NaturalLoop,
     slot: LocalSlotId,
@@ -218,7 +218,7 @@ fn read_only_container_consumer(inst: &Instruction, value: ValueId) -> bool {
 }
 
 /// Returns the instruction that defines `value`, or `None` for a block parameter.
-fn defining_id(function: &Function, value: ValueId) -> Option<InstId> {
+pub(super) fn defining_id(function: &Function, value: ValueId) -> Option<InstId> {
     let ValueDef::Instruction { inst, .. } = function.value(value)?.def else {
         return None;
     };

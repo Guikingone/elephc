@@ -331,6 +331,18 @@ Packed indexed arrays apply the same float-key conversion before `ArrayGet`,
 including when a key becomes boxed `Mixed` or the array is promoted to hash
 storage at runtime. Integral float keys convert without a deprecation.
 
+### Unchecked typed-array reads
+
+`ArrayGetUnchecked` carries the array-bounds proof from
+[the optimizer](the-optimizer.md#eir-typed-array-bounds-proof). It reads one raw
+int word from the packed payload at a fixed 24-byte header offset and stores the
+result as a plain PHP `int`. The op has no null sentinel, storage-kind dispatch,
+bounds branch, missing-key warning, or TaggedScalar materialization; the producer
+proved the receiver is a private, non-null, int-shaped indexed array and that the
+index is in `[0, length)` on every path that reaches the read. Inclusive bounds,
+mutable receivers, parameters and any non-cast consumer keep the guarded
+`ArrayGet` lowering.
+
 String indexing returns a null sentinel for a missing offset when lowered for
 `isset()`, `empty()`, or `??`, allowing null coalescing to select its fallback
 without an out-of-bounds warning. Ordinary reads still return an empty string

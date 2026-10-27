@@ -355,6 +355,76 @@ echo count_loop($argc + 9), "\n";
     }
 }
 
+/// A strict typed-array bound turns the body's element read into an unchecked int load.
+#[test]
+fn test_array_get_bounds_removes_missing_key_and_bounds_guards() {
+    let source = r#"<?php
+function sum_bounded(int $n): int {
+    $data = [];
+    $i = 0;
+    while ($i < $n) {
+        $data[] = $i % 97;
+        $i += 1;
+    }
+    $sum = 0;
+    $i = 0;
+    while ($i < count($data)) {
+        $sum += $data[$i];
+        $i += 1;
+    }
+    return (int)$sum;
+}
+echo sum_bounded($argc + 9), "\n";
+"#;
+    let optimized = optimized_ir(source);
+    let body = function_body(&optimized, "sum_bounded");
+    assert!(
+        body.contains("array_get_unchecked"),
+        "the bounded read must lower to the unchecked op:\n{body}"
+    );
+    assert!(
+        !body.contains("= array_get "),
+        "no guarded read may remain in the bounded loop:\n{body}"
+    );
+    let loop_body = body
+        .split("while.body")
+        .nth(2)
+        .expect("the bounded sum loop body");
+    let before_read = loop_body
+        .split("array_get_unchecked")
+        .next()
+        .expect("the unchecked read");
+    assert!(
+        !before_read.contains("concat_reset"),
+        "the typed count keeps the loop entry concat-clean:\n{before_read}"
+    );
+    for optimized_mode in [false, true] {
+        assert_eq!(run(source, optimized_mode, true), "45\n");
+    }
+}
+
+/// An inclusive bound can read one past the end, so it keeps the warning and the null fallback.
+#[test]
+fn test_array_get_bounds_keeps_inclusive_bound_warning() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$data = [1, 2, 3];
+$sum = 0;
+for ($i = 0; $i <= count($data); $i++) {
+    $sum += $data[$i];
+}
+echo $sum, "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "6\n");
+    assert!(
+        out.stderr.contains("Warning: Undefined array key 3"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// Every supported target emits the checked-bound shapes in both IR modes.
 #[test]
 fn test_checked_bound_counters_emit_on_all_supported_targets() {
