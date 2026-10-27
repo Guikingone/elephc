@@ -745,3 +745,22 @@ echo sprintf("%05d", 42), "|",
     );
     assert_eq!(out, "00042|3%|ff|3\n");
 }
+
+/// Boxed `%d` values read an integer cell inline and fall back to the general formatter for
+/// floats, numeric strings, booleans, null, and other runtime tags.
+#[test]
+fn test_sprintf_boxed_d_uses_integer_fast_path_with_runtime_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 3.9;
+$b = "42";
+$c = true;
+$d = false;
+$e = null;
+$f = 7;
+echo sprintf("%d", $a), "|", sprintf("%d", $b), "|", sprintf("%d", $c), "|",
+     sprintf("%d", $d), "|", sprintf("%d", $e), "|", sprintf("%d", $f), "\n";
+"#,
+    );
+    assert_eq!(out, "3|42|1|0|0|7\n");
+}
