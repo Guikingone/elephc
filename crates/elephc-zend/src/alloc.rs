@@ -266,7 +266,14 @@ pub extern "C" fn __zend_calloc(nmemb: usize, len: usize) -> *mut c_void {
 /// `__zend_realloc`: the persistent `perealloc` backend: resizes without recording the block.
 #[no_mangle]
 pub unsafe extern "C" fn __zend_realloc(p: *mut c_void, len: usize) -> *mut c_void {
-    resize(p, len)
+    // A request block an extension grows with `perealloc(p, n, 1)` moves: the sweep must follow
+    // it, never free the old address.
+    let recorded = !p.is_null() && forget(p);
+    let grown = resize(p, len);
+    if recorded {
+        record(grown);
+    }
+    grown
 }
 
 /// `zend_object_alloc`: an object struct of `obj_size` bytes plus the

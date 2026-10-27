@@ -282,7 +282,9 @@ pub unsafe extern "C" fn elephc_php_ext_request_shutdown() {
 /// c: hidden
 #[no_mangle]
 pub unsafe extern "C" fn elephc_php_ext_request_deactivate() {
-    if HOSTED.get().is_empty() {
+    // Only a request RSHUTDOWN ended is torn down: a stray call must not close the resources,
+    // restore the INI or sweep the heap of a request still running.
+    if HOSTED.get().is_empty() || DEACTIVATING.get().is_empty() {
         return;
     }
     run_lifecycle(PHASE_REQUEST_DEACTIVATE);
@@ -1422,13 +1424,14 @@ unsafe extern "C" fn property_trampoline(handle: *mut c_void, op: *mut c_void) {
 pub unsafe extern "C" fn elephc_php_ext_property_invoke(handle: *mut c_void, op: i64) -> i64 {
     let call = handle.cast::<Call>();
     set_null(&mut (*call).result);
-    let op = if op == PROPERTY_SEED {
-        let ce = (*(*call).this).ce;
-        (*call).access_scope = Some((ce, Some(string::text((*ce).name))));
-        PROPERTY_WRITE
-    } else {
-        op
-    };
+    // A seed runs in the engine object's own class scope (`EG(fake_scope)`), so even a private
+    // property of the class takes it.
+    let seed = op == PROPERTY_SEED;
+    let op = if seed { PROPERTY_WRITE } else { op };
+    let outer_scope = eg().fake_scope;
+    if seed {
+        eg().fake_scope = (*(*call).this).ce;
+    }
     // A read, write, isset or unset is the program's, checked in its scope (`crate::property`).
     let access = matches!(op, PROPERTY_READ | PROPERTY_WRITE | PROPERTY_ISSET | PROPERTY_UNSET);
     if access {
@@ -1448,6 +1451,7 @@ pub unsafe extern "C" fn elephc_php_ext_property_invoke(handle: *mut c_void, op:
         &mut eg().bailout,
     );
     let needs_scope = access && crate::property::end_program_access();
+    eg().fake_scope = outer_scope;
     if bailed != 0 {
         settle_without_exception();
         return CALL_FATAL;

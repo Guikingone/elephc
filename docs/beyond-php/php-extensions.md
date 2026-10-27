@@ -261,9 +261,11 @@ but cannot be called yet: it throws an `Error` saying why.
   objects are released, then its resources close, the INI directives it
   changed at run time go back to their configured values, the post-deactivate
   hooks run, and the request allocations (`emalloc` and friends) it did not
-  free are freed. A worker therefore does not grow from one request to the
-  next, and an `ini_set`-style change never reaches the next request.
-  Allocations an extension makes in MINIT or with `pemalloc(…, 1)` are kept.
+  free are freed; an `ini_set`-style change never reaches the next request.
+  Allocations an extension makes in MINIT or with `pemalloc(…, 1)` are kept,
+  and so are the strings and arrays the engine builds for it (`zend_string`,
+  `HashTable`): an extension that leaks those on every request still grows a
+  `--web` worker, where PHP would reclaim them.
 - **Integrations with other extensions are compiled out.** Elephc does not
   host `session`, `pcre`, streams or output buffering, so an optional
   integration guarded by `HAVE_PHP_SESSION` and the like (msgpack's and

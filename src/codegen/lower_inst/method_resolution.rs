@@ -192,6 +192,29 @@ fn emit_magic_scope_publish(ctx: &mut FunctionContext<'_>, target: &MethodCallTa
     if !magic || !ctx.module.class_infos.contains_key(crate::php_ext::prelude::OWNER_CLASS) {
         return false;
     }
+    // Only a call that lands in a wrapper's own accessor publishes: that accessor takes the scope
+    // as its first statement, so no program code runs in between to throw past the clear below
+    // and leave a scope a later, unpublished caller (eval, a callable) would inherit. A program
+    // subclass overriding the accessor turns publication off for dynamic dispatch through it.
+    let classes = &ctx.module.class_infos;
+    let implements = |name: &str| {
+        classes
+            .get(name)
+            .is_some_and(|info| info.interfaces.iter().any(|i| i == crate::php_ext::prelude::OBJECT_INTERFACE))
+    };
+    let wrapper_accessor = |name: &str| {
+        implements(name) && classes.get(name).and_then(|info| info.parent.as_deref()).is_none_or(|parent| !implements(parent))
+    };
+    if !wrapper_accessor(&target.impl_class) {
+        return false;
+    }
+    if target.dynamic_slot.is_some()
+        && classes.iter().any(|(name, info)| {
+            implements(name) && info.method_impl_classes.get(&target.method_key).is_some_and(|owner| !wrapper_accessor(owner))
+        })
+    {
+        return false;
+    }
     // The class and its ancestors, comma-separated (no class name holds a comma): the engine
     // takes the first it hosts as the class the scope stands for.
     let scope = ctx.lexical_class().map(|class| {
