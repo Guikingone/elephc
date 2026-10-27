@@ -261,3 +261,40 @@ function nestedUpdateOverflow(int $n, int $lo): int {
 echo nestedUpdateOverflow(PHP_INT_MIN + 1 + $argc, PHP_INT_MIN), "\n";
 "#);
 }
+
+/// Value-only consumers preserve representation and ownership in fast, fallback and seed-guard bodies.
+#[test]
+fn test_counter_fast_paths_consumers_match_php() {
+    equivalent(r#"<?php
+function consumers(int $s, mixed $e, mixed $m): string {
+    $out = '';
+    $arr = [];
+    $hits = 0; $steps = 0;
+    for ($i = $s; $i <= $e; $i++) {
+        echo $i, ',';
+        $out = $out . 'x' . $i;
+        $arr[] = $i;
+        if ($i == $m) { $hits++; }
+        if ($i === $m) { $hits += 10; }
+        $hits += ($i <=> $m);
+        if ($i) { $hits += 100; }
+        echo (float)($i / 2), ';';
+        $steps++; if ($steps === 5) { break; }
+    }
+    return $out . '|' . count($arr) . '|' . $hits . '|' . $i;
+}
+echo consumers($argc, $argc + 3, $argc + 1), "\n";
+echo consumers($argc, 2.5, 2), "\n";
+echo consumers(PHP_INT_MAX - 1, PHP_INT_MAX, PHP_INT_MAX), "\n";
+function seedConsumers(int $n, mixed $m): int {
+    $hits = 0;
+    for ($box = $n - 1; $box >= 0; $box--) {
+        echo $box, ':';
+        if ($box == $m) { $hits++; }
+        $hits += ($box <=> $m);
+    }
+    return $hits;
+}
+echo seedConsumers($argc + 3, 2), '|', seedConsumers(PHP_INT_MIN, 0), "\n";
+"#);
+}

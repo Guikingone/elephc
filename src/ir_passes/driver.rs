@@ -97,8 +97,9 @@ pub trait IrPass {
 /// proven receiver-root preparation before inlining,
 /// identity arithmetic folding, peephole rewrites, scalar local promotion,
 /// immutable-local discovery, checked-arithmetic int-sink specialization,
-/// proven bounded Mixed counters, canonical loop optimization, integer range specialization, boxed numeric-chain
-/// fusion, constant folding, common-subexpression elimination, loop-invariant
+/// proven bounded Mixed counters, guarded loop-counter versioning, canonical loop
+/// optimization, integer range specialization, boxed numeric-chain fusion, constant
+/// folding, common-subexpression elimination, loop-invariant
 /// code motion, dead instruction elimination,
 /// dead store elimination, branch simplification, and concat scratch-state
 /// optimization.
