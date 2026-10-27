@@ -61,6 +61,20 @@ PHP_FUNCTION(demo_greet)
 #endif
 }
 
+/* demo_set_greeting(string $value): bool — changes the greeting INI directive at run time, as
+ * ini_set() does; the change lasts the request. */
+PHP_FUNCTION(demo_set_greeting)
+{
+    zend_string *value;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STR(value)
+    ZEND_PARSE_PARAMETERS_END();
+    zend_string *name = zend_string_init("elephc_demo.greeting", sizeof("elephc_demo.greeting") - 1, 0);
+    zend_result changed = zend_alter_ini_entry(name, value, PHP_INI_USER, PHP_INI_STAGE_RUNTIME);
+    zend_string_release(name);
+    RETURN_BOOL(changed == SUCCESS);
+}
+
 /* demo_split(string $subject, string $separator = ","): array — a list. */
 PHP_FUNCTION(demo_split)
 {
@@ -308,6 +322,10 @@ ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_demo_is_even, 0, 1, _IS_BOOL, 0)
     ZEND_ARG_TYPE_INFO(0, n, IS_LONG, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_demo_set_greeting, 0, 1, _IS_BOOL, 0)
+    ZEND_ARG_TYPE_INFO(0, value, IS_STRING, 0)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_demo_greet, 0, 1, IS_STRING, 0)
@@ -681,6 +699,7 @@ static const zend_function_entry demo_functions[] = {
     PHP_FE(demo_scale, arginfo_demo_scale)
     PHP_FE(demo_is_even, arginfo_demo_is_even)
     PHP_FE(demo_greet, arginfo_demo_greet)
+    PHP_FE(demo_set_greeting, arginfo_demo_set_greeting)
     PHP_FE(demo_split, arginfo_demo_split)
     PHP_FE(demo_stats, arginfo_demo_stats)
     PHP_FE(demo_inc, arginfo_demo_inc)
@@ -779,6 +798,16 @@ PHP_RSHUTDOWN_FUNCTION(elephc_demo)
     return SUCCESS;
 }
 
+/* Runs once the request's resources are closed and its INI changes undone, as php-src's
+ * zend_post_deactivate_modules does; the trace shows the greeting is back to its value. */
+ZEND_MODULE_POST_ZEND_DEACTIVATE_D(elephc_demo)
+{
+    if (getenv("ELEPHC_DEMO_TRACE") != NULL) {
+        fprintf(stderr, "elephc_demo: POST_DEACTIVATE %s\n", DEMO_G(greeting) ? DEMO_G(greeting) : "");
+    }
+    return SUCCESS;
+}
+
 PHP_MSHUTDOWN_FUNCTION(elephc_demo)
 {
     demo_trace("MSHUTDOWN");
@@ -807,7 +836,7 @@ zend_module_entry elephc_demo_module_entry = {
     PHP_MODULE_GLOBALS(elephc_demo),
     PHP_GINIT(elephc_demo),
     NULL,
-    NULL,
+    ZEND_MODULE_POST_ZEND_DEACTIVATE_N(elephc_demo),
     STANDARD_MODULE_PROPERTIES_EX
 };
 

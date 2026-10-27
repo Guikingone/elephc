@@ -127,6 +127,13 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     if super::frame::module_binds_extern_callbacks(module) {
         abi::emit_call_label(emitter, super::frame::EXTERN_CALLBACK_RELEASE_LABEL);
     }
+    // With its objects and callbacks gone, the request deactivates: resources close, the INI
+    // directives it changed are restored, post-deactivate hooks run and its leftover request
+    // allocations are freed, before the next request's RINIT.
+    if super::block_emit::module_hosts_php_ext(module) {
+        let symbol = emitter.target.extern_symbol(super::block_emit::HOSTED_REQUEST_DEACTIVATE);
+        abi::emit_call_label(emitter, &symbol);
+    }
 
     // Clear every lazy enum case slot so request N+1 re-materializes its cases on
     // demand instead of reusing request N's object. This keeps the pre-existing

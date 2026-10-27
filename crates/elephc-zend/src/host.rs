@@ -121,9 +121,14 @@ pub unsafe extern "C" fn elephc_php_ext_ini(name: *const c_char, value: *const c
 /// `elephc_zend_protected_call`.
 unsafe extern "C" fn boot_trampoline(module: *mut c_void, booted: *mut c_void) {
     let module = module.cast::<zend_module_entry>();
+    // MINIT's allocations outlive every request; the module starts inside a running request, whose
+    // RINIT allocations are request ones again.
+    crate::alloc::set_request_recording(false);
     let registered = crate::module::zend_register_internal_module(module);
     let mut ok = false;
-    if !registered.is_null() && crate::module::zend_startup_module_ex(registered) == SUCCESS {
+    let started = !registered.is_null() && crate::module::zend_startup_module_ex(registered) == SUCCESS;
+    crate::alloc::set_request_recording(true);
+    if started {
         HOSTED.get().push(registered);
         ok = request_startup(registered);
         if ok {
@@ -148,17 +153,26 @@ static HOSTED: Global<Vec<*mut zend_module_entry>> = Global::new(Vec::new());
 /// Hosted modules whose request startup (RINIT) has run and whose request
 /// shutdown (RSHUTDOWN) has not, in start order.
 static IN_REQUEST: Global<Vec<*mut zend_module_entry>> = Global::new(Vec::new());
+/// Hosted modules whose RSHUTDOWN has run and whose post-deactivation has not, in start order:
+/// the request is being torn down (objects, resources, INI) between the two.
+static DEACTIVATING: Global<Vec<*mut zend_module_entry>> = Global::new(Vec::new());
 
 /// What `lifecycle_trampoline` runs.
 const PHASE_REQUEST_SHUTDOWN: usize = 0;
 const PHASE_REQUEST_STARTUP: usize = 1;
 const PHASE_MODULE_SHUTDOWN: usize = 2;
+const PHASE_REQUEST_DEACTIVATE: usize = 3;
 
 /// Bailout-protected body of one lifecycle phase over the hosted modules, as
-/// php-src orders them: request shutdown (RSHUTDOWN, then the post-deactivate
-/// hooks) walks the modules that are in a request in reverse start order,
-/// request startup (RINIT) walks every hosted module in start order, and module
-/// shutdown (MSHUTDOWN, then the globals destructors) walks them in reverse.
+/// php-src's `php_request_shutdown` orders them:
+/// - request shutdown runs RSHUTDOWN on the modules in the request, in reverse start order;
+/// - the caller then releases the request's objects (the program's hosting tables);
+/// - request deactivation (`zend_deactivate`, then `zend_post_deactivate_modules`, then
+///   `shutdown_memory_manager`) closes the regular resources, restores the INI directives the
+///   request changed, runs the post-deactivate hooks in reverse start order, and frees the
+///   request allocations left behind;
+/// - request startup (RINIT) walks every hosted module in start order;
+/// - module shutdown (MSHUTDOWN, then the globals destructors) walks them in reverse.
 /// A phase a fatal error interrupts stops there, as in PHP.
 unsafe extern "C" fn lifecycle_trampoline(phase: *mut c_void, _unused: *mut c_void) {
     let call = |module: *mut zend_module_entry, handler: module_func_t| {
@@ -174,15 +188,25 @@ unsafe extern "C" fn lifecycle_trampoline(phase: *mut c_void, _unused: *mut c_vo
             for &module in modules.iter().rev() {
                 call(module, (*module).request_shutdown_func);
             }
+            DEACTIVATING.get().extend(modules);
+        }
+        PHASE_REQUEST_DEACTIVATE => {
+            // `zend_deactivate`: every resource the request left open is closed, then the INI
+            // directives it changed go back to their configured values.
+            crate::api::close_regular_resources();
+            crate::api::destroy_regular_resources();
+            crate::ini::zend_ini_deactivate();
+            let modules = std::mem::take(DEACTIVATING.get());
             for &module in modules.iter().rev() {
                 if let Some(post_deactivate) = (*module).post_deactivate_func {
                     crate::module::with_module(module, || post_deactivate());
                 }
             }
-            // php-src's request shutdown then closes every resource the request left open.
-            crate::api::close_regular_resources();
+            // `shutdown_memory_manager`: what the request allocated and did not free goes now.
+            crate::alloc::sweep_request_heap();
         }
         PHASE_REQUEST_STARTUP => {
+            crate::alloc::set_request_recording(true);
             for &module in HOSTED.get().clone().iter() {
                 if !request_startup(module) {
                     // php-src's `zend_activate_modules`: warn, then end the process. The module
@@ -227,10 +251,11 @@ unsafe fn run_lifecycle(phase: usize) {
     );
 }
 
-/// Ends the request that finished in a long-lived process (a `--web` worker serving one request
-/// after another): request shutdown (RSHUTDOWN) for every module in it. The worker calls it once
-/// the request's destructors have run and before its memory is released, as php-src does.
-/// Does nothing before any hosted extension has started, or twice for one request.
+/// Ends the request that finished: request shutdown (RSHUTDOWN) for every module in it. The
+/// program calls it once the request's destructors have run and before it releases the request's
+/// objects; `elephc_php_ext_request_deactivate` follows once they are gone, as php-src orders
+/// `zend_deactivate_modules` before `zend_deactivate`. Does nothing before any hosted extension
+/// has started, or twice for one request.
 /// c: hidden
 #[no_mangle]
 pub unsafe extern "C" fn elephc_php_ext_request_shutdown() {
@@ -242,8 +267,22 @@ pub unsafe extern "C" fn elephc_php_ext_request_shutdown() {
     (*ptr::addr_of_mut!(crate::startup::sapi_globals)).global_request_time = 0.0;
 }
 
+/// Finishes tearing down the request after the program released its objects: regular resources
+/// close, the INI directives the request changed are restored, the post-deactivate hooks run and
+/// the request's leftover allocations are freed, in php-src's order. Does nothing when no request
+/// is being torn down.
+/// c: hidden
+#[no_mangle]
+pub unsafe extern "C" fn elephc_php_ext_request_deactivate() {
+    if HOSTED.get().is_empty() {
+        return;
+    }
+    run_lifecycle(PHASE_REQUEST_DEACTIVATE);
+}
+
 /// Begins the next request in a long-lived process: request startup (RINIT) for every hosted
-/// module, so per-request extension state never crosses requests. Does nothing before any hosted
+/// module, so per-request extension state never crosses requests. A previous request whose
+/// deactivation the program did not reach is finished first. Does nothing before any hosted
 /// extension has started.
 /// c: hidden
 #[no_mangle]
@@ -251,12 +290,15 @@ pub unsafe extern "C" fn elephc_php_ext_request_startup() {
     if HOSTED.get().is_empty() || !IN_REQUEST.get().is_empty() {
         return;
     }
+    if !DEACTIVATING.get().is_empty() {
+        run_lifecycle(PHASE_REQUEST_DEACTIVATE);
+    }
     run_lifecycle(PHASE_REQUEST_STARTUP);
 }
 
-/// The compiled program is about to terminate: the request ends (RSHUTDOWN) and
-/// then the modules shut down (MSHUTDOWN), in php-src's order. Called by every
-/// exit path after output buffers are flushed; calling it again is harmless.
+/// The compiled program is about to terminate: the request ends (RSHUTDOWN, then deactivation)
+/// and then the modules shut down (MSHUTDOWN), in php-src's order. Called by every exit path
+/// after output buffers are flushed; a phase the epilogue already ran finds nothing left to do.
 /// c: hidden
 #[no_mangle]
 pub unsafe extern "C" fn elephc_php_ext_exit_hook() {
@@ -264,6 +306,7 @@ pub unsafe extern "C" fn elephc_php_ext_exit_hook() {
         return;
     }
     run_lifecycle(PHASE_REQUEST_SHUTDOWN);
+    run_lifecycle(PHASE_REQUEST_DEACTIVATE);
     run_lifecycle(PHASE_MODULE_SHUTDOWN);
 }
 

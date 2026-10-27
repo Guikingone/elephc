@@ -247,6 +247,14 @@ but cannot be called yet: it throws an `Error` saying why.
   `--web` program (`PHP_SAPI`, `sapi_module.name`, `sapi_cli_is_cli()`), as
   `php_sapi_name()` answers. Resources still open when a request ends are
   closed then, and persistent resources at program exit, as in PHP.
+- **A request ends in PHP's order**, at a program's exit and between two
+  requests of a `--web` worker: RSHUTDOWN, then the request's extension
+  objects are released, then its resources close, the INI directives it
+  changed at run time go back to their configured values, the post-deactivate
+  hooks run, and the request allocations (`emalloc` and friends) it did not
+  free are freed. A worker therefore does not grow from one request to the
+  next, and an `ini_set`-style change never reaches the next request.
+  Allocations an extension makes in MINIT or with `pemalloc(…, 1)` are kept.
 - **Integrations with other extensions are compiled out.** Elephc does not
   host `session`, `pcre`, streams or output buffering, so an optional
   integration guarded by `HAVE_PHP_SESSION` and the like (msgpack's and

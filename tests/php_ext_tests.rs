@@ -92,7 +92,7 @@ fn add_and_list_report_the_surface() {
     let list = Command::new(elephc()).current_dir(&dir).args(["extension", "list"]).output().unwrap();
     assert_success(&list, "extension list");
     let text = String::from_utf8_lossy(&list.stdout);
-    assert!(text.contains("elephc_demo 1.2.3 — 33 functions, 8 classes, 3 constants"), "{text}");
+    assert!(text.contains("elephc_demo 1.2.3 — 34 functions, 8 classes, 3 constants"), "{text}");
     assert!(text.contains("not callable yet: demo_inspect()"), "{text}");
     assert!(!text.contains("demo_apply()"), "callables are passed: {text}");
     let manifest = fs::read_to_string(dir.join("elephc.toml")).unwrap();
@@ -711,22 +711,29 @@ fn run_traced(dir: &Path, source: &str) -> (Vec<String>, Option<i32>, String) {
 }
 
 /// The extension's request and module lifecycle ends the way php-cli's does: request shutdown
-/// (RSHUTDOWN) and then module shutdown (MSHUTDOWN), after the output is flushed, on a normal end
-/// and on `exit()` alike, and never for a program that uses no extension function.
+/// (RSHUTDOWN), then post-deactivation once the request's resources and INI changes are undone
+/// (the greeting a script changed is back to its configured value), then module shutdown
+/// (MSHUTDOWN), after the output is flushed, on a normal end and on `exit()` alike, and never for a
+/// program that uses no extension function.
 #[test]
 fn the_extension_is_shut_down_when_the_program_ends() {
     let dir = project("lifecycle");
     let (traced, status, stdout) = run_traced(&dir, "<?php\necho demo_add(1, 2), \"\\n\";\n");
     assert_eq!((status, stdout.as_str()), (Some(0), "3\n"));
-    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "MSHUTDOWN"]);
+    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "POST_DEACTIVATE Hello", "MSHUTDOWN"]);
 
     let (traced, status, stdout) = run_traced(&dir, "<?php\necho demo_add(1, 2), \"\\n\";\nexit(3);\n");
     assert_eq!((status, stdout.as_str()), (Some(3), "3\n"));
-    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "MSHUTDOWN"]);
+    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "POST_DEACTIVATE Hello", "MSHUTDOWN"]);
 
     let (traced, status, _) = run_traced(&dir, "<?php\nfunction fail() { throw new RuntimeException('x'); }\necho demo_add(1, 2), \"\\n\";\nfail();\n");
     assert_eq!(status, Some(255));
-    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "MSHUTDOWN"]);
+    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "POST_DEACTIVATE Hello", "MSHUTDOWN"]);
+
+    let (traced, status, stdout) =
+        run_traced(&dir, "<?php\nvar_dump(demo_set_greeting('Hi'));\necho demo_greet('a'), \"\\n\";\n");
+    assert_eq!((status, stdout.as_str()), (Some(0), "bool(true)\nHi, a.\n"));
+    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "POST_DEACTIVATE Hello", "MSHUTDOWN"]);
 
     let (traced, status, stdout) = run_traced(&dir, "<?php\necho \"no extension call\\n\";\n");
     assert_eq!((status, stdout.as_str()), (Some(0), "no extension call\n"));
@@ -796,6 +803,46 @@ fn http_body(address: &str) -> String {
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     response.split_once("\r\n\r\n").map(|(_, body)| body.to_string()).unwrap_or(response)
+}
+
+/// A runtime INI change lasts one request (#2105) and each request is torn down in php-src's order
+/// (#2104): every request of a `--web` worker sees the configured greeting even though the
+/// previous one changed it, and between requests the worker runs RSHUTDOWN, then
+/// post-deactivation with the greeting already restored, then the next RINIT.
+#[test]
+fn a_runtime_ini_change_does_not_cross_web_requests() {
+    use std::os::unix::process::CommandExt;
+    let dir = project("web-ini");
+    let main = dir.join("main.php");
+    fs::write(&main, "<?php\necho demo_greet('a');\ndemo_set_greeting('Hi');\necho ' ', demo_greet('b');\n").unwrap();
+    let compile = Command::new(elephc()).current_dir(&dir).arg("--web").arg(&main).output().expect("run elephc");
+    assert_success(&compile, "compile --web");
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let address = format!("127.0.0.1:{port}");
+    let stderr = fs::File::create(dir.join("server.err")).unwrap();
+    let server = ServerGroup(
+        Command::new(dir.join("main"))
+            .args(["--listen", &address, "--workers", "1"])
+            .env("ELEPHC_DEMO_TRACE", "1")
+            .process_group(0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(stderr)
+            .spawn()
+            .expect("spawn the web server"),
+    );
+    server.wait_until_listening(&address);
+    let bodies: Vec<String> = (0..3).map(|_| http_body(&address).trim().to_string()).collect();
+    drop(server);
+    let output = fs::read_to_string(dir.join("server.err")).unwrap();
+    let traced: Vec<&str> = output.lines().filter_map(|line| line.strip_prefix("elephc_demo: ")).collect();
+    fs::remove_dir_all(dir).unwrap();
+    assert_eq!(bodies, ["Hello, a. Hi, b.", "Hello, a. Hi, b.", "Hello, a. Hi, b."]);
+    assert_eq!(
+        &traced[..7],
+        ["RINIT", "RSHUTDOWN", "POST_DEACTIVATE Hello", "RINIT", "RSHUTDOWN", "POST_DEACTIVATE Hello", "RINIT"],
+        "{output}"
+    );
 }
 
 /// A `--web` worker serves one request after another in one process, but an extension's request
@@ -876,6 +923,6 @@ fn a_failed_request_startup_ends_the_web_worker() {
     let traced: Vec<&str> = output.lines().filter_map(|line| line.strip_prefix("elephc_demo: ")).collect();
     fs::remove_dir_all(dir).unwrap();
     assert_eq!(first, "1");
-    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "RINIT failed"], "{output}");
+    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "POST_DEACTIVATE Hello", "RINIT failed"], "{output}");
     assert!(output.contains("request_startup() for elephc_demo module failed"), "{output}");
 }

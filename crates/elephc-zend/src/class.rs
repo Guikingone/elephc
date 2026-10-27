@@ -23,7 +23,7 @@ use std::ffi::{c_char, c_int, c_void, CStr};
 use std::ptr;
 
 use crate::abi::*;
-use crate::alloc::{alloc_struct, erealloc};
+use crate::alloc::{__zend_realloc, alloc_struct};
 use crate::global::Global;
 use crate::hash;
 use crate::startup::cg;
@@ -289,7 +289,8 @@ unsafe fn add_interface(ce: *mut zend_class_entry, iface: *mut zend_class_entry)
         return;
     }
     let count = (*ce).num_interfaces as usize;
-    let list = erealloc(
+    // The interface list lives as long as the class: persistent, never swept with a request.
+    let list = __zend_realloc(
         (*ce).interfaces_u.interfaces.cast::<c_void>(),
         (count + 1) * std::mem::size_of::<*mut zend_class_entry>(),
     )
