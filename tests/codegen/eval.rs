@@ -8064,6 +8064,36 @@ return preg_replace_callback("/[m]/", $static, "mm");');
     assert_eq!(out, "OAOB:S1S2:SCSC:OxOy:SmSm");
 }
 
+/// Verifies eval `preg_replace_callback()` returns real PHP null for a bad pattern and `/e`.
+///
+/// A valid replacement and an empty subject stay strings.
+#[test]
+fn test_eval_preg_replace_callback_invalid_pattern_returns_real_null() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+echo eval('function eval_bad_repl($matches) {
+    return "x";
+}
+$invalid = preg_replace_callback("/[/", "eval_bad_repl", "a");
+$evalmod = preg_replace_callback("/a/e", "eval_bad_repl", "a");
+$empty = preg_replace_callback("/x/", "eval_bad_repl", "");
+$ok = preg_replace_callback("/a/", "eval_bad_repl", "a");
+return ($invalid === null ? "1" : "0")
+    . (is_string($invalid) ? "1" : "0")
+    . (is_null($invalid) ? "1" : "0")
+    . gettype($invalid) . ":"
+    . ($evalmod === null ? "1" : "0")
+    . (is_string($evalmod) ? "1" : "0")
+    . gettype($evalmod) . ":"
+    . ($empty === "" ? "empty" : "other")
+    . (is_string($empty) ? "s" : "n") . ":"
+    . $ok;
+');
+"#,
+    );
+    assert_eq!(out, "101NULL:10NULL:emptys:x");
+}
+
 /// Verifies dynamic eval preg callables write by-reference `$matches` arrays.
 #[test]
 fn test_eval_dynamic_preg_callables_write_matches_by_ref() {

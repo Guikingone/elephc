@@ -2162,6 +2162,9 @@ echo preg_match_all("/(/", "subject", $matches) . ":" . count($matches);
 
 /// Verifies every shim-backed regex family handles an invalid pattern without exposing a
 /// partial handle, invoking callbacks, or returning partially initialized capture data.
+///
+/// `preg_replace_callback()` returns real PHP null. Concatenation renders that null
+/// as empty, and `??` selects the default, so the callback sections are `:0` and `null:0`.
 #[test]
 fn test_regex_families_reject_invalid_patterns_safely() {
     let out = compile_and_run(
@@ -2184,6 +2187,42 @@ var_dump(preg_split("/(/", "subject"));
 "#,
     );
     assert_eq!(out, "0|:1|||:0|null:0|bool(false)\n");
+}
+
+/// Verifies `preg_replace_callback()` returns real PHP null for an invalid pattern and `/e`.
+///
+/// The null is distinct from a string: `is_string` is false, `=== null` and `is_null`
+/// are true, and `gettype` reports `NULL`. A valid empty subject stays an empty string,
+/// and a normal replacement still runs. Direct calls and the first-class callable share
+/// that result.
+#[test]
+fn test_preg_replace_callback_invalid_pattern_returns_real_null() {
+    let out = compile_and_run(
+        r#"<?php
+$calls = 0;
+$callback = function (array $matches) use (&$calls): string {
+    $calls = $calls + 1;
+    return "x";
+};
+$invalid = @preg_replace_callback("/[/", $callback, "a");
+var_dump($invalid, is_string($invalid), $invalid === null, is_null($invalid), gettype($invalid));
+echo $calls, "|";
+$calls = 0;
+$eval = @preg_replace_callback("/a/e", $callback, "a");
+var_dump($eval, is_string($eval), $eval === null, is_null($eval), gettype($eval));
+echo $calls, "|";
+$empty = preg_replace_callback("/x/", $callback, "");
+echo ($empty === "" ? "empty" : "other"), (is_string($empty) ? "s" : "n"), strlen($empty), "|";
+echo preg_replace_callback("/a/", $callback, "a"), "|";
+$cb = preg_replace_callback(...);
+$through = @$cb("/[/", $callback, "a");
+echo (is_null($through) ? "null" : "bad"), (is_string($through) ? "s" : "n"), ($through === null ? "eq" : "ne");
+"#,
+    );
+    assert_eq!(
+        out,
+        "NULL\nbool(false)\nbool(true)\nbool(true)\nstring(4) \"NULL\"\n0|NULL\nbool(false)\nbool(true)\nbool(true)\nstring(4) \"NULL\"\n0|emptys0|x|nullneq"
+    );
 }
 
 /// Verifies a small callback replacement allocates its output block with the

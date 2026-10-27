@@ -53,6 +53,9 @@ echo $f->x;
 }
 
 /// A managed-native callback may retain code through descriptor data, not a direct call edge.
+///
+/// `?? ''` keeps the declared string return: `preg_replace_callback()` is `string|null`,
+/// and this probe only runs a pattern that replaces.
 #[test]
 fn test_managed_regex_instance_callable_survives_dead_strip() {
     let out = compile_cli_file_and_run_with_managed_pcre2(
@@ -62,7 +65,7 @@ class RegexFormatter {
     public function replace(array $matches): string { return $this->prefix; }
 }
 function run_regex(callable $callback): string {
-    return preg_replace_callback('/[A-Z]/', $callback, 'AB');
+    return preg_replace_callback('/[A-Z]/', $callback, 'AB') ?? '';
 }
 echo run_regex((new RegexFormatter('descriptor:'))->replace(...));
 "#,

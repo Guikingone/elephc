@@ -154,12 +154,21 @@ fn contextual_closure_sig(
     }))
 }
 
+/// Returns the `string|null` result `preg_replace_callback()` produces.
+///
+/// A successful replacement is a string, including the empty string. An invalid
+/// pattern or the removed `/e` modifier is real PHP null, so the checker type
+/// keeps that alternative instead of collapsing the call to `string`.
+fn result_type() -> PhpType {
+    PhpType::Union(vec![PhpType::Str, PhpType::Void])
+}
+
 /// Type-checks a call to PHP `preg_replace_callback(pattern, callback, subject)`.
 ///
 /// Validates exactly 3 arguments, infers types for the pattern and subject
 /// expressions, synthesizes an `array<string>` type for the `$matches` callback
 /// parameter, and delegates to `check_known_callable_call` to verify the closure
-/// signature. Returns `PhpType::Str` on success.
+/// signature. Returns `string|null` so failure stays distinct from a string.
 pub(crate) fn check(
     checker: &mut Checker,
     args: &[Expr],
@@ -185,7 +194,7 @@ pub(crate) fn check(
             env,
             "preg_replace_callback() callback",
         )?;
-        return Ok(Some(PhpType::Str));
+        return Ok(Some(result_type()));
     }
 
     check_callback_builtin_call(
@@ -196,5 +205,5 @@ pub(crate) fn check(
         env,
         "preg_replace_callback() callback",
     )?;
-    Ok(Some(PhpType::Str))
+    Ok(Some(result_type()))
 }

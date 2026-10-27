@@ -27770,7 +27770,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Str,
+        returns: TypeSpec::Union(&[TypeSpec::Str, TypeSpec::Null]),
         by_ref_return: false,
         summary: "Performs a regular expression search and replace using a callback.",
         examples: &[
