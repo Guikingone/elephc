@@ -87,3 +87,44 @@ echo is_int($a[$i]), is_string($a[$i]), is_array($a[$i]), is_null($a[$i]);
         assert!(asm.contains("__rt_array_element_type_check"), "{name}");
     }
 }
+
+/// A declared-int map+sum lowers to a preflight, a fused fast arm, and a generic fallback arm.
+#[test]
+fn declared_int_map_sum_emits_preflight_and_both_arms_on_all_targets() {
+    use crate::ir::{Immediate, RuntimeCallTarget, RuntimeFnId};
+    let source = r#"<?php
+$ints = range(1, $argc + 99);
+echo array_sum(array_map(fn(int $x): int => $x + 1, $ints));
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(name).unwrap(),
+        );
+        let mut safe = 0;
+        let mut fused = 0;
+        let mut generic = 0;
+        for inst in module.functions.iter().flat_map(|function| &function.instructions) {
+            match &inst.immediate {
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::ArrayMapSumAddSafe,
+                ))) => safe += 1,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::ArrayMapSumAdd,
+                ))) => fused += 1,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::ArraySum,
+                ))) => generic += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(safe, 1, "{name}");
+        assert_eq!(fused, 1, "{name}");
+        assert_eq!(generic, 1, "{name}");
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("__rt_array_map_sum_add_safe"), "{name}");
+        assert!(asm.contains("__rt_array_map_sum_add"), "{name}");
+    }
+}

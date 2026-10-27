@@ -20,10 +20,12 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 pub fn emit_keyed_kernels(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_map_sum_add_x86_64(emitter);
+        emit_map_sum_add_safe_x86_64(emitter);
         emit_filter_count_mod_x86_64(emitter);
         return;
     }
     emit_map_sum_add_aarch64(emitter);
+    emit_map_sum_add_safe_aarch64(emitter);
     emit_filter_count_mod_aarch64(emitter);
 }
 
@@ -98,6 +100,7 @@ fn emit_map_sum_add_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x13, x13, x14");                                   // fold both accumulated lanes into the result
     emitter.instruction(&format!("cbz x9, {vector_box}"));                      // stop when the range had an even element count
     emitter.instruction("ldr x14, [x10]");                                      // load the single remaining tail element
+    emitter.instruction("add x14, x14, x1");                                    // map the tail element with the literal offset
     emitter.instruction("add x13, x13, x14");                                   // the gate proves this addition stays in range
 
     emitter.label(vector_box);
@@ -247,7 +250,9 @@ fn emit_map_sum_add_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rax, r11");                                        // fold both accumulated lanes into the result
     emitter.instruction("test r10, r10");                                       // stop when the range had an even element count
     emitter.instruction(&format!("jz {vector_box}"));                           // box the completed vector sum
-    emitter.instruction("add rax, QWORD PTR [r9]");                             // the gate proves the tail addition stays in range
+    emitter.instruction("mov rcx, QWORD PTR [r9]");                             // load the single remaining tail element
+    emitter.instruction("add rcx, rsi");                                        // map the tail element with the literal offset
+    emitter.instruction("add rax, rcx");                                        // the gate proves the tail addition stays in range
 
     emitter.label(vector_box);
     emitter.instruction("mov rdi, rax");                                        // int payload for the vector sum
@@ -319,6 +324,35 @@ fn emit_map_sum_add_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 2");                                          // float Mixed tag for the promoted sum
     emitter.instruction("xor esi, esi");                                        // the high payload word is unused for scalars
     emitter.instruction("jmp __rt_mixed_from_value");                           // box the float sum and return
+}
+
+/// Emits the AArch64 overflow preflight for a declared-int fused map callback.
+fn emit_map_sum_add_safe_aarch64(emitter: &mut Emitter) {
+    let loop_label = "__rt_array_map_sum_add_safe_loop";
+    let safe = "__rt_array_map_sum_add_safe_yes";
+    let unsafe_label = "__rt_array_map_sum_add_safe_no";
+
+    emitter.blank();
+    emitter.comment("--- runtime: array_map_sum_add_safe (declared-int preflight) ---");
+    emitter.label_global("__rt_array_map_sum_add_safe");
+    emitter.instruction("ldr x9, [x0]");                                        // load the packed element count
+    emitter.instruction("add x10, x0, #24");                                    // skip the indexed-array header to the payload base
+
+    emitter.label(loop_label);
+    emitter.instruction(&format!("cbz x9, {safe}"));                            // an exhausted range never overflowed
+    emitter.instruction("ldr x13, [x10], #8");                                  // load the next source element
+    emitter.instruction("adds x14, x13, x1");                                   // perform the same checked map addition as PHP
+    emitter.instruction(&format!("b.vs {unsafe_label}"));                       // one overflowed map value makes the fused arm invalid
+    emitter.instruction("sub x9, x9, #1");                                      // one fewer element remains
+    emitter.instruction(&format!("b {loop_label}"));                            // continue scanning the packed payload
+
+    emitter.label(safe);
+    emitter.instruction("mov x0, #1");                                          // every map result stays an integer
+    emitter.instruction("ret");                                                 // report the safe range
+
+    emitter.label(unsafe_label);
+    emitter.instruction("mov x0, xzr");                                         // at least one map result promotes to float
+    emitter.instruction("ret");                                                 // report the unsafe range
 }
 
 /// Emits `__rt_array_filter_count_mod` for AArch64.
@@ -413,6 +447,38 @@ fn emit_filter_count_mod_aarch64(emitter: &mut Emitter) {
     emitter.label(done);
     emitter.instruction("mov x0, x11");                                         // return the raw PHP int count
     emitter.instruction("ret");                                                 // transfer the count to the caller
+}
+
+/// Emits the x86_64 overflow preflight for a declared-int fused map callback.
+fn emit_map_sum_add_safe_x86_64(emitter: &mut Emitter) {
+    let loop_label = "__rt_array_map_sum_add_safe_loop_x86";
+    let safe = "__rt_array_map_sum_add_safe_yes_x86";
+    let unsafe_label = "__rt_array_map_sum_add_safe_no_x86";
+
+    emitter.blank();
+    emitter.comment("--- runtime: array_map_sum_add_safe (declared-int preflight) ---");
+    emitter.label_global("__rt_array_map_sum_add_safe");
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the packed element count
+    emitter.instruction("lea r9, [rdi + 24]");                                  // skip the indexed-array header to the payload base
+
+    emitter.label(loop_label);
+    emitter.instruction("test r10, r10");                                       // an exhausted range never overflowed
+    emitter.instruction(&format!("jz {safe}"));                                 // report the safe range
+    emitter.instruction("mov rax, QWORD PTR [r9]");                             // load the next source element
+    emitter.instruction("add r9, 8");                                           // advance the element cursor
+    emitter.instruction("mov rcx, rax");                                        // copy the element before mapping it
+    emitter.instruction("add rcx, rsi");                                        // perform the same checked map addition as PHP
+    emitter.instruction(&format!("jo {unsafe_label}"));                         // one overflowed map value makes the fused arm invalid
+    emitter.instruction("dec r10");                                             // one fewer element remains
+    emitter.instruction(&format!("jmp {loop_label}"));                          // continue scanning the packed payload
+
+    emitter.label(safe);
+    emitter.instruction("mov eax, 1");                                          // every map result stays an integer
+    emitter.instruction("ret");                                                 // report the safe range
+
+    emitter.label(unsafe_label);
+    emitter.instruction("xor eax, eax");                                        // at least one map result promotes to float
+    emitter.instruction("ret");                                                 // report the unsafe range
 }
 
 /// Emits `__rt_array_filter_count_mod` for Linux x86_64.

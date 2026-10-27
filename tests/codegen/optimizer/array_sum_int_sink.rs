@@ -81,3 +81,19 @@ echo $n, '|', array_sum($negative) ^ 0, "\n";
         assert_eq!(out, "5151|-2\n");
     });
 }
+
+/// The declared-int preflight branch keeps the same output with EIR optimization disabled.
+#[test]
+fn typed_map_sum_preflight_no_ir_opt_parity() {
+    without_ir_opt(|| {
+        let out = compile_and_run(
+            r#"<?php
+$ok = range(1, $argc + 100);
+$n = 0;
+for ($i = 0; $i < 2001; $i++) { $n ^= array_sum(array_map(fn(int $x): int => $x + 1, $ok)); }
+echo $n, "\n";
+"#,
+        );
+        assert_eq!(out, "5252\n");
+    });
+}

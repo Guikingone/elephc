@@ -865,6 +865,8 @@ The fusions are lowering-time only: they emit ordinary EIR `RuntimeCall` instruc
 
 `__rt_array_map_sum_add` takes a NEON/SSE2 path when the literal offset is non-negative and below `2^31`, the count is at most `2^30 - 1`, and every element's high dword is zero. The gate proves every mapped value and the total stay below `2^63`, so the vector adds cannot promote; any failed gate restarts the exact scalar map-then-sum sequence from element 0. `__rt_array_filter_count_mod` vectorizes the power-of-two divisibility masks (including negative divisors after sign normalization) and falls back to the scalar truncated-remainder loop for every other divisor.
 
+A callback with a declared `int` return cannot use the fused kernel blindly: an overflowing map result must raise PHP's catchable `TypeError`. Lowering therefore emits `__rt_array_map_sum_add_safe` over the packed payload first; a safe range takes the fused kernel, while an unsafe range branches to the ordinary typed `array_map()` + `array_sum()` lowering, which throws at the first overflowing element.
+
 ### Hash table (for associative arrays)
 
 | Routine | What it does | Input | Output |

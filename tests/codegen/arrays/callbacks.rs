@@ -2454,8 +2454,7 @@ W[Undefined array key 7]0W[Undefined array key 7]0W[Undefined array key 7]1|W[Un
 fn test_keyed_array_kernels_simd_boundaries_match_php() {
     let out = compile_and_run(
         r#"<?php
-$odd = [];
-for ($i = 0; $i < 101; $i++) { $odd[] = $i + 1; }
+$odd = range(1, 101);
 echo array_sum(array_map(fn($x) => $x + 1, $odd)), '|';
 $eight = [1, 2, 3, 4, 5, 6, 7, 8];
 echo array_sum(array_map(fn($x) => $x + 0, $eight)), '|';
@@ -2478,5 +2477,50 @@ echo count(array_filter($odd, fn($x) => $x % 1 === 0)), "\n";
     assert_eq!(
         out,
         "5252|36|4294967495|250|double:9.2233720368548E+18|50|25|12|33|50|101\n"
+    );
+}
+
+/// Declared-int map callbacks take the preflighted fused kernel when no value overflows and
+/// fall back to the generic typed map when one does, preserving the catchable TypeError.
+#[test]
+fn test_typed_map_sum_preflight_matches_generic_path() {
+    let out = compile_and_run(
+        r#"<?php
+$ok = range(1, $argc + 100);
+$n = 0;
+for ($i = 0; $i < 2001; $i++) { $n ^= array_sum(array_map(fn(int $x): int => $x + 1, $ok)); }
+echo $n, '|';
+$ov = [PHP_INT_MAX, 1, 2, 3, 4, 5, 6, 7, 8];
+try {
+    array_sum(array_map(fn(int $x): int => $x + 1, $ov));
+    echo 'no-throw|';
+} catch (TypeError $e) {
+    echo str_contains($e->getMessage(), 'Return value must be of type int, float returned') ? 'typeerror|' : $e->getMessage();
+}
+$negative = [-3, 7, -11, 5];
+echo array_sum(array_map(fn(int $x): int => $x + 1, $negative)), "\n";
+"#,
+    );
+    assert_eq!(out, "5252|typeerror|2\n");
+}
+
+/// The safe and scalar-fallback preflight arms own their results without a heap leak.
+#[test]
+fn test_typed_map_sum_preflight_heap_ownership() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$ok = range(1, $argc + 100);
+$n = 0;
+for ($i = 0; $i < 2001; $i++) { $n ^= array_sum(array_map(fn(int $x): int => $x + 1, $ok)); }
+$negative = [-3, 7, -11, 5];
+echo $n, '|', array_sum(array_map(fn(int $x): int => $x + 1, $negative)), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "5252|2\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
     );
 }

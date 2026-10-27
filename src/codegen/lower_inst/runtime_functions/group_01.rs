@@ -37,6 +37,9 @@ pub(super) fn lower(
         RuntimeFnId::ArrayMapSumAdd => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_map_sum_add(ctx, inst)
         }),
+        RuntimeFnId::ArrayMapSumAddSafe => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_sum_add_safe(ctx, inst)
+        }),
         RuntimeFnId::ArrayFilterCountMod => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_filter_count_mod(ctx, inst)
         }),

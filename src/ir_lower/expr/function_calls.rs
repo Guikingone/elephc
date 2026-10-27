@@ -86,6 +86,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_count_explode(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = lower_map_sum_add_declared_int(ctx, canonical, args, expr) {
+        return value;
+    }
     if let Some(value) = lower_map_sum_add(ctx, canonical, args, expr) {
         return value;
     }

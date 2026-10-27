@@ -773,3 +773,175 @@ fn statically_int_expr(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
         _ => false,
     }
 }
+
+/// Lowers a declared-int `array_sum(array_map(fn(int $x): int => $x + C, $ints))`.
+///
+/// A declared `int` return rejects an overflow-promoted map result with PHP's catchable
+/// `TypeError`, so the fused kernel is only valid when no element overflows. The preflight
+/// scans the packed payload once; a safe range takes the fused kernel, while an unsafe range
+/// falls back to the ordinary typed `array_map()` + `array_sum()` lowering, preserving the
+/// exact TypeError at the first overflowing element.
+pub(super) fn lower_map_sum_add_declared_int(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\')) != "array_sum" || args.len() != 1 {
+        return None;
+    }
+    if ctx.functions.contains_key(name.trim_start_matches('\\'))
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let ExprKind::FunctionCall {
+        name: map_name,
+        args: map_args,
+    } = &args[0].kind
+    else {
+        return None;
+    };
+    if php_symbol_key(map_name.as_str().trim_start_matches('\\')) != "array_map"
+        || ctx.functions.contains_key(map_name.as_str().trim_start_matches('\\'))
+        || map_args.len() != 2
+        || crate::types::call_args::has_named_args(map_args)
+        || map_args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let ExprKind::Variable(source_name) = &map_args[1].kind else {
+        return None;
+    };
+    if ctx.local_type(source_name).codegen_repr()
+        != PhpType::Array(Box::new(PhpType::Int))
+    {
+        return None;
+    }
+    let (param, body) = declared_int_single_param_closure(&map_args[0])?;
+    let offset = match &body.kind {
+        ExprKind::BinaryOp { left, op: BinOp::Add, right } => {
+            additive_literal(left, right, param)?
+        }
+        _ => return None,
+    };
+    let source = lower_expr(ctx, &map_args[1]);
+    let offset = ctx.emit_value(
+        Op::ConstI64,
+        Vec::new(),
+        Some(Immediate::I64(offset)),
+        PhpType::Int,
+        Op::ConstI64.default_effects(),
+        Some(expr.span),
+    );
+    let preflight_effects = crate::ir::RuntimeFnId::ArrayMapSumAddSafe.intrinsic_effects();
+    let safe = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![source.value, offset.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+            crate::ir::RuntimeFnId::ArrayMapSumAddSafe,
+        ))),
+        PhpType::Bool,
+        preflight_effects,
+        Some(expr.span),
+    );
+    let fused = ctx.builder.create_named_block("map_sum.fused", Vec::new());
+    let generic = ctx.builder.create_named_block("map_sum.generic", Vec::new());
+    let merge = ctx.builder.create_named_block("map_sum.merge", Vec::new());
+    let temp_name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let split_initialized = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(crate::ir::Terminator::CondBr {
+        cond: safe.value,
+        then_target: fused,
+        then_args: Vec::new(),
+        else_target: generic,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(fused);
+    ctx.restore_initialized_slots(split_initialized.clone());
+    let fused_value = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![source.value, offset.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+            crate::ir::RuntimeFnId::ArrayMapSumAdd,
+        ))),
+        PhpType::Mixed,
+        crate::ir::RuntimeFnId::ArrayMapSumAdd.intrinsic_effects(),
+        Some(expr.span),
+    );
+    super::merge_temps::store_value_into_temp(
+        ctx,
+        &temp_name,
+        PhpType::Mixed,
+        fused_value,
+        expr.span,
+    );
+    let fused_reachable = !ctx.builder.insertion_block_is_terminated();
+    let fused_initialized = ctx.initialized_slots_snapshot();
+    super::merge_temps::branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(generic);
+    ctx.restore_initialized_slots(split_initialized.clone());
+    let mapped = lower_expr(ctx, &args[0]);
+    let summed = super::function_calls::emit_builtin_call_value(
+        ctx,
+        "array_sum",
+        vec![mapped.value],
+        PhpType::Mixed,
+        expr.span,
+        None,
+    );
+    super::merge_temps::store_value_into_temp(
+        ctx,
+        &temp_name,
+        PhpType::Mixed,
+        summed,
+        expr.span,
+    );
+    let generic_reachable = !ctx.builder.insertion_block_is_terminated();
+    let generic_initialized = ctx.initialized_slots_snapshot();
+    super::merge_temps::branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(super::merge_temps::merge_initialized_slots_for_expr(
+        &split_initialized,
+        fused_initialized,
+        fused_reachable,
+        generic_initialized,
+        generic_reachable,
+    ));
+    Some(super::merge_temps::take_owned_temp(ctx, &temp_name, expr.span))
+}
+
+/// Returns the parameter name and return expression of a capture-free `: int` scalar closure.
+fn declared_int_single_param_closure(expr: &Expr) -> Option<(&str, &Expr)> {
+    let ExprKind::Closure {
+        params,
+        variadic: None,
+        return_type: Some(TypeExpr::Int),
+        body,
+        captures,
+        capture_refs,
+        ..
+    } = &expr.kind
+    else {
+        return None;
+    };
+    let [(param, param_type, default, is_ref)] = params.as_slice() else {
+        return None;
+    };
+    if !matches!(param_type, None | Some(TypeExpr::Int))
+        || default.is_some()
+        || *is_ref
+        || !captures.is_empty()
+        || !capture_refs.is_empty()
+    {
+        return None;
+    }
+    let [Stmt { kind: StmtKind::Return(Some(body)), .. }] = body.as_slice() else {
+        return None;
+    };
+    Some((param.as_str(), body))
+}

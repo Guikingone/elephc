@@ -24,6 +24,14 @@ pub(crate) fn lower_array_map_sum_add(
     lower_two_operand_kernel(ctx, inst, "__rt_array_map_sum_add")
 }
 
+/// Lowers the declared-int map+sum overflow preflight.
+pub(crate) fn lower_array_map_sum_add_safe(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_two_operand_kernel(ctx, inst, "__rt_array_map_sum_add_safe")
+}
+
 /// Lowers `array_filter_count_mod(array, divisor)` into the fused runtime kernel.
 pub(crate) fn lower_array_filter_count_mod(
     ctx: &mut FunctionContext<'_>,
