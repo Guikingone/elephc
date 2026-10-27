@@ -45,6 +45,17 @@ pub(super) fn lower_property_assign(
         (receiver, rhs)
     } else {
         let object = lower_expr(ctx, object);
+        if matches!(ctx.builder.value_php_type(object.value), PhpType::Void) {
+            // A receiver that is statically null (an undefined variable php reads as null):
+            // the value is evaluated, then the write raises php's Error.
+            lower_expr(ctx, value_expr);
+            crate::ir_lower::stmt::lower_throw_access_error(
+                ctx,
+                &format!("Attempt to assign property \"{}\" on null", property),
+                span,
+            );
+            return;
+        }
         let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let rhs = match object_property_type(ctx, object.value, property) {
             Some(property_ty) => {

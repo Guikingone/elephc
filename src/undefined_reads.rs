@@ -43,6 +43,9 @@ const DYNAMIC_SCOPE_CALLS: &[&str] = &[
 thread_local! {
     /// `extern global` names of the program being rewritten, visible in every scope.
     static EXTERN_GLOBALS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    /// Names `unset` cannot leave undefined in the scope being walked: in the main scope, a
+    /// function's `global $x` may recreate the cell before the next read.
+    static UNKILLABLE: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
 /// Calls whose variable arguments are probes rather than reads.
@@ -50,8 +53,16 @@ const PROBE_CALLS: &[&str] = &["isset", "empty", "unset"];
 
 /// Rewrites the undefined-variable reads of every scope in the program.
 pub fn rewrite(program: &mut Vec<Stmt>) {
+    crate::globals_array::rewrite(program);
     let mut program_globals = HashSet::new();
     collect_program_globals(program, &mut program_globals);
+    // Closure bodies bind globals too (`function () { global $a; ... }`).
+    crate::undefined_constants::walk_program_exprs_mut(program, &mut |expr| {
+        if let ExprKind::Closure { body, .. } = &expr.kind {
+            collect_program_globals(body, &mut program_globals);
+        }
+    });
+    bind_function_only_globals(program, &program_globals);
     let externs = program
         .iter()
         .filter_map(|stmt| match &stmt.kind {
@@ -61,16 +72,46 @@ pub fn rewrite(program: &mut Vec<Stmt>) {
         .collect();
     EXTERN_GLOBALS.with(|names| *names.borrow_mut() = externs);
     let mut main_scope = ScopeFacts::new();
-    main_scope.written.extend(program_globals);
+    main_scope.written.extend(program_globals.iter().cloned());
     main_scope.written.extend(["argv", "argc"].map(str::to_string));
     vivify_scope(program, &main_scope);
     let mut maybe = main_scope.written.clone();
     collect_stmts(program, &mut main_scope);
     rewrite_scope_stmts(program, &main_scope);
     if !main_scope.dynamic {
+        UNKILLABLE.with(|names| *names.borrow_mut() = program_globals);
         rewrite_reads_before_writes(program, &mut maybe);
+        UNKILLABLE.with(|names| names.borrow_mut().clear());
     }
     EXTERN_GLOBALS.with(|names| names.borrow_mut().clear());
+}
+
+/// Binds, at the top of the main scope, the globals only functions write (`global $c; $c = 5;`):
+/// main then reads the shared cell instead of a local nothing assigns. A main-scope `global` is
+/// a no-op in php, so this only gives the checker and lowering the cell they need.
+fn bind_function_only_globals(program: &mut Vec<Stmt>, program_globals: &HashSet<String>) {
+    let mut main_writes = ScopeFacts { written: HashSet::new(), dynamic: false, flow: false };
+    collect_stmts(program, &mut main_writes);
+    let mut names: Vec<String> = program_globals
+        .iter()
+        .filter(|name| {
+            !main_writes.written.contains(*name)
+                && !ALWAYS_DEFINED.contains(&name.as_str())
+                && !matches!(name.as_str(), "argc" | "argv")
+        })
+        .cloned()
+        .collect();
+    if names.is_empty() {
+        return;
+    }
+    names.sort();
+    let span = program.first().map(|stmt| stmt.span).unwrap_or_else(crate::span::Span::dummy);
+    let binding = Stmt::new(StmtKind::Global { vars: names }, span);
+    // Namespaced programs keep every statement inside their blocks.
+    match program.iter_mut().find(|stmt| matches!(stmt.kind, StmtKind::NamespaceBlock { .. })) {
+        Some(Stmt { kind: StmtKind::NamespaceBlock { body, .. }, .. }) => body.insert(0, binding),
+        _ => program.insert(0, binding),
+    }
 }
 
 /// Per-scope facts gathered before rewriting.
@@ -92,7 +133,7 @@ impl ScopeFacts {
 
     /// Returns whether a read of `name` is certainly undefined in this scope.
     fn read_is_undefined(&self, name: &str) -> bool {
-        !self.dynamic && !self.written.contains(name)
+        !self.dynamic && !self.written.contains(name) && !is_compiler_temp(name)
     }
 }
 
@@ -669,13 +710,20 @@ fn rewrite_expr(expr: &mut Expr, facts: &ScopeFacts) {
             );
         }
         // php reports nothing for probes or the left side of `??`.
-        ExprKind::NullCoalesce { default, .. } => rewrite_expr(default, facts),
+        ExprKind::NullCoalesce { value, default } => {
+            rewrite_probe(value, facts);
+            rewrite_expr(default, facts);
+        }
         // `@` suppresses the warning but the read still yields `null`.
         ExprKind::ErrorSuppress(inner) => silence_undefined_reads(inner, facts),
         ExprKind::FunctionCall { name, args } => {
             let key = crate::names::php_symbol_key(name.as_str().trim_start_matches('\\'));
             let short = key.rsplit('\\').next().unwrap_or(&key).to_string();
-            if !PROBE_CALLS.contains(&short.as_str()) {
+            if PROBE_CALLS.contains(&short.as_str()) {
+                for arg in args.iter_mut() {
+                    rewrite_probe(arg, facts);
+                }
+            } else {
                 rewrite_exprs(args, facts);
             }
         }
@@ -704,6 +752,27 @@ fn rewrite_expr(expr: &mut Expr, facts: &ScopeFacts) {
             rewrite_exprs(args, facts);
         }
         _ => for_each_child_expr_mut(expr, &mut |child| rewrite_expr(child, facts)),
+    }
+}
+
+/// Rewrites a probed lvalue (`isset($a[$k])`, `$o->p ?? d`): its base stays silent, but the
+/// index and dynamic-name expressions along the spine are ordinary reads.
+fn rewrite_probe(expr: &mut Expr, facts: &ScopeFacts) {
+    match &mut expr.kind {
+        ExprKind::Variable(_) => {}
+        ExprKind::ArrayAccess { array, index } => {
+            rewrite_probe(array, facts);
+            rewrite_expr(index, facts);
+        }
+        ExprKind::PropertyAccess { object, .. } | ExprKind::NullsafePropertyAccess { object, .. } => {
+            rewrite_probe(object, facts)
+        }
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            rewrite_probe(object, facts);
+            rewrite_expr(property, facts);
+        }
+        _ => rewrite_expr(expr, facts),
     }
 }
 
@@ -991,83 +1060,419 @@ fn mark_expr_names(expr: &mut Expr, seen: &mut HashSet<String>) {
 ///
 /// `maybe` holds the names some path may have written before the current point: branches merge
 /// by union, a loop first adds every write of its body (a later write reaches the next
-/// iteration), and a statement's own writes count as already written for that statement, so
-/// `($a = 1) + $a` is never touched. Only names absent from `maybe` are rewritten, through the
-/// same probe-aware `rewrite_expr` the whole-scope pass uses.
-fn rewrite_reads_before_writes(stmts: &mut [Stmt], maybe: &mut HashSet<String>) {
-    for stmt in stmts.iter_mut() {
-        let mut own = ScopeFacts { written: HashSet::new(), dynamic: false, flow: false };
-        collect_stmt(stmt, &mut own);
-        match &mut stmt.kind {
-            StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
-                // A condition's writes (`if ($m = f())`, `preg_match(.., $m)`) count for the
-                // conditions themselves and precede every branch body.
-                let mut conditions = ScopeFacts { written: HashSet::new(), dynamic: false, flow: true };
-                collect_expr(condition, &mut conditions);
-                for (condition, _) in elseif_clauses.iter() {
-                    collect_expr(condition, &mut conditions);
-                }
-                maybe.extend(conditions.written);
-                rewrite_expr(condition, &facts_from(maybe));
-                let mut merged = maybe.clone();
-                let mut branch = maybe.clone();
-                rewrite_reads_before_writes(then_body, &mut branch);
-                merged.extend(branch);
-                for (condition, body) in elseif_clauses.iter_mut() {
-                    rewrite_expr(condition, &facts_from(maybe));
-                    let mut branch = maybe.clone();
-                    rewrite_reads_before_writes(body, &mut branch);
-                    merged.extend(branch);
-                }
-                if let Some(body) = else_body {
-                    let mut branch = maybe.clone();
-                    rewrite_reads_before_writes(body, &mut branch);
-                    merged.extend(branch);
-                }
-                *maybe = merged;
+/// iteration), and `unset($x)` removes `$x` again. Inside one statement reads are taken in
+/// evaluation order (`$a = isset($a) ? $a : []` reads `$a` before writing it). A statement that
+/// writes through or increments a name nothing defined yet gets that name initialized first,
+/// the way php's fetch-for-write meets an undefined variable.
+fn rewrite_reads_before_writes(stmts: &mut Vec<Stmt>, maybe: &mut HashSet<String>) {
+    let mut index = 0;
+    while index < stmts.len() {
+        let mut inits = loop_first_iteration_undefined(&stmts[index], maybe);
+        inits.extend(undefined_write_roots(&stmts[index], maybe));
+        for (name, warns) in inits {
+            let span = stmts[index].span;
+            stmts.insert(index, undefined_init(&name, warns, span));
+            maybe.insert(name);
+            index += 1;
+        }
+        rewrite_flow_stmt(&mut stmts[index], maybe);
+        index += 1;
+    }
+}
+
+/// Names a loop reads (or writes through) on its first iteration before the loop itself defines
+/// them; the loop body's own writes only reach later iterations.
+///
+/// The body is rewritten on a copy with the entry state; every name of the loop's writes that
+/// comes out as an undefined read or a fresh init is hoisted before the loop. The hoisted init
+/// warns only when the body certainly runs (`do`/`while`, `for(;;)`), since it fires once at
+/// entry rather than at the read.
+fn loop_first_iteration_undefined(stmt: &Stmt, maybe: &HashSet<String>) -> Vec<(String, bool)> {
+    let body_runs = match &stmt.kind {
+        StmtKind::DoWhile { .. } => true,
+        StmtKind::For { condition, .. } => condition.is_none(),
+        StmtKind::While { .. } | StmtKind::Foreach { .. } => false,
+        _ => return Vec::new(),
+    };
+    let mut own = ScopeFacts { written: HashSet::new(), dynamic: false, flow: false };
+    collect_stmt(stmt, &mut own);
+    let mut entry = maybe.clone();
+    let mut probe = stmt.clone();
+    match &mut probe.kind {
+        StmtKind::While { condition, .. } => rewrite_ordered(condition, &mut entry),
+        StmtKind::For { init, condition, .. } => {
+            if let Some(init) = init {
+                let mut writes = ScopeFacts { written: HashSet::new(), dynamic: false, flow: true };
+                collect_stmt(init, &mut writes);
+                entry.extend(writes.written);
             }
-            StmtKind::While { .. }
-            | StmtKind::DoWhile { .. }
-            | StmtKind::For { .. }
-            | StmtKind::Foreach { .. }
-            | StmtKind::Switch { .. }
-            | StmtKind::Try { .. } => {
-                // Every write inside may reach any read inside (loops repeat, catches follow any
-                // point of the try): add them first, then walk the bodies.
-                maybe.extend(own.written.iter().cloned());
-                for_each_child_body_mut(stmt, &mut |body| rewrite_reads_before_writes(body, maybe));
-                match &mut stmt.kind {
-                    StmtKind::While { condition, .. } | StmtKind::DoWhile { condition, .. } => {
-                        rewrite_expr(condition, &facts_from(maybe));
-                    }
-                    StmtKind::Foreach { array, .. } => rewrite_expr(array, &facts_from(maybe)),
-                    StmtKind::Switch { subject, .. } => rewrite_expr(subject, &facts_from(maybe)),
-                    _ => {}
-                }
-            }
-            StmtKind::FunctionDecl { .. }
-            | StmtKind::ClassDecl { .. }
-            | StmtKind::TraitDecl { .. }
-            | StmtKind::InterfaceDecl { .. }
-            | StmtKind::EnumDecl { .. }
-            | StmtKind::NamespaceBlock { .. }
-            | StmtKind::Synthetic(_)
-            | StmtKind::IncludeOnceGuard { .. } => {
-                if let StmtKind::NamespaceBlock { body, .. }
-                | StmtKind::Synthetic(body)
-                | StmtKind::IncludeOnceGuard { body, .. } = &mut stmt.kind
-                {
-                    rewrite_reads_before_writes(body, maybe);
-                }
-            }
-            _ => {
-                let mut facts = facts_from(maybe);
-                facts.written.extend(own.written.iter().cloned());
-                rewrite_stmt_reads_only(stmt, &facts);
+            if let Some(condition) = condition {
+                rewrite_ordered(condition, &mut entry);
             }
         }
-        maybe.extend(own.written);
+        StmtKind::Foreach { key_var, value_var, .. } => {
+            entry.extend(key_var.iter().cloned());
+            entry.insert(value_var.clone());
+        }
+        _ => {}
     }
+    let original_null_inits = null_inits(stmt);
+    let mut hoisted: Vec<(String, bool)> = Vec::new();
+    let mut record = |name: &str, warns: bool| {
+        if own.written.contains(name) && !maybe.contains(name) && !is_compiler_temp(name) && !hoisted.iter().any(|(seen, _)| seen == name) {
+            hoisted.push((name.to_string(), warns && body_runs));
+        }
+    };
+    for_each_child_body_mut(&mut probe, &mut |body| {
+        let mut state = entry.clone();
+        rewrite_reads_before_writes(body, &mut state);
+    });
+    if let StmtKind::While { condition, .. } | StmtKind::For { condition: Some(condition), .. } = &probe.kind {
+        visit_undefined_reads(condition, &mut |name| record(name, true));
+    }
+    let mut visit_stmts = |body: &mut Vec<Stmt>| {
+        crate::undefined_constants::walk_program_exprs_mut(body, &mut |expr| {
+            if let Some(name) = undefined_read_name(expr) {
+                record(&name, true);
+            }
+        });
+    };
+    for_each_child_body_mut(&mut probe, &mut visit_stmts);
+    for (name, count) in null_inits(&probe) {
+        if count > original_null_inits.get(&name).copied().unwrap_or(0) {
+            record(&name, false);
+        }
+    }
+    hoisted
+}
+
+/// Returns the name an `UndefinedVariable` warning call reports, when `expr` is one.
+fn undefined_read_name(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::FunctionCall { name, args }
+            if name.compiler_runtime() == Some(CompilerCall::UndefinedVariable) =>
+        {
+            match args.first().map(|arg| &arg.kind) {
+                Some(ExprKind::StringLiteral(name)) => Some(name.clone()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Calls `report` for every `UndefinedVariable` warning call inside `expr`.
+fn visit_undefined_reads(expr: &Expr, report: &mut dyn FnMut(&str)) {
+    if let Some(name) = undefined_read_name(expr) {
+        report(&name);
+        return;
+    }
+    for_each_child_expr(expr, &mut |child| visit_undefined_reads(child, report));
+}
+
+/// Counts the silent `$x = null;` statements per name in a statement's bodies.
+fn null_inits(stmt: &Stmt) -> std::collections::HashMap<String, usize> {
+    let mut counts = std::collections::HashMap::new();
+    fn walk(stmts: &[Stmt], counts: &mut std::collections::HashMap<String, usize>) {
+        for stmt in stmts {
+            if let StmtKind::Assign { name, value } = &stmt.kind {
+                if matches!(value.kind, ExprKind::Null) {
+                    *counts.entry(name.clone()).or_insert(0) += 1;
+                }
+            }
+            for_each_child_body(stmt, &mut |body| walk(body, counts));
+        }
+    }
+    for_each_child_body(stmt, &mut |body| walk(body, &mut counts));
+    counts
+}
+
+/// Applies the flow-sensitive rewrite to one statement and records its writes in `maybe`.
+fn rewrite_flow_stmt(stmt: &mut Stmt, maybe: &mut HashSet<String>) {
+    let mut own = ScopeFacts { written: HashSet::new(), dynamic: false, flow: false };
+    collect_stmt(stmt, &mut own);
+    match &mut stmt.kind {
+        StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
+            // A condition's writes (`if ($m = f())`, `preg_match(.., $m)`) count for the
+            // conditions themselves and precede every branch body.
+            rewrite_ordered(condition, maybe);
+            let mut merged = maybe.clone();
+            let mut branch = maybe.clone();
+            rewrite_reads_before_writes(then_body, &mut branch);
+            merged.extend(branch);
+            for (condition, body) in elseif_clauses.iter_mut() {
+                rewrite_ordered(condition, maybe);
+                merged.extend(maybe.iter().cloned());
+                let mut branch = maybe.clone();
+                rewrite_reads_before_writes(body, &mut branch);
+                merged.extend(branch);
+            }
+            if let Some(body) = else_body {
+                let mut branch = maybe.clone();
+                rewrite_reads_before_writes(body, &mut branch);
+                merged.extend(branch);
+            }
+            *maybe = merged;
+        }
+        StmtKind::Foreach { array, .. } => {
+            // The subject is evaluated once, before the loop writes its key and value.
+            rewrite_ordered(array, maybe);
+            maybe.extend(own.written.iter().cloned());
+            for_each_child_body_mut(stmt, &mut |body| rewrite_reads_before_writes(body, maybe));
+        }
+        StmtKind::Switch { subject, .. } => {
+            rewrite_ordered(subject, maybe);
+            maybe.extend(own.written.iter().cloned());
+            for_each_child_body_mut(stmt, &mut |body| rewrite_reads_before_writes(body, maybe));
+        }
+        StmtKind::Try { try_body, catches, finally_body } => {
+            // The try body runs in order; a catch or finally may follow any point of it.
+            rewrite_reads_before_writes(try_body, maybe);
+            maybe.extend(own.written.iter().cloned());
+            for catch in catches.iter_mut() {
+                rewrite_reads_before_writes(&mut catch.body, maybe);
+            }
+            if let Some(body) = finally_body {
+                rewrite_reads_before_writes(body, maybe);
+            }
+        }
+        StmtKind::While { .. } | StmtKind::DoWhile { .. } | StmtKind::For { .. } => {
+            // Every write inside may reach any read inside (loops repeat): add them first, then
+            // walk the bodies.
+            maybe.extend(own.written.iter().cloned());
+            for_each_child_body_mut(stmt, &mut |body| rewrite_reads_before_writes(body, maybe));
+            if let StmtKind::While { condition, .. } | StmtKind::DoWhile { condition, .. } = &mut stmt.kind {
+                rewrite_expr(condition, &facts_from(maybe));
+            }
+        }
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::Synthetic(body)
+        | StmtKind::IncludeOnceGuard { body, .. } => rewrite_reads_before_writes(body, maybe),
+        StmtKind::FunctionDecl { .. }
+        | StmtKind::ClassDecl { .. }
+        | StmtKind::TraitDecl { .. }
+        | StmtKind::InterfaceDecl { .. }
+        | StmtKind::EnumDecl { .. } => {}
+        StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
+            rewrite_ordered(value, maybe);
+            maybe.insert(name.clone());
+        }
+        StmtKind::ArrayPush { value, .. }
+        | StmtKind::Echo(value)
+        | StmtKind::Throw(value)
+        | StmtKind::Return(Some(value)) => rewrite_ordered(value, maybe),
+        StmtKind::ExprStmt(value) => {
+            if let Some(names) = unset_variables(value) {
+                for name in names {
+                    if !UNKILLABLE.with(|kept| kept.borrow().contains(&name)) {
+                        maybe.remove(&name);
+                    }
+                }
+                return;
+            }
+            rewrite_ordered(value, maybe);
+        }
+        StmtKind::ArrayAssign { index, value, .. } => {
+            rewrite_ordered(index, maybe);
+            rewrite_ordered(value, maybe);
+        }
+        _ => {}
+    }
+    maybe.extend(own.written);
+}
+
+/// Returns the plain variables a statement-level `unset(...)` destroys, when it is one.
+fn unset_variables(expr: &Expr) -> Option<Vec<String>> {
+    let ExprKind::FunctionCall { name, args } = &expr.kind else {
+        return None;
+    };
+    let key = crate::names::php_symbol_key(name.as_str().trim_start_matches('\\'));
+    if key != "unset" {
+        return None;
+    }
+    Some(
+        args.iter()
+            .filter_map(|arg| match &arg.kind {
+                ExprKind::Variable(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect(),
+    )
+}
+
+/// Rewrites undefined reads of `expr` in evaluation order, adding its writes to `defined` as
+/// they happen: an assignment's value is read before its target is written.
+fn rewrite_ordered(expr: &mut Expr, defined: &mut HashSet<String>) {
+    let mut writes = ScopeFacts { written: HashSet::new(), dynamic: false, flow: true };
+    collect_expr(expr, &mut writes);
+    if writes.written.iter().all(|name| defined.contains(name)) {
+        rewrite_expr(expr, &facts_from(defined));
+        return;
+    }
+    match &mut expr.kind {
+        ExprKind::Assignment { target, value, .. } if matches!(target.kind, ExprKind::Variable(_)) => {
+            rewrite_ordered(value, defined);
+            defined.extend(writes.written);
+        }
+        ExprKind::BinaryOp { .. }
+        | ExprKind::Ternary { .. }
+        | ExprKind::ShortTernary { .. }
+        | ExprKind::Not(_)
+        | ExprKind::Negate(_)
+        | ExprKind::BitNot(_)
+        | ExprKind::Cast { .. }
+        | ExprKind::ArrayLiteral(_)
+        | ExprKind::ArrayLiteralAssoc(_) => {
+            for_each_child_expr_mut(expr, &mut |child| rewrite_ordered(child, defined));
+            defined.extend(writes.written);
+        }
+        // Calls (whose variable arguments may be by-reference), increments and other writing
+        // forms keep the conservative statement view: their writes count before their reads.
+        _ => {
+            defined.extend(writes.written);
+            rewrite_expr(expr, &facts_from(defined));
+        }
+    }
+}
+
+/// Names a statement writes through (a property, a compound element write, an increment, a
+/// reference source) while no path has defined them, with whether php warns for the read.
+fn undefined_write_roots(stmt: &Stmt, maybe: &HashSet<String>) -> Vec<(String, bool)> {
+    let mut roots: Vec<(String, bool)> = Vec::new();
+    let add = |name: &str, warns: bool, roots: &mut Vec<(String, bool)>| {
+        if maybe.contains(name) || ALWAYS_DEFINED.contains(&name) || name == "this" || is_compiler_temp(name) {
+            return;
+        }
+        if let Some(seen) = roots.iter_mut().find(|(seen, _)| seen == name) {
+            seen.1 |= warns;
+        } else {
+            roots.push((name.to_string(), warns));
+        }
+    };
+    let mut reads = HashSet::new();
+    match &stmt.kind {
+        StmtKind::RefAssign { source, .. } => {
+            if let Some(root) = spine_root(source) {
+                add(root, false, &mut roots);
+            }
+            return roots;
+        }
+        StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyArrayPush { object, value, .. } => {
+            collect_value_reads(value, &mut reads);
+            if let Some(root) = spine_root(object) {
+                let warns = reads.contains(root);
+                add(root, warns, &mut roots);
+            }
+            return roots;
+        }
+        // A compound element write (`$a[] &= 1`) reads the undefined array first; a plain one
+        // auto-vivifies silently and is left to the vivify pass.
+        StmtKind::ArrayPush { array, value } | StmtKind::ArrayAssign { array, value, .. } => {
+            collect_value_reads(value, &mut reads);
+            if reads.contains(array) {
+                add(array, true, &mut roots);
+            }
+            return roots;
+        }
+        StmtKind::NestedArrayAssign { target, value } => {
+            collect_value_reads(value, &mut reads);
+            if let Some(root) = spine_root(target).filter(|root| reads.contains(*root)) {
+                add(root, true, &mut roots);
+            }
+            return roots;
+        }
+        StmtKind::ExprStmt(expr) | StmtKind::Echo(expr) | StmtKind::Return(Some(expr)) => {
+            collect_value_reads(expr, &mut reads);
+            visit_write_roots(expr, &reads, &mut |name, warns| add(name, warns, &mut roots));
+        }
+        StmtKind::Assign { value, .. } | StmtKind::TypedAssign { value, .. } => {
+            collect_value_reads(value, &mut reads);
+            visit_write_roots(value, &reads, &mut |name, warns| add(name, warns, &mut roots));
+        }
+        _ => {}
+    }
+    roots
+}
+
+/// Reports the increment targets and the roots of property or compound element writes in `expr`.
+fn visit_write_roots(expr: &Expr, reads: &HashSet<String>, report: &mut dyn FnMut(&str, bool)) {
+    match &expr.kind {
+        ExprKind::PreIncrement(name)
+        | ExprKind::PostIncrement(name)
+        | ExprKind::PreDecrement(name)
+        | ExprKind::PostDecrement(name) => report(name, true),
+        ExprKind::Assignment { target, value, .. } => {
+            match &target.kind {
+                ExprKind::PropertyAccess { object, .. }
+                | ExprKind::DynamicPropertyAccess { object, .. } => {
+                    if let Some(root) = spine_root(object) {
+                        report(root, reads.contains(root));
+                    }
+                }
+                // A plain element write auto-vivifies silently (the vivify pass seeds it); only
+                // a compound one (`$a[] &= 1`) reads the undefined variable first.
+                ExprKind::ArrayAccess { .. } => {
+                    if let Some(root) = spine_root(target) {
+                        if reads.contains(root) {
+                            report(root, true);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            visit_write_roots(value, reads, report);
+        }
+        ExprKind::Closure { .. } => {}
+        _ => for_each_child_expr(expr, &mut |child| visit_write_roots(child, reads, report)),
+    }
+}
+
+/// Collects the variables an expression reads as values (not the targets it writes).
+fn collect_value_reads(expr: &Expr, reads: &mut HashSet<String>) {
+    match &expr.kind {
+        ExprKind::Variable(name) => {
+            reads.insert(name.clone());
+        }
+        ExprKind::Assignment { value, .. } => collect_value_reads(value, reads),
+        ExprKind::Closure { .. } => {}
+        _ => for_each_child_expr(expr, &mut |child| collect_value_reads(child, reads)),
+    }
+}
+
+/// Returns the variable at the base of a write target (`$a`, `$a[1]->p`, `$o->p[2]`).
+fn spine_root(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
+        ExprKind::Variable(name) => Some(name),
+        ExprKind::ArrayAccess { array, .. } => spine_root(array),
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::NullsafePropertyAccess { object, .. }
+        | ExprKind::DynamicPropertyAccess { object, .. }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, .. } => spine_root(object),
+        _ => None,
+    }
+}
+
+/// Builds `$name = null;`, through the warning call when php reports the undefined read.
+fn undefined_init(name: &str, warns: bool, span: crate::span::Span) -> Stmt {
+    let value = if warns {
+        Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::compiler_call(CompilerCall::UndefinedVariable),
+                args: vec![Expr::new(ExprKind::StringLiteral(name.to_string()), span)],
+            },
+            span,
+        )
+    } else {
+        Expr::new(ExprKind::Null, span)
+    };
+    Stmt::new(StmtKind::Assign { name: name.to_string(), value }, span)
+}
+
+/// Returns whether `name` is a compiler temporary (`…#gen`): the desugaring that introduces one
+/// always defines it before reading it, often in an assignment's prelude this pass reads around.
+fn is_compiler_temp(name: &str) -> bool {
+    name.contains('#')
 }
 
 /// Builds rewrite facts whose defined names are `names`.
@@ -1075,26 +1480,20 @@ fn facts_from(names: &HashSet<String>) -> ScopeFacts {
     ScopeFacts { written: names.clone(), dynamic: false, flow: true }
 }
 
-/// Rewrites the reads of one simple statement without re-entering nested function scopes.
-fn rewrite_stmt_reads_only(stmt: &mut Stmt, facts: &ScopeFacts) {
-    match &mut stmt.kind {
-        StmtKind::Assign { value, .. }
-        | StmtKind::TypedAssign { value, .. }
-        | StmtKind::ArrayPush { value, .. }
-        | StmtKind::Echo(value)
-        | StmtKind::Throw(value)
-        | StmtKind::ExprStmt(value)
-        | StmtKind::Return(Some(value)) => rewrite_expr(value, facts),
-        StmtKind::ArrayAssign { index, value, .. } => {
-            rewrite_expr(index, facts);
-            rewrite_expr(value, facts);
-        }
-        _ => {}
-    }
+/// Mutable twin of `for_each_child_body`, for other AST passes.
+pub(crate) fn for_each_child_body_mut_pub(stmt: &mut Stmt, visit: &mut dyn FnMut(&mut Vec<Stmt>)) {
+    for_each_child_body_mut(stmt, visit);
+}
+
+/// Adds the names one scope's statements write (assignments, `global`, `foreach`, ...).
+pub(crate) fn collect_scope_written_names(stmts: &[Stmt], names: &mut HashSet<String>) {
+    let mut facts = ScopeFacts { written: HashSet::new(), dynamic: false, flow: false };
+    collect_stmts(stmts, &mut facts);
+    names.extend(facts.written);
 }
 
 /// Mutable twin of `for_each_child_body`.
-fn for_each_child_body_mut(stmt: &mut Stmt, visit: &mut dyn FnMut(&mut [Stmt])) {
+fn for_each_child_body_mut(stmt: &mut Stmt, visit: &mut dyn FnMut(&mut Vec<Stmt>)) {
     match &mut stmt.kind {
         StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
             visit(then_body);

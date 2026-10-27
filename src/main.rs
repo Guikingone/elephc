@@ -84,6 +84,7 @@ mod test_command;
 mod testing_prelude;
 mod timings;
 mod types;
+mod globals_array;
 mod undefined_constants;
 mod undefined_reads;
 mod tz_prelude;

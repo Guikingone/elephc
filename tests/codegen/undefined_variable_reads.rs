@@ -203,3 +203,35 @@ echo $top, "\n";
     }
     assert_eq!(out, "NULL\nint(1)\nint(1)\ny\n2\n|\n1\n");
 }
+
+/// Reads after `unset`, a self-read in an assignment, a loop's first iteration, a reference to
+/// an undefined source, a property write on one, an index under `isset`, and literal-key
+/// `$GLOBALS` all behave like php (output measured with php 8.5).
+#[test]
+fn test_undefined_reads_in_ordered_and_loop_positions() {
+    let run = compile_and_run_capture(r#"<?php
+function a() { $v = 1; unset($v); var_dump($v); }
+function b() { $old = isset($old) ? (array)$old : []; var_dump($old); }
+function c() { $n = 0; do { $n++; $total = ($total ?? 0) + $n; $hits++; } while ($n < 3); var_dump($total, $hits); }
+function d() { $c =& $a; var_dump($a); }
+function e() { try { $obj->a = 3; } catch (Error $e) { echo $e->getMessage(), "\n"; } }
+function f() { var_dump(isset($arr[$k])); }
+a(); b(); c(); d(); e(); f();
+class Box { public $n = 1; }
+$box = new Box;
+function g() { $GLOBALS['box']->n++; $GLOBALS['made'] = 'yes'; return $GLOBALS['box']->n; }
+var_dump(g(), $made);
+"#);
+    let (out, err) = (run.stdout, run.stderr);
+    for name in ["$v", "$hits", "$k"] {
+        assert!(err.contains(&format!("Undefined variable {name}")), "{name}: {err}");
+    }
+    for name in ["$old", "$total", "$a", "$obj"] {
+        assert!(!err.contains(&format!("Undefined variable {name}")), "{name}: {err}");
+    }
+    assert_eq!(
+        out,
+        "NULL\narray(0) {\n}\nint(6)\nint(3)\nNULL\nAttempt to assign property \"a\" on null\n\
+         bool(false)\nint(2)\nstring(3) \"yes\"\n"
+    );
+}

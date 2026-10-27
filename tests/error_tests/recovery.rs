@@ -242,12 +242,12 @@ fn test_failed_list_unpack_inference_targets_no_undefined_cascade() {
 /// unbound target prevents the undefined source diagnostic from cascading to later target reads.
 #[test]
 fn test_failed_reference_assignment_target_no_undefined_cascade() {
+    // php binds an undefined reference source to a fresh null: nothing is undefined.
     let messages =
         checker_error_messages("<?php $target =& $missing; echo count($target);");
-    assert_eq!(
-        messages,
-        vec!["Undefined variable: $missing".to_string()],
-        "failed reference assignment must not leave its target undefined",
+    assert!(
+        !messages.iter().any(|message| message.contains("Undefined variable")),
+        "a reference to an undefined source must not report it: {messages:?}",
     );
 }
 

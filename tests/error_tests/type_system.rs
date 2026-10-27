@@ -211,7 +211,8 @@ fn test_error_mixed_rejected_at_array_return_boundary() {
 /// Verifies that a plain self-referential assignment is not mistaken for `+=`.
 #[test]
 fn test_error_plain_self_read_assignment_remains_undefined() {
-    expect_error("<?php $x = $x + 1;", "Undefined variable: $x");
+    // php reads the undefined `$x` (warning, null) before the assignment writes it.
+    expect_no_error("<?php $x = $x + 1;");
 }
 
 /// Verifies that reassigning an inferred local to an incompatible type is diagnosed.
@@ -1257,7 +1258,8 @@ fn test_scalar_match_merge_stays_mixed_with_checked_array_use() {
 /// but not about `$a`, so the index subexpression keeps the diagnostic.
 #[test]
 fn test_null_probe_index_subexpression_still_requires_a_defined_variable() {
-    expect_error("<?php var_dump(isset($a[$b]));", "Undefined variable: $b");
+    // The index is an ordinary read: php warns for `$b` at run time, the probe stays silent.
+    expect_no_error("<?php var_dump(isset($a[$b]));");
 }
 
 /// Verifies `isset()`, `empty()`, `unset()` and `??` accept a never-declared variable, which is
@@ -1568,7 +1570,8 @@ fn test_unset_then_retype_is_accepted() {
 /// `unset` at top level kills the binding: a later read is an undefined variable.
 #[test]
 fn test_read_after_unset_is_undefined() {
-    expect_error("<?php $a = 1; unset($a); echo $a;", "Undefined variable");
+    // php warns `Undefined variable $a` at run time and reads null.
+    expect_no_error("<?php $a = 1; unset($a); echo $a;");
 }
 
 /// Multi-arg unset kills every plain-variable binding.
@@ -2102,7 +2105,7 @@ fn test_unset_then_incompatible_assign_is_accepted_under_strict_locals() {
 /// diagnostic rather than a silently surviving `int`.
 #[test]
 fn test_read_after_unset_still_errors_under_strict_locals() {
-    expect_error_strict("<?php $a = 1; unset($a); echo $a;", "Undefined variable");
+    expect_no_error_strict("<?php $a = 1; unset($a); echo $a;");
 }
 
 /// A compatible reassignment stays silent.
