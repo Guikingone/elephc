@@ -355,7 +355,13 @@ pub(super) fn lower_reduce_sum(
     else {
         return None;
     };
-    if params.len() != 2 || !captures.is_empty() || !capture_refs.is_empty() {
+    if params.len() != 2
+        || params
+            .iter()
+            .any(|(_, type_ann, _, is_ref)| type_ann.is_some() || *is_ref)
+        || !captures.is_empty()
+        || !capture_refs.is_empty()
+    {
         return None;
     }
     let [Stmt { kind: StmtKind::Return(Some(body)), .. }] = body.as_slice() else {
