@@ -152,6 +152,10 @@ integer sinks. Explicit `int` local declarations apply the same conversion to th
 initializer and later arithmetic assignments. Inferred locals retain PHP's dynamic
 integer or float result. Only add/subtract/multiply trees with concrete integer
 leaves take this path; unknown Mixed sources keep the ordinary boundary conversion.
+Names declared inside a branch, loop, exception region or include-once guard keep
+their existing dynamic reassignment handling throughout the body. This conservative
+boundary prevents a skipped declaration from narrowing a sibling arm or a later
+write. Explicit declaration initializers still use their own integer destination.
 
 The conversion consumes the final result of the entire tree. Intermediate overflow
 still promotes at the original operation, and later operations use its float value.

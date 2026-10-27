@@ -78,3 +78,34 @@ echo gettype(redeclared($argc));
             && inst.immediate == Some(Immediate::CastTarget(IrType::I64))), "{declaration}");
     }
 }
+
+/// Conditional declarations cannot publish integer facts across joins or loop backedges.
+#[test]
+fn integer_destinations_conditional_declarations_do_not_narrow_writes() {
+    for control in [
+        "if ($one > 100) { int $value = 0; }",
+        "if ($one < 0) {} elseif ($one > 100) { int $value = 0; }",
+        "while ($one > 100) { int $value = 0; break; }",
+        "do { int $value = 0; } while ($one > 100);",
+        "for ($i = 0; $i > $one; $i++) { int $value = 0; }",
+        "foreach ([$one] as $item) { int $value = 0; }",
+        "switch ($one) { case 100: int $value = 0; break; }",
+        "try { if ($one > 100) { throw new Exception(); } } catch (Exception $e) { int $value = 0; }",
+        "try { if ($one > 100) { throw new Exception(); } int $value = 0; } finally { echo $one; }",
+    ] {
+        let source = format!(r#"<?php
+function conditional(int $one): mixed {{
+    mixed $value = 0;
+    {control}
+    return ($value = PHP_INT_MAX + $one);
+}}
+echo gettype(conditional($argc));
+"#);
+        let module = super::lower_source(&source);
+        let f = function(&module, "conditional");
+        assert!(f.instructions.iter().any(|inst| inst.op == Op::ICheckedAdd), "{control}");
+        assert!(!f.instructions.iter().any(|inst| inst.op == Op::Cast
+            && inst.result_php_type == PhpType::Int
+            && inst.immediate == Some(Immediate::CastTarget(IrType::I64))), "{control}");
+    }
+}

@@ -101,6 +101,55 @@ echo gettype(redeclaredMixed($argc)), '|', gettype(redeclaredUnion($argc));
     }
 }
 
+/// Untaken declarations cannot constrain sibling arms, later writes or zero-trip loop exits.
+#[test]
+fn test_integer_destinations_conditional_declarations_keep_float_promotion() {
+    let source = r#"<?php
+function conditionalDeclaration(int $one): mixed {
+    mixed $value = 0;
+    if ($one > 100) { int $value = 0; }
+    $value = PHP_INT_MAX + $one;
+    return $value;
+}
+function siblingDeclaration(int $one): mixed {
+    mixed $value = 0;
+    if ($one > 100) { int $value = 0; }
+    else { $value = PHP_INT_MAX + $one; }
+    return $value;
+}
+function loopDeclaration(int $one): mixed {
+    mixed $value = 0;
+    while ($one > 100) { int $value = 0; break; }
+    return ($value = PHP_INT_MAX + $one);
+}
+function forDeclaration(int $one): mixed {
+    mixed $value = 0;
+    for ($i = 0; $i > $one; $i++) { int $value = 0; }
+    return ($value = PHP_INT_MAX + $one);
+}
+function switchDeclaration(int $one): mixed {
+    mixed $value = 0;
+    switch ($one) { case 100: int $value = 0; break; default: break; }
+    $value = PHP_INT_MAX + $one;
+    return $value;
+}
+function catchDeclaration(int $one): mixed {
+    mixed $value = 0;
+    try { if ($one > 100) { throw new Exception('unused'); } }
+    catch (Exception $e) { int $value = 0; }
+    $value = PHP_INT_MAX + $one;
+    return $value;
+}
+echo gettype(conditionalDeclaration($argc)), '|';
+echo gettype(siblingDeclaration($argc)), '|', gettype(loopDeclaration($argc)), '|';
+echo gettype(forDeclaration($argc)), '|', gettype(switchDeclaration($argc)), '|';
+echo gettype(catchDeclaration($argc));
+"#;
+    for optimized in [false, true] {
+        assert_eq!(run(source, optimized).0, "double|double|double|double|double|double");
+    }
+}
+
 /// Coerces direct, method, static, closure, named and statically unpacked integer operands.
 #[test]
 fn test_integer_destinations_call_surfaces_allocate_no_arithmetic_cells() {

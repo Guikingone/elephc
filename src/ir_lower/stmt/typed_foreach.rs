@@ -34,7 +34,7 @@ pub(super) fn lower_typed_assign(
     let lowered = ctx.retype_packed_address_for_pointer_sink(lowered, &php_type, Some(span));
     let lowered = coerce_typed_assign_value(ctx, lowered, &php_type, span);
     let lowered = coerce_declared_array_storage(ctx, lowered, &php_type, span);
-    if php_type == PhpType::Int {
+    if php_type == PhpType::Int && !ctx.conditional_local_declarations.contains(name) {
         ctx.integer_local_declarations.insert(name.to_owned());
     } else {
         ctx.integer_local_declarations.remove(name);
