@@ -631,7 +631,7 @@ fn preg_match_capture_rejects_removed_e_modifier_before_compile() {
         };
         let body = helper_body(&asm, "__rt_preg_match_capture");
         let reject_at = body.find(reject).unwrap_or_else(|| {
-            panic!("{name}: capture helper does not reject the /e marker\n{body}")
+            panic!("{name}: capture helper does not reject the /e marker ({reject})")
         });
         let compile_at = body.find("elephc_pcre2_v1_compile").unwrap_or_else(|| {
             panic!("{name}: capture helper does not compile")
