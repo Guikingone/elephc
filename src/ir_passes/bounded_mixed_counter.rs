@@ -94,32 +94,34 @@ impl IrPass for BoundedMixedCounter {
         "bounded_mixed_counter"
     }
 
-    /// Avoids graph construction for ordinary functions without boxed increment operations.
+    /// Avoids graph construction unless a boxed local has a recognized counter update.
     fn is_applicable(&self, function: &Function) -> bool {
-        let boxed_local = function.locals.iter().any(|local| {
-            local.kind == LocalKind::PhpLocal
-                && local.ir_type == IrType::Heap(IrHeapKind::Mixed)
-                && local.php_type == PhpType::Mixed
-        });
-        boxed_local
-            && function.instructions.iter().any(|inst| {
-                inst.op == Op::StrIncDec
-                    || matches!(
-                        (inst.op, &inst.immediate),
-                        (
-                            Op::MixedNumericBinop,
-                            Some(Immediate::MixedNumericOp(
-                                MixedNumericOp::Add | MixedNumericOp::Sub
-                            ))
-                        ) | (
-                            Op::ICheckedAdd
-                                | Op::ICheckedSub
-                                | Op::ICheckedAddToInt
-                                | Op::ICheckedSubToInt,
-                            _
-                        )
-                    )
+        let boxed: HashSet<LocalSlotId> = function
+            .locals
+            .iter()
+            .filter(|local| {
+                local.kind == LocalKind::PhpLocal
+                    && local.ir_type == IrType::Heap(IrHeapKind::Mixed)
+                    && local.php_type == PhpType::Mixed
             })
+            .map(|local| local.id)
+            .collect();
+        if boxed.is_empty() {
+            return false;
+        }
+        function.instructions.iter().any(|inst| {
+            if inst.op != Op::StoreLocal {
+                return false;
+            }
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+                return false;
+            };
+            boxed.contains(&slot)
+                && inst
+                    .operands
+                    .first()
+                    .is_some_and(|&stored| stored_counter_update(function, slot, stored))
+        })
     }
 
     /// Commits a trial representation only when every new checked update becomes unchecked.
@@ -760,6 +762,28 @@ fn compound_counter_updates(function: &Function, slots: &HashSet<LocalSlotId>) -
         }
     }
     updates
+}
+
+/// Follows ownership wrappers from a stored value to an increment or constant step.
+fn stored_counter_update(function: &Function, slot: LocalSlotId, mut value: ValueId) -> bool {
+    for _ in 0..8 {
+        let Some(inst) = defining_instruction(function, value) else {
+            return false;
+        };
+        match inst.op {
+            Op::StrIncDec => return true,
+            Op::Acquire | Op::Move | Op::Borrow | Op::MixedClone | Op::EnsureOwned
+                if inst.immediate.is_none() =>
+            {
+                let Some(&source) = inst.operands.first() else {
+                    return false;
+                };
+                value = source;
+            }
+            _ => return counter_step(function, slot, inst),
+        }
+    }
+    false
 }
 
 /// Follows ownership wrappers from a stored value back to a bounded counter step.

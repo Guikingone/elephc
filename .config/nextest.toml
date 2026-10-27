@@ -412,6 +412,16 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'test(lowers_examples_corpus)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# The opaque-eval demand probe compiles the whole builtin catalog; ~19s alone locally and
+# over the global 60s cap on a loaded non-codegen shard. A hang still terminates at 180s.
+[[profile.default.overrides]]
+filter = 'test(opaque_evals_demand_everything)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(opaque_evals_demand_everything)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
 # These eval/codegen regression tests intentionally exercise several complete
 # compile-link-run programs in one test. They exceed the 60s global guard on
 # one or more supported runners without being hung.

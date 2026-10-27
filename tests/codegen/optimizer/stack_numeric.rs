@@ -236,6 +236,92 @@ sum_echo($argc + 1000);
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// A TaggedScalar array element narrows to null-as-zero int and keeps the accumulator cell.
+#[test]
+fn test_stack_numeric_tagged_scalar_rhs_uses_frame_cell() {
+    let source = r#"<?php
+function sum_tagged_rhs(int $n): void {
+    $data = [];
+    $i = 0;
+    while ($i < $n) {
+        $data[] = $i % 97;
+        $i += 1;
+    }
+    $sum = 0;
+    $i = 0;
+    while ($i < count($data)) {
+        $sum += $data[$i];
+        $i += 1;
+    }
+    echo $sum . "|";
+}
+sum_tagged_rhs($argc + 9);
+"#;
+    let dir = make_cli_test_dir("elephc_stack_numeric_tagged_rhs");
+    let path = dir.join("main.php");
+    fs::write(&path, source).unwrap();
+    let mut command = elephc_cli_command(&dir);
+    command.args(["--emit-asm"]);
+    let output = command.arg(&path).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asm = fs::read_to_string(path.with_extension("s")).unwrap();
+    let function = asm
+        .split("@fn name=sum_tagged_rhs")
+        .nth(1)
+        .expect("sum_tagged_rhs assembly")
+        .split("@fn ")
+        .next()
+        .unwrap();
+    let body = function
+        .split("@block name=while.body")
+        .find(|body| body.contains("op=array_get"))
+        .expect("array sum loop body");
+    assert!(body.contains("op=cast"), "the element must narrow to int:\n{body}");
+    assert!(
+        body.contains("stack_numeric_integer"),
+        "the accumulator must keep its frame cell:\n{body}"
+    );
+    assert!(
+        !body.contains("__rt_mixed_from_value") && !body.contains("__rt_mixed_numeric_add"),
+        "the narrowed element must stay out of the boxed numeric helper:\n{body}"
+    );
+    assert_eq!(run(source, true).0, "45|");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// A missing int element is null-as-zero, and a tagged scalar sum still promotes to float.
+#[test]
+fn test_stack_numeric_tagged_scalar_null_and_overflow_match_php() {
+    let source = r#"<?php
+function sum_sparse(int $n): void {
+    $data = [1, 2];
+    $data[4] = 3;
+    $sum = 0;
+    for ($i = 0; $i < $n; $i++) {
+        $sum += @$data[$i];
+    }
+    echo gettype($sum), ':', @(int)$sum, '|';
+}
+function sum_overflow(int $n): void {
+    $data = [PHP_INT_MAX, 1];
+    $sum = 0;
+    for ($i = 0; $i < $n; $i++) {
+        $sum += $data[$i];
+    }
+    echo gettype($sum), ':', @(int)$sum, '|';
+}
+sum_sparse($argc + 4);
+sum_overflow($argc + 1);
+"#;
+    let expected = "integer:6|double:-9223372036854775808|";
+    assert_eq!(run(source, false).0, expected);
+    assert_eq!(run(source, true).0, expected);
+}
+
 /// Escaping boxes, aliases, captures and a delayed snapshot keep independently owned values.
 #[test]
 fn test_stack_numeric_escaping_values_preserve_php_snapshots() {
