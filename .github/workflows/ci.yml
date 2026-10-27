@@ -691,7 +691,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests) and not (binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests))' \
+            -E 'not binary(codegen_tests) and not (binary_id(elephc::integration) and test(/^(web_tests|web_session_tests|opcache_\w+|eval_\w+|php_profile_\w+|extension_loaded_tests|php_version_surface_tests)::/))' \
             --partition hash:${{ matrix.shard }}/4 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
@@ -741,7 +741,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests) and not (binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests))' \
+            -E 'not binary(codegen_tests) and not (binary_id(elephc::integration) and test(/^(web_tests|web_session_tests|opcache_\w+|eval_\w+|php_profile_\w+|extension_loaded_tests|php_version_surface_tests)::/))' \
             --partition hash:${{ matrix.shard }}/4 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
@@ -791,7 +791,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests) and not (binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests))' \
+            -E 'not binary(codegen_tests) and not (binary_id(elephc::integration) and test(/^(web_tests|web_session_tests|opcache_\w+|eval_\w+|php_profile_\w+|extension_loaded_tests|php_version_surface_tests)::/))' \
             --partition hash:${{ matrix.shard }}/4 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
@@ -865,7 +865,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests)' \
+            -E 'binary_id(elephc::integration) and test(/^(opcache_\w+|eval_\w+|php_profile_\w+|extension_loaded_tests|php_version_surface_tests)::/)' \
             --partition hash:${{ matrix.shard }}/6 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
@@ -919,7 +919,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests)' \
+            -E 'binary_id(elephc::integration) and test(/^(opcache_\w+|eval_\w+|php_profile_\w+|extension_loaded_tests|php_version_surface_tests)::/)' \
             --partition hash:${{ matrix.shard }}/6 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
@@ -973,7 +973,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests)' \
+            -E 'binary_id(elephc::integration) and test(/^(opcache_\w+|eval_\w+|php_profile_\w+|extension_loaded_tests|php_version_surface_tests)::/)' \
             --partition hash:${{ matrix.shard }}/6 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
@@ -1043,7 +1043,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'binary(web_tests) or binary(web_session_tests)' \
+            -E 'binary_id(elephc::integration) and test(/^(web_tests|web_session_tests)::/)' \
             --partition hash:${{ matrix.shard }}/2 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
@@ -1092,7 +1092,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'binary(web_tests) or binary(web_session_tests)' \
+            -E 'binary_id(elephc::integration) and test(/^(web_tests|web_session_tests)::/)' \
             --partition hash:${{ matrix.shard }}/2 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
@@ -1141,7 +1141,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'binary(web_tests) or binary(web_session_tests)' \
+            -E 'binary_id(elephc::integration) and test(/^(web_tests|web_session_tests)::/)' \
             --partition hash:${{ matrix.shard }}/2 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
@@ -2835,7 +2835,7 @@ jobs:
       # per-contract assertions — name sets, signature shapes, eval coverage — to
       # the thirty-four `curl_*` surfaces instead of counting them and moving on.
       - name: Cross-backend parity with the curl surface published
-        run: cargo test --features curl --test builtin_parity_tests
+        run: cargo test --features curl --test integration builtin_parity_tests
 
       # The compiler-side half: `builtins::parity_tests` compares every
       # prelude-provided contract with the PHP declaration its injected prelude
