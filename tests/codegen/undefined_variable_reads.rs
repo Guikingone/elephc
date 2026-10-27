@@ -118,3 +118,29 @@ fn test_undefined_constant_uncaught_is_fatal() {
     );
     assert!(!run.stdout.contains("b\n"), "{}", run.stdout);
 }
+
+/// An element write to an undefined variable creates the array, at top level and inside a
+/// function (where the result used to be garbage); a loop keeps appending, and a write in an
+/// untaken branch leaves the variable undefined.
+#[test]
+fn test_element_write_vivifies_an_undefined_variable() {
+    let run = compile_and_run_with_heap_debug(r#"<?php
+$my_var[] = 5;
+echo json_encode($my_var), "\n";
+function f() { $a['k'] = 1; $b[] = 2; $c[1][2] = 3; return [$a, $b, $c]; }
+echo json_encode(f()), "\n";
+for ($i = 0; $i < 3; $i++) { $acc[] = $i; }
+echo json_encode($acc), "\n";
+function g($flag) {
+    if ($flag) { $x['on'] = 1; }
+    return isset($x) ? json_encode($x) : "unset";
+}
+echo g(true), " ", g(false), "\n";
+"#);
+    assert!(run.success, "stdout: {}\nstderr: {}", run.stdout, run.stderr);
+    assert_eq!(
+        run.stdout,
+        "[5]\n[{\"k\":1},[2],{\"1\":{\"2\":3}}]\n[0,1,2]\n{\"on\":1} unset\n"
+    );
+    assert!(run.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", run.stderr);
+}

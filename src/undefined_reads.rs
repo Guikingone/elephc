@@ -47,7 +47,7 @@ thread_local! {
 const PROBE_CALLS: &[&str] = &["isset", "empty", "unset"];
 
 /// Rewrites the undefined-variable reads of every scope in the program.
-pub fn rewrite(program: &mut [Stmt]) {
+pub fn rewrite(program: &mut Vec<Stmt>) {
     let mut program_globals = HashSet::new();
     collect_program_globals(program, &mut program_globals);
     let externs = program
@@ -61,6 +61,7 @@ pub fn rewrite(program: &mut [Stmt]) {
     let mut main_scope = ScopeFacts::new();
     main_scope.written.extend(program_globals);
     main_scope.written.extend(["argv", "argc"].map(str::to_string));
+    vivify_scope(program, &main_scope);
     collect_stmts(program, &mut main_scope);
     rewrite_scope_stmts(program, &main_scope);
     EXTERN_GLOBALS.with(|names| names.borrow_mut().clear());
@@ -595,13 +596,25 @@ fn rewrite_methods(methods: &mut [ClassMethod]) {
 fn rewrite_function_scope(
     params: impl Iterator<Item = String>,
     variadic: Option<String>,
-    body: &mut [Stmt],
+    body: &mut Vec<Stmt>,
 ) {
     let mut facts = ScopeFacts::new();
     facts.written.extend(params);
     facts.written.extend(variadic);
+    vivify_scope(body, &facts);
     collect_stmts(body, &mut facts);
     rewrite_scope_stmts(body, &facts);
+}
+
+/// Runs array auto-vivification on one scope unless it can define names dynamically.
+fn vivify_scope(body: &mut Vec<Stmt>, initial: &ScopeFacts) {
+    let mut probe = ScopeFacts { written: HashSet::new(), dynamic: false };
+    collect_stmts(body, &mut probe);
+    if probe.dynamic {
+        return;
+    }
+    let mut seen = initial.written.clone();
+    vivify_stmts(body, &mut seen, false);
 }
 
 /// Rewrites undefined reads inside one expression of the current scope.
@@ -771,5 +784,167 @@ pub(crate) fn for_each_child_expr_mut(expr: &mut Expr, visit: &mut dyn FnMut(&mu
             }
         }
         _ => {}
+    }
+}
+
+/// Inserts php's array auto-vivification as an explicit `$v = [];` before the element write
+/// that first mentions `$v` in its scope (`$v[] = x`, `$v['k'] = x`, `$v[1][2] = x`).
+///
+/// php turns an undefined variable into an array on its first element write; elephc refused it
+/// at top level and miscompiled it inside functions. A write inside a loop initializes before
+/// the outermost loop, so later iterations keep appending; a write inside a branch initializes
+/// in that branch, so the other path still leaves the variable undefined. A variable already
+/// mentioned (read, written, bound by `global`/`static`/`foreach`/`list`/`catch`) is left alone.
+fn vivify_stmts(stmts: &mut Vec<Stmt>, seen: &mut HashSet<String>, in_loop: bool) -> Vec<String> {
+    let mut hoisted = Vec::new();
+    let mut i = 0;
+    while i < stmts.len() {
+        if let Some(root) = element_write_root(&stmts[i]) {
+            if !seen.contains(&root) {
+                seen.insert(root.clone());
+                if in_loop {
+                    hoisted.push(root);
+                } else {
+                    let span = stmts[i].span;
+                    stmts.insert(i, empty_array_assign(&root, span));
+                    i += 1;
+                }
+            }
+        }
+        let inner = vivify_children(&mut stmts[i], seen);
+        if in_loop {
+            hoisted.extend(inner);
+        } else {
+            for name in inner {
+                let span = stmts[i].span;
+                stmts.insert(i, empty_array_assign(&name, span));
+                i += 1;
+            }
+        }
+        mark_mentioned_names(&mut stmts[i], seen);
+        i += 1;
+    }
+    hoisted
+}
+
+/// Vivifies the bodies of a compound statement; returns names a loop body hoisted to it.
+fn vivify_children(stmt: &mut Stmt, seen: &mut HashSet<String>) -> Vec<String> {
+    match &mut stmt.kind {
+        StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
+            mark_expr_names(condition, seen);
+            let mut merged = seen.clone();
+            let mut hoisted = Vec::new();
+            let mut branch = seen.clone();
+            hoisted.extend(vivify_stmts(then_body, &mut branch, false));
+            merged.extend(branch);
+            for (condition, body) in elseif_clauses.iter_mut() {
+                mark_expr_names(condition, seen);
+                let mut branch = seen.clone();
+                hoisted.extend(vivify_stmts(body, &mut branch, false));
+                merged.extend(branch);
+            }
+            if let Some(body) = else_body {
+                let mut branch = seen.clone();
+                hoisted.extend(vivify_stmts(body, &mut branch, false));
+                merged.extend(branch);
+            }
+            *seen = merged;
+            hoisted
+        }
+        StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
+            mark_expr_names(condition, seen);
+            vivify_stmts(body, seen, true)
+        }
+        StmtKind::For { init, condition, update, body } => {
+            for part in [init.as_deref_mut(), update.as_deref_mut()].into_iter().flatten() {
+                mark_mentioned_names(part, seen);
+            }
+            if let Some(condition) = condition {
+                mark_expr_names(condition, seen);
+            }
+            vivify_stmts(body, seen, true)
+        }
+        StmtKind::Foreach { array, key_var, value_var, body, .. } => {
+            mark_expr_names(array, seen);
+            seen.extend(key_var.iter().cloned());
+            seen.insert(value_var.clone());
+            vivify_stmts(body, seen, true)
+        }
+        StmtKind::Switch { subject, cases, default } => {
+            mark_expr_names(subject, seen);
+            let mut hoisted = Vec::new();
+            for (_, body) in cases.iter_mut() {
+                hoisted.extend(vivify_stmts(body, seen, false));
+            }
+            if let Some(body) = default {
+                hoisted.extend(vivify_stmts(body, seen, false));
+            }
+            hoisted
+        }
+        StmtKind::Try { try_body, catches, finally_body } => {
+            let mut hoisted = vivify_stmts(try_body, seen, false);
+            for catch in catches.iter_mut() {
+                if let Some(var) = &catch.variable {
+                    seen.insert(var.clone());
+                }
+                hoisted.extend(vivify_stmts(&mut catch.body, seen, false));
+            }
+            if let Some(body) = finally_body {
+                hoisted.extend(vivify_stmts(body, seen, false));
+            }
+            hoisted
+        }
+        StmtKind::Synthetic(body) | StmtKind::IncludeOnceGuard { body, .. } => vivify_stmts(body, seen, false),
+        _ => Vec::new(),
+    }
+}
+
+/// Returns the variable a statement writes an element of, if it is that kind of statement.
+fn element_write_root(stmt: &Stmt) -> Option<String> {
+    match &stmt.kind {
+        StmtKind::ArrayAssign { array, .. } | StmtKind::ArrayPush { array, .. } => Some(array.clone()),
+        StmtKind::NestedArrayAssign { target, .. } => {
+            let mut current = target;
+            while let ExprKind::ArrayAccess { array, .. } = &current.kind {
+                current = array;
+            }
+            match &current.kind {
+                ExprKind::Variable(name) => Some(name.clone()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Builds `$name = [];` at `span`.
+fn empty_array_assign(name: &str, span: crate::span::Span) -> Stmt {
+    Stmt::new(
+        StmtKind::Assign {
+            name: name.to_string(),
+            value: Expr::new(ExprKind::ArrayLiteral(Vec::new()), span),
+        },
+        span,
+    )
+}
+
+/// Records every variable a statement mentions, read or written.
+fn mark_mentioned_names(stmt: &mut Stmt, seen: &mut HashSet<String>) {
+    let mut facts = ScopeFacts { written: HashSet::new(), dynamic: false };
+    collect_stmt(stmt, &mut facts);
+    seen.extend(facts.written);
+    crate::undefined_constants::walk_program_exprs_mut(std::slice::from_mut(stmt), &mut |expr| {
+        if let ExprKind::Variable(name) = &expr.kind {
+            seen.insert(name.clone());
+        }
+    });
+}
+
+/// Records every variable an expression mentions.
+fn mark_expr_names(expr: &mut Expr, seen: &mut HashSet<String>) {
+    let mut stmt = Stmt::new(StmtKind::ExprStmt(std::mem::replace(expr, Expr::new(ExprKind::Null, expr.span))), expr.span);
+    mark_mentioned_names(&mut stmt, seen);
+    if let StmtKind::ExprStmt(original) = stmt.kind {
+        *expr = original;
     }
 }
