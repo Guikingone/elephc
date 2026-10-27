@@ -464,9 +464,11 @@ function scan(Table $t, int $n): int
 A `$receiver->method()` call is a candidate when the receiver's static type is a plain
 (non-nullable) user class and the call cannot reach a different body at run time: the
 class is `final`, the method is `final`, or the class has no vtable slot for it. The
-exception is an instantiated generic receiver with a vtable slot: covariance and
-contravariance can select a different monomorphized specialization, with its own lexical
-class and state, so even a final class or final method keeps a real call. The method body
+exception is an instantiated generic receiver with object type arguments and a vtable slot:
+covariance and contravariance can select a different monomorphized specialization, with its
+own lexical class and state, so even a final class or final method keeps a real call.
+Scalar type arguments cannot widen in place, so a final `Buffer<int>` or `Buffer<float>`
+can use direct dispatch and inlining. The method body
 then has to pass the function rules above (the `$this` receiver is the one object they
 accept, as a borrowed argument) plus a few of its own:
 
@@ -474,7 +476,7 @@ accept, as a borrowed argument) plus a few of its own:
   no by-reference parameter and no literal `false`/`null` parameter type (those carry a
   call-site argument guard the splice would skip);
 - every instruction is **frame-independent**: constants, locals, scalar arithmetic and
-  comparisons, `buffer<T>` element reads, property reads and writes on `$this` or packed
+  comparisons, `buffer<T>` element reads and writes, property reads and writes on `$this` or packed
   records, string concatenation/append/length, ordinary function calls, nested method calls
   on `$this`, and static calls to an explicit user class. Nested calls retain their own
   source spans for diagnostics. Lexical `self::`/`parent::`/`static::` calls, other late static
@@ -496,6 +498,11 @@ class scope, so private and protected property reads and writes resolve exactly 
 method, even from a free function or another class. The method's locals are renamed so
 they never show up in the caller's eval scope or `get_defined_vars()`. The receiver is
 only borrowed, so destructors run where the real call would have released the object.
+
+An extra receiver retain can also disappear when an unchanged frame owner already
+keeps the object alive. This covers concrete by-value parameters and locals with
+one owning entry assignment that dominates every read. Reassignment, reference
+aliases, special storage, eval and uncertain initialization retain their leases.
 
 ### Tail recursion
 
@@ -601,6 +608,15 @@ an invalid cached descriptor. Its first checked access stays in the guarded
 entry. See the [buffer property loop example](../../examples/buffer-property-loop/main.php)
 and the [direct and inlined object example](../../examples/buffer-object-loop/main.php).
 
+Checked accessors can cache their stable state, length and storage reads too.
+For a bounded straight-line entry chain, the optimizer repeats the initial scalar
+loop condition, then evaluates the accessor's first checked prefix in source order.
+Cold throwing branches retain the initial index, message, source span and cleanup.
+Only a successful entry reaches the loop with cached properties, so empty loops
+do not access closed or uninitialized owners. Later index checks remain at their
+accesses. Calls, property mutation and other invalidating operations keep the
+ordinary path. See the [checked owner example](../../examples/checked-buffer/main.php).
+
 A method that reads the same buffer property of `$this` several times shares
 that work too, inside or outside a loop:
 
@@ -618,7 +634,8 @@ private buffer never aliases a shadowing private property in the child. Anything
 between the reads that could change the property or free
 the buffer keeps them apart: a store to that property or `unset()` on any
 object, a `buffer_free()`, any function or method call, a release, a warning or
-output. Other object property reads remain barriers unless they are buffer reads
+output. Guarded scalar reads from inlined `$this` accessors can share a value
+across the same unchanged region. Other object property reads remain barriers unless they are buffer reads
 immediately consumed by a checked access: a null read then returns handle zero
 and the access fails before execution can continue. A change to the index variable keeps the record addresses
 apart. Programs where a class declares `__get`, or that evaluate code at run
