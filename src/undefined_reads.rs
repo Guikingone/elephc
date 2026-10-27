@@ -1516,6 +1516,14 @@ pub(crate) fn for_each_child_body_mut_pub(stmt: &mut Stmt, visit: &mut dyn FnMut
     for_each_child_body_mut(stmt, visit);
 }
 
+/// Returns whether evaluating `expr` may write the variable `name` (assignment, increment,
+/// any call argument, which may be by reference, or a closure capture).
+pub(crate) fn expr_may_write_name(expr: &Expr, name: &str) -> bool {
+    let mut facts = ScopeFacts { written: HashSet::new(), dynamic: false, flow: false };
+    collect_expr(expr, &mut facts);
+    facts.written.contains(name)
+}
+
 /// Adds the names one scope's statements write (assignments, `global`, `foreach`, ...).
 pub(crate) fn collect_scope_written_names(stmts: &[Stmt], names: &mut HashSet<String>) {
     let mut facts = ScopeFacts { written: HashSet::new(), dynamic: false, flow: false };

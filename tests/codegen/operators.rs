@@ -2099,3 +2099,13 @@ fn test_bitwise_float_operands_convert_with_precision_deprecation() {
     );
     assert_eq!(run.stderr.matches("Implicit conversion from float 5.5 to int loses precision").count(), 2, "{}", run.stderr);
 }
+
+/// A plain-variable left operand is read when the operator runs, after a right side that
+/// reassigns it (output measured with php 8.5).
+#[test]
+fn test_variable_left_operand_reads_after_right_side_writes() {
+    let out = compile_and_run(
+        "<?php function t() { $a = null; $x = $a + !($a = !$a); var_dump($x); $b = 5; $y = $b - ($b = 2); var_dump($y); $c = 1; $z = $c * ++$c; var_dump($z); } t();",
+    );
+    assert_eq!(out, "int(1)\nint(0)\nint(4)\n");
+}

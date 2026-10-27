@@ -124,6 +124,15 @@ pub(super) fn lower_numeric_binary(
     right: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
+    // php fetches a plain-variable left operand when the operator runs, after the right side:
+    // in `$a + !($a = !$a)` the left `$a` is the freshly assigned value.
+    if let ExprKind::Variable(name) = &left.kind {
+        if crate::undefined_reads::expr_may_write_name(right, name) {
+            let rhs = lower_expr(ctx, right);
+            let lhs = lower_expr(ctx, left);
+            return lower_numeric_binary_values(ctx, lhs, op, rhs, left, right, expr);
+        }
+    }
     let lhs = lower_expr(ctx, left);
     let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, left.span);
     let rhs = lower_expr(ctx, right);
