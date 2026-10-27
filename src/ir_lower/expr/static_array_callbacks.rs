@@ -390,3 +390,82 @@ pub(super) fn lower_reduce_sum(
         Some(expr.span),
     ))
 }
+
+/// Lowers `count(explode($separator, $subject))` to `substr_count($subject, $separator) + 1`.
+///
+/// The exploded array is only observed through its element count, and a non-empty literal
+/// separator makes `explode()` infallible there. Counting non-overlapping separator occurrences
+/// produces exactly the same segment count without building or boxing any segment strings.
+pub(super) fn lower_count_explode(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\')) != "count" || args.len() != 1 {
+        return None;
+    }
+    if ctx.functions.contains_key(name.trim_start_matches('\\'))
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let ExprKind::FunctionCall {
+        name: explode_name,
+        args: explode_args,
+    } = &args[0].kind
+    else {
+        return None;
+    };
+    if php_symbol_key(explode_name.as_str().trim_start_matches('\\')) != "explode"
+        || ctx.functions.contains_key(explode_name.as_str().trim_start_matches('\\'))
+        || explode_args.len() != 2
+        || crate::types::call_args::has_named_args(explode_args)
+        || explode_args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let ExprKind::StringLiteral(separator) = &explode_args[0].kind else {
+        return None;
+    };
+    if separator.is_empty() {
+        return None;
+    }
+    let subject = lower_expr(ctx, &explode_args[1]);
+    let data = ctx.intern_string(separator);
+    let needle = ctx.emit_value(
+        Op::ConstStr,
+        Vec::new(),
+        Some(Immediate::Data(data)),
+        PhpType::Str,
+        Op::ConstStr.default_effects(),
+        Some(expr.span),
+    );
+    let count = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![subject.value, needle.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+            crate::ir::RuntimeFnId::SubstrCount,
+        ))),
+        PhpType::Int,
+        crate::ir::RuntimeFnId::SubstrCount.intrinsic_effects(),
+        Some(expr.span),
+    );
+    let one = ctx.emit_value(
+        Op::ConstI64,
+        Vec::new(),
+        Some(Immediate::I64(1)),
+        PhpType::Int,
+        Op::ConstI64.default_effects(),
+        Some(expr.span),
+    );
+    Some(ctx.emit_value(
+        Op::IAdd,
+        vec![count.value, one.value],
+        None,
+        PhpType::Int,
+        Op::IAdd.default_effects(),
+        Some(expr.span),
+    ))
+}

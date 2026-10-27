@@ -2366,3 +2366,23 @@ echo array_reduce($a, fn($c, $x) => $c + $x, 0), "|",
     );
     assert_eq!(out, "5050|5050|5150|5150|6\n");
 }
+
+/// `count(explode($literal, $subject))` counts separator occurrences without building segment
+/// strings. Empty subjects, repeated/trailing separators, multi-byte separators, and dynamic
+/// subjects all match the array-building path; a limit keeps the generic explode.
+#[test]
+fn test_count_explode_fusion_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "1,2,3,4,5";
+echo count(explode(",", "a,b,c")), "|",
+     count(explode(",", "")), "|",
+     count(explode(",", "a,,b,")), "|",
+     count(explode("XX", "aXXb")), "|",
+     count(explode(",", "a")), "|",
+     count(explode(",", $s)), "|",
+     count(explode(",", "a,b,c", 2)), "\n";
+"#,
+    );
+    assert_eq!(out, "3|1|4|2|1|5|2\n");
+}
