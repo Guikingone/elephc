@@ -173,8 +173,10 @@ closed numeric add/subtract/multiply or increment; every input must be proven
 integer or float, including all local writers. A float tag remains floating point
 on subsequent operations.
 Private slots in the executable main frame use the same lifetime proof; globals
-retain heap storage. Delayed reads, escaping consumers, aliases, references,
-`eval` and suspension fail the proof.
+retain heap storage. A string cast of the final value is an observation, not an
+escape: the formatter reads the tag and payload and numeric tags render into concat
+scratch without adopting the cell. Delayed reads, escaping consumers, aliases,
+references, `eval` and suspension fail the proof.
 
 Independent frame cells do not invalidate each other's borrowed reads. A same-block
 read must be consumed before its owning slot is stored or released, or before any

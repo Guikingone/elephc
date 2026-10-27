@@ -21,7 +21,10 @@
 //!   consumed by an instruction that is not a proven value-only consumer counts as a
 //!   potential address escape. Operand zero of `prop_get` and `method_call` is a
 //!   value-only receiver on every lowering route; later method operands remain
-//!   conservative even when they repeat that receiver. Terminator uses never alias.
+//!   conservative even when they repeat that receiver. Operand one of an array/hash
+//!   read, write, isset, unset, or element-address instruction is its key: PHP consumes
+//!   keys by value, so only the container operand stays conservative. Terminator uses
+//!   never alias.
 //! - WHY IT IS SHARED. Two passes with different jobs need the identical, safety-critical
 //!   judgement; a second copy that drifted would reintroduce exactly the bug each of them
 //!   fixes. `immutable_local_loads` learned this the hard way: without the exclusion it
@@ -78,6 +81,32 @@ pub(crate) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId
             // magic getters and nullable/boxed receivers. Only the receiver is exempt: a later
             // method argument can still pass this same loaded value by reference.
             if index == 0 && matches!(inst.op, Op::PropGet | Op::MethodCall) {
+                continue;
+            }
+            // An array/hash key is always consumed by value: the container may retain or
+            // normalize it, but it never binds the source local by reference. The container
+            // operand (position 0) stays default-deny.
+            if index == 1
+                && matches!(
+                    inst.op,
+                    Op::ArrayGet
+                        | Op::ArrayGetSilent
+                        | Op::ArrayGetForWrite
+                        | Op::HashGet
+                        | Op::HashGetSilent
+                        | Op::HashGetForWrite
+                        | Op::ArrayIsset
+                        | Op::HashIsset
+                        | Op::ArrayElemAddr
+                        | Op::ArraySet
+                        | Op::HashSet
+                        | Op::ArraySetMixedKey
+                        | Op::ArrayGetMixedKey
+                        | Op::ArrayGetMixedKeySilent
+                        | Op::ArrayKeyExists
+                        | Op::HashUnset
+                )
+            {
                 continue;
             }
             if let Some(&slot) = load_result_slot.get(operand) {

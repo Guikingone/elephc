@@ -258,6 +258,58 @@ fn test_checked_bound_cell_pair_counters_are_integers() {
     assert_eq!(op_lines(body, "ichecked_sub_to_int").len(), 1, "an unboxed `$end - 1`:\n{body}");
 }
 
+/// A compound-assignment counter (`$i += 1`) is proven raw integer exactly like `$i++`.
+#[test]
+fn test_compound_assignment_counter_is_raw_integer() {
+    let source = r#"<?php
+function compoundCount(int $n): int {
+    $i = 0;
+    while ($i < $n) {
+        $i += 1;
+    }
+    return (int)$i;
+}
+echo compoundCount($argc + 7), "\n";
+"#;
+    let ir = optimized_ir(source);
+    let body = function_body(&ir, "compoundCount");
+    assert!(
+        op_lines(body, "mixed_numeric_binop").is_empty(),
+        "compound counter must not stay boxed:\n{body}"
+    );
+    assert!(op_lines(body, "str_inc_dec").is_empty(), "no string-aware update:\n{body}");
+    assert!(!op_lines(body, "icmp").is_empty(), "loop test is a raw integer compare:\n{body}");
+    assert!(body.contains("origin: integer_range"), "update is range-proven:\n{body}");
+    for optimized in [false, true] {
+        assert_eq!(run(source, optimized, true), "8\n");
+    }
+}
+
+/// A top-level compound counter bounded by a literal keeps PHP semantics and loses its box.
+#[test]
+fn test_top_level_compound_counter_is_raw_integer() {
+    let source = r#"<?php
+$sum = 0;
+$i = 1;
+while ($i <= 200) {
+    $sum += $i;
+    $i += 1;
+}
+echo $sum, "\n";
+"#;
+    let ir = optimized_ir(source);
+    let body = function_body(&ir, "main");
+    assert_eq!(
+        op_lines(body, "mixed_numeric_binop").len(),
+        1,
+        "only the accumulator stays boxed:\n{body}"
+    );
+    assert!(!op_lines(body, "icmp").is_empty(), "loop test is a raw integer compare:\n{body}");
+    for optimized in [false, true] {
+        assert_eq!(run(source, optimized, true), "20100\n");
+    }
+}
+
 /// Every supported target emits the checked-bound shapes in both IR modes.
 #[test]
 fn test_checked_bound_counters_emit_on_all_supported_targets() {

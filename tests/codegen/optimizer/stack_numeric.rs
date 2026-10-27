@@ -154,6 +154,88 @@ fn test_stack_numeric_reduction_is_heap_clean_and_allocation_bounded() {
     );
 }
 
+/// A numeric accumulator observed only through its final string form keeps its frame cell.
+///
+/// `echo $sum` casts the boxed slot to string at the loop exit. That read must not disqualify
+/// the producer's frame cell, or the loop falls back to the allocating runtime numeric helper.
+#[test]
+fn test_stack_numeric_string_observation_keeps_allocation_bounded() {
+    let source = r#"<?php
+function local_sum_text(int $n): void {
+    $sum = 0;
+    for ($i = 0; $i < $n; $i++) {
+        $sum += $i;
+    }
+    echo $sum . "|";
+}
+local_sum_text($argc * 1000);
+"#;
+    let large = run(source, true);
+    assert_eq!(large.0, "499500|");
+    let (large_allocs, large_frees) = parse_gc_stats(&large.1);
+    assert_eq!(large_allocs, large_frees, "every numeric owner is retired");
+    let small = run(&source.replace("* 1000", "* 10"), true);
+    assert_eq!(small.0, "45|");
+    let (small_allocs, _) = parse_gc_stats(&small.1);
+    assert!(
+        large_allocs.abs_diff(small_allocs) <= 8,
+        "the loop must not allocate per iteration: small={small_allocs}, large={large_allocs}"
+    );
+    for optimized in [false, true] {
+        assert_eq!(run(source, optimized).0, "499500|");
+    }
+}
+
+/// A scalarized counter feeds a boxed accumulator without allocating a rhs Mixed box.
+#[test]
+fn test_stack_numeric_scalar_rhs_avoids_boxing_in_boxed_accumulator() {
+    let source = r#"<?php
+function sum_echo(int $n): void {
+    $sum = 0;
+    $i = 0;
+    while ($i < $n) {
+        $sum += $i;
+        $i += 1;
+    }
+    echo $sum, "|";
+}
+sum_echo($argc + 1000);
+"#;
+    let dir = make_cli_test_dir("elephc_stack_numeric_scalar_rhs");
+    let path = dir.join("main.php");
+    fs::write(&path, source).unwrap();
+    let mut command = elephc_cli_command(&dir);
+    command.args(["--emit-asm"]);
+    let output = command.arg(&path).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asm = fs::read_to_string(path.with_extension("s")).unwrap();
+    let function = asm
+        .split("@fn name=sum_echo")
+        .nth(1)
+        .expect("sum_echo assembly")
+        .split("@fn ")
+        .next()
+        .unwrap();
+    let body = function
+        .split("@block name=while.body")
+        .nth(1)
+        .expect("loop body")
+        .split("@block name=while.exit")
+        .next()
+        .unwrap();
+    assert!(body.contains("__rt_mixed_numeric_add"), "{body}");
+    assert!(
+        !body.contains("__rt_mixed_from_value"),
+        "the scalar rhs must not be boxed:\n{body}"
+    );
+    assert_eq!(run(source, true).0, "500500|");
+    fs::remove_dir_all(dir).unwrap();
+}
+
 /// Escaping boxes, aliases, captures and a delayed snapshot keep independently owned values.
 #[test]
 fn test_stack_numeric_escaping_values_preserve_php_snapshots() {
