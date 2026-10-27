@@ -60,7 +60,8 @@ fn test_core_symbols_property_override() {
 /// New Core constructors retain normal argument-count and type diagnostics.
 #[test]
 fn test_core_symbols_constructor_diagnostics() {
-    expect_error("<?php new SensitiveParameterValue();", "argument");
+    // Internal constructor arity and scalar type errors are php's run-time throws.
+    expect_no_error("<?php new SensitiveParameterValue();");
     expect_error("<?php WeakReference::create(7);", "object");
-    expect_error("<?php new Attribute([]);", "int");
+    expect_no_error("<?php new Attribute([]);");
 }

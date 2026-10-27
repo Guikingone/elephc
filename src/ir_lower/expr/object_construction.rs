@@ -17,6 +17,41 @@ pub(super) fn lower_new_object(
     expr: &Expr,
 ) -> LoweredValue {
     let object_type = PhpType::Object(class_name.as_str().to_string());
+    // An internal constructor call the checker decided php refuses when it runs: evaluate the
+    // arguments in order, then throw php's ArgumentCountError or TypeError.
+    // The thrown error itself is built at the same span; it must not match its own site.
+    let is_thrown_error = matches!(
+        php_symbol_key(class_name.as_str().trim_start_matches('\\')).as_str(),
+        "argumentcounterror" | "typeerror"
+    );
+    let deferred = ctx.throw_access_sites.get(&expr.span).filter(|_| !is_thrown_error).and_then(|info| match &info.kind {
+        ThrowAccessKind::ArgumentCount { message } => Some(("ArgumentCountError", message.clone())),
+        ThrowAccessKind::TypeError { message } => Some(("TypeError", message.clone())),
+        _ => None,
+    });
+    if let Some((error_class, message)) = deferred {
+        begin_call_argument_evaluation(ctx);
+        let mut operands = lower_args_with_signature(ctx, None, args);
+        let _intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+        let _roots = root_user_call_operands(
+            ctx, &mut operands, None, &ReturnArgAlias::None, &PhpType::Void, expr.span,
+        );
+        return crate::ir_lower::stmt::lower_throw_access_error_of_class_as(
+            ctx, error_class, &message, expr.span, object_type,
+        );
+    }
+    // A user class with no constructor anywhere: php evaluates the arguments and drops them.
+    let user_declared = ctx
+        .classes
+        .get(class_name.as_str().trim_start_matches('\\'))
+        .is_some_and(|info| info.declaration_span != Span::dummy());
+    if !args.is_empty() && user_declared && constructor_signature(ctx, class_name).is_none() {
+        for arg in args {
+            let value = lower_expr(ctx, arg);
+            crate::ir_lower::stmt::release_expr_statement_result(ctx, value, arg.span);
+        }
+        return lower_new_object(ctx, class_name, &[], expr);
+    }
     if let Some(error) = crate::ir_lower::property_default_errors::for_class_as(
         ctx,
         class_name.as_str(),

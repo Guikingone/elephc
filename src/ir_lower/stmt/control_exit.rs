@@ -684,7 +684,7 @@ pub(crate) fn lower_throw_access_error_of_class(
 }
 
 /// Throws `class_name` with `message` and returns an unreachable value typed as `php_type`.
-fn lower_throw_access_error_of_class_as(
+pub(crate) fn lower_throw_access_error_of_class_as(
     ctx: &mut LoweringContext<'_, '_>,
     class_name: &str,
     message: &str,

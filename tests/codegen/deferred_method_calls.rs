@@ -110,3 +110,36 @@ try { $t->h($t); } catch (Error $e) { echo $e->getMessage(), "\n"; }
     );
     assert!(run.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", run.stderr);
 }
+
+/// An internal constructor's wrong argument count or never-acceptable argument is php's
+/// run-time ArgumentCountError/TypeError, raised after the arguments are evaluated; a class
+/// with no constructor evaluates and ignores its arguments (output measured with php 8.5).
+#[test]
+fn test_internal_constructor_argument_errors_throw_at_run_time() {
+    let run = compile_and_run_with_heap_debug(r#"<?php
+class MyFilter extends FilterIterator { function accept(): bool { return true; } }
+class Plain {}
+function trace(string $v): string { echo "eval $v\n"; return $v; }
+try { new MyFilter(); } catch (ArgumentCountError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { new ArrayObject([], 0, "ArrayIterator", trace("extra")); } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+try { new SplFixedArray("string"); } catch (TypeError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { new SplFixedArray(array("string", 1)); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { new SplFixedArray(new SplFixedArray(3)); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$ok = new SplFixedArray(3);
+echo $ok->getSize(), "\n";
+$p = new Plain(trace("ignored"));
+echo get_class($p), "\n";
+"#);
+    assert!(run.success, "stdout: {}\nstderr: {}", run.stdout, run.stderr);
+    assert_eq!(
+        run.stdout,
+        "ArgumentCountError: FilterIterator::__construct() expects exactly 1 argument, 0 given\n\
+         eval extra\n\
+         ArrayObject::__construct() expects at most 3 arguments, 4 given\n\
+         TypeError: SplFixedArray::__construct(): Argument #1 ($size) must be of type int, string given\n\
+         SplFixedArray::__construct(): Argument #1 ($size) must be of type int, array given\n\
+         SplFixedArray::__construct(): Argument #1 ($size) must be of type int, SplFixedArray given\n\
+         3\neval ignored\nPlain\n"
+    );
+    assert!(run.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", run.stderr);
+}

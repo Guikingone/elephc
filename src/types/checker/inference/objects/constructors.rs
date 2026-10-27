@@ -167,6 +167,38 @@ impl Checker {
                     Self::declared_method_param_flags(owner_info, "__construct", false);
                 let effective_sig = Self::callable_sig_for_declared_params(sig, &declared_flags);
                 let param_to_prop = owner_info.constructor_param_to_prop.clone();
+                // php checks an INTERNAL constructor's arguments when the call runs: a wrong
+                // count is an `ArgumentCountError`, an argument weak mode can never accept a
+                // `TypeError`, both with php's wording and after the arguments are evaluated.
+                if !self.class_is_user_declared(declaring_class)
+                    && !args.iter().any(|arg| {
+                        matches!(arg.kind, ExprKind::Spread(_) | ExprKind::NamedArg { .. })
+                    })
+                {
+                    let declaring_class = declaring_class.to_string();
+                    let deferred = super::methods::internal_arity_error(
+                        &declaring_class,
+                        "__construct",
+                        &effective_sig,
+                        args.len(),
+                    )
+                    .map(|message| crate::types::ThrowAccessKind::ArgumentCount { message })
+                    .or_else(|| {
+                        internal_constructor_type_error(&declaring_class, &effective_sig, args)
+                            .map(|message| crate::types::ThrowAccessKind::TypeError { message })
+                    });
+                    if let Some(kind) = deferred {
+                        for arg in args {
+                            self.infer_type(arg, env)?;
+                        }
+                        crate::types::checker::record_throw_access_site(
+                            &mut self.throw_access_sites,
+                            expr.span,
+                            crate::types::ThrowAccessInfo { span: expr.span, kind },
+                        );
+                        return Ok(PhpType::Object(class_name));
+                    }
+                }
                 let normalized_args = self.normalize_named_call_args(
                     &effective_sig,
                     args,
@@ -248,16 +280,9 @@ impl Checker {
                     );
                 }
                 return Ok(PhpType::Object(class_name));
-            } else if !args.is_empty() {
-                return Err(CompileError::new(
-                    expr.span,
-                    &format!(
-                        "Constructor '{}::__construct' expects 0 arguments, got {}",
-                        class_name,
-                        args.len()
-                    ),
-                ));
             }
+            // A class with no constructor at all: php evaluates and ignores the arguments, which
+            // the loop below infers.
         }
         let param_to_prop = self
             .classes
@@ -1376,4 +1401,49 @@ fn attributes_have_unsupported_args(
     args: &[Option<Vec<crate::types::AttrArgEntry>>],
 ) -> bool {
     names.len() != args.len() || args.iter().any(Option::is_none)
+}
+
+/// php's `TypeError` message for an internal constructor argument weak mode can never accept,
+/// judged only from arguments whose type is syntactically certain (literals, array literals,
+/// `new` expressions), or `None`.
+fn internal_constructor_type_error(class_name: &str, sig: &FunctionSig, args: &[Expr]) -> Option<String> {
+    for (index, (arg, (param, expected))) in args.iter().zip(sig.params.iter()).enumerate() {
+        let given = match &arg.kind {
+            ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_) => {
+                "array".to_string()
+            }
+            ExprKind::NewObject { class_name, .. } => class_name.as_str().trim_start_matches('\\').to_string(),
+            ExprKind::StringLiteral(text)
+                if matches!(expected, PhpType::Int | PhpType::Float)
+                    && !is_numeric_php_string(text) =>
+            {
+                "string".to_string()
+            }
+            _ => continue,
+        };
+        let expected_name = match expected {
+            PhpType::Int => "int",
+            PhpType::Float => "float",
+            PhpType::Str => "string",
+            PhpType::Bool => "bool",
+            _ => continue,
+        };
+        return Some(format!(
+            "{}::__construct(): Argument #{} (${}) must be of type {}, {} given",
+            class_name,
+            index + 1,
+            param,
+            expected_name,
+            given
+        ));
+    }
+    None
+}
+
+/// Returns whether php's weak mode reads `text` as a number (`" 12"`, `"1.5e3"`), not `"abc"`.
+fn is_numeric_php_string(text: &str) -> bool {
+    let trimmed = text.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c'));
+    !trimmed.is_empty()
+        && trimmed.chars().all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
+        && trimmed.parse::<f64>().is_ok()
 }

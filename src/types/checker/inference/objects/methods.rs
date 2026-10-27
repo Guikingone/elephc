@@ -603,72 +603,12 @@ impl Checker {
                         matches!(arg.kind, ExprKind::Spread(_) | ExprKind::NamedArg { .. })
                     })
                 {
-                    let regular_param_count = if effective_sig.variadic.is_some() {
-                        effective_sig.params.len().saturating_sub(1)
-                    } else {
-                        effective_sig.params.len()
-                    };
-                    let required = effective_sig
-                        .defaults
-                        .iter()
-                        .take(regular_param_count)
-                        .filter(|default| default.is_none())
-                        .count();
-                    let given = args.len();
-                    let arity_mismatch = if effective_sig.variadic.is_some() {
-                        given < required
-                    } else {
-                        given < required || given > effective_sig.params.len()
-                    };
-                    if arity_mismatch {
-                        // php-src's wording: a callee whose minimum equals its maximum always
-                        // says "exactly" (in either direction); a callee with optional
-                        // parameters says "at least" below its minimum and "at most" above its
-                        // maximum. "argument" is singular for one.
-                        let argument = |count: usize| if count == 1 { "argument" } else { "arguments" };
-                        let message = if effective_sig.variadic.is_some() {
-                            format!(
-                                "{}::{}() expects at least {} {}, {} given",
-                                class_name,
-                                method,
-                                required,
-                                argument(required),
-                                given
-                            )
-                        } else if given < required {
-                            let wording = if effective_sig.params.len() == required {
-                                "exactly"
-                            } else {
-                                "at least"
-                            };
-                            format!(
-                                "{}::{}() expects {} {} {}, {} given",
-                                class_name,
-                                method,
-                                wording,
-                                required,
-                                argument(required),
-                                given
-                            )
-                        } else if effective_sig.params.len() == required {
-                            format!(
-                                "{}::{}() expects exactly {} {}, {} given",
-                                class_name,
-                                method,
-                                effective_sig.params.len(),
-                                argument(effective_sig.params.len()),
-                                given
-                            )
-                        } else {
-                            format!(
-                                "{}::{}() expects at most {} {}, {} given",
-                                class_name,
-                                method,
-                                effective_sig.params.len(),
-                                argument(effective_sig.params.len()),
-                                given
-                            )
-                        };
+                    if let Some(message) = internal_arity_error(
+                        class_name,
+                        method,
+                        &effective_sig,
+                        args.len(),
+                    ) {
                         let return_type = late_static_return_type
                             .clone()
                             .unwrap_or_else(|| sig.return_type.clone());
@@ -1834,4 +1774,52 @@ fn spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool {
             PhpType::AssocArray { .. } | PhpType::Iterable
         ),
     }
+}
+
+
+/// php's run-time `ArgumentCountError` message for an internal callable called with
+/// `given` positional arguments, or `None` when the count fits.
+///
+/// php-src's wording: a callee whose minimum equals its maximum always says "exactly" (in
+/// either direction); a callee with optional parameters says "at least" below its minimum and
+/// "at most" above its maximum; a variadic one says "at least". "argument" is singular for one.
+pub(crate) fn internal_arity_error(
+    class_name: &str,
+    method: &str,
+    sig: &crate::types::FunctionSig,
+    given: usize,
+) -> Option<String> {
+    let regular_param_count = if sig.variadic.is_some() {
+        sig.params.len().saturating_sub(1)
+    } else {
+        sig.params.len()
+    };
+    let required = sig
+        .defaults
+        .iter()
+        .take(regular_param_count)
+        .filter(|default| default.is_none())
+        .count();
+    let argument = |count: usize| if count == 1 { "argument" } else { "arguments" };
+    let (wording, count) = if sig.variadic.is_some() {
+        if given >= required {
+            return None;
+        }
+        ("at least", required)
+    } else if given < required {
+        (if sig.params.len() == required { "exactly" } else { "at least" }, required)
+    } else if given > sig.params.len() {
+        (if sig.params.len() == required { "exactly" } else { "at most" }, sig.params.len())
+    } else {
+        return None;
+    };
+    Some(format!(
+        "{}::{}() expects {} {} {}, {} given",
+        class_name,
+        method,
+        wording,
+        count,
+        argument(count),
+        given
+    ))
 }

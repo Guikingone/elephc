@@ -82,15 +82,15 @@ $db->query();
     .expect("an internal class's arity error is deferred to run time");
 }
 
-/// The constructor rejects more arguments than its six connection parameters.
+/// More arguments than the six connection parameters is php's run-time ArgumentCountError.
 #[test]
 fn constructor_rejects_extra_arguments() {
-    expect_mysqli_error(
+    check_mysqli(
         r#"<?php
 $db = new mysqli("h", "u", "p", "d", 3306, null, 999);
 "#,
-        "mysqli",
-    );
+    )
+    .expect("an internal constructor's arity error is deferred to run time");
 }
 
 /// `mysqli_connect_errno()` takes no arguments (the no-link procedural form).

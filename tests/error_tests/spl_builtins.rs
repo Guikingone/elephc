@@ -406,6 +406,9 @@ fn test_error_filesystem_spl_classes_cannot_be_redeclared() {
 /// Verifies that Phase 8 SPL filesystem constructors validate argument types.
 #[test]
 fn test_error_filesystem_spl_constructors_validate_types() {
+    // A non-numeric string for an int parameter is php's run-time TypeError.
+    expect_no_error("<?php $tmp = new SplTempFileObject(\"bad\");");
+    expect_no_error("<?php $it = new FilesystemIterator(\".\", \"bad\");");
     for (source, expected) in [
         (
             "<?php $info = new SplFileInfo(123);",
@@ -416,16 +419,8 @@ fn test_error_filesystem_spl_constructors_validate_types() {
             "Constructor 'SplFileObject::__construct' parameter $filename expects string, got int",
         ),
         (
-            "<?php $tmp = new SplTempFileObject(\"bad\");",
-            "Constructor 'SplTempFileObject::__construct' parameter $maxMemory expects int, got string",
-        ),
-        (
             "<?php $it = new DirectoryIterator(123);",
             "Constructor 'DirectoryIterator::__construct' parameter $directory expects string, got int",
-        ),
-        (
-            "<?php $it = new FilesystemIterator(\".\", \"bad\");",
-            "Constructor 'FilesystemIterator::__construct' parameter $flags expects int, got string",
         ),
         (
             "<?php $it = new GlobIterator(123);",

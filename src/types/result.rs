@@ -65,6 +65,13 @@ pub enum ThrowAccessKind {
         /// arguments, 1 given`).
         message: String,
     },
+    /// An internal call whose argument php's weak mode can never accept (`new
+    /// SplFixedArray("string")`): a run-time `TypeError` carrying php's verbatim message.
+    TypeError {
+        /// The verbatim php error message (e.g. `SplFixedArray::__construct(): Argument #1
+        /// ($size) must be of type int, string given`).
+        message: String,
+    },
 }
 
 #[derive(Debug)]

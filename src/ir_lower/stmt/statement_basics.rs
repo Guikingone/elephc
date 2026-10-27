@@ -10,7 +10,7 @@
 use super::*;
 
 /// Releases a discarded expression-statement result when it may own temporary storage.
-pub(super) fn release_expr_statement_result(
+pub(crate) fn release_expr_statement_result(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,
