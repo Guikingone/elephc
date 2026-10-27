@@ -227,8 +227,14 @@ fn lower_numeric_binary_values(
         op,
         BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight
     ) {
-        let lhs = coerce_to_int(ctx, lhs, left);
-        let rhs = coerce_to_int(ctx, rhs, right);
+        // A float operand converts like php's implicit float-to-int (a fractional value is
+        // deprecated, an unrepresentable one warns), the rule array keys already follow.
+        let lhs = crate::ir_lower::expr::instanceof_coercions::coerce_array_key_to_int_at_span(
+            ctx, lhs, Some(left.span), false,
+        );
+        let rhs = crate::ir_lower::expr::instanceof_coercions::coerce_array_key_to_int_at_span(
+            ctx, rhs, Some(right.span), false,
+        );
         let iop = match op {
             BinOp::BitAnd => Op::IBitAnd,
             BinOp::BitOr => Op::IBitOr,

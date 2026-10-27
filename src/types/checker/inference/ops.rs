@@ -1690,7 +1690,7 @@ fn is_datetime_family_object(ty: &PhpType) -> bool {
 fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     matches!(
         ty,
-        PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void | PhpType::Mixed
+        PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void | PhpType::Mixed | PhpType::Float
     )
         // `int|float` is what an incremented integer local carries, and `$i & $mask` on one is
         // ordinary PHP: the float side converts to int, exactly as it does for a `mixed` operand,

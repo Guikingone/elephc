@@ -229,12 +229,10 @@ fn test_failed_list_unpack_targets_no_undefined_cascade() {
 /// diagnostic is the unpacking one.
 #[test]
 fn test_failed_list_unpack_inference_targets_no_undefined_cascade() {
-    let messages =
-        checker_error_messages("<?php [$a, $b] = $missing; echo count($a); echo $b;");
-    assert_eq!(
-        messages,
-        vec!["List unpacking requires an array on the right-hand side".to_string()],
-        "failed list-unpack inference must not leave either target undefined",
+    // An undefined source is php's run-time null (warning): both targets are bound to null.
+    assert!(
+        check_source_full("<?php [$a, $b] = $missing; echo count($a); echo $b;").is_ok(),
+        "unpacking an undefined variable must not leave either target undefined",
     );
 }
 
@@ -243,8 +241,10 @@ fn test_failed_list_unpack_inference_targets_no_undefined_cascade() {
 #[test]
 fn test_failed_reference_assignment_target_no_undefined_cascade() {
     // php binds an undefined reference source to a fresh null: nothing is undefined.
-    let messages =
-        checker_error_messages("<?php $target =& $missing; echo count($target);");
+    let messages = check_source_full("<?php $target =& $missing; echo count($target);")
+        .err()
+        .map(|error| error.flatten().iter().map(|e| e.message.clone()).collect::<Vec<_>>())
+        .unwrap_or_default();
     assert!(
         !messages.iter().any(|message| message.contains("Undefined variable")),
         "a reference to an undefined source must not report it: {messages:?}",

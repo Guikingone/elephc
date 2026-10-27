@@ -2085,3 +2085,17 @@ var_dump($hi <=> $lo);
     );
     assert_eq!(out, "int(-1)\nint(1)\nint(0)\nint(1)\nint(1)\n");
 }
+
+/// A float bitwise operand converts like php's implicit float-to-int: integral values silently,
+/// a fractional one with the "loses precision" deprecation (output measured with php 8.5).
+#[test]
+fn test_bitwise_float_operands_convert_with_precision_deprecation() {
+    let run = compile_and_run_capture(
+        "<?php function f(float $x, float $y) { var_dump($x & 3, 6.0 | $y, $x ^ $y, $y << 1, 8.0 >> 1); } f(5.0, 2.0); f(5.5, 2.0);",
+    );
+    assert_eq!(
+        run.stdout,
+        "int(1)\nint(6)\nint(7)\nint(4)\nint(4)\nint(1)\nint(6)\nint(7)\nint(4)\nint(4)\n"
+    );
+    assert_eq!(run.stderr.matches("Implicit conversion from float 5.5 to int loses precision").count(), 2, "{}", run.stderr);
+}

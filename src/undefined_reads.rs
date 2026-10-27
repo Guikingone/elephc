@@ -701,10 +701,19 @@ fn rewrite_expr(expr: &mut Expr, facts: &ScopeFacts) {
         ExprKind::Variable(name) if facts.read_is_undefined(name) => {
             let span = expr.span;
             let name = std::mem::take(name);
-            *expr = Expr::new(
+            let warning = Expr::new(
                 ExprKind::FunctionCall {
                     name: Name::compiler_call(CompilerCall::UndefinedVariable),
                     args: vec![Expr::new(ExprKind::StringLiteral(name), span)],
+                },
+                span,
+            );
+            // The read is a boxed `mixed` null: php's null takes part in arithmetic, bitwise
+            // and array operations that a `null`-typed operand would be refused in.
+            *expr = Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::compiler_call(CompilerCall::MixedReceiver),
+                    args: vec![warning],
                 },
                 span,
             );
@@ -1067,11 +1076,21 @@ fn mark_expr_names(expr: &mut Expr, seen: &mut HashSet<String>) {
 fn rewrite_reads_before_writes(stmts: &mut Vec<Stmt>, maybe: &mut HashSet<String>) {
     let mut index = 0;
     while index < stmts.len() {
-        let mut inits = loop_first_iteration_undefined(&stmts[index], maybe);
-        inits.extend(undefined_write_roots(&stmts[index], maybe));
-        for (name, warns) in inits {
+        // A loop-carried name goes on to hold whatever the body writes, so its init is a boxed
+        // `mixed` null; a write-through root keeps a plain null, whose property write raises
+        // php's Error.
+        let mut inits: Vec<(String, bool, bool)> = loop_first_iteration_undefined(&stmts[index], maybe)
+            .into_iter()
+            .map(|(name, warns)| (name, warns, true))
+            .collect();
+        inits.extend(
+            undefined_write_roots(&stmts[index], maybe)
+                .into_iter()
+                .map(|(name, warns)| (name, warns, false)),
+        );
+        for (name, warns, boxed) in inits {
             let span = stmts[index].span;
-            stmts.insert(index, undefined_init(&name, warns, span));
+            stmts.insert(index, undefined_init(&name, warns, boxed, span));
             maybe.insert(name);
             index += 1;
         }
@@ -1454,7 +1473,7 @@ fn spine_root(expr: &Expr) -> Option<&str> {
 }
 
 /// Builds `$name = null;`, through the warning call when php reports the undefined read.
-fn undefined_init(name: &str, warns: bool, span: crate::span::Span) -> Stmt {
+fn undefined_init(name: &str, warns: bool, boxed: bool, span: crate::span::Span) -> Stmt {
     let value = if warns {
         Expr::new(
             ExprKind::FunctionCall {
@@ -1466,6 +1485,18 @@ fn undefined_init(name: &str, warns: bool, span: crate::span::Span) -> Stmt {
     } else {
         Expr::new(ExprKind::Null, span)
     };
+    if !boxed {
+        return Stmt::new(StmtKind::Assign { name: name.to_string(), value }, span);
+    }
+    // Boxed as `mixed`: the variable goes on to take whatever the loop writes, and a
+    // `null`-typed local would refuse it (`$a &= 15`, `$a[$k][] = v`).
+    let value = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::compiler_call(CompilerCall::MixedReceiver),
+            args: vec![value],
+        },
+        span,
+    );
     Stmt::new(StmtKind::Assign { name: name.to_string(), value }, span)
 }
 
