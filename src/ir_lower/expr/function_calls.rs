@@ -86,6 +86,15 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_count_explode(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = lower_map_sum_add(ctx, canonical, args, expr) {
+        return value;
+    }
+    if let Some(value) = lower_filter_count_mod(ctx, canonical, args, expr) {
+        return value;
+    }
+    if let Some(value) = lower_array_element_type_check(ctx, canonical, args, expr) {
+        return value;
+    }
     if php_symbol_key(canonical.trim_start_matches('\\')) == "unset" {
         if let Some(value) = lower_unset_locals(ctx, args, expr) {
             return value;

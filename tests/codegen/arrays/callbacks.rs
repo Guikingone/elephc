@@ -2386,3 +2386,64 @@ echo count(explode(",", "a,b,c")), "|",
     );
     assert_eq!(out, "3|1|4|2|1|5|2\n");
 }
+
+/// Fused packed-int kernels reproduce PHP map-then-sum promotion and filter remainder truth.
+#[test]
+fn test_keyed_array_kernels_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = range(1, 100);
+echo array_sum(array_map(fn($x) => $x + 1, $a)), '|';
+echo array_sum(array_map(fn($x) => -50 + $x, $a)), '|';
+$negative = [];
+for ($i = 0; $i < 100; $i++) { $negative[] = -$i; }
+echo array_sum(array_map(fn($x) => $x + 3, $negative)), '|';
+$overflow = [PHP_INT_MAX];
+for ($i = 0; $i < 99; $i++) { $overflow[] = PHP_INT_MAX; }
+echo gettype(array_sum(array_map(fn($x) => $x + 1, $overflow))), ':', array_sum(array_map(fn($x) => $x + 1, $overflow)), '|';
+echo count(array_filter($a, fn($x) => $x % 2 === 0)), '|';
+echo count(array_filter($a, fn($x) => $x % 3 === 0)), '|';
+echo count(array_filter($a, fn($x) => $x % -3 === 0)), '|';
+echo count(array_filter($negative, fn($x) => $x % -2 === 0)), '|';
+echo count(array_filter($a, fn($x) => $x % 1 === 0)), '|';
+$mixed = [PHP_INT_MIN, PHP_INT_MAX, 0, 1, -1, 2, -2, 7];
+echo count(array_filter($mixed, fn($x) => $x % -1 === 0)), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "5150|50|-4650|double:9.2233720368548E+20|50|33|33|50|100|8\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Fused `is_*($a[$i])` predicates read the packed Mixed tag directly and keep PHP's warning
+/// and null behavior on missing, negative and out-of-range keys.
+#[test]
+fn test_array_element_type_predicates_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, "x", [1], null, 1.5, true, ["k" => 1]];
+for ($i = 0; $i < 7; $i++) {
+    echo (int)is_int($a[$i]), (int)is_string($a[$i]), (int)is_array($a[$i]),
+         (int)is_null($a[$i]), (int)is_float($a[$i]), (int)is_bool($a[$i]),
+         (int)is_scalar($a[$i]), '|';
+}
+echo "\n";
+set_error_handler(function (int $no, string $msg): bool { echo 'W[', $msg, ']'; return true; });
+echo (int)is_int($a[7]), (int)is_array($a[7]), (int)is_null($a[7]), '|';
+echo (int)is_null($a[-1]), '|';
+echo (int)is_int($a[1 + 1]), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1000001|0100001|0010000|0001000|0000101|0000011|0010000|\n\
+W[Undefined array key 7]0W[Undefined array key 7]0W[Undefined array key 7]1|W[Undefined array key -1]1|0\n"
+    );
+}

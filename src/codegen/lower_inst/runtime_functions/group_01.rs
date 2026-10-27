@@ -31,6 +31,15 @@ pub(super) fn lower(
         RuntimeFnId::ArraySum => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_sum(ctx, inst)
         }),
+        RuntimeFnId::ArrayMapSumAdd => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_sum_add(ctx, inst)
+        }),
+        RuntimeFnId::ArrayFilterCountMod => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_filter_count_mod(ctx, inst)
+        }),
+        RuntimeFnId::ArrayElementTypeCheck => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_element_type_check(ctx, inst)
+        }),
         RuntimeFnId::ArrayUdiff => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_udiff(ctx, inst)
         }),

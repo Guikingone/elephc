@@ -95,6 +95,10 @@ pub enum RuntimeFnId {
     ArrayFill,
     ArrayFillKeys,
     ArrayFilter,
+    /// Fused `count(array_filter($packedInts, fn($x) => $x % $literal === 0))` scalar kernel.
+    ArrayFilterCountMod,
+    /// Fused `is_*($packedMixedArray[$intIndex])` predicate that reads the stored tag in place.
+    ArrayElementTypeCheck,
     ArrayFind,
     ArrayFlip,
     ArrayIntersect,
@@ -106,6 +110,8 @@ pub enum RuntimeFnId {
     ArrayKeyLast,
     ArrayKeys,
     ArrayMap,
+    /// Fused `array_sum(array_map(fn($x) => $x + $literal, $packedInts))` scalar kernel.
+    ArrayMapSumAdd,
     ArrayMerge,
     ArrayMergeRecursive,
     ArrayMultisort,
@@ -858,6 +864,8 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
+            RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayFilterCountMod => Some((2, Some(2))),
+            RuntimeFnId::ArrayElementTypeCheck => Some((3, Some(3))),
             _ => None,
         }
     }
@@ -1665,6 +1673,16 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMap => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
+            // The fused map+sum kernel walks a packed payload and boxes one result cell.
+            RuntimeFnId::ArrayMapSumAdd => {
+                E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
+            }
+            // The fused filter-count kernel only reads the packed payload.
+            RuntimeFnId::ArrayFilterCountMod => E::from_bits_retain(E::READS_HEAP.bits()),
+            // The tag predicate reads one cell directly; its fallback read may warn and box.
+            RuntimeFnId::ArrayElementTypeCheck => E::from_bits_retain(
+                E::READS_HEAP.bits() | E::ALLOC_HEAP.bits() | E::MAY_WARN.bits(),
+            ),
             // Carry, predicate-result and snapshot cleanup can invoke destructors independently
             // of the selected callback's effect summary. Validation may also throw.
             RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayFind
@@ -2376,6 +2394,8 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayUnshift
                 | RuntimeFnId::ArrayAny
                 | RuntimeFnId::ArrayAll
+                | RuntimeFnId::ArrayFilterCountMod
+                | RuntimeFnId::ArrayElementTypeCheck
                 | RuntimeFnId::BcComp | RuntimeFnId::BcNumberComp
                 | RuntimeFnId::BcScale
                 // `iconv_set_encoding()` answers with a bare boolean.
@@ -2520,6 +2540,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayIntersect
                 | RuntimeFnId::ArrayKeys
                 | RuntimeFnId::ArrayMap
+                | RuntimeFnId::ArrayMapSumAdd
                 | RuntimeFnId::ArrayMerge
                 | RuntimeFnId::ArrayPad
                 | RuntimeFnId::ArrayPop
@@ -2816,7 +2837,10 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayKeyLast => "array_key_last",
             RuntimeFnId::ArrayKeys => "array_keys",
             RuntimeFnId::ArrayMap => "array_map",
+            RuntimeFnId::ArrayMapSumAdd => "array_map_sum_add",
             RuntimeFnId::ArrayMerge => "array_merge",
+            RuntimeFnId::ArrayFilterCountMod => "array_filter_count_mod",
+            RuntimeFnId::ArrayElementTypeCheck => "array_element_type_check",
             RuntimeFnId::ArrayMergeRecursive => "array_merge_recursive",
             RuntimeFnId::ArrayMultisort => "array_multisort",
             RuntimeFnId::ArrayPad => "array_pad",
