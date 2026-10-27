@@ -46,7 +46,7 @@ pub enum PhpType {
     Callable,                      // closures and function references
     Object(String),                // class instance, e.g., Object("Point") or Object("App\\Point")
     Packed(String),
-    Pointer(Option<String>),       // opaque ptr or typed ptr<Class>
+    Pointer(Option<String>),       // opaque ptr or pointer tagged with a target type
     Resource(Option<String>),      // generic resource or typed resource such as resource<stream>
     Union(Vec<PhpType>),
     TaggedScalar,                  // codegen-internal inline nullable scalar: {payload, tag} pair
@@ -72,7 +72,7 @@ widths in their metadata instead, as `PackedFieldInfo::width` beside the field's
 
 `Object(String)` represents a class instance. The string carries the canonical class name after name resolution (for example `"Point"` or `"App\\Point"`). Objects are heap-allocated pointers (8 bytes on the stack).
 
-`Pointer(Option<String>)` represents a raw 64-bit address. `Pointer(None)` is an opaque pointer, while `Pointer(Some("Point"))` is a pointer tagged with a checked pointee type. The tag affects static checking, but the runtime value is still just an address in `x0`.
+`Pointer(Option<String>)` represents a raw 64-bit address. `Pointer(None)` is an opaque pointer, while `Pointer(Some("Point"))` is a pointer tagged with a checked pointee type. The tag affects static checking, but the runtime value is still just a native address. A target tag can name a class, a C width, or a nested pointer such as `ptr<App\\Node>`. C widths use a reserved internal prefix so they cannot collide with a class of the same name; `PhpType` display removes that prefix. Class-name consumers must unwrap nested targets using `names::pointer_target_leaf` or `pointer_target_leaf_name`.
 
 `Resource(Option<String>)` represents PHP resource handles. `Resource(None)` is a generic resource, while `Resource(Some("stream"))` is the stream-handle shape used by successful `fopen()` calls and the `STDIN` / `STDOUT` / `STDERR` constants. Resource values are stored as one 8-byte native payload in codegen, but the type checker keeps them distinct from integers so stream built-ins can reject plain numeric descriptors.
 

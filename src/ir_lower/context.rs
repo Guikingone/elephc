@@ -5626,7 +5626,13 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
             value: Box::new(type_expr_to_php_type(value)),
         },
         TypeExpr::Ptr(name) => {
-            PhpType::Pointer(name.as_ref().map(|name| name.as_str().to_string()))
+            PhpType::Pointer(name.as_ref().map(|name| {
+                if name.is_unqualified() {
+                    crate::names::resolved_pointer_target_tag(name.as_str())
+                } else {
+                    name.as_str().to_string()
+                }
+            }))
         }
         TypeExpr::Buffer(inner) => PhpType::Buffer(Box::new(
             crate::types::width_type_from_type_expr(inner)
