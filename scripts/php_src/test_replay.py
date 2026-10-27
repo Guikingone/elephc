@@ -41,6 +41,15 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(ini[-2:], ['display_errors=0', 'opcache.file_cache=' + directory + '/cache'])
             self.assertEqual(env['PHPT_FIXTURE'], directory)
 
+    def test_opcode_dump_phpts_are_classified_out_of_scope(self):
+        """A non-zero opcache.opt_debug_level asks php for Zend opcode dumps; zero does not."""
+        from replay import dumps_zend_opcodes
+        self.assertTrue(dumps_zend_opcodes({'INI': b'opcache.enable=1\nopcache.opt_debug_level=0x20000\n'}))
+        self.assertTrue(dumps_zend_opcodes({'INI': b'opcache.opt_debug_level = 4\n'}))
+        self.assertFalse(dumps_zend_opcodes({'INI': b'opcache.opt_debug_level=0\n'}))
+        self.assertFalse(dumps_zend_opcodes({'INI': b'opcache.enable=1\n'}))
+        self.assertFalse(dumps_zend_opcodes({}))
+
 
 if __name__ == '__main__':
     unittest.main()

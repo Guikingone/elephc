@@ -28,6 +28,11 @@ php-src's runner does. Duplicate native diagnostics are mismatches, not stripped
 output. `--output-channel stdout` is an exploratory mode with stderr retained
 but unscored; its matches are labeled `stdout_pass`, never full passes.
 
+A PHPT whose INI sets a non-zero `opcache.opt_debug_level` compares php's Zend
+optimizer opcode dumps, which an AOT compiler has no equivalent for. It is
+declared out of scope with the status `out_of_scope_opcode_dump`: reported on
+its own, never counted as a pass.
+
 `manifest.json` pins the compiler binary, tracked source diff, reference PHP,
 runner, matcher, test hashes and settings. `results.jsonl` is flushed after each
 case. Per-case streams live under `cases/`; `summary.json` records every outcome.

@@ -111,6 +111,19 @@ def settings(sections, directory):
     return ini, env
 
 
+def dumps_zend_opcodes(sections):
+    """Return whether the PHPT's INI asks php to print optimizer opcode dumps."""
+    for line in sections.get("INI", b"").decode(errors="replace").splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() == "opcache.opt_debug_level":
+            value = value.strip().lower()
+            try:
+                return int(value, 16 if value.startswith("0x") else 10) != 0
+            except ValueError:
+                return True
+    return False
+
+
 def php_command(php, ini, source):
     """Materialize the reference startup INI settings in the PHPT's declared order."""
     return [php] + [arg for setting in ini for arg in ("-d", setting)] + [str(source)]
@@ -150,6 +163,11 @@ def replay_case(path, options, matcher, extensions):
         missing = sorted(set(x.lower() for x in required) - extensions)
         if missing:
             return dict(result, status="oracle_skip", reason="missing reference extensions: " + ", ".join(missing))
+        if dumps_zend_opcodes(sections):
+            # The expectation is php's optimizer opcode listing, which an AOT compiler has no
+            # equivalent for. Declared out of scope (never a pass), reported in its own status.
+            return dict(result, status="out_of_scope_opcode_dump",
+                        reason="opcache.opt_debug_level compares Zend opcode dumps")
         with tempfile.TemporaryDirectory(prefix="case-", dir=options.output / "tmp") as temporary:
             root = Path(temporary)
             for engine in ("reference", "native"):
@@ -300,7 +318,9 @@ def main():
                "counts": counts, "complete": len(selected) == len(corpus), "full_compliance": False,
                "limitations": (["stdout-only comparison; stderr retained but unscored"]
                                if options.output_channel == "stdout" else []) + ["host AOT only", "PHP build configuration differs from a php-src in-tree build",
-                               "reference PHP executes CLEAN for both sandboxes", "reference skips are not implementation passes"]}
+                               "reference PHP executes CLEAN for both sandboxes", "reference skips are not implementation passes",
+                               "opcache.opt_debug_level PHPTs compare Zend opcode dumps: declared out of scope "
+                               "(out_of_scope_opcode_dump), never counted as passes"]}
     (options.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary), flush=True)
     # This adapter intentionally cannot certify stderr, eval, or the target matrix.
