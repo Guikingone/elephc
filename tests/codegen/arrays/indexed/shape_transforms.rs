@@ -954,3 +954,43 @@ echo gettype(array_sum($e)), ':', array_sum($e), "\n";
         out.stderr
     );
 }
+
+/// The SIMD `array_sum` fast path accepts positive ranges only when elements fit in 32 unsigned
+/// bits and the total stays below `2^63`; every other range restarts the exact scalar sequence.
+#[test]
+fn test_array_sum_simd_gate_matches_php_fallbacks() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$positive = [];
+for ($i = 0; $i < 101; $i++) { $positive[] = $i + 1; }
+echo array_sum($positive), '|';
+$odd = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+echo array_sum($odd), '|';
+$negative = [];
+for ($i = 0; $i < 100; $i++) { $negative[] = $i - 50; }
+echo array_sum($negative), '|';
+$wide = [4294967296];
+for ($i = 0; $i < 99; $i++) { $wide[] = 1; }
+echo array_sum($wide), '|';
+$overflow = [PHP_INT_MAX];
+for ($i = 0; $i < 99; $i++) { $overflow[] = 1; }
+echo gettype(array_sum($overflow)), ':', array_sum($overflow), '|';
+$loop = -7;
+for ($i = 0; $i < 101; $i++) { $loop += $positive[$i]; }
+echo $loop, '|';
+$float = 1.5;
+for ($i = 0; $i < 101; $i++) { $float += $positive[$i]; }
+echo gettype($float), ':', $float, "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "5151|45|-50|4294967395|double:9.2233720368548E+18|5144|double:5152.5\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
