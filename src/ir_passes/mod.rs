@@ -13,7 +13,9 @@
 //!   builds.
 
 mod allocation;
+mod array_fill_loop;
 mod array_get_bounds;
+mod array_sum_loop;
 mod boxed_narrowing;
 mod bounded_mixed_counter;
 mod branch_simplify;

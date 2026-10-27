@@ -8,7 +8,9 @@
 //! - Functions are built with `crate::ir::Builder` so the tests exercise the
 //!   real IR data model without going through AST lowering.
 
+mod array_fill_loop_test;
 mod array_get_bounds_test;
+mod array_sum_loop_test;
 mod branch_simplify_test;
 mod borrowed_receiver_roots_test;
 mod boxed_narrowing_test;

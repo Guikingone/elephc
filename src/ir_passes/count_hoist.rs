@@ -205,6 +205,7 @@ fn read_only_container_consumer(inst: &Instruction, value: ValueId) -> bool {
     match inst.op {
         Op::RuntimeCall if is_single_argument_count(inst) => true,
         Op::ArrayGet
+        | Op::ArrayGetUnchecked
         | Op::ArrayGetSilent
         | Op::ArrayLen
         | Op::ArrayIsset

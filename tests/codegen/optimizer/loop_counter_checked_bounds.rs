@@ -375,12 +375,33 @@ function sum_bounded(int $n): int {
 echo sum_bounded($argc + 9), "\n";
 "#;
 
+/// The same bounded sum with the induction observed after the loop, so the reduction
+/// rewrite leaves the guarded/unchecked read path intact for the read-shape tests.
+const BOUNDED_READ_SUM: &str = r#"<?php
+function read_bounded(int $n): string {
+    $data = [];
+    $i = 0;
+    while ($i < $n) {
+        $data[] = $i % 97;
+        $i += 1;
+    }
+    $sum = 0;
+    $i = 0;
+    while ($i < count($data)) {
+        $sum += $data[$i];
+        $i += 1;
+    }
+    return $sum . ':' . $i;
+}
+echo read_bounded($argc + 9), "\n";
+"#;
+
 /// A strict typed-array bound turns the body's element read into an unchecked int load.
 #[test]
 fn test_array_get_bounds_removes_missing_key_and_bounds_guards() {
-    let source = BOUNDED_SUM;
+    let source = BOUNDED_READ_SUM;
     let optimized = optimized_ir(source);
-    let body = function_body(&optimized, "sum_bounded");
+    let body = function_body(&optimized, "read_bounded");
     assert!(
         body.contains("array_get_unchecked"),
         "the bounded read must lower to the unchecked op:\n{body}"
@@ -402,7 +423,211 @@ fn test_array_get_bounds_removes_missing_key_and_bounds_guards() {
         "the typed count keeps the loop entry concat-clean:\n{before_read}"
     );
     for optimized_mode in [false, true] {
+        assert_eq!(run(source, optimized_mode, true), "45:10\n");
+    }
+}
+
+/// A bounded boxed reduction becomes one `__rt_array_sum_int` helper call.
+#[test]
+fn test_array_sum_loop_rewrites_bounded_reduction() {
+    let source = BOUNDED_SUM;
+    let optimized = optimized_ir(source);
+    let body = function_body(&optimized, "sum_bounded");
+    assert!(
+        body.contains("array_sum_int"),
+        "the reduction must become one helper call:\n{body}"
+    );
+    assert!(
+        !body.contains("mixed_numeric_binop"),
+        "the boxed reduction loop must be gone:\n{body}"
+    );
+    for optimized_mode in [false, true] {
         assert_eq!(run(source, optimized_mode, true), "45\n");
+    }
+}
+
+/// The helper keeps PHP's seed, float promotion and empty-range behavior.
+#[test]
+fn test_array_sum_loop_matches_php_seed_and_overflow() {
+    let source = r#"<?php
+function sum_overflow(): string {
+    $data = []; $data[] = PHP_INT_MAX; $data[] = 1; $data[] = 2;
+    $sum = 0; $i = 0;
+    while ($i < count($data)) { $sum += $data[$i]; $i += 1; }
+    return gettype($sum) . ':' . $sum;
+}
+function sum_float(): string {
+    $data = []; $data[] = 1; $data[] = 2; $data[] = 3;
+    $sum = 1.5; $i = 0;
+    while ($i < count($data)) { $sum += $data[$i]; $i += 1; }
+    return gettype($sum) . ':' . $sum;
+}
+function sum_empty(): string {
+    $data = []; $sum = 5; $i = 0;
+    while ($i < count($data)) { $sum += $data[$i]; $i += 1; }
+    return gettype($sum) . ':' . $sum;
+}
+function sum_start(): string {
+    $data = []; $data[] = 10; $data[] = 20; $data[] = 30; $data[] = 40;
+    $sum = 0; $i = 2;
+    while ($i < count($data)) { $sum += $data[$i]; $i += 1; }
+    return gettype($sum) . ':' . $sum;
+}
+echo sum_overflow(), '|', sum_float(), '|', sum_empty(), '|', sum_start(), "\n";
+"#;
+    for optimized_mode in [false, true] {
+        assert_eq!(
+            run(source, optimized_mode, true),
+            "double:9.2233720368548E+18|double:7.5|integer:5|integer:70\n"
+        );
+    }
+}
+
+/// An observed induction value keeps the boxed loop because the helper cannot return it.
+#[test]
+fn test_array_sum_loop_keeps_loop_when_index_is_observed() {
+    let optimized = optimized_ir(
+        r#"<?php
+function sum_then_index(int $n): string {
+    $data = [];
+    $i = 0;
+    while ($i < $n) { $data[] = $i % 97; $i += 1; }
+    $sum = 0;
+    $i = 0;
+    while ($i < count($data)) { $sum += $data[$i]; $i += 1; }
+    return $sum . ':' . $i;
+}
+echo sum_then_index($argc + 9), "\n";
+"#,
+    );
+    let body = function_body(&optimized, "sum_then_index");
+    assert!(
+        !body.contains("array_sum_int") && body.contains("mixed_numeric_binop"),
+        "an observed induction must keep the boxed loop:\n{body}"
+    );
+}
+
+/// Every supported target emits the reduction helper call.
+#[test]
+fn test_array_sum_loop_emits_on_all_supported_targets() {
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let dir = make_cli_test_dir("elephc_array_sum_loop_target");
+        let path = dir.join("main.php");
+        fs::write(&path, BOUNDED_SUM).unwrap();
+        let mut command = elephc_cli_command(&dir);
+        command.args(["--emit-asm", "--target", target]);
+        if target.starts_with("ios-") {
+            command.args(["--emit", "staticlib"]);
+        }
+        let output = command.arg(&path).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{target}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let asm = fs::read_to_string(path.with_extension("s")).unwrap();
+        assert!(
+            asm.contains("__rt_array_sum_int"),
+            "{target}: missing the reduction helper call\n{asm}"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// A pure constant-bound fill loop reserves capacity and uses the reserved append.
+#[test]
+fn test_array_fill_loop_reserves_constant_fill() {
+    let source = r#"<?php
+function fill_and_sum(): string {
+    $data = [];
+    $i = 0;
+    while ($i < 50000) { $data[] = $i % 97; $i += 1; }
+    $sum = 0;
+    $j = 0;
+    while ($j < count($data)) { $sum += $data[$j]; $j += 1; }
+    return count($data) . ':' . $sum;
+}
+echo fill_and_sum(), "\n";
+"#;
+    for optimized_mode in [false, true] {
+        assert_eq!(run(source, optimized_mode, true), "50000:2398830\n");
+    }
+    let optimized = optimized_ir(source);
+    let body = function_body(&optimized, "fill_and_sum");
+    assert!(
+        body.contains("array_push_reserved"),
+        "the constant fill must use the reserved append:\n{body}"
+    );
+    assert!(
+        !body.contains("array_push v"),
+        "no checked append may remain in the constant fill:\n{body}"
+    );
+}
+
+/// A runtime bound keeps the checked append because capacity cannot be reserved.
+#[test]
+fn test_array_fill_loop_keeps_runtime_bound() {
+    let optimized = optimized_ir(BOUNDED_SUM);
+    let body = function_body(&optimized, "sum_bounded");
+    assert!(
+        body.contains("array_push v"),
+        "a runtime bound must keep the checked append:\n{body}"
+    );
+    assert!(
+        !body.contains("array_push_reserved"),
+        "a runtime bound must not reserve capacity:\n{body}"
+    );
+}
+
+/// Every supported target emits the reserved append without the generic push helper.
+#[test]
+fn test_array_fill_loop_emits_on_all_supported_targets() {
+    let source = r#"<?php
+function fill(int $unused): int {
+    $data = [];
+    $i = 0;
+    while ($i < 50000) { $data[] = $i % 97; $i += 1; }
+    return count($data);
+}
+echo fill($argc), "\n";
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let dir = make_cli_test_dir("elephc_array_fill_loop_target");
+        let path = dir.join("main.php");
+        fs::write(&path, source).unwrap();
+        let mut command = elephc_cli_command(&dir);
+        command.args(["--emit-asm", "--target", target]);
+        if target.starts_with("ios-") {
+            command.args(["--emit", "staticlib"]);
+        }
+        let output = command.arg(&path).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{target}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let asm = fs::read_to_string(path.with_extension("s")).unwrap();
+        let body = asm
+            .split("@block name=while.body")
+            .find(|body| body.contains("op=array_push_reserved"))
+            .unwrap_or_else(|| panic!("{target}: missing reserved fill body\n{asm}"));
+        assert!(
+            !body.contains("__rt_array_push_int") && !body.contains("__rt_array_push_reserved"),
+            "{target}: the reserved append must not call a helper\n{body}"
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 }
 
@@ -418,7 +643,7 @@ fn test_array_get_bounds_emits_on_all_supported_targets() {
     ] {
         let dir = make_cli_test_dir("elephc_array_get_bounds_target");
         let path = dir.join("main.php");
-        fs::write(&path, BOUNDED_SUM).unwrap();
+        fs::write(&path, BOUNDED_READ_SUM).unwrap();
         let mut command = elephc_cli_command(&dir);
         command.args(["--emit-asm", "--target", target]);
         if target.starts_with("ios-") {

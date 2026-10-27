@@ -360,6 +360,70 @@ enum ArrayGetMode {
     MixedForWrite,
 }
 
+/// Lowers one append into a private, preallocated, int-shaped array.
+///
+/// The producer proved uniqueness, non-null storage, the int slot shape and spare capacity, so
+/// the store is one payload write plus the header length increment: no COW split, growth,
+/// metadata check or source-local writeback remains. The array pointer is unchanged.
+pub(super) fn lower_array_push_reserved(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let value = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(value, "x1")?;
+            ctx.load_value_to_reg(array, "x9")?;
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load the current logical length
+            ctx.emitter.instruction("add x11, x9, #24");                        // skip the indexed-array header to the payload base
+            ctx.emitter.instruction("str x1, [x11, x10, lsl #3]");              // store the appended int in the reserved slot
+            ctx.emitter.instruction("add x10, x10, #1");                        // advance the logical length
+            ctx.emitter.instruction("str x10, [x9]");                           // publish the updated length
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(value, "rsi")?;
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load the current logical length
+            ctx.emitter.instruction("mov QWORD PTR [rdi + 24 + r10 * 8], rsi"); // store the appended int in the reserved slot
+            ctx.emitter.instruction("add r10, 1");                              // advance the logical length
+            ctx.emitter.instruction("mov QWORD PTR [rdi], r10");                // publish the updated length
+        }
+    }
+    Ok(())
+}
+
+/// Lowers the typed-array reduction helper call.
+///
+/// The producer proved the receiver is a private, non-null, int-shaped packed array and that
+/// `[start, end)` is in bounds. The helper reproduces PHP's left-to-right `+` sequence with
+/// int-to-float promotion and returns an owned Mixed cell; the seed is borrowed.
+pub(super) fn lower_array_sum_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let start = expect_operand(inst, 1)?;
+    let end = expect_operand(inst, 2)?;
+    let seed = expect_operand(inst, 3)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(start, "x1")?;
+            ctx.load_value_to_reg(end, "x2")?;
+            ctx.load_value_to_reg(seed, "x3")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(start, "rsi")?;
+            ctx.load_value_to_reg(end, "rdx")?;
+            ctx.load_value_to_reg(seed, "rcx")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_sum_int");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a proven in-bounds read of a private int-shaped indexed array.
 ///
 /// The producing pass proved the receiver cannot be null, hash-promoted, or widened, and that

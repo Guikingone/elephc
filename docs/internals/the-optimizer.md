@@ -679,6 +679,30 @@ negative seeds or steps, escaping or mutable receivers, parameters and reads
 whose result has any consumer other than that narrowing cast keep the guarded
 `array_get` with its missing-key warning and null fallback.
 
+## EIR typed-array reductions and fill reservation
+
+`src/ir_passes/array_sum_loop.rs` recognizes the exact boxed reduction scaffold
+`while (i < count($data)) { $sum += $data[$i]; $i += 1; }` after the count hoist
+and the bounds proof. The array must be the same private, dense `array<int>`,
+the accumulator must be a proven numeric local, the body may contain only the
+matched load/read/add/clone/acquire/release/store sequence on one unit latch,
+and the induction value must not be observed after the loop. The loop becomes
+one `__rt_array_sum_int` call in the preheader. The helper reproduces PHP's
+left-to-right addition: integer adds overflow into a double at the same step,
+the remaining elements stay double, and an empty range returns the retained
+seed cell. The old loop blocks are left for branch simplification to neutralize.
+
+`src/ir_passes/array_fill_loop.rs` recognizes a top-level constant-bound fill,
+`while (i < N) { $data[] = <pure int expr>; $i += 1; }`, over an array created
+immediately before it. The array must be the only owner, its only append must
+be the matched push, and the value expression is restricted to non-throwing int
+arithmetic with constant nonzero divisors and constant in-range shift counts.
+The pass sizes the initial `array_new` to `N - start` and rewrites the append to
+`ArrayPushReserved`. Preallocating is safe because the accepted expression
+cannot fail before an append, so every iteration reaches the push. Runtime
+bounds, nested loops, a prior append, an observed induction, aliases and any
+other receiver use keep the checked generic append.
+
 ## EIR buffer resolution hoisting
 
 `src/ir_passes/buffer_access.rs` runs once after the module fixed point (and

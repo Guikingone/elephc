@@ -84,15 +84,17 @@ impl IrPass for ArrayGetBounds {
 
 /// One loop's proven count bound and the induction value it constrains.
 #[derive(Clone, Copy)]
-struct LoopBound {
+pub(super) struct LoopBound {
     /// Typed array/hash local read by the condition's `count()`.
-    slot: LocalSlotId,
+    pub(super) slot: LocalSlotId,
     /// Header block parameter compared against the count.
-    param: ValueId,
+    pub(super) param: ValueId,
+    /// Hoisted `count()` result used by the header comparison.
+    pub(super) count: ValueId,
 }
 
 /// Recognizes `header: cond_br (i < count(load slot))` inside the loop.
-fn loop_bound(
+pub(super) fn loop_bound(
     function: &Function,
     loop_ref: &NaturalLoop,
     def_block: &HashMap<ValueId, BlockId>,
@@ -145,7 +147,7 @@ fn loop_bound(
     if !slot_is_loop_invariant(function, loop_ref, slot) {
         return None;
     }
-    Some(LoopBound { slot, param })
+    Some(LoopBound { slot, param, count: count_value })
 }
 
 /// Requires a non-negative seed and one positive constant step on the header parameter.
@@ -341,7 +343,7 @@ fn retire_narrowing_casts(function: &mut Function, result: ValueId, casts: &[Ins
 }
 
 /// Proves the slot only ever holds a private, non-null, int-shaped packed array.
-fn slot_is_private_int_array(function: &Function, slot: LocalSlotId) -> bool {
+pub(super) fn slot_is_private_int_array(function: &Function, slot: LocalSlotId) -> bool {
     let Some(local) = function.locals.get(slot.as_raw() as usize) else {
         return false;
     };
@@ -405,6 +407,14 @@ fn slot_is_private_int_array(function: &Function, slot: LocalSlotId) -> bool {
                 }
             }
         }
+        // A load forwarded as a block/branch/return value is an alias outside this proof.
+        if block
+            .terminator
+            .as_ref()
+            .is_some_and(|term| term.used_values().iter().any(|value| loads.contains(value)))
+        {
+            return false;
+        }
     }
     true
 }
@@ -464,7 +474,9 @@ fn read_only_int_array_consumer(
         | Op::ArrayGetSilent
         | Op::ArrayGetUnchecked
         | Op::ArrayIsset
-        | Op::ArrayKeyExists => inst.operands.first() == Some(&value),
+        | Op::ArrayKeyExists
+        | Op::ArraySumInt
+        | Op::ArrayPushReserved => inst.operands.first() == Some(&value),
         Op::ArrayPush => {
             inst.operands.first() == Some(&value)
                 && inst.operands.get(1).is_some_and(|&pushed| {

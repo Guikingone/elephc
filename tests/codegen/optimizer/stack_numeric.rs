@@ -253,7 +253,7 @@ function sum_tagged_rhs(int $n): void {
         $sum += $data[$i];
         $i += 1;
     }
-    echo $sum . "|";
+    echo $sum . "|" . $i;
 }
 sum_tagged_rhs($argc + 9);
 "#;
@@ -303,7 +303,7 @@ sum_tagged_rhs($argc + 9);
         !condition[window_start..count_at].contains("_php_diagnostic_line"),
         "a typed-array count must not publish a diagnostic site:\n{condition}"
     );
-    assert_eq!(run(source, true).0, "45|");
+    assert_eq!(run(source, true).0, "45|10");
     fs::remove_dir_all(dir).unwrap();
 }
 

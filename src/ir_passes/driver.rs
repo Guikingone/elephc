@@ -29,7 +29,9 @@
 
 use crate::ir::{DataPool, Function, Module};
 
+use super::array_fill_loop::ArrayFillLoop;
 use super::array_get_bounds::ArrayGetBounds;
+use super::array_sum_loop::ArraySumLoop;
 use super::branch_simplify::BranchSimplify;
 use super::borrowed_receiver_roots::BorrowedReceiverRoots;
 use super::bounded_mixed_counter::BoundedMixedCounter;
@@ -139,6 +141,8 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(CountHoist),
         Box::new(ArrayGetBounds),
         Box::new(IntegerRange),
+        Box::new(ArraySumLoop),
+        Box::new(ArrayFillLoop),
         Box::new(CheckedNumericChain),
         Box::new(ConstFold),
         Box::new(Cse),

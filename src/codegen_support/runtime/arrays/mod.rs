@@ -71,6 +71,7 @@ mod array_pad;
 mod array_pad_refcounted;
 mod array_product;
 mod array_numeric_aggregate;
+mod array_sum_int;
 mod array_push_int;
 mod array_push_refcounted;
 mod array_push_str;
@@ -337,6 +338,7 @@ pub use array_pad::emit_array_pad;
 pub use array_pad_refcounted::emit_array_pad_refcounted;
 /// Emit refcounted array pad helper.
 pub use array_product::emit_array_product;
+pub use array_sum_int::emit_array_sum_int;
 pub use array_numeric_aggregate::{emit_array_numeric_aggregate, ARRAY_AGGREGATE_MESSAGES};
 /// Emit array product helper.
 pub use array_push_int::emit_array_push_int;

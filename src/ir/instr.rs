@@ -66,7 +66,9 @@ const _: () = assert!(std::mem::size_of::<Instruction>() <= 112);
 /// Optimization pass recorded as an instruction's provenance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PassOrigin {
+    ArrayFillLoop,
     ArrayGetBounds,
+    ArraySumLoop,
     BufferAccess,
     ConstFold,
     CountHoist,
@@ -79,7 +81,9 @@ impl PassOrigin {
     /// Returns the lower-case spelling used by source maps and the EIR printer.
     pub fn name(self) -> &'static str {
         match self {
+            PassOrigin::ArrayFillLoop => "array_fill_loop",
             PassOrigin::ArrayGetBounds => "array_get_bounds",
+            PassOrigin::ArraySumLoop => "array_sum_loop",
             PassOrigin::BufferAccess => "buffer_access",
             PassOrigin::ConstFold => "const_fold",
             PassOrigin::CountHoist => "count_hoist",
@@ -954,6 +958,19 @@ pub enum Op {
     ArrayLen,
     HashLen,
     ArrayGet,
+    /// Appends one raw int into a private, preallocated, int-shaped indexed array.
+    ///
+    /// Operands: array, value. No immediate. The producer proved the array is unique, non-null,
+    /// int-shaped and has spare capacity for this append, so codegen stores the payload and
+    /// advances the header length without COW, shape, growth or writeback work.
+    ArrayPushReserved,
+    /// Sums a dense int-shaped indexed array range into a fresh Mixed int/float cell.
+    ///
+    /// Operands: array, inclusive start, exclusive end, borrowed seed Mixed cell. No immediate.
+    /// The producer proved the receiver is a private, non-null, int-shaped packed array and that
+    /// the range is in bounds. The helper reproduces PHP's left-to-right `+` sequence, promoting
+    /// to float at the first integer overflow, and returns an owned Mixed cell.
+    ArraySumInt,
     /// Reads one element of a private, int-shaped indexed array at a proven in-bounds index.
     ///
     /// Operands: array, index. No immediate. The producing pass proved the receiver is non-null,
@@ -1395,6 +1412,11 @@ impl Op {
             ArrayToPointerWords => {
                 E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
+            // Reads the array range and the seed cell, retains the seed for an empty range,
+            // and allocates the boxed result. No PHP callback or warning runs inside.
+            ArraySumInt => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
+            // Stores one raw int into preallocated spare capacity and advances the header length.
+            ArrayPushReserved => E::WRITES_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
             | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
             | GeneratorNew => {
@@ -1800,6 +1822,8 @@ impl Op {
             ArrayLen => "array_len",
             HashLen => "hash_len",
             ArrayGet => "array_get",
+            ArrayPushReserved => "array_push_reserved",
+            ArraySumInt => "array_sum_int",
             ArrayGetUnchecked => "array_get_unchecked",
             ArrayGetSilent => "array_get_silent",
             ArrayGetForWrite => "array_get_for_write",
