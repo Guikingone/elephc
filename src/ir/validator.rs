@@ -333,6 +333,14 @@ fn validate_instruction_effects(
         && matches!(inst.immediate, Some(Immediate::PropertyRef { .. }))
     {
         inst.op.default_effects() | Effects::ALLOC_HEAP
+    } else if matches!(
+        inst.op,
+        Op::ICheckedAddToInt | Op::ICheckedSubToInt | Op::ICheckedMulToInt
+    ) && matches!(inst.immediate, Some(Immediate::Data(_)))
+    {
+        // A declared-int return boundary turns the checked arithmetic overflow into PHP's
+        // catchable TypeError, so the specialized producer carries throw/fatal effects.
+        inst.op.default_effects() | Effects::MAY_THROW | Effects::MAY_FATAL
     } else {
         inst.op.default_effects()
     };

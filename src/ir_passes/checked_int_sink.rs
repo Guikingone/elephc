@@ -370,6 +370,11 @@ fn specialize_checked_producer(
         inst.result_php_type = PhpType::Int;
         inst.result_ownership = Ownership::NonHeap;
         inst.effects = replacement_op.default_effects();
+        if matches!(inst.immediate, Some(Immediate::Data(_))) {
+            // The boundary overflow throws PHP's catchable TypeError, so the specialized
+            // producer must keep throw/fatal effects visible to every optimizer.
+            inst.effects |= crate::ir::Effects::MAY_THROW | crate::ir::Effects::MAY_FATAL;
+        }
     }
     if let Some(value) = result.and_then(|result| function.value_mut(result)) {
         value.ir_type = IrType::I64;

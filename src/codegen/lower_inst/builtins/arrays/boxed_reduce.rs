@@ -123,8 +123,7 @@ fn safe_reducer_body(closure: &crate::ir::Function) -> bool {
     closure.instructions.iter().all(|inst| {
         inst.effects
             .intersection(
-                crate::ir::Effects::MAY_THROW
-                    | crate::ir::Effects::MAY_WARN
+                crate::ir::Effects::MAY_WARN
                     | crate::ir::Effects::WRITES_GLOBAL
                     | crate::ir::Effects::WRITES_HEAP
                     | crate::ir::Effects::WRITES_FS
