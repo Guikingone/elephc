@@ -17,9 +17,9 @@
 //!   record with no reader is skipped.
 //! - The bottom entry is always `{main}`: php prints the script frame that way, and elephc's
 //!   process entry frame carries no PHP-visible activation.
-//! - The `thrown in` tail repeats the location the report already printed: the module's source
-//!   path and the throwable's creation line. A zero line still prints `on line 0` — the corpus
-//!   forms always carry a real line, and omitting the tail would hide the block php prints.
+//! - The `thrown in` tail repeats the location the report already printed, through the same
+//!   `__rt_throwable_location_borrowed` lookup (so ErrorException overrides and explicit zero
+//!   lines match the getters); an unknown origin falls back to the script path and creation line.
 //! - The walk cursor lives in x19/r14, which AAPCS/SysV callees preserve, and the frame index
 //!   lives in the walker's own frame slot, so both survive every reader call.
 
@@ -115,26 +115,28 @@ fn emit_uncaught_print_stack_trace_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_uncaught_print_thrown_in");
     emitter.instruction("stp x29, x30, [sp, #-48]!");
     emitter.instruction("mov x29, sp");
-    emitter.instruction("str xzr, [sp, #16]"); // remember whether the file part was written (clear of the saved x30 at +8)
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0);
+    abi::emit_call_label(emitter, "__rt_throwable_location_borrowed"); // x0 line, x1/x2 file, x3 known
+    emitter.instruction("cbnz x3, __rt_uncaught_thrown_known");
+    abi::emit_symbol_address(emitter, "x1", "_script_source_file"); // unknown origin: script path and creation line
+    abi::emit_load_symbol_to_reg(emitter, "x2", "_script_source_file_len", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);
+    emitter.instruction(&format!("ldr x0, [x9, #{}]", THROWABLE_CREATION_LINE_OFFSET));
+    emitter.label("__rt_uncaught_thrown_known");
+    emitter.instruction("stp x1, x2, [sp, #16]"); // the effective file across the write syscalls
+    emitter.instruction("str x0, [sp, #32]"); // the effective line
     abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_thrown");
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_THROWN_LEN));
     emitter.instruction("mov x0, #1");
     emitter.syscall(4);
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_script_source_file_len", 0);
-    emitter.instruction("cbz x9, __rt_uncaught_thrown_line"); // no source path: skip straight to the line
-    emitter.instruction("mov w9, #1");
-    emitter.instruction("str w9, [sp, #16]");
-    abi::emit_symbol_address(emitter, "x1", "_script_source_file");
-    abi::emit_load_symbol_to_reg(emitter, "x2", "_script_source_file_len", 0);
+    emitter.instruction("ldp x1, x2, [sp, #16]");
     emitter.instruction("mov x0, #1");
     emitter.syscall(4);
-    emitter.label("__rt_uncaught_thrown_line");
     abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_online");
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_ONLINE_LEN));
     emitter.instruction("mov x0, #1");
     emitter.syscall(4);
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);
-    emitter.instruction(&format!("ldr x0, [x9, #{}]", THROWABLE_CREATION_LINE_OFFSET));
+    emitter.instruction("ldr x0, [sp, #32]");
     emitter.instruction("bl __rt_itoa");
     emitter.instruction("mov x0, #1");
     emitter.syscall(4);
@@ -244,31 +246,37 @@ fn emit_uncaught_print_stack_trace_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_uncaught_print_thrown_in");
     emitter.instruction("push rbp");
     emitter.instruction("mov rbp, rsp");
-    emitter.instruction("sub rsp, 16");
-    emitter.instruction("mov QWORD PTR [rbp - 8], 0"); // remember whether the file part was written
+    emitter.instruction("sub rsp, 32");
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0);
+    abi::emit_call_label(emitter, "__rt_throwable_location_borrowed"); // rax/rdx file, rcx line, r8 known
+    emitter.instruction("test r8, r8");
+    emitter.instruction("jnz __rt_uncaught_thrown_known_x86");
+    abi::emit_symbol_address(emitter, "rax", "_script_source_file"); // unknown origin: script path and creation line
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_script_source_file_len", 0);
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_exc_value", 0);
+    emitter.instruction(&format!("mov rcx, QWORD PTR [r9 + {}]", THROWABLE_CREATION_LINE_OFFSET));
+    emitter.label("__rt_uncaught_thrown_known_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax"); // the effective file across the write syscalls
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");
+    emitter.instruction("mov QWORD PTR [rbp - 24], rcx"); // the effective line
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_thrown");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_THROWN_LEN));
     emitter.instruction("mov edi, 1");
     emitter.instruction("mov eax, 1"); // syscall 1 = write
     emitter.instruction("syscall");
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_script_source_file_len", 0);
-    emitter.instruction("test r9, r9");
-    emitter.instruction("jz __rt_uncaught_thrown_line_x86"); // no source path: skip straight to the line
-    emitter.instruction("mov QWORD PTR [rbp - 8], 1");
-    abi::emit_symbol_address(emitter, "rsi", "_script_source_file");
-    abi::emit_load_symbol_to_reg(emitter, "rdx", "_script_source_file_len", 0);
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");
     emitter.instruction("mov edi, 1");
     emitter.instruction("mov eax, 1"); // syscall 1 = write
     emitter.instruction("syscall");
-    emitter.label("__rt_uncaught_thrown_line_x86");
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_online");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_ONLINE_LEN));
     emitter.instruction("mov edi, 1");
     emitter.instruction("mov eax, 1"); // syscall 1 = write
     emitter.instruction("syscall");
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_exc_value", 0);
-    emitter.instruction(&format!("mov rdi, QWORD PTR [r9 + {}]", THROWABLE_CREATION_LINE_OFFSET));
-    emitter.instruction("call __rt_itoa");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");
+    emitter.instruction("call __rt_itoa"); // digit bytes in rax, length in rdx
+    emitter.instruction("mov rsi, rax");
     emitter.instruction("mov edi, 1");
     emitter.instruction("mov eax, 1"); // syscall 1 = write
     emitter.instruction("syscall");
@@ -277,7 +285,7 @@ fn emit_uncaught_print_stack_trace_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, 1");
     emitter.instruction("mov eax, 1"); // syscall 1 = write
     emitter.instruction("syscall");
-    emitter.instruction("add rsp, 16");
+    emitter.instruction("add rsp, 32");
     emitter.instruction("pop rbp");
     emitter.instruction("ret");
 }

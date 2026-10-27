@@ -24,10 +24,8 @@
 //!   component independently. Explicit line zero and an empty filename remain visible.
 //!   Synthesized errors with no known location omit the suffix.
 //!
-//! - WHAT THIS STILL DOES NOT EMIT. PHP continues with `Stack trace:`, `#0 {main}` and
-//!   `  thrown in <file> on line <n>`. `Throwable::getTrace()` and `getTraceAsString()` remain
-//!   synthetic in `lower_inst.rs` — an empty array and an empty string — because elephc keeps no
-//!   call stack to render, so there is nothing truthful to print.
+//! - The `Stack trace:` block and its `  thrown in <file> on line <n>` tail follow, emitted by
+//!   `super::uncaught_trace`.
 //!
 //! - The exit status moves from `1` to `255`, which is what reference PHP returns for an uncaught
 //!   exception. A script that branched on `$?` saw the wrong value before.

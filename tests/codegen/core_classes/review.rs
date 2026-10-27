@@ -109,7 +109,9 @@ fn test_core_review_error_exception_uncaught_creation_line() {
     let out = compile_and_run_capture(source);
     assert!(!out.success);
     assert!(out.stdout.contains("Fatal error: Uncaught ReportError: uncaught in "), "{}", out.stdout);
-    assert!(out.stdout.ends_with(&format!(":{line}\n")), "{}", out.stdout);
+    assert!(out.stdout.contains(&format!(":{line}\nStack trace:\n")), "{}", out.stdout);
+    // The harness's filtered stdout drops the diagnostic-shaped `thrown in` tail.
+    assert!(out.stdout_raw.ends_with(&format!(" on line {line}\n")), "{}", out.stdout_raw);
 }
 
 /// Fatal locations match getters for independent overrides, explicit zero, and an empty filename.
@@ -127,7 +129,9 @@ fn test_core_review_error_exception_uncaught_location_overrides() {
         let expected = out.stdout.lines().next().unwrap().strip_prefix("expected:").unwrap();
         if let Some(suffix) = oracle_suffix { assert_eq!(expected, suffix, "{arguments}"); }
         assert!(out.stdout.contains("Fatal error: Uncaught LocatedReport: located in "), "{arguments}: {}", out.stdout);
-        assert!(out.stdout.ends_with(&format!(" in {expected}\n")), "{arguments}: {}", out.stdout);
+        assert!(out.stdout.contains(&format!(" in {expected}\nStack trace:\n")), "{arguments}: {}", out.stdout);
+        let (file, line) = expected.rsplit_once(':').unwrap();
+        assert!(out.stdout_raw.ends_with(&format!("  thrown in {file} on line {line}\n")), "{arguments}: {}", out.stdout_raw);
     }
 }
 
