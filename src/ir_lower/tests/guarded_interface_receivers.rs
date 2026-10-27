@@ -27,6 +27,7 @@ final class Reference implements ActiveEndpoint {
     public function value(): int { return $this->type; }
 }
 final class Direct implements Endpoint {}
+final class Buffered implements Endpoint { public buffer<int> $data; }
 function property(Endpoint $endpoint): int {
     if (!($endpoint instanceof Reference)) { return 0; }
     return $endpoint->type;
@@ -89,6 +90,12 @@ function dynamic(Endpoint $endpoint, string $name, string $pending): void {
         echo $endpoint->{'weight'} ?? "float", $endpoint?->{'note'} ?? "string";
     }
 }
+function buffer_probe(Endpoint $endpoint, string $name): void {
+    if ($endpoint instanceof Buffered) {
+        $value = $endpoint->$name ?? throw new RuntimeException("missing");
+        echo $value[0];
+    }
+}
 function choose(bool $active): Endpoint {
     if ($active) { return new Reference(); }
     return new Direct();
@@ -119,9 +126,13 @@ for ($global = 0; $global < 1; $global++) {
             ("guarded_value", Op::PropGet, "Reference"),
             ("main", Op::PropGet, "Reference"),
             ("dynamic", Op::DynamicPropGet, "Reference"),
+            ("buffer_probe", Op::DynamicPropGet, "Buffered"),
         ] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
             let member = function.instructions.iter().find(|inst| inst.op == op).unwrap();
+            if name == "buffer_probe" {
+                assert_eq!(member.result_php_type, PhpType::Buffer(Box::new(PhpType::Int)));
+            }
             let receiver = function.value(member.operands[0]).unwrap();
             assert_eq!(receiver.php_type, PhpType::Object(expected.into()), "{target}: {name}");
             let mut load = function.instructions.iter().find(|inst| inst.result == Some(member.operands[0])).unwrap();

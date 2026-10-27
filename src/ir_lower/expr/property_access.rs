@@ -899,8 +899,14 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
         }
     }
     let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
-    // A silent fetch can answer null for a typed slot that has not been initialized.
-    let result_type = if mode.is_read() { result_type } else { nullable_result_type(result_type) };
+    // A silent fetch can answer null for a typed slot that has not been initialized. Buffer
+    // handles keep their element type and use the raw missing-value sentinel, like buffer
+    // element probes: boxing a buffer loses the descriptor's element layout at a later merge.
+    let result_type = if mode.is_read() || matches!(result_type, PhpType::Buffer(_)) {
+        result_type
+    } else {
+        nullable_result_type(result_type)
+    };
     let property = lower_expr(ctx, property);
     let property = coerce_runtime_property_name(ctx, property, expr.span);
     lower_dynamic_property_fetch_from_operands(ctx, object, property, result_type, mode, expr)

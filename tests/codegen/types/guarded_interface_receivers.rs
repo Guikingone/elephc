@@ -346,3 +346,53 @@ inspect(choose($argc > 1), $argv[1] ?? "value", $argv[2] ?? "pending");
     assert_eq!(compile_and_run_per_argv(source, &[&[], &["value", "pending"]]), expected);
     assert_eq!(without_ir_opt(|| compile_and_run_per_argv(source, &[&[], &["value", "pending"]])), expected);
 }
+
+/// Buffer probes retain their element layout and still throw lazily for uninitialized slots.
+#[test]
+fn test_guarded_interface_receiver_dynamic_buffer_probes() {
+    let source = r#"<?php
+interface Endpoint {}
+final class Buffered implements Endpoint { public buffer<int> $data; }
+function choose(bool $initialized): Endpoint {
+    $value = new Buffered();
+    if ($initialized) {
+        $value->data = buffer_new<int>(1);
+        $value->data[0] = 9;
+    }
+    return $value;
+}
+function inspect(Endpoint $endpoint, string $name): void {
+    if (!($endpoint instanceof Buffered)) { return; }
+    try {
+        $literal = $endpoint->{'data'} ?? throw new RuntimeException("literal");
+        echo $literal[0];
+    } catch (RuntimeException $error) { echo $error->getMessage(); }
+    echo ":";
+    try {
+        $dynamic = $endpoint->$name ?? throw new RuntimeException("dynamic");
+        echo $dynamic[0];
+    } catch (RuntimeException $error) { echo $error->getMessage(); }
+}
+inspect(choose($argc > 1), $argv[1] ?? "data");
+"#;
+    let expected = ["literal:dynamic", "9:9", "9:dynamic"];
+    assert_eq!(compile_and_run_per_argv(source, &[&[], &["data"], &["absent"]]), expected);
+    assert_eq!(without_ir_opt(|| compile_and_run_per_argv(source, &[&[], &["data"], &["absent"]])), expected);
+    let heap_source = source.replace(
+        "inspect(choose($argc > 1), $argv[1] ?? \"data\");",
+        r#"function heapControl(): void {
+    $value = new Buffered();
+    $buffer = buffer_new<int>(1);
+    $value->data = $buffer;
+    $value->data[0] = 9;
+    inspect($value, "data");
+    inspect($value, "absent");
+    buffer_free($buffer);
+}
+heapControl();"#,
+    );
+    let out = without_ir_opt(|| compile_and_run_with_heap_debug(&heap_source));
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "9:99:dynamic", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
