@@ -243,3 +243,12 @@ echo (new RegionProperties())->indexRegions($argc);
         assert_eq!(bindings(function, "cell").len(), expected, "{}", crate::ir::print_function(function));
     }
 }
+
+/// Retracting region-only decisions must preserve the independent straight-line numeric split.
+#[test]
+fn numeric_region_nonnumeric_tail_preserves_existing_counter_split() {
+    let source = ASCENDING_THEN_DESCENDING.replace("return $sum;", "$i = \"done\"; return $sum;");
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        assert_scalar_binding(&source, target, 0);
+    }
+}

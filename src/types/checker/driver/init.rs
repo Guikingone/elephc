@@ -153,6 +153,7 @@ impl Checker {
             local_parameter_names: HashSet::new(),
             boxed_parameter_locals: HashSet::new(),
             numeric_region_sites: HashMap::new(),
+            numeric_region_retypes: HashSet::new(),
             numeric_region_dependents: HashMap::new(),
             typed_local_names: HashMap::new(),
             local_bind_kill_sites: HashMap::new(),

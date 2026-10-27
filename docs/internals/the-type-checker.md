@@ -190,7 +190,9 @@ an initializer or after its region vetoes that name. Incoming names, captures,
 possible reference arguments and scope-observing constructs are excluded. Every
 assignment must remain numeric. Checked arithmetic can depend on other region
 locals; a later nonnumeric writer retracts the complete transitive dependency
-graph of region decisions. The original assignment spans enter `local_retype_sites`, so
+graph of region decisions. `numeric_region_retypes` records decisions justified only
+by this scan, so retraction preserves independently valid straight-line numeric
+splits. The original assignment spans enter `local_retype_sites`, so
 existing ambiguity and AST-duplication guards apply to these decisions too.
 
 `eval()`'d code — whether interpreted by the optional Magician bridge or AOT-lowered from a literal fragment into an EIR scope function — reads and writes its locals through a boxed `Mixed` scope cell rather than a compiled, typed frame slot (see [eval() scope behavior](../php/eval.md#scope-behavior)), so it was never subject to this rule to begin with: `--strict-locals` has no effect inside `eval()` fragments. The body that CALLS `eval()` is the reverse case: because the scope cell is addressed by NAME, shapes 1 and 2 would hand the fragment a slot the rest of the body no longer uses, so `mixed_storage_scan` records a per-body "contains eval" flag (`Checker::body_contains_eval`) and `local_binding_is_killable` refuses both there — body-scoped rather than point-in-time, since `eval_barrier_active` only rises once the walk has PASSED an `eval` and the hazard includes an `eval` below the site. See [`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode) for the CLI flag.

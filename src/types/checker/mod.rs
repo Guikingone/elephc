@@ -549,6 +549,8 @@ pub(crate) struct Checker {
     pub boxed_parameter_locals: HashSet<String>,
     /// Disjoint binding starts for names dead between syntactically closed regions.
     pub numeric_region_sites: HashMap<Span, HashSet<String>>,
+    /// Retype decisions justified only by region analysis, excluding independent binding rules.
+    pub numeric_region_retypes: HashSet<(Span, String)>,
     /// Assignment dependencies whose numeric region decisions must be invalidated together.
     pub numeric_region_dependents: HashMap<String, HashSet<String>>,
     /// Names whose type was DECLARED in the current body by a `TypedAssign` local
@@ -703,6 +705,7 @@ pub(crate) struct SavedLocalBindingScope {
     guarded_unions: HashMap<String, PhpType>,
     contains_eval: bool,
     numeric_regions: HashMap<Span, HashSet<String>>,
+    numeric_region_retypes: HashSet<(Span, String)>,
     numeric_region_dependents: HashMap<String, HashSet<String>>,
 }
 
@@ -911,6 +914,7 @@ impl Checker {
             guarded_unions: std::mem::take(&mut self.guarded_union_types),
             contains_eval: self.body_contains_eval,
             numeric_regions: std::mem::take(&mut self.numeric_region_sites),
+            numeric_region_retypes: std::mem::take(&mut self.numeric_region_retypes),
             numeric_region_dependents: std::mem::take(&mut self.numeric_region_dependents),
         };
         self.local_conditional_depth = 0;
@@ -945,6 +949,7 @@ impl Checker {
         self.guarded_union_types = saved.guarded_unions;
         self.body_contains_eval = saved.contains_eval;
         self.numeric_region_sites = saved.numeric_regions;
+        self.numeric_region_retypes = saved.numeric_region_retypes;
         self.numeric_region_dependents = saved.numeric_region_dependents;
     }
 
