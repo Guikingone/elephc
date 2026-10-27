@@ -21,35 +21,67 @@ use crate::parser::ast::{ClassMethod, Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
 use crate::undefined_reads::for_each_child_expr_mut;
 
-/// The checker's post-check sites, by span.
-struct Sites<'a> {
-    constants: &'a HashSet<Span>,
-    method_calls: &'a HashSet<Span>,
-}
-
 /// Rewrites every recorded undefined constant read and deferred method call in the program.
 pub fn rewrite(program: &mut [Stmt], constants: &HashSet<Span>, method_calls: &HashSet<Span>) {
     if constants.is_empty() && method_calls.is_empty() {
         return;
     }
-    rewrite_stmts(program, &Sites { constants, method_calls });
+    walk_program_exprs_mut(program, &mut |expr| rewrite_site(expr, constants, method_calls));
 }
 
-/// Rewrites a statement list.
-fn rewrite_stmts(stmts: &mut [Stmt], sites: &Sites<'_>) {
-    for stmt in stmts.iter_mut() {
-        rewrite_stmt(stmt, sites);
+/// Applies the checker's decision to one recorded node.
+fn rewrite_site(expr: &mut Expr, constants: &HashSet<Span>, method_calls: &HashSet<Span>) {
+    let span = expr.span;
+    match &mut expr.kind {
+        ExprKind::ConstRef(name) if constants.contains(&span) => {
+            let name = name.as_str().trim_start_matches('\\').to_string();
+            *expr = Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::compiler_call(CompilerCall::UndefinedConstant),
+                    args: vec![Expr::new(ExprKind::StringLiteral(name), span)],
+                },
+                span,
+            );
+        }
+        ExprKind::MethodCall { object, .. } | ExprKind::NullsafeMethodCall { object, .. }
+            if method_calls.contains(&span) =>
+        {
+            let receiver_span = object.span;
+            let receiver = std::mem::replace(object.as_mut(), Expr::new(ExprKind::Null, receiver_span));
+            **object = Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::compiler_call(CompilerCall::MixedReceiver),
+                    args: vec![receiver],
+                },
+                receiver_span,
+            );
+        }
+        _ => {}
     }
 }
 
-/// Rewrites the expressions and nested bodies of one statement.
-fn rewrite_stmt(stmt: &mut Stmt, sites: &Sites<'_>) {
+/// Calls `visit` on every expression of the program, pre-order, through statement bodies,
+/// methods and closures. `visit` may replace the node it is given; the replacement's children
+/// are walked.
+pub(crate) fn walk_program_exprs_mut(program: &mut [Stmt], visit: &mut dyn FnMut(&mut Expr)) {
+    walk_stmts(program, visit);
+}
+
+/// Visits a statement list.
+fn walk_stmts(stmts: &mut [Stmt], visit: &mut dyn FnMut(&mut Expr)) {
+    for stmt in stmts.iter_mut() {
+        walk_stmt(stmt, visit);
+    }
+}
+
+/// Visits the expressions and nested bodies of one statement.
+fn walk_stmt(stmt: &mut Stmt, visit: &mut dyn FnMut(&mut Expr)) {
     match &mut stmt.kind {
-        StmtKind::FunctionDecl { body, .. } => rewrite_stmts(body, sites),
+        StmtKind::FunctionDecl { body, .. } => walk_stmts(body, visit),
         StmtKind::ClassDecl { methods, .. }
         | StmtKind::TraitDecl { methods, .. }
         | StmtKind::InterfaceDecl { methods, .. }
-        | StmtKind::EnumDecl { methods, .. } => rewrite_methods(methods, sites),
+        | StmtKind::EnumDecl { methods, .. } => walk_methods(methods, visit),
         StmtKind::Assign { value, .. }
         | StmtKind::TypedAssign { value, .. }
         | StmtKind::ArrayPush { value, .. }
@@ -62,150 +94,129 @@ fn rewrite_stmt(stmt: &mut Stmt, sites: &Sites<'_>) {
         | StmtKind::StaticPropertyAssign { value, .. }
         | StmtKind::StaticPropertyArrayPush { value, .. }
         | StmtKind::NestedArrayAssign { value, .. }
-        | StmtKind::Return(Some(value)) => rewrite_expr(value, sites),
+        | StmtKind::Return(Some(value)) => walk_expr(value, visit),
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
-            rewrite_expr(index, sites);
-            rewrite_expr(value, sites);
+            walk_expr(index, visit);
+            walk_expr(value, visit);
         }
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
-            rewrite_expr(object, sites);
-            rewrite_expr(value, sites);
+            walk_expr(object, visit);
+            walk_expr(value, visit);
         }
         StmtKind::PropertyArrayAssign { object, index, value, .. } => {
-            rewrite_expr(object, sites);
-            rewrite_expr(index, sites);
-            rewrite_expr(value, sites);
+            walk_expr(object, visit);
+            walk_expr(index, visit);
+            walk_expr(value, visit);
         }
         StmtKind::Foreach { array, body, .. } => {
-            rewrite_expr(array, sites);
-            rewrite_stmts(body, sites);
+            walk_expr(array, visit);
+            walk_stmts(body, visit);
         }
         StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
-            rewrite_expr(condition, sites);
-            rewrite_stmts(then_body, sites);
+            walk_expr(condition, visit);
+            walk_stmts(then_body, visit);
             for (condition, body) in elseif_clauses.iter_mut() {
-                rewrite_expr(condition, sites);
-                rewrite_stmts(body, sites);
+                walk_expr(condition, visit);
+                walk_stmts(body, visit);
             }
             if let Some(body) = else_body {
-                rewrite_stmts(body, sites);
+                walk_stmts(body, visit);
             }
         }
         StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
-            rewrite_expr(condition, sites);
-            rewrite_stmts(body, sites);
+            walk_expr(condition, visit);
+            walk_stmts(body, visit);
         }
         StmtKind::For { init, condition, update, body } => {
             if let Some(init) = init {
-                rewrite_stmt(init, sites);
+                walk_stmt(init, visit);
             }
             if let Some(condition) = condition {
-                rewrite_expr(condition, sites);
+                walk_expr(condition, visit);
             }
             if let Some(update) = update {
-                rewrite_stmt(update, sites);
+                walk_stmt(update, visit);
             }
-            rewrite_stmts(body, sites);
+            walk_stmts(body, visit);
         }
         StmtKind::Switch { subject, cases, default } => {
-            rewrite_expr(subject, sites);
+            walk_expr(subject, visit);
             for (conditions, body) in cases.iter_mut() {
                 for condition in conditions.iter_mut() {
-                    rewrite_expr(condition, sites);
+                    walk_expr(condition, visit);
                 }
-                rewrite_stmts(body, sites);
+                walk_stmts(body, visit);
             }
             if let Some(body) = default {
-                rewrite_stmts(body, sites);
+                walk_stmts(body, visit);
             }
         }
         StmtKind::Try { try_body, catches, finally_body } => {
-            rewrite_stmts(try_body, sites);
+            walk_stmts(try_body, visit);
             for catch in catches.iter_mut() {
-                rewrite_stmts(&mut catch.body, sites);
+                walk_stmts(&mut catch.body, visit);
             }
             if let Some(body) = finally_body {
-                rewrite_stmts(body, sites);
+                walk_stmts(body, visit);
             }
         }
         StmtKind::IfDef { then_body, else_body, .. } => {
-            rewrite_stmts(then_body, sites);
+            walk_stmts(then_body, visit);
             if let Some(body) = else_body {
-                rewrite_stmts(body, sites);
+                walk_stmts(body, visit);
             }
         }
         StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { body, .. }
-        | StmtKind::IncludeOnceGuard { body, .. } => rewrite_stmts(body, sites),
+        | StmtKind::IncludeOnceGuard { body, .. } => walk_stmts(body, visit),
         _ => {}
     }
 }
 
-/// Rewrites every method body.
-fn rewrite_methods(methods: &mut [ClassMethod], sites: &Sites<'_>) {
+/// Visits every method body.
+fn walk_methods(methods: &mut [ClassMethod], visit: &mut dyn FnMut(&mut Expr)) {
     for method in methods.iter_mut() {
-        rewrite_stmts(&mut method.body, sites);
+        walk_stmts(&mut method.body, visit);
     }
 }
 
-/// Rewrites one expression tree.
-fn rewrite_expr(expr: &mut Expr, sites: &Sites<'_>) {
+/// Visits one expression tree: the node first (it may replace itself), then its children.
+fn walk_expr(expr: &mut Expr, visit: &mut dyn FnMut(&mut Expr)) {
+    visit(expr);
     match &mut expr.kind {
-        ExprKind::ConstRef(name) if sites.constants.contains(&expr.span) => {
-            let span = expr.span;
-            let name = name.as_str().trim_start_matches('\\').to_string();
-            *expr = Expr::new(
-                ExprKind::FunctionCall {
-                    name: Name::compiler_call(CompilerCall::UndefinedConstant),
-                    args: vec![Expr::new(ExprKind::StringLiteral(name), span)],
-                },
-                span,
-            );
-        }
         ExprKind::NullCoalesce { value, default } => {
-            rewrite_expr(value, sites);
-            rewrite_expr(default, sites);
+            walk_expr(value, visit);
+            walk_expr(default, visit);
         }
-        ExprKind::ErrorSuppress(inner) => rewrite_expr(inner, sites),
-        ExprKind::Closure { body, .. } => rewrite_stmts(body, sites),
+        ExprKind::ErrorSuppress(inner) => walk_expr(inner, visit),
+        ExprKind::Closure { body, .. } => walk_stmts(body, visit),
         ExprKind::Assignment { target, value, .. } => {
-            rewrite_expr(target, sites);
-            rewrite_expr(value, sites);
+            walk_expr(target, visit);
+            walk_expr(value, visit);
         }
         ExprKind::FunctionCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewScopedObject { args, .. }
         | ExprKind::NewObject { args, .. }
         | ExprKind::NewGeneric { args, .. }
-        | ExprKind::ClosureCall { args, .. } => rewrite_exprs(args, sites),
+        | ExprKind::ClosureCall { args, .. } => walk_exprs(args, visit),
         ExprKind::MethodCall { object, args, .. } | ExprKind::NullsafeMethodCall { object, args, .. } => {
-            rewrite_expr(object, sites);
-            rewrite_exprs(args, sites);
-            if sites.method_calls.contains(&expr.span) {
-                let span = object.span;
-                let receiver = std::mem::replace(object.as_mut(), Expr::new(ExprKind::Null, span));
-                **object = Expr::new(
-                    ExprKind::FunctionCall {
-                        name: Name::compiler_call(CompilerCall::MixedReceiver),
-                        args: vec![receiver],
-                    },
-                    span,
-                );
-            }
+            walk_expr(object, visit);
+            walk_exprs(args, visit);
         }
         ExprKind::ExprCall { callee, args } => {
-            rewrite_expr(callee, sites);
-            rewrite_exprs(args, sites);
+            walk_expr(callee, visit);
+            walk_exprs(args, visit);
         }
-        _ => for_each_child_expr_mut(expr, &mut |child| rewrite_expr(child, sites)),
+        _ => for_each_child_expr_mut(expr, &mut |child| walk_expr(child, visit)),
     }
 }
 
-/// Rewrites a list of expressions.
-fn rewrite_exprs(exprs: &mut [Expr], sites: &Sites<'_>) {
+/// Visits a list of expressions.
+fn walk_exprs(exprs: &mut [Expr], visit: &mut dyn FnMut(&mut Expr)) {
     for expr in exprs.iter_mut() {
-        rewrite_expr(expr, sites);
+        walk_expr(expr, visit);
     }
 }

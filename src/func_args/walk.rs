@@ -62,17 +62,28 @@ pub(super) struct Rewriter {
     capture_all_frames: bool,
     rewrite_introspection: bool,
     saw_backtrace: bool,
+    /// Callees some call site passes surplus positional arguments.
+    surplus: super::surplus::SurplusCalls,
+    /// Whether the declaration being walked comes from compiler-provided (prelude) source:
+    /// php's built-in functions refuse surplus arguments, so those keep their arity.
+    internal_declaration: bool,
 }
 
 impl Rewriter {
     /// Creates a rewriter positioned at top level with the requested frame-capture mode.
-    pub(super) fn new(capture_all_frames: bool, rewrite_introspection: bool) -> Self {
+    pub(super) fn new(
+        capture_all_frames: bool,
+        rewrite_introspection: bool,
+        surplus: super::surplus::SurplusCalls,
+    ) -> Self {
         Self {
             scope: None,
             errors: Vec::new(),
             capture_all_frames,
             rewrite_introspection,
             saw_backtrace: false,
+            surplus,
+            internal_declaration: false,
         }
     }
 
@@ -90,6 +101,16 @@ impl Rewriter {
 
     /// Rewrites one statement, recursing into every nested statement and expression.
     fn walk_stmt(&mut self, stmt: &mut Stmt) {
+        if matches!(
+            stmt.kind,
+            StmtKind::FunctionDecl { .. }
+                | StmtKind::ClassDecl { .. }
+                | StmtKind::TraitDecl { .. }
+                | StmtKind::InterfaceDecl { .. }
+                | StmtKind::EnumDecl { .. }
+        ) {
+            self.internal_declaration = stmt.source_mode == crate::source::SourceMode::Internal;
+        }
         match &mut stmt.kind {
             // Statements with no expression and no nested body.
             StmtKind::Break(_)
@@ -242,8 +263,12 @@ impl Rewriter {
                 ..
             } => {
                 let label = format!("function '{}'", name);
+                let collect_surplus = !self.internal_declaration
+                    && variadic.is_none()
+                    && self.surplus.function_needs_collector(name, params.len());
                 self.walk_function_scope(
                     label,
+                    collect_surplus,
                     params,
                     Some(param_attributes),
                     variadic,
@@ -284,6 +309,14 @@ impl Rewriter {
     fn walk_methods(&mut self, owner: &str, methods: &mut [ClassMethod]) {
         for method in methods.iter_mut() {
             let label = format!("method '{}::{}'", owner, method.name);
+            let declared = method.params.len();
+            let surplus_call = if method.name.eq_ignore_ascii_case("__construct") {
+                self.surplus.constructor_needs_collector(owner, declared)
+            } else {
+                self.surplus.method_needs_collector(&method.name, declared)
+            };
+            let collect_surplus =
+                !self.internal_declaration && method.variadic.is_none() && surplus_call;
             let ClassMethod {
                 params,
                 param_attributes,
@@ -294,6 +327,7 @@ impl Rewriter {
             } = method;
             self.walk_function_scope(
                 label,
+                collect_surplus,
                 params,
                 Some(param_attributes),
                 variadic,
@@ -311,6 +345,7 @@ impl Rewriter {
     fn walk_function_scope(
         &mut self,
         _label: String,
+        collect_surplus: bool,
         params: &mut Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
         param_attributes: Option<&mut Vec<Vec<AttributeGroup>>>,
         variadic: &mut Option<String>,
@@ -326,7 +361,9 @@ impl Rewriter {
             // Compiler-provided collectors already contain the passed-count metadata.
             // They must not be snapshotted again as a PHP-declared variadic tail.
             source_variadic: variadic.clone().filter(|name| name != HIDDEN_ARGS_PARAM),
-            used: self.capture_all_frames,
+            // A call site passing surplus arguments needs the collector php's ignored extra
+            // arguments land in, exactly as `func_get_args()` does.
+            used: self.capture_all_frames || collect_surplus,
         };
         let outer = self.scope.replace(scope);
         self.walk_stmts(body);
@@ -570,6 +607,7 @@ impl Rewriter {
             } => {
                 self.walk_function_scope(
                     "closure".to_string(),
+                    false,
                     params,
                     None,
                     variadic,
@@ -753,7 +791,7 @@ fn string_literal_names_backtrace(literal: &str) -> bool {
 /// this gate off the compiler's allocation path for every program, including the ones that
 /// never mention a backtrace.
 pub(super) fn program_uses_backtrace(program: &mut [Stmt]) -> bool {
-    let mut detector = Rewriter::new(false, false);
+    let mut detector = Rewriter::new(false, false, Default::default());
     detector.walk_stmts(program);
     detector.saw_backtrace
 }

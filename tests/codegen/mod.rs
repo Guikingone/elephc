@@ -11,6 +11,7 @@ mod array_ordering;
 mod undefined_variable_reads;
 mod deferred_method_calls;
 mod untyped_null_properties;
+mod surplus_arguments;
 mod exceptions;
 mod fibers;
 mod buffers;

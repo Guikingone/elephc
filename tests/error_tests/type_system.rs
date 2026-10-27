@@ -409,15 +409,6 @@ fn test_error_undefined_function() {
     expect_error("<?php nope();", "Undefined function: nope");
 }
 
-/// Verifies that passing too many arguments to a user-defined function is rejected.
-#[test]
-fn test_error_wrong_arg_count() {
-    expect_error(
-        "<?php function f($a) { return $a; } f(1, 2);",
-        "expects 1 arguments, got 2",
-    );
-}
-
 /// Verifies the two `string` storage shapes that cannot take the boxed `mixed` contract
 /// PHP's string increment needs: a by-reference parameter aliases a caller slot whose
 /// declared `string` type must not change, and a `static` local's initializer writes its
@@ -607,16 +598,6 @@ echo pickSecond(["first" => "foo", 1 => "bar"]);
 }
 
 // --- Include/Require errors ---
-
-/// Verifies that passing more arguments than a function with optional parameters accepts is rejected.
-/// Input: `function f($a, $b = 1) { return $a + $b; } f(1, 2, 3);`
-#[test]
-fn test_error_too_many_args_with_defaults() {
-    expect_error(
-        "<?php function f($a, $b = 1) { return $a + $b; } f(1, 2, 3);",
-        "expects 1 to 2 arguments, got 3",
-    );
-}
 
 /// Verifies that passing fewer arguments than a function with optional parameters requires is rejected.
 /// Input: `function f($a, $b = 1) { return $a + $b; } f();`

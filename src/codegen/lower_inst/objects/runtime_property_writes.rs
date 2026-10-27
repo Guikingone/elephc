@@ -1811,10 +1811,13 @@ pub(super) fn emit_dynamic_plan_unset(
     match &arm.action {
         PropertyRuntimeAction::Slot(slot) => {
             if let Some(reason) = unset_unsupported_slot_reason(ctx, slot) {
-                return Err(CodegenIrError::unsupported(format!(
-                    "unset() of {} {}::${}",
-                    reason, slot.class_name, slot.property
-                )));
+                // A runtime-class arm exists for every candidate class, reached or not, so an
+                // unsupported shape raises when taken rather than failing the build.
+                super::super::exceptions::emit_error(
+                    ctx,
+                    &format!("unset() of {} {}::${} is not supported", reason, slot.class_name, slot.property),
+                );
+                return Ok(());
             }
             let base_reg = abi::symbol_scratch_reg(ctx.emitter);
             ctx.load_value_to_reg(object, base_reg)?;
@@ -2137,10 +2140,14 @@ fn emit_mixed_runtime_name_unset_arm(
         // such a name resolves to `DynamicHash` or `DynamicMissing` instead.
         PropertyRuntimeAction::Slot(slot) => {
             if let Some(reason) = unset_unsupported_slot_reason(ctx, slot) {
-                return Err(CodegenIrError::unsupported(format!(
-                    "unset() of {} {}::${}",
-                    reason, slot.class_name, slot.property
-                )));
+                // Ladders carry an arm for every class whether or not the program reaches it,
+                // so an unsupported shape raises when taken rather than failing the build.
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                super::super::exceptions::emit_error(
+                    ctx,
+                    &format!("unset() of {} {}::${} is not supported", reason, slot.class_name, slot.property),
+                );
+                return Ok(());
             }
             let base_reg = abi::symbol_scratch_reg(ctx.emitter).to_string();
             abi::emit_load_temporary_stack_slot(ctx.emitter, &base_reg, 16);

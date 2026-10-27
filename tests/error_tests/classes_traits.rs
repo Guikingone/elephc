@@ -663,15 +663,6 @@ fn test_error_inherited_private_constructor_arity_names_the_declaring_class() {
     );
 }
 
-/// The same for TOO MANY arguments, which reaches the arity check by the other side.
-#[test]
-fn test_error_inherited_private_constructor_excess_arity_names_the_declaring_class() {
-    expect_error(
-        "<?php class Owner { private function __construct(int $n) {} public static function makeChild(): Owner { return new Child(1, 2, 3); } } class Child extends Owner {} Owner::makeChild();",
-        "Constructor 'Owner::__construct' expects 1 arguments, got 3",
-    );
-}
-
 /// A NAMED argument that matches no parameter is normalized against the same signature, so its
 /// diagnostic must name the declaring class as well.
 #[test]

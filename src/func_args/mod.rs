@@ -27,6 +27,7 @@
 //!   remain distinguishable from arguments the caller supplied.
 
 mod build;
+mod surplus;
 mod walk;
 
 use crate::errors::CompileError;
@@ -137,10 +138,11 @@ fn desugar_on_compiler_stack(program: Program) -> Result<Program, CompileError> 
     // no reason to hand it a full copy of the AST.
     let capture_all_frames = walk::program_uses_backtrace(&mut program);
     let rewrite_introspection = !program_declares_introspection_name(&program);
-    if !rewrite_introspection && !capture_all_frames {
+    let surplus = surplus::SurplusCalls::collect(&mut program);
+    if !rewrite_introspection && !capture_all_frames && surplus.is_empty() {
         return Ok(program);
     }
-    let mut rewriter = walk::Rewriter::new(capture_all_frames, rewrite_introspection);
+    let mut rewriter = walk::Rewriter::new(capture_all_frames, rewrite_introspection, surplus);
     rewriter.walk_stmts(&mut program);
     match rewriter.into_errors() {
         errors if errors.is_empty() => Ok(program),
