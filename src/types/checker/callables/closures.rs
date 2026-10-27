@@ -94,9 +94,12 @@ impl Checker {
                     (declared_ty.clone(), declared_ty)
                 }
                 None if *is_ref => (PhpType::Mixed, PhpType::Mixed),
+                // With no contextual hint the parameter holds whatever the caller passes; the
+                // body must see the same `mixed` its storage has (an `int` view made
+                // `function($a, $b) { throw new Exception($b); }` a compile error).
                 None => match contextual_param_types.get(idx) {
                     Some(hint) => (hint.clone(), hint.clone()),
-                    None => (PhpType::Int, PhpType::Mixed),
+                    None => (PhpType::Mixed, PhpType::Mixed),
                 },
             };
 

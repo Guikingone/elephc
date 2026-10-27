@@ -614,7 +614,32 @@ fn vivify_scope(body: &mut Vec<Stmt>, initial: &ScopeFacts) {
         return;
     }
     let mut seen = initial.written.clone();
+    // A variable the scope also assigns as a whole (`$a = false;`) is left to the checker: an
+    // inserted `$a = []` would type it as an array and refuse that later reassignment.
+    collect_plain_assigned_names(body, &mut seen);
+    crate::undefined_constants::walk_program_exprs_mut(body, &mut |expr| {
+        if let ExprKind::Assignment { target, .. } = &expr.kind {
+            if let ExprKind::Variable(name) = &target.kind {
+                seen.insert(name.clone());
+            }
+        }
+    });
     vivify_stmts(body, &mut seen, false);
+}
+
+/// Records the names a scope's statements assign as a whole (not element writes).
+fn collect_plain_assigned_names(stmts: &[Stmt], names: &mut HashSet<String>) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::Assign { name, .. } | StmtKind::TypedAssign { name, .. } => {
+                names.insert(name.clone());
+            }
+            StmtKind::RefAssign { target, .. } => {
+                names.insert(target.clone());
+            }
+            _ => for_each_child_body(stmt, &mut |body| collect_plain_assigned_names(body, names)),
+        }
+    }
 }
 
 /// Rewrites undefined reads inside one expression of the current scope.

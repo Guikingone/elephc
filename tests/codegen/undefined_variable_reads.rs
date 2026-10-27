@@ -119,6 +119,33 @@ fn test_undefined_constant_uncaught_is_fatal() {
     assert!(!run.stdout.contains("b\n"), "{}", run.stdout);
 }
 
+/// An untyped closure parameter holds whatever the caller passes: an error handler's message
+/// (its second argument, a string) reaches `new Exception($m)`, which an `int` view refused.
+#[test]
+fn test_untyped_closure_parameters_are_mixed() {
+    let out = compile_and_run(r#"<?php
+$f = function($a, $b) { throw new Exception($b); };
+try { $f(1, "two"); } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+set_error_handler(function($_, $m) { throw new Exception($m); });
+try { echo $undefined; } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(out, "two\nUndefined variable $undefined\n");
+}
+
+/// A variable the scope also assigns as a whole keeps the checker's own handling: hoisting
+/// `$a = []` before the loop typed it as an array and refused `$a = false` (assign_dim_017).
+#[test]
+fn test_vivification_skips_a_variable_also_assigned_whole() {
+    let out = compile_and_run(r#"<?php
+function test() { for ($i = 0; $i < 3; $i++) { $a[] = 0; $a = false; } }
+@test();
+echo "DONE\n";
+"#);
+    // The function's own return value is left out: a string return after this loop reads back
+    // wrong on its own (bead elephc-4ml.23).
+    assert_eq!(out, "DONE\n");
+}
+
 /// An element write to an undefined variable creates the array, at top level and inside a
 /// function (where the result used to be garbage); a loop keeps appending, and a write in an
 /// untaken branch leaves the variable undefined.
