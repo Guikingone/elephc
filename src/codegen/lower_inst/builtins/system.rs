@@ -731,9 +731,43 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         abi::emit_exit(ctx.emitter, 0);
         return Ok(());
     };
-    require_integer_like(ctx.load_value_to_result(status)?, "exit status")?;
-    emit_dynamic_exit(ctx);
+    // php 8.4 made `exit` a function of `string|int $status`: a string is printed and the
+    // process ends with status 0, any other scalar is coerced to the int status.
+    match ctx.value_php_type(status)?.codegen_repr() {
+        PhpType::Str => {
+            ctx.load_value_to_result(status)?;
+            abi::emit_write_stdout(ctx.emitter, &PhpType::Str);
+            emit_exit_with_zero_status(ctx);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            let int_status = ctx.next_label("exit_int_status");
+            super::super::predicates::emit_mixed_tag_eq(ctx, status, 1)?;
+            abi::emit_branch_if_int_result_zero(ctx.emitter, &int_status);
+            super::super::conversions::emit_mixed_string_context_stdout(ctx, status)?;
+            emit_exit_with_zero_status(ctx);
+            ctx.emitter.label(&int_status);
+            load_value_to_first_int_arg(ctx, status)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            emit_dynamic_exit(ctx);
+        }
+        PhpType::Void => emit_exit_with_zero_status(ctx),
+        PhpType::Float => {
+            ctx.load_value_to_result(status)?;
+            super::strings::emit_explicit_float_result_to_int(ctx);
+            emit_dynamic_exit(ctx);
+        }
+        _ => {
+            require_integer_like(ctx.load_value_to_result(status)?, "exit status")?;
+            emit_dynamic_exit(ctx);
+        }
+    }
     Ok(())
+}
+
+/// Ends the process with status 0 after a printed `exit("message")`.
+fn emit_exit_with_zero_status(ctx: &mut FunctionContext<'_>) {
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    emit_dynamic_exit(ctx);
 }
 
 /// Lowers `getenv(name)` through the target-aware environment lookup helper and

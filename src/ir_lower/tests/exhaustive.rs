@@ -150,6 +150,8 @@ fn dummy_check_result() -> CheckResult {
         builtin_call_types: HashMap::new(),
         boxed_reference_promotion_sites: HashMap::new(),
         buffer_read_sites: Default::default(),
+        undefined_constant_reads: Default::default(),
+        dynamic_method_call_sites: Default::default(),
         first_class_builtin_call_types: HashMap::new(),
         loop_storage_types: HashMap::new(),
         string_incdec_locals: Default::default(),

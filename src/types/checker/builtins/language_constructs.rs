@@ -46,10 +46,23 @@ pub(super) fn check(
             }
             if let Some(arg) = args.first() {
                 let ty = checker.infer_type(arg, env)?;
-                // Not relaxed for `int|float`: `exit status for PHP type Mixed` is what the
-                // backend answers for any boxed status, so the checker keeps the clearer word.
-                if ty != PhpType::Int {
-                    return Err(CompileError::new(span, "exit() argument must be integer"));
+                // php 8.4's `exit(string|int $status)`: a string is printed, every other scalar
+                // is coerced to the status. Arrays and objects are php's TypeError.
+                if !matches!(
+                    ty.codegen_repr(),
+                    PhpType::Int
+                        | PhpType::Str
+                        | PhpType::Bool
+                        | PhpType::False
+                        | PhpType::Float
+                        | PhpType::Void
+                        | PhpType::Mixed
+                        | PhpType::Union(_)
+                ) {
+                    return Err(CompileError::new(
+                        span,
+                        "exit(): Argument #1 ($status) must be of type string|int",
+                    ));
                 }
             }
             Ok(PhpType::Void)

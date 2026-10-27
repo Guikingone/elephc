@@ -624,6 +624,12 @@ pub(crate) struct Checker {
     /// True only when every visit to an indexed-read span used native buffer storage.
     /// Intersecting observations also fails closed when included files share a span.
     pub buffer_read_observations: HashMap<Span, bool>,
+    /// Constant reads no declaration answered when they were checked, with the name read.
+    /// Filtered against the final constant table, so a later `define` keeps its reads.
+    pub undefined_constant_reads: Vec<(Span, String)>,
+    /// Method calls the receiver's declared class or interface does not answer, with the
+    /// class and method key, deferred to run-time dispatch.
+    pub dynamic_method_calls: Vec<(Span, String, String)>,
     /// The warnings that BELONG to a local-binding decision, keyed by that decision's
     /// `(span, local name)` instead of being pushed straight into `warnings`.
     ///
@@ -1318,6 +1324,41 @@ fn check_types_on_compiler_stack(
         &checker.mixed_storage_store_sites,
         &checker.retired_mixed_storage_store_sites,
     )?;
+    // An untyped property with no default starts as `void` and takes the type of its first
+    // write. One the program never writes has no representation (a `prop_get` of it was
+    // refused, `var_dump` of the object faulted); php holds `null` there, which is `mixed`.
+    for info in checker.classes.values_mut() {
+        for index in 0..info.properties.len() {
+            let undeclared = !info.property_slot_is_declared(index, &info.properties[index].0);
+            if undeclared && info.properties[index].1 == PhpType::Void {
+                info.properties[index].1 = PhpType::Mixed;
+            }
+        }
+    }
+    let undefined_constant_reads = checker
+        .undefined_constant_reads
+        .iter()
+        .filter(|(_, name)| !checker.constants.contains_key(name.as_str()))
+        .map(|(span, _)| *span)
+        .collect();
+    // An early walk can miss a method a later one resolves (a trait not yet applied); only the
+    // calls the final class table still cannot answer are deferred.
+    let dynamic_method_call_sites = checker
+        .dynamic_method_calls
+        .iter()
+        .filter(|(_, class_name, method)| {
+            let in_class = checker
+                .classes
+                .get(class_name.as_str())
+                .is_some_and(|info| info.methods.contains_key(method.as_str()));
+            let in_interface = checker
+                .interfaces
+                .get(class_name.as_str())
+                .is_some_and(|info| info.methods.contains_key(method.as_str()));
+            !in_class && !in_interface
+        })
+        .map(|(span, ..)| *span)
+        .collect();
 
     Ok(CheckResult {
         requested_instantiations: checker.requested_instantiations,
@@ -1348,6 +1389,8 @@ fn check_types_on_compiler_stack(
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
         buffer_read_sites: checker.buffer_read_observations.into_iter()
             .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),
+        undefined_constant_reads,
+        dynamic_method_call_sites,
         first_class_builtin_call_types: checker.first_class_builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,

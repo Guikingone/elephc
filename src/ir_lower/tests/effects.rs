@@ -244,7 +244,7 @@ fn property_reads_refine_typed_slots_and_magic_getters() {
     let module = lower_source(
         r#"<?php
 final class Box {
-    public $safe;
+    public $safe = 0;
     public int $risky;
     public function safeRead() { return $this->safe; }
     public function riskyRead() { return $this->risky; }

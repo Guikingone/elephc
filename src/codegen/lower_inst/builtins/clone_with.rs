@@ -107,7 +107,7 @@ pub(crate) fn lower_clone_with(ctx: &mut FunctionContext<'_>, inst: &Instruction
         &eval_handled,
     )?;
     emit_boxed_shallow_clone(ctx, object)?;
-    emit_uncloneable_guard(ctx);
+    emit_uncloneable_guard(ctx, object)?;
 
     let clone_box = abi::int_result_reg(ctx.emitter).to_string();
     abi::emit_reserve_temporary_stack(ctx.emitter, CLONE_OWNER_BYTES);
@@ -566,13 +566,30 @@ fn emit_clone_adapter_call(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_object_clone_shallow_boxed");
 }
 
-/// Turns the adapter's null sentinel into PHP's catchable uncloneable-object `Error`.
-fn emit_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
+/// Turns the adapter's null sentinel into PHP's catchable uncloneable-object `Error`, which
+/// names the runtime class of the refused object (`... of class Generator`).
+fn emit_uncloneable_guard(ctx: &mut FunctionContext<'_>, object: ValueId) -> Result<()> {
     let clone_box = abi::int_result_reg(ctx.emitter).to_string();
     let cloned_label = ctx.next_label("clone_object_cloned");
     emit_branch_if_nonzero(ctx, &clone_box, &cloned_label);
-    super::super::exceptions::emit_error(ctx, "Trying to clone an uncloneable object");
+    let object_reg = abi::nested_call_reg(ctx.emitter).to_string();
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_)) {
+        ctx.load_value_to_reg(object, &object_reg)?;
+    } else {
+        // The type guard already proved the boxed argument holds an object.
+        ctx.load_value_to_result(object)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        let payload = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+        abi::emit_reg_move(ctx.emitter, &object_reg, payload);
+    }
+    super::super::conversions::emit_error_with_receiver_class(
+        ctx,
+        &object_reg,
+        "Trying to clone an uncloneable object of class ",
+        "",
+    );
     ctx.emitter.label(&cloned_label);
+    Ok(())
 }
 
 /// Refuses an enum case, which php forbids cloning, naming the enum the way php-src does.

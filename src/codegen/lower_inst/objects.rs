@@ -370,12 +370,20 @@ fn lower_dynamic_prop_unset(
 /// Names the reason a resolved fixed property slot cannot represent PHP's "removed"
 /// state, or `None` when `unset()` has a faithful lowering for it.
 ///
-/// Only packed class fields have no removed state. Typed and untyped slots take the two-word
-/// uninitialized marker; an object-owned reference cell is released and replaced by a fresh
-/// uninitialized cell, and a borrowed reference slot forgets its alias behind the marker.
-fn unset_unsupported_slot_reason(slot: &PropertySlot) -> Option<&'static str> {
+/// Packed class fields have no removed state. Typed and untyped slots take the two-word
+/// uninitialized marker, and an object-owned reference cell is released and replaced by a fresh
+/// uninitialized cell. A borrowed reference slot (a promoted `&$p` aliasing the caller's
+/// variable) is refused: its probe, read and write paths all go through the alias pointer, so a
+/// removed state there faulted on the next `isset()` or assignment.
+fn unset_unsupported_slot_reason(
+    ctx: &FunctionContext<'_>,
+    slot: &PropertySlot,
+) -> Option<&'static str> {
     if slot.is_packed {
         return Some("packed class field");
+    }
+    if slot.is_reference && !slot_owns_reference_cell(ctx, slot) {
+        return Some("by-reference property");
     }
     None
 }

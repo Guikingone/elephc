@@ -1150,7 +1150,9 @@ fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr)
     }
 
     let _ = fs::remove_dir_all(&dir);
-    elephc_out
+    // Like `compile_and_run`: php's display diagnostics now also reach stdout, and the tagged
+    // fixtures assert the program's own output.
+    strip_php_display_lines(&elephc_out)
 }
 
 /// Returns `user_asm` with the compiled script's embedded path removed, for needle assertions.

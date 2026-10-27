@@ -1587,7 +1587,9 @@ impl Op {
             ExternCall | ExternGlobalLoad | ExternGlobalStore => {
                 E::READS_HEAP | E::WRITES_HEAP | E::READS_PROCESS | E::WRITES_PROCESS | E::MAY_THROW
             }
-            EchoValue | WriteStrStdout | WriteStdout | Warn => E::OUTPUT,
+            EchoValue | WriteStrStdout | WriteStdout => E::OUTPUT,
+            // A warning publishes its source location before reaching the PHP error channel.
+            Warn => E::OUTPUT | E::MAY_WARN,
             PrintValue => E::OUTPUT,
             ErrorSuppressBegin | ErrorSuppressEnd => E::READS_GLOBAL | E::WRITES_GLOBAL,
             ThrowException => E::MAY_THROW | E::WRITES_GLOBAL,

@@ -144,13 +144,18 @@ impl Checker {
                 {
                     self.require_builtin_library("elephc_pcntl");
                 }
-                self.constants
+                if let Some(ty) = self
+                    .constants
                     .get(name.as_str())
                     .cloned()
                     .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
-                    .ok_or_else(|| {
-                        CompileError::new(expr.span, &format!("Undefined constant: {}", name))
-                    })
+                {
+                    return Ok(ty);
+                }
+                // php compiles the read and throws `Undefined constant` only if it runs.
+                self.undefined_constant_reads
+                    .push((expr.span, name.as_str().to_string()));
+                Ok(PhpType::Mixed)
             }
             ExprKind::FirstClassCallable(target) => {
                 self.infer_first_class_callable_target(target, expr.span, env)?;

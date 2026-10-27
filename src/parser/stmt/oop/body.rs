@@ -560,6 +560,15 @@ fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> Result<Me
     let mut is_final = false;
 
     loop {
+        // `var $x;` is php's legacy spelling of `public $x;`. It is only that keyword when a
+        // property name follows, so a type named `Var` is left alone.
+        if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Identifier(word)) if word.eq_ignore_ascii_case("var"))
+            && matches!(tokens.get(*pos + 1).map(|(t, _)| t), Some(Token::Variable(_)))
+        {
+            *pos += 1;
+            visibility = Visibility::Public;
+            continue;
+        }
         // A visibility keyword immediately followed by `(set)` is a PHP 8.4 asymmetric write
         // visibility (`private(set)`); otherwise it is the ordinary read visibility.
         let visibility_keyword = match tokens.get(*pos).map(|(t, _)| t) {

@@ -446,6 +446,22 @@ fn coerce_tostring_return_to_string_result(
 
 /// Throws PHP's catchable object-to-string `Error`, including the runtime class name.
 fn emit_mixed_missing_tostring_error(ctx: &mut FunctionContext<'_>, receiver_reg: &str) {
+    emit_error_with_receiver_class(
+        ctx,
+        receiver_reg,
+        "Object of class ",
+        " could not be converted to string",
+    );
+}
+
+/// Throws a catchable `Error` whose message names the runtime class of the object in
+/// `receiver_reg` between `prefix` and `suffix`.
+pub(super) fn emit_error_with_receiver_class(
+    ctx: &mut FunctionContext<'_>,
+    receiver_reg: &str,
+    prefix: &str,
+    suffix: &str,
+) {
     let (message_ptr, message_len) = abi::string_result_regs(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -463,8 +479,8 @@ fn emit_mixed_missing_tostring_error(ctx: &mut FunctionContext<'_>, receiver_reg
             ctx.emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9 + 8]", message_len)); // borrow the receiver class-name length
         }
     }
-    emit_string_result_concat_prefix(ctx, "Object of class ");
-    emit_string_result_concat_suffix(ctx, " could not be converted to string");
+    emit_string_result_concat_prefix(ctx, prefix);
+    emit_string_result_concat_suffix(ctx, suffix);
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     super::exceptions::emit_error_from_string_result(ctx);
 }

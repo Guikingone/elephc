@@ -226,53 +226,12 @@ echo $box->missing;
     );
 }
 
-/// Verifies the error diagnostic for undefined method.
-#[test]
-fn test_error_undefined_method() {
-    // calling an absent method on an object reports undefined method with the class name.
-    expect_error(
-        "<?php class Box {} $b = new Box(); $b->missing();",
-        "Undefined method: Box::missing",
-    );
-}
-
-/// Verifies an interface call keeps its declared ancestor return type.
-#[test]
-fn test_error_interface_method_does_not_infer_receiver_from_wither_name() {
-    expect_error(
-        r#"<?php
-interface Message { public function withHeader(): Message; }
-interface Request extends Message { public function requestOnly(): string; }
-class Plain implements Message { public function withHeader(): Message { return $this; } }
-class Req implements Request {
-    public function withHeader(): Message { return new Plain(); }
-    public function requestOnly(): string { return "req"; }
-}
-function read(Request $request): string {
-    return $request->withHeader()->requestOnly();
-}
-"#,
-        "Undefined method: Message::requestOnly",
-    );
-}
-
 /// Verifies `::class` rejects a receiver whose static type is not an object.
 #[test]
 fn test_error_object_class_name_requires_object() {
     expect_error(
         "<?php $value = 1; echo $value::class;",
         "Cannot use \"::class\" on int",
-    );
-}
-
-/// Verifies that a method call on an object union (`A|B`) is rejected when the
-/// method is absent from one of the member classes: every object member must
-/// provide the method for the runtime class-id dispatch to be sound.
-#[test]
-fn test_error_object_union_method_missing_from_member() {
-    expect_error(
-        "<?php class A { function only_a() {} } class B {} function make(bool $b): A|B { return $b ? new A() : new B(); } make(true)->only_a();",
-        "Undefined method: B::only_a",
     );
 }
 

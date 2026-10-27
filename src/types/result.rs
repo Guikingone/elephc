@@ -124,6 +124,12 @@ pub struct CheckResult {
     /// Reads proven to use native buffers on every checker visit to the source span.
     /// Buffer bounds checks cannot invoke PHP warning handlers.
     pub buffer_read_sites: HashSet<Span>,
+    /// Constant reads the checker proved undefined; `crate::undefined_constants` turns each into
+    /// php's run-time `Error: Undefined constant`.
+    pub undefined_constant_reads: HashSet<Span>,
+    /// Method calls whose receiver's declared type has no such method; their receiver is boxed
+    /// so the call dispatches on the runtime object, as php does.
+    pub dynamic_method_call_sites: HashSet<Span>,
     /// See `Checker::first_class_builtin_call_types`.
     pub first_class_builtin_call_types: HashMap<Span, PhpType>,
     /// Fixed-point array-local storage contracts keyed by function-like scope and loop span.

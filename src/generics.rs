@@ -211,7 +211,12 @@ where
     // A generic METHOD is a template too, and lives on a class that itself survives. Its body
     // names types with no representation — `new Box<U>` — so leaving it in reaches lowering and
     // panics there. Every call the program makes has its own instantiated method by now.
-    let program = methods::strip_templates(program);
+    let mut program = methods::strip_templates(program);
+    crate::undefined_constants::rewrite(
+        &mut program,
+        &check_result.undefined_constant_reads,
+        &check_result.dynamic_method_call_sites,
+    );
     Ok((program, check_result))
 }
 

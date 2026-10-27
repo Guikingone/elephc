@@ -77,9 +77,9 @@ fn test_tagged_int_at_sentinel_isset_is_true() {
 /// remainder is the NULL the tagged sentinel must answer.
 #[test]
 fn test_tagged_array_miss_var_dumps_null() {
+    // The `Undefined array key` display line is stripped like every display diagnostic.
     let out = compile_and_run_tagged("<?php $a = [1, 2]; var_dump($a[5]);");
-    assert!(out.contains("Warning: Undefined array key 5 in "), "output: {out}");
-    assert!(out.ends_with("\nNULL\n") || out.ends_with("NULL\n"), "output: {out}");
+    assert_eq!(out, "NULL\n");
 }
 
 /// ?? falls back to the default for an out-of-bounds int-array read.

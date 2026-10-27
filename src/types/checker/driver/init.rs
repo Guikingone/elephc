@@ -161,6 +161,8 @@ impl Checker {
             guarded_union_types: HashMap::new(),
             mixed_storage_store_sites: HashMap::new(),
             buffer_read_observations: HashMap::new(),
+            undefined_constant_reads: Vec::new(),
+            dynamic_method_calls: Vec::new(),
             binding_decision_warnings: HashMap::new(),
             retired_mixed_storage_store_sites: HashSet::new(),
         }

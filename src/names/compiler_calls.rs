@@ -36,6 +36,13 @@ pub enum CompilerCall {
     /// Frees scratch without releasing its borrowed payload.
     #[allow(dead_code)] // Trusted library AST builders also use this operation directly.
     BorrowedValueFree,
+    /// Reads a variable no code in its scope defines: php's warning, then `null`.
+    UndefinedVariable,
+    /// Reads a constant the checker proved undefined: php's `Error: Undefined constant "X"`.
+    UndefinedConstant,
+    /// Boxes a method receiver so the call dispatches on the runtime object, as php does when
+    /// the receiver's declared class or interface has no such method.
+    MixedReceiver,
 }
 
 impl CompilerCall {
@@ -44,8 +51,10 @@ impl CompilerCall {
         use crate::types::PhpType;
         match self {
             Self::BorrowedValueSnapshot | Self::HeapScopeBegin => PhpType::Int,
-            Self::BorrowedValueRead | Self::HeapScopeRead | Self::NativePropertyReplace | Self::NativePropertyRestore => PhpType::Mixed,
-            Self::BorrowedValueFree | Self::HeapScopeRootWritten | Self::HeapScopeEnd | Self::HeapScopeReleaseRoot | Self::ExceptionChainMixed => PhpType::Void,
+            Self::BorrowedValueRead | Self::HeapScopeRead | Self::NativePropertyReplace | Self::NativePropertyRestore
+            | Self::MixedReceiver => PhpType::Mixed,
+            Self::BorrowedValueFree | Self::HeapScopeRootWritten | Self::HeapScopeEnd | Self::HeapScopeReleaseRoot | Self::ExceptionChainMixed
+            | Self::UndefinedVariable | Self::UndefinedConstant => PhpType::Void,
         }
     }
 

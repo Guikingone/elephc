@@ -19,7 +19,31 @@ pub(super) fn lower(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    if operation == CompilerCall::UndefinedVariable {
+        return lower_undefined_variable_read(ctx, args, expr);
+    }
+    if operation == CompilerCall::UndefinedConstant {
+        let name = match args.first().map(|arg| &arg.kind) {
+            Some(ExprKind::StringLiteral(name)) => name.as_str(),
+            _ => "",
+        };
+        return crate::ir_lower::stmt::lower_throw_access_error_expr(
+            ctx,
+            &format!("Undefined constant \"{name}\""),
+            expr.span,
+        );
+    }
+    if operation == CompilerCall::MixedReceiver {
+        let receiver = lower_expr(ctx, &args[0]);
+        if receiver.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed) {
+            return receiver;
+        }
+        return ctx.box_value_as_mixed(receiver, PhpType::Mixed, Some(expr.span));
+    }
     let target = match operation {
+        CompilerCall::UndefinedVariable
+        | CompilerCall::UndefinedConstant
+        | CompilerCall::MixedReceiver => unreachable!("handled above"),
         CompilerCall::NativePropertyReplace => RuntimeCallTarget::NativePropertyReplace,
         CompilerCall::NativePropertyRestore => RuntimeCallTarget::NativePropertyRestore,
         CompilerCall::BorrowedValueSnapshot => RuntimeCallTarget::BorrowedValueSnapshot,
@@ -129,4 +153,27 @@ pub(super) fn lower(
         }
     }
     value.unwrap_or_else(|| lower_expr(ctx, &Expr::new(ExprKind::Null, expr.span)))
+}
+
+/// Emits php's run-time warning for a read of a variable its scope never defines, then `null`.
+///
+/// The read site's span publishes the diagnostic line, so the warning names the same file and
+/// line php reports.
+fn lower_undefined_variable_read(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    let Some(ExprKind::StringLiteral(name)) = args.first().map(|arg| &arg.kind) else {
+        unreachable!("an undefined-variable read carries its variable name");
+    };
+    let message = ctx.intern_string(&format!("Warning: Undefined variable ${name}\n"));
+    ctx.emit_void(
+        Op::Warn,
+        Vec::new(),
+        Some(crate::ir::Immediate::Data(message)),
+        Op::Warn.default_effects(),
+        Some(expr.span),
+    );
+    lower_expr(ctx, &Expr::new(ExprKind::Null, expr.span))
 }

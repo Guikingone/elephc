@@ -25,6 +25,11 @@ use super::*;
 /// on the first compile error. The image prelude is injected at the same point
 /// as in `src/pipeline.rs`.
 fn check_image(src: &str) -> Result<(), String> {
+    check_image_warnings(src).map(|_| ())
+}
+
+/// Runs the image-prelude check pipeline and returns the checker's warnings.
+fn check_image_warnings(src: &str) -> Result<Vec<String>, String> {
     let tokens = tokenize(src).map_err(|e| e.message.clone())?;
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
     let defines: HashSet<String> = HashSet::new();
@@ -36,8 +41,8 @@ fn check_image(src: &str) -> Result<(), String> {
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
-    types::check(&ast).map_err(|e| e.message.clone())?;
-    Ok(())
+    let result = types::check(&ast).map_err(|e| e.message.clone())?;
+    Ok(result.warnings.into_iter().map(|warning| warning.message).collect())
 }
 
 /// Asserts that `src` fails to compile, that the error names `callee`, and that
@@ -146,22 +151,23 @@ $s = cairo_image_surface_create(CairoFormat::ARGB32);
 /// exotic methods are intentionally left undefined so a call is a compile-time
 /// error rather than a silent no-op. This locks that contract.
 fn expect_image_undefined_method(src: &str, method: &str) {
-    let msg = check_image(src)
-        .err()
-        .unwrap_or_else(|| panic!("Expected 'Undefined method: {method}', but got Ok"));
+    let warnings = check_image_warnings(src)
+        .unwrap_or_else(|error| panic!("Expected '{method}' to compile with a warning: {error}"));
     assert!(
-        msg.contains(&format!("Undefined method: {method}")),
-        "Error '{msg}' does not report '{method}' as undefined"
+        warnings
+            .iter()
+            .any(|warning| warning.contains(&format!("Undefined method: {method} is not implemented"))),
+        "Warnings {warnings:?} do not report '{method}' as unimplemented"
     );
 }
 
-/// Locks the deliberate "undefined Cairo OOP method = compile error" contract
-/// for a representative set of common-but-unimplemented `CairoContext`
-/// methods (`clip`, `clipPreserve`, `resetClip`, `setDash`, `setMiterLimit`,
-/// `hasCurrentPoint`, `inFill`, `copyPath`). Phase C assessment decision: these
-/// stay undefined (compile error) rather than being mass-stubbed like the
-/// Imagick/Gmagick surface, because PECL cairo is experimental and the common
-/// path is already covered.
+/// Locks the deliberate "undefined Cairo OOP method is reported, not stubbed" contract for a
+/// representative set of common-but-unimplemented `CairoContext` methods (`clip`,
+/// `clipPreserve`, `resetClip`, `setDash`, `setMiterLimit`, `hasCurrentPoint`, `inFill`,
+/// `copyPath`). Phase C assessment decision: these stay undefined rather than being
+/// mass-stubbed like the Imagick/Gmagick surface, because PECL cairo is experimental and the
+/// common path is already covered. Like php on a class without the method, the call compiles
+/// and raises `Error` when it runs; the compile warning keeps the gap visible.
 #[test]
 fn test_image_error_cairo_undefined_methods_are_compile_errors() {
     for method in [

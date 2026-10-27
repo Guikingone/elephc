@@ -1783,7 +1783,7 @@ pub(super) fn lower_named_prop_unset(
         return Ok(());
     }
     let slot = resolve_property_slot(ctx, object, property, inst)?;
-    if let Some(reason) = unset_unsupported_slot_reason(&slot) {
+    if let Some(reason) = unset_unsupported_slot_reason(ctx, &slot) {
         return Err(CodegenIrError::unsupported(format!(
             "unset() of {} {}::${}",
             reason, slot.class_name, slot.property
@@ -1810,7 +1810,7 @@ pub(super) fn emit_dynamic_plan_unset(
 ) -> Result<()> {
     match &arm.action {
         PropertyRuntimeAction::Slot(slot) => {
-            if let Some(reason) = unset_unsupported_slot_reason(slot) {
+            if let Some(reason) = unset_unsupported_slot_reason(ctx, slot) {
                 return Err(CodegenIrError::unsupported(format!(
                     "unset() of {} {}::${}",
                     reason, slot.class_name, slot.property
@@ -2136,7 +2136,7 @@ fn emit_mixed_runtime_name_unset_arm(
         // and this scope resolves the name to it. No ancestor's private slot is reachable here:
         // such a name resolves to `DynamicHash` or `DynamicMissing` instead.
         PropertyRuntimeAction::Slot(slot) => {
-            if let Some(reason) = unset_unsupported_slot_reason(slot) {
+            if let Some(reason) = unset_unsupported_slot_reason(ctx, slot) {
                 return Err(CodegenIrError::unsupported(format!(
                     "unset() of {} {}::${}",
                     reason, slot.class_name, slot.property
@@ -2184,12 +2184,7 @@ fn detach_and_release_unset_property_value(
     slot: &PropertySlot,
     base_reg: &str,
 ) {
-    if slot.is_reference && !slot_owns_reference_cell(ctx, slot) {
-        // A borrowed reference aliases storage this object does not own: removing the property
-        // only forgets that alias, so nothing is released.
-        emit_property_uninitialized_marker(ctx, slot, base_reg);
-        return;
-    }
+    // A borrowed reference slot never gets here: `unset_unsupported_slot_reason` refuses it.
     if slot_owns_reference_cell(ctx, slot) {
         // php's unset() breaks the reference: aliases keep the old cell, and the property
         // becomes uninitialized behind a fresh object-owned cell of the same declared shape.

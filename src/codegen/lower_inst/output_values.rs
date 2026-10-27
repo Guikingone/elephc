@@ -180,3 +180,27 @@ pub(super) fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &Ph
         ))),
     }
 }
+
+/// Lowers a static php warning line through the shared diagnostic dispatcher.
+///
+/// `__rt_diag_warning` applies `error_reporting`, `@`, user handlers and the published source
+/// line, so the message carries only php's text.
+pub(super) fn lower_static_warning(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let data = expect_data(inst)?;
+    let message = ctx
+        .module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?
+        .clone();
+    let (label, len) = ctx.data.add_string(message.as_bytes());
+    let (pointer, length) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x1", "x2"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    abi::emit_symbol_address(ctx.emitter, pointer, &label);
+    abi::emit_load_int_immediate(ctx.emitter, length, len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    Ok(())
+}

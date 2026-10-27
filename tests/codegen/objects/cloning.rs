@@ -343,7 +343,7 @@ echo $b->n . ":" . $b->s;
 fn test_clone_function_reports_uncloneable_objects() {
     let out = compile_and_run(
         r#"<?php
-$s = new SplFixedArray(2);
+$s = (function () { yield 1; })();
 try {
     $c = clone($s);
     echo "no throw";
@@ -352,7 +352,8 @@ try {
 }
 "#,
     );
-    assert_eq!(out, "Trying to clone an uncloneable object");
+    // `SplFixedArray` is cloneable in php 8.5; a Generator is not.
+    assert_eq!(out, "Trying to clone an uncloneable object of class Generator");
 }
 
 /// Verifies hook visibility follows the CALLER's lexical scope, not the runtime class alone.

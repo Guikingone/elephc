@@ -10,7 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::errors::CompileError;
+use crate::errors::{CompileError, CompileWarning};
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver, TypeExpr};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
@@ -271,6 +271,65 @@ impl Checker {
         Ok(PhpType::Mixed)
     }
 
+    /// Defers a method the receiver's declared class or interface does not have to run time.
+    ///
+    /// php looks the method up on the object the call meets, so the call is checked like one on
+    /// a `mixed` receiver and recorded; `crate::undefined_constants::rewrite` then boxes the
+    /// receiver and lowering takes the dynamic dispatch path, which raises php's
+    /// `Call to undefined method` when no class answers. Only a plain or nullsafe method call
+    /// can be deferred; any other caller (callable validation) keeps the compile error.
+    fn defer_unknown_method_call(
+        &mut self,
+        class_name: &str,
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        if !matches!(
+            expr.kind,
+            ExprKind::MethodCall { .. } | ExprKind::NullsafeMethodCall { .. }
+        ) {
+            return Err(CompileError::new(
+                expr.span,
+                &format!("Undefined method: {}::{}", class_name, method),
+            ));
+        }
+        self.record_unresolved_callee_argument_aliases(args);
+        for arg in args {
+            self.infer_type(arg, env)?;
+        }
+        // A built-in class missing a php method is an elephc gap worth naming at compile time,
+        // even though the call (like php's on a class without it) only fails when it runs.
+        if self
+            .classes
+            .get(class_name)
+            .is_some_and(|info| info.is_internal)
+        {
+            let warning = CompileWarning::new(
+                expr.span,
+                &format!(
+                    "Undefined method: {}::{} is not implemented; the call raises Error at run \
+                     time unless the object's class declares it",
+                    class_name, method
+                ),
+            );
+            if !self
+                .warnings
+                .iter()
+                .any(|seen| seen.span == warning.span && seen.message == warning.message)
+            {
+                self.warnings.push(warning);
+            }
+        }
+        self.dynamic_method_calls.push((
+            expr.span,
+            class_name.to_string(),
+            php_symbol_key(method),
+        ));
+        Ok(PhpType::Mixed)
+    }
+
     /// Infers the type of a method call on an interface type.
     ///
     /// Looks up the method in the interface schema, validates arguments via
@@ -285,17 +344,16 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let method_key = php_symbol_key(method);
-        let sig = self
+        let Some(sig) = self
             .interfaces
             .get(interface_name)
             .and_then(|interface_info| interface_info.methods.get(&method_key))
             .cloned()
-            .ok_or_else(|| {
-                CompileError::new(
-                    expr.span,
-                    &format!("Undefined method: {}::{}", interface_name, method),
-                )
-            })?;
+        else {
+            // The interface only promises some methods; the implementation the value holds at
+            // run time may have more (`Iterator` holding a `RecursiveIterator`).
+            return self.defer_unknown_method_call(interface_name, method, args, expr, env);
+        };
         // The interface governs shared calls; enum-specific extensions are allowed when
         // any concrete signature accepts them. The selected runtime branch owns binding.
         let mut implementations: Vec<_> = self.classes.iter()
@@ -700,10 +758,9 @@ impl Checker {
                 // It is resolved here, one round before its instantiation exists.
                 return Ok(return_ty);
             } else {
-                return Err(CompileError::new(
-                    expr.span,
-                    &format!("Undefined method: {}::{}", class_name, method),
-                ));
+                // php resolves the method on the runtime object: a subclass may declare it, and
+                // a class that has none raises `Call to undefined method` when the call runs.
+                return self.defer_unknown_method_call(class_name, method, args, expr, env);
             }
         }
         if let Some(return_ty) = magic_return_ty {

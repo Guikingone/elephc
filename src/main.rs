@@ -84,6 +84,8 @@ mod test_command;
 mod testing_prelude;
 mod timings;
 mod types;
+mod undefined_constants;
+mod undefined_reads;
 mod tz_prelude;
 mod xml_prelude;
 mod tokenizer_prelude;

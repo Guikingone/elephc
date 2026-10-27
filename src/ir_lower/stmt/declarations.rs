@@ -10,16 +10,23 @@
 use super::*;
 
 /// Lowers a global constant declaration.
+///
+/// At run time `const NAME = value;` is `define('NAME', value)`, so it is lowered as that call:
+/// a constant read that cannot fold (`LoadGlobal`) must find the one representation `define`
+/// stores. The boxing `StoreGlobal` this used before made such a read print the box address.
 pub(super) fn lower_const_decl(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, span: Span) {
-    let value = lower_expr(ctx, value);
-    let data = ctx.intern_global_name(name);
-    ctx.emit_void(
-        Op::StoreGlobal,
-        vec![value.value],
-        Some(Immediate::GlobalName(data)),
-        Op::StoreGlobal.default_effects(),
-        Some(span),
+    let define = Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("define"),
+            args: vec![
+                Expr::new(ExprKind::StringLiteral(name.to_string()), Span::dummy()),
+                value.clone(),
+            ],
+        },
+        Span::dummy(),
     );
+    let _ = span;
+    lower_expr(ctx, &define);
 }
 
 /// Lowers simple positional list destructuring into indexed reads plus local writes.

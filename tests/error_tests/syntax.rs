@@ -66,14 +66,6 @@ fn test_error_empty_variable() {
     expect_error("<?php $;", "Expected variable name");
 }
 
-/// Verifies the error diagnostic for bare identifier.
-#[test]
-fn test_error_bare_identifier() {
-    // An unquoted identifier with no matching constant definition produces
-    // "Undefined constant: foo". The lexer treats `foo` as a name token, not a variable.
-    expect_error("<?php foo;", "Undefined constant: foo");
-}
-
 /// Verifies the error diagnostic for unexpected character.
 #[test]
 fn test_error_unexpected_character() {
@@ -853,11 +845,8 @@ fn test_error_relative_name_has_no_global_fallback_and_needs_a_name() {
         "<?php namespace App; echo namespace\\;",
         "Expected identifier after '\\' in qualified name",
     );
-    // Inside a namespace, `namespace\PHP_EOL` is that namespace's constant, not the global one.
-    expect_error(
-        "<?php namespace App; echo namespace\\PHP_EOL;",
-        "Undefined constant: App\\PHP_EOL",
-    );
+    // `namespace\PHP_EOL` has no global fallback either; being a constant read, it is php's
+    // run-time `Error` (see codegen `test_relative_constant_has_no_global_fallback`).
 }
 
 /// Verifies a namespace declaration is refused anywhere but the top level of a file (#825

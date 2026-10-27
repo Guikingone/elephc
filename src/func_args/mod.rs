@@ -130,6 +130,9 @@ pub fn desugar(program: Program) -> Result<Program, CompileError> {
 /// The body of [`desugar`], run on the stack `with_compiler_stack` sized.
 fn desugar_on_compiler_stack(program: Program) -> Result<Program, CompileError> {
     let mut program = program;
+    // Every compile path desugars here, so php's undefined-variable reads become run-time
+    // warnings for the pipeline and the test harnesses alike.
+    crate::undefined_reads::rewrite(&mut program);
     // The gate walks the program in place: its detector mode performs no rewrite, so there is
     // no reason to hand it a full copy of the AST.
     let capture_all_frames = walk::program_uses_backtrace(&mut program);

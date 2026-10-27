@@ -208,12 +208,6 @@ fn test_error_mixed_rejected_at_array_return_boundary() {
     );
 }
 
-/// Verifies that referencing an undefined variable produces an "Undefined variable" error.
-#[test]
-fn test_error_undefined_variable() {
-    expect_error("<?php echo $x;", "Undefined variable: $x");
-}
-
 /// Verifies that a plain self-referential assignment is not mistaken for `+=`.
 #[test]
 fn test_error_plain_self_read_assignment_remains_undefined() {
@@ -256,54 +250,6 @@ fn test_warning_leading_numeric_string_arithmetic() {
     expect_warning(
         "<?php echo \"12abc\" + 3;",
         "A non-numeric value encountered",
-    );
-}
-
-/// Verifies a name beginning with `with` does not imply a late-static fluent return.
-#[test]
-fn test_error_with_prefix_does_not_refine_declared_ancestor_return() {
-    expect_error(
-        r#"<?php
-interface Account {
-    public function withdraw(int $amount): Account;
-}
-interface Savings extends Account {
-    public function interestRate(): int;
-}
-final class SavingsAccount implements Savings {
-    public function withdraw(int $amount): Account { return $this; }
-    public function interestRate(): int { return 4; }
-}
-function rate(Savings $account): int {
-    return $account->withdraw(10)->interestRate();
-}
-echo rate(new SavingsAccount());
-"#,
-        "Undefined method: Account::interestRate",
-    );
-}
-
-/// Verifies that binding `static` preserves distinct explicit union members.
-///
-/// `static|Choice` called on `SpecialChoice` becomes `SpecialChoice|Choice`, so a
-/// subclass-only method is not safe on the result even though one branch is late-bound.
-#[test]
-fn test_error_late_static_union_keeps_explicit_ancestor_member() {
-    expect_error(
-        r#"<?php
-class Choice {
-    public function choose(bool $same): static|Choice {
-        return $same ? $this : new Choice();
-    }
-}
-class SpecialChoice extends Choice {
-    public function special(): string { return "special"; }
-}
-function render(SpecialChoice $choice): string {
-    return $choice->choose(false)->special();
-}
-"#,
-        "Undefined method",
     );
 }
 
@@ -1324,13 +1270,6 @@ fn test_scalar_match_merge_stays_mixed_with_checked_array_use() {
     let ast = parse(&tokens).expect("parse failed");
     let result = types::check(&ast).expect("Mixed aggregates are validated at runtime");
     assert_eq!(result.global_env.get("r"), Some(&PhpType::Mixed));
-}
-
-/// Verifies the `Undefined variable` diagnostic still fires for an ordinary read, so the null-probe
-/// tolerance is scoped to `isset`/`empty`/`unset`/`??` and nothing else.
-#[test]
-fn test_undefined_variable_read_is_still_rejected() {
-    expect_error("<?php echo $neverDefined;", "Undefined variable: $neverDefined");
 }
 
 /// Verifies only the probe's chain SPINE is tolerated: PHP warns about `$b` in `isset($a[$b])`

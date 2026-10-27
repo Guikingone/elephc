@@ -246,12 +246,6 @@ fn test_eval_barrier_does_not_hide_prior_undefined_variable() {
     );
 }
 
-/// Verifies that referencing an undefined constant produces the expected "Undefined constant" error.
-#[test]
-fn test_error_undefined_constant() {
-    expect_error("<?php echo UNDEFINED_CONST;", "Undefined constant");
-}
-
 /// Verifies that `define()` with a single argument (missing value) yields a wrong-args diagnostic.
 #[test]
 fn test_error_define_wrong_args() {

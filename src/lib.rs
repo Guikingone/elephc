@@ -117,6 +117,8 @@ pub mod termination;
 pub mod testing_prelude;
 /// Type system and checking.
 pub mod types;
+pub mod undefined_constants;
+pub mod undefined_reads;
 /// Conditionally-injected timezone-introspection prelude (extern + marshalling).
 pub mod tz_prelude;
 pub mod xml_prelude;

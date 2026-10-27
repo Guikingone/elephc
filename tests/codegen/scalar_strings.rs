@@ -203,6 +203,33 @@ fn test_exit_code() {
     assert_eq!(out, "before");
 }
 
+/// php 8.4's `exit(string|int $status)`: a string status is printed, flushes active output
+/// buffers, and ends the process with status 0, also from expression position (`|| die(...)`).
+#[test]
+fn test_exit_with_string_status_prints_it() {
+    let run = compile_and_run_capture(
+        "<?php $ok = $argc > 0 || die(\"never\\n\"); ob_start(); echo \"buffered\\n\"; die(\"bye {$argc}\\n\"); echo \"after\";",
+    );
+    assert!(run.success, "{}", run.stderr);
+    assert_eq!(run.stdout, "buffered\nbye 1\n");
+}
+
+/// A boxed status picks its arm at run time: a string is printed with status 0, an int is the
+/// process status.
+#[test]
+fn test_exit_with_mixed_status_dispatches_on_its_tag() {
+    let printed = compile_and_run_capture(
+        "<?php $s = $argc > 5 ? 3 : \"msg\\n\"; exit($s);",
+    );
+    assert!(printed.success, "{}", printed.stderr);
+    assert_eq!(printed.stdout, "msg\n");
+    let status = compile_and_run_capture(
+        "<?php $s = $argc > 5 ? \"msg\\n\" : 3; echo \"x\"; exit($s);",
+    );
+    assert!(!status.success);
+    assert_eq!(status.stdout, "x");
+}
+
 // --- $argc ---
 
 /// Compiles `<?php echo $argc;` and asserts stdout is `1` (test binary is run with no extra args).
