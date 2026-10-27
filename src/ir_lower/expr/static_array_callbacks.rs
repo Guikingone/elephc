@@ -310,3 +310,77 @@ pub(super) fn instance_callable_signature(target: &StaticCallableBinding) -> Opt
         _ => None,
     }
 }
+
+/// Lowers `array_reduce($ints, fn($carry, $item) => $carry + $item, 0)` to the typed int sum.
+///
+/// The closure is an untyped pure addition of its two parameters and the initial value is the
+/// additive identity, so PHP's left-to-right reduction and `array_sum()` perform the same
+/// integer additions with the same overflow-to-float promotion. A declared return type, a
+/// capture, a different initial value, or any other body keeps the generic reduce path.
+pub(super) fn lower_reduce_sum(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\')) != "array_reduce" || args.len() != 3 {
+        return None;
+    }
+    if ctx.functions.contains_key(name.trim_start_matches('\\'))
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let ExprKind::Variable(source_name) = &args[0].kind else {
+        return None;
+    };
+    if ctx.local_type(source_name).codegen_repr()
+        != PhpType::Array(Box::new(PhpType::Int))
+    {
+        return None;
+    }
+    if !matches!(args[2].kind, ExprKind::IntLiteral(0)) {
+        return None;
+    }
+    let ExprKind::Closure {
+        params,
+        variadic: None,
+        return_type: None,
+        body,
+        captures,
+        capture_refs,
+        ..
+    } = &args[1].kind
+    else {
+        return None;
+    };
+    if params.len() != 2 || !captures.is_empty() || !capture_refs.is_empty() {
+        return None;
+    }
+    let [Stmt { kind: StmtKind::Return(Some(body)), .. }] = body.as_slice() else {
+        return None;
+    };
+    let ExprKind::BinaryOp { left, op: BinOp::Add, right } = &body.kind else {
+        return None;
+    };
+    let is_param = |expr: &Expr, index: usize| {
+        matches!(&expr.kind, ExprKind::Variable(name) if name == &params[index].0)
+    };
+    if !((is_param(left, 0) && is_param(right, 1))
+        || (is_param(left, 1) && is_param(right, 0)))
+    {
+        return None;
+    }
+    let source = lower_expr(ctx, &args[0]);
+    Some(ctx.emit_value(
+        Op::RuntimeCall,
+        vec![source.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+            crate::ir::RuntimeFnId::ArraySum,
+        ))),
+        PhpType::Mixed,
+        crate::ir::RuntimeFnId::ArraySum.intrinsic_effects(),
+        Some(expr.span),
+    ))
+}

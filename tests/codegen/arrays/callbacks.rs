@@ -2348,3 +2348,21 @@ echo implode(",", array_map(fn(int $x): int => $x + 1, $a));
         user_asm
     );
 }
+
+/// A zero-initialized untyped `$carry + $item` reducer over a packed int array lowers to the
+/// typed int sum. Swapped operands fuse too; a nonzero initial value or an extra body term keeps
+/// the generic reducer and must still match PHP.
+#[test]
+fn test_array_reduce_sum_fusion_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = range(1, 100);
+echo array_reduce($a, fn($c, $x) => $c + $x, 0), "|",
+     array_reduce($a, fn($c, $x) => $x + $c, 0), "|",
+     array_reduce($a, fn($c, $x) => $c + $x, 100), "|",
+     array_reduce($a, fn($c, $x) => $c + $x + 1, 0), "|",
+     array_reduce([1, 2, 3], fn($c, $x) => $c + $x, 0), "\n";
+"#,
+    );
+    assert_eq!(out, "5050|5050|5150|5150|6\n");
+}
