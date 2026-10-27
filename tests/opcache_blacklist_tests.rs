@@ -65,6 +65,7 @@ fn elephc_bin() -> String {
 fn compile(dir: &Path, ini: &[&str]) -> PathBuf {
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     cmd.arg(dir.join("main.php"));
     for assignment in ini {

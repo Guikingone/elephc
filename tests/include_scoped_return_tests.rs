@@ -52,6 +52,7 @@ fn run_program(prefix: &str, files: &[(&str, &str)]) -> String {
     }
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .current_dir(&dir)
         .arg(dir.join("main.php"))
         .output()
@@ -234,6 +235,7 @@ fn compile_with(
     }
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .current_dir(&dir)
         .args(args)
         .arg(dir.join("main.php"))

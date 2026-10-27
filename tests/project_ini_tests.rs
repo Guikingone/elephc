@@ -57,6 +57,7 @@ fn probe(keys: &[&str]) -> String {
 fn compile(root: &Path, source: &Path, extra: &[&str]) -> Output {
     Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", root.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .current_dir(root)
         .args(extra)
         .arg(source)

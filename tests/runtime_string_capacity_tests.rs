@@ -49,6 +49,7 @@ fn compile(dir: &PathBuf, source: &str) -> std::process::Output {
     fs::write(&php, source).expect("write string-capacity fixture");
     Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .arg("-q")
         .arg(&php)
         .output()
@@ -71,6 +72,7 @@ fn compile_with_heap_debug_and_size(
     let mut command = Command::new(elephc_bin());
     command
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .args(["-q", "--heap-debug"]);
     if let Some(size) = heap_size {
         command.arg(format!("--heap-size={size}"));
@@ -264,6 +266,7 @@ fn output_beyond_the_configured_budget_fails_closed() {
     fs::write(&php, source).expect("write configured-budget fixture");
     let compile = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .args(["-q", "--heap-size=65536"])
         .arg(&php)
         .output()
@@ -464,6 +467,7 @@ echo str_repeat("x", 62000), json_encode([1, 2, 3]), "|", json_encode(["k" => 1]
     .expect("write json-headroom fixture");
     let compile = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .args(["-q", "--heap-size=65536"])
         .arg(&php)
         .output()
@@ -498,6 +502,7 @@ echo str_repeat("x", 65500), "|", serialize(1);
     .expect("write serialize-headroom fixture");
     let compile = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .args(["-q", "--heap-size=65536"])
         .arg(&php)
         .output()
