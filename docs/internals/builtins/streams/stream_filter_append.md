@@ -2,7 +2,7 @@
 title: "stream_filter_append() - internals"
 description: "Compiler internals for stream_filter_append(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 798
+  order: 804
 ---
 
 ## `stream_filter_append()` - internals
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `shared`
 - **Callable policy**: `static_only`

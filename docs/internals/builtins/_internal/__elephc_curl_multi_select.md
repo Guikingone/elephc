@@ -2,7 +2,7 @@
 title: "__elephc_curl_multi_select() - internals"
 description: "Compiler internals for __elephc_curl_multi_select(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1137
+  order: 1145
 ---
 
 ## `__elephc_curl_multi_select()` - internals

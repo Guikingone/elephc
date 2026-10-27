@@ -161,7 +161,7 @@ mod tests {
         // +4: the `ptr_read_f32`/`ptr_write_f32`/`ptr_read_f64`/`ptr_write_f64` pointer builtins.
         // +1: `buffer_ptr`, the payload address of a buffer.
         // +5: native heap usage, peak reset, and allocation/free counters.
-        assert_eq!(contracts().len(), 1182 + curl_surface);
+        assert_eq!(contracts().len(), 1190 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

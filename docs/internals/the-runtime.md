@@ -1840,3 +1840,22 @@ When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_chec
 Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, and `6=throwable` (the compact runtime-thrown exception/error payloads, accepted by the release dispatchers and routed through the object release path), which lets runtime dispatch stay independent from each payload's internal layout. Generator frames use heap kind `4` because `Generator` is a built-in object with a custom payload layout. On x86_64 the kind word additionally carries the ASCII marker `"ELPH"` in its high 32 bits; every stamp is built through the shared `codegen_support::sentinels` helpers (`x86_64_heap_kind_word()` / `X86_64_HEAP_MAGIC_HI32`) rather than hand-typed immediates, and the refcount/free helpers ignore pointers whose header lacks the marker. The low 16 bits keep the persistent container metadata: low byte = heap kind, bits `8..14` = indexed-array runtime `value_type`, and bit `15` = copy-on-write container flag. The collector reuses higher bits for transient reachable/incoming-edge metadata during `__rt_gc_collect_cycles`. Runtime data also now includes `_gc_collecting`, `_gc_release_suppressed`, `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_vtable_ptrs`, `_class_static_vtable_ptrs`, and static-property storage slots so deep-free / cycle-collection paths can coordinate nested releases, discover class property traversal metadata, and support inherited instance dispatch, static-property reads/writes, and late static binding.
 
 See [Memory Model](memory-model.md) for details on how these buffers work.
+
+Fileinfo instances keep their native libmagic handle in a private final owner
+object. Releasing the PHP object's properties therefore releases the handle even
+when a subclass overrides its destructor. The shared builtin class contract marks
+`finfo` uncloneable: the typed clone operation and reflection apply that policy
+through the internal class's ancestry, including in eval. Serialization uses the
+existing internal-class refusal table before any user subclass hook runs.
+
+Compiler preludes raise engine warnings through the internal
+`__elephc_builtin_warning` alias and the typed `CoreBuiltinOp::BuiltinWarning`
+operation. It carries source metadata and `E_WARNING` through the ordinary handler
+and reporting machinery, while PHP's public `trigger_error()` retains its restricted
+user-level error categories.
+
+Version-gated prelude deprecations use the corresponding
+`__elephc_builtin_deprecated` alias and `CoreBuiltinOp::BuiltinDeprecated`, with
+`E_DEPRECATED`. Public buffer wrappers inspect the actual source argument count
+before calling their native engine helper, so an omitted context stays distinct
+from an explicitly supplied null context.

@@ -214,6 +214,13 @@ fn is_destructor_free(php_type: &PhpType) -> bool {
 /// the splice cannot move the object's destructor. A method that returns or stores `$this`
 /// is still refused, by the return-type rule and by `callee_mutates_lifetime_tracked_parameter`.
 fn callee_is_inline_safe(callee: &Function, receiver: bool) -> bool {
+    if callee.instructions.iter().any(|inst| {
+        inst.op == Op::CoreBuiltin && inst.immediate == Some(Immediate::I64(
+            crate::ir::CoreBuiltinOp::DiagnosticCallerLine.as_i64(),
+        ))
+    }) {
+        return false;
+    }
     if !is_destructor_free(&callee.return_php_type) {
         return false;
     }

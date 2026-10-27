@@ -2,7 +2,7 @@
 title: "fopen() - internals"
 description: "Compiler internals for fopen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 322
+  order: 327
 ---
 
 ## `fopen()` - internals
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `shared`
 - **Callable policy**: `static_only`

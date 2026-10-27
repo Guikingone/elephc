@@ -204,6 +204,8 @@ pub(crate) struct LoweringSnapshot {
     refusals: usize,
     call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     borrowed_string_call_operands: HashSet<ValueId>,
+    /// Provisional offset receiver reads belonging to this speculative function state.
+    string_offset_receivers: Vec<(Span, ValueId)>,
     borrowed_string_calls_enabled: bool,
     append_update_cell_aliases: HashSet<String>,
     pending_static_callable_result: Option<StaticCallableBinding>,
@@ -293,6 +295,14 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// String subjects borrowed through read-only builtin calls whose result must be detached.
     pub(crate) borrowed_string_call_operands: HashSet<ValueId>,
     pub(crate) borrowed_string_calls_enabled: bool,
+    /// Whole-body proof that an instance method cannot widen its immutable this slot.
+    /// Set before body lowering and preserved across speculative snapshots.
+    pub(crate) this_storage_stays_concrete: bool,
+    /// Raw offset receiver reads checked against final frame storage before replay.
+    pub(crate) string_offset_receivers: Vec<(Span, ValueId)>,
+    /// Offset sites whose final local storage requires an independent, guarded receiver.
+    /// This sealed replay proof survives speculative rollback, unlike provisional value IDs.
+    pub(crate) owned_string_offset_sites: HashSet<Span>,
     pub(crate) append_update_cell_aliases: HashSet<String>,
     initialized_slots: HashSet<LocalSlotId>,
     pub functions: &'m HashMap<String, FunctionSig>,
@@ -611,7 +621,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             reference_call_context: None,
             call_argument_evaluation_scopes: Vec::new(),
             borrowed_string_call_operands: HashSet::new(),
+            string_offset_receivers: Vec::new(),
+            owned_string_offset_sites: HashSet::new(),
             borrowed_string_calls_enabled: true,
+            this_storage_stays_concrete: false,
             append_update_cell_aliases: HashSet::new(),
             argument_guards: HashMap::new(),
             argument_guard_scopes: Vec::new(),
@@ -672,6 +685,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             refusals: crate::ir_lower::diagnostics::mark(),
             call_argument_evaluation_scopes: self.call_argument_evaluation_scopes.clone(),
             borrowed_string_call_operands: self.borrowed_string_call_operands.clone(),
+            string_offset_receivers: self.string_offset_receivers.clone(),
             borrowed_string_calls_enabled: self.borrowed_string_calls_enabled,
             append_update_cell_aliases: self.append_update_cell_aliases.clone(),
             argument_guards: self.argument_guards.clone(),
@@ -752,6 +766,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.pointer_reference_bindings.truncate(snapshot.pointer_reference_bindings);
         self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
         self.borrowed_string_call_operands = snapshot.borrowed_string_call_operands;
+        self.string_offset_receivers = snapshot.string_offset_receivers;
         self.borrowed_string_calls_enabled = snapshot.borrowed_string_calls_enabled;
         self.append_update_cell_aliases = snapshot.append_update_cell_aliases;
         self.argument_guards = snapshot.argument_guards;
@@ -5322,8 +5337,8 @@ pub(super) fn opcode_has_opaque_user_code_target(op: Op, immediate: Option<&Imme
             ))),
         ) => true,
         (Op::CoreBuiltin, Some(Immediate::I64(selector))) => {
-            crate::ir::CoreBuiltinOp::from_i64(*selector)
-                == Some(crate::ir::CoreBuiltinOp::TriggerError)
+            matches!(crate::ir::CoreBuiltinOp::from_i64(*selector),
+                Some(crate::ir::CoreBuiltinOp::TriggerError | crate::ir::CoreBuiltinOp::BuiltinWarning | crate::ir::CoreBuiltinOp::BuiltinDeprecated))
         }
         _ => false,
     }

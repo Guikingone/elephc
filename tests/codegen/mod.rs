@@ -128,3 +128,11 @@ mod dead_strip;
 mod locals_retype;
 mod stack_guard;
 mod zval;
+
+mod fileinfo;
+mod fileinfo_autoload;
+mod fileinfo_reflection;
+mod fileinfo_validation;
+mod fileinfo_stream_diagnostics;
+mod fileinfo_wrapper_stat;
+mod fileinfo_stream_magic;

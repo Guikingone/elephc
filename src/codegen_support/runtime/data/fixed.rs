@@ -1005,6 +1005,12 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_elephc_tls_write_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_read_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_close_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_tls_last_error_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_tls_clear_error_fn", 8, target));
+    out.push_str(&comm_directive("_stream_error_code", 8, target));
+    out.push_str(&comm_directive("_stream_close_silent", 8, target));
+    out.push_str(&comm_directive("_stream_error_tls", 8, target));
+    out.push_str(&comm_directive("_stream_empty_error", 1, target));
     // _elephc_tls_attach_fd_fn: indirect pointer to elephc_tls_attach_fd,
     // used by stream_socket_enable_crypto to promote an existing TCP fd to
     // a TLS session without re-establishing the TCP connection. Same

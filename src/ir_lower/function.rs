@@ -1790,6 +1790,12 @@ fn lower_body_into_function(
     if let Some(function_global_names) = function_global_names {
         ctx.set_function_global_names(function_global_names);
     }
+    ctx.this_storage_stays_concrete = {
+        let flags = &ctx.builder.function().flags;
+        flags.is_method && !flags.is_static && !flags.is_closure
+            && property_initializers.is_none() && !body.is_empty()
+            && !crate::ir_lower::body_contains_eval_call(body)
+    };
     ctx.by_ref_return = function_by_ref_return;
     ctx.return_type_is_declared = return_type_is_declared;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {

@@ -2,7 +2,7 @@
 title: "xmlwriter_start_dtd_entity()"
 description: "Starts a DTD entity declaration."
 sidebar:
-  order: 1071
+  order: 1077
 ---
 
 ## xmlwriter_start_dtd_entity()
