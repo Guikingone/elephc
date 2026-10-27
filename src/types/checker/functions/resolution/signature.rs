@@ -391,6 +391,11 @@ impl Checker {
             return PhpType::Object("Generator".to_string());
         }
         let Some(type_ann) = decl.return_type.as_ref() else {
+            // A body with no `return` at all can only produce null; the `Int` placeholder
+            // leaked to callers typed while the body was still being resolved.
+            if !Self::body_contains_return(&decl.body) {
+                return PhpType::Void;
+            }
             return PhpType::Int;
         };
         self.resolve_declared_return_type_hint(type_ann, decl.span, "")

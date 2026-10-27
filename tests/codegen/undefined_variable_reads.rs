@@ -235,3 +235,13 @@ var_dump(g(), $made);
          bool(false)\nint(2)\nstring(3) \"yes\"\n"
     );
 }
+
+/// A function with no `return` returns null even when a caller is typed while its body is still
+/// being resolved (the provisional signature used to say `int`; output measured with php 8.5).
+#[test]
+fn test_function_without_return_returns_null_to_its_caller() {
+    let out = compile_and_run(
+        "<?php function f($v) { while ($i != 2) { if (!$o) { $o = 1; } elseif (++$i != 2) { $o = 0; } } } var_dump(@f([1,2]));",
+    );
+    assert_eq!(out, "NULL\n");
+}
