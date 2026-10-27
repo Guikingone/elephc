@@ -112,7 +112,11 @@ pub(super) fn lower_property_assign(
         lower_readonly_write_error(ctx, receiver.clone(), lowered_value, &overwrite_message, span);
         ctx.builder.position_at_end(initialize);
         if let Some(message) = initialization_error {
-            lower_readonly_write_error_with_result(ctx, receiver.clone(), lowered_value, &message, span);
+            if ctx.expression_depth > 0 {
+                lower_readonly_write_error_with_result(ctx, receiver.clone(), lowered_value, &message, span);
+            } else {
+                lower_readonly_write_error(ctx, receiver.clone(), lowered_value, &message, span);
+            }
             return;
         }
     }

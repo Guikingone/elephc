@@ -68,7 +68,7 @@ function magic(Root $root): void {
 function locked(Root $root): void {
     if ($root instanceof LockedLabel) {
         $root->value ??= 9;
-        try { $root->value = 9; } catch (Error $error) { echo "locked"; }
+        try { echo ($root->value = 9); } catch (Error $error) { echo "locked"; }
     }
 }
 function locked_static(): void {

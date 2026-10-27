@@ -310,7 +310,7 @@ function mutate(Root $root): void {
     if ($root instanceof MagicLabel) { $root->value = rhs(); unset($root->value); }
     if ($root instanceof LockedLabel) {
         $root->value ??= rhs();
-        try { $root->value = rhs(); } catch (Error $error) { echo $error->getMessage(), "|"; }
+        try { echo ($root->value = rhs()); } catch (Error $error) { echo $error->getMessage(), "|"; }
         echo $root->value;
     }
 }
