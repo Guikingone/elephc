@@ -1660,6 +1660,8 @@ exit publishes the exact final counter to the original slot. Post-test loops and
 conditions computed outside the header cannot justify unchecked counter updates.
 Committed copies accept only consumers whose existing opcode handles raw integers;
 coercing stores and operations requiring a boxed input retain the generic loop.
+Cast targets must be scalar, and ordering partners must preserve PHP numeric or
+boxed comparison rules; boolean/null ordering partners retain the generic loop.
 The broader value-only inventory remains available to discarded storage trials,
 whose later AST lowering rebuilds representation conversions.
 

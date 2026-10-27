@@ -338,3 +338,43 @@ echo counterStoreSeed(PHP_INT_MIN), '|';
 var_dump(CounterStore::$number, CounterStore::$text, CounterStore::$flag);
 "#);
 }
+
+/// Array casts still receive boxed counters in versioned and directional-seed loop shapes.
+#[test]
+fn test_counter_fast_paths_array_casts_preserve_boxed_inputs() {
+    equivalent(r#"<?php
+function counterArrayBound(int $start, mixed $end): int {
+    $hits = 0;
+    for ($i = $start; $i <= $end; $i++) { $a = (array)$i; $hits += $a[0]; }
+    return $hits;
+}
+function counterArraySeed(int $n): int {
+    $hits = 0;
+    for ($box = $n - 1; $box >= 0; $box--) { $a = (array)$box; $hits += $a[0]; }
+    return $hits;
+}
+echo counterArrayBound($argc, $argc + 3), '|', counterArrayBound($argc, 3.5), '|';
+echo counterArraySeed($argc + 3), '|', counterArraySeed(PHP_INT_MIN), "\n";
+"#);
+}
+
+/// Spaceship preserves PHP boolean/null coercion for negative, zero and positive counter values.
+#[test]
+fn test_counter_fast_paths_spaceship_bool_null_match_php() {
+    equivalent(r#"<?php
+function counterCompareBound(int $start, mixed $end): void {
+    $truth = 0; $nil = 0;
+    for ($i = $start; $i <= $end; $i++) { $truth += ($i <=> true); $nil += ($i <=> null); }
+    echo $truth, ':', $nil, '|';
+}
+function counterCompareSeed(int $n, int $lo): void {
+    $truth = 0; $nil = 0;
+    for ($box = $n - 1; $box > $lo; $box--) { $truth += ($box <=> true); $nil += ($box <=> null); }
+    echo $truth, ':', $nil, '|';
+}
+counterCompareBound(-2 + $argc, $argc + 3);
+counterCompareBound(-2 + $argc, 3.5);
+counterCompareSeed($argc + 3, -2);
+counterCompareSeed(PHP_INT_MIN, -2);
+"#);
+}

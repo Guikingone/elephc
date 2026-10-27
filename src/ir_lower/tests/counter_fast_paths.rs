@@ -228,3 +228,49 @@ echo coercingBound($argc + 2), coercingSeed($argc + 3);
         }
     }
 }
+
+/// Boxed array casts and PHP boolean/null ordering retain compatible counter operands on every target.
+#[test]
+fn counter_fast_path_boxed_cast_and_ordering_keep_original_inputs() {
+    use crate::ir::{Immediate, IrHeapKind, IrType};
+    let source = r#"<?php
+function arrayCounterBound(int $start, mixed $end): int {
+    $hits = 0;
+    for ($i = $start; $i <= $end; $i++) { $a = (array)$i; $hits += $a[0]; }
+    return $hits;
+}
+function arrayCounterSeed(int $n): int {
+    $hits = 0;
+    for ($box = $n - 1; $box >= 0; $box--) { $a = (array)$box; $hits += $a[0]; }
+    return $hits;
+}
+function orderingCounterBound(int $start, mixed $end): int {
+    $hits = 0;
+    for ($i = $start; $i <= $end; $i++) { $hits += ($i <=> true); $hits += ($i <=> null); }
+    return $hits;
+}
+function orderingCounterSeed(int $n, int $lo): int {
+    $hits = 0;
+    for ($box = $n - 1; $box > $lo; $box--) { $hits += ($box <=> true); $hits += ($box <=> null); }
+    return $hits;
+}
+echo arrayCounterBound($argc, $argc + 3), arrayCounterSeed($argc + 3);
+echo orderingCounterBound(-2 + $argc, $argc + 3), orderingCounterSeed($argc + 3, -2);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for (name, arrays) in [("arrayCounterBound", true), ("arrayCounterSeed", true),
+            ("orderingCounterBound", false), ("orderingCounterSeed", false)] {
+            let function = optimized(source, name, target);
+            let text = crate::ir::print_function(&function);
+            let consumers: Vec<_> = function.instructions.iter().filter(|inst| {
+                if arrays { inst.op == Op::Cast && inst.immediate == Some(Immediate::CastTarget(IrType::Heap(IrHeapKind::Mixed))) }
+                else { inst.op == Op::Spaceship }
+            }).collect();
+            assert!(!consumers.is_empty(), "{target}: {text}");
+            for consumer in consumers {
+                assert_eq!(function.values[consumer.operands[0].as_raw() as usize].ir_type,
+                    IrType::Heap(IrHeapKind::Mixed), "{target}: {text}");
+            }
+        }
+    }
+}

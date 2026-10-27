@@ -9,7 +9,7 @@
 //! - Only EIR blocks are copied, so AST binding decisions and declarations execute once.
 
 use super::*;
-use crate::ir::{BlockId, Builder, CmpPredicate, Terminator};
+use crate::ir::{BlockId, Builder, CmpPredicate, Instruction, Terminator};
 use crate::ir_passes::loops::NaturalLoop;
 
 mod clone;
@@ -185,7 +185,7 @@ fn analyze(function: &Function, lp: &NaturalLoop, data: &DataPool, pass: &Bounde
         predicate, scalarized, bound_placeholder })
 }
 
-/// Allows committed scalarization only for consumers that accept raw integer operands.
+/// Preserves consumer representations and PHP semantics when committing a scalar counter.
 fn committed_proof(function: &Function, slot: LocalSlotId, pass: &BoundedMixedCounter, data: &DataPool) -> Option<CounterProof> {
     let proof = CounterProof::for_slots(function, &HashSet::from([slot]), pass, data, Some(&HashMap::new()))?;
     // Storage trials can use the broader value-only inventory because ordinary AST lowering
@@ -193,14 +193,31 @@ fn committed_proof(function: &Function, slot: LocalSlotId, pass: &BoundedMixedCo
     // and coercing stores must retain the original generic loop instead.
     if function.instructions.iter().any(|inst| {
         inst.operands.iter().any(|value| proof.scalar_values.contains(value))
-            && !matches!(inst.op,
-                Op::Acquire | Op::Move | Op::Borrow | Op::MixedClone | Op::Release
-                | Op::StoreLocal | Op::StrIncDec | Op::PhpRelCmp | Op::MixedNumericBinop
-                | Op::Call | Op::ArrayPush | Op::Cast | Op::MixedBox | Op::EchoValue
-                | Op::LooseEq | Op::LooseNotEq | Op::StrictEq | Op::StrictNotEq
-                | Op::Spaceship | Op::IsTruthy)
+            && !committed_consumer(function, inst, &proof.scalar_values)
     }) { return None; }
     Some(proof)
+}
+
+/// Checks target-sensitive casts and ordering partners in addition to the consumer opcode.
+fn committed_consumer(function: &Function, inst: &Instruction, scalar_values: &HashSet<ValueId>) -> bool {
+    match inst.op {
+        Op::Cast => matches!(inst.immediate,
+            Some(Immediate::CastTarget(IrType::I64 | IrType::F64 | IrType::Str)
+                | Immediate::StringOffsetCast)),
+        // Raw integer comparisons with bool/null use a different coercion from boxed PHP
+        // ordering. Numeric partners and boxed/tagged partners retain their original rules.
+        Op::Spaceship => inst.operands.iter().all(|value| {
+            scalar_values.contains(value) || function.value(*value).is_some_and(|metadata| {
+                matches!(metadata.php_type.codegen_repr(), PhpType::Int | PhpType::Float
+                    | PhpType::Mixed | PhpType::TaggedScalar)
+            })
+        }),
+        op => matches!(op,
+            Op::Acquire | Op::Move | Op::Borrow | Op::MixedClone | Op::Release
+            | Op::StoreLocal | Op::StrIncDec | Op::PhpRelCmp | Op::MixedNumericBinop
+            | Op::Call | Op::ArrayPush | Op::MixedBox | Op::EchoValue
+            | Op::LooseEq | Op::LooseNotEq | Op::StrictEq | Op::StrictNotEq | Op::IsTruthy),
+    }
 }
 
 /// Returns only direct reads of a boxed local; arbitrary aliases are not counter identities.
