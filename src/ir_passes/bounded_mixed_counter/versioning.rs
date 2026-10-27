@@ -212,11 +212,19 @@ fn committed_consumer(function: &Function, inst: &Instruction, scalar_values: &H
                     | PhpType::Mixed | PhpType::TaggedScalar)
             })
         }),
+        // Mixed boxing represents raw address-like values as integers, while typed strict
+        // comparison distinguishes their PHP types. Keep that boundary on the generic path.
+        Op::StrictEq | Op::StrictNotEq => inst.operands.iter().all(|value| {
+            scalar_values.contains(value) || function.value(*value).is_some_and(|metadata| {
+                !matches!(metadata.php_type.codegen_repr(), PhpType::Pointer(_)
+                    | PhpType::Buffer(_) | PhpType::Packed(_))
+            })
+        }),
         op => matches!(op,
             Op::Acquire | Op::Move | Op::Borrow | Op::MixedClone | Op::Release
             | Op::StoreLocal | Op::StrIncDec | Op::PhpRelCmp | Op::MixedNumericBinop
             | Op::Call | Op::ArrayPush | Op::MixedBox | Op::EchoValue
-            | Op::LooseEq | Op::LooseNotEq | Op::StrictEq | Op::StrictNotEq | Op::IsTruthy),
+            | Op::LooseEq | Op::LooseNotEq | Op::IsTruthy),
     }
 }
 

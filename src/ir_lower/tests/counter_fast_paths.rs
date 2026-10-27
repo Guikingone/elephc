@@ -274,3 +274,40 @@ echo orderingCounterBound(-2 + $argc, $argc + 3), orderingCounterSeed($argc + 3,
         }
     }
 }
+
+/// Strict identity with a raw pointer retains the counter's boxed representation on every target.
+#[test]
+fn counter_fast_path_pointer_identity_keeps_boxed_inputs() {
+    let source = r#"<?php
+function pointerIdentityBound(int $start, mixed $end): int {
+    $p = ptr_null(); $hits = 0;
+    for ($i = $start; $i <= $end; $i++) {
+        if ($i === $p) { $hits++; }
+        if ($i !== $p) { $hits += 10; }
+    }
+    return $hits;
+}
+function pointerIdentitySeed(int $n): int {
+    $p = ptr_null(); $hits = 0;
+    for ($box = $n - 1; $box >= 0; $box--) {
+        if ($box === $p) { $hits++; }
+        if ($box !== $p) { $hits += 10; }
+    }
+    return $hits;
+}
+echo pointerIdentityBound($argc - 1, $argc + 1), pointerIdentitySeed($argc + 2);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for name in ["pointerIdentityBound", "pointerIdentitySeed"] {
+            let function = optimized(source, name, target);
+            let text = crate::ir::print_function(&function);
+            let comparisons: Vec<_> = function.instructions.iter()
+                .filter(|inst| matches!(inst.op, Op::StrictEq | Op::StrictNotEq)).collect();
+            assert!(comparisons.len() >= 2, "{target}: {text}");
+            for comparison in comparisons {
+                assert_eq!(function.values[comparison.operands[0].as_raw() as usize].ir_type,
+                    crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed), "{target}: {text}");
+            }
+        }
+    }
+}

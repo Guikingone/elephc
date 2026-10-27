@@ -19,8 +19,8 @@ loop's exit. A statement assignment can start a region lasting to the end of its
 statement list. Regions never nest for the same name, and every occurrence must
 belong to a region. Incoming bindings and escaping names remain shared.
 
-Implementation and validation completed on `feat/task-2f4c2d30`, based on
-`777b1024e2`. Review and CI publication are tracked separately in Code Journal.
+Implementation and local validation completed on `feat/task-2f4c2d30`.
+Review, the current base and CI publication are tracked separately in Code Journal.
 
 Part B propagates unknown writers and possible reference escapes through the
 numeric dependency graph. Declared numeric properties and typed buffer reads

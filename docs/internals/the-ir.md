@@ -1662,6 +1662,8 @@ Committed copies accept only consumers whose existing opcode handles raw integer
 coercing stores and operations requiring a boxed input retain the generic loop.
 Cast targets must be scalar, and ordering partners must preserve PHP numeric or
 boxed comparison rules; boolean/null ordering partners retain the generic loop.
+Strict identity with raw pointer, buffer or packed partners also keeps its original
+boxed counter input, preserving the runtime boxing semantics.
 The broader value-only inventory remains available to discarded storage trials,
 whose later AST lowering rebuilds representation conversions.
 

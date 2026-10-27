@@ -378,3 +378,36 @@ counterCompareSeed($argc + 3, -2);
 counterCompareSeed(PHP_INT_MIN, -2);
 "#);
 }
+
+/// Raw pointer partners keep strict identity consistent between fast, fallback and seed paths.
+#[test]
+fn test_counter_fast_paths_pointer_identity_keeps_mixed_semantics() {
+    let source = r#"<?php
+function pointerCounterBound(int $start, mixed $end): void {
+    $p = ptr_null(); $equal = 0; $different = 0;
+    for ($i = $start; $i <= $end; $i++) {
+        if ($i === $p) { $equal++; }
+        if ($i !== $p) { $different++; }
+    }
+    echo $equal, ':', $different, '|';
+}
+function pointerCounterSeed(int $n): void {
+    $p = ptr_null(); $equal = 0; $different = 0;
+    for ($box = $n - 1; $box >= 0; $box--) {
+        if ($box === $p) { $equal++; }
+        if ($box !== $p) { $different++; }
+    }
+    echo $equal, ':', $different, '|';
+}
+pointerCounterBound($argc - 1, $argc + 1);
+pointerCounterBound($argc - 1, 2.5);
+pointerCounterSeed($argc + 2);
+pointerCounterSeed(PHP_INT_MIN);
+"#;
+    for optimized in [false, true] {
+        let output = if optimized { compile_and_run_with_heap_debug_tagged(source) }
+            else { without_ir_opt(|| compile_and_run_with_heap_debug_tagged(source)) };
+        assert_eq!(output.stdout, "1:2|1:2|1:2|0:0|", "optimized={optimized}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "optimized={optimized}: {}", output.stderr);
+    }
+}
