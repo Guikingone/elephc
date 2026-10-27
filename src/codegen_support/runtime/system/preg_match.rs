@@ -65,7 +65,6 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x0, sp, #{}", handle_off));               // pass opaque-handle output storage
     emitter.instruction(&format!("ldr x1, [sp, #{}]", pattern_cstr_off));       // pass null-terminated pattern
     emitter.instruction(&format!("ldr x2, [sp, #{}]", flags_off));              // pass PCRE2 POSIX compile flags from delimiter parsing
-    super::preg_strip::emit_mask_preg_eval_marker(emitter, "x2");
     emitter.instruction(&format!("add x3, sp, #{}", match_slot_count_off));     // receive the compiled match-slot count
     emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
     emitter.instruction("cbnz x0, __rt_preg_match_fail");                       // compile failed → PHP false
@@ -148,6 +147,7 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
 
     // -- strip delimiters and compile PCRE regex --
     emitter.instruction("bl __rt_preg_strip");                                  // strip delimiters and expose regex flags
+    emitter.instruction("tbnz x3, #30, __rt_preg_match_capture_compile_fail");  // the removed /e modifier is invalid in PHP 8
     emitter.instruction(&format!("str x3, [sp, #{}]", flags_off));              // save stripped regex flags
     emitter.instruction("bl __rt_pcre_to_posix");                               // materialize PCRE pattern as a C string
     emitter.instruction(&format!("str x0, [sp, #{}]", pattern_cstr_off));       // save null-terminated PCRE pattern
@@ -155,7 +155,6 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x0, sp, #{}", handle_off));               // pass opaque-handle output storage
     emitter.instruction(&format!("ldr x1, [sp, #{}]", pattern_cstr_off));       // pass null-terminated PCRE pattern
     emitter.instruction(&format!("ldr x2, [sp, #{}]", flags_off));              // pass PCRE2 POSIX compile flags from delimiter parsing
-    super::preg_strip::emit_mask_preg_eval_marker(emitter, "x2");
     emitter.instruction(&format!("add x3, sp, #{}", nmatch_off));               // receive the compiled match-slot count
     emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
     emitter.instruction("cbnz x0, __rt_preg_match_capture_compile_fail");       // compile failure returns PHP false plus an empty matches array
@@ -310,7 +309,6 @@ fn emit_preg_match_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("lea rdi, [rsp + {}]", handle_off));           // pass opaque-handle output storage
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass the null-terminated PCRE pattern C string as the second regcomp() argument
     emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", flags_off));  // pass PCRE2 POSIX compile flags from delimiter parsing
-    super::preg_strip::emit_mask_preg_eval_marker(emitter, "edx");
     emitter.instruction(&format!("lea rcx, [rsp + {}]", match_slot_count_off)); // receive the compiled match-slot count
     emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
     emitter.instruction("test eax, eax");                                       // did regcomp() succeed and produce a compiled regex object?
@@ -385,7 +383,6 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("lea rdi, [rsp + {}]", handle_off));           // pass opaque-handle output storage
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass null-terminated PCRE pattern to regcomp
     emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", flags_off));  // pass PCRE2 POSIX compile flags from delimiter parsing
-    super::preg_strip::emit_mask_preg_eval_marker(emitter, "edx");
     emitter.instruction(&format!("lea rcx, [rsp + {}]", nmatch_off));           // receive the compiled match-slot count
     emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
     emitter.instruction("test eax, eax");                                       // did regex compilation succeed?

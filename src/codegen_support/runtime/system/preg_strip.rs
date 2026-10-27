@@ -7,8 +7,9 @@
 //!
 //! Key details:
 //! - Regex helpers preserve PHP PCRE-flavored pattern bytes and pass PCRE2 POSIX-wrapper flags downstream.
-//! - Bit 30 of the flag word marks the removed `/e` modifier. Callback replacement rejects it;
-//!   other helpers clear the bit before compiling.
+//! - Bit 30 of the flag word marks the removed `/e` modifier. It is not a PCRE2 flag.
+//!   Every regex helper tests that bit after stripping and rejects the pattern
+//!   before compilation, so the bit never reaches `pcre2_regcomp`.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -174,20 +175,4 @@ fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_preg_strip_done_linux_x86_64");
     emitter.instruction("ret");                                                 // return the stripped pattern in rax/rdx and the modifier flags in rcx
-}
-
-/// Clears the private `/e` marker before a flag word is passed to PCRE2.
-///
-/// Bit 30 records that PHP 8 rejects the removed eval modifier.
-/// `preg_replace_callback` tests that bit and returns null. Every other regex
-/// helper still compiles the pattern, and PCRE2 does not define the bit.
-pub(crate) fn emit_mask_preg_eval_marker(emitter: &mut Emitter, reg: &str) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("bic {reg}, {reg}, #0x40000000"));     // drop the private /e marker before PCRE2
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("and {reg}, 0x3fffffff"));             // drop the private /e marker before PCRE2
-        }
-    }
 }
