@@ -13,16 +13,48 @@
 //!   is the security property: an oversized result may be rejected but must not corrupt memory.
 //! - The regex fixtures prepare a managed PCRE2 project, lock, receipt, and host provider
 //!   through `tests/support/managed_pcre2.rs`, then pass that cache as `ELEPHC_NATIVE_CACHE`.
-//!   They assert compilation and the PHP output. A host that cannot supply the provider prints
-//!   an explicit supported skip. A compile or link failure is never a pass.
+//!   They assert compilation and the PHP output. Linux, macOS, and CI panic when that
+//!   provider is missing. A skip is printed only on a host where the archives are not
+//!   expected. A compile or link failure is never a pass.
+//! - Fixture directories are removed when the test returns, including when an assertion panics.
 
 #[path = "support/managed_pcre2.rs"]
 mod managed_pcre2;
 
 use std::fs;
-use std::path::PathBuf;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Isolated directory for one string-capacity fixture.
+///
+/// Dropping the guard deletes the directory, including when an assertion panics
+/// before the test reaches an explicit cleanup call.
+struct FixtureDir(PathBuf);
+
+impl Drop for FixtureDir {
+    /// Removes this fixture's directory tree.
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+impl Deref for FixtureDir {
+    type Target = Path;
+
+    /// Borrows the fixture path so compiler helpers can take `&Path`.
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for FixtureDir {
+    /// Borrows the fixture path for APIs that take `AsRef<Path>`.
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
 
 /// Resolves the compiler binary built for this integration test.
 fn elephc_bin() -> String {
@@ -37,7 +69,10 @@ fn elephc_bin() -> String {
 }
 
 /// Creates an isolated directory for one string-capacity fixture.
-fn make_test_dir(name: &str) -> PathBuf {
+///
+/// The returned guard deletes that directory on drop, so a panicked assertion
+/// does not leave the compiler output behind.
+fn make_test_dir(name: &str) -> FixtureDir {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -47,11 +82,11 @@ fn make_test_dir(name: &str) -> PathBuf {
         std::process::id()
     ));
     fs::create_dir_all(&dir).expect("create string-capacity fixture directory");
-    dir
+    FixtureDir(dir)
 }
 
-/// Compiles one PHP source in `dir` and returns the run directory plus the compiler output.
-fn compile(dir: &PathBuf, source: &str) -> std::process::Output {
+/// Compiles one PHP source in `dir` and returns the compiler output.
+fn compile(dir: &Path, source: &str) -> std::process::Output {
     let php = dir.join("main.php");
     fs::write(&php, source).expect("write string-capacity fixture");
     Command::new(elephc_bin())
@@ -67,7 +102,7 @@ fn compile(dir: &PathBuf, source: &str) -> std::process::Output {
 /// The project manifest, lockfile, receipt, and target-aligned provider come from
 /// `managed_pcre2::configure_host_managed_pcre2`. The child receives that cache as
 /// `ELEPHC_NATIVE_CACHE` plus an isolated `XDG_CACHE_HOME`.
-fn compile_with_managed_pcre2(dir: &PathBuf, source: &str) -> std::process::Output {
+fn compile_with_managed_pcre2(dir: &Path, source: &str) -> std::process::Output {
     let php = dir.join("main.php");
     fs::write(&php, source).expect("write string-capacity fixture");
     let mut command = Command::new(elephc_bin());
@@ -84,9 +119,11 @@ fn compile_with_managed_pcre2(dir: &PathBuf, source: &str) -> std::process::Outp
 
 /// Compiles and runs one regex capacity fixture, or prints an explicit supported skip.
 ///
-/// Returns `None` only when `host_managed_pcre2_execution_skip_reason` reports that this
-/// host cannot provide the managed fixture. A prepared fixture must compile; stderr that
-/// mentions `pcre2` or `native project error` is still a failure.
+/// Returns `None` only when this host is not expected to have the managed provider.
+/// Linux, macOS, and CI panic from `host_managed_pcre2_execution_skip_reason` instead
+/// of skipping. A prepared fixture must compile; stderr that mentions `pcre2` or
+/// `native project error` is still a failure. `dir` is removed if compilation or the
+/// child process panics.
 fn run_large_regex_capacity(name: &str, source: &str) -> Option<std::process::Output> {
     if let Some(reason) = managed_pcre2::host_managed_pcre2_execution_skip_reason() {
         eprintln!("skipping {name}: {reason}");
@@ -102,18 +139,17 @@ fn run_large_regex_capacity(name: &str, source: &str) -> Option<std::process::Ou
     let output = Command::new(dir.join("main"))
         .output()
         .unwrap_or_else(|error| panic!("run {name}: {error}"));
-    let _ = fs::remove_dir_all(&dir);
     Some(output)
 }
 
 /// Compiles one PHP source with heap-debug instrumentation enabled.
-fn compile_with_heap_debug(dir: &PathBuf, source: &str) -> std::process::Output {
+fn compile_with_heap_debug(dir: &Path, source: &str) -> std::process::Output {
     compile_with_heap_debug_and_size(dir, source, None)
 }
 
 /// Compiles one PHP source with heap-debug instrumentation and an optional heap budget.
 fn compile_with_heap_debug_and_size(
-    dir: &PathBuf,
+    dir: &Path,
     source: &str,
     heap_size: Option<usize>,
 ) -> std::process::Output {
@@ -184,7 +220,6 @@ echo $upper_words === $expected_upper ? "ucwords-ok\n" : "ucwords-BAD\n";
         "rev-ok\nsrc-ok\n100000 100000 100000 100000 100000\npad-ok\nucfirst-ok\nlcfirst-ok\nucwords-ok\n",
         "large copies must match PHP and leave the source intact"
     );
-    let _ = fs::remove_dir_all(&dir);
 }
 
 /// `json_encode()` and `serialize()` must produce results larger than the historical 64 KiB
@@ -222,7 +257,6 @@ echo $before === md5($s) ? "src-ok" : "src-CORRUPT", "\n";
         "100002 json-ok\n100012 ser-ok\nsrc-ok\n",
         "large JSON and serialize results must stay byte-identical to PHP"
     );
-    let _ = fs::remove_dir_all(&dir);
 }
 
 /// `preg_replace()` must grow its output instead of corrupting the heap when a replacement
@@ -315,7 +349,6 @@ fn output_beyond_the_configured_budget_fails_closed() {
         stderr.contains("string result exceeds the configured string buffer"),
         "expected the controlled capacity diagnostic, got: {stderr}"
     );
-    let _ = fs::remove_dir_all(&dir);
 }
 
 /// Small JSON and serialize results still round-trip after the capacity guards were added.
@@ -344,7 +377,6 @@ echo serialize(["a" => 1, "b" => [true, null, 1.5]]), "\n";
         "{\"a\":1,\"b\":[true,null,1.5]}\na:2:{s:1:\"a\";i:1;s:1:\"b\";a:3:{i:0;b:1;i:1;N;i:2;d:1.5;}}\n",
         "small encoder output must stay byte-identical"
     );
-    let _ = fs::remove_dir_all(&dir);
 }
 
 /// `json_decode()` must decode strings larger than the scratch arena into owned storage and must
@@ -389,7 +421,6 @@ echo $before === md5($s) ? "src-ok\n" : "src-CORRUPT\n";
         stdout, "str-ok\narr-ok\nobj-ok\nsrc-ok\n",
         "json_decode must preserve large decoded strings and the input heap"
     );
-    let _ = fs::remove_dir_all(&dir);
 }
 
 /// `shell_exec()` must grow its output buffer instead of writing command output past the scratch
@@ -430,7 +461,6 @@ echo is_string($out) && $out === str_repeat("a", 100000) ? "exec-ok\n" : "exec-B
         "100000\n1af6d6f2f682f76f80e606aeaaee1680\nexec-ok\n",
         "shell_exec must return the complete command output"
     );
-    let _ = fs::remove_dir_all(&dir);
 }
 
 /// `grapheme_strrev()` must reserve owned storage for a result larger than the scratch arena.
@@ -471,7 +501,6 @@ echo $before === md5($s) ? "src-ok\n" : "src-CORRUPT\n";
         stdout, "100000\nrev-ok\nsrc-ok\n",
         "grapheme_strrev must reverse large inputs without corrupting the heap"
     );
-    let _ = fs::remove_dir_all(&dir);
 }
 
 /// A small JSON result must fit beside a large echo instead of reserving a fixed 4 KiB margin.
@@ -510,7 +539,6 @@ echo str_repeat("x", 62000), json_encode([1, 2, 3]), "|", json_encode(["k" => 1]
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.len(), 62000 + 7 + 1 + 7, "unexpected output length");
     assert!(stdout.ends_with("[1,2,3]|{\"k\":1}"), "tail: {:?}", &stdout[61990..]);
-    let _ = fs::remove_dir_all(&dir);
 }
 
 /// A small serialized value must fit beside a large echo instead of reserving 64 bytes.
@@ -544,7 +572,6 @@ echo str_repeat("x", 65500), "|", serialize(1);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(stdout.len(), 65505, "unexpected output length");
     assert!(stdout.ends_with("|i:1;"), "tail: {:?}", &stdout[65490..]);
-    let _ = fs::remove_dir_all(&dir);
 }
 
 /// Large decoded/reversed values must exercise the heap fallback after the arena is full.
@@ -581,5 +608,4 @@ echo strlen($decoded), "|", strlen($reversed), "\n";
         stderr.contains("HEAP DEBUG: leak summary: clean"),
         "{stderr}"
     );
-    let _ = fs::remove_dir_all(&dir);
 }

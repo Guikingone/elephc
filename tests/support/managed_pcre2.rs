@@ -11,8 +11,10 @@
 //! - System PCRE2 archives are admitted only inside this test provider; production resolution
 //!   remains fail-closed and never falls back to system libraries.
 //! - Process-wide provider and shim caches reject attempts to mix supported targets.
-//! - `managed_pcre2_execution_skip_reason` is the only supported skip. A later compile or
-//!   link failure must still fail the caller.
+//!   Provider discovery, including a miss, is cached for the process.
+//! - `managed_pcre2_execution_skip_reason` skips only where a missing provider is expected.
+//!   Linux, macOS, and any process with `CI` set panic through `test_pcre2_provider` instead.
+//!   A later compile or link failure must still fail the caller.
 
 #![allow(dead_code)]
 
@@ -64,6 +66,12 @@ struct TestPcre2Provider {
 struct TestPcre2Shim {
     target: String,
     archive: PathBuf,
+}
+
+/// One process-wide provider search, including a recorded miss.
+struct CachedTestPcre2Provider {
+    target: String,
+    provider: Option<TestPcre2Provider>,
 }
 
 /// Configures a CLI child process with an isolated host-target managed-PCRE2 project.
@@ -151,8 +159,27 @@ fn test_c_compiler(target: Target) -> &'static str {
     }
 }
 
+/// Returns the cached static PCRE2 provider for `target`, searching at most once.
+///
+/// A miss is cached as `None`. A later call for a different target panics: one test
+/// process cannot mix provider prefixes.
+fn find_test_pcre2_provider(target: Target) -> Option<&'static TestPcre2Provider> {
+    static CACHED: OnceLock<CachedTestPcre2Provider> = OnceLock::new();
+
+    let cached = CACHED.get_or_init(|| CachedTestPcre2Provider {
+        target: target.as_str().to_string(),
+        provider: locate_test_pcre2_provider(target),
+    });
+    assert_eq!(
+        cached.target,
+        target.as_str(),
+        "managed-PCRE2 provider cache cannot mix targets in one test process"
+    );
+    cached.provider.as_ref()
+}
+
 /// Searches the target's static PCRE2 prefixes and returns the first complete one.
-fn find_test_pcre2_provider(target: Target) -> Option<TestPcre2Provider> {
+fn locate_test_pcre2_provider(target: Target) -> Option<TestPcre2Provider> {
     let candidates: Vec<(PathBuf, PathBuf)> = match target.platform {
         Platform::MacOS => {
             let mut candidates = Vec::new();
@@ -202,14 +229,31 @@ fn find_test_pcre2_provider(target: Target) -> Option<TestPcre2Provider> {
     None
 }
 
+/// Reports whether `target` must have the static PCRE2 provider.
+///
+/// Linux and macOS are the hosts that execute these fixtures, and CI images install
+/// the aligned archives. iOS device and Simulator targets do not execute the host
+/// binary, so a missing provider is expected there unless `CI` is set.
+fn provider_is_required(target: Target) -> bool {
+    if std::env::var_os("CI").is_some() {
+        return true;
+    }
+    matches!(target.platform, Platform::Linux | Platform::MacOS) && !target.is_ios()
+}
+
 /// Reports why `target` cannot execute a managed-PCRE2 CLI fixture.
 ///
-/// `None` means the aligned static provider is present and the compiled program can
-/// run on this host. `Some` is an explicit supported skip for Windows, iOS (device
-/// or Simulator), or a host missing `pcre2.h`, `pcre2posix.h`, `libpcre2-posix.a`,
-/// and `libpcre2-8.a`. Callers must not use this to absorb a compile or link failure
-/// after the fixture has been prepared.
+/// `None` means the caller must compile and run. On Linux, macOS, or when `CI` is
+/// set, a missing provider panics with the same message as `test_pcre2_provider`
+/// instead of producing a skip. `Some` is an explicit supported skip for a host
+/// that is not expected to have the archives: Windows, iOS (device or Simulator),
+/// or another non-CI host whose prefixes are absent. Callers must not use this to
+/// absorb a compile or link failure after the fixture has been prepared.
 pub(crate) fn managed_pcre2_execution_skip_reason(target: Target) -> Option<String> {
+    if provider_is_required(target) {
+        let _provider = test_pcre2_provider(target);
+        return None;
+    }
     if target.platform == Platform::Windows || target.is_ios() {
         return Some(format!(
             "supported skip: managed PCRE2 capacity regressions execute on the host and do not run for {}",
@@ -231,27 +275,20 @@ pub(crate) fn host_managed_pcre2_execution_skip_reason() -> Option<String> {
 }
 
 /// Discovers one target-aligned system PCRE2 header/library prefix for integration tests.
+///
+/// Panics when the archives are missing. That is the same failure the regex capacity
+/// regressions use on Linux, macOS, and CI; those hosts do not skip a missing provider.
 fn test_pcre2_provider(target: Target) -> &'static TestPcre2Provider {
-    static PROVIDER: OnceLock<TestPcre2Provider> = OnceLock::new();
-
-    let provider = PROVIDER.get_or_init(|| {
-        if target.platform == Platform::Windows {
-            panic!("managed native fixtures do not support Windows");
-        }
-        find_test_pcre2_provider(target).unwrap_or_else(|| {
-            panic!(
-                "integration regex tests require aligned pcre2.h, pcre2posix.h, \
-                 libpcre2-posix.a and libpcre2-8.a for {}",
-                target.as_str()
-            )
-        })
-    });
-    assert_eq!(
-        provider.target,
-        target.as_str(),
-        "managed-PCRE2 provider cache cannot mix targets in one test process"
-    );
-    provider
+    if target.platform == Platform::Windows {
+        panic!("managed native fixtures do not support Windows");
+    }
+    find_test_pcre2_provider(target).unwrap_or_else(|| {
+        panic!(
+            "integration regex tests require aligned pcre2.h, pcre2posix.h, \
+             libpcre2-posix.a and libpcre2-8.a for {}",
+            target.as_str()
+        )
+    })
 }
 
 /// Returns one header from the target-aligned PCRE2 test provider.
@@ -594,30 +631,40 @@ fn sha256_bytes(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-/// The host skip reason stays empty when the aligned static provider is installed.
+/// Linux, macOS, and CI must find the static provider and must not skip.
 ///
-/// A missing provider, Windows, or an iOS target must name that target in an explicit
-/// supported-skip message. This guards the capacity regressions against treating a
-/// missing cache as a pass.
+/// The branch is the host OS and the `CI` environment variable. It does not repeat
+/// `managed_pcre2_execution_skip_reason`'s result, so a broken prefix search fails
+/// this test instead of taking a matching skip branch. Other hosts must still name
+/// the target in an explicit supported-skip message.
 #[test]
 fn managed_pcre2_execution_skip_reason_follows_the_host_provider() {
     let target = Target::detect_host();
-    let reason = managed_pcre2_execution_skip_reason(target);
-    let unavailable = target.platform == Platform::Windows
-        || target.is_ios()
-        || find_test_pcre2_provider(target).is_none();
-    if unavailable {
-        let reason = reason.expect("missing provider must be an explicit skip");
+    let provider_is_required_here = cfg!(any(target_os = "linux", target_os = "macos"))
+        || std::env::var_os("CI").is_some();
+    if provider_is_required_here {
         assert!(
-            reason.contains("supported skip") && reason.contains(target.as_str()),
-            "{reason}"
+            find_test_pcre2_provider(target).is_some(),
+            "aligned pcre2.h, pcre2posix.h, libpcre2-posix.a, and libpcre2-8.a must be installed for {}",
+            target.as_str()
         );
-    } else {
         assert!(
-            reason.is_none(),
-            "host provider must run the capacity regressions: {reason:?}"
+            managed_pcre2_execution_skip_reason(target).is_none(),
+            "Linux, macOS, and CI must run the regex capacity regressions"
         );
+        return;
     }
+
+    let reason = managed_pcre2_execution_skip_reason(target).unwrap_or_else(|| {
+        panic!(
+            "hosts outside Linux, macOS, and CI must skip explicitly for {}",
+            target.as_str()
+        )
+    });
+    assert!(
+        reason.contains("supported skip") && reason.contains(target.as_str()),
+        "{reason}"
+    );
 }
 
 /// Keeps the CLI fixture's catalog identity aligned with its embedded project lock.
