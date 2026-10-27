@@ -237,7 +237,7 @@ fn is_hoist_eligible(inst: &crate::ir::Instruction) -> bool {
 
 /// Moves an instruction out of its current block and appends it to the preheader
 /// (before the preheader's terminator), updating the current-definition-block map.
-fn move_instruction(
+pub(super) fn move_instruction(
     function: &mut Function,
     inst_id: InstId,
     preheader: BlockId,
@@ -268,7 +268,7 @@ fn move_instruction(
 
 /// Builds the map from each value to the block that currently defines it (block
 /// parameters and instruction results).
-fn build_def_block(function: &Function) -> HashMap<ValueId, BlockId> {
+pub(super) fn build_def_block(function: &Function) -> HashMap<ValueId, BlockId> {
     let mut map: HashMap<ValueId, BlockId> = HashMap::new();
     for block in &function.blocks {
         for &param in &block.params {
@@ -293,7 +293,7 @@ fn defining_inst(function: &Function, value: ValueId) -> Option<InstId> {
 
 /// Recomputes every instruction-result value's definition site from the current
 /// block layout, so the value table matches after instructions have moved.
-fn recompute_instruction_defs(function: &mut Function) {
+pub(super) fn recompute_instruction_defs(function: &mut Function) {
     let mut updates: Vec<(ValueId, ValueDef)> = Vec::new();
     for block in &function.blocks {
         for (index, &inst_id) in block.instructions.iter().enumerate() {

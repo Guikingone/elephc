@@ -36,6 +36,7 @@ use super::checked_int_sink::CheckedIntSink;
 use super::checked_numeric_chain::CheckedNumericChain;
 use super::concat_reset::ConcatResetElim;
 use super::const_fold::ConstFold;
+use super::count_hoist::CountHoist;
 use super::cse::Cse;
 use super::dead_inst::DeadInst;
 use super::dead_store::DeadStore;
@@ -134,6 +135,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(CheckedIntSink),
         Box::new(BoundedMixedCounter::new(module)),
         Box::new(LoopOptimize),
+        Box::new(CountHoist),
         Box::new(IntegerRange),
         Box::new(CheckedNumericChain),
         Box::new(ConstFold),

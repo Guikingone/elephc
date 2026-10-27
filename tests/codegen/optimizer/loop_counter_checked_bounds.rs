@@ -310,6 +310,51 @@ echo $sum, "\n";
     }
 }
 
+/// A read-only typed-array count in a loop condition is hoisted to the preheader.
+#[test]
+fn test_count_hoist_moves_array_length_out_of_condition() {
+    let source = r#"<?php
+function count_loop(int $n): int {
+    $data = [];
+    $i = 0;
+    while ($i < $n) {
+        $data[] = $i % 97;
+        $i += 1;
+    }
+    $sum = 0;
+    $i = 0;
+    while ($i < count($data)) {
+        $sum += $data[$i];
+        $i += 1;
+    }
+    return (int)$sum;
+}
+echo count_loop($argc + 9), "\n";
+"#;
+    let optimized = optimized_ir(source);
+    let body = function_body(&optimized, "count_loop");
+    assert_eq!(
+        body.matches("runtime.count").count(),
+        1,
+        "the loop evaluates count once:\n{body}"
+    );
+    let mut conditions = body.split("while.cond");
+    let _entry = conditions.next().expect("entry");
+    let between = conditions.next().expect("first condition");
+    let second = conditions.next().expect("second condition");
+    assert!(
+        between.contains("runtime.count") && between.contains("origin: count_hoist"),
+        "count moved to the second loop's preheader:\n{between}"
+    );
+    assert!(
+        !second.contains("runtime.count"),
+        "count must leave the condition:\n{second}"
+    );
+    for optimized_mode in [false, true] {
+        assert_eq!(run(source, optimized_mode, true), "45\n");
+    }
+}
+
 /// Every supported target emits the checked-bound shapes in both IR modes.
 #[test]
 fn test_checked_bound_counters_emit_on_all_supported_targets() {

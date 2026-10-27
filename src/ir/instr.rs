@@ -68,6 +68,7 @@ const _: () = assert!(std::mem::size_of::<Instruction>() <= 112);
 pub enum PassOrigin {
     BufferAccess,
     ConstFold,
+    CountHoist,
     IntegerRange,
     Licm,
     LoopOptimize,
@@ -79,6 +80,7 @@ impl PassOrigin {
         match self {
             PassOrigin::BufferAccess => "buffer_access",
             PassOrigin::ConstFold => "const_fold",
+            PassOrigin::CountHoist => "count_hoist",
             PassOrigin::IntegerRange => "integer_range",
             PassOrigin::Licm => "licm",
             PassOrigin::LoopOptimize => "loop_optimize",

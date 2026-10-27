@@ -23,6 +23,7 @@ mod checked_numeric_chain_test;
 mod clobber_test;
 mod concat_reset_test;
 mod const_fold_test;
+mod count_hoist_test;
 mod cse_test;
 mod dead_inst_test;
 mod dead_store_test;

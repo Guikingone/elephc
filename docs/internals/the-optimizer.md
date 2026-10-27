@@ -634,6 +634,26 @@ ordinary lowering again, including with IR optimization disabled, rather than
 installing speculative trial instructions in the executable function. Integer
 storage and buffer bounds remain independent proofs.
 
+## EIR typed-array count hoisting
+
+`src/ir_passes/count_hoist.rs` runs after canonical loop optimization. A
+single-argument `count()` of a typed indexed-array or hash local in a loop
+condition is evaluated on every iteration even when nothing in the loop can
+change the container. When the whole loop only reads the slot (no store,
+retirement, element address, reference operation, mutating array/hash op,
+by-reference call or runtime include) and the array value reaches only
+read-only consumers, the pass moves the slot load and the `count()` call into
+the existing loop preheader, so the condition compares against one hoisted
+length.
+
+The move is only safe for a container that no aliased path can resize: any
+instruction carrying the slot other than a `LoadLocal` rejects the hoist,
+`LoadRefCell` receivers never qualify, and generators, fiber wrappers,
+exception-handler functions and dynamic `eval` are skipped. Runtime includes
+reject it as well because evaluated code receives the frame. The count and its
+receiver are ordinary SSA values after the move, so the fixed-point driver can
+still fold or CSE them, and `--ir-opt=off` keeps the original in-loop shape.
+
 ## EIR buffer resolution hoisting
 
 `src/ir_passes/buffer_access.rs` runs once after the module fixed point (and

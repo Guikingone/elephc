@@ -28,6 +28,7 @@ mod cfg;
 mod clobber;
 mod concat_reset;
 mod const_fold;
+mod count_hoist;
 mod cse;
 mod dead_inst;
 mod dead_store;
