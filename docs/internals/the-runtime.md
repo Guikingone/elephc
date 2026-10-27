@@ -823,8 +823,11 @@ The five `__rt_memory_*` helpers are constant-time leaf routines that never allo
 | `__rt_array_free_deep` | Free array storage and release nested heap-backed elements | `x0` = array | — |
 | `__rt_array_union` | Build PHP indexed-array union: left numeric keys win, only missing right suffix keys are appended | `x0` = left array, `x1` = right array | `x0` = result array |
 | `__rt_array_hash_union` | Build PHP indexed+associative union by converting left indexes to integer hash keys before appending missing right entries | `x0` = left array, `x1` = right hash | `x0` = result hash |
-| `__rt_array_sum_int` | Sum a dense int array range with PHP int-to-float promotion | `x0` = array, `x1` = start, `x2` = end, `x3` = seed Mixed cell | `x0` = fresh Mixed cell |
+| `__rt_array_sum_int` | Sum a dense int array range with PHP int-to-float promotion; a positive-int NEON/SSE2 path runs when every element fits in 32 unsigned bits and the total is provably below `2^63`, otherwise the scalar promotion sequence runs from element 0 | `x0` = array, `x1` = start, `x2` = end, `x3` = seed Mixed cell | `x0` = fresh Mixed cell |
 | `__rt_array_sum_int_i64` | Same reduction with a raw int seed; used by `array_sum()` | `x0` = array, `x1` = start, `x2` = end, `x3` = raw seed | `x0` = fresh Mixed cell |
+| `__rt_array_map_sum_add` | Fused `array_sum(array_map(fn($x) => $x + C, $packedInts))`: walks the payload once, reproduces the per-element int-to-float map promotion and the running-sum promotion, and boxes one result | `x0` = array, `x1` = literal offset | `x0` = fresh Mixed cell |
+| `__rt_array_filter_count_mod` | Fused `count(array_filter($packedInts, fn($x) => $x % C === 0))`: counts divisible elements without building a hash; powers of two use a mask, other divisors use truncated remainder | `x0` = array, `x1` = literal divisor | `x0` = raw PHP int count |
+| `__rt_array_element_type_check` | Fused `is_int/is_string/is_array/is_null($packedMixed[$intIndex])`: reads the stored Mixed cell tag in place; hashes, references, nested wrappers and missing keys fall back to the generic warning/ownership path | `x0` = array, `x1` = int index, `x2` = runtime-tag mask | `x0` = raw PHP bool |
 | `__rt_array_push_int` | Append int to array (grows if needed) | `x0` = array, `x1` = value | `x0` = array |
 | `__rt_array_push_refcounted` | `incref` borrowed heap payload, then append it as an 8-byte array element | `x0` = array, `x1` = heap ptr | `x0` = array |
 | `__rt_array_push_str` | Persist string + append to array (grows if needed) | `x0` = array, `x1`/`x2` = str | `x0` = array |
@@ -832,6 +835,7 @@ The five `__rt_memory_*` helpers are constant-time leaf routines that never allo
 | `__rt_mixed_sort_require_scalars` | Guard `sort()` / `rsort()` on a runtime-typed (`Array(Mixed)`) array: walks every element first and terminates with `Fatal error: sorting Mixed arrays containing non-scalar values is not supported` for a nested array, object, resource, or boxed callable, so an unsupported container is refused instead of ordered wrongly | `x0` = array | — |
 | `__rt_str_persist` | Copy string from concat_buf to heap; a heap block stamped `CONCAT_TEMP_HEAP_KIND` is adopted in place instead of copied | `x1`/`x2` = str | `x1`/`x2` = heap str |
 | `__rt_str_claim` | Give a possibly transient string one owner without copying: retag a `CONCAT_TEMP_HEAP_KIND` block as heap kind 1 in place, return every other payload unchanged (lowering of `EnsureOwned`) | `x1`/`x2` = str | `x1`/`x2` = same str |
+| `__rt_str_new_owned` | Allocate a fresh heap block stamped as owned string kind 1 and return its payload for a producer that writes the result exactly once (`strtolower`/`strtoupper`) | `x0` = byte length | `x0` = uninitialized owned payload |
 
 Common copy-producing array/hash routines now also have dedicated `_refcounted` siblings for nested heap-backed payloads. These variants retain borrowed values before pushing or inserting them into freshly allocated arrays/hash tables, covering array literals with spreads plus `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_splice`, `array_diff`, `array_intersect`, `array_fill`, `array_combine`, and `array_fill_keys`. Filtering uses the storage-neutral boxed predicate runtime instead, preserving logical keys and PHP value types in an independently owned result.
 
@@ -846,6 +850,18 @@ Common copy-producing array/hash routines now also have dedicated `_refcounted` 
 | `__rt_array_combine_refcounted` | Combine key/value arrays into a hash while retaining heap-backed values |
 | `__rt_array_chunk_refcounted` | Split an array into retained heap-backed chunks |
 | `__rt_array_merge_into_refcounted` | Append one indexed array into another in-place while retaining nested heap-backed elements |
+
+### Fused packed-array kernels
+
+`src/ir_lower/expr/static_array_callbacks.rs` recognizes a small grammar of literal, capture-free callback shapes and lowers them to typed EIR runtime targets instead of building an intermediate array or invoking the closure per element:
+
+| EIR target | Source shape | Runtime helper |
+|---|---|---|
+| `ArrayMapSumAdd` | `array_sum(array_map(fn($x) => $x + C, $packedInts))` | `__rt_array_map_sum_add` |
+| `ArrayFilterCountMod` | `count(array_filter($packedInts, fn($x) => $x % C === 0))` | `__rt_array_filter_count_mod` |
+| `ArrayElementTypeCheck` | `is_int/is_string/is_array/is_null($packedMixed[$intIndex])` | `__rt_array_element_type_check` |
+
+The fusions are lowering-time only: they emit ordinary EIR `RuntimeCall` instructions, so the optimizer, ownership analysis, and every supported target see the same typed operation. Each matcher refuses anything outside its exact shape — a declared non-`bool` return type, captures, a non-int index, a shadowed builtin, or a non-packed receiver — and leaves the generic path in place. The fused map and filter kernels preserve PHP's left-to-right additions, int-to-float promotion, and division-by-zero behavior; the predicate kernel keeps the generic warning path for missing keys.
 
 ### Hash table (for associative arrays)
 
