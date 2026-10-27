@@ -311,3 +311,23 @@ echo pointerIdentityBound($argc - 1, $argc + 1), pointerIdentitySeed($argc + 2);
         }
     }
 }
+
+/// Every eligible seed is guarded before full loop copies consume their separate growth budget.
+#[test]
+fn counter_fast_path_multiple_seeds_use_guards_without_copies() {
+    for count in [2, 10] {
+        let loops: String = (0..count).map(|index| format!(
+            "for ($b{index} = $n - 1; $b{index} >= 0; $b{index}--) {{ $count += 1; }}\n"
+        )).collect();
+        let source = format!("<?php function multipleSeeds(int $n): int {{ $count = 0; {loops} return $count; }} echo multipleSeeds($argc + 2);");
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let function = optimized(&source, "multipleSeeds", target);
+            let guards = function.blocks.iter().filter(|block| block.name == "counter.seed.inrange").count();
+            assert_eq!(guards, count, "{target}: each descending loop gets its own seed guard");
+            assert!(!function.blocks.iter().any(|block| block.name.contains(".counter.fast")),
+                "{target}: seed-only loops do not need full copies");
+            assert!(!function.instructions.iter().any(|inst| inst.op == Op::StrIncDec),
+                "{target}: no eligible seed counter remains boxed");
+        }
+    }
+}

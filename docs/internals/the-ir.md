@@ -1669,7 +1669,10 @@ whose later AST lowering rebuilds representation conversions.
 
 A preceding seed guard can skip a dead-at-exit loop when a checked directional
 seed overflow makes its first comparison false. This also requires an innermost
-loop, so one header comparison cannot authorize repeated nested updates. Both
+loop, so one header comparison cannot authorize repeated nested updates. All eligible
+seed guards are exhausted before the separate loop-copy budget is spent. Integer
+and boolean preheader constants and retired bookkeeping are accepted only when the resulting
+CFG still validates. Both
 rewrites operate on EIR and preserve the original AST binding decisions and
 source metadata. See [the optimizer](the-optimizer.md) for the complete eligibility
 and code-growth limits.

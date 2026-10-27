@@ -10,16 +10,23 @@
 
 use super::*;
 
-/// Specializes a dead-at-exit counter without duplicating its loop body.
+/// Exhausts dead-at-exit seed rewrites before the caller spends its loop-copy budget.
 pub(super) fn run(function: &mut Function, data: &DataPool, pass: &BoundedMixedCounter) -> bool {
-    let dominance = crate::ir_passes::compute_dominance(function);
-    let loops = crate::ir_passes::loops::compute_loops(function, &dominance);
-    for lp in loops.loops() {
-        if loops.loops().iter().any(|inner| inner.header != lp.header && lp.contains(inner.header)) { continue; }
-        let Some(trial) = candidate(function, lp, data, pass) else { continue; };
-        if crate::ir::validate_function(&trial).is_ok() { *function = trial; return true; }
+    let mut changed = false;
+    loop {
+        let dominance = crate::ir_passes::compute_dominance(function);
+        let loops = crate::ir_passes::loops::compute_loops(function, &dominance);
+        let trial = loops.loops().iter().filter(|lp| {
+            !loops.loops().iter().any(|inner| inner.header != lp.header && lp.contains(inner.header))
+        }).find_map(|lp| {
+            let trial = candidate(function, lp, data, pass)?;
+            crate::ir::validate_function(&trial).is_ok().then_some(trial)
+        });
+        let Some(trial) = trial else { return changed; };
+        // A committed rewrite removes a Mixed recurrence, so it cannot be selected again.
+        *function = trial;
+        changed = true;
     }
-    false
 }
 
 /// Builds a private guarded seed rewrite, declining every observable overflow result.
@@ -95,6 +102,7 @@ fn candidate(function: &Function, lp: &NaturalLoop, data: &DataPool, pass: &Boun
     for &id in &block.instructions[split..] {
         let inst = function.instruction(id)?;
         if id == producer_id || proof.releases.contains(&id) { continue; }
+        if matches!(inst.op, Op::Nop | Op::ConstI64 | Op::ConstBool) { continue; }
         if inst.op == Op::StoreLocal && inst.immediate == Some(Immediate::LocalSlot(slot)) { continue; }
         if matches!(inst.op, Op::Acquire | Op::MixedClone | Op::Borrow | Op::Move)
             && inst.result.is_some_and(|value| proof.scalar_values.contains(&value)) { continue; }

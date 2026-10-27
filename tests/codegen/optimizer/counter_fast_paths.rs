@@ -411,3 +411,15 @@ pointerCounterSeed(PHP_INT_MIN);
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "optimized={optimized}: {}", output.stderr);
     }
 }
+
+/// Several dead-seed guards preserve normal, empty and overflowing entry behavior together.
+#[test]
+fn test_counter_fast_paths_multiple_seed_guards_match_php() {
+    let loops: String = (0..10).map(|index| format!(
+        "for ($b{index} = $n - 1; $b{index} >= 0; $b{index}--) {{ $count += 1; }}\n"
+    )).collect();
+    let source = format!("<?php function multipleSeedRuntime(int $n): int {{ $count = 0; {loops} return $count; }}
+        echo multipleSeedRuntime(PHP_INT_MIN), '|', multipleSeedRuntime(0), '|',
+            multipleSeedRuntime(1), '|', multipleSeedRuntime($argc + 2);");
+    equivalent(&source);
+}
