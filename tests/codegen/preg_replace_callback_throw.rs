@@ -10,6 +10,9 @@
 //!   a throw abandons the replacement, and an invalid pattern or `/e` yields null.
 //! - Repeated catches must not accumulate helper-owned blocks. The 65536-byte heap
 //!   is the size that previously died after a handful of caught throws.
+//! - `--heap-debug` counts elephc heap blocks only. PCRE2's compiled pattern and
+//!   match data come from the libc allocator, so this summary cannot see them.
+//!   The throw path still frees those pointers through the shim and `free`.
 
 use crate::support::*;
 
@@ -39,6 +42,9 @@ fn run_preg_callback(source: &str, heap_size: usize, heap_debug: bool) -> Progra
 }
 
 /// Reads the `live_blocks=` count from a `--heap-debug` leak summary.
+///
+/// The summary is elephc's heap. A block allocated by PCRE2 with libc `malloc`
+/// does not appear here, even when the throw path failed to free it.
 fn live_blocks(stderr: &str) -> usize {
     let summary = stderr
         .lines()
@@ -157,6 +163,54 @@ fn test_preg_replace_callback_throw_releases_private_buffers() {
 #[test]
 fn test_preg_replace_callback_throw_releases_private_buffers_without_ir_opt() {
     without_ir_opt(|| assert_throw_cleanup_does_not_scale(false));
+}
+
+/// A `[$obj, 'method']` callback owns a runtime descriptor that retains the
+/// receiver. A throw must drop that reference, so `__destruct` runs in PHP's
+/// order and the descriptor is not left on the elephc heap.
+#[test]
+fn test_preg_replace_callback_throw_releases_bound_method() {
+    let source = r#"<?php
+class BoundCallback {
+    public function __destruct() { echo "D"; }
+    public function fail(array $matches): string {
+        echo "M";
+        throw new Exception("x");
+    }
+}
+$marks = "";
+for ($i = 0; $i < 2; $i++) {
+    try {
+        preg_replace_callback("/a/", [new BoundCallback(), "fail"], "a");
+        $marks .= "!";
+    } catch (Exception $e) {
+        $marks .= "C";
+    }
+}
+echo $marks, "\n";
+$obj = new BoundCallback();
+try {
+    preg_replace_callback("/a/", [$obj, "fail"], "a");
+} catch (Exception $e) {
+    echo "C";
+}
+echo "S";
+$obj = null;
+echo "E\n";
+"#;
+    let out = run_preg_callback(source, 8_388_608, true);
+    assert!(
+        out.success,
+        "bound method throw failed\nstdout:\n{}\nstderr:\n{}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "MDMDCC\nMCSDE\n", "stderr:\n{}", out.stderr);
+    assert_eq!(
+        live_blocks(&out.stderr),
+        0,
+        "a thrown bound method left a block alive:\n{}",
+        out.stderr
+    );
 }
 
 /// Runs the fixture once and twenty times. Live blocks must not grow with the
