@@ -22,11 +22,11 @@ slow-timeout = { period = "60s", terminate-after = 6 }
 # core and crossed 60s twice each once the non-codegen shards ran four. Three periods keep a real
 # hang bounded while the shards keep their parallelism.
 [[profile.default.overrides]]
-filter = 'binary(embedder_stack_tests) or binary(compiler_security_limits_tests)'
+filter = 'binary(embedder_stack_tests) or (binary_id(elephc::integration) and test(/^compiler_security_limits_tests::/))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(embedder_stack_tests) or binary(compiler_security_limits_tests)'
+filter = 'binary(embedder_stack_tests) or (binary_id(elephc::integration) and test(/^compiler_security_limits_tests::/))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # These BCMath probes compile dynamic-eval hosts and exceeded 60s under local load.
@@ -200,11 +200,11 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 # eval and opcache binaries in the same CLI shards use, instead of one entry per crossing:
 # the 60s slow warning stays, and a hang still terminates at 180s.
 [[profile.default.overrides]]
-filter = 'binary(extension_loaded_tests)'
+filter = '(binary_id(elephc::integration) and test(/^extension_loaded_tests::/))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(extension_loaded_tests)'
+filter = '(binary_id(elephc::integration) and test(/^extension_loaded_tests::/))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # The `codegen::eval` fixtures compile, link (against the Magician staticlib), and
@@ -233,34 +233,34 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::[^:]+::test_core_eval_/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
-# The standalone `eval_*` integration binaries (object handles, resource ids,
+# The `eval_*` integration suites (object handles, resource ids,
 # string interpolation) link Magician for every program they compile, exactly
 # like `codegen::eval`, but run in the non-codegen shards, where they had only
 # the plain 60s cap. Two of them were terminated at 60s on both attempts on one
 # slow macOS runner while the same shard had passed in 11 minutes the run before.
 # Give them the eval budget too.
 [[profile.default.overrides]]
-filter = 'binary(/^eval_/)'
+filter = 'binary_id(elephc::integration) and test(/^eval_\w+::/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(/^eval_/)'
+filter = 'binary_id(elephc::integration) and test(/^eval_\w+::/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
-# The `opcache_*` integration binaries are in the same position: most of their programs call
+# The `opcache_*` integration suites are in the same position: most of their programs call
 # `eval()` or `include` a path known only at run time — the only ways to reach the runtime
-# script cache they test — so every such program links Magician, like the `eval_*` binaries,
+# script cache they test — so every such program links Magician, like the `eval_*` suites,
 # and they run in the non-codegen shards under the plain 60s cap. On the macOS runners
 # `a_non_forced_invalidate_follows_the_timestamp_directive` and
 # `a_runtime_eval_source_is_refused_as_native_calls_are` were terminated at 60s on both
 # attempts, and others of the family measured 57.4s, 51.2s and 46.3s in the same run. Give
 # the whole family the eval budget rather than chasing them one test at a time.
 [[profile.default.overrides]]
-filter = 'binary(/^opcache_/)'
+filter = 'binary_id(elephc::integration) and test(/^opcache_\w+::/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(/^opcache_/)'
+filter = 'binary_id(elephc::integration) and test(/^opcache_\w+::/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # The mbstring codegen tests compile each program twice, natively and inside `eval()`, and the
@@ -345,11 +345,11 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 # then drives several requests. Both retries on macOS CI reached nextest's exact
 # 60s termination boundary without a test panic or server diagnostic.
 [[profile.default.overrides]]
-filter = 'binary(web_tests) and test(=web_eval_superglobal_reload_releases_replaced_owners)'
+filter = 'binary_id(elephc::integration) and test(=web_tests::web_eval_superglobal_reload_releases_replaced_owners)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
-filter = 'binary(web_tests) and test(=web_eval_superglobal_reload_releases_replaced_owners)'
+filter = 'binary_id(elephc::integration) and test(=web_tests::web_eval_superglobal_reload_releases_replaced_owners)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 # The two `web_session_tests` cases that compile a `--web` program WITH `eval()` — the only way
@@ -359,30 +359,30 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 # program with `eval()` and no OPcache call is already 3.08M lines. Both terminated at the 60s
 # guard on the macOS runners, on both attempts, in two consecutive runs.
 [[profile.default.overrides]]
-filter = 'binary(web_session_tests) and test(=opcache_reset_is_performed_at_the_next_request_boundary)'
+filter = 'binary_id(elephc::integration) and test(=web_session_tests::opcache_reset_is_performed_at_the_next_request_boundary)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
-filter = 'binary(web_session_tests) and test(=opcache_reset_is_performed_at_the_next_request_boundary)'
+filter = 'binary_id(elephc::integration) and test(=web_session_tests::opcache_reset_is_performed_at_the_next_request_boundary)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.default.overrides]]
-filter = 'binary(web_session_tests) and test(=the_revalidate_field_is_the_entrys_own_deadline)'
+filter = 'binary_id(elephc::integration) and test(=web_session_tests::the_revalidate_field_is_the_entrys_own_deadline)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
-filter = 'binary(web_session_tests) and test(=the_revalidate_field_is_the_entrys_own_deadline)'
+filter = 'binary_id(elephc::integration) and test(=web_session_tests::the_revalidate_field_is_the_entrys_own_deadline)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 # One web-runtime compile plus a served request: median 44s and up to 58s on macOS in the
 # CI JUnit reports of 2026-10-20..22, with five retried 60s timeouts in three days. Keep the
 # 60s slow warning and terminate a hang at 180s, like the other web session entries above.
 [[profile.default.overrides]]
-filter = 'binary(web_session_tests) and test(=ini_get_session_name_tracks_session_name)'
+filter = 'binary_id(elephc::integration) and test(=web_session_tests::ini_get_session_name_tracks_session_name)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-filter = 'binary(web_session_tests) and test(=ini_get_session_name_tracks_session_name)'
+filter = 'binary_id(elephc::integration) and test(=web_session_tests::ini_get_session_name_tracks_session_name)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # PDO_ODBC surface/live fixtures compile the full versioned PDO prelude and may
@@ -568,11 +568,11 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 # this file because the cost here is dominated by linking a large archive rather than by
 # compilation, which is exactly what a loaded runner stretches most.
 [[profile.default.overrides]]
-filter = 'binary(php_profile_independence_tests) and test(/^eval_/)'
+filter = 'binary_id(elephc::integration) and test(/^php_profile_independence_tests::eval_/)'
 slow-timeout = { period = "300s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
-filter = 'binary(php_profile_independence_tests) and test(/^eval_/)'
+filter = 'binary_id(elephc::integration) and test(/^php_profile_independence_tests::eval_/)'
 slow-timeout = { period = "300s", terminate-after = 1 }
 
 # On shared macOS runners, eval-linked programs (the 65MB Magician archive per link)
