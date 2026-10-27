@@ -9,6 +9,8 @@
 //! - A string cast whose runtime value can carry the missing typed-array sentinel
 //!   normalizes that sentinel into a real empty string. Computed string producers
 //!   that cannot carry it stay unwrapped so their ownership remains visible.
+//! - Whether a value can carry the sentinel is decided in `missing_string`, including
+//!   stores a loop back-edge has not emitted yet.
 
 use super::*;
 
@@ -122,7 +124,7 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     // them. The decision follows that runtime producer, not the cast operand's
     // immediate AST shape.
     if matches!(target, CastType::String) && value.ir_type == IrType::Str {
-        if !string_value_may_carry_missing_entry(ctx, value) {
+        if !super::missing_string::string_value_may_carry_missing_entry(ctx, value) {
             return value;
         }
         return normalize_missing_string_value(ctx, value, expr);
@@ -145,95 +147,6 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
     }
     result
-}
-
-/// Returns whether a string value can still be the missing typed-array sentinel.
-///
-/// Literals, concatenations, and scalar coercions allocate a real string. A local
-/// load can carry the sentinel only when some store into that slot forwarded an
-/// element read: a `string` parameter, and a local copied from one, stay real
-/// strings so `(string)` over them remains a pure alias.
-fn string_value_may_carry_missing_entry(
-    ctx: &LoweringContext<'_, '_>,
-    value: LoweredValue,
-) -> bool {
-    let mut values = std::collections::HashSet::new();
-    let mut slots = std::collections::HashSet::new();
-    value_may_carry_missing_string(ctx, value.value, &mut values, &mut slots, false)
-}
-
-/// Follows ownership forwards to an element read that publishes the missing-string sentinel.
-///
-/// `stored` is set while deciding whether a value written into a local can carry the
-/// sentinel. A store of an unrelated producer, such as a mixed clone of another
-/// parameter, must not make every later load of that slot look like a missing entry.
-fn value_may_carry_missing_string(
-    ctx: &LoweringContext<'_, '_>,
-    value: crate::ir::ValueId,
-    values: &mut std::collections::HashSet<crate::ir::ValueId>,
-    slots: &mut std::collections::HashSet<crate::ir::LocalSlotId>,
-    stored: bool,
-) -> bool {
-    if !values.insert(value) {
-        return false;
-    }
-    let Some(inst) = ctx.builder.value_defining_instruction(value) else {
-        return false;
-    };
-    match inst.op {
-        Op::ArrayGet | Op::ArrayGetSilent | Op::HashGet | Op::HashGetSilent => true,
-        Op::Acquire | Op::Move | Op::Borrow | Op::EnsureOwned | Op::StrPersist => inst
-            .operands
-            .first()
-            .is_some_and(|source| {
-                value_may_carry_missing_string(ctx, *source, values, slots, stored)
-            }),
-        Op::LoadLocal | Op::LoadStaticLocal => {
-            let Some(crate::ir::Immediate::LocalSlot(slot)) = inst.immediate else {
-                return false;
-            };
-            if !slots.insert(slot) {
-                return false;
-            }
-            let store = match inst.op {
-                Op::LoadStaticLocal => Op::StoreStaticLocal,
-                _ => Op::StoreLocal,
-            };
-            let stored_values = ctx
-                .builder
-                .function()
-                .instructions
-                .iter()
-                .filter_map(|candidate| {
-                    (candidate.op == store
-                        && candidate.immediate == Some(crate::ir::Immediate::LocalSlot(slot)))
-                        .then_some(candidate.operands.first().copied())
-                        .flatten()
-                })
-                .collect::<Vec<_>>();
-            stored_values.into_iter().any(|stored_value| {
-                value_may_carry_missing_string(ctx, stored_value, values, slots, true)
-            })
-        }
-        Op::ConstStr
-        | Op::StrConcat
-        | Op::StrAppend
-        | Op::StrInterpolate
-        | Op::IToStr
-        | Op::FToStr
-        | Op::BoolToStr
-        | Op::ResourceToStr
-        | Op::MixedCastString
-        | Op::CoreBuiltin
-        | Op::RuntimeCall
-        | Op::SplRuntimeCall
-        | Op::FiberRuntimeCall
-        | Op::StrCharAt
-        | Op::Cast => false,
-        // A call can hand back a stored miss unchanged. Producers reached only
-        // through a local store do not: they are real values written into the slot.
-        _ => !stored,
-    }
 }
 
 /// Normalizes a string that may carry the missing-entry sentinel.

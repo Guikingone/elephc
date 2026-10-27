@@ -8,6 +8,8 @@
 //! - Exact PHP output, warning counts and clean heaps cover hits, misses and ownership.
 //! - A string cast of a stored missing typed-array entry is a real empty string.
 //!   The bare read stays null. Both shapes are checked with IR optimization on and off.
+//! - A cast inside a loop sees a miss stored later in that loop, and a miss returned
+//!   from a call or ternary and then stored casts to an empty string too.
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
@@ -401,6 +403,141 @@ bool(false)
 []
 0
 string(2) \"ok\"
+";
+
+/// A cast before a later store in the same loop still becomes an empty string on the next iteration.
+///
+/// The store is lowered after the cast, but the back-edge runs it first. PHP 8.2–8.5 prints the
+/// original string once, then `string(0) ""`. A later assignment of a real string stays that string.
+#[test]
+fn test_loop_carried_missing_string_cast_is_empty() {
+    assert_loop_carried_missing_string_cast();
+}
+
+/// The loop-carried missing-entry cast stays an empty string when EIR optimization is off.
+#[test]
+fn test_loop_carried_missing_string_cast_is_empty_no_ir_opt() {
+    without_ir_opt(assert_loop_carried_missing_string_cast);
+}
+
+/// Runs the loop back-edge fixture and checks PHP's stdout, warnings, and heap.
+fn assert_loop_carried_missing_string_cast() {
+    assert_merge(
+        LOOP_CARRIED_MISSING_STRING_CAST,
+        LOOP_CARRIED_MISSING_STRING_CAST_OUT,
+        10,
+    );
+}
+
+/// Fixture for casts that run before the missing store in source order and after it at runtime.
+const LOOP_CARRIED_MISSING_STRING_CAST: &str = r#"<?php
+function probe(int $key): void {
+    $values = [""];
+    $s = "seed";
+    for ($i = 0; $i < 2; $i++) {
+        var_dump((string)$s);
+        $s = $values[$key];
+    }
+    $copy = "seed";
+    for ($i = 0; $i < 2; $i++) {
+        var_dump((string)$copy);
+        $t = $values[$key];
+        $copy = $t;
+    }
+    $again = "seed";
+    $i = 0;
+    while ($i < 2) {
+        var_dump((string)$again);
+        $again = $values[$key];
+        $i++;
+    }
+    $rolled = "seed";
+    $i = 0;
+    do {
+        var_dump((string)$rolled);
+        $rolled = $values[$key];
+        $i++;
+    } while ($i < 2);
+    $rolled = "seed";
+    foreach ([0, 1] as $i) {
+        var_dump((string)$rolled);
+        $rolled = $values[$key];
+    }
+    $kept = "stay";
+    for ($i = 0; $i < 2; $i++) {
+        var_dump((string)$kept);
+        $kept = "ok";
+    }
+}
+probe($argc + 9);
+"#;
+
+/// PHP 8.5 stdout for [`LOOP_CARRIED_MISSING_STRING_CAST`], stable across PHP 8.2–8.5.
+const LOOP_CARRIED_MISSING_STRING_CAST_OUT: &str = "\
+string(4) \"seed\"
+string(0) \"\"
+string(4) \"seed\"
+string(0) \"\"
+string(4) \"seed\"
+string(0) \"\"
+string(4) \"seed\"
+string(0) \"\"
+string(4) \"seed\"
+string(0) \"\"
+string(4) \"stay\"
+string(2) \"ok\"
+";
+
+/// A miss returned by a call or ternary and then stored casts to an empty string.
+///
+/// PHP 8.2–8.5 prints `NULL` for the stored return itself and `string(0) ""` for `(string)` of
+/// it. `is_null` of that cast is false. `$argc` keeps the chosen ternary arm runtime-unknown.
+#[test]
+fn test_stored_call_and_ternary_missing_string_cast() {
+    assert_stored_call_and_ternary_missing_string_cast();
+}
+
+/// The stored call and ternary casts stay empty strings when EIR optimization is off.
+#[test]
+fn test_stored_call_and_ternary_missing_string_cast_no_ir_opt() {
+    without_ir_opt(assert_stored_call_and_ternary_missing_string_cast);
+}
+
+/// Runs the stored call and ternary fixture and checks PHP's stdout, warnings, and heap.
+fn assert_stored_call_and_ternary_missing_string_cast() {
+    assert_merge(
+        STORED_CALL_AND_TERNARY_MISSING_STRING_CAST,
+        STORED_CALL_AND_TERNARY_MISSING_STRING_CAST_OUT,
+        1,
+    );
+}
+
+/// Fixture for `(string)` of a call result and a ternary result saved in a local.
+const STORED_CALL_AND_TERNARY_MISSING_STRING_CAST: &str = r#"<?php
+function pass($value) { return $value; }
+function probe(int $key): void {
+    $values = [""];
+    $stored = $values[$key];
+    $y = pass($stored);
+    $z = ($key == 10) ? pass($stored) : "keep";
+    var_dump($y);
+    var_dump((string)$y);
+    var_dump(is_null((string)$y));
+    var_dump($z);
+    var_dump((string)$z);
+    var_dump(is_null((string)$z));
+}
+probe($argc + 9);
+"#;
+
+/// PHP 8.5 stdout for [`STORED_CALL_AND_TERNARY_MISSING_STRING_CAST`], stable across PHP 8.2–8.5.
+const STORED_CALL_AND_TERNARY_MISSING_STRING_CAST_OUT: &str = "\
+NULL
+string(0) \"\"
+bool(false)
+NULL
+string(0) \"\"
+bool(false)
 ";
 
 /// Explicit casts still convert a missing value instead of preserving an implicit null.

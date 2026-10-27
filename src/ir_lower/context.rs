@@ -182,6 +182,7 @@ pub(crate) struct LoweringSnapshot {
     initialized_slots: HashSet<LocalSlotId>,
     constants: HashMap<String, (ExprKind, PhpType)>,
     loop_stack: Vec<LoopFrame>,
+    loop_carried_missing_strings: Vec<HashSet<String>>,
     finally_stack: Vec<FinallyFrame>,
     try_loop_depths: Vec<usize>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
@@ -376,6 +377,11 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
+    /// Locals each enclosing loop assigns a value that may still be the missing-string
+    /// sentinel. A cast inside the loop must see those stores even when they are lowered
+    /// later in the body, because the back-edge runs them before the next iteration.
+    /// A `string` parameter is absent unless such a store actually reaches it.
+    pub loop_carried_missing_strings: Vec<HashSet<String>>,
     pub finally_stack: Vec<FinallyFrame>,
     /// Loop-stack depth at each active `try` handler push; see
     /// `LoweringContext::loops_a_throw_would_leave`.
@@ -596,6 +602,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             top_level_env,
             current_class,
             loop_stack: Vec::new(),
+            loop_carried_missing_strings: Vec::new(),
             finally_stack: Vec::new(),
             try_loop_depths: Vec::new(),
             taken_finally_exceptions: Vec::new(),
@@ -670,6 +677,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             initialized_slots: self.initialized_slots.clone(),
             constants: self.constants.clone(),
             loop_stack: self.loop_stack.clone(),
+            loop_carried_missing_strings: self.loop_carried_missing_strings.clone(),
             finally_stack: self.finally_stack.clone(),
             try_loop_depths: self.try_loop_depths.clone(),
             static_callable_locals: self.static_callable_locals.clone(),
@@ -725,6 +733,28 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.try_loop_depths.push(depth);
     }
 
+    /// Records locals this loop assigns a missing-string sentinel, for casts lowered
+    /// earlier in the body than the store.
+    pub(crate) fn push_loop_carried_missing_strings(&mut self, names: HashSet<String>) {
+        self.loop_carried_missing_strings.push(names);
+    }
+
+    /// Drops the missing-string names recorded for the loop that just finished lowering.
+    pub(crate) fn pop_loop_carried_missing_strings(&mut self) {
+        self.loop_carried_missing_strings.pop();
+    }
+
+    /// Returns whether an enclosing loop assigns `name` a value that may be the sentinel.
+    ///
+    /// Copy-on-write shadows keep the PHP name with a `#cow` suffix. The loop scan records
+    /// the source name, so the suffix is ignored here.
+    pub(crate) fn loop_assigns_missing_string(&self, name: &str) -> bool {
+        let name = name.strip_suffix("#cow").unwrap_or(name);
+        self.loop_carried_missing_strings
+            .iter()
+            .any(|names| names.contains(name))
+    }
+
     /// Drops the innermost active `try` handler's record.
     pub(crate) fn pop_try_loop_depth(&mut self) {
         self.try_loop_depths.pop();
@@ -754,6 +784,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots = snapshot.initialized_slots;
         self.constants = snapshot.constants;
         self.loop_stack = snapshot.loop_stack;
+        self.loop_carried_missing_strings = snapshot.loop_carried_missing_strings;
         self.finally_stack = snapshot.finally_stack;
         self.try_loop_depths = snapshot.try_loop_depths;
         self.static_callable_locals = snapshot.static_callable_locals;
