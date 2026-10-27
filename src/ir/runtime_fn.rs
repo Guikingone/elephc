@@ -2672,6 +2672,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::OpensslEncrypt
                 | RuntimeFnId::OpensslGetCipherMethods
                 | RuntimeFnId::ParseUrl
+                | RuntimeFnId::PregMatch
+                | RuntimeFnId::PregMatchAll
+                | RuntimeFnId::PregReplace
                 | RuntimeFnId::PregSplit
                 // print_r renders into the `_print_r_buf` capture buffer and `__rt_pr_finish`
                 // copies those bytes out through `__rt_str_persist`, so every mode returns
@@ -2733,6 +2736,16 @@ impl RuntimeFnId {
                 | RuntimeFnId::ZvalUnpack
                 // Parsed values own their storage independently of the wire input and options.
                 | RuntimeFnId::Unserialize
+                // Both callback replacement and shell output reserve or persist their own
+                // result storage; failure paths copy the borrowed subject/empty output.
+                | RuntimeFnId::PregReplaceCallback
+                | RuntimeFnId::ShellExec
+                // These string transforms always answer with a fresh mutable copy. The
+                // caller persists it for assignment and may then release the original result.
+                | RuntimeFnId::StrPad
+                | RuntimeFnId::Ucfirst
+                | RuntimeFnId::Lcfirst
+                | RuntimeFnId::Ucwords
         ) {
             BuiltinResultOwnership::Fresh
         } else if matches!(
