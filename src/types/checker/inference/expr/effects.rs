@@ -127,6 +127,12 @@ impl Checker {
                 self.infer_type_with_assignment_effects(left, env)?;
                 if matches!(op, BinOp::And | BinOp::Or) {
                     let mut right_env = env.clone();
+                    // The right operand runs only where the left one held (`&&`) or did not
+                    // (`||`): it sees the guard's narrowing, as a ternary's branches do.
+                    if let Some(guard) = self.guard_narrowing(left, env)? {
+                        let ty = if matches!(op, BinOp::And) { guard.then_ty } else { guard.else_ty };
+                        right_env.insert(guard.var, ty);
+                    }
                     self.infer_type_with_assignment_effects(right, &mut right_env)?;
                     merge_array_storage_effects(env, &right_env);
                     Ok(PhpType::Bool)

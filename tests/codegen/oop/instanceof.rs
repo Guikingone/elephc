@@ -452,3 +452,24 @@ var_dump(!$rule->test(new Circle()) || $rule->test(new Square()));
         )
     );
 }
+
+/// A receiver declared as a parent class and narrowed by `instanceof` calls a method only the
+/// subclass declares, in an `if`, a ternary and the right operand of `&&`, dispatching on the
+/// runtime class.
+#[test]
+fn test_instanceof_narrowing_reaches_subclass_methods() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public $kind = 'a'; }
+class B extends A { public function k() { return 'k'; } }
+function viaIf(A $o) { if ($o instanceof B) { return $o->k(); } return $o->kind; }
+function viaTernary(A $o) { return $o instanceof B ? $o->k() : $o->kind; }
+function viaAnd(A $o) { return $o instanceof B && $o->k() === 'k'; }
+var_dump(viaIf(new B), viaIf(new A), viaTernary(new B), viaTernary(new A), viaAnd(new B), viaAnd(new A));
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(1) \"k\"\nstring(1) \"a\"\nstring(1) \"k\"\nstring(1) \"a\"\nbool(true)\nbool(false)\n"
+    );
+}

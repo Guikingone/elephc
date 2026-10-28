@@ -226,6 +226,15 @@ pub(super) fn method_call_result_type_for_receiver_type(
         if dynamic_method_receiver_needs_mixed_fallback(object_ty) {
             return PhpType::Mixed;
         }
+        // A method the receiver's class lacks is a subclass's, reached once the checker narrowed
+        // the receiver (`$o instanceof B ? $o->k() : …`): the backend dispatches on the runtime
+        // class, and its result comes back boxed.
+        if singular_object_class(object_ty).is_some_and(|(class, _)| {
+            ctx.classes.contains_key(class.trim_start_matches('\\'))
+                && method_signature_for_receiver_type(ctx, object_ty, "__call").is_none()
+        }) {
+            return PhpType::Mixed;
+        }
         return fallback_expr_type(expr);
     };
     let return_ty = if let Some((receiver_name, _)) = singular_object_class(object_ty) {
