@@ -702,6 +702,13 @@ scalar promotion sequence; a promoted sum terminates in PHP's warned
 float-to-int conversion. Any other observer — echo, a store, a second cast, a
 call, or a terminator — keeps the boxed `array_sum()` call.
 
+`src/ir_passes/abs_int_sink.rs` applies the same cast-observed rule to the builtin
+`abs()`. When the operand is a concrete int, bool, or null-capable tagged scalar and
+the boxed result is observed only through one `(int)` cast, the call becomes
+`AbsInt`: in-range values return the raw magnitude, while `INT_MIN` still promotes
+to the float `2^63` and terminates in PHP's warned float-to-int conversion. Floats
+and general Mixed operands keep the boxed `abs()` call.
+
 `src/ir_passes/array_fill_loop.rs` recognizes a top-level constant-bound fill,
 `while (i < N) { $data[] = <pure int expr>; $i += 1; }`, over an array created
 immediately before it. The array must be the only owner, its only append must

@@ -131,7 +131,7 @@ fn receiver_is_packed_int_array(function: &Function, receiver: ValueId) -> bool 
 }
 
 /// Returns the single int cast observing `result`, its result value, and removable releases.
-fn analyze_uses(
+pub(super) fn analyze_uses(
     function: &Function,
     result: ValueId,
 ) -> Option<(InstId, ValueId, Vec<InstId>)> {

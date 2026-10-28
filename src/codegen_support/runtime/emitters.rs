@@ -30,6 +30,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // branch into `__rt_php_float_to_int` for PHP's float→int rules.
     numeric::emit_php_float_to_int(emitter);
     numeric::emit_php_float_to_int_cap(emitter);
+    numeric::emit_abs_int(emitter);
     round_mode::emit_round_mode(emitter);
 
     // String runtime functions

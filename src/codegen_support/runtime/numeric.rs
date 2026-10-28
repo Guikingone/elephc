@@ -222,3 +222,45 @@ fn emit_php_float_to_int_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rcx");                                             // restore the shift-count register
     emitter.instruction("ret");                                                 // return the PHP integer value in r11
 }
+
+/// Emits `__rt_abs_int`, the raw integer-abs entry used by the abs int sink.
+///
+/// The ordinary negative value returns `-value`. `INT_MIN` cannot be represented as a positive
+/// int, so its PHP result is the float `2^63`; an `(int)` observation of that float applies the
+/// shared warned float-to-int conversion, which yields `INT_MIN` again.
+pub fn emit_abs_int(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.blank();
+        emitter.comment("--- runtime: abs_int ---");
+        emitter.label_global("__rt_abs_int");
+        emitter.instruction("test rax, rax");                                   // is the integer already non-negative?
+        emitter.instruction("jns __rt_abs_int_done_x86");                       // non-negative values are their own absolute value
+        emitter.instruction("neg rax");                                         // compute the magnitude modulo 2^64
+        emitter.instruction("test rax, rax");                                   // did negation leave the INT_MIN bit pattern?
+        emitter.instruction("js __rt_abs_int_min_x86");                         // INT_MIN must promote to the float 2^63
+        emitter.instruction("ret");                                             // return the in-range integer magnitude
+        emitter.label("__rt_abs_int_min_x86");
+        crate::codegen_support::abi::emit_load_int_immediate(emitter, "r10", 0x43e0000000000000_u64 as i64);
+        emitter.instruction("movq xmm0, r10");                                  // load the exact double representation of 2^63
+        emitter.instruction("jmp __rt_float_key_to_int");                       // apply PHP's warned float-to-int conversion
+        emitter.label("__rt_abs_int_done_x86");
+        emitter.instruction("ret");                                             // return the non-negative integer unchanged
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: abs_int ---");
+    emitter.label_global("__rt_abs_int");
+    emitter.instruction("cmp x0, #0");                                          // is the integer already non-negative?
+    emitter.instruction("b.ge __rt_abs_int_done");                              // non-negative values are their own absolute value
+    emitter.instruction("neg x1, x0");                                          // compute the magnitude modulo 2^64
+    emitter.instruction("tbnz x1, #63, __rt_abs_int_min");                      // did negation leave the INT_MIN bit pattern?
+    emitter.instruction("mov x0, x1");                                          // return the in-range integer magnitude
+    emitter.instruction("ret");                                                 // transfer the absolute value to the caller
+    emitter.label("__rt_abs_int_min");
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x9", 0x43e0000000000000_u64 as i64);
+    emitter.instruction("fmov d0, x9");                                         // load the exact double representation of 2^63
+    emitter.instruction("b __rt_float_key_to_int");                             // apply PHP's warned float-to-int conversion
+    emitter.label("__rt_abs_int_done");
+    emitter.instruction("ret");                                                 // return the non-negative integer unchanged
+}

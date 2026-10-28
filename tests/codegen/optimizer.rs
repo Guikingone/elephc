@@ -11,6 +11,8 @@
 
 use crate::support::*;
 
+#[path = "optimizer/abs_int_sink.rs"]
+mod abs_int_sink;
 #[path = "optimizer/array_sum_int_sink.rs"]
 mod array_sum_int_sink;
 #[path = "optimizer/array_read_match.rs"]
