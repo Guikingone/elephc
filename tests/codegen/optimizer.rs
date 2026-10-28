@@ -17,6 +17,8 @@ mod abs_int_sink;
 mod sqrt_add_int_sink;
 #[path = "optimizer/strpos_int_sink.rs"]
 mod strpos_int_sink;
+#[path = "optimizer/json_decode_count_sink.rs"]
+mod json_decode_count_sink;
 #[path = "optimizer/array_sum_int_sink.rs"]
 mod array_sum_int_sink;
 #[path = "optimizer/array_read_match.rs"]

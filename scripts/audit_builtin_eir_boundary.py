@@ -56,6 +56,7 @@ COMPILER_INTERNAL_RUNTIME_FNS = {
     "StrposInt",
     "SqrtAddInt",
     "JsonEncodeStr",
+    "JsonDecodeCount",
     "ArrayElementTypeCheck",
     "ArrayFilterCountMod",
     "ArrayMapSumAdd",

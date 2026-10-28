@@ -73,6 +73,9 @@ pub(super) fn lower(
         RuntimeFnId::JsonDecode => Some({
             crate::codegen::lower_inst::builtins::json::lower_json_decode(ctx, inst)
         }),
+        RuntimeFnId::JsonDecodeCount => Some({
+            crate::codegen::lower_inst::builtins::json::lower_json_decode_count(ctx, inst)
+        }),
         RuntimeFnId::JsonEncode => Some({
             crate::codegen::lower_inst::builtins::json::lower_json_encode(ctx, inst)
         }),

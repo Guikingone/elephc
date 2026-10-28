@@ -690,6 +690,19 @@ promotion, the NAN warning for a negative sum, and truncation toward zero. A flo
 addend, another observer of the sum, or a non-cast observer of the root keeps the
 boxed graph.
 
+`src/ir_passes/json_decode_count_sink.rs` folds `count(json_decode($s, true))` into
+`JsonDecodeCount` when the decoded Mixed graph has no other observer. The decode
+must have exactly two operands with an associative flag constant `true`; the decode
+result may be observed only by the count call, one temporary-slot store, one release
+and that slot's owner/unset scaffolding; and the source must stay alive until the
+call (locals, borrowed cell payloads and persistent literals, never a released
+temporary). The count call keeps the source and assoc operands, while the decoder,
+store, owner pushes/pops, unset and pre-store retirement are retired. The runtime
+validates the whole document, counts a top-level array by skipping values or a
+top-level object by deduplicating plain non-numeric keys, raises PHP's exact
+`count()` TypeError for scalar/invalid roots, and falls back to the full decoder for
+numeric roots and escaped/numeric keys.
+
 `src/ir_passes/strpos_int_sink.rs` does the same for `strpos()`. The search keeps
 its original arguments, offsets, coercion and `ValueError` behavior; only the
 result representation changes from the boxed `int|false` cell to a raw `I64`

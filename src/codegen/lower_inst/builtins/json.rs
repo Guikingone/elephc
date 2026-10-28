@@ -69,6 +69,247 @@ pub(crate) fn lower_json_encode(
     store_if_result(ctx, inst)
 }
 
+/// Publishes the state expected by the default two-argument `json_decode`.
+fn prepare_json_decode_count_state(ctx: &mut FunctionContext<'_>) {
+    reset_json_decode_state(ctx);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 512);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        "_json_depth_limit",
+        0,
+    );
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_active_flags", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_decode_assoc", 0);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        "_json_decode_assoc",
+        0,
+    );
+}
+
+/// Lowers the count-only `count(json_decode($s, true))` fast path selected by the sink.
+///
+/// The runtime helper validates the whole document and returns the top-level count, or a
+/// status code for a scalar root / invalid JSON / unsupported key shape. Scalar and invalid
+/// roots raise PHP's exact `count()` TypeError without building a Mixed graph; the rare
+/// unsupported object-key case falls back to the full decoder and then counts its root.
+pub(crate) fn lower_json_decode_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "json_decode_count", 2, 2)?;
+    let source = expect_operand(inst, 0)?;
+
+    prepare_json_decode_count_state(ctx);
+    let source_temp = load_json_source_string(ctx, source, "json_decode_count source")?;
+    abi::emit_call_label(ctx.emitter, "__rt_json_decode_count");
+
+    let fallback = ctx.next_label("json_decode_count_fallback");
+    let fast = ctx.next_label("json_decode_count_fast");
+    let done = ctx.next_label("json_decode_count_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // is this a real top-level count?
+            ctx.emitter.instruction(&format!("b.ge {fast}"));                   // counts are non-negative
+            ctx.emitter.instruction("cmp x0, #-8");                             // is the exact decoder required?
+            ctx.emitter.instruction(&format!("b.eq {fallback}"));               // fall back for numeric roots and escaped keys
+            release_json_source_temp(ctx, source_temp);
+            let null = ctx.next_label("json_decode_count_null");
+            let int = ctx.next_label("json_decode_count_int");
+            let float = ctx.next_label("json_decode_count_float");
+            let string = ctx.next_label("json_decode_count_string");
+            let false_ = ctx.next_label("json_decode_count_false");
+            let true_ = ctx.next_label("json_decode_count_true");
+            ctx.emitter.instruction("cmp x0, #-2");                             // int root?
+            ctx.emitter.instruction(&format!("b.eq {int}"));
+            ctx.emitter.instruction("cmp x0, #-3");                             // float root?
+            ctx.emitter.instruction(&format!("b.eq {float}"));
+            ctx.emitter.instruction("cmp x0, #-4");                             // string root?
+            ctx.emitter.instruction(&format!("b.eq {string}"));
+            ctx.emitter.instruction("cmp x0, #-5");                             // false root?
+            ctx.emitter.instruction(&format!("b.eq {false_}"));
+            ctx.emitter.instruction("cmp x0, #-6");                             // true root?
+            ctx.emitter.instruction(&format!("b.eq {true_}"));                  // true root
+            ctx.emitter.instruction(&format!("b {null}"));                      // invalid JSON and null roots
+            ctx.emitter.label(&int);
+            super::count_empty::emit_count_type_error(ctx, "int");
+            ctx.emitter.label(&float);
+            super::count_empty::emit_count_type_error(ctx, "float");
+            ctx.emitter.label(&string);
+            super::count_empty::emit_count_type_error(ctx, "string");
+            ctx.emitter.label(&false_);
+            super::count_empty::emit_count_type_error(ctx, "false");
+            ctx.emitter.label(&true_);
+            super::count_empty::emit_count_type_error(ctx, "true");
+            ctx.emitter.label(&null);
+            super::count_empty::emit_count_type_error(ctx, "null");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // is this a real top-level count?
+            ctx.emitter.instruction(&format!("jns {fast}"));                    // counts are non-negative
+            ctx.emitter.instruction("cmp rax, -8");                             // is the exact decoder required?
+            ctx.emitter.instruction(&format!("je {fallback}"));                 // fall back for numeric roots and escaped keys
+            release_json_source_temp(ctx, source_temp);
+            let null = ctx.next_label("json_decode_count_null_x");
+            let int = ctx.next_label("json_decode_count_int_x");
+            let float = ctx.next_label("json_decode_count_float_x");
+            let string = ctx.next_label("json_decode_count_string_x");
+            let false_ = ctx.next_label("json_decode_count_false_x");
+            let true_ = ctx.next_label("json_decode_count_true_x");
+            ctx.emitter.instruction("cmp rax, -2");                             // int root?
+            ctx.emitter.instruction(&format!("je {int}"));
+            ctx.emitter.instruction("cmp rax, -3");                             // float root?
+            ctx.emitter.instruction(&format!("je {float}"));
+            ctx.emitter.instruction("cmp rax, -4");                             // string root?
+            ctx.emitter.instruction(&format!("je {string}"));
+            ctx.emitter.instruction("cmp rax, -5");                             // false root?
+            ctx.emitter.instruction(&format!("je {false_}"));
+            ctx.emitter.instruction("cmp rax, -6");                             // true root?
+            ctx.emitter.instruction(&format!("je {true_}"));
+            ctx.emitter.instruction(&format!("jmp {null}"));                    // invalid JSON and null roots
+            ctx.emitter.label(&int);
+            super::count_empty::emit_count_type_error(ctx, "int");
+            ctx.emitter.label(&float);
+            super::count_empty::emit_count_type_error(ctx, "float");
+            ctx.emitter.label(&string);
+            super::count_empty::emit_count_type_error(ctx, "string");
+            ctx.emitter.label(&false_);
+            super::count_empty::emit_count_type_error(ctx, "false");
+            ctx.emitter.label(&true_);
+            super::count_empty::emit_count_type_error(ctx, "true");
+            ctx.emitter.label(&null);
+            super::count_empty::emit_count_type_error(ctx, "null");
+        }
+    }
+
+    ctx.emitter.label(&fallback);
+    release_json_source_temp(ctx, source_temp);
+    prepare_json_decode_count_state(ctx);
+    let fallback_temp = load_json_source_string(ctx, source, "json_decode_count source")?;
+    store_json_error_source_ptr(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_json_decode_mixed");
+    clear_json_diagnostic_source_refs(ctx);
+    release_json_source_temp(ctx, fallback_temp);
+    emit_decoded_count_result(ctx);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fast);
+    release_json_source_temp(ctx, source_temp);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Counts a decoded root Mixed cell, releasing it and raising PHP's exact TypeError for scalars.
+fn emit_decoded_count_result(ctx: &mut FunctionContext<'_>) {
+    let countable = ctx.next_label("json_decode_count_countable");
+    let int = ctx.next_label("json_decode_count_result_int");
+    let string = ctx.next_label("json_decode_count_result_string");
+    let float = ctx.next_label("json_decode_count_result_float");
+    let bool_ = ctx.next_label("json_decode_count_result_bool");
+    let true_ = ctx.next_label("json_decode_count_result_true");
+    let result_done = ctx.next_label("json_decode_count_result_done");
+    let null = ctx.next_label("json_decode_count_result_null");
+    let resource = ctx.next_label("json_decode_count_result_resource");
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    abi::emit_store_to_sp(ctx.emitter, result, 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {null}"));                // a failed decode behaves like null
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // a failed decode behaves like null
+            ctx.emitter.instruction(&format!("jz {null}"));
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            for tag in [4u8, 5, 6] {
+                ctx.emitter.instruction(&format!("cmp x0, #{tag}"));            // countable container tags
+                ctx.emitter.instruction(&format!("b.eq {countable}"));
+            }
+            ctx.emitter.instruction("cmp x0, #0");                              // int payload?
+            ctx.emitter.instruction(&format!("b.eq {int}"));
+            ctx.emitter.instruction("cmp x0, #1");                              // string payload?
+            ctx.emitter.instruction(&format!("b.eq {string}"));
+            ctx.emitter.instruction("cmp x0, #2");                              // float payload?
+            ctx.emitter.instruction(&format!("b.eq {float}"));
+            ctx.emitter.instruction("cmp x0, #3");                              // bool payload?
+            ctx.emitter.instruction(&format!("b.eq {bool_}"));
+            ctx.emitter.instruction("cmp x0, #9");                              // resource payload?
+            ctx.emitter.instruction(&format!("b.eq {resource}"));
+            ctx.emitter.instruction(&format!("b {null}"));                      // every other tag is null
+        }
+        Arch::X86_64 => {
+            for tag in [4u8, 5, 6] {
+                ctx.emitter.instruction(&format!("cmp rax, {tag}"));            // countable container tags
+                ctx.emitter.instruction(&format!("je {countable}"));
+            }
+            ctx.emitter.instruction("cmp rax, 0");                              // int payload?
+            ctx.emitter.instruction(&format!("je {int}"));
+            ctx.emitter.instruction("cmp rax, 1");                              // string payload?
+            ctx.emitter.instruction(&format!("je {string}"));
+            ctx.emitter.instruction("cmp rax, 2");                              // float payload?
+            ctx.emitter.instruction(&format!("je {float}"));
+            ctx.emitter.instruction("cmp rax, 3");                              // bool payload?
+            ctx.emitter.instruction(&format!("je {bool_}"));
+            ctx.emitter.instruction("cmp rax, 9");                              // resource payload?
+            ctx.emitter.instruction(&format!("je {resource}"));
+            ctx.emitter.instruction(&format!("jmp {null}"));                    // every other tag is null
+        }
+    }
+    ctx.emitter.label(&countable);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, result);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_jump(ctx.emitter, &result_done);
+    ctx.emitter.label(&int);
+    release_decoded_count_cell(ctx);
+    super::count_empty::emit_count_type_error(ctx, "int");
+    ctx.emitter.label(&string);
+    release_decoded_count_cell(ctx);
+    super::count_empty::emit_count_type_error(ctx, "string");
+    ctx.emitter.label(&float);
+    release_decoded_count_cell(ctx);
+    super::count_empty::emit_count_type_error(ctx, "float");
+    ctx.emitter.label(&bool_);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x1, {true_}"));              // true payload
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdi, rdi");                           // true payload
+            ctx.emitter.instruction(&format!("jnz {true_}"));
+        }
+    }
+    release_decoded_count_cell(ctx);
+    super::count_empty::emit_count_type_error(ctx, "false");
+    ctx.emitter.label(&true_);
+    release_decoded_count_cell(ctx);
+    super::count_empty::emit_count_type_error(ctx, "true");
+    ctx.emitter.label(&resource);
+    release_decoded_count_cell(ctx);
+    super::count_empty::emit_count_type_error(ctx, "resource");
+    ctx.emitter.label(&null);
+    release_decoded_count_cell(ctx);
+    super::count_empty::emit_count_type_error(ctx, "null");
+    ctx.emitter.label(&result_done);
+}
+
+/// Releases the decoded Mixed cell saved in the count-result temp slot.
+fn release_decoded_count_cell(ctx: &mut FunctionContext<'_>) {
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+}
+
 /// Lowers the raw string form of `json_encode()` selected by the length sink.
 ///
 /// The encoder runs exactly as the boxed builtin does, including flags, depth, error state and
