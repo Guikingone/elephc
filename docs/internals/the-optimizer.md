@@ -682,6 +682,13 @@ boxed result is observed only through one `(int)` cast, the call becomes
 promotes to the float `2^63` and terminates in PHP's warned float-to-int
 conversion. Floats and general Mixed operands keep the boxed `abs()` call.
 
+`src/ir_passes/strpos_int_sink.rs` does the same for `strpos()`. The search keeps
+its original arguments, offsets, coercion and `ValueError` behavior; only the
+result representation changes from the boxed `int|false` cell to a raw `I64`
+`int`, where the not-found sentinel becomes `0` exactly like PHP's `(int)false`.
+A strict-false comparison, echo, store or any other observer keeps the boxed
+call.
+
 `src/ir_passes/string_len_sink.rs` removes a hash/encoding whose bytes are never
 observed. When a one-argument `md5()` or `base64_encode()` call receives an
 already-materialized PHP string and its result feeds only one `str_len` (plus

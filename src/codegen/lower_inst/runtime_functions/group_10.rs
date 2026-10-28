@@ -207,6 +207,15 @@ pub(super) fn lower(
                     crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Forward,
                 )
         }),
+        RuntimeFnId::StrposInt => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_string_position_int(
+                ctx,
+                inst,
+                "strpos",
+                "__rt_strpos",
+                crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Forward,
+            )
+        }),
         RuntimeFnId::Strripos => Some({
             crate::codegen::lower_inst::builtins::strings::lower_string_position(
                     ctx,

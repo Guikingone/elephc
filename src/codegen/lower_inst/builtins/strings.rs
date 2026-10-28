@@ -82,7 +82,7 @@ pub(crate) use scalar::{
     lower_ord,
 };
 pub(crate) use search::{
-    lower_str_contains, lower_str_repeat, lower_string_position, lower_strstr, lower_substr,
+    lower_str_contains, lower_str_repeat, lower_string_position, lower_string_position_int, lower_strstr, lower_substr,
     lower_substr_replace,
 };
 pub(crate) use simple::{

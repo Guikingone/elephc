@@ -43,10 +43,33 @@ pub(crate) fn lower_string_position(
     runtime_label: &str,
     direction: StringPositionDirection,
 ) -> Result<()> {
+    lower_string_position_mode(ctx, inst, name, runtime_label, direction, true)
+}
+
+/// Lowers the raw `(int)strpos()`-family result selected by the cast sink.
+pub(crate) fn lower_string_position_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+    direction: StringPositionDirection,
+) -> Result<()> {
+    lower_string_position_mode(ctx, inst, name, runtime_label, direction, false)
+}
+
+/// Shared search lowering; `boxed` selects the PHP int|false cell or the raw integer.
+fn lower_string_position_mode(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+    direction: StringPositionDirection,
+    boxed: bool,
+) -> Result<()> {
     if inst.operands.len() == 2 {
         load_binary_string_args(ctx, inst, name)?;
         abi::emit_call_label(ctx.emitter, runtime_label);
-        box_search_result(ctx, name);
+        finish_search_result(ctx, name, boxed);
         return store_if_result(ctx, inst);
     }
     if inst.operands.len() != 3 {
@@ -62,7 +85,7 @@ pub(crate) fn lower_string_position(
     abi::emit_call_label(ctx.emitter, runtime_label);
     abi::emit_pop_reg(ctx.emitter, string_position_base_reg(ctx));
     emit_string_position_rebase(ctx, name);
-    box_search_result(ctx, name);
+    finish_search_result(ctx, name, boxed);
     store_if_result(ctx, inst)
 }
 
@@ -216,6 +239,33 @@ fn emit_string_position_offset_guard(
             }
         }
     }
+}
+
+/// Finishes a search as either the PHP int|false cell or the raw integer observation.
+fn finish_search_result(ctx: &mut FunctionContext<'_>, name: &str, boxed: bool) {
+    if boxed {
+        box_search_result(ctx, name);
+    } else {
+        emit_string_position_raw_int(ctx, name);
+    }
+}
+
+/// Maps a not-found sentinel to PHP's `(int)false` zero and leaves found offsets untouched.
+fn emit_string_position_raw_int(ctx: &mut FunctionContext<'_>, name: &str) {
+    let done_label = ctx.next_label(&format!("{}_raw_int_done", name));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // distinguish a found offset from the not-found sentinel
+            ctx.emitter.instruction(&format!("b.ge {}", done_label));           // found offsets are already the PHP integer result
+            ctx.emitter.instruction("mov x0, xzr");                             // PHP casts the false not-found result to zero
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 0");                              // distinguish a found offset from the not-found sentinel
+            ctx.emitter.instruction(&format!("jge {}", done_label));            // found offsets are already the PHP integer result
+            ctx.emitter.instruction("xor eax, eax");                            // PHP casts the false not-found result to zero
+        }
+    }
+    ctx.emitter.label(&done_label);
 }
 
 /// Turns a window-relative `strpos()`-family match back into a haystack-absolute offset.

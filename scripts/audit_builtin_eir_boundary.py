@@ -53,6 +53,7 @@ COMPILER_TRANSFORM_NAMES = {"func_get_arg", "func_get_args", "func_num_args"}
 COMPILER_INTERNAL_RUNTIME_FNS = {
     "AbsInt",
     "Base64EncodedLen",
+    "StrposInt",
     "ArrayElementTypeCheck",
     "ArrayFilterCountMod",
     "ArrayMapSumAdd",

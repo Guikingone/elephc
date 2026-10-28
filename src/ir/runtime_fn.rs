@@ -750,6 +750,8 @@ pub enum RuntimeFnId {
     StripTags,
     Stripos,
     Strpos,
+    /// Raw `(int)strpos()` observed only through an integer cast; absent matches become zero.
+    StrposInt,
     Strripos,
     Strrpos,
     Strtr,
@@ -882,6 +884,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArraySumInt => Some((1, Some(1))),
             RuntimeFnId::AbsInt => Some((1, Some(1))),
             RuntimeFnId::Base64EncodedLen => Some((1, Some(1))),
+            RuntimeFnId::StrposInt => Some((2, Some(3))),
             _ => None,
         }
     }
@@ -1710,6 +1713,8 @@ impl RuntimeFnId {
             RuntimeFnId::AbsInt => E::from_bits_retain(E::MAY_WARN.bits()),
             // The encoded-length helper reads only the already-materialized string length.
             RuntimeFnId::Base64EncodedLen => E::PURE,
+            // The raw position keeps the search's offset-validation and coercion effects.
+            RuntimeFnId::StrposInt => self.effects(),
             // Carry, predicate-result and snapshot cleanup can invoke destructors independently
             // of the selected callback's effect summary. Validation may also throw.
             RuntimeFnId::ArrayFilter | RuntimeFnId::ArrayReduce | RuntimeFnId::ArrayFind
@@ -2757,6 +2762,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::StrWordCount
                 | RuntimeFnId::Stripos
                 | RuntimeFnId::Strpos
+                | RuntimeFnId::StrposInt
                 | RuntimeFnId::Strripos
                 | RuntimeFnId::Strrpos
                 // `strip_tags()` publishes its concat reservation and then persists it before
@@ -3438,6 +3444,7 @@ impl RuntimeFnId {
             RuntimeFnId::StripTags => "strip_tags",
             RuntimeFnId::Stripos => "stripos",
             RuntimeFnId::Strpos => "strpos",
+            RuntimeFnId::StrposInt => "strpos_int",
             RuntimeFnId::Strripos => "strripos",
             RuntimeFnId::Strrpos => "strrpos",
             RuntimeFnId::Strtr => "strtr",
