@@ -13,7 +13,7 @@
 
 The user subsequently authorized opening the PR, following CI and recovering its
 queue entry through a verified merge. PR https://github.com/illegalstudio/elephc/pull/2127
-is open as a draft with `ci:macos`. Publication is tracked in Code Journal plan
+is open and ready with `ci:macos`. Publication is tracked in Code Journal plan
 `83dcd1ef-2352-45bf-a569-adf7ff19e865`. The previous delivery statuses below are
 historical; the implementation is now committed and published.
 
@@ -43,6 +43,39 @@ all three catches. Both that exact CI failure and private-control catch regressi
 pass with curl enabled. Queues `508c25aa` and `b12648fb` verified these corrections,
 the final native callback cycle and the complete builtin documentation audits. Queue membership is currently absent; native
 GitHub HEADGREEN admission and final remote ancestry verification remain required.
+
+## Post-integration review and CI corrections
+
+Claude round 13 (`5ebcdb85-abee-4ce3-b192-18fb8f61bacc`, result event 8096)
+reviewed the full integrated source at `565146078b`. Its single accepted P3
+finding concerned suspended `__debugInfo`: the upstream debug-info guard sent the
+private eight-byte cancellation object through the Throwable formatter. Both ABIs
+now divert that marker to the existing PHP fatal path before reading exception
+fields. Real finally exceptions retain their warning and trace. Queue `02e3a266`
+passed the warning-free curl build, all-target/PIC guard test, both new native
+regressions and three existing fatal controls. The two independent native/PHP
+probes now agree byte for byte, including exit 255 and empty stderr.
+
+The same queue passed all 21 generic shape-sharing tests, the generic report
+oracle, the example corpus and ten SysV alignment checks. Non-coroutine modules
+omit unique suspended-owner visitors so identical generic implementations can
+still fold. The corpus excludes the application example's non-default profile,
+which already has a real application-mode HTTP test. The SysV parser discards
+inline comments and models `leave`; its old `gc_mark_reachable` exception was
+removed because the helper is now analyzable. Controls still detect actual
+misaligned calls and missing frame restoration.
+
+Linux ARM64 web CI exposed two object-edge recount paths that restored the scan
+cursor as a physical heap header. Candidate mode stores a libc vector-slot
+address there. Both restores now resolve that slot before reading class data.
+The identical native ARM64 self-cycle changed from SIGBUS during collection to
+exit zero, two collected graph nodes and one destructor (queues `19e564c6` and
+`73b503e3`). Queue `a71f3513` passed the all-ARM/PIC restore regression and complete
+collector/coroutine subgraph assembly on all five supported targets. Three exact failed ARM64 HTTP cases also pass unchanged: superglobal cleanup,
+throwing/resurrecting cycles and saturated incoming edges. The remaining native
+container, sparse graph and memory cases are being prepared with target-matched
+bridge libraries. A new full-work review remains pending. No failed CI run has been
+retried as an infrastructure incident, and queue admission has not been attempted.
 
 ## Initial implementation delivery, before PR publication, 2026-10-28
 

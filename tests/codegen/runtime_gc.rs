@@ -244,6 +244,9 @@ mod coroutine_boundaries;
 #[path = "runtime_gc/coroutine_eval.rs"]
 mod coroutine_eval;
 
+#[path = "runtime_gc/coroutine_debuginfo.rs"]
+mod coroutine_debuginfo;
+
 mod coroutine_slot_set;
 #[path = "runtime_gc/counter_regions.rs"]
 mod counter_regions;

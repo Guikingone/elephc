@@ -252,6 +252,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("mov x2, xzr");                                         // select incoming-edge counting rather than marking
     emitter.instruction("bl __rt_gc_object_children");                          // include retained closure receivers in heap graph accounting
     emitter.instruction("ldr x12, [sp]");                                       // recover the current heap header after callback clobbers
+    scans::header(emitter, "x12", "rdx", "count_object_restore", None);
     emitter.instruction("add x12, x12, #16");                                   // restore the source object payload pointer
     emitter.instruction("ldr x14, [x12]");                                      // load the runtime class_id from the object payload
     crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_class_gc_desc_count");
@@ -309,6 +310,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     // -- dynamic-property storage is an owned graph edge, including stdClass --
     emitter.label("__rt_gc_collect_cycles_count_object_dynamic");
     emitter.instruction("ldr x12, [sp, #0]");                                   // reload the source heap header after fixed-slot traversal
+    scans::header(emitter, "x12", "rdx", "count_dynamic_restore", None);
     emitter.instruction("add x12, x12, #16");                                   // recover the object payload pointer
     emitter.instruction("ldr x14, [x12]");                                      // read the already-validated runtime class id
     crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_class_object_dynamic_prop_flags");
@@ -533,6 +535,26 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// Object traversal restores an actual header from candidate slots before reading class data.
+    #[test]
+    fn aarch64_candidate_object_restores_resolve_vector_slots() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
+            for pic in [false, true] {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                emitter.pic_data_refs = pic;
+                emit_gc_collect_cycles(&mut emitter);
+                let output = emitter.output();
+                for phase in ["count_object_restore", "count_dynamic_restore"] {
+                    let end = output.find(&format!("__rt_gc_{phase}_header_ready:")).unwrap();
+                    let begin = output[..end].rfind("ldr x12, [sp").unwrap();
+                    assert!(output[begin..end].contains("ldr x12, [x12]"), "{name}, PIC={pic}, {phase}");
+                    assert!(output[end..].find("add x12, x12, #16").unwrap()
+                        < output[end..].find("ldr x14, [x12]").unwrap(), "{name}, {phase}");
+                }
+            }
+        }
+    }
 
     #[test]
     /// Verifies suppressed collection leaves the active flag unset on every AArch64 target.

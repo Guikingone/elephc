@@ -644,7 +644,9 @@ fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &s
         abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_php_backtrace_next_line", 0);
     }
     abi::store_at_offset(ctx.emitter, scratch, offset - 32);
-    if ctx.exception_cleanup_activation {
+    if ctx.exception_cleanup_activation
+        && (ctx.module.required_runtime_features.fiber || ctx.module.required_runtime_features.generator)
+    {
         abi::emit_symbol_address(ctx.emitter, scratch, &format!("{entry_label}__gc_frame_owners"));
     } else {
         abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
@@ -684,7 +686,9 @@ pub(super) fn emit_exception_cleanup_callback(
     if !ctx.exception_cleanup_activation {
         return;
     }
-    gc_owners::emit(ctx, entry_label);
+    if ctx.module.required_runtime_features.fiber || ctx.module.required_runtime_features.generator {
+        gc_owners::emit(ctx, entry_label);
+    }
     let callback = format!("{entry_label}__cdylib_exception_cleanup");
     ctx.emitter.blank();
     ctx.emitter.comment("exceptional PHP frame cleanup callback");
