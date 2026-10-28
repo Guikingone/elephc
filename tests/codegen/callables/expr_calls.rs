@@ -2179,3 +2179,26 @@ echo "\n";
     );
     assert_eq!(out, "x/2/3|41|x/s/z|\n");
 }
+
+/// A runtime name that resolves to nothing throws PHP's catchable `Error` naming it, instead of
+/// ending the program: an undefined function called through a string, an undefined method
+/// called by name, and `new` of an undefined class.
+#[test]
+fn test_dynamic_call_misses_throw_catchable_errors() {
+    let out = compile_and_run(
+        r#"<?php
+class P { function a() { return 1; } }
+$n = $argc > 5 ? 'strlen' : 'nope_nope';
+try { $n(1); } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+$m = $argc > 5 ? 'a' : 'zz';
+try { (new P)->$m(); } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+$k = $argc > 5 ? 'stdClass' : 'NopeClass';
+try { new $k; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+echo "after\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error: Call to undefined function nope_nope()\nError: Call to undefined method P::zz()\nError: Class \"NopeClass\" not found\nafter\n"
+    );
+}

@@ -302,6 +302,46 @@ pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) 
     Ok(())
 }
 
+/// One piece of a runtime-built exception message (`emit_error_from_parts`).
+pub(in crate::codegen) enum MessagePart<'a> {
+    /// Fixed text.
+    Text(&'a str),
+    /// A string on the temporary stack: its pointer at this byte offset, its length 8 bytes on.
+    Stacked(usize),
+}
+
+/// Throws a catchable PHP `Error` whose message is `parts` joined, for a refusal that names a
+/// value only known at run time (an undefined function or class a string names). The stacked
+/// strings stay where they are; the unwinder drops the temporary stack with the frame.
+pub(in crate::codegen) fn emit_error_from_parts(ctx: &mut FunctionContext<'_>, parts: &[MessagePart<'_>]) {
+    let (left_ptr, left_len) = abi::string_result_regs(ctx.emitter);
+    let (right_ptr, right_len) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x3", "x4"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    let load = |ctx: &mut FunctionContext<'_>, part: &MessagePart<'_>, ptr: &str, len: &str| match part {
+        MessagePart::Text(text) => {
+            let (label, length) = ctx.data.add_string(text.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, ptr, &label);
+            abi::emit_load_int_immediate(ctx.emitter, len, length as i64);
+        }
+        MessagePart::Stacked(offset) => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, ptr, *offset);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, len, *offset + 8);
+        }
+    };
+    let Some((first, rest)) = parts.split_first() else {
+        return emit_error(ctx, "");
+    };
+    load(ctx, first, left_ptr, left_len);
+    for part in rest {
+        load(ctx, part, right_ptr, right_len);
+        abi::emit_call_label(ctx.emitter, "__rt_concat");
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    emit_error_from_string_result(ctx);
+}
+
 /// Throws a catchable PHP `Error` whose message already sits in the string-result registers.
 pub(super) fn emit_error_from_string_result(ctx: &mut FunctionContext<'_>) {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
