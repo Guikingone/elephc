@@ -457,6 +457,7 @@ fn emit_x86_64(e: &mut Emitter) {
     e.instruction("add r11, 1");                                                // advance the key scan
     e.instruction("jmp __rt_json_count_key_scan_x");                            // inspect the next key byte
     e.label("__rt_json_count_key_end_x");
+    e.instruction("mov QWORD PTR [rbp - 72], r11");                             // preserve the key end across the dedupe length load
     e.instruction("mov QWORD PTR [rbp - 40], r10");                             // save the key start offset
     e.instruction("mov r9, r11");                                               // copy the key end before deriving the length
     e.instruction("sub r9, r10");                                               // key byte length
@@ -516,6 +517,7 @@ fn emit_x86_64(e: &mut Emitter) {
     e.instruction("mov QWORD PTR [r9 + 8], r10");                               // record the key length
     e.instruction("add QWORD PTR [rbp - 32], 1");                               // count the new unique key
     e.label("__rt_json_count_key_after_x");
+    e.instruction("mov r11, QWORD PTR [rbp - 72]");                             // restore the key end clobbered by the dedupe length load
     e.instruction("lea rcx, [r11 + 1]");                                        // continue after the closing key quote
     e.instruction("call __rt_json_count_skip_ws_x");                            // skip whitespace before the colon
     e.instruction("cmp rcx, rsi");                                              // did the source end before the colon?
