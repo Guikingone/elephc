@@ -24,7 +24,7 @@
 
 use crate::errors::CompileError;
 use crate::names::{Name, NameKind};
-use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, TypeExpr};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_binop, e_bool, e_call, e_cast, e_concat_all, e_index, e_new, e_not, e_null, e_static_prop,
     e_str, e_var, function, internal_declarations, s_assign, s_expr, s_foreach, s_if, s_return,
@@ -39,6 +39,10 @@ pub(crate) const EXISTS_HELPER: &str = "__elephc_class_like_exists";
 
 /// The helper `spl_autoload_call` and an autoloading `*_exists` run the loaders through.
 pub(crate) const CALL_HELPER: &str = "__elephc_spl_autoload_call";
+
+/// The helper an instantiation of a class declared nowhere throws through: it runs the loaders
+/// and returns php's "not found" message.
+pub(crate) const MISSING_HELPER: &str = "__elephc_spl_autoload_missing";
 
 /// The class-like kinds whose `*_exists` builtin autoloads.
 const KINDS: [&str; 4] = ["class", "interface", "trait", "enum"];
@@ -205,6 +209,16 @@ fn dispatcher_decl() -> Stmt {
                 op_is("register"),
                 vec![
                     s_if(
+                        e_not(e_var("throw")),
+                        vec![s_expr(e_call("trigger_error", vec![
+                            e_str("spl_autoload_register(): Argument #2 ($do_throw) has been ignored, \
+                                   spl_autoload_register() will always throw"),
+                            crate::synthetic_class::e_const("E_USER_NOTICE"),
+                        ]))],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
                         e_binop(e_var("callback"), BinOp::StrictEq, e_null()),
                         vec![s_assign("callback", e_str("spl_autoload"))],
                         vec![],
@@ -245,6 +259,33 @@ fn dispatcher_decl() -> Stmt {
         // copied, the entry removed, and the re-packed list stored back.
         .chain(normalize_entry())
         .chain([
+            // `spl_autoload_call` as the callback clears every loader, with php's deprecation.
+            s_if(
+                e_binop(
+                    e_call("is_string", vec![e_var("callback")]),
+                    BinOp::And,
+                    e_binop(
+                        e_call("strtolower", vec![e_call("ltrim", vec![
+                            e_cast(CastType::String, e_var("callback")),
+                            e_str("\\"),
+                        ])]),
+                        BinOp::StrictEq,
+                        e_str("spl_autoload_call"),
+                    ),
+                ),
+                vec![
+                    // php's engine deprecation (`E_DEPRECATED`), at the caller's line.
+                    s_expr(e_call("__elephc_deprecated", vec![
+                        e_str("spl_autoload_unregister(): Using spl_autoload_call() as a callback for \
+                               spl_autoload_unregister() is deprecated, to remove all registered autoloaders, \
+                               call spl_autoload_unregister() for all values returned from spl_autoload_functions()"),
+                    ])),
+                    s_static_prop_assign(STATE_CLASS, LOADERS, e_array(vec![])),
+                    s_return(e_bool(true)),
+                ],
+                vec![],
+                None,
+            ),
             refuse_uncallable("spl_autoload_unregister(): Argument #1 ($callback) must be a valid callback, "),
             s_foreach(
                 loaders(),
@@ -285,7 +326,21 @@ fn call_decl() -> Stmt {
                 None,
                 "loader",
                 vec![
-                    s_expr(e_call("call_user_func", vec![e_var("loader"), e_var("name")])),
+                    // The default loader is a builtin a dynamic call cannot reach.
+                    s_if(
+                        e_binop(
+                            e_call("is_string", vec![e_var("loader")]),
+                            BinOp::And,
+                            e_binop(
+                                e_call("strtolower", vec![e_cast(CastType::String, e_var("loader"))]),
+                                BinOp::StrictEq,
+                                e_str("spl_autoload"),
+                            ),
+                        ),
+                        vec![s_expr(e_call("spl_autoload", vec![e_var("name")]))],
+                        vec![],
+                        Some(vec![s_expr(e_call("call_user_func", vec![e_var("loader"), e_var("name")]))]),
+                    ),
                     s_if(
                         e_call(EXISTS_HELPER, vec![e_str("any"), e_var("name"), e_bool(false)]),
                         vec![s_return_void()],
@@ -294,6 +349,19 @@ fn call_decl() -> Stmt {
                     ),
                 ],
             ),
+        ])
+        .build()
+}
+
+/// Builds `__elephc_spl_autoload_missing($name)`: runs the loaders for a class no declaration
+/// names, then returns the message of php's `Error`.
+fn missing_decl() -> Stmt {
+    function(MISSING_HELPER)
+        .param("name", TypeExpr::Str)
+        .returns(TypeExpr::Str)
+        .body(vec![
+            s_expr(e_call(CALL_HELPER, vec![e_var("name")])),
+            s_return(e_concat_all(vec![e_str("Class \""), e_var("name"), e_str("\" not found")])),
         ])
         .build()
 }
@@ -339,7 +407,7 @@ fn exists_decl() -> Stmt {
 
 /// Builds the prelude declarations.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| vec![state_decl(), same_decl(), dispatcher_decl(), call_decl(), exists_decl()])
+    internal_declarations(|| vec![state_decl(), same_decl(), dispatcher_decl(), call_decl(), exists_decl(), missing_decl()])
 }
 
 /// Returns the bare lowercase name of a call to a global function, if it is one.
@@ -395,6 +463,53 @@ fn rewrite_calls(program: &mut Program) {
     });
 }
 
+/// Collects the lowercase bare names of every class-like the program declares, at any depth.
+fn declared_class_likes(stmts: &mut Vec<Stmt>, names: &mut std::collections::HashSet<String>) {
+    for stmt in stmts.iter_mut() {
+        match &stmt.kind {
+            StmtKind::ClassDecl { name, .. }
+            | StmtKind::EnumDecl { name, .. }
+            | StmtKind::InterfaceDecl { name, .. }
+            | StmtKind::TraitDecl { name, .. } => {
+                let bare = name.rsplit('\\').next().unwrap_or(name);
+                names.insert(bare.to_ascii_lowercase());
+            }
+            _ => {}
+        }
+        crate::undefined_reads::for_each_child_body_mut_pub(stmt, &mut |body| {
+            declared_class_likes(body, names)
+        });
+    }
+}
+
+/// Rewrites `new X(...)` of a class no declaration and no builtin names into php's behaviour:
+/// the loaders run, then an `Error` is thrown. php looks the class up before it evaluates the
+/// constructor arguments, so they are dropped.
+fn rewrite_missing_instantiations(program: &mut Program) {
+    let mut declared = std::collections::HashSet::new();
+    declared_class_likes(program, &mut declared);
+    crate::undefined_constants::walk_program_exprs_mut(program, &mut |expr| {
+        let ExprKind::NewObject { class_name, .. } = &expr.kind else { return; };
+        let name = class_name.as_str().trim_start_matches('\\').to_string();
+        let bare = name.rsplit('\\').next().unwrap_or(&name).to_ascii_lowercase();
+        if matches!(bare.as_str(), "self" | "static" | "parent")
+            || declared.contains(&bare)
+            || elephc_builtin_contract::lookup_class(&name).is_some()
+        {
+            return;
+        }
+        // The program is already name-resolved: both names must be fully qualified.
+        let mut message = e_call(MISSING_HELPER, vec![e_str(&name)]);
+        if let ExprKind::FunctionCall { name: callee, .. } = &mut message.kind {
+            *callee = crate::synthetic_class::fq_name(MISSING_HELPER);
+        }
+        let mut error = crate::synthetic_class::e_new_fq("Error", vec![message]);
+        // The `Error` reports the line of the `new` it replaces.
+        error.span = expr.span;
+        *expr = Expr::new(ExprKind::Throw(Box::new(error)), expr.span);
+    });
+}
+
 /// Prepends the autoload stack and routes the program's calls to it when the program uses the
 /// stack and resolves nothing at compile time (no PSR-4 index, no consumed closure rule);
 /// otherwise returns the program unchanged.
@@ -407,6 +522,7 @@ pub fn inject_if_used(
         return Ok(program);
     }
     rewrite_calls(&mut program);
+    rewrite_missing_instantiations(&mut program);
     let mut combined = crate::name_resolver::resolve(declarations())?;
     inventory.record_program("spl_autoload", &combined);
     combined.extend(program);

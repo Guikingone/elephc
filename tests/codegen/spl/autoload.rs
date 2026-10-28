@@ -1768,3 +1768,57 @@ fn test_spl_autoload_call_with_literal_loads_class() {
     );
     assert_eq!(out, "forced");
 }
+
+/// `new` of a class no declaration names runs the run-time loaders, then throws php's
+/// `Error` without evaluating the constructor arguments; the default `spl_autoload` loader
+/// registered by a bare `spl_autoload_register()` is callable (output measured with php 8.5).
+#[test]
+fn test_spl_autoload_stack_runs_for_new_of_an_undeclared_class() {
+    let run = compile_and_run_capture(r#"<?php
+namespace App;
+spl_autoload_register(function ($name) { echo "load($name)\n"; });
+try {
+    $x = new Missing(print("arg\n"));
+} catch (\Error $e) {
+    echo get_class($e), ": ", $e->getMessage(), " @", $e->getLine(), "\n";
+}
+echo count(new \ArrayObject([1])), "\n";
+spl_autoload_register();
+var_dump(class_exists('Nope'), count(spl_autoload_functions()));
+"#);
+    assert!(run.success, "stdout: {}\nstderr: {}", run.stdout, run.stderr);
+    assert_eq!(
+        run.stdout,
+        "load(App\\Missing)\nError: Class \"App\\Missing\" not found @5\n1\nload(Nope)\nbool(false)\nint(2)\n"
+    );
+}
+
+/// The run-time stack reports php's diagnostics at the CALLER's line: the ignored `$do_throw`
+/// notice, and the deprecated `spl_autoload_unregister('spl_autoload_call')`, which clears
+/// every loader and answers true (output measured with php 8.5).
+#[test]
+fn test_spl_autoload_stack_diagnostics_name_the_caller_line() {
+    let run = compile_and_run_capture(r#"<?php
+function a($c) { echo "a($c)\n"; }
+spl_autoload_register('a', false);
+var_dump(spl_autoload_unregister("spl_autoload_call"));
+var_dump(count(spl_autoload_functions()));
+"#);
+    assert!(run.success, "stdout: {}\nstderr: {}", run.stdout, run.stderr);
+    assert!(
+        run.stdout_raw.contains(
+            "Notice: spl_autoload_register(): Argument #2 ($do_throw) has been ignored, \
+             spl_autoload_register() will always throw in "
+        ) && run.stdout_raw.contains("will always throw in ") && run.stdout_raw.contains(" on line 3\n"),
+        "{}",
+        run.stdout_raw
+    );
+    assert!(
+        run.stdout_raw.contains("Deprecated: spl_autoload_unregister(): Using spl_autoload_call() as a callback")
+            && run.stdout_raw.contains("spl_autoload_functions() in ")
+            && run.stdout_raw.contains(" on line 4\n"),
+        "{}",
+        run.stdout_raw
+    );
+    assert_eq!(run.stdout, "bool(true)\nint(0)\n");
+}
