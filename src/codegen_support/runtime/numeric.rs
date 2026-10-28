@@ -302,9 +302,11 @@ pub fn emit_sqrt_add_int(emitter: &mut Emitter) {
         emitter.instruction("cvttsd2si rax, xmm0");                             // truncate toward zero like PHP's cast
         emitter.instruction("ret");                                             // return the integer square root
         emitter.label("__rt_sqrt_add_int_nan_x86");
+        emitter.instruction("sub rsp, 8");                                      // align the stack for the System V diagnostic call
         crate::codegen_support::abi::emit_symbol_address(emitter, "rdi", "_diag_sqrt_nan_warning");
         crate::codegen_support::abi::emit_load_int_immediate(emitter, "rsi", SQRT_NAN_WARNING.len() as i64);
         crate::codegen_support::abi::emit_call_label(emitter, "__rt_diag_warning");
+        emitter.instruction("add rsp, 8");                                      // release the diagnostic alignment slot
         emitter.instruction("xor eax, eax");                                    // PHP casts NAN to zero after the warning
         emitter.instruction("ret");                                             // return the warned zero result
         return;
