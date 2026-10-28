@@ -38,6 +38,7 @@ mod counter_fast_paths;
 mod callable_property_owners;
 mod class_introspection_owners;
 mod closure_bind_owners;
+mod closure_scope_variants;
 mod corpus;
 mod debug_info;
 mod descriptor_ownership;

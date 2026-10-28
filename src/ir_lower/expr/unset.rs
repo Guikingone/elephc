@@ -243,6 +243,7 @@ pub(super) fn lower_unset_hash_element(
 ) {
     let array_value = ctx.load_local(name, Some(array_span));
     let index_value = lower_expr(ctx, index);
+    let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
     ctx.emit_void(
         Op::HashUnset,
         vec![array_value.value, index_value.value],
@@ -250,6 +251,9 @@ pub(super) fn lower_unset_hash_element(
         Op::HashUnset.default_effects(),
         Some(expr.span),
     );
+    if let Some(slot) = key_owner {
+        retire_owned_call_operand(ctx, slot, index.span);
+    }
 }
 
 /// Lowers `unset($arr[$key])` for a packed indexed-array local.

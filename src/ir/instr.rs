@@ -228,6 +228,10 @@ pub enum Immediate {
     RuntimeCall(RuntimeCallTarget),
     ExternRef(u32),
     ClassRef(u32),
+    /// Explicit visibility scope for closure binding; `None` removes class scope.
+    ClosureBindScope(Option<u32>),
+    /// The third operand supplies an object scope, with an optional declared base class.
+    ClosureBindObjectScope(Option<u32>),
     EnumCaseRef {
         enum_id: u32,
         case_id: u32,
