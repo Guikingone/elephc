@@ -516,3 +516,16 @@ deliberately requires those changes before claiming ZTS support.
 - [PHP extension skeleton](https://github.com/php/php-src/blob/PHP-8.5/ext/skeleton/skeleton.c)
   and [php-config implementation](https://github.com/php/php-src/blob/PHP-8.5/scripts/php-config.in):
   lifecycle, TSRM cache handling, and available SDK discovery options.
+
+
+## Main integration checkpoint, 2026-10-28
+
+Parent PR #1743 merged as `dbef26b9f8c49b3f8244d3c3980d1a7d646b9960`.
+The producer commits have been rebased from the old owned mirror onto
+`main` at `4249f8d7a5405ef5c7fa235fa570660be6789e1b`.
+The shared Zend value facts remain reused without linking the replacement engine.
+Conflicts preserved current-main zval pointer normalization, the heap-sized
+concatenation arena and strict-types regressions alongside producer guards.
+Acceptance of this integration requires fresh full repository CI, the six SDK
+configurations and renewed Grok and Greptile review on the final head.
+Historical review and CI evidence above applies only to the old stacked head.

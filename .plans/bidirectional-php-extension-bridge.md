@@ -11,9 +11,9 @@
 
 As checked on 2026-10-28,
 [PR #1743](https://github.com/illegalstudio/elephc/pull/1743) has merged.
-[PR #1862](https://github.com/illegalstudio/elephc/pull/1862) is being rebased
-onto `main` and validated under the [producer plan](emit-phpext.md).
-The producer is in draft during integration and fresh review.
+[PR #1862](https://github.com/illegalstudio/elephc/pull/1862) has been rebased
+onto `main`. Integration validation and fresh review are tracked under the
+[producer plan](emit-phpext.md).
 
 The active producer design and review record are Code Journal plan `3c86308a`
 ("Emit PHP extensions through a host-owned Zend adapter") and doc `38078d2a`.

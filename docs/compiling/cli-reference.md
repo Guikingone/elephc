@@ -1027,6 +1027,7 @@ The variables in this table are read by the **compiler**. A separate family,
 functions and `finfo` class for dynamic eval. Declare the managed `libmagic`
 package first with `elephc native add libmagic`. Its compiled database is embedded
 in the resulting program.
+
 ## PHP extension SDK selection
 
 `--emit phpext` requires a native PHP 8.5 development SDK on Linux x86_64,
