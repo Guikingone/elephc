@@ -766,6 +766,11 @@ Property element removal fetches separated storage with `PropGetForWrite` and
 removes the key in place. It never stores a container back after releasing the
 removed value, because that value's destructor may replace the property or throw.
 Owned receiver expressions and keys stay in unwind-visible EIR operand slots.
+If key conversion can invoke a warning handler, native lowering retains a snapshot
+owner of the selected hash in a temporary cleanup scope. After conversion, another
+live owner allows this snapshot to be retired before deletion, preserving ordinary
+destructor interleaving. A detached hash keeps its snapshot through deletion or
+exception unwinding. The old property value is never stored back.
 
 When a boxed property holds an `ArrayAccess` object, the native
 `__rt_mixed_object_offset_unset` helper retains the selected object across dispatch.

@@ -49,6 +49,7 @@ $holder = new RuntimeOffsetHolder();
 $holder->value = new RuntimeOffsetBag();
 unset($holder->value[[1]], $holder->value[new stdClass()], $holder->fixed["key"]);
 $holder->value = ["keep" => 1];
+unset($holder->value[1.5]);
 try { unset($holder->value[runtime_offset_key($argc)]); } catch (TypeError $error) {}
 "#;
     for name in TARGETS {
@@ -89,10 +90,12 @@ class Store {
     public array $typed = ["p" => 1, "q" => 2];
     public function dropItem(string $k): void { unset($this->items[$k]); }
     public function dropTyped(string $k): void { unset($this->typed[$k]); }
+    public function dropFloat(): void { unset($this->items[1.5]); }
 }
 $s = new Store();
 $s->dropItem("x");
 $s->dropTyped("p");
+$s->dropFloat();
 echo count($s->items), count($s->typed);
 "#;
     for name in TARGETS {

@@ -10,6 +10,129 @@
 
 use super::*;
 
+/// Raw associative property storage uses the same key-diagnostic snapshot as boxed PHP arrays.
+#[test]
+fn test_unset_associative_property_key_diagnostic_preserves_replacement() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class AssociativeDiagnosticHolder { public $items = ["x" => "old", "y" => "kept"]; }
+function associative_diagnostic_key(): mixed { return 1.5; }
+function associative_diagnostic_unset(int $mode): void {
+    $holder = new AssociativeDiagnosticHolder();
+    set_error_handler(function () use ($holder): bool {
+        echo "warning|";
+        $holder->items = ["x" => "new", "z" => "fresh"];
+        return true;
+    });
+    if ($mode === 0) { unset($holder->items[1.5]); }
+    else { unset($holder->items[associative_diagnostic_key()]); }
+    restore_error_handler();
+    echo json_encode($holder->items), "\n";
+}
+associative_diagnostic_unset(0);
+associative_diagnostic_unset(1);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "warning|{\"x\":\"new\",\"z\":\"fresh\"}\n".repeat(2));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Float-key diagnostics keep the old selected array alive without overwriting a replacement.
+#[test]
+fn test_unset_array_property_key_diagnostic_preserves_replacement() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class DiagnosticArrayValue {
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "drop:", $this->name, "|"; }
+}
+class DiagnosticArrayHolder { public array $items = []; }
+function diagnostic_array_key(): mixed { return 1.5; }
+function replace_during_unset_key(int $mode): void {
+    $holder = new DiagnosticArrayHolder();
+    $holder->items = [1 => new DiagnosticArrayValue("one"), 2 => new DiagnosticArrayValue("two")];
+    set_error_handler(function () use ($holder): bool {
+        echo "before|";
+        $holder->items = [1 => "new", 3 => "fresh"];
+        echo "after|";
+        return true;
+    });
+    if ($mode === 0) { unset($holder->items[1.5]); }
+    else { unset($holder->items[diagnostic_array_key()]); }
+    restore_error_handler();
+    echo "done|", json_encode($holder->items), "\n";
+}
+replace_during_unset_key(0);
+replace_during_unset_key(1);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "before|after|drop:one|drop:two|done|{\"1\":\"new\",\"3\":\"fresh\"}\n".repeat(2));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A throwing key handler releases the retained old hash before the catch resumes.
+#[test]
+fn test_unset_array_property_throwing_key_diagnostic_releases_selected_cell() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ThrowingDiagnosticArrayValue {
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "drop:", $this->name, "|"; }
+}
+class ThrowingDiagnosticArrayHolder { public array $items = []; }
+function throwing_diagnostic_array_key(): mixed { return 1.5; }
+function throw_during_unset_key(int $mode): void {
+    $holder = new ThrowingDiagnosticArrayHolder();
+    $holder->items = [1 => new ThrowingDiagnosticArrayValue("one"), 2 => new ThrowingDiagnosticArrayValue("two")];
+    set_error_handler(function () use ($holder): bool {
+        $holder->items = [1 => "new"];
+        throw new RuntimeException("key");
+    });
+    try {
+        if ($mode === 0) { unset($holder->items[1.5]); }
+        else { unset($holder->items[throwing_diagnostic_array_key()]); }
+    } catch (RuntimeException $error) { echo "caught:", $error->getMessage(), "|"; }
+    restore_error_handler();
+    echo json_encode($holder->items), "\n";
+}
+throw_during_unset_key(0);
+throw_during_unset_key(1);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "drop:one|drop:two|caught:key|{\"1\":\"new\"}\n".repeat(2));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A still-attached array releases its snapshot before the removed value reenters destruction.
+#[test]
+fn test_unset_array_property_float_key_preserves_destructor_interleaving() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class OrderedUnsetHolder { public array $items = []; }
+class OrderedUnsetValue {
+    public function __construct(public string $name, public OrderedUnsetHolder $holder) {}
+    public function __destruct() {
+        echo "enter:", $this->name, "|";
+        if ($this->name === "one") { $this->holder->items = []; echo "cleared|"; }
+        echo "exit:", $this->name, "|";
+    }
+}
+function ordered_unset_key(): mixed { return 1; }
+function ordered_unset(int $mode): void {
+    $holder = new OrderedUnsetHolder();
+    $holder->items = [1 => new OrderedUnsetValue("one", $holder), 2 => new OrderedUnsetValue("two", $holder)];
+    set_error_handler(function (): bool { return true; });
+    if ($mode === 0) { unset($holder->items[1.0]); }
+    elseif ($mode === 1) { unset($holder->items[1.5]); }
+    else { unset($holder->items[ordered_unset_key()]); }
+    restore_error_handler();
+    echo "done\n";
+}
+ordered_unset(0);
+ordered_unset(1);
+ordered_unset(2);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "enter:one|enter:two|exit:two|cleared|exit:one|done\n".repeat(3));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// An uninitialized static array skips removal after evaluating and retiring its computed key.
 #[test]
 fn test_unset_uninitialized_static_array_property_is_quiet() {

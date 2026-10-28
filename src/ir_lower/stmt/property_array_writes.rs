@@ -526,7 +526,9 @@ fn lower_property_array_assign_value(
 ///   declared-array cell; the backend leaves a null cell alone and refuses a scalar with PHP's
 ///   `Error`. A removed untyped slot is recreated as null by the fetch, as PHP does.
 ///
-/// Nothing owned is in flight across the removal. That matters because `__rt_hash_unset`
+/// No independent PHP array copy is in flight across removal. The backend can retain the same
+/// hash in an unwind-visible scope when key conversion can invoke a warning handler.
+/// That matters because `__rt_hash_unset`
 /// releases the removed value last, and that release can run a destructor which throws or
 /// writes the property again. An acquired copy of the property value, as the element WRITE
 /// path uses, would leak on the throw (the unwinder cannot see it) and, stored back with

@@ -1489,12 +1489,12 @@ impl Op {
             }
             // Replacing a pending return can retire a payload with an arbitrary destructor.
             AcquireRefCell => E::all(),
-            // Boxed removal can invoke arbitrary PHP methods or warning handlers.
-            OffsetUnset => E::all(),
+            // Offset removal can invoke arbitrary PHP methods, destructors or warning handlers.
+            HashUnset | OffsetUnset => E::all(),
             // `DynamicPropUnset` carries exactly `PropUnset`'s contract: the same storage is
             // removed, the same destructors can run, the same access `Error` can be raised, and
             // the hash removal can reallocate the table.
-            HashUnset | PropUnset | DynamicPropUnset => E::READS_HEAP
+            PropUnset | DynamicPropUnset => E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
             ArraySet | HashSet | DescriptorArgSet | ArrayPush | HashAppend
             | BufferFree | PackedFieldSet | PtrWrite
