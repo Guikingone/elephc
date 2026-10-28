@@ -258,7 +258,7 @@ fn emit_implode_int_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_implode_int_copy");
     emitter.instruction("test r9, r9");                                         // check whether every converted decimal byte has already been copied into the concat buffer
-    emitter.instruction("jz __rt_implode_int_next");                            // advance to the next indexed-array integer once the current decimal string is fully copied
+    emitter.instruction("jz __rt_implode_int_slow_done");                       // save the advanced cursor once the converted decimal bytes are copied
     emitter.instruction("mov r11b, BYTE PTR [r8]");                             // load one byte from the converted decimal string before advancing the source pointer
     emitter.instruction("mov BYTE PTR [r10], r11b");                            // store one byte from the converted decimal string into the concat buffer
     emitter.instruction("add r8, 1");                                           // advance the converted decimal string source pointer after copying one byte
@@ -266,8 +266,9 @@ fn emit_implode_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r9, 1");                                           // decrement the remaining converted decimal byte count after copying one byte
     emitter.instruction("jmp __rt_implode_int_copy");                           // continue copying bytes from the converted decimal string until it is exhausted
 
+    emitter.label("__rt_implode_int_slow_done");
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the advanced destination cursor after the slow decimal copy
     emitter.label("__rt_implode_int_next");
-    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the concat-buffer destination cursor after copying the current converted decimal string
     emitter.instruction("add QWORD PTR [rbp - 56], 1");                         // advance the indexed-array loop cursor to the next integer element
     emitter.instruction("jmp __rt_implode_int_loop");                           // continue joining converted integer elements into the concat buffer
 
