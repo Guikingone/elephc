@@ -11,6 +11,32 @@
 
 use super::*;
 
+/// Native coroutine stacks, foreign globals and suppression cannot escape hosted state checks.
+#[test]
+fn phpext_validation_rejects_unhosted_runtime_state() {
+    let project = Project::new();
+    let source = project.0.join("unhosted.php");
+    for (program, expected) in [
+        ("function php_items(array $value) { foreach ($value as $item) { echo $item; yield $item; } } #[Export] function php_unhosted(array $value): array { $result = []; foreach (php_items($value) as $item) { $result[] = $item; } return $result; }", "native generators"),
+        ("extern global int $optind; #[Export] function php_unhosted(): int { global $optind; return $optind; }", "extern globals"),
+        ("extern global int $optind; #[Export] function php_unhosted(): int { global $optind; $optind = 5; return 1; }", "extern globals"),
+        ("#[Export] function php_unhosted(array $value): mixed { return @$value['missing']; }", "error suppression"),
+    ] {
+        fs::write(&source, format!("<?php {program}")).unwrap();
+        for mode in [Some("--check"), Some("--emit-ir"), None] {
+            let mut command = Command::new(compiler_binary());
+            command.args(["--emit", "phpext"]);
+            if let Some(mode) = mode { command.arg(mode); }
+            let output = command.arg(&source)
+                .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk")).output().unwrap();
+            let diagnostic = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{expected}, {mode:?} bypassed hosted state validation");
+            assert!(diagnostic.contains(expected), "{expected}, {mode:?}: {diagnostic}");
+            assert!(!diagnostic.contains("query php-config"), "{expected}, {mode:?}: {diagnostic}");
+        }
+    }
+}
+
 /// Handler registration and direct diagnostic emitters cannot bypass hosted capability checks.
 #[test]
 fn phpext_validation_rejects_unaudited_core_builtins() {

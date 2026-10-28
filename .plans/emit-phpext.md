@@ -305,6 +305,9 @@ contained native unwind; a bailout is re-raised only after all native frames
 have returned. On resumption the adapter restores the outer thread or Fiber
 stack floor. Core-only capability checks reject bridges and process-monitoring
 state until they have an explicit hosted lifecycle policy.
+The same capability gate rejects reachable native generators, their coroutine
+instructions and extern C global reads/writes. Native `@` scopes are rejected
+until host reporting-mask and last-error semantics have an audited boundary.
 
 Each request tracks the active native activation and its host Fiber context.
 Synchronous nested entry on that context is supported. Entry from another Fiber

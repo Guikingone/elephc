@@ -1,9 +1,9 @@
 //! Purpose:
-//! Validates control-flow restrictions that make every cdylib export recoverable
-//! at the native host boundary.
+//! Validates control-flow and capability restrictions for recoverable library exports
+//! at native C and PHP host boundaries.
 //!
 //! Called from:
-//! - `crate::pipeline::compile()` after AST-to-EIR lowering for cdylib output.
+//! - `crate::pipeline::compile()` after AST-to-EIR lowering for library output.
 //!
 //! Key details:
 //! - Statically reachable functions, methods, constructors, implicit object hooks,
@@ -99,10 +99,28 @@ fn validate_call_graph(
             let Some(function) = functions.get(&function_key) else {
                 continue;
             };
+            // Generator constructors allocate coroutine stacks before entering their EIR bodies.
+            if phpext && function.flags.is_generator {
+                return Err(CompileError::new(export.span,
+                    &format!("PHP export '{}' reaches native generators through {}; native generators have no hosted stack or lifecycle policy", export.name, path.join(" -> "))));
+            }
             reject_fatal_terminators(module, function, export, &path)?;
             let callable_reachability = CallableReachabilityAnalysis::new(module, function);
             for instruction in &function.instructions {
                 if phpext {
+                    let unsupported = match instruction.op {
+                        Op::GeneratorNew | Op::GeneratorYield | Op::GeneratorYieldFrom | Op::GeneratorReturn =>
+                            Some("native generators have no hosted stack or lifecycle policy"),
+                        Op::ExternGlobalLoad | Op::ExternGlobalStore =>
+                            Some("extern globals have no audited request-local PHP extension lifecycle"),
+                        Op::ErrorSuppressBegin | Op::ErrorSuppressEnd =>
+                            Some("native error suppression has no audited PHP host reporting policy"),
+                        _ => None,
+                    };
+                    if let Some(reason) = unsupported {
+                        return Err(CompileError::new(instruction.span.unwrap_or(export.span),
+                            &format!("PHP export '{}' reaches {} through {}; {reason}", export.name, instruction.op.name(), path.join(" -> "))));
+                    }
                     // Handler registration and fragment-based diagnostics cannot bypass the host policy.
                     if instruction.op == Op::CoreBuiltin && !matches!(instruction.immediate.as_ref(),
                         Some(Immediate::I64(selector)) if *selector == CoreBuiltinOp::DiagnosticCallerLine.as_i64()) {

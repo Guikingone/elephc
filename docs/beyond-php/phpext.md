@@ -96,6 +96,10 @@ snapshot and native calls exchange the complete configured image.
 Compiled `trigger_error`, error-handler registration, `error_reporting` and
 request introspection helpers currently lack a hosted capability policy and
 are rejected. Configure error reporting and handlers in the host PHP program.
+Native generators and extern C globals are also rejected: their coroutine stacks
+and process state are outside request snapshots. Error suppression with `@`
+inside a compiled export is unsupported; it would bypass host error handlers and
+last-error tracking. A host PHP caller can apply `@` to the exported call instead.
 Native warnings, notices and deprecations retain their PHP severity and use
 the host's reporting mask. Host termination prevents further output callbacks.
 
