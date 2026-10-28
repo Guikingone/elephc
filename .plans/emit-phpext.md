@@ -25,6 +25,10 @@ or arginfo. Parameter names are escaped C strings, independent of C identifier
 rules. Runtime result packing rejects callable and raw pointer tags before
 normalization. EIR validation rejects conversions and PHP container stores that
 erase native handle identity.
+Result depth counts only arrays, allowing exactly 64 logical levels through
+Mixed wrappers. Unsupported result tags use a distinct error path. Fatal
+request shutdown retires a parent-linked chain of abandoned native activations
+without touching Zend values whose request lifetime is ending.
 
 The first delivery covers by-value `int`, `float`, `bool`, binary `string`,
 `array`, `null`, supported nullable forms, and `void` returns. Arrays include

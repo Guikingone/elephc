@@ -57,6 +57,7 @@ def main():
     parser.add_argument("--compiler", default="target/debug/elephc")
     parser.add_argument("--valgrind", action="store_true")
     parser.add_argument("--leaks", action="store_true")
+    parser.add_argument("--asan", action="store_true", help="use PHP's ASan minimum reserved stack")
     args = parser.parse_args()
     config = Path(args.php_config).resolve()
     compiler = Path(args.compiler).resolve()
@@ -77,8 +78,11 @@ def main():
         checked([compiler, "--emit", "phpext", "--heap-size=524288", source], env=env)
         ini = work / "php.ini"
         # Keep stack exhaustion ahead of the intentionally small native heap on NTS main threads too.
+        reserved = 327680 if args.asan else 65536
+        # ASan requires 320 KiB for PHP's error paths; retain the ordinary 192 KiB native budget.
         ini.write_text(f'extension="{source.with_suffix(".so")}"\n'
-                       'zend.max_allowed_stack_size=262144\nzend.reserved_stack_size=65536\n')
+                       f'zend.max_allowed_stack_size={reserved + 196608}\n'
+                       f'zend.reserved_stack_size={reserved}\n')
         executable = work / "embed-test"
         cc = shlex.split(os.environ.get("CC", "cc"))
         checked(cc + includes + ["-std=c11", "-O1", "-g", "-pthread", str(root / "tests/phpext/embed.c"),

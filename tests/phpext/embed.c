@@ -5,6 +5,24 @@
 #include <stdatomic.h>
 #include <stdio.h>
 
+#if defined(__SANITIZE_ADDRESS__)
+#define EP_SANITIZED_ALLOCATOR 1
+#elif defined(__clang__)
+#if __has_feature(address_sanitizer)
+#define EP_SANITIZED_ALLOCATOR 1
+#endif
+#endif
+
+#if defined(EP_SANITIZED_ALLOCATOR)
+#include <sanitizer/allocator_interface.h>
+#elif defined(__GLIBC__)
+#include <malloc.h>
+#elif defined(__APPLE__)
+#include <malloc/malloc.h>
+#else
+#error "The PHP lifecycle test requires live malloc statistics on this platform"
+#endif
+
 #if defined(__x86_64__) && defined(__linux__)
 /* PHP's supplied Valgrind replacement targets the CLI's NONE soname. Embed
  * libphp.so needs the same bounded comparison registered for its own soname.
@@ -18,6 +36,64 @@ bool ZEND_FASTCALL _vgr00000ZU_libphpZdso_zend_string_equal_val(const zend_strin
 
 static atomic_int failures;
 static atomic_uint request_ids;
+
+/* Reachable allocations also count: PHP can retain a fatal Fiber's stack mapping. */
+static size_t live_malloc_bytes(void)
+{
+#if defined(EP_SANITIZED_ALLOCATOR)
+    return __sanitizer_get_current_allocated_bytes();
+#elif defined(__GLIBC__)
+    struct mallinfo2 stats = mallinfo2();
+    return stats.uordblks + stats.hblkhd;
+#else
+    malloc_statistics_t stats;
+    malloc_zone_statistics(NULL, &stats);
+    return stats.size_in_use;
+#endif
+}
+
+/* A fatal on the main context abandons one or two parked native activations. */
+static void run_abandoned_requests(void)
+{
+    static const char code[] =
+        "error_reporting(0); ini_set('display_errors', '0'); ini_set('log_errors', '0');"
+        "$GLOBALS['fatal_fiber'] = new Fiber(function () use ($nested) {"
+        "  set_error_handler(function () use ($nested) {"
+        "    if ($nested) {"
+        "      set_error_handler(function () { Fiber::suspend('parked'); return true; });"
+        "      phpext_pause('nested abandoned');"
+        "    } else { Fiber::suspend('parked'); } return true;"
+        "  });"
+        "  phpext_pause('abandoned');"
+        "});"
+        "if ($GLOBALS['fatal_fiber']->start() !== 'parked') { throw new Exception('Fiber did not park'); }"
+        "set_error_handler(static function () { return false; });"
+        "trigger_error('intentional fatal request', E_USER_ERROR);";
+    php_request_shutdown(NULL);
+    size_t baseline = live_malloc_bytes();
+    for (unsigned request = 0; request < 8; request++) {
+        if (php_request_startup() == FAILURE) { atomic_fetch_add(&failures, 1); break; }
+        char script[sizeof(code) + 40];
+        snprintf(script, sizeof(script), "$nested = %s; %s", request % 2 ? "true" : "false", code);
+        volatile bool bailed = false;
+        zend_first_try {
+            (void)zend_eval_string(script, NULL, "phpext abandoned request");
+        } zend_catch {
+            bailed = true;
+        } zend_end_try();
+        if (!bailed) { atomic_fetch_add(&failures, 1); }
+        php_request_shutdown(NULL);
+        size_t current = live_malloc_bytes();
+        /* The fixture uses a 512 KiB native heap; abandoned images grow well past 4 MiB. */
+        if (current > baseline && current - baseline > 4 * 1024 * 1024) {
+            fprintf(stderr, "abandoned native calls retained %zu malloc bytes after %u requests\n",
+                current - baseline, request + 1);
+            atomic_fetch_add(&failures, 1);
+            break;
+        }
+    }
+    if (php_request_startup() == FAILURE) { atomic_fetch_add(&failures, 1); }
+}
 
 static const char request_code[] =
     "ob_start(function ($bytes) use ($token) {"
@@ -96,6 +172,7 @@ int main(int argc, char **argv)
     run_requests(NULL);
     if (php_request_startup() == FAILURE) { return 4; }
 #endif
+    run_abandoned_requests();
     php_embed_shutdown();
     if (atomic_load(&failures)) {
         fprintf(stderr, "PHP extension request failures: %d\n", atomic_load(&failures));

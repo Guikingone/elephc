@@ -15,28 +15,39 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 pub(super) fn emit_guard(emitter: &mut Emitter) {
     const DEPTH: &str = "_elephc_phpext_pack_depth";
     if !emitter.phpext_output { return; }
-    let full = "L_phpext_pack_invalid_result";
+    let invalid = "L_phpext_pack_invalid_result";
+    let full = "L_phpext_pack_depth_exceeded";
+    let counted = "L_phpext_pack_array_depth";
     let scratch = abi::secondary_scratch_reg(emitter);
-    abi::emit_frame_prologue(emitter, 16);
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("cmp x0, #8");                                  // admit known PHP value tags through null before pointer normalization
-            emitter.instruction(&format!("b.hi {full}"));                       // reject callables, resources and raw pointer tags at the host boundary
+            emitter.instruction(&format!("b.hi {invalid}"));                    // reject callables, resources and raw pointer tags at the host boundary
+            emitter.instruction("cmp x0, #4");                                  // indexed arrays consume one logical nesting level
+            emitter.instruction(&format!("b.eq {counted}"));                    // count the indexed container before descending into its elements
+            emitter.instruction("cmp x0, #5");                                  // hashes consume the same single logical nesting level
+            emitter.instruction("b.ne __rt_zval_pack_element_impl");            // scalars and nested Mixed wrappers do not increase array depth
         }
         Arch::X86_64 => {
             emitter.instruction("cmp rax, 8");                                  // admit known PHP value tags through null before pointer normalization
-            emitter.instruction(&format!("ja {full}"));                         // reject callables, resources and raw pointer tags at the host boundary
+            emitter.instruction(&format!("ja {invalid}"));                      // reject callables, resources and raw pointer tags at the host boundary
+            emitter.instruction("cmp rax, 4");                                  // indexed arrays consume one logical nesting level
+            emitter.instruction(&format!("je {counted}"));                      // count the indexed container before descending into its elements
+            emitter.instruction("cmp rax, 5");                                  // hashes consume the same single logical nesting level
+            emitter.instruction("jne __rt_zval_pack_element_impl");             // scalars and nested Mixed wrappers do not increase array depth
         }
     }
+    emitter.label(counted);
+    abi::emit_frame_prologue(emitter, 16);
     abi::emit_load_symbol_to_reg(emitter, scratch, DEPTH, 0);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {scratch}, #65"));                // allow 64 nested arrays and their terminal scalar value
+            emitter.instruction(&format!("cmp {scratch}, #64"));                // allow exactly 64 arrays along this conversion path
             emitter.instruction(&format!("b.hs {full}"));                       // reject excessive recursion before packing another child
             emitter.instruction(&format!("add {scratch}, {scratch}, #1"));      // reserve one conversion level for this value
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {scratch}, 65"));                 // allow 64 nested arrays and their terminal scalar value
+            emitter.instruction(&format!("cmp {scratch}, 64"));                 // allow exactly 64 arrays along this conversion path
             emitter.instruction(&format!("jae {full}"));                        // reject excessive recursion before packing another child
             emitter.instruction(&format!("add {scratch}, 1"));                  // reserve one conversion level for this value
         }
@@ -54,6 +65,13 @@ pub(super) fn emit_guard(emitter: &mut Emitter) {
     emitter.label(full);
     abi::emit_store_imm_to_symbol(emitter, crate::codegen_support::cdylib::BOUNDARY_STATUS, 0,
         crate::codegen_support::cdylib::STATUS_INVALID_ARGUMENT as i64);
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    abi::emit_jump(emitter, "__rt_throw_current");
+    emitter.label(invalid);
+    abi::emit_frame_prologue(emitter, 16);
+    emitter.bl_c("elephc_php_unsupported_result");
+    abi::emit_store_imm_to_symbol(emitter, crate::codegen_support::cdylib::BOUNDARY_STATUS, 0,
+        crate::codegen_support::cdylib::STATUS_RUNTIME_FAILURE as i64);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_jump(emitter, "__rt_throw_current");
     emitter.label_global("__rt_zval_pack_element_impl");
@@ -89,6 +107,10 @@ mod tests {
                 assert!(asm.find(branch).unwrap() < implementation, "{target:?}");
                 assert!(implementation < asm.find(normalized).unwrap(), "{target:?}");
                 assert!(asm[..implementation].contains("__rt_throw_current"), "{target:?}");
+                let skip = if target.arch == Arch::X86_64 { "jne __rt_zval_pack_element_impl" }
+                    else { "b.ne __rt_zval_pack_element_impl" };
+                assert!(asm.find(skip).unwrap() < implementation, "{target:?}");
+                assert!(asm[..implementation].contains("elephc_php_unsupported_result"), "{target:?}");
             }
         }
     }

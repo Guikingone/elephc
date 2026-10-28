@@ -10,6 +10,51 @@
 
 use super::*;
 
+/// Input and output accept exactly 64 arrays, independent of nested Mixed wrappers.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn array_depth_limit_counts_arrays_only() {
+    let project = Project::new();
+    let sdk = project.sdk();
+    let module = project.compile("depth_limit", r#"<?php
+#[Export] function php_depth_identity(array $value): array { return $value; }
+#[Export] function php_depth_result(int $depth): array {
+    $value = [];
+    for ($i = 1; $i < $depth; $i++) { $value = [$value]; }
+    return $value;
+}
+"#);
+    let output = php(&sdk, &module).args(["-r", r#"
+function nested($depth, $hash) {
+    $value = 1;
+    for ($i = 0; $i < $depth; $i++) { $value = $hash ? ['child' => $value] : [$value]; }
+    return $value;
+}
+foreach ([1, 32, 33, 63, 64] as $depth) {
+    foreach ([false, true] as $hash) {
+        $value = nested($depth, $hash);
+        if (php_depth_identity($value) !== $value) { exit(10); }
+    }
+}
+$expected = [];
+for ($i = 1; $i < 64; $i++) { $expected = [$expected]; }
+if (php_depth_result(64) !== $expected) { exit(11); }
+try { php_depth_identity(nested(65, false)); exit(12); }
+catch (Error $error) {
+    if (!str_contains($error->getMessage(), 'maximum nesting depth (64)')) { throw $error; }
+}
+try { php_depth_result(65); exit(13); }
+catch (Error $error) {
+    if (!str_contains($error->getMessage(), 'result exceeds the maximum nesting depth (64)')) { throw $error; }
+}
+if (php_depth_identity([1]) !== [1]) { exit(14); }
+echo 'ok';
+"#]).output().unwrap();
+    assert!(output.status.success(), "{:?}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.stdout, b"ok");
+    assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
 /// Escaped PHP bytes stay identical in optional values and Reflection defaults.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]
@@ -59,7 +104,10 @@ fn unsupported_dynamic_results_raise_host_errors() {
 "#);
     let output = php(&sdk, &module).args(["-r", r#"
 foreach (['php_closure', 'php_callable_array', 'php_object'] as $function) {
-    try { $function(); exit(10); } catch (Error $error) {}
+    try { $function(); exit(10); }
+    catch (Error $error) {
+        if (!str_contains($error->getMessage(), 'boundary supports only int, float, bool, string, array and null')) { throw $error; }
+    }
     if (php_recover(41) !== 42) { exit(11); }
 }
 echo 'ok';

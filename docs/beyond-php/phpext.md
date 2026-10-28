@@ -92,6 +92,9 @@ allocator and GC bookkeeping, globals, statics, scratch buffers and exception
 state. MINIT saves initialized data; zero-initialized storage remains sparse in
 the module file. RINIT activates the request, and its snapshot is allocated on
 the first exported call. RSHUTDOWN releases it; MSHUTDOWN releases module resources.
+Fatal PHP errors can skip Fiber destructors. RSHUTDOWN also retires every
+abandoned native activation and its malloc-owned copies and checkpoints,
+including nested calls. Zend values remain owned by PHP's request heap.
 
 A module-local mutex serializes native execution while the adapter exchanges
 complete request images at stable addresses. This supports independent ZTS
@@ -150,8 +153,10 @@ It also builds a checksum-pinned real PHP debug CLI/embed SDK, executes repeated
 requests, and runs eight concurrent ZTS request threads with small stacks.
 Host Fiber tests cover suspended callbacks, rejected overlap, same-Fiber
 reentry, exception propagation, cancellation, destruction and ownership handoff.
-Valgrind on Linux and Apple's `leaks` tool check the embed lifecycle. Native
-heap pressure and Zend allocation growth are tested separately.
+Valgrind on Linux and Apple's `leaks` tool check the embed lifecycle. Tests
+of fatal requests also measure live malloc growth across repeated requests,
+including allocations still reachable from an abandoned Fiber stack.
+Native heap pressure and Zend allocation growth are tested separately.
 
 For a local embed check with a PHP SDK configured with `--enable-embed=shared`:
 

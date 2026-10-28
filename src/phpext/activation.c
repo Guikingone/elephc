@@ -166,6 +166,14 @@ void elephc_php_result(const zval *value)
     }
 }
 
+/* Native conversion reports a type failure without allocating or entering Zend. */
+void elephc_php_unsupported_result(void)
+{
+    if (ep_current && !ep_current->error) {
+        ep_current->error = "PHP extension boundary supports only int, float, bool, string, array and null";
+    }
+}
+
 /* Copy a compact native Throwable while its owned message remains live. */
 int elephc_php_exception(const uintptr_t *object, uintptr_t status)
 {
@@ -233,6 +241,7 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
     }
     ep_call *call = calloc(1, sizeof(ep_call));
     if (!call) { zend_throw_error(NULL, "PHP extension activation allocation failed"); return; }
+    call->parent = EP_GLOBAL(active);
     call->stack_floor = ep_stack_floor();
     call->fiber_context = EG(current_fiber_context);
     call->snapshot = EP_GLOBAL(snapshot);
@@ -250,13 +259,12 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
             call->error = "PHP extension runtime lock failed";
         } else {
             ep_state_restore(EP_GLOBAL(snapshot));
-            ep_call *parent = EP_GLOBAL(active);
             EP_GLOBAL(active) = call;
             ep_current = call;
             function(inputs);
             ep_current = NULL;
             /* The thunk has retired every native frame, including contained unwinds. */
-            EP_GLOBAL(active) = parent;
+            EP_GLOBAL(active) = call->parent;
             /* Infrastructure failures can leave partial native imports or results. Roll back
              * the entire image; ordinary PHP exceptions keep their completed state changes. */
             if (!call->error) { ep_state_save(call->snapshot); }
@@ -304,6 +312,7 @@ static PHP_GINIT_FUNCTION(@IDENT@)
 /* Also covers partial request startup that never reaches this module's RSHUTDOWN. */
 static PHP_GSHUTDOWN_FUNCTION(@IDENT@)
 {
+    ep_call_abandon_chain(@IDENT@_globals->active);
     free(@IDENT@_globals->snapshot);
     @IDENT@_globals->snapshot = NULL;
     @IDENT@_globals->active = NULL;

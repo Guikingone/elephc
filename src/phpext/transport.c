@@ -11,6 +11,7 @@ typedef struct ep_allocation {
 } ep_allocation;
 
 typedef struct ep_call {
+    struct ep_call *parent;
     ep_allocation *allocations;
     size_t transport_bytes;
     zval *result;
@@ -60,10 +61,9 @@ static void *ep_alloc(ep_call *call, size_t size)
     return allocation->bytes;
 }
 
-/* Retire every partial input/result copy after normal returns, exceptions and bailouts. */
-static void ep_call_destroy(ep_call *call)
+/* Also safe after a fatal has abandoned Zend frames and their request-owned values. */
+static void ep_call_free_storage(ep_call *call)
 {
-    zval pending = call->pending_exception;
     ep_allocation *allocation = call->allocations;
     while (allocation) {
         ep_allocation *next = allocation->next;
@@ -73,7 +73,24 @@ static void ep_call_destroy(ep_call *call)
     free(call->checkpoint);
     free(call->output);
     free(call);
+}
+
+/* Retire every partial input/result copy after normal returns, exceptions and bailouts. */
+static void ep_call_destroy(ep_call *call)
+{
+    zval pending = call->pending_exception;
+    ep_call_free_storage(call);
     if (!Z_ISUNDEF(pending)) { zval_ptr_dtor(&pending); }
+}
+
+/* Fatal request termination can skip Fiber destructors, leaving parked calls in this chain. */
+static void ep_call_abandon_chain(ep_call *call)
+{
+    while (call) {
+        ep_call *parent = call->parent;
+        ep_call_free_storage(call);
+        call = parent;
+    }
 }
 
 /* Copy binary bytes into a transport string, using only the shared zend_string value layout. */

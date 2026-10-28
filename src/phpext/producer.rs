@@ -112,7 +112,7 @@ pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Resul
     registration = registration.replace(&shutdown, &format!("{shutdown}    free(ep_template);\n    ep_template = NULL;\n"));
     registration = registration.replace("    ZEND_TSRMLS_CACHE_UPDATE();\n#endif\n    return SUCCESS;", "    ZEND_TSRMLS_CACHE_UPDATE();\n#endif\n    return ep_request_startup();");
     let rshutdown = format!("static PHP_RSHUTDOWN_FUNCTION({ident})\n{{\n    (void)type;\n    (void)module_number;\n");
-    registration = registration.replace(&rshutdown, &format!("{rshutdown}    free(EP_GLOBAL(snapshot));\n    EP_GLOBAL(snapshot) = NULL;\n    EP_GLOBAL(active) = NULL;\n    EP_GLOBAL(initialized) = false;\n"));
+    registration = registration.replace(&rshutdown, &format!("{rshutdown}    ep_call_abandon_chain(EP_GLOBAL(active));\n    free(EP_GLOBAL(snapshot));\n    EP_GLOBAL(snapshot) = NULL;\n    EP_GLOBAL(active) = NULL;\n    EP_GLOBAL(initialized) = false;\n"));
     registration = registration.replace("    STANDARD_MODULE_PROPERTIES", &format!("    ZEND_MODULE_GLOBALS({ident}),\n    PHP_GINIT({ident}),\n    PHP_GSHUTDOWN({ident}),\n    NULL,\n    STANDARD_MODULE_PROPERTIES_EX"));
     Ok(registration)
 }
