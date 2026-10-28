@@ -113862,7 +113862,7 @@
           "type": "string"
         }
       ],
-      "return_type": "string",
+      "return_type": "mixed",
       "variadic": null
     },
     "since": null,
