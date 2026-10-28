@@ -40,6 +40,9 @@ pub(crate) const EXISTS_HELPER: &str = "__elephc_class_like_exists";
 /// The helper `spl_autoload_call` and an autoloading `*_exists` run the loaders through.
 pub(crate) const CALL_HELPER: &str = "__elephc_spl_autoload_call";
 
+/// The program's own `spl_autoload_call($class)`: php's argument check, then [`CALL_HELPER`].
+pub(crate) const CHECKED_CALL_HELPER: &str = "__elephc_spl_autoload_call_checked";
+
 /// The helper an instantiation of a class declared nowhere throws through: it runs the loaders
 /// and returns php's "not found" message.
 pub(crate) const MISSING_HELPER: &str = "__elephc_spl_autoload_missing";
@@ -319,7 +322,8 @@ fn call_decl() -> Stmt {
         .param("name", TypeExpr::Str)
         .returns(TypeExpr::Void)
         .body(vec![
-            s_assign("name", e_call("ltrim", vec![e_var("name"), e_str("\\")])),
+            // php hands `spl_autoload_call()`'s name to the loaders as written; the `*_exists`
+            // lookups strip a leading `\` before they get here.
             s_assign("loaders", e_call(DISPATCHER, vec![e_str("functions")])),
             s_foreach(
                 e_var("loaders"),
@@ -349,6 +353,36 @@ fn call_decl() -> Stmt {
                     ),
                 ],
             ),
+        ])
+        .build()
+}
+
+/// Builds `__elephc_spl_autoload_call_checked($class)`: an array or object is php's `TypeError`,
+/// a scalar is coerced to the class name as php coerces it.
+fn checked_call_decl() -> Stmt {
+    function(CHECKED_CALL_HELPER)
+        .param("class", t_mixed())
+        .returns(TypeExpr::Void)
+        .body(vec![
+            s_if(
+                e_binop(
+                    e_call("is_array", vec![e_var("class")]),
+                    BinOp::Or,
+                    e_call("is_object", vec![e_var("class")]),
+                ),
+                vec![s_throw(e_new("TypeError", vec![e_concat_all(vec![
+                    e_str("spl_autoload_call(): Argument #1 ($class) must be of type string, "),
+                    crate::synthetic_class::e_ternary(
+                        e_call("is_array", vec![e_var("class")]),
+                        e_str("array"),
+                        e_call("get_class", vec![e_var("class")]),
+                    ),
+                    e_str(" given"),
+                ])]))],
+                vec![],
+                None,
+            ),
+            s_expr(e_call(CALL_HELPER, vec![e_cast(CastType::String, e_var("class"))])),
         ])
         .build()
 }
@@ -388,7 +422,8 @@ fn exists_decl() -> Stmt {
                     vec![],
                     None,
                 ),
-                s_expr(e_call(CALL_HELPER, vec![e_var("name")])),
+                // php's class lookup strips a leading `\` before the loaders see the name.
+                s_expr(e_call(CALL_HELPER, vec![e_call("ltrim", vec![e_var("name"), e_str("\\")])])),
                 s_return(probe(kind)),
             ],
             vec![],
@@ -407,7 +442,7 @@ fn exists_decl() -> Stmt {
 
 /// Builds the prelude declarations.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| vec![state_decl(), same_decl(), dispatcher_decl(), call_decl(), exists_decl(), missing_decl()])
+    internal_declarations(|| vec![state_decl(), same_decl(), dispatcher_decl(), call_decl(), checked_call_decl(), exists_decl(), missing_decl()])
 }
 
 /// Returns the bare lowercase name of a call to a global function, if it is one.
@@ -441,7 +476,7 @@ fn rewrite_calls(program: &mut Program) {
         let ExprKind::FunctionCall { name: callee, args } = &mut expr.kind else { return; };
         let span = expr.span;
         if name == "spl_autoload_call" {
-            *callee = Name::from_parts(NameKind::FullyQualified, vec![CALL_HELPER.to_string()]);
+            *callee = Name::from_parts(NameKind::FullyQualified, vec![CHECKED_CALL_HELPER.to_string()]);
             return;
         }
         let op = match name.as_str() {

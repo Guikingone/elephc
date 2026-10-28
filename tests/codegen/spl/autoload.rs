@@ -1793,6 +1793,29 @@ var_dump(class_exists('Nope'), count(spl_autoload_functions()));
     );
 }
 
+/// `spl_autoload_call()` refuses an array with php's `TypeError`, coerces a scalar, and hands
+/// the name to the loaders as written, while `class_exists('\X')` strips the leading `\`
+/// first (output measured with php 8.5).
+#[test]
+fn test_spl_autoload_call_argument_checks_and_names() {
+    let out = compile_and_run(r#"<?php
+spl_autoload_register(function ($c) { echo "load($c)\n"; });
+try {
+    spl_autoload_call([]);
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+spl_autoload_call(42);
+spl_autoload_call("\\Ns\\K");
+var_dump(class_exists("\\Ns\\K"));
+"#);
+    assert_eq!(
+        out,
+        "spl_autoload_call(): Argument #1 ($class) must be of type string, array given\n\
+         load(42)\nload(\\Ns\\K)\nload(Ns\\K)\nbool(false)\n"
+    );
+}
+
 /// The run-time stack reports php's diagnostics at the CALLER's line: the ignored `$do_throw`
 /// notice, and the deprecated `spl_autoload_unregister('spl_autoload_call')`, which clears
 /// every loader and answers true (output measured with php 8.5).
