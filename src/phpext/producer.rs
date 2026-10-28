@@ -86,12 +86,16 @@ pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Resul
                     let array = base.is_php_array() || matches!(base, PhpType::Array(_) | PhpType::AssocArray { .. });
                     if array { parse.push_str(&format!("        Z_PARAM_ARRAY{suffix}(arg_{i})\n")); }
                     else { parse.push_str(&format!("        Z_PARAM_ZVAL(arg_{i})\n")); }
+                    if array && nullable {
+                        normalize.push_str(&format!("    if (!arg_{i}) {{ ZVAL_NULL(&{value}); arg_{i} = &{value}; }}\n"));
+                    }
                     normalize.push_str(&format!("    ZVAL_DEREF(arg_{i});\n"));
                     if base == &PhpType::False {
                         let null = if nullable { format!(" && Z_TYPE_P(arg_{i}) != IS_NULL") } else { String::new() };
-                        normalize.push_str(&format!("    if (Z_TYPE_P(arg_{i}) != IS_FALSE{null}) {{ zend_argument_type_error({}, \"must be false{}\"); return; }}\n", i + 1, if nullable { "|null" } else { "" }));
+                        let expected = if nullable { "?false" } else { "false" };
+                        normalize.push_str(&format!("    if (Z_TYPE_P(arg_{i}) != IS_FALSE{null}) {{ zend_argument_type_error({}, \"must be of type {expected}, %s given\", zend_zval_value_name(arg_{i})); return; }}\n", i + 1));
                     } else if base == &PhpType::Void {
-                        normalize.push_str(&format!("    if (Z_TYPE_P(arg_{i}) != IS_NULL) {{ zend_argument_type_error({}, \"must be null\"); return; }}\n", i + 1));
+                        normalize.push_str(&format!("    if (Z_TYPE_P(arg_{i}) != IS_NULL) {{ zend_argument_type_error({}, \"must be of type null, %s given\", zend_zval_value_name(arg_{i})); return; }}\n", i + 1));
                     }
                     normalize.push_str(&format!("    ZVAL_COPY_VALUE(&{value}, arg_{i});\n"));
                 }

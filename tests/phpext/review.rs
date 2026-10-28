@@ -77,13 +77,13 @@ echo json_encode(php_values($value));
 "#);
 }
 
-/// Zend array parameter parsing reports the caller's actual type and nullable spelling.
+/// Parameter errors report the caller's actual type and nullable spelling, including false/null.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]
-fn array_type_errors_match_php() {
-    compare("<?php #[Export] function php_values(array $value): array { return $value; } #[Export] function php_nullable(?array $value): ?array { return $value; }", r#"
-foreach (['php_values', 'php_nullable'] as $function) {
-    foreach (['text', 7, true, new stdClass] as $value) {
+fn parameter_type_errors_match_php() {
+    compare("<?php #[Export] function php_values(array $value): array { return $value; } #[Export] function php_nullable(?array $value): ?array { return $value; } #[Export] function php_false(false $value): false { return $value; } #[Export] function php_nullable_false(?false $value): ?false { return $value; } #[Export] function php_null(null $value): null { return $value; }", r#"
+foreach (['php_values', 'php_nullable', 'php_false', 'php_nullable_false', 'php_null'] as $function) {
+    foreach (['text', 7, true, new stdClass, null] as $value) {
         try { $function($value); echo 'accepted'; } catch (TypeError $e) {
             echo preg_replace('/, called in .*$/s', '', $e->getMessage()), "\n";
         }
