@@ -28,9 +28,12 @@ sparse zero-filled range. MINIT retains initialized bytes. RINIT activates the
 request; its first exported call lazily allocates an independent snapshot. The
 adapter exchanges both ranges at stable native addresses under a module
 mutex. PHP output/error callbacks run with the image parked and the lock released,
-allowing reentry and concurrent host requests. RSHUTDOWN and MSHUTDOWN free the
-request and module storage. The initial producer capability policy rejects
-runtime families whose lifecycle has not been audited for this profile.
+allowing reentry and concurrent host requests. RSHUTDOWN prevents new entries
+but retains state for callbacks that another module or late Fiber destruction
+can still resume. The post-deactivate hook frees request storage after Zend
+blocks Fiber switching; MSHUTDOWN frees module storage. The initial producer
+capability policy rejects runtime families whose lifecycle has not been audited
+for this profile.
 
 The actual Zend ABI comes from the selected PHP SDK. The producer reuses neutral
 `elephc-zend` value-layout facts and native zval transport helpers; the replacement

@@ -52,6 +52,26 @@ static size_t live_malloc_bytes(void)
 #endif
 }
 
+/* A shutdown-flushed output callback can park a Fiber after the destructor pass. */
+static void run_late_userland_fiber_request(void)
+{
+    static const char code[] =
+        "ob_start(function ($bytes) {"
+        "  if ($bytes === '') { return ''; }"
+        "  $GLOBALS['late_fiber'] = new Fiber(function () {"
+        "    set_error_handler(function () { Fiber::suspend('parked'); return true; });"
+        "    try { phpext_pause('late userland shutdown'); } catch (RuntimeException $error) {}"
+        "  });"
+        "  if ($GLOBALS['late_fiber']->start() !== 'parked') { throw new Exception('late Fiber did not park'); }"
+        "  return '';"
+        "}); echo 'late';";
+    if (php_request_startup() == FAILURE) { atomic_fetch_add(&failures, 1); return; }
+    if (zend_eval_string(code, NULL, "phpext late userland Fiber") == FAILURE || EG(exception)) {
+        atomic_fetch_add(&failures, 1);
+    }
+    php_request_shutdown(NULL);
+}
+
 /* A fatal on the main context abandons one or two parked native activations. */
 static void run_abandoned_requests(void)
 {
@@ -61,20 +81,24 @@ static void run_abandoned_requests(void)
         "  set_error_handler(function () use ($nested) {"
         "    if ($nested) {"
         "      set_error_handler(function () { Fiber::suspend('parked'); return true; });"
-        "      phpext_pause('nested abandoned');"
+        "      try { phpext_pause('nested abandoned'); } catch (RuntimeException $error) {}"
         "    } else { Fiber::suspend('parked'); } return true;"
         "  });"
-        "  phpext_pause('abandoned');"
+        "  try { phpext_pause('abandoned'); } catch (RuntimeException $error) {}"
         "});"
         "if ($GLOBALS['fatal_fiber']->start() !== 'parked') { throw new Exception('Fiber did not park'); }"
+        "elephc_late_hold($GLOBALS['fatal_fiber']);"
         "set_error_handler(static function () { return false; });"
         "trigger_error('intentional fatal request', E_USER_ERROR);";
     php_request_shutdown(NULL);
+    run_late_userland_fiber_request();
     size_t baseline = live_malloc_bytes();
     for (unsigned request = 0; request < 8; request++) {
         if (php_request_startup() == FAILURE) { atomic_fetch_add(&failures, 1); break; }
-        char script[sizeof(code) + 40];
-        snprintf(script, sizeof(script), "$nested = %s; %s", request % 2 ? "true" : "false", code);
+        char script[sizeof(code) + 160];
+        snprintf(script, sizeof(script),
+            "if (elephc_late_resume_count() !== %u) { throw new Exception('late resume missing'); } "
+            "$nested = %s; %s", request, request % 2 ? "true" : "false", code);
         volatile bool bailed = false;
         zend_first_try {
             (void)zend_eval_string(script, NULL, "phpext abandoned request");
@@ -92,7 +116,12 @@ static void run_abandoned_requests(void)
             break;
         }
     }
-    if (php_request_startup() == FAILURE) { atomic_fetch_add(&failures, 1); }
+    if (php_request_startup() == FAILURE) {
+        atomic_fetch_add(&failures, 1);
+    } else if (zend_eval_string("if (elephc_late_resume_count() !== 8) { throw new Exception('final late resume missing'); }",
+        NULL, "phpext final late resume") == FAILURE || EG(exception)) {
+        atomic_fetch_add(&failures, 1);
+    }
 }
 
 static const char request_code[] =

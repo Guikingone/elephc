@@ -9,6 +9,7 @@ import select
 import shlex
 import signal
 import subprocess
+import sys
 import tempfile
 
 
@@ -76,15 +77,20 @@ def main():
         env = dict(os.environ, ELEPHC_PHPEXT_PHP_CONFIG=str(config), ELEPHC_PHPEXT_PHP_BINARY=str(php),
                    PHP_INI_SCAN_DIR="", ELEPHC_EMBED_FIBERS=str(root / "tests/phpext/fibers.php"))
         checked([compiler, "--emit", "phpext", "--heap-size=524288", source], env=env)
+        helper = work / "late_resume.so"
+        cc = shlex.split(os.environ.get("CC", "cc"))
+        shared = ["-bundle", "-undefined", "dynamic_lookup"] if sys.platform == "darwin" else ["-shared"]
+        checked(cc + includes + ["-std=gnu11", "-O1", "-g", "-fPIC", "-Wall", "-Wextra", "-Werror"]
+                + shared + [str(root / "tests/phpext/late_resume.c"), "-o", str(helper)])
         ini = work / "php.ini"
         # Keep stack exhaustion ahead of the intentionally small native heap on NTS main threads too.
         reserved = 327680 if args.asan else 65536
         # ASan requires 320 KiB for PHP's error paths; retain the ordinary 192 KiB native budget.
-        ini.write_text(f'extension="{source.with_suffix(".so")}"\n'
+        ini.write_text(f'extension="{helper}"\n'
+                       f'extension="{source.with_suffix(".so")}"\n'
                        f'zend.max_allowed_stack_size={reserved + 196608}\n'
                        f'zend.reserved_stack_size={reserved}\n')
         executable = work / "embed-test"
-        cc = shlex.split(os.environ.get("CC", "cc"))
         checked(cc + includes + ["-std=c11", "-O1", "-g", "-pthread", str(root / "tests/phpext/embed.c"),
                                 str(library), f"-Wl,-rpath,{library.parent}", "-o", str(executable)])
         command = [str(executable), str(ini)]

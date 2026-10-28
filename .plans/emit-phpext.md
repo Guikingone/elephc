@@ -27,8 +27,8 @@ normalization. EIR validation rejects conversions and PHP container stores that
 erase native handle identity.
 Result depth counts only arrays, allowing exactly 64 logical levels through
 Mixed wrappers. Unsupported result tags use a distinct error path. Fatal
-request shutdown retires a parent-linked chain of abandoned native activations
-without touching Zend values whose request lifetime is ending.
+request post-deactivation retires a parent-linked chain of abandoned native
+activations without touching Zend values whose request lifetime is ending.
 
 The first delivery covers by-value `int`, `float`, `bool`, binary `string`,
 `array`, `null`, supported nullable forms, and `void` returns. Arrays include
@@ -239,6 +239,8 @@ Generate C metadata with `STANDARD_MODULE_HEADER`, real arginfo macros,
 `zend_function_entry[]` with its terminator, and `ZEND_GET_MODULE`. All five
 MINIT/MSHUTDOWN/RINIT/RSHUTDOWN/MINFO pointers are present. MINFO reports the
 module version, compiler version, and PHP build identity through PHP's info API.
+The module also registers `post_deactivate_func` for cleanup that must wait until
+Zend has blocked Fiber switching.
 Generate handlers through the host's `PHP_FUNCTION`/`ZEND_NAMED_FUNCTION` macros,
 with the PHP 8.5 signature `void ZEND_FASTCALL handler(zend_execute_data *, zval *)`.
 Read arguments through ZPP and host call-frame macros, not hardcoded stack offsets.
@@ -284,7 +286,8 @@ library outputs stay covered by their current compile/emitter checks.
 | MINIT | Validate module-level configuration and register immutable descriptors. Do not initialize a request heap, execute source top-level statements, or replace PHP process handlers. |
 | RINIT | Update the TSRM cache in ZTS builds; create a fresh module-specific request context and attach its opaque pointer to Zend module globals. Initialize native heap bookkeeping, scratch, exception/cleanup stacks, per-request statics and settings, and the current thread's stack guard. |
 | First exported call | Verify an active context and enter a nested-call boundary. Lazily materialize optional resources through non-throwing initialization if needed. Do not create process-global request state. |
-| RSHUTDOWN | Close owned request resources, clean native roots and temporaries, collect/free the native heap, clear diagnostics, and detach/destroy the context. Destruction is idempotent after partial initialization or failed calls. |
+| RSHUTDOWN | Reject new exported calls, but retain snapshots and parked activation records because another module callback or late Fiber destructor can still resume them. |
+| Post-deactivate | After Zend blocks Fiber switching, retire abandoned activation chains, free the request snapshot, and detach the request context. Cleanup is idempotent after partial initialization or failed calls. |
 | MSHUTDOWN | Release module-level resources after request cleanup. Never free PHP globals, close host-owned standard descriptors, or shut down Zend. |
 
 Use the same context model for NTS and ZTS. The context includes all mutable state
@@ -331,7 +334,7 @@ or the main context while an activation is parked throws a host Error before
 loading the request image. This prevents shared exception and cleanup chains
 from acquiring pointers into a different suspended C stack. Native return and
 contained unwind restore the previous activation before host result handling;
-request startup and shutdown clear the ownership record. The shared real-PHP
+request startup and post-deactivation clear the ownership record. The shared real-PHP
 Fiber driver also runs in every embed lifecycle and native leak-check job.
 The warning dispatcher publishes its owning cleanup record before both native
 and host handler dispatch. A host callback exception, Fiber cancellation or

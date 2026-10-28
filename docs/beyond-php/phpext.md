@@ -91,10 +91,13 @@ Each request owns a complete native state image, including the fixed heap,
 allocator and GC bookkeeping, globals, statics, scratch buffers and exception
 state. MINIT saves initialized data; zero-initialized storage remains sparse in
 the module file. RINIT activates the request, and its snapshot is allocated on
-the first exported call. RSHUTDOWN releases it; MSHUTDOWN releases module resources.
-Fatal PHP errors can skip Fiber destructors. RSHUTDOWN also retires every
-abandoned native activation and its malloc-owned copies and checkpoints,
-including nested calls. Zend values remain owned by PHP's request heap.
+the first exported call. RSHUTDOWN rejects new calls but keeps the request image
+available because another module's RSHUTDOWN callback or a late Fiber destructor
+can still resume a parked native call. Zend's post-deactivate hook runs after
+Fiber switching is blocked; it releases the snapshot and retires every abandoned
+native activation and its malloc-owned copies and checkpoints, including nested
+calls. MSHUTDOWN releases module resources. Zend values remain owned by PHP's
+request heap.
 
 A module-local mutex serializes native execution while the adapter exchanges
 complete request images at stable addresses. This supports independent ZTS
@@ -155,7 +158,9 @@ Host Fiber tests cover suspended callbacks, rejected overlap, same-Fiber
 reentry, exception propagation, cancellation, destruction and ownership handoff.
 Valgrind on Linux and Apple's `leaks` tool check the embed lifecycle. Tests
 of fatal requests also measure live malloc growth across repeated requests,
-including allocations still reachable from an abandoned Fiber stack.
+including allocations still reachable from an abandoned Fiber stack. A sibling
+test extension retains and resumes that Fiber from its own RSHUTDOWN, and an
+output-buffer callback covers userland Fiber destruction after module shutdown.
 Native heap pressure and Zend allocation growth are tested separately.
 
 For a local embed check with a PHP SDK configured with `--enable-embed=shared`:

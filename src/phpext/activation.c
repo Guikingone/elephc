@@ -85,6 +85,7 @@ ZEND_DECLARE_MODULE_GLOBALS(@IDENT@)
 /* Requests that never invoke an export do not allocate or touch the native heap. */
 static int ep_request_startup(void)
 {
+    ep_call_abandon_chain(EP_GLOBAL(active));
     free(EP_GLOBAL(snapshot));
     EP_GLOBAL(snapshot) = NULL;
     EP_GLOBAL(active) = NULL;
@@ -309,7 +310,20 @@ static PHP_GINIT_FUNCTION(@IDENT@)
     @IDENT@_globals->initialized = false;
 }
 
-/* Also covers partial request startup that never reaches this module's RSHUTDOWN. */
+/* Fiber destruction can resume parked callbacks after every module RSHUTDOWN.
+ * Zend blocks switching before this post-deactivate phase, so native images and
+ * activation records become unreachable only here. */
+static ZEND_MODULE_POST_ZEND_DEACTIVATE_D(@IDENT@)
+{
+    ep_call_abandon_chain(EP_GLOBAL(active));
+    free(EP_GLOBAL(snapshot));
+    EP_GLOBAL(snapshot) = NULL;
+    EP_GLOBAL(active) = NULL;
+    EP_GLOBAL(initialized) = false;
+    return SUCCESS;
+}
+
+/* Also covers partial request teardown that never reaches post-deactivate. */
 static PHP_GSHUTDOWN_FUNCTION(@IDENT@)
 {
     ep_call_abandon_chain(@IDENT@_globals->active);
