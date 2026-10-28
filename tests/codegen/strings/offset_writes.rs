@@ -273,10 +273,17 @@ $direct = 'abc'; $direct[1] = 'D';
 $items = ['abc']; $copy = $items;
 $items[0][1] = 'N'; $items[0][-1] = 'Z'; $items[0][5] = 'P';
 echo $direct, '|', json_encode($items), '|', json_encode($copy), '|';
+function append_key(): int { echo 'K'; return 0; }
+function append_value(): string { echo 'V'; return 'X'; }
+try { $items[append_key()][] = append_value(); }
+catch (Error $error) { echo $error->getMessage(), '|'; }
+echo json_encode($items), '|';
 try { $direct[0][0] = 'X'; } catch (Error $error) { echo $error->getMessage(); }
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "aDc|[\"aNZ  P\"]|[\"abc\"]|Cannot use string offset as an array");
+    assert_eq!(out.stdout, concat!(
+        "aDc|[\"aNZ  P\"]|[\"abc\"]|KV[] operator not supported for strings|",
+        "[\"aNZ  P\"]|Cannot use string offset as an array"));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

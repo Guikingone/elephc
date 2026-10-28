@@ -9,7 +9,7 @@
 //! - Assignment checking must distinguish value writes, by-reference mutation, nullable access, and declared property contracts.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{BinOp, Expr, ExprKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, NESTED_APPEND_TEMP_PREFIX};
 use crate::span::Span;
 use crate::types::{
     array_key_contiguity_is_unproven, merge_array_key_types, normalized_array_key_type,
@@ -461,7 +461,8 @@ pub(super) fn check_array_push(
         .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
-    if arr_ty == PhpType::Str {
+    // Nested appends retain their catchable runtime Error through the generated temporary.
+    if arr_ty == PhpType::Str && !array.starts_with(NESTED_APPEND_TEMP_PREFIX) {
         return Err(CompileError::new(span, "[] operator not supported for strings"));
     }
     if let PhpType::Array(elem_ty) = &arr_ty {
