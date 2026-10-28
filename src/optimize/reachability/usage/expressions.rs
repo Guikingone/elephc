@@ -270,6 +270,18 @@ impl Scanner<'_> {
         }
         self.record_builtin_requirements(name, args);
         self.scan_builtin_callback_arguments(&key, args);
+        // A rewritten `spl_autoload_register($cb)` passes the callback as the dispatcher's
+        // second argument, where the builtin's callback metadata no longer sees it.
+        if key == crate::spl_autoload_prelude::DISPATCHER {
+            match args.get(1).map(|arg| &arg.kind) {
+                None | Some(ExprKind::Null | ExprKind::Closure { .. }) => {}
+                Some(ExprKind::FirstClassCallable(target)) => self.scan_callable_target(target),
+                Some(ExprKind::StringLiteral(_) | ExprKind::ArrayLiteral(_)) => {
+                    self.callable_or_hazard(args.get(1));
+                }
+                Some(_) => self.unresolved_callable_hazard(),
+            }
+        }
         self.scan_declaration_arguments(&key, args);
         self.scan_function_signature_arguments(&key, args);
         // The backend lowering calls this private PDOStatement method directly. Keep the

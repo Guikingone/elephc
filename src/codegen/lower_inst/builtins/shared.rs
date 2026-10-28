@@ -26,6 +26,8 @@ pub(in crate::codegen::lower_inst) fn callable_name_exists(
 ) -> bool {
     ctx.function_variant_group_name(name).is_some()
         || ctx.function_by_name(name).is_some()
+        // php function names are case-insensitive and may carry a leading `\`.
+        || contains_folded(ctx.module.functions.iter().map(|function| &function.name), name)
         || ctx.has_extern_function(name)
         || is_php_visible_builtin_function_for_profile(
             name.trim_start_matches('\\'),

@@ -364,6 +364,11 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
         .expect("testing prelude post-autoload injection failed");
     let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)
         .expect("object-cast prelude injection failed");
+    // Mirrors `pipeline::compile`: the run-time SPL autoload stack (standalone programs only).
+    let resolved = elephc::spl_autoload_prelude::inject_if_used(
+        resolved, !autoload_registry.is_empty(), &mut prelude_inventory,
+    )
+        .expect("SPL autoload prelude injection failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
@@ -544,6 +549,11 @@ fn compile_and_run_files_with_defines_per_argv(
         .expect("testing prelude post-autoload injection failed");
     let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)
         .expect("object-cast prelude injection failed");
+    // Mirrors `pipeline::compile`: the run-time SPL autoload stack (standalone programs only).
+    let resolved = elephc::spl_autoload_prelude::inject_if_used(
+        resolved, !autoload_registry.is_empty(), &mut prelude_inventory,
+    )
+        .expect("SPL autoload prelude injection failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");

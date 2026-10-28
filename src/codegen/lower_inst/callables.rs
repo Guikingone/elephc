@@ -1454,6 +1454,15 @@ fn emit_mixed_callable_array_descriptor_dispatch(
         abi::emit_jump(ctx.emitter, &done_label);
         ctx.emitter.label(&next_label);
     }
+    for case in static_cases {
+        let next_label = ctx.next_label("callable_array_object_static_next");
+        if !emit_branch_if_object_static_case_mismatch(ctx, case, &next_label) {
+            continue;
+        }
+        emit_static_descriptor_case_invoke(ctx, inst, arg_mixed, &case.case.descriptor_label)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&next_label);
+    }
     abi::emit_jump(ctx.emitter, &miss_label);
 
     ctx.emitter.label(&miss_label);
@@ -1596,6 +1605,19 @@ fn emit_mixed_callable_array_descriptor_value(
     for case in &static_cases {
         let next_label = ctx.next_label("callable_array_static_next");
         emit_branch_if_mixed_static_case_mismatch(ctx, case, &next_label);
+        abi::emit_symbol_address(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            &case.case.descriptor_label,
+        );
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&next_label);
+    }
+    for case in &static_cases {
+        let next_label = ctx.next_label("callable_array_object_static_next");
+        if !emit_branch_if_object_static_case_mismatch(ctx, case, &next_label) {
+            continue;
+        }
         abi::emit_symbol_address(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
@@ -2172,6 +2194,30 @@ fn emit_branch_if_runtime_array_instance_mismatch(
         target.method_name.as_bytes(),
         next_label,
     );
+}
+
+/// Branches unless saved mixed slots hold an object of the case's class and its static method
+/// name: `[$object, 'staticMethod']` calls the static method, as php allows. Returns `false`
+/// (emitting nothing) when the case's class has no runtime class id.
+fn emit_branch_if_object_static_case_mismatch(
+    ctx: &mut FunctionContext<'_>,
+    case: &callable_dispatch::RuntimeStaticMethodCallableCase,
+    next_label: &str,
+) -> bool {
+    let Some(class_id) = ctx.module.class_infos.get(&case.class_name).map(|info| info.class_id) else {
+        return false;
+    };
+    emit_branch_if_stack_tag_mismatch(ctx, MIXED_RECEIVER_TAG_OFFSET, MIXED_TAG_OBJECT, next_label);
+    emit_branch_if_stack_tag_mismatch(ctx, MIXED_METHOD_TAG_OFFSET, MIXED_TAG_STRING, next_label);
+    emit_branch_if_saved_receiver_class_id_mismatch(ctx, class_id, MIXED_RECEIVER_PAYLOAD_OFFSET, next_label);
+    emit_branch_if_stack_string_mismatch(
+        ctx,
+        MIXED_METHOD_PAYLOAD_OFFSET,
+        MIXED_METHOD_PAYLOAD_OFFSET + 8,
+        case.method_name.as_bytes(),
+        next_label,
+    );
+    true
 }
 
 /// Branches unless saved mixed slots match a public static-method callable case.

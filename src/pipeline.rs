@@ -715,6 +715,21 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     };
     timings.record_since("object-cast-prelude", phase_started);
 
+    // A standalone program's run-time SPL autoload stack; a Composer project keeps resolving
+    // its classes from the PSR-4 index, and consumed closure rules, at compile time.
+    let ast = match crate::spl_autoload_prelude::inject_if_used(
+        ast,
+        !autoload_registry.is_empty(),
+        &mut prelude_inventory,
+    ) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+
     // Desugar PHP's argument-introspection constructs (`func_num_args`, `func_get_args`,
     // `func_get_arg`) into plain PHP: every function scope that uses one gains the hidden
     // `mixed ...$__elephc_func_args` parameter, so the surplus positional arguments PHP

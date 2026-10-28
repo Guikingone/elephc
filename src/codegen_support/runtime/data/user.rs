@@ -3261,8 +3261,16 @@ fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {
                 .get(*method_name)
                 .is_some_and(|visibility| matches!(visibility, Visibility::Public))
         })
+        // `[$object, 'staticMethod']` is callable too.
+        .chain(class_info.static_methods.keys().filter(|method_name| {
+            class_info
+                .static_method_visibilities
+                .get(*method_name)
+                .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+        }))
         .collect();
     public_methods.sort();
+    public_methods.dedup();
     for method_name in &public_methods {
         out.push_str(&format!(
             ".globl _class_callable_method_name_{0}_{1}\n_class_callable_method_name_{0}_{1}:\n    .ascii \"{2}\"\n",

@@ -25,7 +25,13 @@ use crate::types::PhpType;
 /// is a literal bool or int (the autoload flag). Returns `Bool` on success.
 /// Arguments are pre-inferred by the registry common path before this hook runs.
 pub(crate) fn check_class_like_exists(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    if !matches!(cx.args[0].kind, ExprKind::StringLiteral(_)) {
+    // The SPL autoload prelude asks about a run-time name, answered against the compiled class
+    // tables (`lower_dynamic_class_like_exists`). User code keeps the literal requirement: a
+    // refused class file is handed to the runtime autoloader instead.
+    let string_name = cx.checker.current_function.as_deref()
+        == Some(crate::spl_autoload_prelude::EXISTS_HELPER)
+        && cx.checker.infer_type(&cx.args[0], cx.env)? == PhpType::Str;
+    if !matches!(cx.args[0].kind, ExprKind::StringLiteral(_)) && !string_name {
         return Err(CompileError::aot_literal_required(
             cx.span,
             &format!("{}() first argument must be a string literal in AOT mode", cx.name),

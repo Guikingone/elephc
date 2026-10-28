@@ -209,17 +209,68 @@ echo $ok ? "true" : "false";
     assert_eq!(out, "true");
 }
 
-/// Verifies SPL autoload unregister returns true.
+/// Verifies SPL autoload unregister of a never-registered closure returns false, as php does.
 #[test]
 fn test_spl_autoload_unregister_returns_true() {
-    // spl_autoload_unregister returns true after removing a registered autoloader.
+    // A closure no registration stored is not removed: php answers false.
     let out = compile_and_run(
         r#"<?php
 $ok = spl_autoload_unregister(function($name) {});
 echo $ok ? "true" : "false";
 "#,
     );
-    assert_eq!(out, "true");
+    assert_eq!(out, "false");
+}
+
+/// The run-time SPL autoload stack of a standalone program: registration order, `$prepend`,
+/// duplicates ignored (function names case-insensitively, a static method named through its
+/// class or an object), `spl_autoload_functions()`, unregistering, `class_exists` running the
+/// loaders until the class exists and never for a name another class-like already uses, and
+/// php's `TypeError` for an uncallable loader (output measured with php 8.5).
+#[test]
+fn test_spl_autoload_runtime_stack() {
+    let out = compile_and_run(r#"<?php
+function TestFunc1($classname) { echo __METHOD__ . "($classname)\n"; }
+function TestFunc2($classname) { echo __METHOD__ . "($classname)\n"; }
+class Foo { public function load($c) { echo "Foo::load($c)\n"; } public static function s($c) { echo "Foo::s($c)\n"; } }
+$foo = new Foo;
+spl_autoload_register("TestFunc1");
+spl_autoload_register("TestFunc2");
+spl_autoload_register("testfunc2");
+spl_autoload_register([$foo, 'load'], true, true);
+spl_autoload_register(['Foo', 's']);
+spl_autoload_register([$foo, 's']);
+var_dump(count(spl_autoload_functions()));
+var_dump(class_exists("TestClass"));
+var_dump(class_exists("TestClass", false));
+var_dump(spl_autoload_unregister("TestFunc1"));
+try { spl_autoload_unregister("Nope"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+spl_autoload_call("Other");
+var_dump(interface_exists("Foo"), class_exists("Foo"));
+try { spl_autoload_register("unavailable_autoload_function"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#);
+    assert_eq!(
+        out,
+        "int(4)\nFoo::load(TestClass)\nTestFunc1(TestClass)\nTestFunc2(TestClass)\nFoo::s(TestClass)\n\
+         bool(false)\nbool(false)\nbool(true)\n\
+         spl_autoload_unregister(): Argument #1 ($callback) must be a valid callback, function \"Nope\" not found or invalid function name\n\
+         Foo::load(Other)\nTestFunc2(Other)\nFoo::s(Other)\nbool(false)\nbool(true)\n\
+         spl_autoload_register(): Argument #1 ($callback) must be a valid callback or null, function \"unavailable_autoload_function\" not found or invalid function name\n"
+    );
+}
+
+/// `[$object, 'staticMethod']` is a valid callable (php calls the static method).
+#[test]
+fn test_object_static_method_array_callable() {
+    let out = compile_and_run(r#"<?php
+class L { static function load($c) { echo "load $c\n"; } }
+function probe(mixed $n) { var_dump(is_callable($n)); call_user_func($n, "X"); }
+probe([new L, "load"]);
+function TestFn($c) { echo "fn $c\n"; }
+probe("testfn");
+probe("\\TESTFN");
+"#);
+    assert_eq!(out, "bool(true)\nload X\nbool(true)\nfn X\nbool(true)\nfn X\n");
 }
 
 /// Verifies SPL autoload functions returns empty array.

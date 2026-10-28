@@ -265,10 +265,13 @@ fn static_local_value_type_matches(value_ty: &PhpType, slot_ty: &PhpType) -> boo
     if matches!(slot_ty, PhpType::Int) && matches!(value_ty, PhpType::Mixed) {
         return true;
     }
+    // An array initializer (`static $list = [];` whose later writes widened the slot) is boxed
+    // too: the box takes over the freshly built array.
     if matches!(slot_ty, PhpType::Mixed)
         && matches!(
             value_ty,
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Float | PhpType::Pointer(_)
+                | PhpType::Array(_) | PhpType::AssocArray { .. }
         )
     {
         return true;

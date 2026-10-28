@@ -413,6 +413,43 @@ fn resolve_callable(
     var_bindings: &HashMap<String, VarBinding>,
     function_rules: &HashMap<String, FunctionSource>,
 ) -> Resolved {
+    // Only a loader that includes a file can resolve a class file at compile time. Any other
+    // loader (one that reports, throws, declares or defers) stays an ordinary run-time
+    // registration on the program's SPL autoload stack.
+    let resolved = resolve_callable_source(arg, var_bindings, function_rules);
+    let loads_nothing = match (&resolved, &arg.kind) {
+        (Resolved::Rule { rule, .. }, _) => !loads_a_file(&rule.body),
+        (Resolved::StripUnmatched(_), ExprKind::Closure { body, .. }) => !loads_a_file(body),
+        _ => false,
+    };
+    if loads_nothing { Resolved::Unknown } else { resolved }
+}
+
+/// Returns whether a loader body includes or requires a file anywhere.
+fn loads_a_file(body: &[Stmt]) -> bool {
+    fn statements(stmts: &mut Vec<Stmt>, found: &mut bool) {
+        for stmt in stmts.iter_mut() {
+            if matches!(stmt.kind, StmtKind::Include { .. }) {
+                *found = true;
+            }
+            crate::undefined_reads::for_each_child_body_mut_pub(stmt, &mut |body| statements(body, found));
+        }
+    }
+    let mut copy = body.to_vec();
+    let mut found = false;
+    statements(&mut copy, &mut found);
+    crate::undefined_constants::walk_program_exprs_mut(&mut copy, &mut |expr| {
+        found |= matches!(expr.kind, ExprKind::IncludeValue { .. });
+    });
+    found
+}
+
+/// Resolves a registration's callable argument to its compile-time rule, if it has one.
+fn resolve_callable_source(
+    arg: &Expr,
+    var_bindings: &HashMap<String, VarBinding>,
+    function_rules: &HashMap<String, FunctionSource>,
+) -> Resolved {
     match &arg.kind {
         ExprKind::Closure { .. } => match extract_closure_rule(arg) {
             Ok(rule) => Resolved::Rule {
