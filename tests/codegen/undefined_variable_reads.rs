@@ -303,6 +303,26 @@ truthy();
     assert!(run.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", run.stderr);
 }
 
+/// An element assignment used as a value vivifies its undefined array silently and warns for
+/// an undefined value it reads (`var_dump($a[0] = $v)` crashed reading two unset slots).
+#[test]
+fn test_element_assignment_expression_vivifies_and_warns() {
+    let run = compile_and_run_capture(r#"<?php
+function test() { var_dump($a[0] = $v); }
+test();
+function e1() { $x = ($a[0] = $w); var_dump($x, count($a)); }
+e1();
+function e2() { echo ($a[0] = 7), "\n"; var_dump($a); }
+e2();
+"#);
+    assert!(run.success, "stdout: {}\nstderr: {}", run.stdout, run.stderr);
+    for warning in ["Undefined variable $v", "Undefined variable $w"] {
+        assert!(run.stdout_raw.contains(warning), "{warning}: {}", run.stdout_raw);
+    }
+    assert!(!run.stdout_raw.contains("Undefined variable $a"), "{}", run.stdout_raw);
+    assert_eq!(run.stdout, "NULL\nNULL\nint(1)\n7\narray(1) {\n  [0]=>\n  int(7)\n}\n");
+}
+
 /// A boxed `?ArrayObject` local can never hold false, so its keyed write is a plain
 /// `offsetSet()` with no false-to-array promotion (output measured with php 8.5).
 #[test]

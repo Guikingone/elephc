@@ -343,7 +343,8 @@ fn collect_expr(expr: &Expr, facts: &mut ScopeFacts) {
         }
         ExprKind::Assignment { target, value, result_target, prelude, .. } => {
             mark_spine_written(target, facts);
-            if let Some(result_target) = result_target {
+            // A result read straight from the value (`f($a[0] = $v)` keeps `$v`) writes nothing.
+            if let Some(result_target) = result_target.as_ref().filter(|result| result != &value) {
                 mark_spine_written(result_target, facts);
             }
             collect_stmts(prelude, facts);
@@ -746,7 +747,17 @@ fn rewrite_expr(expr: &mut Expr, facts: &ScopeFacts) {
                 rewrite_function_scope(names.into_iter(), variadic.clone(), body);
             }
         }
-        ExprKind::Assignment { value, .. } => rewrite_expr(value, facts),
+        // An element target's value is bound in the prelude (`$t = $v; $a[0] = $t`): its reads
+        // are the assignment's own.
+        ExprKind::Assignment { value, prelude, result_target, .. } => {
+            rewrite_scope_stmts(prelude, facts);
+            // A result read straight from the value (`$x = ($a[0] = $w)`) reads it a second
+            // time: only the value's read warns, the result's is the silent null it produced.
+            if let Some(result) = result_target.as_mut().filter(|result| result == &value) {
+                silence_undefined_reads(result, facts);
+            }
+            rewrite_expr(value, facts);
+        }
         ExprKind::MethodCall { object, args, .. } | ExprKind::NullsafeMethodCall { object, args, .. } => {
             rewrite_expr(object, facts);
             rewrite_exprs(args, facts);
@@ -914,7 +925,8 @@ fn vivify_stmts(stmts: &mut Vec<Stmt>, seen: &mut HashSet<String>, in_loop: bool
     let mut hoisted = Vec::new();
     let mut i = 0;
     while i < stmts.len() {
-        if let Some(root) = element_write_root(&stmts[i]) {
+        let roots = element_write_root(&stmts[i]).into_iter().chain(expression_element_write_roots(&stmts[i]));
+        for root in roots.collect::<Vec<_>>() {
             if !seen.contains(&root) {
                 seen.insert(root.clone());
                 if in_loop {
@@ -1056,6 +1068,45 @@ fn element_write_root(stmt: &Stmt) -> Option<String> {
             }
         }
         _ => None,
+    }
+}
+
+/// Returns the variables a statement's own expressions write an element of through a plain
+/// element assignment used as a value (`f($a[0] = $v)`); nested bodies and closures are not
+/// searched, and an assignment whose value reads the variable is a compound one, left to the
+/// flow pass.
+fn expression_element_write_roots(stmt: &Stmt) -> Vec<String> {
+    let mut roots = Vec::new();
+    let mut visit = |expr: &Expr| visit_expression_element_writes(expr, &mut roots);
+    match &stmt.kind {
+        StmtKind::ExprStmt(expr) | StmtKind::Echo(expr) | StmtKind::Return(Some(expr)) | StmtKind::Throw(expr) => {
+            visit(expr)
+        }
+        StmtKind::Assign { value, .. } | StmtKind::TypedAssign { value, .. } => visit(value),
+        _ => {}
+    }
+    roots
+}
+
+/// Adds the roots of plain element assignments inside `expr` to `roots`.
+fn visit_expression_element_writes(expr: &Expr, roots: &mut Vec<String>) {
+    match &expr.kind {
+        ExprKind::Assignment { target, value, .. } if matches!(target.kind, ExprKind::ArrayAccess { .. }) => {
+            let mut root = target.as_ref();
+            while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+                root = array;
+            }
+            if let ExprKind::Variable(name) = &root.kind {
+                let mut reads = HashSet::new();
+                collect_value_reads(value, &mut reads);
+                if !is_compiler_temp(name) && !reads.contains(name) && !roots.contains(name) {
+                    roots.push(name.clone());
+                }
+            }
+            visit_expression_element_writes(value, roots);
+        }
+        ExprKind::Closure { .. } => {}
+        _ => for_each_child_expr(expr, &mut |child| visit_expression_element_writes(child, roots)),
     }
 }
 
