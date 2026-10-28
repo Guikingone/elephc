@@ -45,7 +45,7 @@ pub(crate) fn emit_host_callback_check(emitter: &mut Emitter, done: &str) {
             emitter.instruction(&format!("jz {done}"));                         // resume normal native execution only after a successful host callback
         }
     }
-    abi::emit_store_imm_to_symbol(emitter, BOUNDARY_STATUS, 0, STATUS_RUNTIME_FAILURE as i64);
+    abi::emit_store_imm_to_symbol(emitter, BOUNDARY_STATUS, 0, STATUS_PHP_EXCEPTION as i64);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_jump(emitter, "__rt_throw_current");
 }
@@ -305,6 +305,26 @@ mod tests {
             let thunk_asm = thunk.output();
             assert!(thunk_asm.contains("cbnz w0, L_roundtrip_rollback"), "{target:?}: {thunk_asm}");
             assert!(!thunk_asm.contains("cbnz x0, L_roundtrip_rollback"), "{target:?}: {thunk_asm}");
+        }
+    }
+
+    /// Guarded host callbacks publish the distinct PHP-exception status on every host target.
+    #[test]
+    fn phpext_host_callback_escapes_keep_their_boundary_status() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            emit_host_callback_check(&mut emitter, "L_callback_done");
+            let asm = emitter.output();
+            let expected = if target.arch == Arch::AArch64 {
+                "mov x10, #2"
+            } else {
+                "mov QWORD PTR [r11], 2"
+            };
+            assert!(asm.contains(expected), "{target:?}: {asm}");
         }
     }
 

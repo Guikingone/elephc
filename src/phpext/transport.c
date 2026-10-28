@@ -21,7 +21,11 @@ typedef struct ep_call {
     char *exception_message;
     size_t exception_message_len;
     zend_long exception_code;
-    bool exception_is_previous;
+    char *previous_exception_name;
+    size_t previous_exception_name_len;
+    char *previous_exception_message;
+    size_t previous_exception_message_len;
+    zend_long previous_exception_code;
     char *output;
     size_t output_len;
     size_t output_capacity;
@@ -32,6 +36,7 @@ typedef struct ep_call {
     bool host_exception;
     bool host_bailout;
     zend_string *warning;
+    char *parked_warning_buffer;
     zval pending_exception;
     const HashTable *ancestors[64];
 } ep_call;
@@ -72,6 +77,7 @@ static void ep_call_free_storage(ep_call *call)
         allocation = next;
     }
     free(call->checkpoint);
+    free(call->parked_warning_buffer);
     free(call->output);
     free(call);
 }

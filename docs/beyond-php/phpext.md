@@ -96,7 +96,8 @@ available because another module's RSHUTDOWN callback or a late Fiber destructor
 can still resume a parked native call. Zend's post-deactivate hook runs after
 Fiber switching is blocked; it releases the snapshot and retires every abandoned
 native activation and its malloc-owned copies and checkpoints, including nested
-calls. MSHUTDOWN releases module resources. Zend values remain owned by PHP's
+calls and warning buffers parked on abandoned Fiber stacks. MSHUTDOWN releases
+module resources. Zend values remain owned by PHP's
 request heap.
 
 A module-local mutex serializes native execution while the adapter exchanges
@@ -136,6 +137,9 @@ rules as Zend. If a host callback inside `finally` throws while a native excepti
 is already pending, the host exception remains primary and the native exception
 becomes its previous link. Host `exit` and `die` remain authoritative: neither a
 native return nor a native exception from cleanup can replace their termination.
+Zend's graceful Fiber destruction is not an `exit`: compiled `finally` output,
+replacement exceptions and returns follow the same rules as native PHP during
+Fiber teardown.
 
 Synchronous reentry on the same host Fiber is supported. If an error handler
 suspends a Fiber while native frames remain active, another Fiber or the main

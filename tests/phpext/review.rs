@@ -355,6 +355,146 @@ catch (Throwable $error) {
 "#);
 }
 
+/// Array helpers propagate a null-object host warning escape after retiring partial owners.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn array_helpers_propagate_host_warning_exceptions() {
+    compare(r#"<?php
+#[Export] function php_sum_warning(array $value): mixed {
+    $result = array_sum($value); echo 'after-sum'; return $result;
+}
+#[Export] function php_product_warning(array $value): mixed {
+    $result = array_product($value); echo 'after-product'; return $result;
+}
+#[Export] function php_flip_warning(array $value): array {
+    $result = array_flip($value); echo 'after-flip'; return $result;
+}
+"#, r#"
+$cases = [
+    ['php_sum_warning', [1, [2], 3]],
+    ['php_product_warning', [1, [2], 3]],
+    ['php_flip_warning', [['nested']]],
+];
+foreach ($cases as [$function, $value]) {
+    set_error_handler(function () use ($function) { throw new LogicException("host:$function"); });
+    try { $function($value); echo 'missing'; }
+    catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+    finally { restore_error_handler(); }
+}
+"#);
+}
+
+/// An outer native finally return discards both the host exception and its stored native tail.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn outer_finally_returns_discard_stored_previous_exceptions() {
+    compare(r#"<?php
+#[Export] function php_previous_then_return(array $value): int {
+    try {
+        try { throw new RuntimeException('first', 123); }
+        finally { echo $value['missing']; }
+    } finally { return 7; }
+}
+"#, r#"
+set_error_handler(function () { throw new LogicException('host', 456); });
+var_dump(php_previous_then_return([]));
+echo 'after';
+"#);
+}
+
+/// An outer native finally throw preserves native, host and older-native chain order.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn outer_finally_exceptions_keep_complete_previous_chain() {
+    compare(r#"<?php
+#[Export] function php_previous_then_throw(array $value): void {
+    try {
+        try { throw new RuntimeException('first', 123); }
+        finally { echo $value['missing']; }
+    } finally { throw new TypeError('second', 789); }
+}
+"#, r#"
+set_error_handler(function () { throw new LogicException('host', 456); });
+try { php_previous_then_throw([]); }
+catch (Throwable $error) {
+    while ($error) {
+        echo get_class($error), ':', $error->getMessage(), ':', $error->getCode(), '|';
+        $error = $error->getPrevious();
+    }
+}
+"#);
+}
+
+/// Fiber destruction keeps graceful-exit cleanup subject to ordinary finally rules.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn fiber_destruction_uses_graceful_finally_semantics() {
+    compare(r#"<?php
+#[Export] function php_graceful_output(array $value): void {
+    try { echo $value['missing']; } finally { echo 'cleanup'; }
+}
+#[Export] function php_graceful_throw(array $value): void {
+    try { echo $value['missing']; } finally { throw new TypeError('second'); }
+}
+#[Export] function php_graceful_return(array $value): int {
+    try { echo $value['missing']; } finally { return 7; }
+}
+"#, r#"
+$run = function (string $function): void {
+    $fiber = new Fiber(function () use ($function) {
+        set_error_handler(function () { Fiber::suspend('parked'); return true; });
+        try {
+            try { $result = $function([]); echo 'result:', $result; }
+            catch (Throwable $error) {
+                echo 'inside:', get_class($error), ':', $error->getMessage(), ':',
+                    $error->getPrevious() ? get_class($error->getPrevious()) : 'none';
+            }
+            echo ':continued';
+        } finally { restore_error_handler(); }
+    });
+    echo $fiber->start(), ':';
+    try { unset($fiber); }
+    catch (Throwable $error) { echo 'outside:', get_class($error), ':', $error->getMessage(); }
+    echo ':after|';
+};
+$run('php_graceful_output');
+$run('php_graceful_throw');
+$run('php_graceful_return');
+"#);
+}
+
+/// A result-pack failure overrides a pending host callback exception and rolls state back.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn result_depth_failures_override_pending_host_exceptions() {
+    let project = Project::new();
+    let sdk = project.sdk();
+    let module = project.compile("depth_after_host", r#"<?php
+#[Export] function php_deep_after_host(array $value): array {
+    try { echo $value['missing']; }
+    finally {
+        $result = [];
+        for ($i = 0; $i < 65; $i++) { $result = [$result]; }
+        return $result;
+    }
+}
+#[Export] function php_small_after_depth(): array { return [42]; }
+"#);
+    let output = php(&sdk, &module).args(["-d", "display_errors=0", "-r", r#"
+set_error_handler(function () { throw new LogicException('host'); });
+try { php_deep_after_host([]); exit(10); }
+catch (Error $error) {
+    if (!str_contains($error->getMessage(), 'result exceeds the maximum nesting depth (64)')) { throw $error; }
+}
+restore_error_handler();
+if (php_small_after_depth() !== [42]) { exit(11); }
+echo 'ok';
+"#]).output().unwrap();
+    assert!(output.status.success(), "{:?}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.stdout, b"ok");
+    assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
 /// Host exit remains authoritative over a return from native finally cleanup.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]
