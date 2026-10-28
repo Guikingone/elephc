@@ -65,6 +65,9 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
     if crate::codegen::frame::module_binds_extern_callbacks(module) {
         // Native registrations remain callable until every PHP/resource destructor has finished.
         scope.call(emitter, crate::codegen::frame::EXTERN_CALLBACK_RELEASE_LABEL, false);
+        // Retiring the last native lease can detach cycles and resources captured by callbacks.
+        scope.call(emitter, "__rt_gc_collect_cycles_explicit", false);
+        scope.call(emitter, "__rt_web_inventory_prune", false);
     }
     // -- preserve a pending Throwable until the generated PHP catch can log it --
     scope.finish(emitter);

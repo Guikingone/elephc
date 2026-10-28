@@ -31,6 +31,9 @@ mod native_cycles;
 #[path = "application_coroutines.rs"]
 mod coroutines;
 
+#[path = "application_extern_callbacks.rs"]
+mod extern_callbacks;
+
 /// Removes only this test's fixture tree after the server guard has stopped.
 struct Fixture(PathBuf);
 

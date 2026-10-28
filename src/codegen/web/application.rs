@@ -151,6 +151,10 @@ mod tests {
             let global = shutdown.find(&ir_global_symbol("probe")).unwrap();
             let resources = shutdown.find("__rt_stream_registry_cleanup").unwrap();
             assert!(global < resources && resources < release, "{name}: {shutdown}");
+            let released = &shutdown[release..];
+            let collect = released.find("__rt_gc_collect_cycles_explicit").unwrap();
+            let prune = released.find("__rt_web_inventory_prune").unwrap();
+            assert!(collect < prune, "{name}: {released}");
         }
     }
 

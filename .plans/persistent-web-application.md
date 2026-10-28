@@ -29,9 +29,19 @@ application lifecycle, documented and tested before native artifact resolution.
 
 Machine queue job `50729bce` passed the warning-free build, seven library checks
 (including the new admission and all-target teardown cases), twenty-two native
-coroutine/allocator regressions, and all forty application HTTP cases. An
-additional native callback-cycle control is queued. Remote CI and a clean review
-of the integrated head are pending. Queue membership is currently absent; native
+coroutine/allocator regressions, and all forty application HTTP cases. A
+native callback-cycle control confirmed that the final lease retirement detached
+an uncollected cycle: only the shutdown hook logged before correction. A final
+protected cycle pass and inventory prune now run after callback retirement. The
+new HTTP regression and the identical native control log shutdown then destroyed;
+all-target ordering checks pass. There are now 41 application HTTP cases with
+focused green evidence across the final paths. Remote CI and a clean review
+of the integrated head are pending. CI on integration commit `c1f4999c4f` also
+exposed an incomplete FakeOps ArgumentCountError hierarchy. The test simulator now
+models TypeError, Error and Throwable correctly, and the omission regression checks
+all three catches. Both that exact CI failure and private-control catch regression
+pass with curl enabled. Queues `508c25aa` and `b12648fb` verified these corrections,
+the final native callback cycle and the complete builtin documentation audits. Queue membership is currently absent; native
 GitHub HEADGREEN admission and final remote ancestry verification remain required.
 
 ## Initial implementation delivery, before PR publication, 2026-10-28

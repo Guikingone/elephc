@@ -101,6 +101,8 @@ Ordinary globals, function statics, static properties, and application-owned
 objects live for the worker. Process registrations, including error handlers
 and stream wrapper/filter definitions, also remain worker state. Applications
 that install a registration temporarily must restore it in `finally`.
+Native extern callback bindings also remain worker state. Final teardown releases
+them after PHP and resource cleanup, then collects cycles detached by their captures.
 Session deployment settings and request parser controls are prepared afresh.
 Ambient stream-context options and notification callbacks are request scoped;
 create them inside `handle()` when needed. Replacing those registrations and
