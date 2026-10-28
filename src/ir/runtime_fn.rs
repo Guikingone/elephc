@@ -2701,6 +2701,8 @@ impl RuntimeFnId {
                 | RuntimeFnId::OpensslEncrypt
                 | RuntimeFnId::OpensslGetCipherMethods
                 | RuntimeFnId::ParseUrl
+                // `preg_match()` boxes `int|false` through `__rt_mixed_from_value`.
+                // That cell is fresh and does not alias the pattern, subject, or capture array.
                 | RuntimeFnId::PregMatch
                 | RuntimeFnId::PregMatchAll
                 | RuntimeFnId::PregReplace
