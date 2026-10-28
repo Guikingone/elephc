@@ -12,7 +12,6 @@ extern uintptr_t ep_native_stack_limit_main __asm__("_stack_limit_main");
 typedef void (*ep_native_function)(const zval *const *);
 static pthread_mutex_t ep_native_lock = PTHREAD_MUTEX_INITIALIZER;
 static unsigned char *ep_template;
-static size_t ep_state_size;
 static size_t ep_data_size, ep_zero_size;
 static ep_call *ep_current;
 
@@ -117,8 +116,9 @@ static int ep_deliver(const char *bytes, size_t length, bool warning)
     if (call->error || call->host_bailout || (EG(exception) && zend_is_unwind_exit(EG(exception)))) { return 1; }
     if (!length) { return 0; }
     if (!call->checkpoint) {
-        call->checkpoint = ep_alloc(call, ep_state_size);
-        if (!call->checkpoint) { return 1; }
+        /* Recovery storage is bounded independently and does not consume transport bytes. */
+        call->checkpoint = malloc(ep_state_size ? ep_state_size : 1);
+        if (!call->checkpoint) { call->error = "PHP extension checkpoint allocation failed"; return 1; }
         memcpy(call->checkpoint, call->snapshot, ep_state_size);
     }
     if (length > call->output_capacity) {

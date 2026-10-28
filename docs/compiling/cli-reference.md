@@ -1033,6 +1033,8 @@ in the resulting program.
 `--emit phpext` requires a native PHP 8.5 development SDK on Linux x86_64,
 Linux aarch64 or macOS aarch64. iOS extension output is rejected. It produces
 `<source-stem>.so`, including a Mach-O bundle with that suffix on macOS.
+Exported parameters and returns need explicit type declarations; null defaults
+need an explicit nullable type such as `?int`.
 
 | Environment variable | Default | Meaning |
 | --- | --- | --- |

@@ -17,6 +17,9 @@ This plan tracks the implementation of a distinct
 producer output, `elephc --emit phpext`, whose artifact PHP loads through
 `extension=...`. Top-level functions marked `#[Export]` become PHP functions.
 The existing C ABI for `cdylib` and `staticlib` remains compatible.
+Producer exports require explicit parameter and return declarations. Null
+defaults require explicit nullable types, avoiding inferred ABI placeholders
+and PHP's deprecated implicit-nullable scalar declarations.
 
 The first delivery covers by-value `int`, `float`, `bool`, binary `string`,
 `array`, `null`, supported nullable forms, and `void` returns. Arrays include
@@ -296,8 +299,12 @@ not only the adapter pointer. Native calls are serialized in ZTS in this first
 version; requests remain independent.
 
 Native thunks call only C transport callbacks. Results and exception records
-are copied into malloc-owned storage before the native boundary returns. Output
-and warnings park the complete active image, release the mutex, and invoke the
+are copied into malloc-owned storage before the native boundary returns. Result
+transport allocations are charged with input copies to a per-call budget equal
+to the native state image size, including allocation headers. This bounds shared
+array expansion before native import. Checkpoint storage is separately owned
+and freed by the activation so host reentry does not consume this copy budget.
+Output and warnings park the complete active image, release the mutex, and invoke the
 real host API inside a C bailout guard. Nested PHP-to-native calls restore the
 parked image and publish their changes before the outer native activation
 resumes. Host exceptions and bailouts become a callback status, followed by a

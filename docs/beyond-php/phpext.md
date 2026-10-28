@@ -53,11 +53,19 @@ and `null`, including supported nullable signatures and `mixed` values that
 contain this subset. `void` and `never` returns are supported. Zend parses
 arguments, applies caller strictness and handles named and optional arguments.
 Supported defaults are scalar constants, null and empty arrays.
+Exported parameters and returns require explicit type declarations, including
+`mixed` for supported dynamic values. A null default requires an explicitly
+nullable declaration such as `?int $value = null`; implicit nullability is rejected.
 
 Arrays may be nested, sparse and heterogeneous. Copies preserve insertion
 order, integer and string keys, binary keys and the next append index. Both
 strings and arrays are copied in each direction. Neither allocator frees the
 other runtime's memory, and changing a returned array cannot mutate an input.
+The combined input and result transport allocations for one call are bounded
+by the module's native state image size, including allocation bookkeeping.
+Exceeding this budget throws a PHP `Error` and leaves later calls usable.
+This also bounds expansion of shared nested arrays into independent copies.
+Transport uses the module's configured budget rather than PHP's `memory_limit`.
 
 By-reference and variadic exports, objects, resources, callables, recursive
 arrays and shared references inside arrays are rejected. Unshared reference

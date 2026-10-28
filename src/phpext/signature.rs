@@ -15,6 +15,12 @@ pub(crate) fn validate(name: &str, sig: &FunctionSig, span: Span) -> Result<(), 
     if sig.variadic.is_some() || sig.by_ref_return || sig.ref_params.iter().any(|r| *r) {
         return Err(fail("--emit phpext requires fixed, by-value parameters and returns"));
     }
+    if (0..sig.params.len()).any(|i| !sig.declared_params.get(i).copied().unwrap_or(false)) {
+        return Err(fail("PHP export parameters require a declared type; use mixed for supported dynamic values"));
+    }
+    if !sig.declared_return {
+        return Err(fail("PHP export returns require a declared type; use mixed for supported dynamic values"));
+    }
     for (_, ty) in &sig.params {
         if !input_storage_supported(ty) {
             return Err(fail("typed array parameters are not supported by --emit phpext; use the PHP array type"));
@@ -22,15 +28,39 @@ pub(crate) fn validate(name: &str, sig: &FunctionSig, span: Span) -> Result<(), 
         if !supported(ty) { return Err(fail(&format!("unsupported parameter type {ty:?}"))); }
         parameter_type(ty).map_err(|detail| fail(&detail))?;
     }
-    for default in sig.defaults.iter().flatten() {
+    for (i, default) in sig.defaults.iter().enumerate().filter_map(|(i, value)| value.as_ref().map(|value| (i, value))) {
         default_text(Some(default)).map_err(|detail| {
             CompileError::new(default.span, &format!("PHP export '{name}': {detail}"))
         })?;
+        let ty = &sig.params[i].1;
+        let (base, nullable) = parameter_type(ty).map_err(|detail| fail(&detail))?;
+        if matches!(default.kind, ExprKind::Null) && !nullable && !matches!(base, PhpType::Void | PhpType::Mixed) {
+            return Err(fail("null defaults require an explicitly nullable parameter type; use ?T"));
+        }
+        if !default_matches(ty, default) {
+            return Err(fail("default value does not match the declared parameter type"));
+        }
     }
     if !supported(&sig.return_type) && sig.return_type != PhpType::Never {
         return Err(fail(&format!("unsupported return type {:?}", sig.return_type)));
     }
     Ok(())
+}
+
+/// PHP declarations permit integer defaults for float, without general scalar coercion.
+fn default_matches(ty: &PhpType, expr: &Expr) -> bool {
+    match ty {
+        PhpType::Mixed => true,
+        PhpType::Int => matches!(expr.kind, ExprKind::IntLiteral(_)),
+        PhpType::Float => matches!(expr.kind, ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)),
+        PhpType::Bool => matches!(expr.kind, ExprKind::BoolLiteral(_)),
+        PhpType::False => matches!(expr.kind, ExprKind::BoolLiteral(false)),
+        PhpType::Str => matches!(expr.kind, ExprKind::StringLiteral(_)),
+        PhpType::Void => matches!(expr.kind, ExprKind::Null),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => matches!(&expr.kind, ExprKind::ArrayLiteral(values) if values.is_empty()),
+        PhpType::Union(members) => members.iter().any(|member| default_matches(member, expr)),
+        _ => false,
+    }
 }
 
 /// Shares the accepted default forms between source validation and Zend reflection metadata.

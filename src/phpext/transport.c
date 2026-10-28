@@ -12,6 +12,7 @@ typedef struct ep_allocation {
 
 typedef struct ep_call {
     ep_allocation *allocations;
+    size_t transport_bytes;
     zval *result;
     const char *error;
     char *exception_name;
@@ -33,6 +34,9 @@ typedef struct ep_call {
     const HashTable *ancestors[64];
 } ep_call;
 
+/* Set once at MINIT, before requests can allocate transport or native snapshots. */
+static size_t ep_state_size;
+
 /* Allocate independently of emalloc: native code cannot cross a Zend bailout frame. */
 static void *ep_alloc(ep_call *call, size_t size)
 {
@@ -40,13 +44,19 @@ static void *ep_alloc(ep_call *call, size_t size)
         call->error = "PHP extension transport allocation overflow";
         return NULL;
     }
-    ep_allocation *allocation = calloc(1, offsetof(ep_allocation, bytes) + size);
+    size_t bytes = offsetof(ep_allocation, bytes) + size;
+    if (call->transport_bytes > ep_state_size || bytes > ep_state_size - call->transport_bytes) {
+        call->error = "PHP extension transport allocation budget exceeded";
+        return NULL;
+    }
+    ep_allocation *allocation = calloc(1, bytes);
     if (!allocation) {
         call->error = "PHP extension transport allocation failed";
         return NULL;
     }
     allocation->next = call->allocations;
     call->allocations = allocation;
+    call->transport_bytes += bytes;
     return allocation->bytes;
 }
 
@@ -60,6 +70,7 @@ static void ep_call_destroy(ep_call *call)
         free(allocation);
         allocation = next;
     }
+    free(call->checkpoint);
     free(call->output);
     free(call);
     if (!Z_ISUNDEF(pending)) { zval_ptr_dtor(&pending); }

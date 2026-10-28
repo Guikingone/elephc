@@ -10,6 +10,48 @@
 
 use super::*;
 
+/// Explicit nullable declarations retain omitted, explicit and named null defaults.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn explicit_nullable_defaults_match_php() {
+    compare(r#"<?php
+#[Export] function php_defaults(?int $integer = null, ?float $float = null,
+    ?bool $boolean = null, ?string $string = null, ?array $array = null,
+    ?false $flag = null, mixed $dynamic = null, null $nothing = null): array {
+    return [$integer, $float, $boolean, $string, $array, $flag, $dynamic, $nothing];
+}
+#[Export] function php_float_default(float $value = 5): float { return $value; }
+"#, r#"
+echo json_encode([php_defaults(), php_defaults(null, null, null, null, null, null, null, null),
+    php_defaults(string: 'ok', flag: false, dynamic: ['key' => 1]), php_float_default()]);
+"#);
+}
+
+/// A small shared array graph cannot expand into an unbounded malloc-owned transport tree.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn shared_array_transport_has_a_per_call_budget() {
+    let project = Project::new();
+    let sdk = project.sdk();
+    let module = project.compile("budget", "<?php #[Export] function php_copy(array $value): array { return $value; }");
+    let output = php(&sdk, &module).args(["-r", r#"
+$value = [1];
+for ($i = 0; $i < 16; $i++) { $value = [$value, $value]; }
+try { php_copy($value); exit(10); }
+catch (Error $error) {
+    if (!str_contains($error->getMessage(), 'transport allocation budget exceeded')) { throw $error; }
+}
+$input = [[1], [2]];
+$result = php_copy($input);
+$result[0][0] = 3;
+if ($input !== [[1], [2]] || $result !== [[3], [2]]) { exit(11); }
+echo 'ok';
+"#]).output().unwrap();
+    assert!(output.status.success(), "{:?}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.stdout, b"ok");
+    assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
 /// Shared fatal helpers become recoverable PHP Errors without writing around host diagnostics.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]

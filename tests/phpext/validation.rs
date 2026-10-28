@@ -11,6 +11,55 @@
 
 use super::*;
 
+/// Inferred storage types must not become declarations in the public PHP signature.
+#[test]
+fn phpext_validation_requires_declared_export_types() {
+    let project = Project::new();
+    let source = project.0.join("inferred.php");
+    for (program, expected) in [
+        ("function identity($value): int { return $value; }", "parameters require a declared type"),
+        ("function identity($value = 'text'): string { return $value; }", "parameters require a declared type"),
+        ("function identity(int $value) { return $value; }", "returns require a declared type"),
+        ("function identity() { return 1; }", "returns require a declared type"),
+    ] {
+        fs::write(&source, format!("<?php #[Export] {program}")).unwrap();
+        for mode in [Some("--check"), Some("--emit-ir"), None] {
+            let mut command = Command::new(compiler_binary());
+            command.args(["--emit", "phpext"]);
+            if let Some(mode) = mode { command.arg(mode); }
+            let output = command.arg(&source)
+                .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk")).output().unwrap();
+            let diagnostic = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{program}, {mode:?} accepted an inferred declaration");
+            assert!(diagnostic.contains(expected), "{program}, {mode:?}: {diagnostic}");
+            assert!(!diagnostic.contains("query php-config"), "{program}, {mode:?}: {diagnostic}");
+        }
+    }
+}
+
+/// Null defaults need an explicit nullable native representation before any SDK work.
+#[test]
+fn phpext_validation_requires_explicit_nullable_defaults() {
+    let project = Project::new();
+    let source = project.0.join("implicit_nullable.php");
+    for ty in ["int", "float", "bool", "string", "array", "false"] {
+        fs::write(&source, format!("<?php #[Export] function optional({ty} $value = null): mixed {{ return $value; }}")).unwrap();
+        for mode in [Some("--check"), Some("--emit-ir"), None] {
+            let mut command = Command::new(compiler_binary());
+            command.args(["--emit", "phpext"]);
+            if let Some(mode) = mode { command.arg(mode); }
+            let output = command.arg(&source)
+                .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk")).output().unwrap();
+            let diagnostic = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{ty}, {mode:?} accepted an implicit nullable default");
+            let nullable_error = diagnostic.contains("null defaults require an explicitly nullable parameter type");
+            let checker_error = diagnostic.contains("parameter $value expects") && diagnostic.contains("got null");
+            assert!(nullable_error || checker_error, "{ty}, {mode:?}: {diagnostic}");
+            assert!(!diagnostic.contains("query php-config"), "{ty}, {mode:?}: {diagnostic}");
+        }
+    }
+}
+
 /// Native coroutine stacks, foreign globals and suppression cannot escape hosted state checks.
 #[test]
 fn phpext_validation_rejects_unhosted_runtime_state() {
@@ -125,8 +174,12 @@ fn phpext_validation_accepts_nullable_parameter_shapes() {
 fn phpext_validation_rejects_defaults_before_sdk() {
     let project = Project::new();
     let source = project.0.join("defaults.php");
-    for default in ["[1]", "['key' => 2]"] {
-        fs::write(&source, format!("<?php #[Export] function php_default_array(array $value = {default}): array {{ return $value; }}")).unwrap();
+    for (ty, default, expected) in [
+        ("array", "[1]", "defaults currently require scalar, null or empty array constants"),
+        ("array", "['key' => 2]", "defaults currently require scalar, null or empty array constants"),
+        ("bool", "1", "default value does not match the declared parameter type"),
+    ] {
+        fs::write(&source, format!("<?php #[Export] function php_default_array({ty} $value = {default}): {ty} {{ return $value; }}")).unwrap();
         for mode in [Some("--check"), Some("--emit-ir"), None] {
             let mut command = Command::new(compiler_binary());
             command.args(["--emit", "phpext"]);
@@ -136,7 +189,7 @@ fn phpext_validation_rejects_defaults_before_sdk() {
                 .output().unwrap();
             let diagnostic = String::from_utf8_lossy(&output.stderr);
             assert!(!output.status.success(), "{default}, {mode:?} accepted an unsupported default");
-            assert!(diagnostic.contains("defaults currently require scalar, null or empty array constants"), "{default}, {mode:?}: {diagnostic}");
+            assert!(diagnostic.contains(expected), "{default}, {mode:?}: {diagnostic}");
             assert!(diagnostic.contains("defaults.php:1:"), "{default}, {mode:?}: {diagnostic}");
             assert!(!diagnostic.contains("query php-config"), "{default}, {mode:?}: {diagnostic}");
         }
