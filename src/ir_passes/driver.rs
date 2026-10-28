@@ -36,7 +36,7 @@ use super::array_sum_int_sink::ArraySumIntSink;
 use super::array_sum_loop::ArraySumLoop;
 use super::branch_simplify::BranchSimplify;
 use super::borrowed_receiver_roots::BorrowedReceiverRoots;
-use super::bounded_mixed_counter::BoundedMixedCounter;
+use super::bounded_mixed_counter::{BoundedMixedCounter, LoopCounterVersioning};
 use super::checked_int_sink::CheckedIntSink;
 use super::checked_numeric_chain::CheckedNumericChain;
 use super::concat_reset::ConcatResetElim;
@@ -103,8 +103,9 @@ pub trait IrPass {
 /// proven receiver-root preparation before inlining,
 /// identity arithmetic folding, peephole rewrites, scalar local promotion,
 /// immutable-local discovery, checked-arithmetic int-sink specialization,
-/// proven bounded Mixed counters, canonical loop optimization, integer range specialization, boxed numeric-chain
-/// fusion, constant folding, common-subexpression elimination, loop-invariant
+/// proven bounded Mixed counters, guarded loop-counter versioning, canonical loop
+/// optimization, integer range specialization, boxed numeric-chain fusion, constant
+/// folding, common-subexpression elimination, loop-invariant
 /// code motion, dead instruction elimination,
 /// dead store elimination, branch simplification, and concat scratch-state
 /// optimization.
@@ -141,6 +142,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(ArraySumIntSink),
         Box::new(AbsIntSink),
         Box::new(BoundedMixedCounter::new(module)),
+        Box::new(LoopCounterVersioning::new(module)),
         Box::new(LoopOptimize),
         Box::new(CountHoist),
         Box::new(ArrayGetBounds),

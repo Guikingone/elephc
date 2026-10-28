@@ -36,6 +36,15 @@ pub(super) fn publish_diagnostic_site(ctx: &mut FunctionContext<'_>, inst: &Inst
     backtrace::publish_diagnostic_site(ctx, inst)
 }
 
+/// Emits the function-level frame reader the prologue publishes in the activation record.
+pub(in crate::codegen) fn emit_function_frame_reader(
+    ctx: &mut FunctionContext<'_>,
+    label: &str,
+    materialize: bool,
+) -> Result<()> {
+    backtrace::emit_function_frame_reader(ctx, label, materialize)
+}
+
 /// Lowers one selector-validated PHP Core operation.
 pub(super) fn lower_core_builtin(
     ctx: &mut FunctionContext<'_>,

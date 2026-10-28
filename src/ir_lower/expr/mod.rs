@@ -106,6 +106,7 @@ use reference_returns::{
 };
 mod property_fetch_for_write;
 mod method_calls;
+mod member_receivers;
 mod enum_interface_calls;
 mod enum_argument_guards;
 mod enum_method_args;
@@ -185,6 +186,8 @@ use object_construction::*;
 use property_access::*;
 use property_probes::*;
 use method_calls::*;
+use member_receivers::{checked_member_receiver_type, lower_member_receiver, refine_member_receiver};
+pub(crate) use member_receivers::lower_member_receiver_at_span;
 use reflection_class_calls::*;
 use reflection_method_calls::*;
 use reflection_property_calls::*;

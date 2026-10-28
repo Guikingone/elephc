@@ -612,6 +612,8 @@ are a separate storage optimization and do not require this pass to run.
 
 Lowering also uses a discarded trial to decide whether a potentially promoting
 local can retain scalar storage when the body is lowered again. A counter whose
+comparison partners require boxed PHP coercion or identity remains boxed in that
+replay, using the same partner rules as guarded loop copies. A counter whose
 seed is checked arithmetic on another counter (`$j = $i + 1`) is retried jointly
 with that counter when it fails alone, and a proven seeded counter is replayed
 with its seed recorded as an `int` (`LoweringContext::int_seed_bindings`), so its
@@ -634,91 +636,51 @@ ordinary lowering again, including with IR optimization disabled, rather than
 installing speculative trial instructions in the executable function. Integer
 storage and buffer bounds remain independent proofs.
 
-## EIR typed-array count hoisting
+For a canonical counter that lacks a static overflow proof,
+`bounded_mixed_counter/versioning.rs` can retain the original loop and add a
+guarded integer copy. Both the seed and the invariant bound must have integer
+tags. Inclusive ascending bounds must differ from `PHP_INT_MAX`, and descending
+ones from `PHP_INT_MIN`. The copied counter uses private scalar storage, and each
+normal exit publishes its final integer into the original boxed slot. Float
+bounds, overflowing seeds and unsafe inclusive bounds follow the original loop.
+Mutable bounds, escaping SSA values, references, dynamic scopes, handlers and
+suspension are excluded. Only innermost loops of at most 256 instructions qualify,
+with at most four copies per function and conservative function-size limits.
+Copies preserve instruction source spans and lexical class scopes.
 
-`src/ir_passes/count_hoist.rs` runs after canonical loop optimization. A
-single-argument `count()` of a typed indexed-array or hash local in a loop
-condition is evaluated on every iteration even when nothing in the loop can
-change the container. When the whole loop only reads the slot (no store,
-retirement, element address, reference operation, mutating array/hash op,
-by-reference call or runtime include) and the array value reaches only
-read-only consumers, the pass moves the slot load and the `count()` call into
-the existing loop preheader, so the condition compares against one hoisted
-length.
+A separate seed guard avoids a loop copy when overflow makes the first condition
+false and no code outside the loop reads the counter. For example, the overflowing
+seed of `for ($box = $n - 1; $box >= 0; $box--)` is negative and never enters the
+body. Its guard skips directly to the exit; the in-range path uses exact integer
+arithmetic. Header effects and observable final seed values veto this rewrite.
 
-The move is only safe for a container that no aliased path can resize: any
-instruction carrying the slot other than a `LoadLocal` rejects the hoist,
-`LoadRefCell` receivers never qualify, and generators, fiber wrappers,
-exception-handler functions and dynamic `eval` are skipped. Runtime includes
-reject it as well because evaluated code receives the frame. The count and its
-receiver are ordinary SSA values after the move, so the fixed-point driver can
-still fold or CSE them, and `--ir-opt=off` keeps the original in-loop shape.
+`checked_numeric_chain/locals.rs` extends integer-cast chain fusion through private
+local writers. It inventories every observation reached before an overwrite or
+retirement, requires the writer to dominate those reads and be their unique reaching
+definition, and accepts only graphs ending in explicit integer casts. The generic loop copy can retain boxed storage
+while its fast copy eliminates an otherwise unobserved numeric store. A suffix such as `(int)($cell + 1)` stays in the same ordered
+float-promoting chain as `$cell = $row * $columns + $column`. Casting the local
+before that suffix would change PHP's answer after overflow, so the pass fuses the
+complete expression at each cast and removes the now-unobserved boxed storage.
 
-## EIR typed-array bounds proof
+## EIR cast-observed integer sinks
 
-`src/ir_passes/array_get_bounds.rs` runs immediately after the count hoist and
-reuses its loop-invariance proof. It recognizes a strict signed comparison in
-the loop header, `i < count($data)`, where `i` is the header block parameter and
-the count has already been hoisted to the preheader. The parameter must be
-seeded with a non-negative constant and advanced by one positive constant step
-on the loop's single latch.
+`src/ir_passes/array_sum_int_sink.rs` handles a builtin `array_sum()` over a
+statically packed `array<int>` when its boxed result is observed only through
+one `(int)` cast (plus ordinary release scaffolding). The pass retargets the
+call to `ArraySumInt`, changes the result to a raw `I64`/`int`/`NonHeap` value,
+replaces the cast result with the call result, and neutralizes the cast and
+releases. The raw reducer keeps the same NEON/SSE2 positive-int gate and scalar
+promotion sequence; a promoted sum terminates in PHP's warned float-to-int
+conversion. Any other observer — echo, a store, a second cast, a call, or a
+terminator — keeps the boxed `array_sum()` call.
 
-The receiver must be a non-parameter PHP local whose declared and read types are
-an indexed array of raw integers (or still empty), built only by `array_new` and
-int-valued appends. Every load of that slot may reach only `count`, an
-array length/read/isset/key-exists probe, or a raw-int append; calls, mixed
-boxing, references, element addresses, mutating helpers and runtime includes
-reject the proof. Under those facts a packed, non-null, int-shaped array cannot
-promote to a hash or widen its slots, and the header condition holds on every
-path to the body, so an `array_get` of the induction value cannot miss.
-
-The pass rewrites those reads to
-[`array_get_unchecked`](the-codegen.md#unchecked-typed-array-reads), retypes the result to a raw
-PHP `int`, and retires the now-redundant null-as-zero cast. Inclusive bounds,
-negative seeds or steps, escaping or mutable receivers, parameters and reads
-whose result has any consumer other than that narrowing cast keep the guarded
-`array_get` with its missing-key warning and null fallback.
-
-## EIR typed-array reductions and fill reservation
-
-`src/ir_passes/array_sum_loop.rs` recognizes the exact boxed reduction scaffold
-`while (i < count($data)) { $sum += $data[$i]; $i += 1; }` after the count hoist
-and the bounds proof. The array must be the same private, dense `array<int>`,
-the accumulator must be a proven numeric local, the body may contain only the
-matched load/read/add/clone/acquire/release/store sequence on one unit latch,
-and the induction value must not be observed after the loop. The loop becomes
-one `__rt_array_sum_int` call in the preheader. The helper reproduces PHP's
-left-to-right addition: integer adds overflow into a double at the same step,
-the remaining elements stay double, and an empty range returns the retained
-seed cell. The old loop blocks are left for branch simplification to neutralize.
-
-`src/ir_passes/array_sum_int_sink.rs` handles the builtin form. When an
-`array_sum()` call over a statically packed `array<int>` result is observed only
-through one `(int)` cast (plus ordinary release scaffolding), the pass retargets
-the call to `ArraySumInt`, changes the result to a raw `I64`/`int`/`NonHeap`
-value, replaces the cast result with the call result, and neutralizes the cast
-and releases. The raw reducer keeps the same NEON/SSE2 positive-int gate and
-scalar promotion sequence; a promoted sum terminates in PHP's warned
-float-to-int conversion. Any other observer — echo, a store, a second cast, a
-call, or a terminator — keeps the boxed `array_sum()` call.
-
-`src/ir_passes/abs_int_sink.rs` applies the same cast-observed rule to the builtin
-`abs()`. When the operand is a concrete int, bool, or null-capable tagged scalar and
-the boxed result is observed only through one `(int)` cast, the call becomes
-`AbsInt`: in-range values return the raw magnitude, while `INT_MIN` still promotes
-to the float `2^63` and terminates in PHP's warned float-to-int conversion. Floats
-and general Mixed operands keep the boxed `abs()` call.
-
-`src/ir_passes/array_fill_loop.rs` recognizes a top-level constant-bound fill,
-`while (i < N) { $data[] = <pure int expr>; $i += 1; }`, over an array created
-immediately before it. The array must be the only owner, its only append must
-be the matched push, and the value expression is restricted to non-throwing int
-arithmetic with constant nonzero divisors and constant in-range shift counts.
-The pass sizes the initial `array_new` to `N - start` and rewrites the append to
-`ArrayPushReserved`. Preallocating is safe because the accepted expression
-cannot fail before an append, so every iteration reaches the push. Runtime
-bounds, nested loops, a prior append, an observed induction, aliases and any
-other receiver use keep the checked generic append.
+`src/ir_passes/abs_int_sink.rs` applies the same cast-observed rule to `abs()`.
+When the operand is a concrete int, bool, or null-capable tagged scalar and the
+boxed result is observed only through one `(int)` cast, the call becomes
+`AbsInt`: in-range values return the raw magnitude, while `INT_MIN` still
+promotes to the float `2^63` and terminates in PHP's warned float-to-int
+conversion. Floats and general Mixed operands keep the boxed `abs()` call.
 
 ## EIR buffer resolution hoisting
 
@@ -805,9 +767,10 @@ descriptor hoisting, `buffer_property_loops` relocates a stable buffer-property
 read from the header or its unconditional body entry into a preheader. A
 body-only read gets a taken-only entry behind a duplicate of the scalar loop
 condition, preserving zero-trip uninitialized-property behavior. The read keeps
-its original instruction id and lexical scope. Calls, property writes, frees,
-conditional reads, faulting prefixes and live-out header SSA values prevent
-property motion. See `examples/buffer-property-loop/main.php`.
+its original instruction id and lexical scope. The ordinary single-read path
+rejects conditional reads and faulting prefixes. Calls, object-property writes,
+frees and live-out header SSA values prevent property motion.
+See `examples/buffer-property-loop/main.php`.
 
 The same body-read optimization handles an invariant object parameter such as
 `$table->slots[$i]`, including a read left by an inlined accessor. Borrowed
@@ -816,6 +779,18 @@ original SSA values. An accessor's invariant receiver null check moves behind
 the zero-trip guard and retains its original throwing edge and lexical scope.
 Object local receivers must use exact borrowed loads, remain unwritten in the
 loop, and have no by-reference parameter binding or escaping slot address.
+
+For a checked accessor chain, `guarded_buffer_prefix` clones the first scalar
+header and a bounded straight entry prefix through the first invariant buffer
+property read. A unique conditional loop-entry edge can be split to create its
+preheader. The first checks run only on a taken entry, in their original order;
+terminal failure blocks keep the initial operands, owner slots, source spans and
+inlined lexical scopes. Invariant object loads, scalar properties and conditions
+are cached, while index-dependent checks remain per iteration. Repeated tests of
+a cached condition can then fold through `guard_facts`. Calls, object-property
+writes, frees and other operations that could invalidate those reads reject the
+transformation, as do header SSA values observed after the loop. Zero-trip loops
+still execute no accessor checks. See `examples/checked-buffer/main.php`.
 
 A foreign receiver's static object type alone does not prove it non-null:
 dynamic calls can supply null, and a property warning can run an error handler.
@@ -863,16 +838,18 @@ not proven free of address escapes), plus
 the no-op `acquire` and `release` of a buffer handle and named property reads of
 `$this` refined to `reads_heap, may_throw`. Foreign buffer reads also qualify
 when their null-warning path immediately reaches the checked access described
-above. Other foreign property reads remain barriers: effect refinement drops
-their null-receiver warning, which can run a user error handler and then return.
+above. Inlined scalar `int`, `float` and `bool` object-property reads also qualify:
+the splice retains their receiver guard and lexical scope. Other foreign property
+reads remain barriers: effect refinement drops their null-receiver warning, which
+can run a user error handler and then return.
 Modules where a class declares `__get`, or where the eval bridge can declare one,
 skip the phase, so no trusted read dispatches to user code. A property store or
 `unset` on any object
 (another reference may alias the receiver), `buffer_free()`, a call, a release,
 an allocation, a warning or output ends the region.
 
-1. A dominated buffer-typed `prop_get` of the same property on a matching
-   receiver in the same inlined class scope (`Function::inlined_scopes`) is replaced
+1. A dominated buffer-typed or inlined scalar object `prop_get` of the same property
+   on a matching receiver in the same inlined class scope (`Function::inlined_scopes`) is replaced
    by the dominating read. A read that did not throw first
    cannot throw the second time, because nothing changed the property.
 2. A dominated packed `buffer_get` of the same property-read handle and a
@@ -895,7 +872,10 @@ their exact effects during effect refinement (`reads_heap` for a read;
 `reads_heap`, `writes_heap` and `may_fatal` for a write, which may copy a whole
 nested record), count as concat-inert, and consume their operands by value for the
 by-reference alias analysis, so the loop index and the locals they store stay in
-SSA. See the [compilation guide](../compiling/optimization.md#buffer-loops).
+SSA. Packed field values are excluded from property-read merging: a packed field
+write, including a nested-record copy, can change them while preserving the
+record address, buffer handle and descriptor. See the
+[compilation guide](../compiling/optimization.md#buffer-loops).
 
 ## Effect summaries: purity and `may_throw`
 

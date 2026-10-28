@@ -32,6 +32,7 @@ mod basics;
 mod branch_conditions;
 #[path = "runtime_gc/receiver_parameter_owners.rs"]
 mod receiver_parameter_owners;
+mod guarded_interface_mutations;
 #[path = "runtime_gc/large_unary_string_results.rs"]
 mod large_unary_string_results;
 #[path = "runtime_gc/static_local_initializers.rs"]
@@ -196,6 +197,8 @@ mod unserialize_hydration_data;
 mod serialize_magic_results;
 #[path = "runtime_gc/growth.rs"]
 mod growth;
+#[path = "runtime_gc/allocator_bins.rs"]
+mod allocator_bins;
 #[path = "runtime_gc/heap.rs"]
 mod heap;
 mod split_remainders;
@@ -221,3 +224,5 @@ mod gc_incoming_cache;
 mod unshift_reference_cow;
 
 mod entity_slot_owners;
+#[path = "runtime_gc/counter_regions.rs"]
+mod counter_regions;
