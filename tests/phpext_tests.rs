@@ -18,6 +18,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use elephc::codegen_support::platform::Target;
 use elephc::phpext::{render_registration, PhpSdk};
 
+#[path = "phpext/support.rs"]
+mod support;
+use support::{compiler_binary, fixture_dir};
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
 #[path = "phpext/validation.rs"]
@@ -78,7 +82,7 @@ impl Project {
     fn compile(&self, name: &str, source: &str) -> PathBuf {
         let path = self.0.join(format!("{name}.php"));
         fs::write(&path, source).unwrap();
-        let output = Command::new(env!("CARGO_BIN_EXE_elephc"))
+        let output = Command::new(compiler_binary())
             .args(["--emit", "phpext", "--heap-size=524288"]).arg(&path).output().unwrap();
         assert!(output.status.success(), "compiler failed:\n{}\n{}",
             String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));

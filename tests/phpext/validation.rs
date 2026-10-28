@@ -18,7 +18,7 @@ fn phpext_validation_rejects_user_classes_in_eir() {
     let source = project.0.join("objects.php");
     fs::write(&source, "<?php class PhpBox { public int $value = 42; } #[Export] function box_value(): int { $box = new PhpBox(); return $box->value; }").unwrap();
     for mode in [Some("--check"), Some("--emit-ir"), None] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_elephc"));
+        let mut command = Command::new(compiler_binary());
         command.args(["--emit", "phpext"]);
         if let Some(mode) = mode { command.arg(mode); }
         let output = command.arg(&source)
@@ -29,7 +29,7 @@ fn phpext_validation_rejects_user_classes_in_eir() {
         assert!(diagnostic.contains("constructs unsupported class 'PhpBox'"), "{mode:?}: {diagnostic}");
         assert!(!diagnostic.contains("query php-config"), "{mode:?}: {diagnostic}");
     }
-    let cdylib = Command::new(env!("CARGO_BIN_EXE_elephc"))
+    let cdylib = Command::new(compiler_binary())
         .args(["--emit", "cdylib", "--emit-ir"]).arg(&source).output().unwrap();
     assert!(cdylib.status.success(), "{}", String::from_utf8_lossy(&cdylib.stderr));
 }
@@ -42,7 +42,7 @@ fn phpext_validation_rejects_parameter_unions_before_sdk() {
     for ty in ["int|float", "int|float|null", "string|bool"] {
         fs::write(&source, format!("<?php #[Export] function identity({ty} $value): {ty} {{ return $value; }}")).unwrap();
         for mode in [Some("--check"), Some("--emit-ir"), None] {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_elephc"));
+            let mut command = Command::new(compiler_binary());
             command.args(["--emit", "phpext"]);
             if let Some(mode) = mode { command.arg(mode); }
             let output = command.arg(&source)
@@ -64,7 +64,7 @@ fn phpext_validation_accepts_nullable_parameter_shapes() {
     let source = project.0.join("nullable.php");
     fs::write(&source, "<?php #[Export] function nullable(?int $integer, ?float $float, ?bool $boolean, ?string $string, ?array $value): ?array { return $value; }").unwrap();
     for mode in ["--check", "--emit-ir"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_elephc"))
+        let output = Command::new(compiler_binary())
             .args(["--emit", "phpext", mode]).arg(&source)
             .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
             .output().unwrap();
@@ -80,7 +80,7 @@ fn phpext_validation_rejects_defaults_before_sdk() {
     for default in ["[1]", "['key' => 2]"] {
         fs::write(&source, format!("<?php #[Export] function php_default_array(array $value = {default}): array {{ return $value; }}")).unwrap();
         for mode in [Some("--check"), Some("--emit-ir"), None] {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_elephc"));
+            let mut command = Command::new(compiler_binary());
             command.args(["--emit", "phpext"]);
             if let Some(mode) = mode { command.arg(mode); }
             let output = command.arg(&source)
@@ -102,7 +102,7 @@ fn phpext_validation_accepts_supported_defaults() {
     let source = project.0.join("supported_defaults.php");
     fs::write(&source, "<?php #[Export] function defaults(int $integer = -42, float $float = 1.5, bool $boolean = false, string $string = 'text', ?int $nullable = null, array $values = []): array { return [$integer, $float, $boolean, $string, $nullable, $values]; }").unwrap();
     for mode in ["--check", "--emit-ir"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_elephc"))
+        let output = Command::new(compiler_binary())
             .args(["--emit", "phpext", mode]).arg(&source)
             .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
             .output().unwrap();
@@ -122,7 +122,7 @@ fn phpext_validation_rejects_options_before_sdk() {
         &["-L", "unavailable"][..], &["--framework", "unavailable"][..],
     ] {
         for mode in [Some("--check"), Some("--emit-ir"), None] {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_elephc"));
+            let mut command = Command::new(compiler_binary());
             command.args(["--emit", "phpext"]).args(options);
             if let Some(mode) = mode { command.arg(mode); }
             let output = command.arg(&source)
@@ -144,7 +144,7 @@ fn phpext_validation_rejects_detected_libraries_before_sdk() {
     for body in ["return hash('sha256', $value);", "return php_dependency($value);"] {
         fs::write(&source, format!("<?php function php_dependency(string $value): string {{ return hash('sha256', $value); }} #[Export] function php_live(string $value): string {{ {body} }}")).unwrap();
         for mode in [Some("--check"), Some("--emit-ir"), None] {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_elephc"));
+            let mut command = Command::new(compiler_binary());
             command.args(["--emit", "phpext"]);
             if let Some(mode) = mode { command.arg(mode); }
             let output = command.arg(&source)
@@ -165,13 +165,13 @@ fn phpext_validation_accepts_pruned_dependencies() {
     let source = project.0.join("pruned.php");
     fs::write(&source, "<?php function unused(string $value): string { return hash('sha256', $value); } #[Export] function php_ok(): int { return 1; }").unwrap();
     for mode in ["--check", "--emit-ir"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_elephc"))
+        let output = Command::new(compiler_binary())
             .args(["--emit", "phpext", mode]).arg(&source)
             .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
             .output().unwrap();
         assert!(output.status.success(), "{mode}: {}", String::from_utf8_lossy(&output.stderr));
     }
-    let output = Command::new(env!("CARGO_BIN_EXE_elephc"))
+    let output = Command::new(compiler_binary())
         .args(["--emit", "phpext"]).arg(&source)
         .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
         .output().unwrap();
@@ -186,7 +186,7 @@ fn phpext_validation_rejects_missing_exports_before_sdk() {
     let source = project.0.join("missing_exports.php");
     fs::write(&source, "<?php function php_unexported(): int { return 1; }").unwrap();
     for mode in [Some("--check"), Some("--emit-ir"), None] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_elephc"));
+        let mut command = Command::new(compiler_binary());
         command.args(["--emit", "phpext"]);
         if let Some(mode) = mode { command.arg(mode); }
         let output = command.arg(&source)
@@ -219,13 +219,13 @@ fn phpext_validation_rejects_hosted_extensions_before_sdk() {
     let source = project.0.join("hosted.php");
     fs::write(&source, "<?php #[Export] function php_ok(): int { return 1; }").unwrap();
     let cache = project.0.join("cache");
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/php_ext/demo");
-    let installed = Command::new(env!("CARGO_BIN_EXE_elephc"))
+    let fixture = fixture_dir().join("demo");
+    let installed = Command::new(compiler_binary())
         .current_dir(&project.0).args(["extension", "add", "elephc_demo", "--path"])
         .arg(fixture).env("ELEPHC_NATIVE_CACHE", &cache).output().unwrap();
     assert!(installed.status.success(), "{}", String::from_utf8_lossy(&installed.stderr));
     for mode in [Some("--check"), Some("--emit-ir"), None] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_elephc"));
+        let mut command = Command::new(compiler_binary());
         command.args(["--emit", "phpext"]);
         if let Some(mode) = mode { command.arg(mode); }
         let output = command.arg(&source)
