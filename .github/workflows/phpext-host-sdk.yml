@@ -2,6 +2,7 @@ name: PHP extension host SDK
 
 on:
   workflow_dispatch:
+  workflow_call:
   pull_request:
     branches: [main]
     paths:
