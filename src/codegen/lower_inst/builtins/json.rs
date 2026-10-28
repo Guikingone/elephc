@@ -124,13 +124,13 @@ pub(crate) fn lower_json_decode_count(
             let false_ = ctx.next_label("json_decode_count_false");
             let true_ = ctx.next_label("json_decode_count_true");
             ctx.emitter.instruction("cmp x0, #-2");                             // int root?
-            ctx.emitter.instruction(&format!("b.eq {int}"));
+            ctx.emitter.instruction(&format!("b.eq {int}"));                    // int root
             ctx.emitter.instruction("cmp x0, #-3");                             // float root?
-            ctx.emitter.instruction(&format!("b.eq {float}"));
+            ctx.emitter.instruction(&format!("b.eq {float}"));                  // float root
             ctx.emitter.instruction("cmp x0, #-4");                             // string root?
-            ctx.emitter.instruction(&format!("b.eq {string}"));
+            ctx.emitter.instruction(&format!("b.eq {string}"));                 // string root
             ctx.emitter.instruction("cmp x0, #-5");                             // false root?
-            ctx.emitter.instruction(&format!("b.eq {false_}"));
+            ctx.emitter.instruction(&format!("b.eq {false_}"));                 // false root
             ctx.emitter.instruction("cmp x0, #-6");                             // true root?
             ctx.emitter.instruction(&format!("b.eq {true_}"));                  // true root
             ctx.emitter.instruction(&format!("b {null}"));                      // invalid JSON and null roots
@@ -160,15 +160,15 @@ pub(crate) fn lower_json_decode_count(
             let false_ = ctx.next_label("json_decode_count_false_x");
             let true_ = ctx.next_label("json_decode_count_true_x");
             ctx.emitter.instruction("cmp rax, -2");                             // int root?
-            ctx.emitter.instruction(&format!("je {int}"));
+            ctx.emitter.instruction(&format!("je {int}"));                      // int root
             ctx.emitter.instruction("cmp rax, -3");                             // float root?
-            ctx.emitter.instruction(&format!("je {float}"));
+            ctx.emitter.instruction(&format!("je {float}"));                    // float root
             ctx.emitter.instruction("cmp rax, -4");                             // string root?
-            ctx.emitter.instruction(&format!("je {string}"));
+            ctx.emitter.instruction(&format!("je {string}"));                   // string root
             ctx.emitter.instruction("cmp rax, -5");                             // false root?
-            ctx.emitter.instruction(&format!("je {false_}"));
+            ctx.emitter.instruction(&format!("je {false_}"));                   // false root
             ctx.emitter.instruction("cmp rax, -6");                             // true root?
-            ctx.emitter.instruction(&format!("je {true_}"));
+            ctx.emitter.instruction(&format!("je {true_}"));                    // true root
             ctx.emitter.instruction(&format!("jmp {null}"));                    // invalid JSON and null roots
             ctx.emitter.label(&int);
             super::count_empty::emit_count_type_error(ctx, "int");
@@ -221,7 +221,7 @@ fn emit_decoded_count_result(ctx: &mut FunctionContext<'_>) {
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("test rax, rax");                           // a failed decode behaves like null
-            ctx.emitter.instruction(&format!("jz {null}"));
+            ctx.emitter.instruction(&format!("jz {null}"));                     // a failed decode behaves like null
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -229,35 +229,35 @@ fn emit_decoded_count_result(ctx: &mut FunctionContext<'_>) {
         Arch::AArch64 => {
             for tag in [4u8, 5, 6] {
                 ctx.emitter.instruction(&format!("cmp x0, #{tag}"));            // countable container tags
-                ctx.emitter.instruction(&format!("b.eq {countable}"));
+                ctx.emitter.instruction(&format!("b.eq {countable}"));          // countable container tag
             }
             ctx.emitter.instruction("cmp x0, #0");                              // int payload?
-            ctx.emitter.instruction(&format!("b.eq {int}"));
+            ctx.emitter.instruction(&format!("b.eq {int}"));                    // int payload tag
             ctx.emitter.instruction("cmp x0, #1");                              // string payload?
-            ctx.emitter.instruction(&format!("b.eq {string}"));
+            ctx.emitter.instruction(&format!("b.eq {string}"));                 // string payload tag
             ctx.emitter.instruction("cmp x0, #2");                              // float payload?
-            ctx.emitter.instruction(&format!("b.eq {float}"));
+            ctx.emitter.instruction(&format!("b.eq {float}"));                  // float payload tag
             ctx.emitter.instruction("cmp x0, #3");                              // bool payload?
-            ctx.emitter.instruction(&format!("b.eq {bool_}"));
+            ctx.emitter.instruction(&format!("b.eq {bool_}"));                  // bool payload tag
             ctx.emitter.instruction("cmp x0, #9");                              // resource payload?
-            ctx.emitter.instruction(&format!("b.eq {resource}"));
+            ctx.emitter.instruction(&format!("b.eq {resource}"));               // resource payload tag
             ctx.emitter.instruction(&format!("b {null}"));                      // every other tag is null
         }
         Arch::X86_64 => {
             for tag in [4u8, 5, 6] {
                 ctx.emitter.instruction(&format!("cmp rax, {tag}"));            // countable container tags
-                ctx.emitter.instruction(&format!("je {countable}"));
+                ctx.emitter.instruction(&format!("je {countable}"));            // countable container tag
             }
             ctx.emitter.instruction("cmp rax, 0");                              // int payload?
-            ctx.emitter.instruction(&format!("je {int}"));
+            ctx.emitter.instruction(&format!("je {int}"));                      // int payload tag
             ctx.emitter.instruction("cmp rax, 1");                              // string payload?
-            ctx.emitter.instruction(&format!("je {string}"));
+            ctx.emitter.instruction(&format!("je {string}"));                   // string payload tag
             ctx.emitter.instruction("cmp rax, 2");                              // float payload?
-            ctx.emitter.instruction(&format!("je {float}"));
+            ctx.emitter.instruction(&format!("je {float}"));                    // float payload tag
             ctx.emitter.instruction("cmp rax, 3");                              // bool payload?
-            ctx.emitter.instruction(&format!("je {bool_}"));
+            ctx.emitter.instruction(&format!("je {bool_}"));                    // bool payload tag
             ctx.emitter.instruction("cmp rax, 9");                              // resource payload?
-            ctx.emitter.instruction(&format!("je {resource}"));
+            ctx.emitter.instruction(&format!("je {resource}"));                 // resource payload tag
             ctx.emitter.instruction(&format!("jmp {null}"));                    // every other tag is null
         }
     }
@@ -286,7 +286,7 @@ fn emit_decoded_count_result(ctx: &mut FunctionContext<'_>) {
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("test rdi, rdi");                           // true payload
-            ctx.emitter.instruction(&format!("jnz {true_}"));
+            ctx.emitter.instruction(&format!("jnz {true_}"));                   // true payload tag
         }
     }
     release_decoded_count_cell(ctx);
