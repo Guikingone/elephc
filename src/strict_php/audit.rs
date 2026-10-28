@@ -48,20 +48,42 @@ fn reject(errors: &mut Vec<CompileError>, span: Span, lead: &str) {
 }
 
 /// Pushes a violation when `name`'s bare (last) segment uses the
-/// compiler-reserved `__elephc_` prefix.
+/// compiler-reserved `__elephc_` prefix, or names one of the C entry points a
+/// hosted PHP extension's wrappers call (`elephc_php_ext_` prefix).
 ///
-/// Applied to free-function declarations and call targets only: the compiler
-/// reserves the prefix exclusively for internal builtins and synthesized
-/// functions, which live in the function namespace. Class, method, and property
-/// names are separate PHP symbol spaces the compiler never synthesizes
-/// `__elephc_*` names into, so they are deliberately not checked.
+/// Applied to free-function declarations and call targets: the compiler
+/// reserves both prefixes for internal builtins, synthesized functions and the
+/// extension host's hidden externs, which live in the function namespace.
 fn reject_reserved_name(errors: &mut Vec<CompileError>, span: Span, name: &Name) {
     let bare = name.parts.last().map(String::as_str).unwrap_or_default();
-    if bare.to_ascii_lowercase().starts_with("__elephc_") {
+    let lower = bare.to_ascii_lowercase();
+    if lower.starts_with("__elephc_") {
         reject(
             errors,
             span,
             &format!("'{bare}' is reserved for the compiler ('__elephc_' prefix)"),
+        );
+    } else if lower.starts_with("elephc_php_ext_") {
+        reject(
+            errors,
+            span,
+            &format!("'{bare}' is reserved for the PHP extension host ('elephc_php_ext_' prefix)"),
+        );
+    }
+}
+
+/// Pushes a violation when a class, method or property name uses the
+/// compiler-reserved `__elephc` prefix (any case). Synthesized wrapper classes
+/// keep their bookkeeping there (a hosted PHP extension's `__elephcHandle` and
+/// `__elephcOwner`, `__elephcObject()`, the `__ElephcPhpExtOwner` class), which
+/// PHP code never sees: reaching it could release an engine object under its
+/// live wrapper.
+fn reject_reserved_member(errors: &mut Vec<CompileError>, span: Span, kind: &str, name: &str) {
+    if name.to_ascii_lowercase().starts_with("__elephc") {
+        reject(
+            errors,
+            span,
+            &format!("{kind} '{name}' is reserved for the compiler ('__elephc' prefix)"),
         );
     }
 }
@@ -667,10 +689,11 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             audit_expr(callee, errors);
             audit_exprs(args, errors);
         }
-        ExprKind::NewObject {
-            class_name: _,
-            args,
-        } => audit_exprs(args, errors),
+        ExprKind::NewObject { class_name, args } => {
+            let bare = class_name.parts.last().map(String::as_str).unwrap_or_default();
+            reject_reserved_member(errors, span, "class", bare);
+            audit_exprs(args, errors);
+        }
         // `new Box<int>()` is not PHP: php-src reads the `<` as a comparison. The audit rejects
         // the type itself so the message names the extension rather than the parse.
         ExprKind::NewGeneric { class_type, args } => {
@@ -690,14 +713,10 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             audit_expr(class_name, errors);
             audit_exprs(args, errors);
         }
-        ExprKind::PropertyAccess {
-            object,
-            property: _,
+        ExprKind::PropertyAccess { object, property } | ExprKind::NullsafePropertyAccess { object, property } => {
+            reject_reserved_member(errors, span, "property", property);
+            audit_expr(object, errors);
         }
-        | ExprKind::NullsafePropertyAccess {
-            object,
-            property: _,
-        } => audit_expr(object, errors),
         ExprKind::DynamicPropertyAccess { object, property }
         | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
             audit_expr(object, errors);
@@ -707,16 +726,8 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             receiver,
             property: _,
         } => audit_static_receiver(receiver, span, errors),
-        ExprKind::MethodCall {
-            object,
-            method: _,
-            args,
-        }
-        | ExprKind::NullsafeMethodCall {
-            object,
-            method: _,
-            args,
-        } => {
+        ExprKind::MethodCall { object, method, args } | ExprKind::NullsafeMethodCall { object, method, args } => {
+            reject_reserved_member(errors, span, "method", method);
             audit_expr(object, errors);
             audit_exprs(args, errors);
         }
@@ -731,9 +742,10 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
         }
         ExprKind::StaticMethodCall {
             receiver,
-            method: _,
+            method,
             args,
         } => {
+            reject_reserved_member(errors, span, "method", method);
             audit_static_receiver(receiver, span, errors);
             audit_exprs(args, errors);
         }

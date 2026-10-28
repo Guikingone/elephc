@@ -448,6 +448,19 @@ fn test_audit_rejects_reserved_elephc_call() {
     );
 }
 
+/// Verifies the audit rejects reaching a hosted PHP extension's hidden bookkeeping: its C entry
+/// points, the wrapper's `__elephc*` members and the owner class, which PHP code never sees.
+#[test]
+fn test_audit_rejects_extension_host_internals() {
+    expect_audit_violation("<?php elephc_php_ext_object_release(1);", "reserved for the PHP extension host");
+    expect_audit_violation(
+        "<?php class M { public function o(): mixed { return $this->__elephcOwner; } }",
+        "property '__elephcOwner' is reserved for the compiler",
+    );
+    expect_audit_violation("<?php $o = new \\__ElephcPhpExtOwner(1, 1);", "class '__ElephcPhpExtOwner' is reserved");
+    expect_audit_violation("<?php function f(object $w): int { return $w->__elephcObject(); }", "method '__elephcObject' is reserved");
+}
+
 /// Verifies extension expressions inside PHP attribute arguments on a function
 /// declaration are rejected: attribute args are ordinary expressions and must
 /// not be an audit blind spot.
