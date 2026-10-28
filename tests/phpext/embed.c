@@ -87,7 +87,7 @@ static void run_abandoned_requests(void)
         "  try { phpext_pause('abandoned'); } catch (RuntimeException $error) {}"
         "});"
         "if ($GLOBALS['fatal_fiber']->start() !== 'parked') { throw new Exception('Fiber did not park'); }"
-        "elephc_late_hold($GLOBALS['fatal_fiber']);"
+        "if ($held) { elephc_late_hold($GLOBALS['fatal_fiber']); }"
         "set_error_handler(static function () { return false; });"
         "trigger_error('intentional fatal request', E_USER_ERROR);";
     php_request_shutdown(NULL);
@@ -95,10 +95,12 @@ static void run_abandoned_requests(void)
     size_t baseline = live_malloc_bytes();
     for (unsigned request = 0; request < 8; request++) {
         if (php_request_startup() == FAILURE) { atomic_fetch_add(&failures, 1); break; }
+        unsigned expected_resumes = (request / 4) * 2 + (request % 4 < 2 ? request % 4 : 2);
         char script[sizeof(code) + 160];
         snprintf(script, sizeof(script),
             "if (elephc_late_resume_count() !== %u) { throw new Exception('late resume missing'); } "
-            "$nested = %s; %s", request, request % 2 ? "true" : "false", code);
+            "$nested = %s; $held = %s; %s", expected_resumes,
+            request % 2 ? "true" : "false", request % 4 < 2 ? "true" : "false", code);
         volatile bool bailed = false;
         zend_first_try {
             (void)zend_eval_string(script, NULL, "phpext abandoned request");
@@ -118,7 +120,7 @@ static void run_abandoned_requests(void)
     }
     if (php_request_startup() == FAILURE) {
         atomic_fetch_add(&failures, 1);
-    } else if (zend_eval_string("if (elephc_late_resume_count() !== 8) { throw new Exception('final late resume missing'); }",
+    } else if (zend_eval_string("if (elephc_late_resume_count() !== 4) { throw new Exception('final late resume missing'); }",
         NULL, "phpext final late resume") == FAILURE || EG(exception)) {
         atomic_fetch_add(&failures, 1);
     }

@@ -158,9 +158,11 @@ Host Fiber tests cover suspended callbacks, rejected overlap, same-Fiber
 reentry, exception propagation, cancellation, destruction and ownership handoff.
 Valgrind on Linux and Apple's `leaks` tool check the embed lifecycle. Tests
 of fatal requests also measure live malloc growth across repeated requests,
-including allocations still reachable from an abandoned Fiber stack. A sibling
-test extension retains and resumes that Fiber from its own RSHUTDOWN, and an
-output-buffer callback covers userland Fiber destruction after module shutdown.
+including allocations still reachable from an abandoned Fiber stack. Four
+requests leave single or nested native activation chains for post-deactivate to
+retire. A sibling test extension retains and resumes the other four Fibers from
+its own RSHUTDOWN. An output-buffer callback separately covers userland Fiber
+destruction after module shutdown.
 Native heap pressure and Zend allocation growth are tested separately.
 
 For a local embed check with a PHP SDK configured with `--enable-embed=shared`:
