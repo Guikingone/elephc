@@ -142,17 +142,6 @@ echo "call: ";
 echo $read->call($second);   // 20 — bound to $second for this call only
 echo "\n";
 
-// A callback supplied at runtime can receive an explicit private visibility scope.
-class ScopedBox {
-    private string $label = "private value";
-}
-function scopedReader(callable $reader, ScopedBox $box): callable {
-    return Closure::bind($reader, $box, ScopedBox::class);
-}
-$privateReader = function () { return $this->label; };
-$scopedReader = scopedReader($privateReader, new ScopedBox());
-echo "Scoped callback: ", $scopedReader(), "\n";
-
 // Callbacks returned inside a PHP array remain directly invokable after extraction.
 function greetingCallbacks(string $prefix): array {
     return [function(string $name) use ($prefix): string { return $prefix . $name; }];

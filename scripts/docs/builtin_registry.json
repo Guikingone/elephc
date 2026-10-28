@@ -45076,7 +45076,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/count_empty.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 241,
+      "codegen_line": 220,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
