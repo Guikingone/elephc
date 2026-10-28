@@ -14,6 +14,7 @@ use crate::codegen::{
     abi, emit_array_value_type_stamp, emit_box_current_owned_value_as_mixed,
     emit_box_current_value_as_mixed, Result,
 };
+use crate::ir::Immediate;
 use crate::ir::Instruction;
 use crate::ir::Op;
 use crate::types::PhpType;
@@ -98,7 +99,7 @@ pub(super) fn prepare_call_site(
     // the user's call site, so publishing the prelude's synthetic span here would overwrite
     // the location the entering call just published.
     let compiler_generated = inst.span.is_some_and(|span| !span.is_from_source());
-    if (instruction_may_enter_php_frame(inst) || warns_at_call_site) && !compiler_generated {
+    if (instruction_may_enter_php_frame(ctx, inst) || warns_at_call_site) && !compiler_generated {
         let scratch = abi::int_result_reg(ctx.emitter);
         abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
         abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
@@ -107,7 +108,7 @@ pub(super) fn prepare_call_site(
         abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(inst.span.map_or(0, |span| span.line)));
         abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
     }
-    if !ctx.backtrace_enabled || !instruction_may_enter_php_frame(inst) {
+    if !ctx.backtrace_enabled || !instruction_may_enter_php_frame(ctx, inst) {
         return Ok(());
     }
     let line = i64::from(inst.span.map_or(0, |span| span.line));
@@ -121,8 +122,41 @@ pub(super) fn prepare_call_site(
     Ok(())
 }
 
+/// Returns whether a runtime call cannot run PHP code, warn, throw or produce output.
+///
+/// Such a call needs neither a backtrace frame nor a diagnostic-site publication. The
+/// effect summary is the shared contract: user-code reaches are excluded by throw/warn/fatal,
+/// output, refcount retirement and blocking-I/O bits, and callable or object operands are
+/// rejected even when a target summary is incomplete.
+fn is_leaf_runtime_call(ctx: &FunctionContext<'_>, inst: &Instruction) -> bool {
+    if !matches!(inst.immediate, Some(Immediate::RuntimeCall(_))) {
+        return false;
+    }
+    const USER_CODE: crate::ir::Effects = crate::ir::Effects::MAY_THROW
+        .union(crate::ir::Effects::MAY_WARN)
+        .union(crate::ir::Effects::MAY_FATAL)
+        .union(crate::ir::Effects::OUTPUT)
+        .union(crate::ir::Effects::REFCOUNT_OP)
+        .union(crate::ir::Effects::BLOCKING_IO)
+        .union(crate::ir::Effects::NETWORK_IO);
+    if inst.effects.intersects(USER_CODE) {
+        return false;
+    }
+    !inst.operands.iter().any(|&operand| {
+        ctx.value_php_type(operand).is_ok_and(|ty| {
+            matches!(
+                ty.codegen_repr(),
+                PhpType::Callable | PhpType::Object(_)
+            )
+        })
+    })
+}
+
 /// Returns whether an instruction can synchronously enter another PHP-visible frame.
-fn instruction_may_enter_php_frame(inst: &Instruction) -> bool {
+fn instruction_may_enter_php_frame(ctx: &FunctionContext<'_>, inst: &Instruction) -> bool {
+    if is_leaf_runtime_call(ctx, inst) {
+        return false;
+    }
     matches!(
         inst.op,
         Op::Call
